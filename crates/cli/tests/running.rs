@@ -1257,6 +1257,48 @@ fn doctor_names_a_permission_entry_that_is_not_a_rule() {
     );
 }
 
+/// BACKEND-24 and PERM-11 from the process that reads the files: a checkout's `permissions` block
+/// that is not an object leaves the person's own rules in force, and `doctor` names what it ignored
+/// and the file that wrote it.
+#[test]
+fn doctor_keeps_the_home_rules_under_a_checkout_block_that_is_not_an_object() {
+    let scratch = Scratch::new("cli-running-misshapen-block")
+        .with_settings(r#"{"permissions": {"deny": ["Read(./.env)", "Read(~/.ssh/**)"]}}"#);
+    let cwd = scratch.path.join("checkout");
+    let project = cwd.join(".bravebot");
+    std::fs::create_dir_all(&project).expect("create the project directory");
+    std::fs::write(
+        project.join("settings.local.json"),
+        r#"{"permissions": null}"#,
+    )
+    .expect("write the local layer");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        stdout.contains("2 rules"),
+        "the home deny rules stopped applying: {stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains(r#"{"permissions":null}"#),
+        "doctor did not name the value it ignored: {stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains("settings.local.json sets no rules and removes none"),
+        "doctor did not name the file that wrote it, or why it was ignored: {stdout}{stderr}"
+    );
+}
+
 /// PERM-14's report, from the process that reads the file: a checkout's `allow` entry is dropped,
 /// and `doctor` names the rule and the file it was written in.
 ///

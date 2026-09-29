@@ -219,6 +219,10 @@ pub struct Settings {
     ///
     /// Kept for the same reason, the key picking which of the providers above answers.
     model_ignored: Vec<PathBuf>,
+    /// The `permissions` blocks and rule lists a layer spelled as another shape, with the file each
+    /// came from. The merge keeps the weaker block or list in their place, so the merged root no
+    /// longer holds them and only the layer that wrote one can say it was ignored (PERM-11).
+    misshapen: Vec<(PathBuf, String)>,
     /// The keys a layer declared an MCP server under, with the file each came from, for `doctor`.
     ///
     /// Recorded rather than read: a declaration lives in the person's own directory and nowhere
@@ -448,6 +452,7 @@ impl Settings {
         // from the layer's own root below, before it reaches the merge.
         let mut provider_ignored = Vec::new();
         let mut model_ignored = Vec::new();
+        let mut misshapen = Vec::new();
         let mut mcp_declared = Vec::new();
         let mut mcp_requested: Vec<(PathBuf, String)> = Vec::new();
         // Which kind of layer spelled `effort` last, which is the layer the merge lets answer for
@@ -515,6 +520,9 @@ impl Settings {
                     false => allow_ignored.push((path.clone(), rule)),
                 }
             }
+            for value in misshapen_rule_lists(&root) {
+                misshapen.push((path.clone(), value));
+            }
             for name in env_names(&root) {
                 // Whoever set it before lost it here, which is the only thing worth telling somebody:
                 // a name one file sets needs no explanation of where it came from.
@@ -539,6 +547,7 @@ impl Settings {
         // to the entries a layer entitled to grant wrote.
         settings.permissions.allow = allow;
         settings.allow_ignored = allow_ignored;
+        settings.misshapen = misshapen;
         settings.mcp_declared = mcp_declared;
         settings.mcp_requested = mcp_requested;
         // Overwritten rather than merged in, for the reason `provider_ignored` is kept: what every
@@ -613,6 +622,7 @@ impl Settings {
             // an `allow` entry in it grants anything.
             allow_ignored: Vec::new(),
             // Filled by [`Settings::layered`], which knows which file each key was written in.
+            misshapen: Vec::new(),
             mcp_declared: Vec::new(),
             mcp_requested: Vec::new(),
             keybindings: keybindings_block(root),
@@ -713,6 +723,17 @@ impl Settings {
             .map(|(path, rule)| (path.as_path(), rule.as_str()))
     }
 
+    /// The `permissions` blocks and `deny`, `ask` and `allow` values that were not the shape rules
+    /// are read from, and the file each was written in, weakest first.
+    ///
+    /// Each is spelled with the names that lead to it, `{"permissions":{"deny":null}}`, so the
+    /// person can find it. None of them set or removed a rule: the weaker layers' lists stand.
+    pub fn misshapen_rule_lists(&self) -> impl Iterator<Item = (&Path, &str)> {
+        self.misshapen
+            .iter()
+            .map(|(path, value)| (path.as_path(), value.as_str()))
+    }
+
     /// The keys a settings layer declared an MCP server under, and the file each was written in.
     ///
     /// None of them declares anything: a server is declared in `~/.bravebot/mcp.json` and nowhere
@@ -794,6 +815,8 @@ impl Settings {
             // the same reason: `doctor` names that file, so reporting it as no settings at all
             // would contradict the line under it.
             && self.allow_ignored.is_empty()
+            // And a file whose only rule list was misshapen, which `doctor` names too.
+            && self.misshapen.is_empty()
             // And a file that only tried to declare a server, which `doctor` names too.
             && self.mcp_declared.is_empty()
             && self.mcp_requested.is_empty()
@@ -1231,6 +1254,10 @@ fn merge(document: &mut Document, over: serde_json::Map<String, serde_json::Valu
             {
                 merge_permissions(displaced, under, above);
             }
+            // Either block spelled as anything but an object holds no list, so it removes none.
+            (Some(serde_json::Value::Object(_)), value) if key == "run" || key == "permissions" => {
+                displaced.push(value);
+            }
             (_, value) => {
                 lay_over(displaced, base, key, value);
             }
@@ -1278,6 +1305,16 @@ fn merge_permissions(
             (Some(serde_json::Value::Array(kept)), serde_json::Value::Array(added)) => {
                 kept.extend(added);
             }
+            // A list spelled as anything but an array adds no entry, so it removes none either. Only
+            // the lists: a weaker file's `"defaultMode": ["plan"]` must not outrank a stronger mode.
+            (Some(serde_json::Value::Array(_)), value)
+                if matches!(
+                    key.as_str(),
+                    "deny" | "ask" | "allow" | "additionalDirectories"
+                ) =>
+            {
+                displaced.push(value);
+            }
             (_, value) => {
                 lay_over(displaced, under, key, value);
             }
@@ -1297,6 +1334,9 @@ fn merge_run(
                 if key == "scrubEnv" =>
             {
                 kept.extend(added);
+            }
+            (Some(serde_json::Value::Array(_)), value) if key == "scrubEnv" => {
+                displaced.push(value);
             }
             (_, value) => {
                 lay_over(displaced, under, key, value);
@@ -1461,6 +1501,26 @@ fn permission_lists(root: &serde_json::Map<String, serde_json::Value>) -> Permis
     }
 }
 
+/// One layer's `permissions` block or rule list that is not the shape rules are read from, spelled
+/// with the names that lead to it so a person can find it in the file (PERM-11).
+///
+/// Written out from the parsed value rather than through a new one, which would be a copy of it that
+/// is dropped uncleared (CRED-23).
+fn misshapen_rule_lists(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+    let block = match root.get("permissions") {
+        None => return Vec::new(),
+        Some(serde_json::Value::Object(block)) => block,
+        Some(other) => return vec![format!(r#"{{"permissions":{other}}}"#)],
+    };
+    ["deny", "ask", "allow"]
+        .into_iter()
+        .filter_map(|name| match block.get(name) {
+            None | Some(serde_json::Value::Array(_)) => None,
+            Some(other) => Some(format!(r#"{{"permissions":{{"{name}":{other}}}}}"#)),
+        })
+        .collect()
+}
+
 /// One array of rule text out of a block, with every entry that is not text put in `unreadable`.
 ///
 /// Blank text is carried rather than filtered, because the rule language already has a word for
@@ -1611,10 +1671,10 @@ mod tests {
     /// the clearing the document does when it goes, so the merge keeps it instead.
     ///
     /// Through [`merge`] rather than the helper it calls, because which arm handles a name is what
-    /// decides whether the entry is kept. All four displace: a project file restating a gateway a
+    /// decides whether the entry is kept. Every case displaces: a project file restating a gateway a
     /// home file stated, one setting `provider` to something that is not a block and so replacing
-    /// every gateway at once, and one restating `permissions.deny` or `run.scrubEnv` as a value that
-    /// is not a list.
+    /// every gateway at once, and one spelling `permissions`, `permissions.deny`, `run` or
+    /// `run.scrubEnv` as another shape, which is set aside while the weaker block or list stays.
     #[test]
     fn a_merge_keeps_the_entry_a_stronger_layer_displaced() {
         let token = "sk-home-0123456789";
@@ -1633,12 +1693,20 @@ mod tests {
                 vec![serde_json::json!({"gw": gateway(token)})],
             ),
             (
+                serde_json::json!({"permissions": "everything"}),
+                vec![serde_json::json!("everything")],
+            ),
+            (
                 serde_json::json!({"permissions": {"deny": "everything"}}),
-                vec![serde_json::json!(["Read(./.env)"])],
+                vec![serde_json::json!("everything")],
+            ),
+            (
+                serde_json::json!({"run": "all of them"}),
+                vec![serde_json::json!("all of them")],
             ),
             (
                 serde_json::json!({"run": {"scrubEnv": "all of them"}}),
-                vec![serde_json::json!(["MY_TOKEN"])],
+                vec![serde_json::json!("all of them")],
             ),
         ] {
             let mut merged = Document::default();
@@ -2835,6 +2903,132 @@ mod tests {
         assert_eq!(denied, ["run(curl)", "run(rm)"]);
         assert_eq!(rules.allow, ["run(ls)"]);
         assert_eq!(rules.ask, ["run(git push)"]);
+    }
+
+    /// A stronger layer that spells the block or one of its lists as some other shape holds no rule,
+    /// so it must not replace the rules a weaker layer wrote.
+    #[test]
+    fn a_layer_that_is_not_a_list_of_rules_takes_no_rule_away() {
+        let home = r#"{"permissions": {
+            "deny": ["Read(./.env)"], "ask": ["Bash(git push)"], "additionalDirectories": ["/one"]
+        }}"#;
+        let shapes = [
+            r#"{"permissions": null}"#,
+            r#"{"permissions": []}"#,
+            r#"{"permissions": "x"}"#,
+            r#"{"permissions": {"deny": null, "ask": null, "additionalDirectories": null}}"#,
+            r#"{"permissions": {"deny": {}, "ask": {}, "additionalDirectories": {}}}"#,
+            r#"{"permissions": {"deny": "Read(x)", "ask": "Read(x)", "additionalDirectories": "/two"}}"#,
+        ];
+        for (n, shape) in shapes.iter().enumerate() {
+            for (layer, settings) in [
+                (
+                    "project",
+                    Layers::new(&format!("misshapen-project-{n}"))
+                        .global(home)
+                        .project(shape)
+                        .read(),
+                ),
+                (
+                    "local",
+                    Layers::new(&format!("misshapen-local-{n}"))
+                        .global(home)
+                        .local(shape)
+                        .read(),
+                ),
+            ] {
+                let rules = settings.permissions();
+                assert_eq!(rules.deny, ["Read(./.env)"], "a {layer} layer of {shape}");
+                assert_eq!(rules.ask, ["Bash(git push)"], "a {layer} layer of {shape}");
+                assert_eq!(
+                    rules.additional_directories,
+                    ["/one"],
+                    "a {layer} layer of {shape}"
+                );
+            }
+        }
+    }
+
+    /// The value that was ignored is named, with the names that lead to it and the file that wrote
+    /// it, so a person can find it: every layer can spell the same block. A misshapen
+    /// `additionalDirectories` is not a rule and is not reported, as PERM-10 has it.
+    #[test]
+    fn a_rule_list_that_is_not_a_list_is_carried_out_to_be_reported() {
+        let layers = Layers::new("misshapen-reported")
+            .global(r#"{"permissions": {"deny": ["Read(./.env)"]}}"#)
+            .project(r#"{"permissions": {"deny": "Read(x)", "ask": null, "additionalDirectories": "/two"}}"#)
+            .local(r#"{"permissions": null}"#);
+        let settings = layers.read();
+        let project = layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE);
+        let local = layers.cwd.join(PROJECT_DIR).join(LOCAL_SETTINGS_FILE);
+        assert_eq!(
+            settings.misshapen_rule_lists().collect::<Vec<_>>(),
+            [
+                (project.as_path(), r#"{"permissions":{"deny":"Read(x)"}}"#),
+                (project.as_path(), r#"{"permissions":{"ask":null}}"#),
+                (local.as_path(), r#"{"permissions":null}"#),
+            ]
+        );
+        assert!(
+            settings.permissions().unreadable.is_empty(),
+            "a misshapen list was reported as an entry in one, with no file"
+        );
+
+        let alone = Layers::new("misshapen-reported-home")
+            .global(r#"{"permissions": {"allow": "Read(x)"}}"#);
+        let settings = alone.read();
+        assert_eq!(
+            settings.misshapen_rule_lists().collect::<Vec<_>>(),
+            [(
+                alone.home.join(SETTINGS_FILE).as_path(),
+                r#"{"permissions":{"allow":"Read(x)"}}"#
+            )]
+        );
+        assert!(
+            !settings.is_empty(),
+            "a file whose only rule list was misshapen read as absent"
+        );
+    }
+
+    /// The guard on a misshapen list is for the lists. Any other name in the block is one choice,
+    /// so the stronger layer's word wins even over a weaker layer that spelled it as a list.
+    #[test]
+    fn a_weaker_layer_spelling_a_mode_as_a_list_does_not_outrank_a_stronger_one() {
+        let mut merged = Document::default();
+        merge(
+            &mut merged,
+            layer(serde_json::json!({"permissions": {"defaultMode": ["plan"]}})),
+        );
+        merge(
+            &mut merged,
+            layer(serde_json::json!({"permissions": {"defaultMode": "acceptEdits"}})),
+        );
+        assert_eq!(merged.root["permissions"]["defaultMode"], "acceptEdits");
+    }
+
+    /// `run` and `run.scrubEnv` spelled as some other shape name no variable, so the names a weaker
+    /// layer kept from a program stay kept, and so does the rest of the weaker block.
+    #[test]
+    fn a_layer_that_is_not_a_list_of_names_takes_no_name_away() {
+        let shapes = [
+            r#"{"run": null}"#,
+            r#"{"run": ["PROJECT_TOKEN"]}"#,
+            r#"{"run": {"scrubEnv": null}}"#,
+            r#"{"run": {"scrubEnv": "PROJECT_TOKEN"}}"#,
+        ];
+        for (n, shape) in shapes.iter().enumerate() {
+            let settings = Layers::new(&format!("misshapen-scrub-{n}"))
+                .global(r#"{"run": {"scrubEnv": ["PERSONAL_TOKEN"], "maxSeconds": 3600}}"#)
+                .project(shape)
+                .read();
+            let named: Vec<&str> = settings.scrubbed().collect();
+            assert_eq!(named, ["PERSONAL_TOKEN"], "a project layer of {shape}");
+            assert_eq!(
+                settings.run_deadlines().ceiling,
+                Some(Duration::from_secs(3600)),
+                "a project layer of {shape}"
+            );
+        }
     }
 
     /// A directory one layer made reachable stays reachable when a stronger layer names another, since

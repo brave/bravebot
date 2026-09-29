@@ -340,6 +340,8 @@ impl Rule {
 pub struct Rejected {
     pub text: String,
     pub reason: Unreadable,
+    /// The settings file the entry was written in, where whoever read it knew.
+    pub file: Option<String>,
 }
 
 /// What was wrong with an entry of a permissions list, for whoever is going to say so.
@@ -367,6 +369,9 @@ pub enum Unreadable {
     NoDomainNamed,
     /// An `Mcp` rule whose specifier is not `alias` or `alias:tool`.
     NotAToolRule,
+    /// A value where a list of rules belongs, or the `permissions` block holding them, that is
+    /// neither: `null`, a string, a list in place of the block.
+    NotAList,
 }
 
 impl Rejected {
@@ -374,6 +379,7 @@ impl Rejected {
         Self {
             text: text.to_string(),
             reason,
+            file: None,
         }
     }
 
@@ -386,6 +392,17 @@ impl Rejected {
     /// file and the parser has to arrive in the same report as one the parser refused (PERM-11).
     pub fn not_a_line(text: &str) -> Self {
         Self::new(text, Unreadable::NotALine)
+    }
+
+    /// A list of rules, or the block that holds them, spelled as some other shape in `file`.
+    ///
+    /// Named with its file, unlike an entry inside a list: every layer can spell the same block,
+    /// and the value alone does not say which of up to four files to open.
+    pub fn not_a_list(text: &str, file: &str) -> Self {
+        Self {
+            file: Some(file.to_string()),
+            ..Self::new(text, Unreadable::NotAList)
+        }
     }
 }
 
