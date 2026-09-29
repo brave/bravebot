@@ -321,8 +321,12 @@ the whole description. Answer 2 names this one tool and none of the server's oth
 what it was called with. Where nothing can be written, as in an incognito session, it is drawn as
 not offered.
 
-What the server returns is untrusted. You see it behind the margin; the model is handed a reference
-to it and the word that it is quarantined, and none of what it says.
+What the server returns is untrusted and private. You see it behind the margin; the model is handed
+a reference to it and the word that it is quarantined, and none of what it says. It is private
+because what a server read may be your own mail or calendar, so a command fed that reference is put
+to you whatever you [vouched for](../security/permissions.md#vouching-for-a-command), as one fed a
+file is. The words a server describes its tools with stay public, since it hands the same list to
+whoever connects.
 
 ### Asking again
 
@@ -433,6 +437,68 @@ address. A yes does not move it to an address a declaration cannot hold, or to a
 organization's settings refuse. A no changes nothing: the call is refused, or the server is not
 started. A one-shot run, a session with nobody at the terminal, and
 `--dangerously-skip-permissions` refuse the redirect without asking.
+
+## Connecting Gmail
+
+A mail server is declared like any other, with the two files it signs in with named, so it may read
+them. This uses [Gmail AutoAuth](https://github.com/gongrzhe/server-gmail-autoauth-mcp), whose
+README says how to make the Google Cloud OAuth client it needs.
+
+1. Save the OAuth client's JSON as `~/.gmail-mcp/gcp-oauth.keys.json`, then sign in once, outside
+   bravebot. This opens a browser, waits on `localhost:3000`, and writes the token to
+   `~/.gmail-mcp/credentials.json`:
+
+   ```sh
+   npx -y @gongrzhe/server-gmail-autoauth-mcp@1.1.11 auth
+   ```
+
+2. Declare it, naming both files by their full paths:
+
+   ```sh
+   bravebot mcp add gmail -s user \
+     -e GMAIL_OAUTH_PATH=/Users/you/.gmail-mcp/gcp-oauth.keys.json \
+     -e GMAIL_CREDENTIALS_PATH=/Users/you/.gmail-mcp/credentials.json \
+     -- npx -y @gongrzhe/server-gmail-autoauth-mcp@1.1.11
+   ```
+
+   ```
+     gmail   stdio   npx -y @gongrzhe/server-gmail-autoauth-mcp@1.1.11
+             variables: GMAIL_CREDENTIALS_PATH (stored), GMAIL_OAUTH_PATH (stored), PATH
+             may read: /Users/you/.gmail-mcp/credentials.json
+             may read: /Users/you/.gmail-mcp/gcp-oauth.keys.json
+   ```
+
+   The server looks in `~/.gmail-mcp` when neither is named, and here `HOME` is a directory of its
+   own, so it would find nothing there. Naming a file is what lets it read that file, and only that
+   one. `-s user` asks for it in every session once you answer yes.
+
+3. Refuse what it should never do unasked, in `~/.bravebot/settings.json`:
+
+   ```json
+   {
+     "permissions": {
+       "deny": [
+         "Mcp(gmail:send_email)",
+         "Mcp(gmail:create_filter)",
+         "Mcp(gmail:create_filter_from_template)"
+       ]
+     }
+   }
+   ```
+
+   Every call is put to you anyway. A `deny` rule holds where no question is asked, answer 2 and
+   `--dangerously-skip-permissions` included, and a filter is on the list because it can forward
+   your mail to another address from then on.
+
+What you have handed over:
+
+- **The token reaches the whole mailbox.** It reads, sends and changes mail as you, password-reset
+  links included. The server holds it and refreshes it; bravebot neither sees it nor narrows it.
+  Taking it back is removing the app's access in your Google account and deleting
+  `credentials.json`.
+- **An attachment is saved where the server runs.** `download_attachment` saves into the directory
+  the server runs in unless the call names another, and that is the temporary directory unless
+  `--dir` names one.
 
 ## Seeing what a session started
 
@@ -570,5 +636,11 @@ profile directory there is no `~/.bravebot` at all: nothing is declared there, a
 - **An approval does not travel.** It lives in your own directory, so a second machine asks again.
   The same is true of a list you said yes to and a tool you stopped the asking for.
 - **`--plain` cannot stop asking for a tool.** Its call question has room for one answer.
+- **Mail the model has read can leave in what it writes.** A result reaches the model only once a
+  [check](../security/vetting.md) and you let it out of quarantine, and what the model then writes
+  is not held back as private: an argument of a later call may carry it. Each call is put to you
+  with its arguments, and a fetch is put to you with its URL unless an `allow` rule covers the host.
+- **A server that holds nothing of yours still asks.** Every result is private, so a search
+  server's answer fed to a command is put to you as a mailbox's would be.
 - **A one-shot run still checks a list it then refuses.** The check is a model call nobody reads
   the answer to, made once per run for each server whose list you have not said yes to.

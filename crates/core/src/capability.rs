@@ -119,7 +119,10 @@ impl Capability {
                 Some(Label::untrusted_private())
             }
             // Remote content is attacker-influenceable but not confidential to us.
-            Self::WebFetch | Self::McpCall(_) => Some(Label::untrusted_public()),
+            Self::WebFetch => Some(Label::untrusted_public()),
+            // A server may hold the person's own data, a mailbox or a calendar, and this client
+            // cannot tell what a given call read from it.
+            Self::McpCall(_) => Some(Label::untrusted_private()),
             // Effects produce no labelled observation.
             Self::FileWrite | Self::GitWrite => None,
             // Command output can contain anything the workspace contains.
