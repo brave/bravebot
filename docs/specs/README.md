@@ -96,7 +96,14 @@ Front matter, then numbered clauses. Everything outside a clause is commentary a
 
 - **`id`** is a short prefix. Clause ids are `PREFIX-N`, allocated in order and never reused and
   never renumbered, because a commit message, an issue, and a test name all point at one. A
-  withdrawn clause stays, marked withdrawn, and says what replaced it.
+  clause added mid-spec takes the next free id where it stands, so ids need not read in order
+  down the file. A withdrawn clause stays, marked withdrawn, and says what replaced it.
+  `make check-spec` holds a file to this against main, and fails a clause whose heading
+  has moved to another id, since a renumbered id goes on resolving while naming a clause nobody
+  cited. Improving a heading's wording is not that and costs nothing. A spec withdrawn and rewritten
+  wholesale does renumber on purpose, and says so in
+  [../../agents/renumbered-clauses.txt](../../agents/renumbered-clauses.txt), which is also where
+  somebody following a citation of the old id is told where the clause went.
 - **Every clause carries an anchor**, `<a id="PREFIX-N"></a>` on the line directly above its
   heading, so `labels.md#LABEL-3` is a link that keeps working. The anchor GitHub generates from
   a heading contains the title, so it breaks the moment somebody improves the wording, which is

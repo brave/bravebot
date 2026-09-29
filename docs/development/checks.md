@@ -117,6 +117,20 @@ pull request rather than waiting for somebody to notice it. It also holds
 rather than a warning nobody has to read. `make write-unverified` writes the file; commit what it
 writes.
 
+It also compares each spec against main, because clause numbering read within one file cannot see
+the thing it is for. A file renumbered to close a gap still reads `1..N`, so nothing in it is wrong
+and every citation of a moved id, in a cross-spec link, a `verified-by` line or an issue title, goes
+on resolving and points at another clause. What fails is a clause whose heading has moved to another
+id, which is the renumber; rewording a heading under the id it belongs to is expected and fails
+nothing. On a branch, main is where the branch left `upstream/main`, or `origin/main` without one; in
+CI's checkout of a pull request it is the merge commit's first parent, which is why the Specs job
+fetches two commits deep. With neither, the check falls back to `HEAD` and sees only an edit not yet
+committed. The tree compared against is the one the spec files are in rather than whichever
+directory the command was run from. A spec withdrawn and rewritten wholesale renumbers on purpose
+and says so in [../../agents/renumbered-clauses.txt](../../agents/renumbered-clauses.txt), one
+hand-written line per clause that moved, naming the id and heading it carries now: nothing
+generates that file, and the check fails on a line that has stopped being true of the tree.
+
 `make check-security` decides the things `check-spec` structurally cannot: whether two documents
 agree about how many exceptions to the rule are admitted, whether every crate keeping a network
 client of its own is one the egress register admits and no comment claims a dependency a manifest
