@@ -1303,6 +1303,11 @@ request, and is asked again with **8,192**: once per model for as long as braveb
 refusal costs one request rather than every answer. A figure you state is never lowered, so a model
 that refuses one you chose fails with the service's refusal.
 
+A reply that reaches the ceiling part way through a tool call makes no call. The model is told the
+ceiling and what it was writing, and asked once to do the work in smaller parts, such as a long file
+written in pieces. If it runs out again the turn ends there. A reply that runs out part way through
+its answer ends the turn with what it wrote.
+
 The ceiling is also what Bedrock reserves against the account's tokens-per-minute quota while each
 request runs, so on an inference profile a team shares, a larger one means fewer requests at once
 before any of them is throttled.

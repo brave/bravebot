@@ -7067,7 +7067,10 @@ fn fold_outcome(
             let ending = error.ending();
             match ending {
                 bravebot_agent::Ending::Failed(diagnosis) => {
-                    session.fail(crate::state::failure_reason(diagnosis), ending);
+                    session.fail(
+                        crate::state::failure_reason(diagnosis, error.cut_off()),
+                        ending,
+                    );
                 }
                 bravebot_agent::Ending::Stopped { attempts } => session.stopped(attempts),
                 bravebot_agent::Ending::Done => {}

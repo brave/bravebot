@@ -119,17 +119,41 @@ pub struct Completion {
     pub context_tokens: u64,
     /// What this call cost, including reported usage from completed retry attempts.
     pub usage: protocol::Usage,
-    /// Whether the service stopped the reply at its output ceiling rather than letting it finish.
+    /// Where the service stopped the reply at its output ceiling rather than letting it finish,
+    /// what the reply had got to.
     ///
     /// What is here is what the model wrote before it ran out of room, which is kept rather than
     /// discarded: the alternative throws away a whole turn's work to report that it was too long.
     /// A caller showing this to a person has to say so, and one continuing a conversation with it
     /// is continuing from a sentence that stops mid-word.
     ///
-    /// Always false from this backend, which states no ceiling: the request carries no
+    /// Always `None` from this backend, which states no ceiling: the request carries no
     /// `max_tokens` field, so whatever bounds a reply here belongs to the service and is not
     /// reported as this. Only [`bravebot_bedrock`] sets it.
-    pub cut_off: bool,
+    pub cut_off: Option<CutOff>,
+}
+
+/// What a reply the output ceiling stopped was doing when it stopped.
+///
+/// Taken from which events arrived and how many bytes, and never from what any of them said, so
+/// a caller may decide on it without reading the reply. The one name in it is copied from the
+/// request's own list of tools.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CutOff {
+    /// The ceiling it reached, in tokens. This program's own figure, not the service's.
+    pub ceiling: u64,
+    /// The tool call it was part way through, where one was open when it stopped.
+    pub call: Option<OpenCall>,
+    /// Whether any of its reasoning arrived.
+    pub thought: bool,
+}
+
+/// A tool call a reply was still writing when the ceiling stopped it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenCall {
+    /// The offered tool it named, spelt as the request offered it, and `None` where it named
+    /// none of them. The reply's own spelling never travels.
+    pub tool: Option<String>,
 }
 
 /// A source of subscription credentials, one per request.
@@ -562,7 +586,7 @@ impl<'a> AichatClient<'a> {
             calls,
             context_tokens: usage.prompt_tokens,
             usage,
-            cut_off: false,
+            cut_off: None,
         })
     }
 
@@ -853,7 +877,7 @@ impl<'a> AichatClient<'a> {
             calls,
             context_tokens: usage.prompt_tokens,
             usage,
-            cut_off: false,
+            cut_off: None,
         })
     }
 }

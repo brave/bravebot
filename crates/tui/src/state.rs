@@ -555,8 +555,15 @@ impl Finished {
 }
 
 /// Compose a localized failure reason from safe fields, without raw backend error text.
-pub fn failure_reason(diagnosis: bravebot_agent::Diagnosis) -> String {
+///
+/// `cut_off` is what a reply the output ceiling stopped was doing, whose one name is a tool the
+/// request offered, spelt as it offered it.
+pub fn failure_reason(
+    diagnosis: bravebot_agent::Diagnosis,
+    cut_off: Option<&bravebot_aichat::CutOff>,
+) -> String {
     use bravebot_agent::Category;
+    use bravebot_aichat::OpenCall;
     let what: std::borrow::Cow<'_, str> = match diagnosis.category {
         Category::Unauthorized => t!(failure_unauthorized).into(),
         Category::RateLimited => t!(failure_rate_limited).into(),
@@ -567,9 +574,24 @@ pub fn failure_reason(diagnosis: bravebot_agent::Diagnosis) -> String {
         Category::Undecodable => t!(failure_undecodable).into(),
         // The one category that says a number. It is this program's own configured ceiling, not
         // anything the service reported, and without it the sentence names no remedy.
-        Category::TooLong => match diagnosis.ceiling {
-            Some(tokens) => t!(failure_too_long_at, tokens = tokens).into(),
-            None => t!(failure_too_long).into(),
+        // What the reply was writing is said as well, since a reply that spent the ceiling on one
+        // file's worth of argument is asked for in parts, and one that spent it thinking is not.
+        Category::TooLong => match (diagnosis.ceiling, cut_off) {
+            (None, _) => t!(failure_too_long).into(),
+            (Some(tokens), None) => t!(failure_too_long_at, tokens = tokens).into(),
+            (Some(tokens), Some(cut_off)) => match (&cut_off.call, cut_off.thought) {
+                (Some(OpenCall { tool: Some(tool) }), _) => t!(
+                    failure_too_long_in_call,
+                    tokens = tokens,
+                    tool = tool.as_str()
+                )
+                .into(),
+                (Some(OpenCall { tool: None }), _) => {
+                    t!(failure_too_long_in_a_call, tokens = tokens).into()
+                }
+                (None, true) => t!(failure_too_long_thinking, tokens = tokens).into(),
+                (None, false) => t!(failure_too_long_at, tokens = tokens).into(),
+            },
         },
         Category::Unconfigured => t!(failure_unconfigured).into(),
         Category::Blocked => t!(failure_blocked).into(),
@@ -5671,7 +5693,7 @@ impl Session {
                 reason: entries
                     .iter()
                     .find(|e| e.speaker == Speaker::Failure)
-                    .map_or_else(|| failure_reason(diagnosis), |e| e.text.clone()),
+                    .map_or_else(|| failure_reason(diagnosis, None), |e| e.text.clone()),
             },
             bravebot_agent::Ending::Stopped { .. } => StoredOutcome::Cancelled {
                 reason: t!(turn_cancelled, turn = self.turns),
@@ -12035,7 +12057,7 @@ mod tests {
     fn a_reply_stopped_at_a_ceiling_says_which_ceiling() {
         use bravebot_agent::{Category, Diagnosis};
 
-        let vague = failure_reason(Diagnosis::of(Category::TooLong));
+        let vague = failure_reason(Diagnosis::of(Category::TooLong), None);
         assert!(
             !vague.contains("8192") && !vague.contains("8,192"),
             "a ceiling nobody measured was named anyway: {vague}"
@@ -12043,7 +12065,7 @@ mod tests {
 
         // Two different ceilings, because a sentence that hard-coded one would pass with either.
         for ceiling in [8_192_u64, 64_000] {
-            let said = failure_reason(Diagnosis::of(Category::TooLong).at_ceiling(ceiling));
+            let said = failure_reason(Diagnosis::of(Category::TooLong).at_ceiling(ceiling), None);
             assert!(
                 said.contains(&ceiling.to_string()),
                 "the ceiling that stopped the reply is not in {said}"
@@ -12053,6 +12075,46 @@ mod tests {
                 "the setting that raises it is not in {said}"
             );
         }
+    }
+
+    /// A reply stopped part way through a call and one stopped while it was thinking want
+    /// different remedies, and the failure line is the only thing left on screen that can tell
+    /// them apart. The tool is named where the request offered it, and only then.
+    #[test]
+    fn a_reply_stopped_at_the_ceiling_says_what_it_was_writing() {
+        use bravebot_agent::{Category, Diagnosis};
+        use bravebot_aichat::{CutOff, OpenCall};
+
+        let diagnosis = Diagnosis::of(Category::TooLong).at_ceiling(64_000);
+        let stopped = |call: Option<Option<&str>>, thought: bool| {
+            failure_reason(
+                diagnosis,
+                Some(&CutOff {
+                    ceiling: 64_000,
+                    call: call.map(|tool| OpenCall {
+                        tool: tool.map(str::to_owned),
+                    }),
+                    thought,
+                }),
+            )
+        };
+
+        let in_a_call = stopped(Some(Some("write_file")), false);
+        assert!(in_a_call.contains("write_file"), "{in_a_call}");
+        assert!(in_a_call.contains("64000"), "{in_a_call}");
+        assert!(in_a_call.contains("not made"), "{in_a_call}");
+
+        let unnamed = stopped(Some(None), false);
+        assert!(unnamed.contains("a tool call"), "{unnamed}");
+
+        let thinking = stopped(None, true);
+        assert!(thinking.contains("thinking"), "{thinking}");
+
+        assert_eq!(
+            stopped(None, false),
+            failure_reason(diagnosis, None),
+            "a reply that wrote nothing at all is reported as it always was"
+        );
     }
 
     #[test]

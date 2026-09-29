@@ -14,7 +14,8 @@ documented-by:
 
 How long a turn may go on, what happens when it does not stop, and what is said when it goes on
 without producing anything or ends without checking anything. What completed requests cost survives
-a later failure or stop. What happens when the model's reply says nothing at all.
+a later failure or stop. What happens when the model's reply says nothing at all, and when it runs
+into its output ceiling.
 
 ## Clauses
 
@@ -196,8 +197,9 @@ the task.
 to say here, and asking a third time would spend a request per round finding that out.
 
 **Only a finished reply with nothing in it.** A reply that was cut off, could not be decoded, or
-was refused is not this. Each has its own ending, and asking a model to carry on from something it
-never finished saying would answer the wrong failure.
+was refused is not this. Each has its own ending, one cut off at the ceiling has
+[TURN-7](#TURN-7), and asking a model to carry on from something it never finished saying would
+answer the wrong failure.
 
 **Deciding on it reads nothing untrusted.** The reply is the planner's own output, and the
 planner's context holds nothing untrusted, so what it produced is trusted
@@ -220,3 +222,48 @@ on ordinary endings; file authority remains shared and child advice remains loca
 `verified-by: bravebot_agent::turn::two_empty_replies_in_a_row_end_the_turn`
 `verified-by: bravebot_agent::turn::completed_empty_reply_keeps_reported_usage_on_failure`
 `verified-by: bravebot_agent::backend::only_a_finished_reply_with_nothing_in_it_is_an_empty_reply`
+
+<a id="TURN-7"></a>
+### TURN-7: a reply the output ceiling stopped is told why and asked once for less
+
+When a reply reaches its output ceiling part way through a tool call, or before it wrote anything,
+the driver adds a line to the conversation naming the ceiling and what the reply was doing, and asks
+again. Text the reply wrote before the call is kept as its answer so far. The line says what to do
+instead: a file too big for one reply is written in smaller calls with the write tools the request
+offered; any other call is made again with less in it; a reply that thought until the ceiling is
+asked to act; and a turn with no tools left is asked for a shorter answer. The person is told the
+reply stopped and what it is being asked for. A second stop in a row ends the turn: as the failure
+naming the ceiling when nothing was written, and with its text when something was, the person told
+of any call it was writing that was not made. An answered request in between starts the count
+again. A stop wrote something, so it is not an empty reply ([TURN-6](#TURN-6)) and breaks a run of
+them.
+
+**The call it was writing is never made.** Its arguments stopped where the ceiling did, so running
+it would write half a file or run half a command. The backend returns no call from a reply the
+ceiling stopped ([BACKEND-42](backends.md#BACKEND-42)), and the driver drops any that reach it.
+
+**Told why, not sent again unchanged.** A task that asks for one long script has the model spend
+the whole ceiling on one `write_file` argument. Sent the same request again it writes the same call
+again, and ending the turn there leaves nothing written. Told the size of the ceiling and that the
+file can be written in parts, it has a way through.
+
+**A reply cut off in its prose is not asked about.** One that stopped part way through its answer,
+with no call open, ends the turn with what it wrote, and the person is told it stopped short. Asked
+to carry on, a model tends to start the answer again from the top.
+
+**Once, for the reason an empty reply is asked about once** ([TURN-6](#TURN-6)): a model that runs
+out again after being told how to do the work in parts cannot do it in parts here.
+
+**Deciding on it reads nothing untrusted.** Where the reply stopped is the planner's own output
+([LABEL-8](labels.md#LABEL-8)). The tool the line names is the request's own copy of the name,
+found by matching what the reply was writing against the tools the request offered, so a name the
+reply made up is never repeated back to it.
+
+`verified-by: bravebot_agent::turn::a_reply_cut_off_while_writing_a_call_is_told_so_and_the_turn_carries_on`
+`verified-by: bravebot_agent::turn::a_reply_cut_off_after_text_keeps_the_text_and_the_turn_carries_on`
+`verified-by: bravebot_agent::turn::two_ceiling_stops_in_a_row_end_the_turn`
+`verified-by: bravebot_agent::turn::a_round_between_two_ceiling_stops_starts_the_count_again`
+`verified-by: bravebot_agent::turn::a_call_cut_off_at_the_ceiling_is_never_run`
+`verified-by: bravebot_agent::turn::the_line_after_a_ceiling_stop_says_what_to_do_about_it`
+`verified-by: bravebot_agent::turn::the_person_is_told_what_a_ceiling_stop_asked_for`
+`verified-by: bravebot_agent::turn::a_ceiling_stop_between_two_empty_replies_is_not_two_empty_replies_in_a_row`

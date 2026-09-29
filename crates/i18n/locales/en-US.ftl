@@ -437,6 +437,23 @@ subscription-unusable =
 # printed goes to the view a person can open; this is the sentence saying the thing has ended.
 background-job-finished = `{ $command }` finished in the background: { $outcome }
 
+# Said when a reply reached the output limit and the model is asked again rather than the turn
+# ending. Which one follows from what the reply was doing when it stopped: a call it was writing
+# was never made, so the work is asked for in parts, and a reply that wrote nothing is asked again.
+ceiling-stop-in-call = the model reached its output limit of { $tokens } tokens while writing a call to { $tool }, so the call was not made; asking it to do the work in smaller parts
+ceiling-stop-in-a-call = the model reached its output limit of { $tokens } tokens while writing a tool call, so the call was not made; asking it to do the work in smaller parts
+ceiling-stop-thinking = the model reached its output limit of { $tokens } tokens while thinking, before it wrote anything; asking it again
+ceiling-stop-silent = the model reached its output limit of { $tokens } tokens before it wrote anything; asking it again
+# Said instead where the turn has no tools left, so the model is asked for an answer rather than
+# for the work.
+ceiling-stop-answer-now = the model reached its output limit of { $tokens } tokens; asking it for a shorter answer
+
+# Said when a reply reached the output limit a second time with a call part written, so its text
+# is the answer. The text arrives looking like the work was done, and the call it was writing is
+# the part that was not.
+ceiling-stop-ends-in-call = the model reached its output limit of { $tokens } tokens again while writing a call to { $tool }, so the call was not made and this answer stops where it did; raise BRAVEBOT_OUTPUT_BUDGET or ask for less in one turn
+ceiling-stop-ends-in-a-call = the model reached its output limit of { $tokens } tokens again while writing a tool call, so the call was not made and this answer stops where it did; raise BRAVEBOT_OUTPUT_BUDGET or ask for less in one turn
+
 # Said when a hook a person attached to a moment did not end well. Three sentences rather than one
 # because what to do about each is different: a program that is not there is a path to fix, a
 # non-zero status is the hook's own business, and one that was stopped was too slow to be run from
@@ -1753,6 +1770,9 @@ failure-incomplete = the reply stopped before it was finished
 failure-undecodable = the reply could not be read
 failure-too-long = the model reached its output limit
 failure-too-long-at = the model reached its output limit of { $tokens } tokens, which BRAVEBOT_OUTPUT_BUDGET raises
+failure-too-long-in-call = the model reached its output limit of { $tokens } tokens, which BRAVEBOT_OUTPUT_BUDGET raises, part way through a call to { $tool }, so the call was not made
+failure-too-long-in-a-call = the model reached its output limit of { $tokens } tokens, which BRAVEBOT_OUTPUT_BUDGET raises, part way through a tool call, so the call was not made
+failure-too-long-thinking = the model reached its output limit of { $tokens } tokens, which BRAVEBOT_OUTPUT_BUDGET raises, while it was still thinking
 failure-unconfigured = nothing here was configured to send the request
 failure-blocked = a gate here would not let the request out
 failure-workspace = the workspace could not be used
