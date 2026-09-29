@@ -481,10 +481,18 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
         // index of the same tree.
         self.servers = Some(servers);
 
-        self.trust = completed.decisions.trust;
-        self.programs = completed.decisions.programs;
-        self.asked_about = completed.decisions.asked_about;
-        self.exposed = completed.decisions.exposed;
+        // Taken apart with no `..`, so an answer a turn learns to remember does not build until
+        // this session says what becomes of it.
+        let turn::Decisions {
+            trust,
+            programs,
+            asked_about,
+            exposed,
+        } = completed.decisions;
+        self.trust = trust;
+        self.programs = programs;
+        self.asked_about = asked_about;
+        self.exposed = exposed;
         let mut said = match completed.outcome {
             Ok(outcome) => Said {
                 reply: outcome.reply_for_display().to_string(),

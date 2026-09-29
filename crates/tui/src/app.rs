@@ -2721,16 +2721,7 @@ fn event_loop(
     // Outlives every turn, which is the point: a turn begins with the exchange so far rather
     // than with nothing, so the user can say "try that again" and be understood. A resumed
     // session begins with an exchange that outlived the process it happened in.
-    // Every run prompt this session has drawn, so a second prompt for one binary under other
-    // arguments can say that a settings file is what ends the asking. It grants nothing and is not
-    // written down anywhere: a session that ends forgets what it asked, which is the same lifetime
-    // the list of programs it vouched for has.
-    let mut asked_about = AskedAbout::new();
-    // And every file this session has agreed the planner may be given despite the credential
-    // scan. The same lifetime, except that `/cd` drops it: an answer is kept under the file's
-    // name from the working directory, which after a move names another file.
-    let mut exposed = bravebot_core::credentials::Exposed::new();
-    let (mut conversation, mut stored, mut programs) = match start {
+    let (mut conversation, mut stored, programs) = match start {
         // Already answered before the loop was entered: the picker runs once, in `run`.
         Start::Fresh | Start::Choose => (
             Conversation::new(),
@@ -2825,14 +2816,6 @@ fn event_loop(
     // person who left at it has nothing created for a session they declined to have.
     let mut scratch = opened_scratch(&mut session, &mut workspace);
 
-    // The language servers this session has started, LSP-8. Held here rather than inside a turn
-    // because the process is the session's: one built per turn would be shut down at the end of
-    // the turn that started it, so the next message would ask the same person about the same
-    // language and wait for a second index of the same tree. `None` until the first turn builds
-    // one, and again after `/clear`, which ends the session the approval belonged to, and after
-    // `/cd`, which leaves the tree it was approved for.
-    let mut servers: Option<LanguageServers> = None;
-
     // After the trust answer, because that question is the first thing on the screen and an aside
     // about a newer release does not come before it. Nothing is fetched here: the line is read off
     // what an earlier launch wrote down, and the ask that answers the next launch runs behind the
@@ -2906,10 +2889,14 @@ fn event_loop(
         }
     };
     open_named(&mut session, &mut workspace, &mut trust, &opening);
-    let mut rules = Rules {
-        sources,
-        permissions,
-    };
+    let mut answers = Answers::opening(
+        trust,
+        programs,
+        Rules {
+            sources,
+            permissions,
+        },
+    );
 
     // Drawn when something has changed rather than on every pass. A drag arrives as a stream of
     // positions, and a frame for each costs more than the whole gesture is worth: with a long
@@ -2921,7 +2908,7 @@ fn event_loop(
     loop {
         // Before the frame and before the next key, so what a slash offers is on the screen as the
         // slash is, and Tab never reaches a list the frame did not show.
-        session.settle_skills(|| crate::skills::resolved(&workspace, trust.clone()));
+        session.settle_skills(|| crate::skills::resolved(&workspace, answers.trust.clone()));
 
         // Waiting for the burst to end, but not indefinitely: a drag that never pauses would
         // otherwise show nothing until it stopped.
@@ -3003,7 +2990,7 @@ fn event_loop(
                 let definitions = bravebot_agent::agents::resolved(
                     &workspace,
                     bravebot_agent::home::directory().as_deref(),
-                    trust.clone(),
+                    answers.trust.clone(),
                     &mut Trail::new(),
                 );
                 address(
@@ -3044,11 +3031,11 @@ fn event_loop(
                 rewind(
                     &mut session,
                     &mut conversation,
-                    &mut trust,
-                    &mut programs,
+                    &mut answers.trust,
+                    &mut answers.programs,
                     &mut stored,
                     &workspace,
-                    &mut servers,
+                    &mut answers.servers,
                     1,
                 );
                 needs_draw = true;
@@ -3061,11 +3048,11 @@ fn event_loop(
                         Ok(steps) if steps > 0 => rewind(
                             &mut session,
                             &mut conversation,
-                            &mut trust,
-                            &mut programs,
+                            &mut answers.trust,
+                            &mut answers.programs,
                             &mut stored,
                             &workspace,
-                            &mut servers,
+                            &mut answers.servers,
                             steps,
                         ),
                         _ => session.note(t!(session_rewind_needs_a_number)),
@@ -3105,7 +3092,7 @@ fn event_loop(
                 // The snapshot holds a trust map without this directory's rule in it, while the
                 // directory itself would stay open.
                 session.close_rewind_window();
-                add_directory(&mut session, &mut workspace, &mut trust, &directory);
+                add_directory(&mut session, &mut workspace, &mut answers.trust, &directory);
             }
             Action::ChangeDirectory(directory) => {
                 // The record moves with the working directory, so the snapshot describes a
@@ -3114,10 +3101,7 @@ fn event_loop(
                 let changed = change_directory(
                     &mut session,
                     &mut workspace,
-                    &mut trust,
-                    &mut servers,
-                    &mut rules,
-                    &mut exposed,
+                    &mut answers,
                     stored.id(),
                     &directory,
                     |asking, carried| crate::trust_prompt::ask_granted(terminal, asking, carried),
@@ -3135,8 +3119,8 @@ fn event_loop(
                             model: session.served_model(),
                             todos: &session.todos_by_turn(),
                             asides: session.asides(),
-                            trust: &trust,
-                            programs: &programs,
+                            trust: &answers.trust,
+                            programs: &answers.programs,
                             directories: workspace.added_directories(),
                             manifest: None,
                             rewind: session.rewind_points(),
@@ -3195,8 +3179,8 @@ fn event_loop(
                     tokens: session.tokens,
                     timing: session.timing_total(),
                     cached: session.cached(),
-                    trust: &trust,
-                    programs: &programs,
+                    trust: &answers.trust,
+                    programs: &answers.programs,
                     looping: session.looping(),
                     watches: session.watches(),
                     goal: session.goal(),
@@ -3231,7 +3215,7 @@ fn event_loop(
                 session.close_rewind_window();
                 let events;
                 (conversation, events) =
-                    compact_animated(terminal, &mut session, config, conversation, &trust)?;
+                    compact_animated(terminal, &mut session, config, conversation, &answers.trust)?;
 
                 // Written now rather than at the end of the next turn: the shortening is the
                 // change, and a session that compacted and then slept should resume compacted.
@@ -3248,8 +3232,8 @@ fn event_loop(
                         model: session.served_model(),
                         todos: &session.todos_by_turn(),
                         asides: session.asides(),
-                        trust: &trust,
-                        programs: &programs,
+                        trust: &answers.trust,
+                        programs: &answers.programs,
                         directories: workspace.added_directories(),
                         manifest: None,
                         rewind: session.rewind_points(),
@@ -3271,7 +3255,7 @@ fn event_loop(
                         &mut session,
                         config,
                         &conversation,
-                        &mut trust,
+                        &mut answers.trust,
                         &question,
                         &pasted,
                         &attached,
@@ -3299,8 +3283,8 @@ fn event_loop(
                                 model: session.served_model(),
                                 todos: &session.todos_by_turn(),
                                 asides: session.asides(),
-                                trust: &trust,
-                                programs: &programs,
+                                trust: &answers.trust,
+                                programs: &answers.programs,
                                 directories: workspace.added_directories(),
                                 manifest: None,
                                 rewind: session.rewind_points(),
@@ -3328,8 +3312,8 @@ fn event_loop(
                         &task,
                         &pasted,
                         &attached,
-                        &mut trust,
-                        &rules.permissions,
+                        &mut answers.trust,
+                        &answers.rules.permissions,
                         settings.attribution(),
                         settings.run_output_cap(),
                         bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines()),
@@ -3361,8 +3345,8 @@ fn event_loop(
                                 model: session.served_model(),
                                 todos: &session.todos_by_turn(),
                                 asides: session.asides(),
-                                trust: &trust,
-                                programs: &programs,
+                                trust: &answers.trust,
+                                programs: &answers.programs,
                                 directories: workspace.added_directories(),
                                 // None, and it stays none however many runs this session starts.
                                 // Its presence is what makes a record a manifest run, and this
@@ -3406,7 +3390,15 @@ fn event_loop(
                 ) else {
                     return Ok(left_behind(&stored));
                 };
-                trust = fresh;
+                let Answers {
+                    trust,
+                    programs,
+                    servers,
+                    asked_about,
+                    exposed,
+                    rules,
+                } = &mut answers;
+                *trust = fresh;
                 // And the rules a new session opens with, for the root it is in: the grants the
                 // cleared session installed were answered by its user, and the files may have
                 // changed since. Where the person already granted a rule the record says so, and
@@ -3422,12 +3414,12 @@ fn event_loop(
                 }
                 // A new session vouches for no program, on the same reasoning as the map: the
                 // list is a standing permission, and this begins a session that was never asked.
-                programs = TrustedPrograms::new();
+                *programs = TrustedPrograms::new();
                 // And nothing has been asked about, since the questions this list holds were put
                 // in a session that is over.
-                asked_about = AskedAbout::new();
+                *asked_about = AskedAbout::new();
                 // And nothing agreed to be shown, for the same reason.
-                exposed = bravebot_core::credentials::Exposed::new();
+                *exposed = bravebot_core::credentials::Exposed::new();
                 // And a new directory, since nothing in the old one outlives the session that
                 // wrote it. The old one is removed either way: what the cleared context wrote is
                 // not something the session after it should find lying there.
@@ -3435,7 +3427,7 @@ fn event_loop(
                 // The servers go with it, LSP-8: what was approved was a process for the session,
                 // so dropping the set shuts them down and the session beginning here is asked
                 // again before one starts.
-                servers = None;
+                *servers = None;
                 needs_draw = true;
             }
             Action::Submit(prompt) => {
@@ -3459,12 +3451,17 @@ fn event_loop(
                     // With the record's rules, which the turn about to run will read: without them a
                     // yes this turn gives to a recorded memory would outlive rewinding past it.
                     let recorded = bravebot_agent::memory::with_recorded(
-                        &trust,
+                        &answers.trust,
                         &workspace,
                         bravebot_agent::home::directory().as_deref(),
                     );
-                    let point =
-                        rewind_point(&session, &conversation, &recorded, &programs, &stored);
+                    let point = rewind_point(
+                        &session,
+                        &conversation,
+                        &recorded,
+                        &answers.programs,
+                        &stored,
+                    );
                     let _ = workspace.take_backups();
                     session.open_rewind_point(point, prompt.clone());
                     session.bind_rewind_coverage(&workspace);
@@ -3483,24 +3480,34 @@ fn event_loop(
                         &prompt,
                         wrote,
                         conversation,
-                        trust,
-                        programs,
-                        servers,
-                        asked_about,
-                        exposed,
-                        &rules.permissions,
+                        answers.trust,
+                        answers.programs,
+                        answers.servers,
+                        answers.asked_about,
+                        answers.exposed,
+                        &answers.rules.permissions,
                         settings.attribution(),
                         settings.run_output_cap(),
                         bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines()),
                         stored.id(),
                     )?;
-                    let events = continued.events;
-                    conversation = continued.conversation;
-                    trust = continued.trust;
-                    programs = continued.programs;
-                    servers = continued.servers;
-                    asked_about = continued.asked_about;
-                    exposed = continued.exposed;
+                    // Taken apart with no `..`, so an answer a turn learns to remember does not
+                    // build until it has a place in `answers`, where `/cd` and `/clear` decide it.
+                    let Continued {
+                        conversation: next,
+                        trust,
+                        programs,
+                        servers,
+                        asked_about,
+                        exposed,
+                        events,
+                    } = continued;
+                    conversation = next;
+                    answers.trust = trust;
+                    answers.programs = programs;
+                    answers.servers = servers;
+                    answers.asked_about = asked_about;
+                    answers.exposed = exposed;
 
                     session.record_turn(history_start, &conversation);
                     session.keep_backups(workspace.take_backups());
@@ -3520,8 +3527,8 @@ fn event_loop(
                             model: session.served_model(),
                             todos: &session.todos_by_turn(),
                             asides: session.asides(),
-                            trust: &trust,
-                            programs: &programs,
+                            trust: &answers.trust,
+                            programs: &answers.programs,
                             directories: workspace.added_directories(),
                             manifest: None,
                             rewind: session.rewind_points(),
@@ -3544,7 +3551,7 @@ fn event_loop(
                             &mut session,
                             config,
                             &conversation,
-                            &trust,
+                            &answers.trust,
                         )?;
                         // The check is a request that really went out, and a refusal in one is
                         // exactly what somebody reading the trail afterwards wants to find.
@@ -3574,8 +3581,8 @@ fn event_loop(
                         model: session.served_model(),
                         todos: &session.todos_by_turn(),
                         asides: session.asides(),
-                        trust: &trust,
-                        programs: &programs,
+                        trust: &answers.trust,
+                        programs: &answers.programs,
                         directories: workspace.added_directories(),
                         manifest: None,
                         rewind: session.rewind_points(),
@@ -3660,14 +3667,10 @@ fn add_directory(
 ///
 /// The answers to the credential question are dropped, TRUST-13: one about a file inside the old
 /// root is remembered under its name from there, and from the new one that name is another file.
-#[allow(clippy::too_many_arguments)]
 fn change_directory(
     session: &mut Session,
     workspace: &mut Workspace,
-    trust: &mut TrustStore,
-    servers: &mut Option<LanguageServers>,
-    rules: &mut Rules,
-    exposed: &mut bravebot_core::credentials::Exposed,
+    answers: &mut Answers,
     id: &str,
     directory: &str,
     ask: impl FnOnce(&[bravebot_agent::granted::Proposed], &mut String) -> Option<bool>,
@@ -3694,6 +3697,17 @@ fn change_directory(
         }
     };
 
+    let Answers {
+        trust,
+        // Kept: an entry names the canonical directory it was vouched in, which the move does not
+        // change, so it covers that tree and no other from anywhere.
+        programs: _,
+        servers,
+        // Kept: it grants nothing.
+        asked_about: _,
+        exposed,
+        rules,
+    } = answers;
     *exposed = bravebot_core::credentials::Exposed::new();
     *trust = trust.rebased(std::path::Path::new(&bravebot_agent::workspace::key_of(
         &moved.root,
@@ -4602,6 +4616,48 @@ impl Rules {
         };
         self.permissions = permissions;
         true
+    }
+}
+
+/// The answers the event loop itself keeps past the prompt that gave them.
+///
+/// One value so that `/cd` and `/clear` each take it apart with no `..`: a set added here does not
+/// build until both say whether it is kept, reset, rebased or read again. The mode, vetting and the
+/// MCP servers are the `Session`'s, and the directories `/add-dir` opened are the `Workspace`'s, so
+/// neither pattern reaches them.
+struct Answers {
+    trust: TrustStore,
+    programs: TrustedPrograms,
+    /// The language servers this session has started, LSP-8. Held here rather than inside a turn
+    /// because the process is the session's: one built per turn would be shut down at the end of
+    /// the turn that started it, so the next message would ask the same person about the same
+    /// language and wait for a second index of the same tree. `None` until the first turn builds
+    /// one, and again after `/clear`, which ends the session the approval belonged to, and after
+    /// `/cd`, which leaves the tree it was approved for.
+    servers: Option<LanguageServers>,
+    /// Every run prompt this session has drawn, so a second prompt for one binary under other
+    /// arguments can say that a settings file is what ends the asking. It grants nothing and is not
+    /// written down anywhere: a session that ends forgets what it asked, which is the same lifetime
+    /// the list of programs it vouched for has.
+    asked_about: AskedAbout,
+    /// Every file this session has agreed the planner may be given despite the credential scan.
+    /// The same lifetime, except that `/cd` drops it: an answer is kept under the file's name from
+    /// the working directory, which after a move names another file.
+    exposed: bravebot_core::credentials::Exposed,
+    rules: Rules,
+}
+
+impl Answers {
+    /// What a session holds on opening, before any turn has asked anything.
+    fn opening(trust: TrustStore, programs: TrustedPrograms, rules: Rules) -> Self {
+        Self {
+            trust,
+            programs,
+            servers: None,
+            asked_about: AskedAbout::new(),
+            exposed: bravebot_core::credentials::Exposed::new(),
+            rules,
+        }
     }
 }
 
@@ -6537,11 +6593,16 @@ fn finish_turn(
         servers,
     } = finished;
     let carried = match decisions {
-        Some(decisions) => Carried {
-            trust: decisions.trust,
-            programs: decisions.programs,
-            asked: decisions.asked_about,
-            exposed: decisions.exposed,
+        Some(turn::Decisions {
+            trust,
+            programs,
+            asked_about,
+            exposed,
+        }) => Carried {
+            trust,
+            programs,
+            asked: asked_about,
+            exposed,
         },
         // Preserve the existing unwind fallback; ordinary endings always carry current decisions.
         None => Carried {
@@ -6588,13 +6649,19 @@ fn finish_turn(
             workspace,
         )
     };
+    let Carried {
+        trust,
+        programs,
+        asked,
+        exposed,
+    } = carried;
     Continued {
         conversation,
-        trust: carried.trust,
-        programs: carried.programs,
+        trust,
+        programs,
         servers,
-        asked_about: carried.asked,
-        exposed: carried.exposed,
+        asked_about: asked,
+        exposed,
         events,
     }
 }
@@ -17270,10 +17337,14 @@ mod tests {
 
         let mut workspace = Workspace::new(&a).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new(workspace.root());
-        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let trust = TrustStore::new(workspace.root());
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
         assert_eq!(
-            rules.permissions.for_command("bash scripts/check.sh"),
+            answers
+                .rules
+                .permissions
+                .for_command("bash scripts/check.sh"),
             Decision::Ruled(Ruling::Allow),
             "the rule was not granted where it was proposed"
         );
@@ -17283,10 +17354,7 @@ mod tests {
             change_directory(
                 &mut session,
                 &mut workspace,
-                &mut trust,
-                &mut None,
-                &mut rules,
-                &mut bravebot_core::credentials::Exposed::new(),
+                &mut answers,
                 "a-session",
                 b.to_str().expect("utf-8 path"),
                 |_, _| {
@@ -17298,7 +17366,10 @@ mod tests {
         );
 
         assert_eq!(
-            rules.permissions.for_command("bash scripts/check.sh"),
+            answers
+                .rules
+                .permissions
+                .for_command("bash scripts/check.sh"),
             Decision::Unmatched,
             "the grant for the checkout left behind still answers the run prompt"
         );
@@ -17323,10 +17394,11 @@ mod tests {
 
         let mut workspace = Workspace::new(&a).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new(workspace.root());
-        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let trust = TrustStore::new(workspace.root());
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
         assert_eq!(
-            rules.permissions.for_command("rm -rf build"),
+            answers.rules.permissions.for_command("rm -rf build"),
             Decision::Unmatched
         );
 
@@ -17334,10 +17406,7 @@ mod tests {
             change_directory(
                 &mut session,
                 &mut workspace,
-                &mut trust,
-                &mut None,
-                &mut rules,
-                &mut bravebot_core::credentials::Exposed::new(),
+                &mut answers,
                 "a-session",
                 b.to_str().expect("utf-8 path"),
                 never_asked,
@@ -17346,7 +17415,7 @@ mod tests {
         );
 
         assert_eq!(
-            rules.permissions.for_command("rm -rf build"),
+            answers.rules.permissions.for_command("rm -rf build"),
             Decision::Ruled(Ruling::Deny),
             "the deny rule of the checkout moved to is not in force"
         );
@@ -17368,18 +17437,16 @@ mod tests {
 
         let mut workspace = Workspace::new(&a).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new(workspace.root());
-        let mut rules = starting_rules(&mut session, &state, workspace.root());
+        let trust = TrustStore::new(workspace.root());
+        let rules = starting_rules(&mut session, &state, workspace.root());
+        let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
 
         let mut offered = Vec::new();
         assert_eq!(
             change_directory(
                 &mut session,
                 &mut workspace,
-                &mut trust,
-                &mut None,
-                &mut rules,
-                &mut bravebot_core::credentials::Exposed::new(),
+                &mut answers,
                 "a-session",
                 b.to_str().expect("utf-8 path"),
                 |asking, _| {
@@ -17400,7 +17467,10 @@ mod tests {
             "the question did not name the rule the checkout moved to proposed"
         );
         assert_eq!(
-            rules.permissions.for_command("bash scripts/check.sh"),
+            answers
+                .rules
+                .permissions
+                .for_command("bash scripts/check.sh"),
             Decision::Ruled(Ruling::Allow),
             "the rule accepted after the move is not in force"
         );
@@ -17427,17 +17497,15 @@ mod tests {
 
         let mut workspace = Workspace::new(&a).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new(workspace.root());
-        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let trust = TrustStore::new(workspace.root());
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
 
         assert_eq!(
             change_directory(
                 &mut session,
                 &mut workspace,
-                &mut trust,
-                &mut None,
-                &mut rules,
-                &mut bravebot_core::credentials::Exposed::new(),
+                &mut answers,
                 "a-session",
                 b.to_str().expect("utf-8 path"),
                 |_, _| None,
@@ -17461,17 +17529,15 @@ mod tests {
 
         let mut workspace = Workspace::new(&a).expect("workspace");
         let mut session = Session::new("none").allowing_bypass();
-        let mut trust = TrustStore::new(workspace.root());
-        let mut rules = starting_rules(&mut session, &state, workspace.root());
+        let trust = TrustStore::new(workspace.root());
+        let rules = starting_rules(&mut session, &state, workspace.root());
+        let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
 
         assert_eq!(
             change_directory(
                 &mut session,
                 &mut workspace,
-                &mut trust,
-                &mut None,
-                &mut rules,
-                &mut bravebot_core::credentials::Exposed::new(),
+                &mut answers,
                 "a-session",
                 b.to_str().expect("utf-8 path"),
                 never_asked,
@@ -17480,7 +17546,10 @@ mod tests {
         );
 
         assert_eq!(
-            rules.permissions.for_command("bash scripts/check.sh"),
+            answers
+                .rules
+                .permissions
+                .for_command("bash scripts/check.sh"),
             Decision::Ruled(Ruling::Allow),
             "the mode did not grant what the checkout moved to proposed"
         );
@@ -17514,23 +17583,21 @@ mod tests {
 
         let mut workspace = Workspace::new(&a).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new(workspace.root());
-        let mut rules = starting_rules_naming(
+        let trust = TrustStore::new(workspace.root());
+        let rules = starting_rules_naming(
             &mut session,
             &root.join("state"),
             workspace.root(),
             Some(&tooling),
         );
+        let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
 
         let mut offered = Vec::new();
         assert_eq!(
             change_directory(
                 &mut session,
                 &mut workspace,
-                &mut trust,
-                &mut None,
-                &mut rules,
-                &mut bravebot_core::credentials::Exposed::new(),
+                &mut answers,
                 "a-session",
                 b.to_str().expect("utf-8 path"),
                 |asking, _| {
@@ -17542,7 +17609,10 @@ mod tests {
         );
 
         assert_eq!(
-            rules.permissions.for_command("bash scripts/check.sh"),
+            answers
+                .rules
+                .permissions
+                .for_command("bash scripts/check.sh"),
             Decision::Unmatched,
             "moving out of the checkout made its file the person's"
         );
@@ -17609,17 +17679,15 @@ mod tests {
 
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new("/work");
-        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let trust = TrustStore::new("/work");
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
 
         assert_eq!(
             change_directory(
                 &mut session,
                 &mut workspace,
-                &mut trust,
-                &mut None,
-                &mut rules,
-                &mut bravebot_core::credentials::Exposed::new(),
+                &mut answers,
                 "a-session",
                 other.to_str().expect("utf-8 path"),
                 never_asked,
@@ -17630,7 +17698,7 @@ mod tests {
         let canonical = other.canonicalize().expect("canonical");
         assert_eq!(workspace.root(), canonical);
         assert!(
-            trust.is_trusted("."),
+            answers.trust.is_trusted("."),
             "the directory moved to was not vouched for"
         );
 
@@ -17660,8 +17728,9 @@ mod tests {
 
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new(workspace.root());
-        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let trust = TrustStore::new(workspace.root());
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
         let under = workspace.root();
         session.arm_watch("notes.md", under, workspace.look("notes.md", under));
         assert_eq!(session.watches().len(), 1, "the watch was not armed");
@@ -17670,10 +17739,7 @@ mod tests {
             change_directory(
                 &mut session,
                 &mut workspace,
-                &mut trust,
-                &mut None,
-                &mut rules,
-                &mut bravebot_core::credentials::Exposed::new(),
+                &mut answers,
                 "a-session",
                 other.to_str().expect("utf-8 path"),
                 never_asked,
@@ -17722,20 +17788,18 @@ mod tests {
 
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new(workspace.root());
-        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let trust = TrustStore::new(workspace.root());
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
         // Nothing is started by building the set, which is LSP-8: a server comes up on the first
         // question that needs one. What is being asserted is who holds the set afterwards.
-        let mut servers = Some(LanguageServers::new(workspace.root().to_path_buf(), None));
+        answers.servers = Some(LanguageServers::new(workspace.root().to_path_buf(), None));
 
         assert_eq!(
             change_directory(
                 &mut session,
                 &mut workspace,
-                &mut trust,
-                &mut servers,
-                &mut rules,
-                &mut bravebot_core::credentials::Exposed::new(),
+                &mut answers,
                 "a-session",
                 other.to_str().expect("utf-8 path"),
                 never_asked,
@@ -17744,7 +17808,7 @@ mod tests {
         );
 
         assert!(
-            servers.is_none(),
+            answers.servers.is_none(),
             "the servers of the directory left behind are still the session's"
         );
 
@@ -17764,20 +17828,18 @@ mod tests {
 
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new(workspace.root());
-        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
-        trust.trust(".");
-        trust.distrust("vendor");
+        let trust = TrustStore::new(workspace.root());
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
+        answers.trust.trust(".");
+        answers.trust.distrust("vendor");
 
         let left = workspace.root().to_path_buf();
         assert_eq!(
             change_directory(
                 &mut session,
                 &mut workspace,
-                &mut trust,
-                &mut None,
-                &mut rules,
-                &mut bravebot_core::credentials::Exposed::new(),
+                &mut answers,
                 "a-session",
                 other.to_str().expect("utf-8 path"),
                 never_asked,
@@ -17786,15 +17848,17 @@ mod tests {
         );
 
         assert!(
-            trust.is_trusted(&left.display().to_string()),
+            answers.trust.is_trusted(&left.display().to_string()),
             "the answer given for the directory left behind was forgotten"
         );
         assert!(
-            !trust.is_trusted(&left.join("vendor").display().to_string()),
+            !answers
+                .trust
+                .is_trusted(&left.join("vendor").display().to_string()),
             "a no given inside the directory left behind was forgotten"
         );
         assert_eq!(
-            trust.integrity_of("vendor"),
+            answers.trust.integrity_of("vendor"),
             Some(bravebot_core::label::Integrity::Trusted),
             "a rule about the old vendor directory decided a path in the new one"
         );
@@ -17813,19 +17877,17 @@ mod tests {
 
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new(workspace.root());
-        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
-        trust.trust(".");
-        trust.distrust("src/vendor");
+        let trust = TrustStore::new(workspace.root());
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
+        answers.trust.trust(".");
+        answers.trust.distrust("src/vendor");
 
         assert_eq!(
             change_directory(
                 &mut session,
                 &mut workspace,
-                &mut trust,
-                &mut None,
-                &mut rules,
-                &mut bravebot_core::credentials::Exposed::new(),
+                &mut answers,
                 "a-session",
                 "src",
                 never_asked,
@@ -17834,11 +17896,11 @@ mod tests {
         );
 
         assert!(
-            trust.is_trusted("main.rs"),
+            answers.trust.is_trusted("main.rs"),
             "the directory moved into was not vouched for"
         );
         assert!(
-            !trust.is_trusted("vendor/lib.js"),
+            !answers.trust.is_trusted("vendor/lib.js"),
             "an untrusted subtree became trusted by moving into its parent"
         );
 
@@ -17857,19 +17919,16 @@ mod tests {
 
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new(workspace.root());
-        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
-        let mut exposed = bravebot_core::credentials::Exposed::new();
+        let trust = TrustStore::new(workspace.root());
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
 
-        exposed.allow(".env");
+        answers.exposed.allow(".env");
         assert_eq!(
             change_directory(
                 &mut session,
                 &mut workspace,
-                &mut trust,
-                &mut None,
-                &mut rules,
-                &mut exposed,
+                &mut answers,
                 "a-session",
                 "src",
                 never_asked,
@@ -17877,19 +17936,16 @@ mod tests {
             Changed::Moved
         );
         assert!(
-            !exposed.holds(".env"),
+            !answers.exposed.holds(".env"),
             "a yes for the root's .env covered src/.env after moving into src"
         );
 
-        exposed.allow(".env");
+        answers.exposed.allow(".env");
         assert_eq!(
             change_directory(
                 &mut session,
                 &mut workspace,
-                &mut trust,
-                &mut None,
-                &mut rules,
-                &mut exposed,
+                &mut answers,
                 "a-session",
                 other.to_str().expect("utf-8 path"),
                 never_asked,
@@ -17897,8 +17953,58 @@ mod tests {
             Changed::Moved
         );
         assert!(
-            !exposed.holds(".env"),
+            !answers.exposed.holds(".env"),
             "a yes for one checkout's .env covered another checkout's"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A program vouched for names the tree it was vouched in, so a move leaves it covering that
+    /// tree and no other, and the run prompts already drawn grant nothing. Both are kept.
+    #[test]
+    fn moving_keeps_the_programs_vouched_for_and_the_prompts_already_drawn() {
+        use bravebot_core::programs::Command;
+        let root = crate::testutil::scratch_dir("bravebot-cd-programs-test");
+        let project = root.join("project");
+        let other = root.join("other");
+        std::fs::create_dir_all(&project).expect("scratch");
+        std::fs::create_dir_all(&other).expect("scratch");
+
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        let mut session = Session::new("none");
+        let trust = TrustStore::new(workspace.root());
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
+        let make = Command::new("/usr/bin/make", vec!["check".into()], workspace.root());
+        answers.programs.trust(make.clone());
+        answers.asked_about.record(make.clone());
+        let (programs, asked_about) = (answers.programs.clone(), answers.asked_about.clone());
+
+        assert_eq!(
+            change_directory(
+                &mut session,
+                &mut workspace,
+                &mut answers,
+                "a-session",
+                other.to_str().expect("utf-8 path"),
+                never_asked,
+            ),
+            Changed::Moved
+        );
+        assert_eq!(
+            answers.programs, programs,
+            "moving forgot a program vouched for in the tree left behind"
+        );
+        assert_eq!(
+            answers.asked_about, asked_about,
+            "moving forgot a run prompt already drawn"
+        );
+        assert!(
+            !answers
+                .programs
+                .contains(&make.program, &make.args, workspace.root()),
+            "a program vouched for in one tree covered the tree moved to"
         );
 
         std::fs::remove_dir_all(&root).ok();
@@ -17913,20 +18019,17 @@ mod tests {
 
         let mut workspace = Workspace::new(&root).expect("workspace");
         let mut session = Session::new("none");
-        let mut trust = TrustStore::new("/work");
-        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
-        let mut exposed = bravebot_core::credentials::Exposed::new();
-        exposed.allow(".env");
+        let trust = TrustStore::new("/work");
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
+        answers.exposed.allow(".env");
         let before = workspace.root().to_path_buf();
 
         assert_eq!(
             change_directory(
                 &mut session,
                 &mut workspace,
-                &mut trust,
-                &mut None,
-                &mut rules,
-                &mut exposed,
+                &mut answers,
                 "a-session",
                 "nowhere",
                 never_asked,
@@ -17934,9 +18037,12 @@ mod tests {
             Changed::Stayed
         );
         assert_eq!(workspace.root(), before);
-        assert!(trust.is_empty(), "a refused move vouched for something");
         assert!(
-            exposed.holds(".env"),
+            answers.trust.is_empty(),
+            "a refused move vouched for something"
+        );
+        assert!(
+            answers.exposed.holds(".env"),
             "a refused move dropped an answer about a file the session has not left"
         );
 
