@@ -22,6 +22,7 @@ import type {
   OutputRequest,
   RunRequest,
   Said,
+  ServerRequest,
   Shown,
   VouchRequest,
   VetRequest,
@@ -112,6 +113,14 @@ export type Entry = (
    * given for and the next fetch asks again.
    */
   | { kind: 'fetch'; id: string; request: FetchRequest; decision: 'approve' | 'reject' | null }
+  /**
+   * A language server awaiting a decision about whether to start it, or the record of one
+   * already made.
+   *
+   * No `remember`. An approval lasts for the conversation, and the agent keeps track of it: the
+   * same language is not asked about again until the conversation closes.
+   */
+  | { kind: 'server'; id: string; request: ServerRequest; decision: 'approve' | 'reject' | null }
   | { kind: 'ask'; id: string; request: AskRequest; answers: AskAnswer[] | null }
   | { kind: 'error'; id: string; text: string; category?: string | null; attempts?: number | null; status?: number | null; cutOff?: CutOff | null }
   | { kind: 'watch'; id: string; text: string }
@@ -203,6 +212,7 @@ export const askedOutput = (request: OutputRequest): Entry => ({
 })
 export const askedVet = (request: VetRequest): Entry => ({ kind: 'vet', id: nextId(), request, decision: null })
 export const askedFetch = (request: FetchRequest): Entry => ({ kind: 'fetch', id: nextId(), request, decision: null })
+export const askedServer = (request: ServerRequest): Entry => ({ kind: 'server', id: nextId(), request, decision: null })
 export const askedVouch = (request: VouchRequest): Entry => ({
   kind: 'vouch',
   id: nextId(),
@@ -300,6 +310,7 @@ export const REPLY = {
   vouch: 'vouch.reply',
   vet: 'vet.reply',
   fetch: 'fetch.reply',
+  server: 'server.reply',
 } as const
 
 /** Which kinds of question a person can answer with a yes or a no. */
@@ -478,6 +489,7 @@ export function searchableText(entry: Entry): string {
     case 'output': return [entry.request.command, entry.request.summary, entry.request.output].join(' ')
     case 'vet': return [entry.request.origin, entry.request.expects, entry.request.content].join(' ')
     case 'fetch': return [entry.request.url, entry.request.host].join(' ')
+    case 'server': return [entry.request.language, entry.request.program, entry.request.workspace].join(' ')
     case 'vouch': return [entry.request.path, entry.request.preview].join(' ')
     case 'ask': return entry.request.prompts.map((prompt) => [prompt.header, prompt.question, ...prompt.rows.map((row) => `${row.label} ${row.detail ?? ''}`)].join(' ')).join(' ')
   }

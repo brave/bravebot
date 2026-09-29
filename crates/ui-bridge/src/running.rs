@@ -81,6 +81,16 @@ pub struct State {
     pub rewind: Vec<bravebot_session::sessions::RewindPoint>,
     /// The first thing the user asked, which is what a list calls the session.
     pub first_prompt: Option<String>,
+    /// The language servers this session has started (LSP-8). `None` until a turn builds the set.
+    ///
+    /// The session holds the set so that an approved server answers later turns. A set owned by
+    /// a turn would stop at the end of it, and the next turn would ask about the same language
+    /// and index the same tree again. Each turn takes the set and puts it back.
+    ///
+    /// The set is not saved to the record. A reopened or forked session starts with none and
+    /// asks before starting a server. Dropping this state stops the servers, which happens when
+    /// the session closes or the process ends.
+    pub servers: Option<bravebot_agent::lsp::LanguageServers>,
 }
 
 impl State {
@@ -102,6 +112,7 @@ impl State {
             asides: Vec::new(),
             rewind: Vec::new(),
             first_prompt: None,
+            servers: None,
         }
     }
 
@@ -141,6 +152,7 @@ impl State {
             asides: bravebot_session::sessions::recall(project, record).asides,
             rewind: record.rewind_points(project),
             first_prompt: Some(record.title.clone()),
+            servers: None,
         }
     }
 
@@ -197,6 +209,7 @@ impl State {
             asides: Vec::new(),
             rewind: Vec::new(),
             first_prompt,
+            servers: None,
         }
     }
 }

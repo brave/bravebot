@@ -1479,6 +1479,59 @@ function Card({
       )
     }
 
+    case 'server': {
+      const { request, decision } = entry
+      return (
+        <div className={`confirm server ${request.runsBuildTooling ? 'builds' : ''}`}>
+          <div className="confirm-head">
+            <span className="intent">start server</span>
+            <span className="path server-language">{request.language} language server</span>
+          </div>
+
+          {/* The resolved path is shown because `$PATH` decides what the name runs. */}
+          <p className="permission-scope">
+            <strong>Program:</strong> <code>{request.program}</code>
+          </p>
+          <p className="permission-scope">
+            <strong>Indexes:</strong> <code>{request.workspace}</code>
+          </p>
+
+          {/* A server that runs build tooling executes code from dependencies (LSP-5). */}
+          {request.runsBuildTooling ? (
+            <p className="warn">
+              Starting it runs the build tooling of its ecosystem, so code from your
+              dependencies runs with your own access, the way a build or a test run does. It
+              is not confined. Files it writes are not tracked, so undoing a turn in the
+              terminal may not put them back.
+            </p>
+          ) : (
+            <p className="permission-scope">
+              It reads the project with your own access. Nothing is written to your project.
+            </p>
+          )}
+
+          <p className="permission-scope">
+            It stays running for this conversation and stops when the conversation closes.
+            What it reports stays on the same footing however you answer: a place in a file
+            is shown to the model, and the text at that place stays confined unless you
+            vouched for the file.
+          </p>
+
+          <YesOrNo
+            kind="server"
+            request={request.request}
+            answerable={answerable}
+            decision={decision}
+            onDecide={onDecide}
+            reject="Don’t start"
+            approve="Start for this conversation"
+            approved="You started this server for the conversation"
+            rejected="You refused this server"
+          />
+        </div>
+      )
+    }
+
     case 'ask':
       return <Questions request={entry} answers={entry.answers} onAnswer={onAnswer} />
 
@@ -1553,6 +1606,8 @@ function waitingOn(kind: t.Asking['kind']): string {
       return 'Review the checked content'
     case 'fetch':
       return 'Answer the fetch'
+    case 'server':
+      return 'Answer the language server'
     case 'vouch':
       return 'Answer the vouch'
     case 'ask':

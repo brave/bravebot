@@ -963,3 +963,40 @@ fn a_fetch_from_a_metadata_service_says_so_across_the_bridge() {
         json!([{ "authority": "metadata-service", "named": "169.254.169.254" }])
     );
 }
+
+/// What would run and what running it means, and no sentence about either: the binary as it
+/// resolved, the tree it would index, and whether starting it runs build tooling, which is the
+/// fact a front end has to say out loud (LSP-5). The question carries no answer of its own.
+#[test]
+fn a_server_prompt_carries_what_would_run_and_whether_it_builds() {
+    use bravebot_agent::confirm::ServerRequest;
+    let request = ServerRequest {
+        language: "Rust",
+        program: "/home/someone/.cargo/bin/rust-analyzer".into(),
+        workspace: "/home/someone/project".into(),
+        runs_build_tooling: true,
+    };
+
+    assert_eq!(
+        wire::server_request(5, &request),
+        json!({
+            "request": 5,
+            "language": "Rust",
+            "program": "/home/someone/.cargo/bin/rust-analyzer",
+            "workspace": "/home/someone/project",
+            "runsBuildTooling": true,
+            "summary": "start the Rust language server",
+        })
+    );
+    assert_eq!(
+        wire::server_request(
+            6,
+            &ServerRequest {
+                runs_build_tooling: false,
+                ..request
+            }
+        )["runsBuildTooling"],
+        false,
+        "a server that builds nothing was said to build"
+    );
+}

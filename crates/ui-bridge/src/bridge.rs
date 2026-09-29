@@ -137,6 +137,7 @@ impl Bridge {
                 Reply::Vet(wire::decision(request.param("decision"))),
             ),
             "fetch.reply" => self.reply_decision(request, Reply::Fetch),
+            "server.reply" => self.reply_decision(request, Reply::Server),
             "ask.reply" => self.reply_ask(request),
             "trust.reply" => self.reply_trust(request),
             "permissions.list" => self.permissions(request, false),
@@ -1414,6 +1415,13 @@ fn work(work: Work) {
     let file_authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
     let task = task.with_file_authority(file_authority.clone());
     let programs = state.programs.clone();
+    // The session's language servers (LSP-8), taken for this turn and put back after it. The
+    // first turn builds the set. Building it starts no server: one starts on the first question
+    // that needs it, after the person approves.
+    let mut servers = state.servers.take().unwrap_or_else(|| {
+        // Use the task's home so the index is cached with the rest of the session's state.
+        bravebot_agent::lsp::LanguageServers::new(workspace.root().to_path_buf(), task.home.clone())
+    });
     let completed = agent_turn::resume(
         &config,
         &egress,
@@ -1425,9 +1433,12 @@ fn work(work: Work) {
         &mut sink,
         trust,
         programs,
-        None, // Language-server approvals are not offered by this front-end.
+        Some(&mut servers),
         &cancel,
     );
+    // Put the set back even if the turn failed or was cancelled. Otherwise its servers would
+    // stop here, and the next turn would ask about the same language again.
+    state.servers = Some(servers);
 
     // Cleanup has finished on every return, including cancellation and request errors.
     // Taken apart with no `..`, so an answer a turn learns to remember does not build until this

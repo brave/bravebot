@@ -362,6 +362,24 @@ export interface FetchRequest {
   summary: string
 }
 
+/**
+ * A language server the planner wants started.
+ *
+ * `program` is the absolute path the server's name resolved to, drawn as sent. The agent picks
+ * the name from its own table, so nothing a turn read chooses what runs.
+ *
+ * When `runsBuildTooling` is true, starting the server runs code from the dependency tree with
+ * the person's own access, as a build does. The card must say so.
+ */
+export interface ServerRequest {
+  request: number
+  language: string
+  program: string
+  workspace: string
+  runsBuildTooling: boolean
+  summary: string
+}
+
 /** A pipeline the planner wants to run. */
 export interface RunRequest {
   request: number
@@ -502,6 +520,7 @@ export interface EventMap {
   'vouch.request': VouchRequest
   'vet.request': VetRequest
   'fetch.request': FetchRequest
+  'server.request': ServerRequest
   'ask.request': AskRequest
   'turn.done': TurnDone
   'turn.error': TurnError

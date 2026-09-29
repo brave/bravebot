@@ -12,8 +12,8 @@ and network diagnostics include every certificate trust problem reported upstrea
 The bridge uses policy-audited model-list decoding and Bedrock's per-model names and
 context windows. Trust maps are rooted in the session project. Resuming a terminal
 session preserves its saved side conversations and rewind checkpoints.
-The UI presents fetch approvals. It does not yet present language-server or manifest-plan
-approvals; those requests are refused without consuming another pending approval.
+The UI presents fetch and language-server approvals. It does not yet present manifest-plan
+approvals; that request is refused without consuming another pending approval.
 
 Vetted reads now have one-time approval cards, existing output/path approvals include checker
 advice, and write approvals show the processor's remark beside the diff.
@@ -29,6 +29,10 @@ advice, and write approvals show the processor's remark beside the diff.
   against a model service and a website the script serves itself. The website is the
   witness: an approval sends one request to the host the card showed, a refusal sends none,
   and an earlier approval does not answer a later fetch. No paid inference.
+- `npm run drive:language-server`: a language server the planner asks for, through the real
+  app and bridge, against a model service and a server the script supplies. The server is
+  the witness: an approval starts one process, the next message asks nobody and starts none,
+  and the process has ended once the app has closed. No paid inference. Not for Windows.
 - After building, `node scripts/drive-agent-rpc.mjs`: an actual automatic watch turn against
   a local fake gateway, real lifecycle hook subprocesses, context measurements and stop/close.
   Uses an isolated agent home; no paid inference or real credentials.
@@ -86,6 +90,7 @@ at, that a control keeps keyboard focus through an animation.
 | `npm run drive:models` | Model defaults, composer placement, search and keyboard selection, turn payload, per-conversation persistence, and discovery error recovery. Also bot creation, Avatar refresh and layout, saved bot models, composer changes, and persistence after reload. Uses deterministic replies without paid inference. |
 | `npm run drive:run` | Approving a command from the window, end to end through a live turn |
 | `npm run drive:fetch` | Approving and refusing a fetch from the window, end to end, against a local model service and website |
+| `npm run drive:language-server` | Starting a language server from the window, that it is kept for the conversation, and that it ends with the app |
 | `npm run drive:ask` | Answering a series of questions the planner asks, likewise live |
 | `npm run drive:menu` | The application menu: what it offers, what it greys, and what it refuses to offer |
 | `npm run drive:export` | Exporting a conversation to text, Markdown and PDF — with and without the tool calls, and what the file leaves out either way |
