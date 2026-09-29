@@ -45,8 +45,9 @@
 //! answers with that file. A caller takes the label from the answer: the meet over those paths and
 //! over stdin, which is the ordinary rule for a derived value applied to a process.
 //!
-//! No answer is the conservative case and the default. Three things produce one: a program not in
-//! [`FILTERS`], an option the entry does not list, and an operand a program has no reading for.
+//! No answer is the conservative case and the default. A program not in [`FILTERS`] gets none, and
+//! so do an option the entry does not list, an option written after an operand, an operand a
+//! program has no reading for, and a recursive call naming no path.
 //!
 //! # The options are an allowlist, and that is the whole of why this is safe
 //!
@@ -56,9 +57,18 @@
 //! `--recursive` to a matcher and is exactly `--recursive` to the program.
 //!
 //! So each entry lists the options it recognises, spelled exactly, and anything else refuses the
-//! call. An option that takes a value says so, and its value is skipped wherever it is written, so
-//! it is never counted as an operand: `grep -A 1 -r TODO` walks the working directory and names no
-//! path, and a count read as the pattern would have left `TODO` standing in for the tree.
+//! call. An option that takes a value says so, and its value is skipped whether it is attached or
+//! is the next word, so it is never counted as an operand: `grep -A 1 -r TODO` walks the working
+//! directory and names no path, and a count read as the pattern would have left `TODO` standing in
+//! for the tree.
+//!
+//! # An option after an operand proves nothing
+//!
+//! GNU's option parser reads an option anywhere in argv. BSD `head`, `tail`, `wc` and `cut` stop
+//! reading options at the first operand, and so does GNU with `POSIXLY_CORRECT` set, so a word
+//! spelled like an option after it is a file: `head a.md -n secret.txt` prints `secret.txt` as
+//! well as `a.md`. The two readings name different files, so a call with such a word proves
+//! nothing. `-` alone is not such a word: both read it as an operand wherever it is written.
 //!
 //! # An option that supplies the instruction is excluded, not parsed
 //!
@@ -164,9 +174,11 @@ const fn takes(spelling: &'static str) -> Flag {
 ///
 /// Short on purpose. Each entry is a claim that no argument can make the program write, execute, or
 /// read anything but stdin and the paths it was given, and that claim was checked against the
-/// program's own option list rather than assumed from what it is usually used for. Only options
-/// both the GNU and the BSD implementation spell the same way are listed, since the entry is
-/// matched by the name a program resolved to and either may be the one behind it.
+/// program's own option list rather than assumed from what it is usually used for. The entry is
+/// matched by the name a program resolved to and either the GNU or the BSD implementation may be
+/// the one behind it, so an option is listed only where each one that accepts it reads the same
+/// files for it and takes its value the same way. One that rejects it, as BSD `wc` rejects every
+/// long option, reads nothing.
 pub const FILTERS: &[Filter] = &[
     Filter {
         program: "wc",
@@ -318,7 +330,6 @@ pub const FILTERS: &[Filter] = &[
             takes("-m"),
             takes("--after-context"),
             takes("--before-context"),
-            takes("--context"),
             takes("--max-count"),
             // Both only narrow which of the named paths are read, so the answer still covers what
             // was read.
@@ -359,6 +370,9 @@ pub const FILTERS: &[Filter] = &[
             // refuse the spelling everybody writes.
             "--color",
             "--colour",
+            // BSD gives --context an optional value, so a separate word after it is the pattern
+            // there and the value under GNU. -C takes a required value under both.
+            "--context",
         ],
         numeric: true,
         operands: 1,
@@ -407,9 +421,9 @@ pub const NEVER: &[&str] = &[
 /// `Some(paths)` is a claim that the call writes no file, starts no process, opens no socket, and
 /// reads nothing except stdin and the paths returned. `Some(&[])` says stdin was its only input.
 ///
-/// Conservative by construction: an unknown program, an option the entry does not list, an operand
-/// the program has no reading for, and a recursive call naming no path all answer `None`, and
-/// `None` means the caller keeps the opaque default.
+/// Conservative by construction: an unknown program, an option the entry does not list, an option
+/// written after an operand, an operand the program has no reading for, and a recursive call naming
+/// no path all answer `None`, and `None` means the caller keeps the opaque default.
 pub fn read_set(program: &str, args: &[String]) -> Option<Vec<String>> {
     // A path resolves to a file name; the table names programs.
     let name = program_name(program);
@@ -433,7 +447,13 @@ pub fn read_set(program: &str, args: &[String]) -> Option<Vec<String>> {
             operands.push(arg);
             continue;
         }
-        match recognise(filter, arg)? {
+        let argument = recognise(filter, arg)?;
+        // GNU reads this word as an option, and a program that stops reading options at its first
+        // operand opens it as a file. `--` is one of them: past an operand it names a file too.
+        if !operands.is_empty() && argument != Argument::Operand {
+            return None;
+        }
+        match argument {
             Argument::EndOfFlags => only_operands_left = true,
             Argument::Flag => {}
             Argument::Recursive => recursing = true,
@@ -835,7 +855,11 @@ mod tests {
     #[test]
     fn a_word_past_the_end_of_flags_marker_is_an_operand() {
         assert_eq!(
-            read_set("grep", &args(&["pattern", "--", "-i"])),
+            read_set("grep", &args(&["--", "-i", "notes.txt"])),
+            Some(vec!["notes.txt".to_string()])
+        );
+        assert_eq!(
+            read_set("grep", &args(&["--", "pattern", "-i"])),
             Some(vec!["-i".to_string()])
         );
         // The pattern itself can be spelled like a flag, and then nothing is read from disk.
@@ -869,6 +893,48 @@ mod tests {
             read_set("cut", &args(&["-d", ",", "-f", "1", "rows.csv"])),
             Some(vec!["rows.csv".to_string()])
         );
+    }
+
+    /// BSD grep gives `--context` an optional value, so `grep --context TODO secret.txt` searches
+    /// `secret.txt` for `TODO` there, while GNU takes `TODO` as the value and reads stdin. An
+    /// answer taken from the GNU reading leaves out the file the BSD one prints.
+    #[test]
+    fn a_context_option_given_its_value_apart_proves_nothing() {
+        assert_eq!(
+            read_set("grep", &args(&["--context", "TODO", "secret.txt"])),
+            None
+        );
+        // -C takes a required value under both, so a call spelled with it is still proven.
+        assert_eq!(
+            read_set("grep", &args(&["-C", "2", "TODO", "notes.txt"])),
+            Some(vec!["notes.txt".to_string()])
+        );
+    }
+
+    /// GNU reads an option anywhere in argv, while BSD `head`, `tail`, `wc` and `cut`, and GNU with
+    /// `POSIXLY_CORRECT` set, stop reading options at the first operand and open every word after
+    /// it as a file. Under the second reading each call below also prints `secret.txt` or a file
+    /// named like the option, and an answer taken from the first reading leaves that file out.
+    #[test]
+    fn an_option_after_an_operand_proves_nothing() {
+        let calls: &[(&str, &[&str])] = &[
+            ("head", &["a.md", "-n", "secret.txt"]),
+            ("tail", &["a.md", "-n", "secret.txt"]),
+            ("cut", &["-c1-3", "a.md", "-c", "secret.txt"]),
+            ("grep", &["TODO", "a.md", "-A", "secret.txt"]),
+            ("wc", &["a.md", "-l"]),
+            ("grep", &["TODO", "a.md", "-l"]),
+            // Past an operand, `--` is a file name too.
+            ("head", &["a.md", "--", "secret.txt"]),
+            ("grep", &["TODO", "--", "-i"]),
+        ];
+        for (program, call) in calls {
+            assert_eq!(
+                read_set(program, &args(call)),
+                None,
+                "{program} {call:?} was proven"
+            );
+        }
     }
 
     /// An abbreviation of a long option is not that option. Deciding which option `--recursi`

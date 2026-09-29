@@ -7672,6 +7672,31 @@ five
         );
     }
 
+    /// On macOS both lines print `secret.txt`, which the user refused: BSD `head` stops reading
+    /// options at `safe.txt` and opens the rest as files, and BSD grep gives `--context` an
+    /// optional value, so `TODO` is the pattern. Read the GNU way, the first reads only `safe.txt`
+    /// and the second only stdin, and either would run unasked with its output trusted.
+    #[test]
+    fn a_line_bsd_and_gnu_read_different_files_from_still_asks() {
+        let mut sink = RecordingSink::new();
+        let mut policy = in_a_project(&mut sink, &["secret.txt"]);
+
+        for (program, args) in [
+            ("head", ["safe.txt", "-n", "secret.txt"]),
+            ("grep", ["--context", "TODO", "secret.txt"]),
+        ] {
+            let line = plan_of(vec![step_named(program, &args)]);
+            assert!(
+                policy.plan_needs_approval(&line),
+                "{program}: a line that can read a refused file ran unasked"
+            );
+            assert!(
+                !label_of(&mut policy, &line).is_trusted(),
+                "{program}: bytes that can come from a refused file came back trusted"
+            );
+        }
+    }
+
     /// A recursive search reads a whole tree, so a directory the user refused inside a project they
     /// vouched for has to decide the answer about that project. A label taken from the directory
     /// named on the line would be taken from the one path in the walk nobody objected to.
