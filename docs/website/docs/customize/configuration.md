@@ -28,9 +28,9 @@ block copied out of another tool names its models and names no default, so the m
 still the one the build came with. That case gets one line naming the [`model`](#model) key rather
 than the three routes.
 
-**If Claude Code or opencode already reaches a service on this machine,** the first run offers to copy
-that setup instead, showing everything it would write before it asks. See
-[Importing from Claude Code or opencode](#importing-from-claude-code-or-opencode).
+**If Claude Code or opencode already reaches a service on this machine, or Ollama is running on it,**
+the first run offers to copy that setup instead, showing everything it would write before it asks.
+See [Importing from Claude Code, opencode or Ollama](#importing-from-claude-code-opencode-or-ollama).
 
 Once a service is configured, the rest of this page is what else you can set. What will actually be
 used is reported by:
@@ -912,11 +912,12 @@ what its permissions are: somebody who can write that path can replace the binar
 any other layer, so a file that is missing, over 64 KB or unparseable pins nothing, and a blank or
 non-string value pins nothing under that name.
 
-## Importing from Claude Code or opencode
+## Importing from Claude Code, opencode or Ollama
 
 A first run with nothing configured, in a terminal, reads what Claude Code and opencode set up in your
-home directory before it names the three routes. Where either reaches a service bravebot can use, it
-shows what it would add to `~/.bravebot/settings.json` and asks:
+home directory, and asks a running Ollama what it serves, before it names the three routes. Where any
+of them reaches a service bravebot can use, it shows what it would add to `~/.bravebot/settings.json`
+and asks:
 
 ```
 Claude Code configures a model service bravebot can use, in /home/you/.claude/settings.json.
@@ -941,6 +942,25 @@ answering is not written over.
 its `auth.json` in `$XDG_DATA_HOME/opencode`. A checkout's `.claude/`, `opencode.json` and
 `.opencode/` are never opened: they hold whatever the repository's author wrote, and would otherwise
 decide where your key is sent.
+
+**A running Ollama.** Ollama is asked what it has pulled at the address `OLLAMA_HOST` names, read as
+Ollama reads it, or at `http://localhost:11434` where it is unset. Only an address on this machine is
+asked; one on another machine is named as left, and nothing is sent to it. A server that answers is
+offered as [the block below](#a-local-ollama-or-another-gateway-that-wants-no-key), with the newest
+model that can call tools as `model`:
+
+```
+Ollama is running at http://localhost:11434, serving models bravebot can use.
+Importing it adds these to /home/you/.bravebot/settings.json:
+  model: "ollama/qwen3-coder-oc:latest"
+  provider.ollama, reached at http://localhost:11434/v1: {"name":"Ollama (local)","options":{"baseURL":"http://localhost:11434/v1"}}
+Import this from Ollama? [y/N]
+```
+
+A model that reports it cannot call tools is never the one written, since every turn calls them; an
+Ollama with none that can is named as left. Nothing answering, or an answer that is not Ollama's
+listing, says nothing. The request waits a few seconds at most. Where your settings file already has
+an entry for a server on the same port, under any name, Ollama is not offered again.
 
 **What can be imported.** A Claude Code Bedrock setup, under bravebot's own names, when a region is
 named. An opencode `provider` entry reached through an OpenAI-compatible SDK, with only the fields
@@ -969,7 +989,8 @@ bravebot import-providers
 ```
 
 That command asks the same questions at any time, whether or not a service is configured. It refuses
-without a terminal and in an incognito session.
+without a terminal and in an incognito session. An incognito session asks no Ollama either, since it
+has nothing to write.
 
 ## Reaching a model through AWS Bedrock
 
@@ -1181,7 +1202,9 @@ Ollama wants no API key, so its block names none:
 
 `baseURL` is written down because `ollama` is not one of the names an endpoint is
 [compiled in](#where-the-requests-go) for. There is no `models` key, so Ollama is asked what it has
-pulled and `/model` lists what came back.
+pulled and `/model` lists what came back. A first run with nothing configured offers to write this
+block for you where Ollama is running ([Importing from Claude Code, opencode or
+Ollama](#importing-from-claude-code-opencode-or-ollama)).
 
 ### Which models are offered
 

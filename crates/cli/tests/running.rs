@@ -16,7 +16,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 /// A directory handed to a run as its own, removed when the test that made it ends.
@@ -122,6 +123,12 @@ fn bravebot_started_in(
     run(home, Some(cwd), environment, arguments)
 }
 
+/// Where every run looks for an Ollama unless a test names one: a loopback port nothing listens on.
+///
+/// A first start asks the Ollama on this machine what it serves (IMPORT-10), and the machine
+/// running the suite may have one, which would put its models into every refusal asserted on.
+const NO_OLLAMA: &str = "127.0.0.1:1";
+
 fn run(
     home: &Path,
     cwd: Option<&Path>,
@@ -133,6 +140,7 @@ fn run(
         .env_clear()
         .env("HOME", home)
         .env("BRAVEBOT_LOCALE", "en-US")
+        .env("OLLAMA_HOST", NO_OLLAMA)
         .envs(environment.iter().copied())
         .args(arguments)
         // Not a terminal, and carrying nothing: a run that reads a pipe reads the end of the
@@ -1509,6 +1517,7 @@ fn in_a_terminal_command(
         .env_clear()
         .env("HOME", home)
         .env("BRAVEBOT_LOCALE", "en-US")
+        .env("OLLAMA_HOST", NO_OLLAMA)
         .envs(environment.iter().copied())
         // `-q` leaves out the banner script would otherwise write into what is asserted on, `-e`
         // reports the status the binary exited with rather than script's own, and the transcript
@@ -3353,5 +3362,150 @@ fn import_providers_is_refused_while_incognito() {
     assert!(
         !scratch.settings().exists(),
         "an incognito import wrote settings"
+    );
+}
+
+/// What `ollama list` shows on a machine with one model that can call tools and one that cannot,
+/// as `/api/tags` answers it.
+const OLLAMA_LISTING: &str = r#"{"models": [
+    {"name": "qwen3-coder:30b", "modified_at": "2026-09-16T14:07:58-04:00", "capabilities": ["completion", "tools"]},
+    {"name": "llama3:latest", "modified_at": "2026-09-17T09:46:42-04:00", "capabilities": ["completion"]}
+]}"#;
+
+/// An Ollama on loopback answering `/api/tags` with [`OLLAMA_LISTING`], as the `OLLAMA_HOST` that
+/// reaches it, and a count of the connections it has taken.
+fn an_ollama() -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("addr").port();
+    let asked = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&asked);
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            counted.fetch_add(1, Ordering::SeqCst);
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut request = String::new();
+            let _ = reader.read_line(&mut request);
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                    break;
+                }
+            }
+            let reply = match request.starts_with("GET /api/tags ") {
+                true => http(200, OLLAMA_LISTING),
+                false => http(404, r#"{"error": "not found"}"#),
+            };
+            let _ = stream.write_all(reply.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (format!("127.0.0.1:{port}"), asked)
+}
+
+/// IMPORT-10: a first start on a machine where Ollama runs and nothing else is configured asks
+/// whether to import it, showing the server and the model that would be written, and a start
+/// nobody answers is declined and refused as before.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_first_run_with_ollama_running_offers_to_import_it() {
+    let scratch = Scratch::new("cli-running-import-ollama");
+    let (ollama, _) = an_ollama();
+    let environment = [NOTHING_CONFIGURED, &[("OLLAMA_HOST", ollama.as_str())]].concat();
+
+    let output = in_a_terminal(&scratch.path, &environment, &["--plain"]);
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    let question = transcript
+        .find("Import this from Ollama?")
+        .unwrap_or_else(|| panic!("no import was offered: {transcript}"));
+    let refusal = transcript
+        .find("no model service is configured yet")
+        .unwrap_or_else(|| panic!("the declined start was not refused: {transcript}"));
+    assert!(question < refusal, "{transcript}");
+    let before = &transcript[..question];
+    for shown in [
+        format!("Ollama is running at http://{ollama}, serving models bravebot can use."),
+        format!("provider.ollama, reached at http://{ollama}/v1"),
+        r#"model: "ollama/qwen3-coder:30b""#.to_string(),
+    ] {
+        assert!(
+            before.contains(&shown),
+            "{shown} was not shown before the question: {transcript}"
+        );
+    }
+    assert!(!before.contains("llama3"), "{transcript}");
+    assert!(
+        !scratch.settings().exists(),
+        "a declined import wrote the file"
+    );
+}
+
+/// IMPORT-10: where nothing answers at the address, nothing on the machine said an Ollama was
+/// meant to be there, so nothing is asked or said about one.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_first_run_with_nothing_listening_refuses_as_before() {
+    let scratch = Scratch::new("cli-running-import-ollama-silent");
+    let closed = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let host = format!("127.0.0.1:{}", closed.local_addr().expect("addr").port());
+    drop(closed);
+    let environment = [NOTHING_CONFIGURED, &[("OLLAMA_HOST", host.as_str())]].concat();
+
+    let output = in_a_terminal(&scratch.path, &environment, &["--plain"]);
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    assert!(!transcript.contains("Import this"), "{transcript}");
+    assert!(!transcript.contains("import-providers"), "{transcript}");
+    assert!(!transcript.contains("Ollama"), "{transcript}");
+    assert!(transcript.contains("amazon-bedrock"), "{transcript}");
+}
+
+/// IMPORT-10: a settings file the import cannot write into ends the start in the refusal naming
+/// it, and Ollama is asked once on the way there rather than again for the refusal's lines.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_first_run_whose_settings_file_cannot_be_imported_into_asks_ollama_once() {
+    let scratch = Scratch::new("cli-running-import-ollama-not-a-document");
+    std::fs::create_dir_all(scratch.path.join(".bravebot")).expect("settings directory");
+    std::fs::write(scratch.settings(), "{ not json").expect("settings file");
+    let (ollama, asked) = an_ollama();
+    let environment = [NOTHING_CONFIGURED, &[("OLLAMA_HOST", ollama.as_str())]].concat();
+
+    let output = in_a_terminal(&scratch.path, &environment, &["--plain"]);
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    assert!(!transcript.contains("Import this"), "{transcript}");
+    assert!(
+        transcript.contains("does not hold a settings document"),
+        "{transcript}"
+    );
+    assert_eq!(asked.load(Ordering::SeqCst), 1, "{transcript}");
+}
+
+/// IMPORT-8 and IMPORT-10: a one-shot run has nobody to ask, so a running Ollama puts the command
+/// that asks into the refusal, in the words for a server rather than a file.
+#[test]
+fn a_one_shot_first_run_with_ollama_running_names_the_import_command() {
+    let scratch = Scratch::new("cli-running-import-ollama-one-shot");
+    let (ollama, _) = an_ollama();
+    let environment = [NOTHING_CONFIGURED, &[("OLLAMA_HOST", ollama.as_str())]].concat();
+
+    let output = bravebot(&scratch.path, &environment, &["-p", "say something"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("Ollama is running here with models bravebot can use")
+            && stderr.contains("bravebot import-providers"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("Import this"), "{stderr}");
+    assert!(
+        !scratch.settings().exists(),
+        "a one-shot run wrote settings"
     );
 }

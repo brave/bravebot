@@ -148,6 +148,7 @@ guards:
       - crates/agent/src/tools.rs: 1
       - crates/aichat/src/lib.rs: 2
       - crates/aichat/src/models.rs: 2
+      - crates/aichat/src/ollama.rs: 1
       - crates/bedrock/src/lib.rs: 2
       - crates/core/src/policy.rs: 2
       - crates/mcp/src/http.rs: 1
