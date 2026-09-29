@@ -736,21 +736,30 @@ in `deny` or `ask` covers a `src` directory at any depth, including a copy under
 pattern in `allow` covers only the `src` at the top. Anchor it as `Edit(/src/**)` to pin it to one
 place in either list.
 
-A **command** specifier matches the whole line, with `*` standing in for any text:
+A **command** specifier matches a step's program and arguments, with `*` standing in for any text:
 
 | Rule | Matches | Does not match |
 |---|---|---|
 | `Bash(cargo test)` | `cargo test` | `cargo test --release` |
-| `Bash(ls *)` | `ls`, `ls -la` | `lsof` |
-| `Bash(ls*)` | `ls`, `lsof` | |
+| `Bash(ls *)` | `ls`, `ls -la` | `lsof`, `"ls /x"` |
+| `Bash(ls*)` | `ls`, `lsof`, `"ls /x"` | |
 | `Bash(* --help *)` | `npm run --help x` | `npm --help` |
 
 A trailing ` *` also matches the bare command, but only when it is the rule's only wildcard. The
 space before it is part of the rule. A trailing `:*` is the same rule as a trailing ` *`, and a colon
 anywhere else is an ordinary character.
 
-**Every step of a command line is judged on its own**, as its program and arguments joined by single
-spaces, which is the shape a rule is written in. Restricting any one step restricts the whole line.
+A space in an `allow` rule stands for the gap between two words and nothing else, so `Bash(ls *)` does
+not match `"ls /x"`, which is one quoted program word naming a script at `ls /x`. A space in a `deny`
+or `ask` rule also matches a space inside a word, so the same rule in those lists still covers it.
+
+So an `allow` rule cannot spell out a word that holds a space: `Bash(python3 my script.py)` names three
+words and does not match `python3 "my script.py"`. A `*` in the space's place does, along with anything
+else in that place. A `*` covers any text, spaces inside a word included, so `Bash(ls*)` grants every
+program whose name begins with `ls`, a script in the checkout among them.
+
+**Every step of a command line is judged on its own**, as its program and arguments, each one word
+as the line was split. Restricting any one step restricts the whole line.
 Granting the line needs every step granted. An argument is never re-split, so a denied program cannot
 be smuggled inside one.
 

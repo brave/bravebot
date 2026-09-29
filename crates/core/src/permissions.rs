@@ -164,7 +164,7 @@ enum Pattern {
     Relative(PathPattern),
     /// A path pattern against an absolute path.
     Absolute(PathPattern),
-    /// A command pattern, matched against one stage's argv rendered as a line.
+    /// A command pattern, matched against one stage's argv.
     Command(String),
     /// A host, from a `domain:` specifier, matched against a URL's host and its subdomains.
     Domain(String),
@@ -274,11 +274,13 @@ impl Rule {
         }
     }
 
-    /// Whether this rule covers running `command`, one stage rendered as a line.
-    fn covers_command(&self, command: &str) -> bool {
+    /// Whether this rule covers running one stage, `argv` its program word and arguments.
+    ///
+    /// `restricting` selects what a space in the pattern covers, which differs between the lists.
+    fn covers_command(&self, argv: &[Place], restricting: bool) -> bool {
         match &self.pattern {
             Pattern::Everything => true,
-            Pattern::Command(pattern) => command_matches(pattern, command),
+            Pattern::Command(pattern) => command_matches(pattern, argv, restricting),
             Pattern::Relative(_)
             | Pattern::Absolute(_)
             | Pattern::Domain(_)
@@ -459,9 +461,16 @@ impl Permissions {
         })
     }
 
-    /// What the rules say about running one stage, rendered as a command line.
-    pub fn for_command(&self, command: &str) -> Decision {
-        self.decide(|rule, _| rule.subject == Subject::Bash && rule.covers_command(command))
+    /// What the rules say about running one stage: its program word, then its arguments, each one
+    /// word as the compiler split them.
+    ///
+    /// The words and not a line, because a line loses where one word ends. `"ls /x"`, one program
+    /// word naming a script at `ls /x`, would read as `ls` given `/x` (PERM-5).
+    pub fn for_command<S: AsRef<str>>(&self, argv: &[S]) -> Decision {
+        let argv = places(argv);
+        self.decide(|rule, restricting| {
+            rule.subject == Subject::Bash && rule.covers_command(&argv, restricting)
+        })
     }
 
     /// What the rules say about fetching from `host`.
@@ -492,14 +501,11 @@ impl Permissions {
     /// splitting it differently from the shell.
     ///
     /// An empty pipeline is unmatched: there is nothing to have an opinion about.
-    pub fn for_pipeline(&self, commands: &[String]) -> Decision {
-        if commands.is_empty() {
+    pub fn for_pipeline<S: AsRef<str>>(&self, stages: &[Vec<S>]) -> Decision {
+        if stages.is_empty() {
             return Decision::Unmatched;
         }
-        let each: Vec<Decision> = commands
-            .iter()
-            .map(|command| self.for_command(command))
-            .collect();
+        let each: Vec<Decision> = stages.iter().map(|argv| self.for_command(argv)).collect();
 
         // Restricting any stage restricts the pipeline: an unwanted program in the middle is
         // still an unwanted program.
@@ -701,12 +707,18 @@ fn segments_match(pattern: &[String], path: &[&str]) -> bool {
 }
 
 /// Whether one pattern segment covers one path segment, `*` standing in for any text within it.
+fn wildcard_matches(pattern: &str, text: &str) -> bool {
+    let text: Vec<char> = text.chars().collect();
+    starred_matches(pattern, &text, |c, t| c == *t)
+}
+
+/// Whether `pattern` covers `text`, `*` standing in for any run of it and every other character
+/// covering what `covers` says it does.
 ///
 /// Two pointers with a single remembered star, for the same reason as [`segments_match`]: no
 /// recursion, and no pattern that costs more than the product of the two lengths.
-fn wildcard_matches(pattern: &str, text: &str) -> bool {
+fn starred_matches<T>(pattern: &str, text: &[T], covers: impl Fn(char, &T) -> bool) -> bool {
     let pattern: Vec<char> = pattern.chars().collect();
-    let text: Vec<char> = text.chars().collect();
     let mut p = 0;
     let mut t = 0;
     let mut star: Option<(usize, usize)> = None;
@@ -717,7 +729,7 @@ fn wildcard_matches(pattern: &str, text: &str) -> bool {
                 star = Some((p, t));
                 p += 1;
             }
-            Some(c) if *c == text[t] => {
+            Some(c) if covers(*c, &text[t]) => {
                 p += 1;
                 t += 1;
             }
@@ -747,7 +759,42 @@ fn command_pattern(specifier: &str) -> String {
     }
 }
 
-/// Whether a command pattern covers one command line.
+/// One place in a stage's argv as a command pattern reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// A character of one word.
+    Char(char),
+    /// Where one word ends and the next begins.
+    Gap,
+}
+
+/// A stage's words as the places a pattern is matched against, a gap between each two.
+fn places<S: AsRef<str>>(argv: &[S]) -> Vec<Place> {
+    let mut places = Vec::new();
+    for (at, word) in argv.iter().enumerate() {
+        if at > 0 {
+            places.push(Place::Gap);
+        }
+        places.extend(word.as_ref().chars().map(Place::Char));
+    }
+    places
+}
+
+/// Whether one character of a command pattern covers one place in the argv.
+///
+/// A space covers a gap between two words. In a rule that grants it covers nothing else, so
+/// `Bash(ls *)` names a program called `ls` and not one called `ls /x`. In a rule that restricts it
+/// covers a space inside a word as well, so a deny or ask rule refuses everything it refused when
+/// it was matched against the words run together into a line. The asymmetry is PERM-4's: a rule
+/// that restricts should cover more, and a rule that grants should cover what it names.
+fn covers_place(c: char, place: &Place, restricting: bool) -> bool {
+    match *place {
+        Place::Char(found) => c == found && (c != ' ' || restricting),
+        Place::Gap => c == ' ',
+    }
+}
+
+/// Whether a command pattern covers one stage's argv.
 ///
 /// A trailing ` *` also matches the bare command, so `Bash(ls *)` covers `ls`. That holds only
 /// when the trailing star is the pattern's only one, which is what separates `Bash(ls *)` from
@@ -755,14 +802,17 @@ fn command_pattern(specifier: &str) -> String {
 ///
 /// The space before a trailing star is part of the pattern. `Bash(ls *)` does not match `lsof`,
 /// and `Bash(ls*)` does, which is the difference between naming a command and naming a prefix.
-fn command_matches(pattern: &str, command: &str) -> bool {
+/// A star covers any places at all, gaps and spaces inside a word among them, so `Bash(ls*)` also
+/// covers a program called `ls /x`.
+fn command_matches(pattern: &str, argv: &[Place], restricting: bool) -> bool {
+    let covers = |c: char, place: &Place| covers_place(c, place, restricting);
     if let Some(head) = pattern.strip_suffix(" *")
         && !head.contains('*')
-        && head == command
+        && starred_matches(head, argv, covers)
     {
         return true;
     }
-    wildcard_matches(pattern, command)
+    starred_matches(pattern, argv, covers)
 }
 
 #[cfg(test)]
@@ -774,6 +824,34 @@ mod tests {
             home: Some("/home/someone".to_string()),
             settings_dir: Some("/home/someone/.bravebot".to_string()),
             backslash_separates: false,
+        }
+    }
+
+    /// A line split at each space, for a stage none of whose words holds one.
+    fn words(line: &str) -> Vec<&str> {
+        line.split(' ').collect()
+    }
+
+    type Argvs<'a> = &'a [&'a [&'a str]];
+
+    /// Each allow rule against the argvs it should cover and the argvs it should not.
+    fn assert_allow_rules_cover(cases: &[(&str, Argvs, Argvs)]) {
+        for (rule, matching, not_matching) in cases {
+            let permissions = rules(&[], &[], &[rule]);
+            for argv in *matching {
+                assert_eq!(
+                    permissions.for_command(argv),
+                    Decision::Ruled(Ruling::Allow),
+                    "{rule} should match {argv:?}"
+                );
+            }
+            for argv in *not_matching {
+                assert_eq!(
+                    permissions.for_command(argv),
+                    Decision::Unmatched,
+                    "{rule} should not match {argv:?}"
+                );
+            }
         }
     }
 
@@ -822,14 +900,17 @@ mod tests {
             Decision::Ruled(Ruling::Deny)
         );
         assert_eq!(
-            permissions.for_command("git push origin main"),
+            permissions.for_command(&words("git push origin main")),
             Decision::Ruled(Ruling::Ask)
         );
         assert_eq!(
-            permissions.for_command("git diff --stat"),
+            permissions.for_command(&words("git diff --stat")),
             Decision::Ruled(Ruling::Allow)
         );
-        assert_eq!(permissions.for_command("rm -rf /"), Decision::Unmatched);
+        assert_eq!(
+            permissions.for_command(&words("rm -rf /")),
+            Decision::Unmatched
+        );
     }
 
     /// No rules must mean no change to anything, or adding the feature would have altered every
@@ -842,7 +923,7 @@ mod tests {
             permissions.for_path(Subject::Read, "src/main.rs"),
             Decision::Unmatched
         );
-        assert_eq!(permissions.for_command("ls"), Decision::Unmatched);
+        assert_eq!(permissions.for_command(&words("ls")), Decision::Unmatched);
     }
 
     /// The precedence is the whole of the rule, and specificity is not part of it. A deny rule
@@ -852,13 +933,13 @@ mod tests {
     fn deny_beats_ask_and_ask_beats_allow_however_specific_the_loser() {
         let permissions = rules(&["Bash(aws *)"], &[], &["Bash(aws s3 ls)"]);
         assert_eq!(
-            permissions.for_command("aws s3 ls"),
+            permissions.for_command(&words("aws s3 ls")),
             Decision::Ruled(Ruling::Deny)
         );
 
         let permissions = rules(&[], &["Bash(git push *)"], &["Bash(git push origin main)"]);
         assert_eq!(
-            permissions.for_command("git push origin main"),
+            permissions.for_command(&words("git push origin main")),
             Decision::Ruled(Ruling::Ask)
         );
     }
@@ -869,7 +950,7 @@ mod tests {
         for text in ["Bash", "Bash(*)"] {
             let permissions = rules(&[text], &[], &[]);
             assert_eq!(
-                permissions.for_command("anything at all"),
+                permissions.for_command(&words("anything at all")),
                 Decision::Ruled(Ruling::Deny),
                 "{text} did not cover every command"
             );
@@ -920,14 +1001,14 @@ mod tests {
             let permissions = rules(&[], &[], &[rule]);
             for command in *matching {
                 assert_eq!(
-                    permissions.for_command(command),
+                    permissions.for_command(&words(command)),
                     Decision::Ruled(Ruling::Allow),
                     "{rule} should match {command:?}"
                 );
             }
             for command in *not_matching {
                 assert_eq!(
-                    permissions.for_command(command),
+                    permissions.for_command(&words(command)),
                     Decision::Unmatched,
                     "{rule} should not match {command:?}"
                 );
@@ -942,17 +1023,93 @@ mod tests {
         let permissions = rules(&[], &[], &["Bash(ls:*)"]);
         for command in ["ls", "ls -la"] {
             assert_eq!(
-                permissions.for_command(command),
+                permissions.for_command(&words(command)),
                 Decision::Ruled(Ruling::Allow),
                 "{command} did not match"
             );
         }
 
         let permissions = rules(&[], &[], &["Bash(git:* push)"]);
-        assert_eq!(permissions.for_command("git push"), Decision::Unmatched);
         assert_eq!(
-            permissions.for_command("git:anything push"),
+            permissions.for_command(&words("git push")),
+            Decision::Unmatched
+        );
+        assert_eq!(
+            permissions.for_command(&words("git:anything push")),
             Decision::Ruled(Ruling::Allow)
+        );
+    }
+
+    /// A space in an allow rule is where one word of the argv ends and the next begins. Matched
+    /// against the words run together, `Bash(ls *)` covered `"ls /x"`, one program word naming a
+    /// script in a directory called `ls `, and the script ran with nobody asked. The same holds
+    /// for an argument, so a rule naming a script names that script and no file whose name starts
+    /// with it.
+    #[test]
+    fn a_space_in_an_allow_rule_covers_only_the_gap_between_two_words() {
+        assert_allow_rules_cover(&[
+            ("Bash(ls *)", &[&["ls", "/x"], &["ls"]], &[&["ls /x"]]),
+            ("Bash(ls:*)", &[&["ls", "/x"]], &[&["ls /x"]]),
+            (
+                "Bash(python3 script.py *)",
+                &[&["python3", "script.py", "x"]],
+                &[&["python3", "script.py x"]],
+            ),
+            (
+                "Bash(npm run build)",
+                &[&["npm", "run", "build"]],
+                &[&["npm", "run build"], &["npm run", "build"]],
+            ),
+            ("Bash(npm run *)", &[&["npm", "run"]], &[&["npm run"]]),
+            (
+                "Bash(git commit -m *)",
+                &[&["git", "commit", "-m", "fix the build"]],
+                &[&["git", "commit -m", "x"]],
+            ),
+        ]);
+    }
+
+    /// A star covers any text, a space inside a word among it, so `Bash(ls*)` covers a program
+    /// called `ls /x` as it covers `lsof`. A space after a star is still only a gap: were it to
+    /// cover a space inside a word once a star had been passed, `Bash(* --help)` would cover a
+    /// program called `npm --help`, and a rule opening with a star would reach a checkout's script
+    /// the way `Bash(ls *)` did.
+    #[test]
+    fn a_star_in_an_allow_rule_covers_any_text_and_a_space_after_it_only_a_gap() {
+        assert_allow_rules_cover(&[
+            ("Bash(ls*)", &[&["ls /x"], &["lsof"]], &[]),
+            ("Bash(* --help)", &[&["npm", "--help"]], &[&["npm --help"]]),
+            (
+                "Bash(git * main)",
+                &[&["git", "push", "origin", "main"]],
+                &[&["git", "x main"]],
+            ),
+        ]);
+    }
+
+    /// The other half: a deny or ask rule still covers a space inside a word, so it refuses
+    /// everything it refused when the words were run together. A rule that restricts covering
+    /// less than it used to would let through a line somebody wrote it to stop.
+    #[test]
+    fn a_space_in_a_deny_or_ask_rule_covers_a_space_inside_a_word_too() {
+        for argv in [&["ls /x"][..], &["ls", "/x"]] {
+            assert_eq!(
+                rules(&["Bash(ls *)"], &[], &[]).for_command(argv),
+                Decision::Ruled(Ruling::Deny),
+                "the deny rule did not cover {argv:?}"
+            );
+        }
+        for argv in [&["git push", "origin"][..], &["git", "push origin"]] {
+            assert_eq!(
+                rules(&[], &["Bash(git push *)"], &[]).for_command(argv),
+                Decision::Ruled(Ruling::Ask),
+                "the ask rule did not cover {argv:?}"
+            );
+        }
+        assert_eq!(
+            rules(&["Bash(npm run *)"], &[], &[]).for_command(&["npm run"]),
+            Decision::Ruled(Ruling::Deny),
+            "the bare command a deny rule names was not covered when it came as one word"
         );
     }
 
@@ -1134,7 +1291,10 @@ mod tests {
             Decision::Unmatched
         );
         // And a path rule is not a command rule, whatever it looks like.
-        assert_eq!(permissions.for_command("src/main.rs"), Decision::Unmatched);
+        assert_eq!(
+            permissions.for_command(&words("src/main.rs")),
+            Decision::Unmatched
+        );
     }
 
     /// A rule nobody can act on is dropped and named, never guessed at. A misread deny rule
@@ -1219,7 +1379,7 @@ mod tests {
         );
         let calling = rules(&["Mcp(weather)"], &[], &[]);
         assert_eq!(calling.for_host("weather"), Decision::Unmatched);
-        assert_eq!(calling.for_command("weather"), Decision::Unmatched);
+        assert_eq!(calling.for_command(&words("weather")), Decision::Unmatched);
     }
 
     /// A rule for a domain covers that host and anything under it, which is what somebody writing
@@ -1284,7 +1444,10 @@ mod tests {
             permissions.for_path(Subject::Read, "example.com"),
             Decision::Unmatched
         );
-        assert_eq!(permissions.for_command("example.com"), Decision::Unmatched);
+        assert_eq!(
+            permissions.for_command(&words("example.com")),
+            Decision::Unmatched
+        );
 
         let paths = rules(&[], &[], &["Read(src/**)"]);
         assert_eq!(paths.for_host("example.com"), Decision::Unmatched);
@@ -1327,16 +1490,13 @@ mod tests {
     #[test]
     fn a_pipeline_is_allowed_only_when_every_stage_is() {
         let permissions = rules(&[], &[], &["Bash(git log *)", "Bash(sed *)"]);
-        let allowed = ["git log --oneline".to_string(), "sed -n 1,10p".to_string()];
+        let allowed = [words("git log --oneline"), words("sed -n 1,10p")];
         assert_eq!(
             permissions.for_pipeline(&allowed),
             Decision::Ruled(Ruling::Allow)
         );
 
-        let one_unruled = [
-            "git log --oneline".to_string(),
-            "curl example.com".to_string(),
-        ];
+        let one_unruled = [words("git log --oneline"), words("curl example.com")];
         assert_eq!(permissions.for_pipeline(&one_unruled), Decision::Unmatched);
     }
 
@@ -1345,10 +1505,7 @@ mod tests {
     #[test]
     fn restricting_one_stage_restricts_the_whole_pipeline() {
         let permissions = rules(&["Bash(curl *)"], &[], &["Bash(git log *)"]);
-        let stages = [
-            "git log --oneline".to_string(),
-            "curl example.com".to_string(),
-        ];
+        let stages = [words("git log --oneline"), words("curl example.com")];
         assert_eq!(
             permissions.for_pipeline(&stages),
             Decision::Ruled(Ruling::Deny)
@@ -1368,7 +1525,7 @@ mod tests {
         let pattern = format!("Bash({}b)", "*a".repeat(24));
         let permissions = rules(&[], &[], &[&pattern]);
         let command = "a".repeat(2048);
-        assert_eq!(permissions.for_command(&command), Decision::Unmatched);
+        assert_eq!(permissions.for_command(&[&command]), Decision::Unmatched);
     }
     /// A rule a person wrote about a path applies to the path they wrote it for on every host this
     /// ships to. A pattern is matched segment by segment against a name split on `/` and a host
@@ -1459,12 +1616,12 @@ mod tests {
             rules_where_a_backslash_separates(&["Bash(type C:\\secrets.txt)"], &[], &[]);
 
         assert_eq!(
-            permissions.for_command("type C:\\secrets.txt"),
+            permissions.for_command(&words("type C:\\secrets.txt")),
             Decision::Ruled(Ruling::Deny),
             "a command rule stopped matching the line it names"
         );
         assert_eq!(
-            permissions.for_command("type C:/secrets.txt"),
+            permissions.for_command(&words("type C:/secrets.txt")),
             Decision::Unmatched,
             "a command rule matched a line it does not name"
         );

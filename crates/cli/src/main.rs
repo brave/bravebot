@@ -5231,7 +5231,7 @@ mod tests {
             Decision::Ruled(Ruling::Deny)
         );
         assert_eq!(
-            permissions.for_command("git push origin main"),
+            permissions.for_command(&["git", "push", "origin", "main"]),
             Decision::Ruled(Ruling::Ask)
         );
     }

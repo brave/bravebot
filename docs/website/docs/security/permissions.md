@@ -148,7 +148,7 @@ joined differently, writing somewhere else, or run in another directory. See
 prints is quarantined. An assignment decides what a program loads and reads before its own arguments
 are looked at, so the line is a different proposition from the one you read, and nothing in a vouched
 entry records it. No rule can answer this one either, because a rule is matched against the program and
-its arguments run together and an assignment is in neither.
+its arguments and an assignment is in neither.
 
 :::tip
 `NO_COLOR=1 cargo test` is ordinary work, and it asks every time. The spelling that can be answered
@@ -454,8 +454,8 @@ tool asks for the same reason, and a standing answer to that server does not cov
 destination is known only through a reference asks too: that prompt is the only
 moment such a path is shown to anybody, so nothing a pattern says can stand in for having looked. And a
 run carrying a variable set in front of one of its programs asks, because a rule is matched against the
-program and its arguments run together: `Bash(git log)` matches `LD_PRELOAD=./evil.so git log`, and no
-rule you could write tells the two apart.
+program and its arguments: `Bash(git log)` matches `LD_PRELOAD=./evil.so git log`, and no rule you could
+write tells the two apart.
 
 **A rule that cannot be read is dropped, named, and takes nothing with it.** A line that is not a rule,
 names no tool family, or has no anchor to resolve is skipped and the rest of the file still applies.

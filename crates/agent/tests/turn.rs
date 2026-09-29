@@ -2855,6 +2855,68 @@ fn a_denied_program_is_refused_by_the_rule_and_not_for_being_absent() {
     );
 }
 
+/// A quoted program word is one word however many spaces it holds. `"ls /x"` names a script at
+/// `ls /x` in the workspace, and an allow rule for `ls` used to stop the prompt for it, because the
+/// rule was matched against the words run together, which read as `ls` given `/x`.
+///
+/// Both lines in one turn, because the property is the boundary: a rule that stopped no prompt at
+/// all would pass the second half alone.
+#[cfg(unix)]
+#[test]
+fn an_allow_rule_does_not_run_a_program_whose_name_holds_a_space_unasked() {
+    let scratch = Scratch::new("permissions-run-program-with-a-space");
+    let directory = scratch.path.join("ls ");
+    std::fs::create_dir_all(&directory).unwrap();
+    let script = directory.join("x");
+    std::fs::write(&script, "#!/bin/sh\ntouch ran.txt\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"ls"}"#),
+        tool_request_2("run", r#"{"command":"\"ls /x\""}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("list it").with_permissions(rules(&[], &[], &["Bash(ls *)"])),
+        &mut bravebot_agent::Conversation::new(),
+        &mut asked,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert!(
+        !scratch.path.join("ran.txt").exists(),
+        "the script ran without anybody being asked"
+    );
+    let seen = asked.seen.lock().unwrap();
+    let asked_about: Vec<&str> = seen
+        .iter()
+        .flat_map(|request| request.plan.steps())
+        .map(|step| step.program.as_str())
+        .collect();
+    assert_eq!(
+        asked_about,
+        ["ls /x"],
+        "the prompts drawn were not the one for the program the rule does not name"
+    );
+}
+
 /// A deny rule holds against a workspace the user vouched for, which is the case that makes one
 /// worth writing: saying yes at startup trusts the tree, and a rule is how a person keeps one file
 /// out of that answer without having to decline the whole of it.
