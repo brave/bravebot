@@ -343,11 +343,21 @@ pub(crate) fn one_line(text: &str) -> String {
     text.lines().next().unwrap_or_default().trim().to_string()
 }
 
-/// Why the planner made a call, dim beside the call it is for, the way a delegate's task sits
-/// beside the delegate. Nothing where it gave no reason.
-fn why_span(why: &str) -> Option<Span<'static>> {
+/// The rows naming one call: what it is for as the headline, and the call itself under it.
+///
+/// The planner's reason says what is happening, which is what a person scanning a run of calls
+/// wants to read; `Read(tests/test_scripts.py)` is the detail behind it. A call that gave no
+/// reason is headed by the call, as before. Only the reason's first line is drawn, since the
+/// headline is one row of a transcript and not a paragraph.
+fn call_rows(marker: Span<'static>, call: String, style: Style, why: &str) -> Vec<Line<'static>> {
     let why = one_line(why);
-    (!why.is_empty()).then(|| Span::styled(format!("  {why}"), dim()))
+    if why.is_empty() {
+        return vec![Line::from(vec![marker, Span::styled(call, style)])];
+    }
+    vec![
+        Line::from(vec![marker, Span::styled(why, style)]),
+        Line::from(Span::styled(format!("  {DETAIL_MARKER} {call}"), dim())),
+    ]
 }
 
 fn activity_lines(
@@ -364,15 +374,12 @@ fn activity_lines(
         Style::default().fg(theme::ok())
     };
 
-    let mut row = vec![
+    let mut lines = call_rows(
         Span::styled(format!("{TURN_MARKER} "), head),
-        Span::styled(
-            activity.line(),
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-    ];
-    row.extend(why_span(&activity.why));
-    let mut lines = vec![Line::from(row)];
+        activity.line(),
+        Style::default().add_modifier(Modifier::BOLD),
+        &activity.why,
+    );
 
     if let Some(note) = &activity.note {
         lines.push(Line::from(Span::styled(
@@ -1891,12 +1898,12 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> (Vec<Line<'static
                 // not what came of it. Drawn without the coloured marker a live call earns,
                 // since green would claim an outcome the record does not have.
                 None => {
-                    let mut row = vec![
+                    lines.extend(call_rows(
                         Span::styled(format!("{TURN_MARKER} "), dim()),
-                        Span::styled(entry.text.clone(), dim()),
-                    ];
-                    row.extend(why_span(&entry.why));
-                    lines.push(Line::from(row));
+                        entry.text.clone(),
+                        dim(),
+                        &entry.why,
+                    ));
                 }
             },
         }
@@ -5988,21 +5995,44 @@ mod tests {
                 .join("\n")
         }
 
-        /// The reason the planner gave sits on the call's own row, while it runs and once it is
-        /// over. The finished line replaces the running one, so a reason drawn on only one of them
-        /// is gone the moment the call ends; and a reason of several lines is kept to its first,
-        /// since the row is one line of a transcript and not a paragraph.
+        /// The reason the planner gave is the call's headline, with the call itself under it, while
+        /// it runs and once it is over. The finished line replaces the running one, so a reason
+        /// drawn on only one of them is gone the moment the call ends; and a reason of several
+        /// lines is kept to its first, since the headline is one row and not a paragraph.
         #[test]
-        fn a_call_is_drawn_with_the_reason_it_was_made() {
+        fn a_call_is_headed_by_the_reason_it_was_made() {
             let running = Activity::running("Search", "MAX_STEPS")
                 .saying_why("find where the bound is set\nand then some");
             for activity in [running.clone(), running.done("4 matches")] {
-                let head = activity_lines(&activity, None, 80)[0].to_string();
+                let rows = activity_lines(&activity, None, 80);
                 assert!(
-                    head.ends_with("Search(MAX_STEPS)  find where the bound is set"),
-                    "the reason is not on the call's row: {head}"
+                    rows[0].to_string().ends_with("find where the bound is set"),
+                    "the reason is not the headline: {}",
+                    rows[0]
                 );
+                assert_eq!(rows[1].to_string(), "  ⎿ Search(MAX_STEPS)");
             }
+        }
+
+        /// The call sits between the headline and what came of it, so the result reads as the
+        /// result of that call rather than of the reason.
+        #[test]
+        fn the_call_comes_before_its_result() {
+            let done = Activity::running("Read", "tests/test_scripts.py")
+                .saying_why("See how profile.json keys are tested")
+                .done("180 lines");
+            let rows: Vec<String> = activity_lines(&done, None, 80)
+                .iter()
+                .map(|row| row.to_string())
+                .collect();
+            assert_eq!(
+                rows,
+                [
+                    "⏺ See how profile.json keys are tested",
+                    "  ⎿ Read(tests/test_scripts.py)",
+                    "  ⎿ 180 lines",
+                ]
+            );
         }
 
         /// A call with no reason is drawn as it was before there was one to give, with nothing
@@ -8208,9 +8238,11 @@ mod tests {
         ));
 
         let drawn = rendered(&session);
+        let reason = drawn.find("see the entry point");
+        let call = drawn.find("Read(src/main.rs)");
         assert!(
-            drawn.contains("Read(src/main.rs)  see the entry point"),
-            "{drawn}"
+            reason.is_some() && call.is_some() && reason < call,
+            "the reason should head the call: {drawn}"
         );
     }
 
