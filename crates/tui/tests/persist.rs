@@ -371,10 +371,10 @@ fn level(settings: &bravebot_config::Settings) -> Option<bravebot_aichat::protoc
     session.effort()
 }
 
-/// BACKEND-11, the model's half of the same rule. `None` is the configured model, which is what a
-/// checkout naming one resolves to.
+/// BACKEND-11, the model's half of the same rule. A checkout cannot pick a model, and a pick
+/// outranks the person's own file, being the later thing they said there.
 #[test]
-fn a_recorded_model_answers_between_a_checkouts_file_and_the_persons_own() {
+fn a_recorded_model_answers_over_a_checkouts_file_and_the_persons_own() {
     with_temp_home("model-adopted", || {
         store::save_model("picked");
         assert_eq!(
@@ -383,9 +383,9 @@ fn a_recorded_model_answers_between_a_checkouts_file_and_the_persons_own() {
             "the person's own file outranked the choice they made"
         );
         assert_eq!(
-            opened_on(&settings(r#"{"model": "mine"}"#, r#"{"model": "its"}"#)),
-            None,
-            "the choice outranked a checkout's file"
+            opened_on(&settings(r#"{"model": "mine"}"#, r#"{"model": "its"}"#)).as_deref(),
+            Some("picked"),
+            "a checkout's file outranked the choice they made"
         );
 
         // A session that does not persist is handed nobody's pick, for the reason it is handed no

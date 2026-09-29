@@ -824,11 +824,11 @@ and this?
         bravebot_config::Settings::layered(Some(root.join("home")), Some(&root.join("cwd")), None)
     }
 
-    /// BACKEND-11. A checkout that names a model outranks the pick, which is recorded once per
-    /// person and cannot tell two checkouts apart; the person's own file does not, the pick being
-    /// the later thing they said there.
+    /// BACKEND-11. A checkout cannot pick a model, so the pick, which is recorded once per person
+    /// and cannot tell two checkouts apart, answers over one; the person's own file does not
+    /// outrank the pick either, the pick being the later thing they said there.
     #[test]
-    fn a_checkouts_model_outranks_the_saved_pick_and_the_home_file_does_not() {
+    fn a_checkouts_model_cannot_displace_the_saved_pick_and_the_home_file_does_not() {
         let picked = || Some("picked".to_string());
         let checkout = layered(
             "model-checkout",
@@ -836,9 +836,19 @@ and this?
             r#"{"model": "its"}"#,
         );
         assert_eq!(
-            model(picked(), &checkout),
-            None,
-            "the pick outranked a checkout"
+            model(picked(), &checkout).as_deref(),
+            Some("picked"),
+            "a checkout displaced the pick"
+        );
+        assert_eq!(
+            checkout.model(),
+            Some("mine"),
+            "the merged settings do not hold the home file's key"
+        );
+        assert_eq!(
+            checkout.model_ignored().count(),
+            1,
+            "the checkout's key is not what is reported as ignored"
         );
 
         let own = layered("model-own", r#"{"model": "mine"}"#, "{}");
@@ -848,12 +858,12 @@ and this?
         assert_eq!(
             model(picked(), &blank).as_deref(),
             Some("picked"),
-            "a blank key outranked the pick"
+            "a blank key displaced the pick"
         );
         assert_eq!(
-            checkout.model(),
-            Some("its"),
-            "the checkout's key is not what answers in the pick's place"
+            blank.model(),
+            None,
+            "a blank key named a model in the merged settings"
         );
     }
 

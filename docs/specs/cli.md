@@ -378,7 +378,7 @@ nothing about having done so, which is the substitution the flag exists to make 
 
 `verified-by: bravebot_cli::main::a_model_flag_names_the_model_a_run_asks_for`
 `verified-by: bravebot_cli::main::a_run_that_named_no_model_names_nothing`
-`verified-by: bravebot_cli::running::a_run_asks_for_a_checkouts_model_over_the_recorded_one`
+`verified-by: bravebot_cli::running::a_run_asks_for_the_recorded_model_ignoring_a_checkouts`
 `verified-by: bravebot_cli::running::a_run_asks_for_the_settings_model_over_an_exported_default`
 `verified-by: bravebot_cli::main::the_command_line_outranks_the_record_a_session_would_read`
 `verified-by: bravebot_cli::main::a_run_that_named_no_model_reads_the_record_a_session_would`

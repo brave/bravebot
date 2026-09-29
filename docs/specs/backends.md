@@ -252,18 +252,20 @@ rather than a way to get stuck.
 `verified-by: bravebot_bedrock::credentials::forgetting_one_profile_leaves_the_others_alone`
 
 <a id="BACKEND-11"></a>
-### BACKEND-11: a settings file names the model above the build, and a checkout's above a pick
+### BACKEND-11: a settings file names the model above the build, and a pick above a checkout's
 
 Where a settings file names a model, that name is what a request uses, in preference to the model
 compiled into the binary and to one exported as `BRAVE_AI_CHAT_DEFAULT_MODEL`. The exported variable
 answers where no file names one, above the build.
 
 A choice recorded with `/model` ranks as the person's own file, `~/.bravebot/settings.json`, does.
-It outranks the `model` key in that file, and is outranked by one in a checkout's
-`.bravebot/settings.json` or `.bravebot/settings.local.json`, or in the file `--settings` named. A
+It outranks the `model` key in that file, and no file above the person's own may name a model at
+all ([BACKEND-24](#BACKEND-24)), so a checkout's `.bravebot/settings.json`,
+`.bravebot/settings.local.json`, or the file `--settings` named cannot rank one above the pick. A
 key spelled blank, or as something other than a string, names nothing and does not outrank a pick.
-It still displaces the key a lower file named, so with nothing recorded the exported variable or the
-build answers. Above all of it are `--model` and a model picked in the session that is running.
+It still displaces the key the person's own file named, so with nothing recorded the exported
+variable or the build answers. Above all of it are `--model` and a model picked in the session that
+is running.
 
 **Why.** Every release bakes a default model in, so this value ranked like the rest of the file would
 lose on every binary anybody was given: the key would parse, `doctor` would report it, and nothing
@@ -271,15 +273,15 @@ would change outside a source build.
 
 The variable is named as a default, and a default is how it is used: a `.envrc` that exports it for
 every checkout of a project is saying what answers when nothing else does. Ranked above the file it
-would outrank every `model` key on any machine that sources one, the key a checkout wrote to state
-its model included. Claude Code ranks its counterpart, `ANTHROPIC_DEFAULT_MODEL`, last.
+would outrank every `model` key on any machine that sources one. Claude Code ranks its counterpart,
+`ANTHROPIC_DEFAULT_MODEL`, last.
 
 A pick is recorded once per person and read back in every checkout. Ranked above a checkout's file,
 it is the one thing a checkout cannot override: two checkouts in one account cannot want different
 models, and a project that states its model is undone by whatever its reader last picked anywhere.
-Claude Code's `/model` writes the person's own settings file, which every other settings file
-outranks, and this is that rung. The pick outranks that file's own key because both are the same
-person speaking at the same rung, and the pick is the later of the two.
+Claude Code's `/model` writes the person's own settings file, and the pick ranks as that file does.
+The pick outranks that file's own key because both are the same person speaking at the same rung,
+and the pick is the later of the two.
 
 `verified-by: bravebot_config::lib::a_model_in_the_settings_file_outranks_the_baked_in_one`
 `verified-by: bravebot_config::lib::a_model_in_the_settings_file_outranks_an_exported_one`
@@ -287,11 +289,11 @@ person speaking at the same rung, and the pick is the later of the two.
 `verified-by: bravebot_config::settings::a_layer_above_the_home_one_does_not_pick_a_model`
 `verified-by: bravebot_config::settings::the_home_layer_does_not_outrank_a_saved_pick`
 `verified-by: bravebot_config::settings::a_layer_above_that_names_nothing_does_not_outrank_a_saved_pick`
-`verified-by: bravebot_session::store::a_checkouts_model_outranks_the_saved_pick_and_the_home_file_does_not`
-`verified-by: bravebot_tui::persist::a_recorded_model_answers_between_a_checkouts_file_and_the_persons_own`
-`verified-by: bravebot_cli::running::a_run_asks_for_a_checkouts_model_over_the_recorded_one`
+`verified-by: bravebot_session::store::a_checkouts_model_cannot_displace_the_saved_pick_and_the_home_file_does_not`
+`verified-by: bravebot_tui::persist::a_recorded_model_answers_over_a_checkouts_file_and_the_persons_own`
+`verified-by: bravebot_cli::running::a_run_asks_for_the_recorded_model_ignoring_a_checkouts`
 `verified-by: bravebot_cli::running::a_run_asks_for_the_settings_model_over_an_exported_default`
-`verified-by: bravebot_cli::running::doctor_names_a_checkouts_model_rather_than_the_pick_it_outranks`
+`verified-by: bravebot_cli::running::doctor_names_the_pick_a_checkouts_model_cannot_displace`
 
 <a id="BACKEND-12"></a>
 ### BACKEND-12: a tier word names a model some reachable service serves

@@ -2228,10 +2228,10 @@ fn a_run_sends_the_level_the_command_line_named_over_every_other() {
     );
 }
 
-/// A checkout that names a model outranks the one `/model` recorded (BACKEND-11), for the reason
-/// a checkout's level does.
+/// A checkout cannot pick a model (BACKEND-24), so the one `/model` recorded answers over a
+/// checkout's file and over the person's own (BACKEND-11).
 #[test]
-fn a_run_asks_for_a_checkouts_model_over_the_recorded_one() {
+fn a_run_asks_for_the_recorded_model_ignoring_a_checkouts() {
     let gateway = a_gateway_listing(r#"["tools", "reasoning"]"#);
     let scratch = Scratch::new("cli-running-model-checkout")
         .with_settings(&settings_for(&gateway).replace(
@@ -2248,8 +2248,8 @@ fn a_run_asks_for_a_checkouts_model_over_the_recorded_one() {
         .recv_timeout(Duration::from_secs(60))
         .expect("the run reached the gateway");
     assert!(
-        asked.contains(r#""model":"reasons-only""#),
-        "the checkout's model was outranked: {asked}"
+        asked.contains(r#""model":"picked-before""#),
+        "the checkout's model was not ignored: {asked}"
     );
 }
 
@@ -2276,11 +2276,11 @@ fn a_run_asks_for_the_settings_model_over_an_exported_default() {
     );
 }
 
-/// `doctor` says a model was chosen with `/model` only where that choice is the one in force. Where
-/// a checkout outranks it, naming it would send somebody looking for why their checkout's model
-/// was ignored when it was not.
+/// `doctor` says a model was chosen with `/model` only where that choice is the one in force. A
+/// checkout cannot pick a model (BACKEND-24), so the pick is the one in force and the checkout's
+/// key is named nowhere.
 #[test]
-fn doctor_names_a_checkouts_model_rather_than_the_pick_it_outranks() {
+fn doctor_names_the_pick_a_checkouts_model_cannot_displace() {
     let scratch =
         Scratch::new("cli-running-doctor-model-checkout").with_state("model", "picked-before\n");
     let cwd = a_checkout_saying(&scratch, r#"{"model": "the-checkouts"}"#);
@@ -2297,10 +2297,10 @@ fn doctor_names_a_checkouts_model_rather_than_the_pick_it_outranks() {
     );
 
     let (stdout, stderr) = said(&output);
-    assert!(stdout.contains("the-checkouts"), "{stdout}{stderr}");
+    assert!(stdout.contains("picked-before"), "{stdout}{stderr}");
     assert!(
-        !stdout.contains("picked-before"),
-        "doctor named a pick the checkout outranks: {stdout}"
+        !stdout.contains("the-checkouts"),
+        "doctor named a model a checkout cannot pick: {stdout}"
     );
 }
 
