@@ -84,6 +84,7 @@ fn a_settings_rule_is_anchored_at_the_home_directory_the_accessor_names() {
         let (permissions, rejected) = bravebot_agent::permissions::from_settings(
             &settings,
             bravebot_agent::home::profile().as_deref(),
+            home,
         );
 
         assert!(rejected.is_empty(), "{rejected:?}");

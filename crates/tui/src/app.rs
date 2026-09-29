@@ -2929,6 +2929,7 @@ fn event_loop(
     let Some(permissions) = rules_from(
         &mut session,
         &settings,
+        workspace.root(),
         sources.grants(workspace.root()).as_ref(),
         whence,
         stored.id(),
@@ -4595,6 +4596,7 @@ fn grant_proposed_rules(
 fn rules_from(
     session: &mut Session,
     settings: &bravebot_config::Settings,
+    root: &std::path::Path,
     grants: Option<&bravebot_agent::granted::Store>,
     whence: Whence,
     id: &str,
@@ -4612,6 +4614,7 @@ fn rules_from(
             .map(|rule| rule.rule.clone())
             .collect::<Vec<_>>(),
         bravebot_agent::home::profile().as_deref(),
+        root,
     );
     // Said out loud, because a rule that parses as nothing is a rule somebody believes is in
     // force. A misspelled deny rule reads as protection that is not there.
@@ -4700,7 +4703,8 @@ impl Rules {
     ) -> bool {
         let settings = self.sources.settings(root);
         let grants = self.sources.grants(root);
-        let Some(permissions) = rules_from(session, &settings, grants.as_ref(), whence, id, ask)
+        let Some(permissions) =
+            rules_from(session, &settings, root, grants.as_ref(), whence, id, ask)
         else {
             return false;
         };
@@ -17650,6 +17654,7 @@ mod tests {
         let permissions = rules_from(
             session,
             &settings,
+            root,
             sources.grants(root).as_ref(),
             Whence::Asked,
             "the-first-session",

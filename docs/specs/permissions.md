@@ -150,15 +150,23 @@ person wrote is inert in both directions. A name on a drive left as it arrived r
 the rules miss it the other way round: `Read(//D:/added/**)` refuses nothing, and `Edit(*.md)` in
 `allow` grants `D:\added\a.md`, which is not in the project.
 
-Where the host's filesystem folds case (macOS, Windows), both the pattern and the path are lowercased
-segment by segment before they are matched, so `Read(.env)` covers `.ENV`, which opens the same file.
-A rule in any list is read this way, allow included: on such a host the two spellings name one file, so
-an allow rule covers the same file the deny rule would. Where the filesystem is case-sensitive the
-match is byte-exact.
+Whether two spellings that differ only in case are one file is a fact about the volume the workspace
+is on (the trust map asks it the same way, [trust-map.md](trust-map.md)), so the caller asks the volume and hands the answer to
+the rules, which ask nothing. Where the volume folds case, both the pattern and the path are
+lowercased segment by segment before they are matched, so `Read(.env)` covers `.ENV`, which opens the
+same file. A rule in any list is read this way, allow included: there the two spellings name one file,
+so an allow rule covers the same file the deny rule would. Where the volume keeps the spellings apart,
+or the caller could not tell, the match is byte-exact and a rule about `Docs` decides nothing about
+`docs`, in either polarity: the answer only widens what a rule reaches, so an unknown answer is read
+as the narrower one.
 
 `verified-by: bravebot_core::permissions::a_path_rule_covers_the_file_it_names_wherever_a_backslash_separates`
-`verified-by: bravebot_core::permissions::a_deny_rule_covers_the_case_spelling_the_filesystem_would_open`
+`verified-by: bravebot_core::permissions::a_deny_rule_covers_the_case_spelling_a_folding_volume_would_open`
 `verified-by: bravebot_core::permissions::a_tree_rule_covers_the_folded_spelling_of_its_path`
+`verified-by: bravebot_core::permissions::an_allow_rule_covers_the_folded_spelling_on_a_folding_volume`
+`verified-by: bravebot_core::permissions::a_rule_does_not_cover_a_case_variant_on_a_volume_that_keeps_them_apart`
+`verified-by: bravebot_core::permissions::rules_read_without_an_answer_about_the_volume_compare_bytes`
+`verified-by: bravebot_agent::permissions::rules_take_the_case_answer_of_the_volume_the_workspace_is_on`
 `verified-by: bravebot_core::permissions::a_name_holding_a_backslash_is_one_segment_where_a_slash_is_the_only_separator`
 `verified-by: bravebot_core::permissions::a_pattern_written_with_the_hosts_own_separator_is_the_same_rule`
 `verified-by: bravebot_core::permissions::a_command_rule_keeps_a_backslash_where_a_path_rule_would_not`

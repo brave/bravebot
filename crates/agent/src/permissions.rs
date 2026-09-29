@@ -27,11 +27,14 @@ use bravebot_i18n::t;
 /// directory: [`anchors`] joins `.bravebot` onto it itself to reach the settings file, and a
 /// caller that passed the state directory would anchor a `~/` rule one segment too deep and a
 /// `/` rule two.
+/// `workspace` is the directory the session works in, whose volume answers whether two spellings of
+/// a path that differ only in case are one file ([`crate::workspace::volume_folds_case`]).
 pub fn from_settings(
     settings: &Settings,
     profile: Option<&std::path::Path>,
+    workspace: &std::path::Path,
 ) -> (Permissions, Vec<Rejected>) {
-    with_granted(settings, &[], profile)
+    with_granted(settings, &[], profile, workspace)
 }
 
 /// The entries the settings layer could not hand over as rule text, as rejects.
@@ -115,13 +118,15 @@ fn problem(reason: Unreadable) -> &'static str {
 /// The other two carry over, because both still say something such a run can act on. A deny rule
 /// refuses before there is anything to prompt about, and an ask rule turns a write that would have
 /// gone through silently into one there is nobody to approve.
-/// `profile` is the user's home directory, for the reason [`from_settings`] states.
+/// `profile` is the user's home directory, for the reason [`from_settings`] states, and `workspace`
+/// is the directory whose volume decides whether case is folded.
 pub fn for_an_unattended_run(
     settings: &Settings,
     profile: Option<&std::path::Path>,
+    workspace: &std::path::Path,
 ) -> (Permissions, Vec<Rejected>) {
     let lists = settings.permissions();
-    let anchors = anchors(profile);
+    let anchors = anchors(profile, crate::workspace::volume_folds_case(workspace));
     let (permissions, mut rejected) = Permissions::parse(&lists.deny, &lists.ask, &[], &anchors);
     // Read for its rejects and then dropped, rather than not read at all. A line the person
     // believes is in force and that nothing can act on is worth saying out loud wherever it was
@@ -143,7 +148,7 @@ pub fn for_an_unattended_run(
 /// Both come from the user's home directory, the settings one by joining `.bravebot` onto it. So
 /// what this takes is the home directory itself and not the state directory that sits inside it
 /// (PERM-3), which is the same distinction a `~` in a command line turns on (CMDLINE-4).
-fn anchors(profile: Option<&std::path::Path>) -> Anchors {
+fn anchors(profile: Option<&std::path::Path>, folds_case: bool) -> Anchors {
     let home = profile.map(|profile| profile.display().to_string());
     Anchors {
         // The settings file lives in the global state directory, so a `/` rule is anchored there.
@@ -152,6 +157,9 @@ fn anchors(profile: Option<&std::path::Path>) -> Anchors {
         // The host's answer, which this crate is the lowest one that may ask for: the kernel has
         // no filesystem and takes it as data (PERM-3).
         backslash_separates: crate::workspace::BACKSLASH_SEPARATES,
+        // Asked of the workspace's volume by the caller and false where that could not be told, so
+        // a failed probe compares bytes and never widens a rule.
+        folds_case,
     }
 }
 
@@ -171,7 +179,8 @@ fn anchors(profile: Option<&std::path::Path>) -> Anchors {
 ///
 /// Takes the text rather than a [`crate::granted::Proposed`] because what reaches the rule parser is
 /// a line: which file proposed it decided whether to ask, and that question is answered by the time
-/// this is called. `profile` is the user's home directory, for the reason [`from_settings`] states.
+/// this is called. `profile` is the user's home directory, for the reason [`from_settings`] states,
+/// and `workspace` is the directory whose volume decides whether case is folded.
 ///
 /// [PERM-11]: ../../../docs/specs/permissions.md
 /// [PERM-14]: ../../../docs/specs/permissions.md
@@ -179,6 +188,7 @@ pub fn with_granted(
     settings: &Settings,
     granted: &[String],
     profile: Option<&std::path::Path>,
+    workspace: &std::path::Path,
 ) -> (Permissions, Vec<Rejected>) {
     let lists = settings.permissions();
     // Appended rather than prepended, and it decides nothing either way: PERM-2 puts `deny` before
@@ -186,7 +196,7 @@ pub fn with_granted(
     // narrowing one however the list is ordered. The order the person read them in is the order they
     // were proposed in, which is the order to report a bad one in.
     let allow: Vec<String> = lists.allow.iter().chain(granted).cloned().collect();
-    let anchors = anchors(profile);
+    let anchors = anchors(profile, crate::workspace::volume_folds_case(workspace));
     let (permissions, mut rejected) = Permissions::parse(&lists.deny, &lists.ask, &allow, &anchors);
     rejected.extend(entries_that_are_not_lines(lists));
     rejected.extend(values_that_are_not_lists(settings));
@@ -236,7 +246,7 @@ fn dropped_allow_entries(settings: &Settings, anchors: &Anchors) -> (Vec<Propose
 /// [PERM-14]: ../../../docs/specs/permissions.md
 /// [PERM-15]: ../../../docs/specs/permissions.md
 pub fn proposed(settings: &Settings, profile: Option<&std::path::Path>) -> Vec<Proposed> {
-    dropped_allow_entries(settings, &anchors(profile)).0
+    dropped_allow_entries(settings, &anchors(profile, false)).0
 }
 
 /// The directories a settings file asked to have opened, in the order it named them.
@@ -254,7 +264,38 @@ pub fn additional_directories(settings: &Settings) -> &[String] {
 mod tests {
     use super::*;
     use bravebot_core::permissions::{Decision, Ruling, Subject};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+
+    /// The rules take the answer of the volume the workspace is on, and a workspace that cannot be
+    /// read gets byte comparison: a rule about `Docs` covers `docs` only where the two are one file.
+    #[test]
+    fn rules_take_the_case_answer_of_the_volume_the_workspace_is_on() {
+        let root = crate::testutil::scratch_dir("Permissions-Volume-Case");
+        std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        // The oracle asks the same filesystem the other way, with a file of the test's own.
+        std::fs::write(root.join("probe-file"), b"").unwrap();
+        let folds = root.join("PROBE-FILE").exists();
+
+        let settings = Settings::parse(r#"{"permissions": {"deny": ["Read(Docs/**)"]}}"#);
+        let (on_it, _) = from_settings(&settings, None, &root);
+        let (nowhere, _) = from_settings(&settings, None, &root.join("does-not-exist"));
+
+        let expected = match folds {
+            true => Decision::Ruled(Ruling::Deny),
+            false => Decision::Unmatched,
+        };
+        assert_eq!(on_it.for_path(Subject::Read, "docs/a.md"), expected);
+        assert_eq!(
+            nowhere.for_path(Subject::Read, "docs/a.md"),
+            Decision::Unmatched,
+            "a workspace that could not be read folded case"
+        );
+        assert_eq!(
+            on_it.for_path(Subject::Read, "Docs/a.md"),
+            Decision::Ruled(Ruling::Deny)
+        );
+    }
 
     /// The block from Claude Code's own documentation, read out of a settings file and into rules
     /// that decide something. This is the whole point of the module.
@@ -269,7 +310,11 @@ mod tests {
               }
             }"#,
         );
-        let (permissions, rejected) = from_settings(&settings, Some(&PathBuf::from("/home/x")));
+        let (permissions, rejected) = from_settings(
+            &settings,
+            Some(&PathBuf::from("/home/x")),
+            Path::new("/nonexistent"),
+        );
         assert!(rejected.is_empty());
         assert_eq!(
             permissions.for_command(&["git", "diff", "--stat"]),
@@ -289,7 +334,8 @@ mod tests {
     /// existed and must stay indistinguishable from it.
     #[test]
     fn no_block_is_no_rules() {
-        let (permissions, rejected) = from_settings(&Settings::default(), None);
+        let (permissions, rejected) =
+            from_settings(&Settings::default(), None, Path::new("/nonexistent"));
         assert!(permissions.is_empty());
         assert!(rejected.is_empty());
     }
@@ -299,7 +345,11 @@ mod tests {
     #[test]
     fn a_line_that_is_not_a_rule_is_reported() {
         let settings = Settings::parse(r#"{"permissions": {"deny": ["Read(.env)", "Nonsense"]}}"#);
-        let (permissions, rejected) = from_settings(&settings, Some(&PathBuf::from("/home/x")));
+        let (permissions, rejected) = from_settings(
+            &settings,
+            Some(&PathBuf::from("/home/x")),
+            Path::new("/nonexistent"),
+        );
         assert_eq!(permissions.len(), 1);
         assert_eq!(rejected.len(), 1);
         assert!(describe(&rejected[0]).contains("Nonsense"));
@@ -318,8 +368,11 @@ mod tests {
               }
             }"#,
         );
-        let (permissions, rejected) =
-            for_an_unattended_run(&settings, Some(&PathBuf::from("/home/x")));
+        let (permissions, rejected) = for_an_unattended_run(
+            &settings,
+            Some(&PathBuf::from("/home/x")),
+            Path::new("/nonexistent"),
+        );
         assert!(rejected.is_empty());
         assert_eq!(
             permissions.for_command(&["git", "diff", "--stat"]),
@@ -341,8 +394,11 @@ mod tests {
     #[test]
     fn an_unreadable_allow_rule_is_reported_to_a_run_nobody_is_watching() {
         let settings = Settings::parse(r#"{"permissions": {"allow": ["Bash(git diff *"]}}"#);
-        let (permissions, rejected) =
-            for_an_unattended_run(&settings, Some(&PathBuf::from("/home/x")));
+        let (permissions, rejected) = for_an_unattended_run(
+            &settings,
+            Some(&PathBuf::from("/home/x")),
+            Path::new("/nonexistent"),
+        );
         assert!(permissions.is_empty());
         assert_eq!(rejected.len(), 1);
         assert!(describe(&rejected[0]).contains("git diff"));
@@ -356,7 +412,11 @@ mod tests {
     fn an_entry_that_is_not_a_line_is_reported() {
         let settings =
             Settings::parse(r#"{"permissions": {"deny": [["Read(./.env)"], "Read(./notes)"]}}"#);
-        let (permissions, rejected) = from_settings(&settings, Some(&PathBuf::from("/home/x")));
+        let (permissions, rejected) = from_settings(
+            &settings,
+            Some(&PathBuf::from("/home/x")),
+            Path::new("/nonexistent"),
+        );
         assert_eq!(permissions.len(), 1);
         assert_eq!(
             rejected.iter().map(describe).collect::<Vec<_>>(),
@@ -376,8 +436,11 @@ mod tests {
     #[test]
     fn an_entry_that_is_not_a_line_is_reported_to_a_run_nobody_is_watching() {
         let settings = Settings::parse(r#"{"permissions": {"allow": [["Bash(git diff *)"]]}}"#);
-        let (permissions, rejected) =
-            for_an_unattended_run(&settings, Some(&PathBuf::from("/home/x")));
+        let (permissions, rejected) = for_an_unattended_run(
+            &settings,
+            Some(&PathBuf::from("/home/x")),
+            Path::new("/nonexistent"),
+        );
         assert!(permissions.is_empty());
         assert_eq!(rejected.len(), 1);
         assert!(describe(&rejected[0]).contains("Bash(git diff *)"));
@@ -399,11 +462,19 @@ mod tests {
         for (caller, (permissions, rejected)) in [
             (
                 "a session",
-                from_settings(&settings, Some(&PathBuf::from("/home/x"))),
+                from_settings(
+                    &settings,
+                    Some(&PathBuf::from("/home/x")),
+                    std::path::Path::new("."),
+                ),
             ),
             (
                 "a run nobody is watching",
-                for_an_unattended_run(&settings, Some(&PathBuf::from("/home/x"))),
+                for_an_unattended_run(
+                    &settings,
+                    Some(&PathBuf::from("/home/x")),
+                    std::path::Path::new("."),
+                ),
             ),
         ] {
             assert_eq!(
@@ -434,7 +505,11 @@ mod tests {
     #[test]
     fn a_blank_rule_is_reported_as_empty() {
         let settings = Settings::parse(r#"{"permissions": {"deny": ["   ", ""]}}"#);
-        let (permissions, rejected) = from_settings(&settings, Some(&PathBuf::from("/home/x")));
+        let (permissions, rejected) = from_settings(
+            &settings,
+            Some(&PathBuf::from("/home/x")),
+            Path::new("/nonexistent"),
+        );
         assert!(permissions.is_empty());
         assert_eq!(
             rejected.iter().map(describe).collect::<Vec<_>>(),
@@ -482,7 +557,11 @@ mod tests {
     fn a_checkout_cannot_write_a_rule_that_answers_a_prompt() {
         let block = r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#;
         let checkout = layered_settings("checkout-allow", Some(block), None);
-        let (permissions, rejected) = from_settings(&checkout, Some(&PathBuf::from("/home/x")));
+        let (permissions, rejected) = from_settings(
+            &checkout,
+            Some(&PathBuf::from("/home/x")),
+            Path::new("/nonexistent"),
+        );
         assert!(rejected.is_empty(), "{rejected:?}");
         assert_eq!(
             permissions.for_command(&["bash", "scripts/check.sh"]),
@@ -491,7 +570,11 @@ mod tests {
         );
 
         let own = layered_settings("own-allow", None, Some(block));
-        let (permissions, rejected) = from_settings(&own, Some(&PathBuf::from("/home/x")));
+        let (permissions, rejected) = from_settings(
+            &own,
+            Some(&PathBuf::from("/home/x")),
+            Path::new("/nonexistent"),
+        );
         assert!(rejected.is_empty(), "{rejected:?}");
         assert_eq!(
             permissions.for_command(&["bash", "scripts/check.sh"]),
@@ -514,6 +597,7 @@ mod tests {
             &checkout,
             &["Bash(bash scripts/check.sh)".to_string()],
             Some(&profile),
+            Path::new("/nonexistent"),
         );
         assert!(rejected.is_empty(), "{rejected:?}");
         assert_eq!(
@@ -522,7 +606,8 @@ mod tests {
             "a rule the person granted did not answer the run prompt"
         );
 
-        let (ungranted, rejected) = with_granted(&checkout, &[], Some(&profile));
+        let (ungranted, rejected) =
+            with_granted(&checkout, &[], Some(&profile), Path::new("/nonexistent"));
         assert!(rejected.is_empty(), "{rejected:?}");
         assert_eq!(
             ungranted.for_command(&["bash", "scripts/check.sh"]),
@@ -543,6 +628,7 @@ mod tests {
             &checkout,
             &["Bash(bash scripts/check.sh)".to_string()],
             Some(&PathBuf::from("/home/x")),
+            Path::new("/nonexistent"),
         );
         assert_eq!(
             permissions.for_command(&["bash", "scripts/check.sh"]),
@@ -561,6 +647,7 @@ mod tests {
             &Settings::default(),
             &["Bash(bash scripts/check.sh".to_string()],
             Some(&PathBuf::from("/home/x")),
+            Path::new("/nonexistent"),
         );
         assert!(
             permissions.is_empty(),
@@ -591,7 +678,7 @@ mod tests {
             "the entries offered as grants are not the ones that are rules"
         );
 
-        let (_, rejected) = from_settings(&checkout, Some(&profile));
+        let (_, rejected) = from_settings(&checkout, Some(&profile), Path::new("/nonexistent"));
         let said: Vec<String> = rejected.iter().map(describe).collect();
         assert_eq!(said.len(), 1, "{said:?}");
         assert!(
@@ -609,7 +696,11 @@ mod tests {
         let block = r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)", "Nonsense"]}}"#;
         let checkout = layered_settings("unattended-checkout-allow", Some(block), None);
 
-        let (_, rejected) = for_an_unattended_run(&checkout, Some(&PathBuf::from("/home/x")));
+        let (_, rejected) = for_an_unattended_run(
+            &checkout,
+            Some(&PathBuf::from("/home/x")),
+            Path::new("/nonexistent"),
+        );
         let said: Vec<String> = rejected.iter().map(describe).collect();
         assert_eq!(said.len(), 1, "{said:?}");
         assert!(
@@ -648,7 +739,11 @@ mod tests {
     #[test]
     fn a_single_slash_rule_is_anchored_at_the_settings_directory() {
         let settings = Settings::parse(r#"{"permissions": {"deny": ["Read(/secrets/**)"]}}"#);
-        let (permissions, _) = from_settings(&settings, Some(&PathBuf::from("/home/x")));
+        let (permissions, _) = from_settings(
+            &settings,
+            Some(&PathBuf::from("/home/x")),
+            Path::new("/nonexistent"),
+        );
         assert_eq!(
             permissions.for_path(Subject::Read, "/home/x/.bravebot/secrets/key"),
             Decision::Ruled(Ruling::Deny)
