@@ -256,10 +256,10 @@ impl TrustStore {
         if !self.folds_case {
             return None;
         }
-        let folded = key.to_lowercase();
+        let folded = fold_case(key);
         self.rules
             .iter()
-            .find(|(rule, _)| rule.to_lowercase() == folded)
+            .find(|(rule, _)| fold_case(rule) == folded)
             .map(|(_, decision)| decision)
     }
 
@@ -403,6 +403,17 @@ pub(crate) fn normalise(path: &str) -> String {
     }
 }
 
+/// `key` with its letter case folded out, the way a map that folds case compares names.
+///
+/// Upper case first, so a letter whose lower case is itself still meets the letter a volume folds
+/// it to: APFS opens `src` as `\u{17f}rc`, and `\u{17f}` lowercases to itself.
+pub(crate) fn fold_case(key: &str) -> String {
+    key.chars()
+        .flat_map(char::to_uppercase)
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
 /// Whether `prefix` covers `path`, matching whole segments only.
 ///
 /// Segment-wise so `src` does not cover `srcfoo`, which a plain string prefix test would
@@ -417,8 +428,8 @@ pub(crate) fn normalise(path: &str) -> String {
 pub(crate) fn covers(prefix: &str, path: &str, folds_case: bool) -> bool {
     let (prefix, path) = if folds_case {
         (
-            std::borrow::Cow::Owned(prefix.to_lowercase()),
-            std::borrow::Cow::Owned(path.to_lowercase()),
+            std::borrow::Cow::Owned(fold_case(prefix)),
+            std::borrow::Cow::Owned(fold_case(path)),
         )
     } else {
         (
@@ -723,6 +734,27 @@ mod tests {
         assert!(!covers("src/fetched.json", "SRC/other.json", true));
         assert!(!covers("src/fetched.json", "src/FETCHED.json.bak", true));
         assert!(!covers("src", "SRCFOO", true));
+    }
+
+    /// APFS and NTFS open `\u{17f}rc` as `src`, and `\u{17f}` is its own lower case, so folding by
+    /// lower case alone leaves that spelling past every rule written about the file.
+    #[test]
+    fn a_folding_volume_reads_a_long_s_as_the_letter_it_opens_as() {
+        assert!(covers("src/fetched.json", "\u{17f}rc/fetched.json", true));
+        assert!(!covers("src/fetched.json", "\u{17f}rc/fetched.json", false));
+
+        let mut store = TrustStore::new("/work").folding_case(true);
+        store.trust("src");
+        store.distrust("src/Fetched.json");
+        assert_eq!(
+            store.integrity_of("\u{17f}rc/fetched.json"),
+            Some(Integrity::Untrusted),
+            "a distrusted file named with a long s was read as trusted"
+        );
+        assert_eq!(
+            store.integrity_beneath("\u{17f}rc"),
+            Some(Integrity::Untrusted)
+        );
     }
 
     /// Both polarities carry across the spellings of a folding volume, since a distrust that missed

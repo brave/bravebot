@@ -94,8 +94,9 @@ asked (an error, a mount point, a name with no letter anywhere on the path, a ho
 telling files apart), the map also compares bytes: the answer only widens what a rule reaches, and
 a map that does not fold has never made trust cover a path it was not written about. A map made
 without the answer compares bytes, and a map moved to another directory takes that directory's
-answer. Where two rules differ only in case on a volume that folds, the one that sorts first
-decides, and the map does not replace one with the other.
+answer. Folding takes each letter to upper case and then to lower case, since APFS opens `ſrc`
+as `src` and `ſ` is its own lower case. Where two rules differ only in case on a volume that folds,
+the one that sorts first decides, and the map does not replace one with the other.
 
 **Why.** Per-file exceptions in both directions are the only way `@vendor/lib.js` can be trusted
 inside a `vendor` a person marked untrusted, without that answer leaking to its siblings.
@@ -119,6 +120,7 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_agent::workspace::a_second_spelling_of_a_distrusted_file_is_read_as_untrusted`
 `verified-by: bravebot_core::trust::a_rule_covers_a_case_variant_spelling_of_the_same_file`
 `verified-by: bravebot_core::trust::a_folding_volume_applies_a_rule_in_both_polarities_to_the_other_spelling`
+`verified-by: bravebot_core::trust::a_folding_volume_reads_a_long_s_as_the_letter_it_opens_as`
 `verified-by: bravebot_core::trust::a_case_sensitive_volume_keeps_spellings_apart`
 `verified-by: bravebot_core::trust::a_map_moved_takes_the_new_volumes_answer`
 `verified-by: bravebot_agent::workspace::a_volume_answering_to_either_spelling_folds_case`

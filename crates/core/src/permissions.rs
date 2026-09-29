@@ -747,11 +747,12 @@ fn segments_of(path: &str) -> Vec<&str> {
         .collect()
 }
 
-/// Fold a path or a pattern to lowercase, one segment at a time, where `folds` says the volume
+/// Fold a path or a pattern's letter case, one segment at a time, where `folds` says the volume
 /// holds two spellings that differ only in case as one file.
 ///
 /// There a planner's `.ENV` opens the same file as the `.env` a deny rule names, so both sides of
-/// a match are lowered before they are compared. Lowering segment-wise leaves the separators, and
+/// a match are folded before they are compared, upper case first as
+/// [`fold_case`](crate::trust::fold_case) does. Folding segment-wise leaves the separators, and
 /// with them the anchor and relative/absolute logic and the `*` and `**` semantics, exactly as
 /// they were. Nothing is folded where the volume keeps the spellings apart, since there it would
 /// make one rule cover another file.
@@ -760,7 +761,7 @@ fn fold(path: &str, folds: bool) -> String {
         return path.to_string();
     }
     path.split('/')
-        .map(str::to_lowercase)
+        .map(crate::trust::fold_case)
         .collect::<Vec<_>>()
         .join("/")
 }
@@ -1274,7 +1275,7 @@ mod tests {
     #[test]
     fn a_tree_rule_covers_the_folded_spelling_of_its_path() {
         let permissions = rules_on_a_volume_that_folds_case(true, &["Read(src/**)"], &[], &[]);
-        for path in ["src/x/y", "SRC/x/y", "Src/x/y"] {
+        for path in ["src/x/y", "SRC/x/y", "Src/x/y", "\u{17f}rc/x/y"] {
             assert_eq!(
                 permissions.for_path(Subject::Read, path),
                 Decision::Ruled(Ruling::Deny),
