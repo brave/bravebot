@@ -4,7 +4,7 @@ import { Modal } from './Modal'
 import { botHistory } from '../../shared/bot-history'
 import { useExperience } from '../experience'
 import type { SessionSummary } from '../../shared/protocol'
-import { Button, Icon, Input, TextArea } from '../nala'
+import { Alert, Button, Icon, Input, Label, TextArea } from '../nala'
 /**
  * The other list in the left column: the bots somebody has defined.
  *
@@ -70,14 +70,6 @@ export function Bots({
   const history = overview ? botHistory(overview, sessions, preferences) : []
   const filteredHistory = history.filter(row => `${row.session?.title ?? ''} ${row.id}`.toLowerCase().includes(historyQuery.toLowerCase()))
   const setOverview = (bot: Bot | null) => { setOverviewSlug(bot?.slug ?? null); setHistoryQuery('') }
-  // Leo's React wrapper assigns `aria-label` as a property on the host. The field
-  // Playwright and assistive tech read is the input inside the shadow tree.
-  useEffect(() => {
-    const apply = () => historySearch.current?.shadowRoot?.querySelector('input')?.setAttribute('aria-label', 'Search bot conversations')
-    apply()
-    const timer = window.setTimeout(apply, 0)
-    return () => window.clearTimeout(timer)
-  }, [overviewSlug, history.length])
   const [editing, setEditing] = useState<string | null>(null)
   // Whether the archive is open. Local for the same reason, and closed to begin with: the archive
   // is where things go to stop being in the way, and one that opened itself every launch would be
@@ -135,13 +127,13 @@ export function Bots({
           </div>
           <h3>Conversation history ({history.length})</h3>
           <p className="bot-note">All conversations for this bot, including archived conversations and drafts. Starting a new conversation keeps the earlier ones here.</p>
-          {history.length > 0 && <Input ref={historySearch} className="bot-history-search" type="search" placeholder="Search conversations…" value={historyQuery}
+          {history.length > 0 && <Input ref={historySearch} className="bot-history-search" type="search" aria-label="Search bot conversations" placeholder="Search conversations…" value={historyQuery}
             onInput={({ value }) => setHistoryQuery(value)} onChange={({ value }) => setHistoryQuery(value)} />}
           <div className="bot-conversations" aria-label="Bot conversation history">
             {filteredHistory.map(({ id, session, archived }) => session ?
-              <button key={id} onClick={() => { onConversation(overview, session); setOverview(null) }}>
+              <Button key={id} kind="outline" size="small" onClick={() => { onConversation(overview, session); setOverview(null) }}>
                 <strong>{session.title}</strong><span>{id.startsWith('draft:') ? 'Draft' : new Date(session.updated * 1000).toLocaleDateString()}{archived ? ' · Archived' : ''}</span>
-              </button> : <div className="bot-history-unavailable" key={id}><strong>Unavailable conversation</strong><code>{id}</code><span>The saved record is not currently available in the session list.</span></div>)}
+              </Button> : <Alert type="info" size="small" className="bot-history-unavailable" key={id}><span slot="title">Unavailable conversation</span><code>{id}</code><span>The saved record is not currently available in the session list.</span></Alert>)}
             {history.length === 0 && <p>No conversations yet.</p>}
             {history.length > 0 && filteredHistory.length === 0 && <p>No conversations match “{historyQuery}”.</p>}
           </div>
@@ -171,11 +163,9 @@ export function Bots({
                 setShowing(!showing)
               }}
             >
-              <span className={`chevron ${showing ? 'open' : ''}`} aria-hidden="true">
-                ›
-              </span>
+              <Icon className={`chevron ${showing ? 'open' : ''}`} name="carat-right" />
               <span className="session-group-name">Archived</span>
-              <span className="count">{away.length}</span>
+              <Label className="count" color="neutral">{away.length}</Label>
             </button>
           </div>
           {/* The rows scroll on their own once there are enough of them. A fold pinned to the
@@ -241,14 +231,17 @@ function BotRow({
           </span>
         </span>
       </button>
-      <button
+      <Button
+        kind="plain-faint"
+        size="tiny"
+        fab
         className="bot-edit"
         aria-label={`Edit ${bot.name}`}
         title={`Edit ${bot.name}`}
         onClick={onEdit}
       >
-        <span aria-hidden="true">⋯</span>
-      </button>
+        <Icon name="more-horizontal" slot="icon-before" />
+      </Button>
     </div>
   )
 }
@@ -313,36 +306,39 @@ function ArchivedRow({
       </span>
       {asking ? (
         <>
-          <button type="button" className="bot-keep" onClick={onCancel}>
+          <Button kind="plain-faint" size="tiny" className="bot-keep" onClick={onCancel}>
             Keep
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            kind="outline"
+            size="tiny"
             className="bot-delete bot-delete-armed"
             title={`Delete ${bot.name} and its local memory history for good. Project files and conversations are kept.`}
             onClick={onDelete}
           >
             Delete
-          </button>
+          </Button>
         </>
       ) : (
         <>
-          <button
-            type="button"
+          <Button
+            kind="outline"
+            size="tiny"
             className="bot-restore"
             title={`Bring ${bot.name} back, with its session, its memory and its face.`}
             onClick={onRestore}
           >
             Restore
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            kind="plain-faint"
+            size="tiny"
             className="bot-delete"
             title={`Delete ${bot.name} for good. Local memory history is deleted. Project files and conversations are kept.`}
             onClick={onAsk}
           >
             Delete
-          </button>
+          </Button>
         </>
       )}
     </div>
@@ -385,24 +381,19 @@ function BotForm({
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const formRef = useRef<HTMLFormElement>(null)
-  const nameField = useRef<HTMLElement>(null)
-  const purposeField = useRef<HTMLElement>(null)
   // The host does not forward `type` or `aria-label` into the shadow control.
-  // Name and Purpose keep their visible captions; the inner fields need the
-  // same names so labels and the drive tests still find them.
   useEffect(() => {
-    // Leo rebuilds a button's shadow tree when its slot changes, which drops
-    // `type` and `aria-label` set during the commit. Apply again after that.
+    // Leo rebuilds a button's shadow tree when its slot changes, which drops the `type` set
+    // during the commit. A Leo button can be a submit button only by asking the form to submit
+    // (below), so this only keeps the others from behaving like one.
+    // Apply again after that.
     let frame = 0
     let timer = 0
     const apply = () => {
-      nameField.current?.shadowRoot?.querySelector('input')?.setAttribute('aria-label', 'Name')
-      purposeField.current?.shadowRoot?.querySelector('textarea')?.setAttribute('aria-label', 'Purpose')
       formRef.current?.querySelectorAll('leo-button').forEach((host) => {
         const button = host.shadowRoot?.querySelector('button')
         if (!button) return
         button.type = host.classList.contains('bot-save') ? 'submit' : 'button'
-        if (host.classList.contains('bot-avatar-refresh')) button.setAttribute('aria-label', 'Refresh avatar')
       })
     }
     apply()
@@ -462,6 +453,7 @@ function BotForm({
               size="tiny"
               fab
               className="bot-avatar-refresh"
+              aria-label="Refresh avatar"
               title="Try a new avatar appearance"
               onClick={() => setAvatar(newAvatarSeed(crypto.randomUUID()))}
             >
@@ -470,24 +462,20 @@ function BotForm({
           </div>
         )}
 
-        <label className="bot-field">
-          <span>Name</span>
+        <div className="bot-field">
           <Input
-            ref={nameField}
             autofocus
             value={name}
             placeholder="Web dev bot"
             onInput={({ value }) => setName(value)}
             onChange={({ value }) => setName(value)}
             onKeyDown={onNameKey}
-          />
-        </label>
+          >Name</Input>
+        </div>
       </div>
 
-      <label className="bot-field">
-        <span>Purpose</span>
+      <div className="bot-field">
         <TextArea
-          ref={purposeField}
           value={purpose}
           minRows={4}
           maxRows={12}
@@ -496,8 +484,8 @@ function BotForm({
           onInput={({ value }) => setPurpose(value)}
           onChange={({ value }) => setPurpose(value)}
           onKeyDown={onEscape}
-        />
-      </label>
+        >Purpose</TextArea>
+      </div>
 
       <div className="bot-field bot-form-model">
         <span>Model</span>
@@ -528,7 +516,7 @@ function BotForm({
 
       {bot && <BotMemory slug={bot.slug} />}
 
-      {saveError && <p role="alert">{saveError}</p>}
+      {saveError && <Alert type="error" size="small" role="alert">{saveError}</Alert>}
       <div className="bot-actions">
         {onArchive && (
           <Button

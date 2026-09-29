@@ -6,7 +6,6 @@ import { keyOf } from '../../shared/forks'
 import { projectLabel } from '../../shared/recents'
 import { Fold } from './Fold'
 import { ForkIcon } from './ForkIcon'
-import { PopMenu } from './PopMenu'
 import { conversationKey } from '../../shared/experience'
 import { useExperience, setConversation } from '../experience'
 import { Button, ButtonMenu, Icon, Label, TabItem, Tabs } from '../nala'
@@ -228,24 +227,25 @@ function Group({
           title={group.directory}
           onClick={() => onToggle(group.directory)}
         >
-          <span className={`chevron ${open ? 'open' : ''}`} aria-hidden="true">
-            ›
-          </span>
+          <Icon className={`chevron ${open ? 'open' : ''}`} name="carat-right" />
           <span className="session-group-name">{group.project}</span>
-          <span className="count">{group.sessions.length}</span>
+          <Label className="count" color="neutral">{group.sessions.length}</Label>
         </button>
         {/* The same thing **New session** does, minus the folder picker — the directory is
             already known, and the picker's whole job is to find one out. Named for the
             project rather than "New session" so that a reader of the button list is told
             which of a dozen identical-looking pluses they have landed on. */}
-        <button
+        <Button
+          kind="plain-faint"
+          size="tiny"
+          fab
           className="session-group-new"
           aria-label={`New session in ${group.project}`}
           title={`New session in ${group.directory}`}
           onClick={() => onNew(group.directory)}
         >
-          <span aria-hidden="true">+</span>
-        </button>
+          <Icon name="plus-add" slot="icon-before" />
+        </Button>
       </div>
       <Fold open={open}>
         {group.sessions.map((session) => (
@@ -286,7 +286,13 @@ function Session({
   const preferences = useExperience().conversations[key]
   const info = useContext(SessionInfo)[key]
   const [menu, setMenu] = useState(false)
-  const anchor = useRef<HTMLButtonElement>(null)
+  const anchor = useRef<HTMLElement>(null)
+  const shutReason = useRef('explicit')
+  const choose = (id: 'pin' | 'archive') => {
+    setMenu(false)
+    anchor.current?.focus()
+    setConversation(key, id === 'pin' ? { pinned: !preferences?.pinned } : { archived: !preferences?.archived })
+  }
   return <div className={`session-row ${session.id === openId ? 'current' : ''}`}>
     <button className={`session ${session.id === openId ? 'current' : ''}`} onClick={() => onOpen(session)} onContextMenu={contextMenu('session', session.id)}>
       <span className="session-title" title={session.title}>
@@ -299,10 +305,22 @@ function Session({
         {info.state && <Label className="session-state" color={info.state.color}>{info.state.label}</Label>}
       </span>}
     </button>
-    <button ref={anchor} className="session-more" aria-label={`Actions for ${session.title}`} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>⋯</button>
-    <PopMenu open={menu} anchor={anchor} label="Conversation actions" onClose={() => setMenu(false)}
-      items={[{ id: 'pin', label: preferences?.pinned ? 'Unpin conversation' : 'Pin conversation' }, { id: 'archive', label: preferences?.archived ? 'Restore conversation' : 'Archive conversation' }]}
-      onChoose={(id) => setConversation(key, id === 'pin' ? { pinned: !preferences?.pinned } : { archived: !preferences?.archived })} />
+    <ButtonMenu className="session-more-menu" isOpen={menu} placement="bottom-end" positionStrategy="fixed"
+      onClose={(detail) => { shutReason.current = detail.reason }}
+      onChange={({ isOpen }) => {
+        setMenu(isOpen)
+        // Escape returns focus to the button that opened the menu; a click elsewhere leaves it
+        // where the pointer landed.
+        if (!isOpen && shutReason.current !== 'blur') anchor.current?.focus()
+        if (!isOpen) shutReason.current = 'explicit'
+      }}>
+      <Button ref={anchor} slot="anchor-content" kind="plain-faint" size="tiny" fab className="session-more"
+        aria-label={`Actions for ${session.title}`} title={`Actions for ${session.title}`} aria-haspopup="menu" aria-expanded={menu}>
+        <Icon name="more-horizontal" slot="icon-before" />
+      </Button>
+      <leo-menu-item onClick={() => choose('pin')}>{preferences?.pinned ? 'Unpin conversation' : 'Pin conversation'}</leo-menu-item>
+      <leo-menu-item onClick={() => choose('archive')}>{preferences?.archived ? 'Restore conversation' : 'Archive conversation'}</leo-menu-item>
+    </ButtonMenu>
   </div>
 
 }
@@ -338,7 +356,6 @@ function NewSession({ onNew }: { onNew: (directory?: string) => void }): React.J
   useEffect(() => {
     const column = menu.current?.closest('.sessions')
     column?.classList.toggle('recents-open', open)
-    menu.current?.setAttribute('aria-expanded', String(open))
     return () => column?.classList.remove('recents-open')
   }, [open])
 
@@ -395,8 +412,6 @@ function NewSession({ onNew }: { onNew: (directory?: string) => void }): React.J
         className="new-recent recent-menu"
         isOpen={open}
         positionStrategy="fixed"
-        aria-haspopup="menu"
-        aria-label="Projects opened before"
         onChange={({ isOpen: next }) => {
           if (next) show()
           else {
@@ -413,6 +428,8 @@ function NewSession({ onNew }: { onNew: (directory?: string) => void }): React.J
           size="small"
           fab
           aria-label="Projects opened before"
+          aria-haspopup="menu"
+          aria-expanded={open}
           title="Projects opened before"
         >
           <Icon name="carat-down" slot="icon-before" />
