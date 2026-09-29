@@ -1,14 +1,13 @@
 import { Watches } from './Watches'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
-import { useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
+import { useLayoutEffect, useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { isConfined, type Ambient, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import type { Side } from '../columns'
 import type { Asked } from '../App'
 import type { ExportFormat } from '../../shared/export'
 import { Diff } from './Diff'
-import { Fold } from './Fold'
 import { ModelPicker } from './ModelPicker'
 import { ForkIcon } from './ForkIcon'
 import { ago, contextMenu } from './Sessions'
@@ -21,7 +20,7 @@ import { ErrorCard } from './ErrorCard'
 import { FilePreview } from './FilePreview'
 import { TurnFooter, TurnNotices, type OpenAudit } from './TurnDetails'
 import type { Turns, TurnDisclosure } from '../turn-details'
-import { Alert, Button, ButtonMenu, Collapse, Icon, ProgressRing, type IconName } from '../nala'
+import { Alert, Button, ButtonMenu, Collapse, Icon, Input, ProgressRing, TextArea, type IconName } from '../nala'
 
 interface Live {
   model: string | null
@@ -111,6 +110,42 @@ interface Props {
 }
 
 /**
+ * Leo's button host does not put `aria-label` on the inner control the accessibility
+ * tree reads. Icon-only composer actions need the name on that inner button, and a
+ * slot update rebuilds it, so the name is applied again when the shadow tree changes.
+ */
+function useLeoButtonLabel(label: string) {
+  const labelRef = useRef(label)
+  labelRef.current = label
+  const host = useRef<HTMLElement | null>(null)
+  const observer = useRef<MutationObserver | null>(null)
+  const applyTo = (node: HTMLElement) => {
+    const name = labelRef.current
+    node.setAttribute('aria-label', name)
+    const inner = node.shadowRoot?.querySelector('button')
+    if (!inner) return
+    inner.setAttribute('aria-label', name)
+    inner.title = name
+  }
+  const ref = useCallback((node: HTMLElement | null) => {
+    observer.current?.disconnect()
+    observer.current = null
+    host.current = node
+    if (!node) return
+    applyTo(node)
+    const slots = new MutationObserver(() => queueMicrotask(() => applyTo(node)))
+    slots.observe(node, { childList: true })
+    if (node.shadowRoot) slots.observe(node.shadowRoot, { childList: true, subtree: true })
+    observer.current = slots
+  }, [])
+  useEffect(() => {
+    if (host.current) applyTo(host.current)
+  }, [label])
+  useEffect(() => () => observer.current?.disconnect(), [])
+  return ref
+}
+
+/**
  * The control that folds one side column away.
  *
  * Both toggles live here, in the middle column's header, rather than each sitting in the
@@ -134,7 +169,6 @@ function ColumnToggle({
   collapsed: boolean
   onToggle: (side: Side) => void
 }): React.JSX.Element {
-  const host = useRef<HTMLElement>(null)
   const what = side === 'left' ? 'the session list' : 'the context panel'
   const label = side === 'left' ? 'Session list' : 'Context panel'
   const controls = side === 'left' ? 'sessions-column' : 'context-column'
@@ -148,44 +182,16 @@ function ColumnToggle({
         ? 'sidepanel-open'
         : 'browser-split-view-right'
 
-  // Leo draws the control inside a shadow root and rebuilds that inner button when the
-  // icon slot arrives, which is after this effect. The host is what the column drivers
-  // query, and the inner button is what the accessibility tree exposes — a name set on
-  // only one of them would satisfy either the tests or a screen reader. Reapplying when
-  // the slot lands puts the name on the button that stays.
-  useEffect(() => {
-    const node = host.current
-    if (!node) return
-    const apply = () => {
-      const current = host.current
-      if (!current) return
-      current.setAttribute('aria-expanded', collapsed ? 'false' : 'true')
-      current.setAttribute('aria-controls', controls)
-      current.setAttribute('aria-label', label)
-      const inner = current.shadowRoot?.querySelector('button')
-      if (!inner) return
-      inner.setAttribute('aria-expanded', collapsed ? 'false' : 'true')
-      inner.setAttribute('aria-controls', controls)
-      inner.setAttribute('aria-label', label)
-      inner.title = title
-    }
-    apply()
-    // The slot mutation rebuilds the inner button after this effect, inside the shadow
-    // root. Applying again once that new button is in place keeps the name on it.
-    const slots = new MutationObserver(() => queueMicrotask(apply))
-    slots.observe(node, { childList: true })
-    if (node.shadowRoot) slots.observe(node.shadowRoot, { childList: true, subtree: true })
-    return () => slots.disconnect()
-  }, [collapsed, controls, label, title])
-
   return (
     <Button
-      ref={host}
       kind="plain-faint"
       size="small"
       fab
       className={`fold-toggle ${side}`}
       title={title}
+      aria-label={label}
+      aria-expanded={!collapsed}
+      aria-controls={controls}
       onClick={() => onToggle(side)}
     >
       <Icon name={icon} slot="icon-before" />
@@ -235,7 +241,10 @@ export function Transcript({
   const bottom = useRef<HTMLDivElement>(null)
   const marked = useRef<HTMLDivElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
-  const input = useRef<HTMLTextAreaElement>(null)
+  const input = useRef<HTMLElement>(null)
+  const stopping = live?.running === true
+  const attachButton = useLeoButtonLabel('Attach files')
+  const submitButton = useLeoButtonLabel(stopping ? 'Stop' : 'Send')
   const following = useRef(true)
   const lastScroll = useRef(0)
   const scrollSave = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -258,11 +267,20 @@ export function Transcript({
     behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
   const latest = () => { following.current = true; setUnseen(false); jump(bottom.current) }
   useEffect(() => { void window.bravebot.readRecents().then(setRecents).catch(() => {}) }, [live?.handle])
+  // Leo's TextArea only works out its rows while somebody types, so a restored draft would sit
+  // in a one-line box and scroll. Size the field Leo draws from its content instead.
   useLayoutEffect(() => {
-    if (!input.current) return
-    input.current.style.height = 'auto'
-    input.current.style.height = `${Math.min(210, Math.max(70, input.current.scrollHeight))}px`
-  }, [draft])
+    let frame = 0
+    let tries = 0
+    const fit = () => {
+      const field = input.current?.shadowRoot?.querySelector('textarea')
+      if (!field) { if (tries++ < 20) frame = requestAnimationFrame(fit); return }
+      field.style.height = 'auto'
+      field.style.height = `${Math.min(210, field.scrollHeight)}px`
+    }
+    fit()
+    return () => cancelAnimationFrame(frame)
+  }, [draft, live?.handle])
   useLayoutEffect(() => {
     const element = scroller.current
     if (!element) return
@@ -399,9 +417,9 @@ export function Transcript({
       </div>
       {live && <div className="conversation-toolbar">
         <Button kind={searching ? 'filled' : 'plain'} size="small" onClick={() => setSearching((value) => !value)} aria-expanded={searching}>Find</Button>
-        <Button kind={permissions ? 'filled' : 'plain'} size="small" onClick={() => setPermissions(true)} aria-expanded={permissions}>Permissions</Button>
-        <Button kind={watches ? 'filled' : 'plain'} size="small" onClick={() => setWatches(true)} aria-expanded={watches}>Watches</Button>
-        <Button kind={focusedLayout ? 'filled' : 'plain'} size="small" aria-pressed={focusedLayout !== null} onClick={() => {
+        <Button kind={permissions ? 'filled' : 'plain'} size="small" onClick={() => setPermissions(true)} aria-haspopup="dialog">Permissions</Button>
+        <Button kind={watches ? 'filled' : 'plain'} size="small" onClick={() => setWatches(true)} aria-haspopup="dialog">Watches</Button>
+        <Button kind={focusedLayout ? 'filled' : 'plain'} size="small" onClick={() => {
           if (focusedLayout) {
             for (const side of ['left', 'right'] as const) if (collapsed[side] !== focusedLayout[side]) onToggle(side)
             setFocusedLayout(null)
@@ -410,25 +428,43 @@ export function Transcript({
             for (const side of ['left', 'right'] as const) if (!collapsed[side]) onToggle(side)
           }
         }}>{focusedLayout ? 'Exit focus' : 'Focus'}</Button>
-        <Button kind={preferences.density === 'compact' ? 'filled' : 'plain'} size="small" aria-pressed={preferences.density === 'compact'} onClick={() => setExperience('density', preferences.density === 'compact' ? 'comfortable' : 'compact')}>
+        <Button kind={preferences.density === 'compact' ? 'filled' : 'plain'} size="small" onClick={() => setExperience('density', preferences.density === 'compact' ? 'comfortable' : 'compact')}>
           {preferences.density === 'compact' ? 'Comfortable view' : 'Compact view'}
         </Button>
         <ExportMenu canExport={canExport} includeTools={includeTools} onToggleTools={onToggleTools} onExport={onExport} />
       </div>}
-      {backendReady === false && <div className="backend-status" role="status"><strong>Backend setup needed</strong><span>You can browse conversations and prepare drafts.</span><div><button onClick={onSetup}>Setup help</button><button onClick={onCheckBackend}>Check again</button><button onClick={onDiagnostics}>Diagnostics</button></div></div>}
+      {backendReady === false && <Alert type="warning" size="small" className="backend-status" role="status" hasActions>
+        <span slot="title">Backend setup needed</span>
+        <span>You can browse conversations and prepare drafts.</span>
+        <div slot="actions" className="backend-actions">
+          <Button size="small" kind="outline" onClick={onSetup}>Setup help</Button>
+          <Button size="small" kind="outline" onClick={onCheckBackend}>Check again</Button>
+          <Button size="small" kind="plain" onClick={onDiagnostics}>Diagnostics</Button>
+        </div>
+      </Alert>}
       {live && <div className="context-status" title="The model’s last request size, not accumulated token usage. New messages may change the next request.">
         {live.phase === 'compacting' ? 'Summarising context…' : live.contextTokens === undefined ? 'Context measurement unavailable' : live.contextTokens === 0 ? 'Context not yet measured' : `${live.contextTokens.toLocaleString()} context tokens at last request`}
         {!!live.archived && <span> · Earlier context summarised</span>}
       </div>}
       {problem && <ErrorCard detail={problem} />}
       {searching && <div className="conversation-search">
-        <input autoFocus type="search" aria-label="Find in conversation" placeholder="Find in conversation…" value={query}
-          onChange={(event) => { setQuery(event.target.value); setMatch(0) }}
-          onKeyDown={(event) => { if (event.key === 'Escape') setSearching(false); if (event.key === 'Enter') setMatch((n) => n + (event.shiftKey ? -1 + matches.length : 1)) }} />
+        <Input autofocus type="search" aria-label="Find in conversation" placeholder="Find in conversation…" value={query}
+          onChange={({ value }) => { setQuery(value); setMatch(0) }}
+          onKeyDown={({ innerEvent }) => {
+            const key = innerEvent as unknown as KeyboardEvent
+            if (key.key === 'Escape') setSearching(false)
+            if (key.key === 'Enter') setMatch((n) => n + (key.shiftKey ? -1 + matches.length : 1))
+          }} />
         <span role="status">{matches.length ? `${match % matches.length + 1} of ${matches.length}` : query ? 'No matches' : ''}</span>
-        <button disabled={!matches.length} onClick={() => setMatch((n) => n + matches.length - 1)} aria-label="Previous match">↑</button>
-        <button disabled={!matches.length} onClick={() => setMatch((n) => n + 1)} aria-label="Next match">↓</button>
-        <button onClick={() => setSearching(false)} aria-label="Close search">×</button>
+        <Button kind="plain-faint" size="small" fab isDisabled={!matches.length} onClick={() => setMatch((n) => n + matches.length - 1)} aria-label="Previous match" title="Previous match">
+          <Icon name="arrow-up" slot="icon-before" />
+        </Button>
+        <Button kind="plain-faint" size="small" fab isDisabled={!matches.length} onClick={() => setMatch((n) => n + 1)} aria-label="Next match" title="Next match">
+          <Icon name="arrow-down" slot="icon-before" />
+        </Button>
+        <Button kind="plain-faint" size="small" fab onClick={() => setSearching(false)} aria-label="Close search" title="Close search">
+          <Icon name="close" slot="icon-before" />
+        </Button>
       </div>}
       {live?.trustRemembered && <RememberedBanner kept={live.trustRemembered} />}
       {live?.autoVetting && <VettingBanner />}
@@ -521,7 +557,7 @@ export function Transcript({
             {workingWord(live.phase, live.checking)}
             {live.tokens > 0 && <span className="count"> · {live.tokens} tokens written</span>}
             {Object.values(live.turns).filter((turn) => turn.status === 'running').slice(-1).map((turn) =>
-              <button className="turn-audit-link" key={turn.turn} aria-controls="turn-audit-inspector" onClick={(event) => onAudit(turn.turn, event.currentTarget)}>Audit</button>)}
+              <Button kind="plain" size="tiny" className="turn-audit-link" key={turn.turn} aria-controls="turn-audit-inspector" onClick={(event) => onAudit(turn.turn, event.currentTarget as HTMLButtonElement)}>Audit</Button>)}
             <Button kind="plain-faint" size="tiny" className="cancel" onClick={onCancel} data-test="cancel-turn">
               Cancel
             </Button>
@@ -531,41 +567,49 @@ export function Transcript({
       </div>
 
       <div className="attention-bar" aria-live="polite">
-        {pending ? <button className="pending-jump" onClick={() => {
+        {pending ? <Button kind="outline" size="small" className="pending-jump" onClick={() => {
           document.dispatchEvent(new CustomEvent('bravebot:reveal-entry', { detail: pending.id }))
           const element = scroller.current?.querySelector<HTMLElement>(`[data-entry-id="${pending.id}"]`)
           jump(element ?? bottom.current)
-        }}>{pending.kind === 'ask' ? 'Your answer is needed' : 'Approval needed'} · {waitingOn(pending.kind)} — Review ↑</button> :
+        }}>{pending.kind === 'ask' ? 'Your answer is needed' : 'Approval needed'} · {waitingOn(pending.kind)} — Review ↑</Button> :
           live.running ? <span>{workingWord(live.phase, live.checking)} · You can draft your next message</span> :
           <span>{live.entries.at(-1)?.kind === 'error' ? 'Needs attention' : live.entries.length ? 'Ready for your next message' : 'Ready to begin'}</span>}
-        {unseen && <button onClick={latest}>New activity ↓</button>}
+        {unseen && <Button kind="outline" size="small" onClick={latest}>New activity ↓</Button>}
       </div>
       <footer className="composer">
-        {queued.length > 0 && <div className="queued-messages"><strong>{queuePaused ? 'Queue paused' : 'Queued after this turn'}</strong>{queuePaused && <button disabled={live.running || backendReady === false} onClick={onResumeQueued}>Resume queue</button>}{queued.map((text, index) => <div key={index}><span>{text}</span><button aria-label={`Remove queued message ${index + 1}`} onClick={() => onRemoveQueued(index)}>×</button></div>)}</div>}
-        {attachments.length > 0 && <div className="attachment-chips"><p>These files will be sent as trusted context with your message.</p>{attachments.map((file) => <span key={file.id}><button onClick={() => setPreviewPath(file.path)}>{file.path}</button><button aria-label={`Remove attachment ${file.path}`} onClick={() => onRemoveAttachment(file.id)}>×</button></span>)}</div>}
-        <textarea ref={input} rows={2} value={draft} aria-label="Message the agent" title="Unsent drafts are saved locally on this device. Clear the message to remove its saved draft."
-          placeholder={pending ? 'Draft your next message while you review…' : 'Describe a task, ask a question, or paste code…'}
-          onChange={(event) => onDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey
-              && !event.nativeEvent.isComposing && event.keyCode !== 229) {
-              event.preventDefault()
-              if (!event.repeat && !live.running && backendReady !== false && draft.trim()) { latest(); onSubmit() }
-            }
-          }} />
-        <div className="composer-toolbar">
-          <Button kind="plain-faint" size="medium" className="attach-files" onClick={onAttach} isDisabled={attachments.length >= 5} title="Choose project files to share as trusted context">
-            <Icon name="attachment" slot="icon-before" />
-            Attach files
-          </Button>
-          <span className="composer-hint">Enter to send · Shift+Enter for newline</span>
-          {live.running && <Button kind="outline" size="medium" className="stop" onClick={onCancel} data-test="stop-turn">Stop</Button>}
-          <ModelPicker session={live.handle} scope={bot ? 'bot' : 'conversation'} key={live.handle} model={live.model} disabled={live.running} onChoose={onModel} />
-          <Button kind="filled" size="medium" className="send" onClick={() => { latest(); live.running ? onQueue() : onSubmit() }}
-            isDisabled={!draft.trim() || !!live.askingTrust || backendReady === false}
-            data-test="send-message">
-            {live.running ? 'Queue message' : 'Send'}
-          </Button>
+        {queued.length > 0 && <div className="queued-messages"><strong>{queuePaused ? 'Queue paused' : 'Queued after this turn'}</strong>{queuePaused && <Button kind="outline" size="tiny" isDisabled={live.running || backendReady === false} onClick={onResumeQueued}>Resume queue</Button>}{queued.map((text, index) => <div key={index}><span>{text}</span><Button kind="plain-faint" size="tiny" fab aria-label={`Remove queued message ${index + 1}`} title={`Remove queued message ${index + 1}`} onClick={() => onRemoveQueued(index)}><Icon name="close" slot="icon-before" /></Button></div>)}</div>}
+        <div className="composer-box">
+          {attachments.length > 0 && <div className="attachment-chips"><p>These files will be sent as trusted context with your message.</p>{attachments.map((file) => <span key={file.id}><Button kind="plain" size="tiny" onClick={() => setPreviewPath(file.path)}>{file.path}</Button><Button kind="plain-faint" size="tiny" fab aria-label={`Remove attachment ${file.path}`} title={`Remove attachment ${file.path}`} onClick={() => onRemoveAttachment(file.id)}><Icon name="close" slot="icon-before" /></Button></span>)}</div>}
+          <TextArea ref={input} mode="plain" minRows={1} maxRows={8} value={draft} aria-label="Message the agent" title="Enter to send · Shift+Enter for a new line. While a reply is generating, Enter queues the next message. Unsent drafts are saved on this device."
+            placeholder={pending ? 'Draft your next message while you review…' : 'How can I help you today?'}
+            onInput={({ value }) => onDraft(value)}
+            onKeyDown={({ innerEvent }) => {
+              const event = innerEvent as unknown as KeyboardEvent
+              if (event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey
+                && !event.isComposing && event.keyCode !== 229) {
+                event.preventDefault()
+                // The round button is Stop for the whole time a reply is generating. Enter still
+                // queues a follow-up, which is the path the button used to offer as "Queue message".
+                if (!event.repeat && !live.askingTrust && backendReady !== false && draft.trim()) {
+                  if (live.running) onQueue()
+                  else { latest(); onSubmit() }
+                }
+              }
+            }} />
+          <div className="composer-toolbar">
+            <Button ref={attachButton} kind="plain-faint" size="small" fab className="attach-files" onClick={onAttach} isDisabled={attachments.length >= 5} title="Attach files" aria-label="Attach files">
+              <Icon name="attachment" slot="icon-before" />
+            </Button>
+            <ModelPicker compact session={live.handle} scope={bot ? 'bot' : 'conversation'} key={live.handle} model={live.model} disabled={live.running} onChoose={onModel} />
+            <Button ref={submitButton} kind={stopping ? 'outline' : 'filled'} size="small" fab className={stopping ? 'send stop' : 'send'}
+              onClick={() => { if (stopping) onCancel(); else { latest(); onSubmit() } }}
+              isDisabled={!stopping && (!draft.trim() || !!live.askingTrust || backendReady === false)}
+              title={stopping ? 'Stop' : 'Send'}
+              aria-label={stopping ? 'Stop' : 'Send'}
+              data-test={stopping ? 'stop-turn' : 'send-message'}>
+              <Icon name={stopping ? 'stop-filled' : 'arrow-up'} slot="icon-before" />
+            </Button>
+          </div>
         </div>
       </footer>
       {watches && <Watches session={live.handle} onClose={() => setWatches(false)} />}
@@ -729,19 +773,8 @@ function ToolRun({ entries }: { entries: t.Entry[] }): React.JSX.Element {
 
   return (
     <section className={`tool-run ${open ? 'open' : ''}`}>
-      <button
-        className="tool-run-head"
-        aria-expanded={open}
-        // The verb in the title, the name staying put — the rule `ColumnToggle` states above.
-        title={open ? 'Hide these steps' : 'Show these steps'}
-        onClick={() => setOpen(!open)}
-      >
-        <span className={`chevron ${open ? 'open' : ''}`} aria-hidden="true">
-          ›
-        </span>
-        {entries.length} step{entries.length === 1 ? '' : 's'}
-      </button>
-      <Fold open={open}>
+      <Collapse className="flat-collapse tool-run-collapse" isOpen={open} onToggle={({ open: next }) => setOpen(next)}
+        title={`${entries.length} step${entries.length === 1 ? '' : 's'}`} data-test="tool-run">
         {entries.map((entry) => (
           <div key={entry.id} data-entry-id={entry.id}><Row
             key={entry.id}
@@ -754,7 +787,7 @@ function ToolRun({ entries }: { entries: t.Entry[] }): React.JSX.Element {
             forkable={false}
           /></div>
         ))}
-      </Fold>
+      </Collapse>
     </section>
   )
 }
@@ -884,10 +917,10 @@ function Questions({
       <div className="confirm-actions">
         {/* Declining every question is a real answer and the turn continues, so it is a
             button here rather than something a person has to leave blank and guess at. */}
-        <button className="reject" onClick={() => onAnswer(request.request.request, prompts.map(() => ({})))}>
+        <Button kind="plain" size="small" className="reject" onClick={() => onAnswer(request.request.request, prompts.map(() => ({})))}>
           Decline
-        </button>
-        <button className="approve" onClick={() => onAnswer(request.request.request, collected())}>
+        </Button>
+        <Button kind="filled" size="small" className="approve" onClick={() => onAnswer(request.request.request, collected())}>
           Answer
           {/* Leaving a question blank declines it, which is legitimate but should not be a
               surprise — with several questions on screen it is easy to answer two of three
@@ -895,7 +928,7 @@ function Questions({
           {blank > 0 && prompts.length > 1 && (
             <span className="aside"> · {blank} declined</span>
           )}
-        </button>
+        </Button>
       </div>
     </div>
   )
@@ -926,9 +959,9 @@ function ForkBanner({
         <ForkIcon />
       </span>{' '}
       Forked from{' '}
-      <button className="link" onClick={onOpen} title="Show the session this was forked from">
+      <Button kind="plain" size="tiny" className="link" onClick={onOpen} title="Show the session this was forked from">
         {from.title}
-      </button>
+      </Button>
       , before prompt {from.prompt + 1}.
     </p>
   )
@@ -1298,12 +1331,12 @@ function Card({
             <Unanswered />
           ) : decision === null ? (
             <div className="confirm-actions">
-              <button className="reject" onClick={() => onDecide('confirm', request.request, false)}>
+              <Button kind="plain" size="small" className="reject" onClick={() => onDecide('confirm', request.request, false)}>
                 Don’t write
-              </button>
-              <button className="approve" onClick={() => onDecide('confirm', request.request, true)}>
+              </Button>
+              <Button kind="filled" size="small" className="approve" onClick={() => onDecide('confirm', request.request, true)}>
                 {request.existing ? 'Apply this change' : 'Create this file'}
-              </button>
+              </Button>
             </div>
           ) : (
             <div className={`decided ${decision}`}>
@@ -1362,22 +1395,22 @@ function Card({
             <Unanswered />
           ) : decision === null ? (
             <div className="confirm-actions">
-              <button className="reject" onClick={() => onDecide('run', request.request, false)}>
+              <Button kind="plain" size="small" className="reject" onClick={() => onDecide('run', request.request, false)}>
                 Don’t run
-              </button>
-              <button className="approve" onClick={() => onDecide('run', request.request, true)}>
+              </Button>
+              <Button kind="filled" size="small" className="approve" onClick={() => onDecide('run', request.request, true)}>
                 Run once
-              </button>
+              </Button>
               {/* Separate from "Run once" rather than a checkbox beside it: remembering
                   answers every later question about these programs, so it should take its
                   own deliberate press. The title says exactly what it would cover. */}
-              <button
-                className="approve always"
+              <Button
+                kind="outline" size="small" className="approve always"
                 title={`Stop asking about: ${request.vouches.map((v) => v.display).join(', ')}`}
                 onClick={() => onDecide('run', request.request, true, true)}
               >
                 Trust command and output
-              </button>
+              </Button>
             </div>
           ) : (
             <div className={`decided ${decision}`}>
@@ -1419,18 +1452,18 @@ function Card({
             <Unanswered />
           ) : decision === null ? (
             <div className="confirm-actions">
-              <button
-                className="reject"
+              <Button
+                kind="plain" size="small" className="reject"
                 onClick={() => onDecide('output', request.request, false)}
               >
                 Keep it out
-              </button>
-              <button
-                className="approve"
+              </Button>
+              <Button
+                kind="filled" size="small" className="approve"
                 onClick={() => onDecide('output', request.request, true)}
               >
                 Let the planner read it
-              </button>
+              </Button>
             </div>
           ) : (
             <div className={`decided ${decision}`}>
@@ -1457,8 +1490,8 @@ function Card({
           <p className="warn">A model reads words in a picture that a person can miss: small, faint, or nearly the colour of what is behind them. Look for writing before letting it through.</p>
           {picture.media === 'application/pdf' && <p className="warn">A PDF can also hold text that no page draws, and the planner is given that text too.</p>}
           {!answerable ? <Unanswered /> : decision === null ? <div className="confirm-actions">
-            <button className="reject" onClick={() => onDecide('vet', request.request, false)}>Keep it out</button>
-            <button className="approve" onClick={() => onDecide('vet', request.request, true)}>Let the planner see it once</button>
+            <Button kind="plain" size="small" className="reject" onClick={() => onDecide('vet', request.request, false)}>Keep it out</Button>
+            <Button kind="filled" size="small" className="approve" onClick={() => onDecide('vet', request.request, true)}>Let the planner see it once</Button>
           </div> : <div className={`decided ${decision}`}>{decision === 'approve' ? 'You allowed this file once' : 'You kept this file out'}</div>}
         </div>
       }
@@ -1469,8 +1502,8 @@ function Card({
         <p className="warn">Approval lets the planner read only this content. It does not trust this file for future reads.</p>
         <pre className="preview">{request.content}</pre>
         {!answerable ? <Unanswered /> : decision === null ? <div className="confirm-actions">
-          <button className="reject" onClick={() => onDecide('vet', request.request, false)}>Keep it out</button>
-          <button className="approve" onClick={() => onDecide('vet', request.request, true)}>Let the planner read once</button>
+          <Button kind="plain" size="small" className="reject" onClick={() => onDecide('vet', request.request, false)}>Keep it out</Button>
+          <Button kind="filled" size="small" className="approve" onClick={() => onDecide('vet', request.request, true)}>Let the planner read once</Button>
         </div> : <div className={`decided ${decision}`}>{decision === 'approve' ? 'You allowed this content once' : 'You kept this content out'}</div>}
       </div>
     }
@@ -1598,18 +1631,18 @@ function Card({
             <Unanswered />
           ) : decision === null ? (
             <div className="confirm-actions">
-              <button
-                className="reject"
+              <Button
+                kind="plain" size="small" className="reject"
                 onClick={() => onDecide('vouch', request.request, false)}
               >
                 Leave it confined
-              </button>
-              <button
-                className="approve"
+              </Button>
+              <Button
+                kind="filled" size="small" className="approve"
                 onClick={() => onDecide('vouch', request.request, true)}
               >
                 Vouch for this path
-              </button>
+              </Button>
             </div>
           ) : (
             <div className={`decided ${decision}`}>

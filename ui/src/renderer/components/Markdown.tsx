@@ -3,6 +3,7 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 import { isSubpath } from '../../shared/files'
+import { Alert, Button } from '../nala'
 
 /**
  * The model's own words, formatted.
@@ -139,10 +140,10 @@ function CodeBlock({ children }: { children: ReactNode }): React.JSX.Element {
   const language = isValidElement<{ className?: string }>(children) ? children.props.className?.replace('language-', '') : undefined
   return <div className="code-block">
     <div className="code-toolbar"><span>{language || 'Code'}</span>
-      <button aria-pressed={wrap} onClick={() => setWrap(!wrap)}>Wrap</button>
-      <button onClick={() => { void navigator.clipboard.writeText(plain(children)).then(() => { setCopied(true); setError(false) }).catch(() => setError(true)) }}>{copied ? 'Copied' : 'Copy code'}</button>
+      <Button kind={wrap ? 'filled' : 'plain'} size="tiny" aria-pressed={wrap} onClick={() => setWrap(!wrap)}>Wrap</Button>
+      <Button kind="plain" size="tiny" onClick={() => { void navigator.clipboard.writeText(plain(children)).then(() => { setCopied(true); setError(false) }).catch(() => setError(true)) }}>{copied ? 'Copied' : 'Copy code'}</Button>
     </div>
-    {error && <p role="alert">Could not copy. Select the code and copy it manually.</p>}
+    {error && <Alert type="error" size="small" role="alert">Could not copy. Select the code and copy it manually.</Alert>}
     <pre className={wrap ? 'code-wrapped' : ''}>{children}</pre>
   </div>
 }

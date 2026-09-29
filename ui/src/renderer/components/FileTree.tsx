@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Fold } from './Fold'
 import { FileGlyph } from './FileGlyph'
 import { type FileRow, type Listing, isSubpath, under } from '../../shared/files'
-import { Icon, Input } from '../nala'
+import { Alert, Button, Icon, Input, ProgressRing } from '../nala'
 
 /**
  * The folder the session is working in.
@@ -43,7 +43,7 @@ export function FileTree({
   const [hidden, setHidden] = useState(false)
   const [query, setQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
-  const searchButton = useRef<HTMLButtonElement>(null)
+  const searchButton = useRef<HTMLElement>(null)
   const closeSearch = () => { setQuery(''); setSearchOpen(false); searchButton.current?.focus() }
   const [results, setResults] = useState<FileSearch | null>(null)
   const [searching, setSearching] = useState(false)
@@ -155,25 +155,29 @@ export function FileTree({
         <code className="tree-root" title={root}>
           {root}
         </code>
-        <button ref={searchButton} className={`tree-tool ${searchOpen ? 'on' : ''}`}
+        <Button ref={searchButton} kind={searchOpen ? 'filled' : 'plain-faint'} size="tiny" fab className="tree-tool"
           title="Search files" aria-label="Search files" aria-expanded={searchOpen}
           data-test="tree-search-toggle"
           onClick={() => searchOpen ? closeSearch() : setSearchOpen(true)}>
-          <Icon name="search" style={{ '--leo-icon-size': '16px' } as React.CSSProperties} />
-        </button>
+          <Icon name="search" slot="icon-before" />
+        </Button>
         {/* Labelled with the thing it is about rather than with an eye or a dot: `.*` is what a
             dotfile looks like, and it is legible at 10px where a pictogram is not. */}
-        <button
-          className={`tree-tool dotfiles ${hidden ? 'on' : ''}`}
+        <Button
+          kind={hidden ? 'filled' : 'plain-faint'}
+          size="tiny"
+          fab
+          className="tree-tool dotfiles"
           aria-pressed={hidden}
+          aria-label="Dotfiles"
           title={hidden ? 'Hide dotfiles' : 'Show dotfiles'}
           onClick={() => setHidden(!hidden)}
         >
           .*
-        </button>
-        <button className="tree-tool" title="Read the folder again" onClick={() => void refresh()}>
-          ↻
-        </button>
+        </Button>
+        <Button kind="plain-faint" size="tiny" fab className="tree-tool" title="Read the folder again" aria-label="Read the folder again" onClick={() => void refresh()}>
+          <Icon name="refresh" slot="icon-before" />
+        </Button>
       </div>
 
       {searchOpen && <div className="tree-search">
@@ -187,12 +191,12 @@ export function FileTree({
               closeSearch()
             }
           }} />
-        <button className="tree-tool" aria-label="Close file search" onClick={closeSearch}>
-          <Icon name="close" style={{ '--leo-icon-size': '14px' } as React.CSSProperties} />
-        </button>
+        <Button kind="plain-faint" size="tiny" fab className="tree-tool" aria-label="Close file search" title="Close file search" onClick={closeSearch}>
+          <Icon name="close" slot="icon-before" />
+        </Button>
       </div>}
 
-      {problem && <p className="tree-problem">{problem}</p>}
+      {problem && <Alert type="error" size="small" className="tree-problem">{problem}</Alert>}
 
       {/* The rows sit in a well of their own rather than straight on the column. Everything else
           in this panel is a short list of names the session mentioned; this is a folder somebody
@@ -202,9 +206,9 @@ export function FileTree({
           take the header with it. */}
       <div className="tree-body">
         {terms.length > 0 ? <div className="file-search-results">
-          {searching && <p role="status">Searching project…</p>}
+          {searching && <p role="status"><ProgressRing mode="indeterminate" /> Searching project…</p>}
           {!searching && results?.paths.length === 0 && <p>No matching files.</p>}
-          {results?.paths.map((path) => <button key={path} onClick={() => setPreviewPath(path)} title={path}>{path}</button>)}
+          {results?.paths.map((path) => <Button key={path} kind="plain" size="small" onClick={() => setPreviewPath(path)} title={path}>{path}</Button>)}
           <p className="tree-note">Search skips .git, node_modules, target and dist. Symbolic-link directories are not followed.</p>
           {results?.incomplete && <p role="status">Results are limited or some folders could not be read. Narrow the search.</p>}
         </div> : rootListing === undefined ? (

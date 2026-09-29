@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ModelCatalogue, ModelOption } from '../../shared/protocol'
 import { setExperience, useExperience } from '../experience'
-import { Button, ButtonMenu, Hr, Icon, Input, Label } from '../nala'
+import { Alert, Button, ButtonMenu, Hr, Icon, Input, Label, ProgressRing } from '../nala'
 
 const CAPABILITIES: Record<string, [string, string]> = {
   text: ['Text', 'Generates text'],
@@ -28,10 +28,12 @@ const CAPABILITIES: Record<string, [string, string]> = {
  * moving and shut the popup. The keyboard highlight only moves the list's own
  * scroll offset, so a pointer moving across the rows leaves the menu up.
  */
-export function ModelPicker({ model, disabled, onChoose, scope = 'conversation', session }: {
+export function ModelPicker({ model, disabled, onChoose, scope = 'conversation', session, compact = false }: {
   model: string | null
   scope?: 'conversation' | 'bot'
   session?: string
+  /** Text and caret only, for the control that sits inside the composer. */
+  compact?: boolean
   disabled: boolean
   onChoose: (model: string) => void
 }): React.JSX.Element {
@@ -169,11 +171,11 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
         shutReason.current = 'explicit'
       }}
     >
-      <Button ref={trigger} slot="anchor-content" kind={scope === 'bot' ? 'plain' : 'plain-faint'} size="medium" className="model-trigger" isDisabled={disabled}
+      <Button ref={trigger} slot="anchor-content" kind={scope === 'bot' ? 'plain' : 'plain-faint'} size={compact ? 'tiny' : 'medium'} className="model-trigger" isDisabled={disabled}
         title={`Choose model · ${model ?? label}`} aria-label={`Choose model: ${label}`}
         aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined}
         data-test="model-trigger">
-        <Icon name="layers" slot="icon-before" />
+        {compact ? null : <Icon name="layers" slot="icon-before" />}
         <span className="model-current" aria-hidden="true">{compactLabel}</span>
         <Icon name={open ? 'carat-up' : 'carat-down'} slot="icon-after" />
       </Button>
@@ -203,8 +205,8 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
           }
         }} />
       <div className="model-notices">
-        {loading && <p className="model-status" role="status">Loading available models…</p>}
-        {problem && <p className="model-status" role="alert">{problem}</p>}
+        {loading && <p className="model-status" role="status"><ProgressRing mode="indeterminate" /> Loading available models…</p>}
+        {problem && <Alert type="error" size="small" className="model-status" role="alert">{problem}</Alert>}
         {catalogue?.warnings.map((warning) => <p className="model-status" key={warning}>{warning}</p>)}
         {!loading && options.length === 0 && <p className="model-status">{query ? 'No models match your search.' : 'No models available. Check your backend settings.'}</p>}
       </div>

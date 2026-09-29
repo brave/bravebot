@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { auditDescription, isRefusal, type AuditRecord, type TurnDetails } from '../turn-details'
-import { Collapse, Icon } from '../nala'
+import { Button, Collapse, Icon } from '../nala'
 
 const Evidence = memo(function Evidence({ record }: { record: AuditRecord }): React.JSX.Element {
   const { title, detail } = auditDescription(record.event)
@@ -21,7 +21,7 @@ const Evidence = memo(function Evidence({ record }: { record: AuditRecord }): Re
 })
 
 export function AuditInspector({ details, onClose }: { details?: TurnDetails; onClose: () => void }): React.JSX.Element {
-  const close = useRef<HTMLButtonElement>(null)
+  const close = useRef<HTMLElement>(null)
   const [allOpen, setAllOpen] = useState(false)
   useEffect(() => { close.current?.focus({ preventScroll: true }) }, [])
   const refusals = details?.audit.filter((record) => isRefusal(record.event)) ?? []
@@ -29,9 +29,9 @@ export function AuditInspector({ details, onClose }: { details?: TurnDetails; on
   return <section className="audit-inspector" id="turn-audit-inspector" aria-label="Turn audit"
     onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); onClose() } }}>
     <div className="inspector-title"><strong>Audit · {details ? `Turn ${details.turn}` : 'Saved reply'}</strong>
-      <button ref={close} className="audit-close" onClick={onClose} aria-label="Close audit inspector" data-test="audit-close">
-        <Icon name="close" style={{ '--leo-icon-size': '14px' } as React.CSSProperties} />
-      </button></div>
+      <Button ref={close} kind="plain-faint" size="small" fab className="audit-close" onClick={onClose} aria-label="Close audit inspector" title="Close audit inspector" data-test="audit-close">
+        <Icon name="close" slot="icon-before" />
+      </Button></div>
     <p className="audit-status">{!details ? 'Saved conversation' : details.status === 'running' ? 'Live · This turn' : incomplete ? 'Capture incomplete' : 'Captured during this session'}</p>
     {!details ? <p>Audit details aren’t available for this saved reply.</p> : <>
       {incomplete && <p>The event stream may be incomplete. Captured evidence is shown below.</p>}

@@ -38,6 +38,7 @@ import { useExperience, conversationPreferences, setConversation, experienceErro
 import { AppearancePicker } from './components/AppearancePicker'
 import { applyAppearance } from './theme'
 import { SYSTEM, parseAppearance, type Appearance } from '../shared/theme'
+import { Button } from './nala'
 
 /** What the app is doing, which decides most of what the interface offers. */
 interface Live {
@@ -1269,9 +1270,9 @@ export function App(): React.JSX.Element {
       {[...openedLives.current.values()].some((item) => item.handle !== live?.handle && item.running) && (
         <div className="background-tasks" aria-label="Background tasks">
           {[...openedLives.current.values()].filter((item) => item.handle !== live?.handle && item.running).map((item) => (
-            <button key={item.handle} onClick={() => setLive(item)}>
+            <Button key={item.handle} kind="outline" size="small" onClick={() => setLive(item)}>
               {t.outstanding(item.entries) ? t.outstanding(item.entries)?.kind === 'ask' ? 'Answer needed' : 'Approval needed' : 'Working'} · {item.summary.title}
-            </button>
+            </Button>
           ))}
         </div>
       )}

@@ -1,10 +1,9 @@
 import { useState } from 'react'
-import { Fold } from './Fold'
 import { FileTree } from './FileTree'
 import { type PanelName } from '../../shared/state'
 import { isConfined, type Activity, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
 import type { Entry } from '../transcript'
-import { Icon, TabItem, Tabs } from '../nala'
+import { Button, Collapse, Icon, Label, TabItem, Tabs } from '../nala'
 
 interface Live {
   /** The session's handle. The file tree names it rather than naming a folder. */
@@ -86,9 +85,9 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
           own margins overflows. The wrapper takes that width and the bar sits inside it. */}
       <div className="context-head">
         <div className="inspector-title"><strong>Project context</strong>
-          <button className="drawer-close" onClick={onClose} aria-label="Close context panel" data-test="context-close">
-            <Icon name="close" style={{ '--leo-icon-size': '14px' } as React.CSSProperties} />
-          </button>
+          <Button kind="plain-faint" size="small" fab className="drawer-close" onClick={onClose} aria-label="Close context panel" title="Close context panel" data-test="context-close">
+            <Icon name="close" slot="icon-before" />
+          </Button>
         </div>
         <Tabs className="inspector-tabs" size="medium" value={tab} data-test="inspector-tabs"
           onChange={({ value }) => { if (value === 'overview' || value === 'files') setTab(value) }}>
@@ -153,8 +152,8 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
           <ul className="files">
             {files.map((file) => (
               <li key={file.target} className={file.confined ? 'confined' : ''}>
-                <button className="context-link" onClick={() => reveal(file.target)} title={file.target}>{file.target}</button>
-                {file.confined && <span className="tag">confined</span>}
+                <Button kind="plain" size="tiny" className="context-link" onClick={() => reveal(file.target)} title={file.target}>{file.target}</Button>
+                {file.confined && <Label className="tag" color="yellow">confined</Label>}
               </li>
             ))}
           </ul>
@@ -172,8 +171,8 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
           <ul className="files">
             {writes.map((write) => (
               <li key={write.target} className={write.state}>
-                <button className="context-link" onClick={() => reveal(write.target)} title={write.target}>{write.target}</button>
-                <span className="tag">{write.state}</span>
+                <Button kind="plain" size="tiny" className="context-link" onClick={() => reveal(write.target)} title={write.target}>{write.target}</Button>
+                <Label className="tag" color={stateColor(write.state)}>{write.state}</Label>
               </li>
             ))}
           </ul>
@@ -231,6 +230,14 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
   )
 }
 
+/** What a write's state means at a glance: done, refused or failed, or still moving. */
+function stateColor(state: string): 'green' | 'red' | 'yellow' | 'neutral' {
+  if (state === 'applied') return 'green'
+  if (state === 'refused' || state === 'failed') return 'red'
+  if (state === 'waiting' || state === 'approved' || state === 'applying') return 'yellow'
+  return 'neutral'
+}
+
 function Section({
   id,
   title,
@@ -254,22 +261,13 @@ function Section({
   const [open, setOpen] = useState(true)
   return (
     <section className={`panel ${off ? 'off' : ''}`} id={`panel-${id}`}>
-      <button
-        className="panel-head"
-        aria-expanded={open}
-        // The verb in the title and the name staying put, the rule `ColumnToggle` states.
-        title={`${open ? 'Hide' : 'Show'} ${title.toLowerCase()}`}
-        onClick={() => setOpen(!open)}
-      >
-        <span className={`chevron ${open ? 'open' : ''}`} aria-hidden="true">
-          ›
+      <Collapse className="flat-collapse panel-collapse" isOpen={open} onToggle={({ open: next }) => setOpen(next)} data-test={`panel-${id}-collapse`}>
+        <span slot="title" className="panel-title">
+          {title}
+          {count !== undefined && count > 0 && <Label className="count" color="neutral">{count}</Label>}
         </span>
-        {title}
-        {count !== undefined && count > 0 && <span className="count">{count}</span>}
-      </button>
-      <Fold open={open} className="panel-inner">
-        {children}
-      </Fold>
+        <div className="panel-inner">{children}</div>
+      </Collapse>
     </section>
   )
 }
