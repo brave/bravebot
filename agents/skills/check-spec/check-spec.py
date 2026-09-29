@@ -3,7 +3,7 @@
 
 Two passes. This script is the first: everything that can be decided without a model,
 which is most of the bookkeeping a spec carries. Clause numbering, whether an id still
-names the clause it named at HEAD, the tests a clause names, the paths it governs, the
+names the clause it named on main, the tests a clause names, the paths it governs, the
 symbols it guards, and the table in the specs README are all facts, and a fact does not
 need a review.
 
@@ -170,6 +170,7 @@ def check_clause_numbering(spec):
 
 
 _TOPLEVEL = {}
+_BASE = {}
 
 
 def git_output(arguments, directory):
@@ -197,7 +198,7 @@ def checkout_of(path):
     Asked of the file rather than of the process, because the answer has to be the tree the spec
     being checked is in. One repository with several worktrees checked out at once is the case
     that decides it: they share a `.git`, their specs differ, and a run handed one worktree's
-    files must compare them against that worktree's `HEAD` and not whichever one the shell
+    files must compare them against that worktree's history and not whichever one the shell
     happened to be sitting in."""
     absolute = Path(path).resolve()
     directory = str(absolute.parent)
@@ -213,8 +214,29 @@ def checkout_of(path):
         return None, None
 
 
+def history_base(root):
+    """The revision to compare `root`'s specs against: main, before this change.
+
+    `HEAD` would miss a committed renumber, because the file and `HEAD` then match. In CI's
+    checkout of a pull request, main is the merge commit's first parent. Elsewhere it is the merge
+    base with upstream/main, or origin/main without one, as in affected-checks.py. `HEAD` is the
+    fallback where neither is available."""
+    if root not in _BASE:
+        base = None
+        if os.environ.get("GITHUB_EVENT_NAME") == "pull_request":
+            parents = (git_output(["rev-list", "--parents", "-n", "1", "HEAD"], root) or "").split()
+            if len(parents) == 3:
+                base = parents[1]
+        for main in ("upstream/main", "origin/main"):
+            if base is None:
+                answer = (git_output(["merge-base", "HEAD", main], root) or "").strip()
+                base = answer or None
+        _BASE[root] = base or "HEAD"
+    return _BASE[root]
+
+
 def committed_headings(spec):
-    """What each clause id in this file named at `HEAD`, or `None` where there is no such file.
+    """What each clause id in this file named at `history_base`, or `None` where it had no file.
 
     `None` rather than an empty mapping, because the two say different things. A spec added on
     this branch has no committed form at all, and reading that as a file that held no clauses
@@ -222,7 +244,7 @@ def committed_headings(spec):
     root, inside = checkout_of(spec.path)
     if root is None:
         return None
-    text = git_output(["show", f"HEAD:{inside}"], root)
+    text = git_output(["show", f"{history_base(root)}:{inside}"], root)
     return None if text is None else clause_headings(text.split("\n"))
 
 
@@ -261,7 +283,7 @@ def declared_renumbers(path=RENUMBERED_FILE):
 
 
 def check_clause_history(spec, declared):
-    """A clause id still names the clause it named at `HEAD`.
+    """A clause id still names the clause it named on main.
 
     The counter above sees a gap and a duplicate, and cannot see the thing it was named for. A
     file renumbered to close a gap reads `1..N`, so nothing about the file alone is wrong, while

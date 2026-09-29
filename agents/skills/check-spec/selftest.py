@@ -141,12 +141,18 @@ def build_fixture(root):
     (root / "crates" / "demo" / "src" / "lib.rs").write_text(CLEAN_SOURCE, encoding="utf-8")
     # A tracked tree, because a body may quote only what the tree publishes and the drafter asks
     # git which files those are.
-    subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
-    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
-    # And a commit, because what a clause id named is read from `HEAD`. Identity and signing are
-    # given on the command rather than taken from the machine, so a case says the same thing
-    # wherever it runs and a throwaway fixture never asks anybody for a key.
-    subprocess.run(
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    # And a commit, because what a clause id named is read from history.
+    git(root, "commit", "-q", "-m", "the fixture before the case breaks it")
+
+
+def git(root, *arguments):
+    """One git command in the fixture, printing only what it prints on stdout.
+
+    Identity and signing are given on the command rather than taken from the machine, so a case
+    says the same thing wherever it runs and a throwaway fixture never asks anybody for a key."""
+    return subprocess.run(
         [
             "git",
             "-C",
@@ -157,13 +163,12 @@ def build_fixture(root):
             "user.email=selftest@example.invalid",
             "-c",
             "commit.gpgsign=false",
-            "commit",
-            "-q",
-            "-m",
-            "the fixture before the case breaks it",
+            *arguments,
         ],
         check=True,
-    )
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
 
 def run_checks():
@@ -502,6 +507,38 @@ def renumber_again_past_the_declaration(root):
     )
 
 
+def commit_a_renumber_on_a_branch(root):
+    """The renumber committed on a branch cut from origin/main, which is how it reaches CI."""
+    git(root, "update-ref", "refs/remotes/origin/main", "HEAD")
+    insert_a_clause_and_renumber(root)
+    git(root, "commit", "-qam", "renumber")
+
+
+def branch_and_main_move_on(root):
+    """A renumber committed on a branch, then an empty commit on main, returning both heads."""
+    before = git(root, "rev-parse", "HEAD")
+    insert_a_clause_and_renumber(root)
+    git(root, "commit", "-qam", "renumber")
+    branch = git(root, "rev-parse", "HEAD")
+    git(root, "checkout", "-q", "--detach", before)
+    git(root, "commit", "-q", "--allow-empty", "-m", "main moves on")
+    return branch, git(root, "rev-parse", "HEAD")
+
+
+def merge_a_renumber_as_a_pull_request(root):
+    """The checkout CI makes of a pull request: main merging the branch, main the first parent."""
+    branch, _ = branch_and_main_move_on(root)
+    git(root, "merge", "-q", "--no-ff", "-m", "merge the pull request", branch)
+
+
+def merge_main_into_a_renumbered_branch(root):
+    """Main merged into the branch locally, so the first parent is the branch and not main."""
+    branch, main = branch_and_main_move_on(root)
+    git(root, "update-ref", "refs/remotes/origin/main", main)
+    git(root, "checkout", "-q", "--detach", branch)
+    git(root, "merge", "-q", "--no-ff", "-m", "merge main", main)
+
+
 def list_says(root, lines):
     (root / check.UNVERIFIED_FILE).write_text(check.render_unverified(lines), encoding="utf-8")
 
@@ -570,7 +607,7 @@ CASES = [
         "clause-prefix-mismatch",
     ),
     (
-        # The one the counter above cannot see, and the reason this check reads `HEAD` at all.
+        # The one the counter above cannot see, and the reason this check reads history at all.
         # Exact, because a renumber is the only thing wrong with that file.
         "a clause inserted mid-spec with every clause after it renumbered",
         insert_a_clause_and_renumber,
@@ -825,6 +862,28 @@ COUNTER_ALONE = [
 def numbering_alone():
     """What the per-file counter reports with nothing else running."""
     return sorted({f["kind"] for one in load_specs() for f in check.check_clause_numbering(one)})
+
+
+# A renumber that is already committed, which is the only form CI sees. Each case names the
+# GITHUB_EVENT_NAME it runs under, because that decides whether a merge's first parent is main.
+COMMITTED = [
+    ("a renumber committed on a branch", commit_a_renumber_on_a_branch, None),
+    ("a renumber in a pull request's merge", merge_a_renumber_as_a_pull_request, "pull_request"),
+    ("a renumber on a branch that merged main", merge_main_into_a_renumbered_branch, None),
+]
+
+
+def under_event(event):
+    """What `run_checks` reports with GITHUB_EVENT_NAME set to `event`, or unset for `None`."""
+    saved = os.environ.pop("GITHUB_EVENT_NAME", None)
+    if event is not None:
+        os.environ["GITHUB_EVENT_NAME"] = event
+    try:
+        return sorted({f["kind"] for f in run_checks()})
+    finally:
+        os.environ.pop("GITHUB_EVENT_NAME", None)
+        if saved is not None:
+            os.environ["GITHUB_EVENT_NAME"] = saved
 
 
 UNVERIFIED_CASES = [
@@ -1112,6 +1171,7 @@ def in_fixture(break_it, ask):
     original = Path.cwd()
     root = Path(tempfile.mkdtemp(prefix="check-spec-selftest-"))
     check._TOPLEVEL.clear()  # A different checkout from the last case's.
+    check._BASE.clear()
     try:
         build_fixture(root)
         os.chdir(root)
@@ -1149,6 +1209,10 @@ def main():
         kinds = in_fixture(break_it, numbering_alone)
         note(name, kinds == expected, f"reported {kinds}, wanted {expected}")
 
+    for name, break_it, event in COMMITTED:
+        kinds = in_fixture(break_it, lambda: under_event(event))
+        note(name, kinds == ["clause-renumbered"], f"reported {kinds}")
+
     for name, break_it, expected in UNVERIFIED_CASES:
         lines = in_fixture(break_it, generated_list)
         note(name, lines == expected, f"generated {lines}, wanted {expected}")
@@ -1172,6 +1236,7 @@ def main():
     total = (
         len(CASES)
         + len(COUNTER_ALONE)
+        + len(COMMITTED)
         + len(UNVERIFIED_CASES)
         + len(SELECTIONS)
         + len(drafted)

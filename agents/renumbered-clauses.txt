@@ -5,7 +5,7 @@
 #
 # A clause id is the only durable name a clause has. A cross-spec link, a verified-by line and an
 # issue title all point at one, and all of them keep resolving after a renumber while pointing at
-# a different clause, so make check-spec compares every spec against HEAD and fails a clause whose
+# a different clause, so make check-spec compares every spec against main and fails a clause whose
 # heading has moved to another id. Rewording a heading is not that and needs no line here.
 #
 # The one case that does: a spec withdrawn and rewritten wholesale renumbers on purpose. A line
@@ -17,6 +17,6 @@
 # also keeps the entry to the one renumber it was written for: the same id moved again says
 # something else and is reported.
 #
-# A line is never pruned. Once the renumber is committed the entry suppresses nothing, and that is
+# A line is never pruned. Once the renumber is on main the entry suppresses nothing, and that is
 # what it is for: somebody following a citation of the old id needs to be told where the clause
 # went.

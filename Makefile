@@ -167,7 +167,7 @@ check-toolchain:
 # what a clause says needs a reading of the governed source: run the check-spec skill for
 # that half.
 #
-# Numbering is read against the last commit as well as within the file, because a file renumbered
+# Numbering is read against main as well as within the file, because a file renumbered
 # to close a gap still reads 1..N and leaves every citation of a moved id pointing at another
 # clause. A renumber meant on purpose is declared in agents/renumbered-clauses.txt, by hand.
 #
