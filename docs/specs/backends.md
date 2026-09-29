@@ -782,6 +782,10 @@ every file that was found. The flag that names one, and the path it refuses, are
 | `provider`, `model` | home layer, and the file `--settings` names; a project or local layer naming either is ignored, and the file is reported as one whose naming was dropped |
 | anything else | the closest layer that set it wins |
 
+A layer that spells `permissions` or `run` as something other than an object, or `run.scrubEnv` or
+a list under `permissions` as something other than an array, sets nothing there: the weaker layers'
+block or list stays in force.
+
 The project layers are read from the directory the process started in and no ancestor of it. Each
 layer fails independently: one that is missing, larger than 64 KB, or unparseable leaves the others
 in force.
@@ -810,8 +814,10 @@ widening a search's walk for its own size is none about how long a read may take
 The lists are the exception because an entry in one only ever narrows what is possible: a name under
 `scrubEnv` takes a variable away from a subprocess, and a rule under `permissions` refuses something
 that was otherwise allowed. Overriding either would let a layer hand back what a weaker one withheld,
-and a permission removed by a file somebody did not open is the one outcome worth ruling out. A model
-is one choice rather than a list, so it resolves like any other single value.
+and a permission removed by a file somebody did not open is the one outcome worth ruling out. A value
+of another shape names no entry, so letting it replace a list would remove every entry under it and
+add none. A model is one choice rather than a list, so it resolves like any other single value, and
+so does any other name in those blocks whatever shape a weaker layer gave it.
 
 `mcp.request` is kept from every layer for a different reason that arrives at the same rule. An entry
 names a server a person must already have declared in their own directory and then approved, so a
@@ -841,6 +847,10 @@ with it.
 `verified-by: bravebot_config::settings::the_local_layer_beats_the_one_a_checkout_carries`
 `verified-by: bravebot_config::settings::every_layer_adds_to_the_names_kept_from_a_program`
 `verified-by: bravebot_config::settings::every_layer_adds_to_the_permission_rules`
+`verified-by: bravebot_config::settings::a_layer_that_is_not_a_list_of_rules_takes_no_rule_away`
+`verified-by: bravebot_config::settings::a_layer_that_is_not_a_list_of_names_takes_no_name_away`
+`verified-by: bravebot_config::settings::a_weaker_layer_spelling_a_mode_as_a_list_does_not_outrank_a_stronger_one`
+`verified-by: bravebot_cli::running::doctor_keeps_the_home_rules_under_a_checkout_block_that_is_not_an_object`
 `verified-by: bravebot_config::settings::every_layer_adds_to_the_directories_a_file_makes_reachable`
 `verified-by: bravebot_config::settings::every_layers_request_is_read_and_each_alias_is_kept_once`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_pick_a_backend`

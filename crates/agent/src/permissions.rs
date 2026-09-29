@@ -47,6 +47,20 @@ fn entries_that_are_not_lines(lists: &PermissionLists) -> impl Iterator<Item = R
         .map(|text| Rejected::not_a_line(text))
 }
 
+/// The `permissions` blocks and rule lists a layer spelled as another shape, as rejects that name
+/// the file each came from.
+///
+/// None of them set or removed a rule, so nothing in [`Settings::permissions`] holds them: the
+/// weaker layers' lists stand in their place, and only the layer that wrote one can say it was
+/// ignored ([PERM-11]).
+///
+/// [PERM-11]: ../../../docs/specs/permissions.md
+fn values_that_are_not_lists(settings: &Settings) -> impl Iterator<Item = Rejected> + '_ {
+    settings
+        .misshapen_rule_lists()
+        .map(|(path, text)| Rejected::not_a_list(text, &path.display().to_string()))
+}
+
 /// One dropped entry as the person reading about it sees it, in their own language.
 ///
 /// The kernel names what was wrong and this says it, because a person reads it and what a person
@@ -56,11 +70,20 @@ fn entries_that_are_not_lines(lists: &PermissionLists) -> impl Iterator<Item = R
 /// The entry is quoted in the spelling the file used: a line of three spaces and a line of none
 /// are two entries somebody has to find, and a report that trimmed both names neither.
 pub fn describe(rejected: &Rejected) -> String {
-    t!(
-        permission_rule_unreadable,
-        rule = &rejected.text,
-        problem = problem(rejected.reason)
-    )
+    let problem = problem(rejected.reason);
+    match &rejected.file {
+        Some(path) => t!(
+            permission_rule_unreadable_in,
+            rule = &rejected.text,
+            path = path,
+            problem = problem
+        ),
+        None => t!(
+            permission_rule_unreadable,
+            rule = &rejected.text,
+            problem = problem
+        ),
+    }
 }
 
 /// What was wrong, as a clause to follow the entry.
@@ -78,6 +101,7 @@ fn problem(reason: Unreadable) -> &'static str {
         Unreadable::NotADomainRule => t!(permission_rule_not_a_domain_rule),
         Unreadable::NoDomainNamed => t!(permission_rule_no_domain_named),
         Unreadable::NotAToolRule => t!(permission_rule_not_a_tool_rule),
+        Unreadable::NotAList => t!(permission_rule_not_a_list),
     }
 }
 
@@ -105,6 +129,7 @@ pub fn for_an_unattended_run(
     let (_, unreadable) = Permissions::parse(&[], &[], &lists.allow, &anchors);
     rejected.extend(unreadable);
     rejected.extend(entries_that_are_not_lines(lists));
+    rejected.extend(values_that_are_not_lists(settings));
     // And the entries a layer that cannot grant wrote, for the same reason again: an unreadable
     // one is not a rule anybody could have granted, so it is named here rather than left to the
     // report about grants (PERM-14) that this run has none of.
@@ -164,6 +189,7 @@ pub fn with_granted(
     let anchors = anchors(profile);
     let (permissions, mut rejected) = Permissions::parse(&lists.deny, &lists.ask, &allow, &anchors);
     rejected.extend(entries_that_are_not_lines(lists));
+    rejected.extend(values_that_are_not_lists(settings));
     let (_, unreadable) = dropped_allow_entries(settings, &anchors);
     rejected.extend(unreadable);
     (permissions, rejected)
@@ -357,6 +383,49 @@ mod tests {
         assert!(describe(&rejected[0]).contains("Bash(git diff *)"));
     }
 
+    /// A checkout's `permissions` block that is not an object sets no rule and takes none of the
+    /// person's away, and is named with its file and a reason of its own. Every layer can spell the
+    /// same block, and the advice for an entry in a list, to write it as a line, is the wrong fix.
+    /// Both callers, because each builds its rejects on its own.
+    #[test]
+    fn a_rule_list_that_is_not_a_list_is_reported_with_its_file() {
+        let settings = layered_settings(
+            "not-a-list",
+            Some(r#"{"permissions": null}"#),
+            Some(r#"{"permissions": {"deny": ["Read(./.env)"]}}"#),
+        );
+        let file = std::path::Path::new(".bravebot").join("settings.json");
+        let reason = r#"sets no rules and removes none; rules go in a list, such as "deny": ["Read(./.env)"]"#;
+        for (caller, (permissions, rejected)) in [
+            (
+                "a session",
+                from_settings(&settings, Some(&PathBuf::from("/home/x"))),
+            ),
+            (
+                "a run nobody is watching",
+                for_an_unattended_run(&settings, Some(&PathBuf::from("/home/x"))),
+            ),
+        ] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, ".env"),
+                Decision::Ruled(Ruling::Deny),
+                "{caller} lost the person's own deny rule"
+            );
+            let said: Vec<String> = rejected.iter().map(describe).collect();
+            assert_eq!(said.len(), 1, "{caller}: {said:?}");
+            assert!(
+                said[0].starts_with(r#"'{"permissions":null}' in "#),
+                "{caller}: {}",
+                said[0]
+            );
+            assert!(
+                said[0].ends_with(&format!("{} {reason}", file.display())),
+                "{caller}: {}",
+                said[0]
+            );
+        }
+    }
+
     /// Blank text is a line, so it reaches the rule parser and comes back with the parser's own
     /// word for it. A filter over the list is what stopped that rejection ever being reached.
     ///
@@ -390,6 +459,7 @@ mod tests {
             Unreadable::NotADomainRule,
             Unreadable::NoDomainNamed,
             Unreadable::NotAToolRule,
+            Unreadable::NotAList,
         ]
         .map(problem);
 

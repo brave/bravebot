@@ -384,8 +384,10 @@ directory a person typed from being reachable on different terms.
 
 A line that is not a rule, names no family this agent has, or has no anchor to resolve is dropped,
 and the rest of the file still applies. So is an entry that is not a line at all: a number, or a
-rule nested one array too deep. Every one dropped is reported: on `doctor`, and in the session
-where the file was read, named in the spelling the file used.
+rule nested one array too deep. So is a `deny`, `ask` or `allow` value that is not an array, and a
+`permissions` block that is not an object, each named with the keys that lead to it and the file
+that wrote it. Every one dropped is reported: on `doctor`, and in the session where the file was
+read, named in the spelling the file used.
 
 **Why.** A misspelled deny rule reads as protection that is not there, which is the one failure
 here worth interrupting somebody over. Refusing the whole file instead would mean a typo in an
@@ -396,9 +398,12 @@ allow rule quietly removed a deny rule's protection.
 `verified-by: bravebot_config::settings::an_entry_that_is_not_a_rule_is_carried_out_to_be_reported`
 `verified-by: bravebot_config::settings::an_unreadable_entry_is_carried_out_of_whichever_rule_list_held_it`
 `verified-by: bravebot_config::settings::a_malformed_permissions_block_carries_no_rules`
+`verified-by: bravebot_config::settings::a_rule_list_that_is_not_a_list_is_carried_out_to_be_reported`
+`verified-by: bravebot_cli::running::doctor_keeps_the_home_rules_under_a_checkout_block_that_is_not_an_object`
 `verified-by: bravebot_agent::permissions::a_line_that_is_not_a_rule_is_reported`
 `verified-by: bravebot_agent::permissions::an_entry_that_is_not_a_line_is_reported`
 `verified-by: bravebot_agent::permissions::an_entry_that_is_not_a_line_is_reported_to_a_run_nobody_is_watching`
+`verified-by: bravebot_agent::permissions::a_rule_list_that_is_not_a_list_is_reported_with_its_file`
 `verified-by: bravebot_agent::permissions::a_blank_rule_is_reported_as_empty`
 `verified-by: bravebot_agent::permissions::every_reason_a_rule_is_dropped_for_says_something_of_its_own`
 `verified-by: bravebot_cli::running::doctor_names_a_permission_entry_that_is_not_a_rule`

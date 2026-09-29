@@ -361,6 +361,8 @@ doctor-no-proxy = sans proxy
 # comme note dans la session qui a lu le fichier. L'entrée est citée telle que le fichier l'a
 # écrite, parce que la retrouver est tout l'intérêt d'en être averti.
 permission-rule-unreadable = '{ $rule }' { $problem }
+# La même, pour une valeur que chaque fichier de réglages aurait pu écrire, d'où le fichier nommé.
+permission-rule-unreadable-in = '{ $rule }' dans { $path } { $problem }
 permission-rule-not-a-line = n'est pas une règle ; une règle est une ligne de texte
 permission-rule-empty = est vide
 permission-rule-unclosed-bracket = n'a pas sa parenthèse fermante
@@ -370,6 +372,9 @@ permission-rule-unanchored = a besoin d'un répertoire personnel ou d'un répert
 permission-rule-not-a-domain-rule = a besoin d'un domaine ; écrivez WebFetch(domain:example.com)
 permission-rule-no-domain-named = ne nomme aucun domaine après 'domain:'
 permission-rule-not-a-tool-rule = a besoin d'un serveur, ou d'un serveur et de l'un de ses outils ; écrivez Mcp(weather) ou Mcp(weather:get_forecast)
+# Un bloc permissions, ou sa liste deny, ask ou allow, écrit autrement qu'en liste. Les règles
+# qu'un autre fichier de réglages a écrites restent en vigueur, d'où « n'en retire aucune ».
+permission-rule-not-a-list = n'ajoute aucune règle et n'en retire aucune ; les règles s'écrivent en liste, par exemple "deny": ["Read(./.env)"]
 
 
 ## Importer un abonnement Leo Premium

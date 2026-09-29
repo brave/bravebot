@@ -439,6 +439,8 @@ doctor-no-proxy = not proxied
 # the session that read the file. The entry is quoted as the file spelled it, because finding it
 # again is the whole point of being told.
 permission-rule-unreadable = '{ $rule }' { $problem }
+# The same, for a value that every settings file could have written, so the file is named with it.
+permission-rule-unreadable-in = '{ $rule }' in { $path } { $problem }
 permission-rule-not-a-line = is not a rule; a rule is written as a line of text
 permission-rule-empty = is empty
 permission-rule-unclosed-bracket = is missing its closing bracket
@@ -448,6 +450,9 @@ permission-rule-unanchored = needs a home directory or a settings directory to s
 permission-rule-not-a-domain-rule = needs a domain, written WebFetch(domain:example.com)
 permission-rule-no-domain-named = names no domain after 'domain:'
 permission-rule-not-a-tool-rule = needs a server, or a server and one of its tools, written Mcp(weather) or Mcp(weather:get_forecast)
+# A permissions block, or its deny, ask or allow list, written as something other than a list.
+# The rules another settings file wrote still apply, which is what "removes none" says.
+permission-rule-not-a-list = sets no rules and removes none; rules go in a list, such as "deny": ["Read(./.env)"]
 
 
 ## Importing a Leo Premium subscription
