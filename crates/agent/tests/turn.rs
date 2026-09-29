@@ -13278,8 +13278,10 @@ fn the_planner_is_told_how_a_run_it_may_not_read_ended() {
     let scratch = Scratch::new("run-status-kept");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
+    // Something printed, to stderr, so there is output to be kept from the planner: one that prints
+    // nothing is told as exactly that (RUN-24).
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"false"}"#),
+        tool_request("run", r#"{"command":"cat missing.txt"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -13312,6 +13314,130 @@ fn the_planner_is_told_how_a_run_it_may_not_read_ended() {
     assert!(
         second.contains("exited 1"),
         "the planner was not told how a run it may not read ended: {second}"
+    );
+}
+
+/// A command that printed nothing has nothing to keep from anybody. Handed a reference to its
+/// empty output with the ways to process, vet and read it, a planner that had only made a
+/// directory went looking for something to do with the reference. It still hears how the run
+/// ended, and the output stays quarantined, so nothing about it was read into the planner's context.
+#[test]
+fn a_run_that_printed_nothing_says_so_and_hands_back_no_reference() {
+    let scratch = Scratch::new("run-printed-nothing");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"mkdir made"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("make it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert!(scratch.path.join("made").is_dir(), "the line did not run");
+    assert!(
+        reporter
+            .printed
+            .iter()
+            .all(|printed| !printed.read_by_the_planner),
+        "the output reached the planner's context, so this tests the wrong branch"
+    );
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    let told = message_from(&second, "Result of run");
+    assert!(
+        told.contains("It exited 0.") && told.contains("It printed nothing."),
+        "the planner was not told how the run ended and that it printed nothing: {told}"
+    );
+    for advice in ["ref:", "read_output", "spawn_processor", "vet_content"] {
+        assert!(
+            !told.contains(advice),
+            "the planner was handed {advice} for output that is not there: {told}"
+        );
+    }
+    assert!(
+        !reporter
+            .landed
+            .contains(&bravebot_agent::report::Landing::Quarantined)
+            && reporter.shown.is_empty(),
+        "the person was told something was kept from the planner when nothing was: {:?}",
+        reporter.landed
+    );
+}
+
+/// The same for a look at a job that has printed nothing since it was last looked at, which is
+/// every look at a quiet server.
+#[test]
+fn a_look_at_a_job_that_printed_nothing_new_says_so_and_hands_back_no_reference() {
+    let scratch = Scratch::new("job-printed-nothing");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sleep 30","background":true}"#),
+        tool_request("job_output", r#"{"job":"job:1","kill":true}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let told = message_from(
+        sent.last().expect("the round after job_output"),
+        "Result of job_output",
+    );
+    assert!(
+        told.contains("was stopped") && told.contains("It has printed nothing new."),
+        "the planner was not told how the job ended and that nothing new came of it: {told}"
+    );
+    for advice in ["ref:", "read_output", "spawn_processor", "vet_content"] {
+        assert!(
+            !told.contains(advice),
+            "the planner was handed {advice} for output that is not there: {told}"
+        );
+    }
+    assert!(
+        !reporter
+            .landed
+            .contains(&bravebot_agent::report::Landing::Quarantined)
+            && reporter.shown.is_empty(),
+        "the person was told something was kept from the planner when nothing was: {:?}",
+        reporter.landed
     );
 }
 

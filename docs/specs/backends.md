@@ -1359,6 +1359,12 @@ written ([BACKEND-44](#BACKEND-44)) or offered no tool, and not where it offered
 there the silence may be the service holding an argument back until the model has finished it, and a
 second request waits out the same silence and is billed for it.
 
+A streamed reply from an OpenAI-compatible service that stops arriving once any of its body has
+arrived is incomplete in the same way, and is sent again as any reply that ended early is. A read
+that fails before any of its body has arrived stays a transport failure. That client has no ask for
+arguments as they are written, so nothing tells it a service holding one back from a connection
+that died, and it sends the request again as it did before either was told apart.
+
 A reply cut at the time its request stated for it ([NET-5](network-egress.md#NET-5)) is incomplete
 too, streamed or asked for whole, and never a request that did not get through: the service had the
 request and was still writing. It is not asked for again, since the same reply takes as long again.
@@ -1387,6 +1393,8 @@ from a reply, and without it the report names a limit and no way to change it.
 `verified-by: bravebot_bedrock::lib::a_reply_that_never_began_is_still_a_request_that_did_not_get_through`
 `verified-by: bravebot_bedrock::lib::a_reply_that_went_quiet_while_an_argument_was_held_back_is_not_asked_for_again`
 `verified-by: bravebot_bedrock::lib::only_a_request_whose_arguments_are_held_back_stalls_rather_than_stopping`
+`verified-by: bravebot_aichat::client::a_stream_that_breaks_after_it_began_is_a_reply_that_stopped`
+`verified-by: bravebot_aichat::client::a_stream_that_breaks_before_any_of_it_arrived_is_still_a_connection_failure`
 `verified-by: bravebot_agent::backend::a_reply_that_stopped_arriving_is_reported_as_unfinished_and_not_as_unreachable`
 `verified-by: bravebot_net::egress::a_reply_outlasting_the_time_its_request_stated_is_given_up_on`
 `verified-by: bravebot_net::egress::a_reply_written_before_any_of_it_is_sent_is_out_of_time_when_it_outlasts_its_stated_bound`

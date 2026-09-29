@@ -59,3 +59,21 @@ longest part of it.
 which is what marking a prompt is for. What is given up is a write and no read.
 
 `verified-by: bravebot_agent::turn::a_processor_asks_for_no_cache_of_the_content_it_reads`
+
+<a id="SPAWN-5"></a>
+### SPAWN-5: a call that cannot be taken says what is wrong with it
+
+A call whose `reads` is missing, is sent under the name `read`, or is a string holding an array
+rather than the array, is told which of those it was. A call whose `reads` names no reference is
+told that a processor works only on content already quarantined, and that a file made from nothing
+is written with `write_file`. Each is a fixed sentence chosen from the argument's name and JSON
+type ([TOOL-4](tool-surface.md#TOOL-4)), and the empty list is answered before the kernel's refusal
+of it ([SPAWN-1](#SPAWN-1)) is reached.
+
+**Why.** Told only that `reads` was required, a planner that had sent `read` holding a string sent
+the same call again word for word. It then sent an empty list to have a processor draw a picture
+from nothing, and the kernel's refusal said there was nothing quarantined to work on without saying
+that the planner could write the file itself.
+
+`verified-by: bravebot_agent::tools::a_processor_call_naming_its_references_wrongly_is_told_what_is_wrong`
+`verified-by: bravebot_agent::tools::a_processor_given_nothing_to_read_is_pointed_at_write_file`

@@ -1318,6 +1318,29 @@ stop being theirs because the work moved ([DELEGATE-1](../delegation.md)).
 `verified-by: bravebot_agent::turn::the_planner_is_told_the_deadlines_the_settings_named`
 `verified-by: bravebot_agent::turn::a_delegate_runs_under_the_deadlines_of_the_turn_that_spawned_it`
 
+<a id="RUN-24"></a>
+### RUN-24: output that is empty is said to be empty
+
+Where what a command printed is quarantined and its slot holds no bytes, the planner is told how
+the run ended ([RUN-13](#RUN-13)) and that it printed nothing, and is handed no reference and none
+of [RUN-14](#RUN-14)'s advice. A look at a job that has printed nothing since it was last looked at
+says it has printed nothing new. The person watching is not told the result was kept from the
+planner, and no quarantined block is drawn for it. The slot is still made and keeps its label, so
+the output view says the planner has not read it, which is true.
+
+**Why.** A planner that made a directory with `mkdir` was handed a reference to its empty output,
+told it could not be shown, and told to give it to a processor, write it into a file, vet it or
+call `read_output` on it. It went looking for something to do with nothing, and the person was told
+beside a `mkdir` that only an isolated processor could be sent to read what it printed.
+
+**This changes no label and reads no byte.** What decides it is the size the slot states, which
+the reference would have put in front of the planner as `0 bytes`
+([LABEL-4](../labels.md#LABEL-4)). "It printed nothing" is that same number in other words, and a
+program choosing to print nothing chose what the planner is told no more than it did before.
+
+`verified-by: bravebot_agent::turn::a_run_that_printed_nothing_says_so_and_hands_back_no_reference`
+`verified-by: bravebot_agent::turn::a_look_at_a_job_that_printed_nothing_new_says_so_and_hands_back_no_reference`
+
 ## Open questions
 
 - Whether output can ever be trusted by proof rather than by assertion is issue #3, and it may not

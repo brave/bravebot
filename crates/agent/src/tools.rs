@@ -6287,6 +6287,31 @@ fn bounded(text: &str, cap: usize) -> Option<String> {
     ))
 }
 
+/// Why a processor call's `reads` could not be taken, naming the mistake in it.
+///
+/// Chosen from the argument's name and JSON type and nothing else, so each answer is a fixed
+/// sentence. Told only that `reads` is required, a planner that had sent `read` holding a string
+/// sent the same call again word for word.
+fn unreadable_reads(arguments: &Value) -> &'static str {
+    match (arguments.get("reads"), arguments.get("read")) {
+        (None, Some(sent)) if sent.is_string() => {
+            "error: the argument is 'reads', not 'read', and it takes an array rather than a \
+             string holding one, e.g. \"reads\": [\"ref:0\"]"
+        }
+        (None, Some(_)) => {
+            "error: the argument is 'reads', not 'read', e.g. \"reads\": [\"ref:0\"]"
+        }
+        (Some(sent), _) if sent.is_string() => {
+            "error: 'reads' takes an array rather than a string holding one, e.g. \"reads\": \
+             [\"ref:0\"]"
+        }
+        _ => {
+            "error: 'reads' is required and must be an array of reference names, e.g. \
+             \"reads\": [\"ref:0\"]"
+        }
+    }
+}
+
 /// the inputs before the processor runs.
 fn spawn_processor<S: Sink>(
     policy: &mut Policy<'_, S>,
@@ -6297,11 +6322,17 @@ fn spawn_processor<S: Sink>(
         return Produced::problem("error: 'instruction' is required and must be a string");
     };
     let Some(entries) = arguments.get("reads").and_then(Value::as_array) else {
-        return Produced::problem(
-            "error: 'reads' is required and must be an array of reference names, e.g. \
-             [\"ref:0\"]",
-        );
+        return Produced::problem(unreadable_reads(arguments));
     };
+    // Before any reference is looked at, because an empty list is a call that took the tool for
+    // something it is not. The kernel refuses it too (SPAWN-1), but in words about the kernel.
+    if entries.is_empty() {
+        return Produced::problem(
+            "error: 'reads' names no references. A processor only works on quarantined content \
+             you were not shown, so it needs at least one reference to some. To make a file from \
+             nothing, write it yourself with write_file.",
+        );
+    }
 
     let mut reads = Vec::with_capacity(entries.len());
     for entry in entries {
@@ -11476,6 +11507,70 @@ mod tests {
             assert!(
                 finished.last().is_some_and(|activity| activity.failed),
                 "the call was not reported failed: {finished:?}"
+            );
+        }
+
+        /// A processor call that misnames `reads`, or sends it as a string, is told which. Told
+        /// only that the argument was required, a planner that sent `read` holding a string sent
+        /// the same call again word for word.
+        #[test]
+        fn a_processor_call_naming_its_references_wrongly_is_told_what_is_wrong() {
+            let scratch = Scratch::new("processor-reads");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            for (arguments, expected) in [
+                (
+                    json!({"instruction": "redo it", "read": "[\"ref:0\"]"}),
+                    "error: the argument is 'reads', not 'read', and it takes an array rather \
+                     than a string holding one, e.g. \"reads\": [\"ref:0\"]",
+                ),
+                (
+                    json!({"instruction": "redo it", "read": ["ref:0"]}),
+                    "error: the argument is 'reads', not 'read', e.g. \"reads\": [\"ref:0\"]",
+                ),
+                (
+                    json!({"instruction": "redo it", "reads": "[\"ref:0\"]"}),
+                    "error: 'reads' takes an array rather than a string holding one, e.g. \
+                     \"reads\": [\"ref:0\"]",
+                ),
+                (
+                    json!({"instruction": "redo it"}),
+                    "error: 'reads' is required and must be an array of reference names, e.g. \
+                     \"reads\": [\"ref:0\"]",
+                ),
+            ] {
+                let mut sink = RecordingSink::new();
+                let mut policy = policy(&mut sink);
+                let produced = with_tools(&workspace, |tools| {
+                    spawn_processor(&mut policy, tools, &arguments)
+                });
+                assert_eq!(told(&mut policy, &produced.text), expected, "{arguments}");
+            }
+        }
+
+        /// An empty `reads` is a planner taking a processor for a way to make something new. It
+        /// is told what a processor is for and where a new file comes from, rather than the
+        /// kernel's refusal, which is worded about the kernel and names no tool to use instead.
+        #[test]
+        fn a_processor_given_nothing_to_read_is_pointed_at_write_file() {
+            let scratch = Scratch::new("processor-nothing");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+
+            let produced = with_tools(&workspace, |tools| {
+                spawn_processor(
+                    &mut policy,
+                    tools,
+                    &json!({"instruction": "draw a betta fish as an SVG", "reads": []}),
+                )
+            });
+
+            assert_eq!(
+                told(&mut policy, &produced.text),
+                "error: 'reads' names no references. A processor only works on quarantined \
+                 content you were not shown, so it needs at least one reference to some. To make \
+                 a file from nothing, write it yourself with write_file."
             );
         }
     }

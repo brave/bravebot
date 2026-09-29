@@ -44,7 +44,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [mcp.md](mcp.md) | `MCP` | 9 | tools that come from outside this repository, and what they are allowed to do |
 | [mcp-servers.md](mcp-servers.md) | `SERVERS` | 14 | how a person declares one of those servers, what that declaration is trusted for, and what is asked before a tool from one runs |
 | [hooks.md](hooks.md) | `HOOK` | 8 | a command a person asked to have run when something happens |
-| [network-egress.md](network-egress.md) | `NET` | 9 | every request that leaves this process, and what comes back |
+| [network-egress.md](network-egress.md) | `NET` | 10 | every request that leaves this process, and what comes back |
 | [backends.md](backends.md) | `BACKEND` | 46 | which service answers a request, and what a person may choose between |
 | [import.md](import.md) | `IMPORT` | 10 | a first start with nothing configured: what Claude Code and opencode set up, or a running Ollama serves, and what of it may be copied here |
 | [compaction.md](compaction.md) | `COMPACT` | 12 | shortening a long conversation into a summary of itself, in the request only |
@@ -75,9 +75,9 @@ the routing-versus-content split they share.
 | [tools/lsp.md](tools/lsp.md) | `LSP` | 10 | `lsp` |
 | [tools/write-file.md](tools/write-file.md) | `WRITE` | 4 | `write_file` |
 | [tools/edit-file.md](tools/edit-file.md) | `EDIT` | 4 | `edit_file` |
-| [tools/spawn-processor.md](tools/spawn-processor.md) | `SPAWN` | 4 | `spawn_processor` |
+| [tools/spawn-processor.md](tools/spawn-processor.md) | `SPAWN` | 5 | `spawn_processor` |
 | [tools/spawn-agent.md](tools/spawn-agent.md) | `AGENT` | 5 | `spawn_agent` |
-| [tools/run.md](tools/run.md) | `RUN` | 23 | `run` |
+| [tools/run.md](tools/run.md) | `RUN` | 24 | `run` |
 | [tools/command-line.md](tools/command-line.md) | `CMDLINE` | 16 | `run`'s command line, compiled rather than interpreted |
 | [tools/read-output.md](tools/read-output.md) | `OUTPUT` | 4 | `read_output` |
 | [tools/vet-content.md](tools/vet-content.md) | `VET` | 4 | `vet_content` |
