@@ -284,7 +284,7 @@ person speaking at the same rung, and the pick is the later of the two.
 `verified-by: bravebot_config::lib::a_model_in_the_settings_file_outranks_the_baked_in_one`
 `verified-by: bravebot_config::lib::a_model_in_the_settings_file_outranks_an_exported_one`
 `verified-by: bravebot_config::lib::the_env_block_spelling_stays_below_the_baked_in_value`
-`verified-by: bravebot_config::settings::a_layer_above_the_home_one_outranks_a_saved_pick`
+`verified-by: bravebot_config::settings::a_layer_above_the_home_one_does_not_pick_a_model`
 `verified-by: bravebot_config::settings::the_home_layer_does_not_outrank_a_saved_pick`
 `verified-by: bravebot_config::settings::a_layer_above_that_names_nothing_does_not_outrank_a_saved_pick`
 `verified-by: bravebot_session::store::a_checkouts_model_outranks_the_saved_pick_and_the_home_file_does_not`
@@ -1789,7 +1789,7 @@ what drifting costs is a word no service defines in a request field.
 `verified-by: bravebot_config::settings::an_effort_word_is_read_as_the_file_spelled_it`
 `verified-by: bravebot_config::settings::an_effort_that_is_blank_or_not_a_string_names_nothing`
 `verified-by: bravebot_config::settings::the_closest_layer_that_named_an_effort_wins`
-`verified-by: bravebot_config::settings::a_layer_above_the_home_one_outranks_a_saved_pick`
+`verified-by: bravebot_config::settings::a_layer_above_the_home_one_does_not_pick_a_model`
 `verified-by: bravebot_config::settings::the_home_layer_does_not_outrank_a_saved_pick`
 `verified-by: bravebot_config::settings::a_layer_above_that_names_nothing_does_not_outrank_a_saved_pick`
 `verified-by: bravebot_session::store::a_checkouts_level_outranks_the_saved_pick_and_the_home_file_does_not`
@@ -2028,8 +2028,8 @@ BACKEND-39 because importing it again is what serves the pick, and the refusal s
 
 - **A layer a checkout carries is trusted as far as the person's own file is, except where it is
   not.** A `.bravebot` directory arrives with whatever produced the checkout, so a `settings.json` in
-  one arrives unasked. The fields that name a destination and the credential that signs it —
-  `provider` and `model` ([BACKEND-24](#BACKEND-24)) — are refused from the project layers outright,
+  one arrives unasked. The fields that name a destination and the credential that signs it
+  (`provider` and `model`, [BACKEND-24](#BACKEND-24)) are refused from the project layers outright,
   because the credential value comes from the person's own environment under names the layer would
   choose, and a file nobody read must not pick either. For the remaining fields, what limits the
   damage is the same rule that limits it anywhere: a file names a destination and grants no
