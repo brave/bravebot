@@ -63,7 +63,10 @@ const CONTEXT: usize = 3;
 /// `skip_permissions` is the same flag it is everywhere: the one way to stop being asked. It is
 /// read here rather than deeper in for the reason [`crate::take_skip_permissions`] takes it out of
 /// the arguments before anything dispatches.
-pub fn session(skip_permissions: bool) -> ExitCode {
+///
+/// `agent` is the definition `--agent` named, which every prompt of the session is addressed to
+/// once the directory's trust is settled (CLI-17).
+pub fn session(skip_permissions: bool, agent: Option<String>) -> ExitCode {
     // Refused rather than read. The lines this reads are the person's own prompts, and a pipe has
     // nothing vouching for what it carries: CLI-3 quarantines piped bytes for exactly that reason,
     // so a session taking its prompts from one would be taking instruction from whatever fed it,
@@ -173,6 +176,38 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         return ExitCode::SUCCESS;
     };
 
+    // Matched after that question, because its answer decides whether the checkout's definitions
+    // are in the set, and before any server is reached, so a name matching nothing starts nothing
+    // (ADDRESS-5).
+    let agent = match agent
+        .map(|name| {
+            let definitions = bravebot_agent::agents::resolved(
+                &workspace,
+                home.as_deref(),
+                trust.clone(),
+                &mut RecordingSink::new(),
+            );
+            bravebot_tui::app::definition_named(&config, &definitions, &name)
+        })
+        .transpose()
+    {
+        Ok(agent) => agent,
+        Err(refused) => return fail(Ending::Argument, refused),
+    };
+    // With the definition's model, because the opening line named the session's before the name
+    // was matched, and every prompt asks for the definition's.
+    if let Some(agent) = &agent {
+        let notice = match &agent.model {
+            Some(model) => t!(
+                cli_plain_working_under_model,
+                definition = &agent.name,
+                model = model
+            ),
+            None => t!(cli_plain_working_under, definition = &agent.name),
+        };
+        asking.say(&t!(cli_notice, notice = notice));
+    }
+
     // After that question, and put on the same two streams every other question here is. Held for
     // the length of the session, since dropping one stops its server.
     let mut reached = crate::servers::for_this_session(
@@ -197,8 +232,12 @@ pub fn session(skip_permissions: bool) -> ExitCode {
     // What compaction measures the conversation against, and whether the model in force reads an
     // effort level. A session in lines opens no picker, so the model in force here is the stored
     // one or the configured one, and this is the only place either can be looked up.
-    let named = model
-        .clone()
+    //
+    // The definition's model where it names one, since that is the one every turn will ask for.
+    let named = agent
+        .as_ref()
+        .and_then(|agent| agent.model.clone())
+        .or_else(|| model.clone())
         .unwrap_or_else(|| config.default_model.clone());
     let reads_effort = bravebot_tui::app::adopt_listing_for_model(&mut config, &named);
 
@@ -244,6 +283,7 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         deadlines: bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines()),
         model,
         in_force: named,
+        agent,
         reads_effort,
         effort,
         complained: None,
@@ -371,6 +411,8 @@ struct Running<'a> {
     /// The name of the model in force, whichever of the two it came from, which is what a
     /// substitution is measured against (CLI-10).
     in_force: String,
+    /// The definition every prompt is addressed to, where `--agent` named one.
+    agent: Option<bravebot_tui::state::Addressed>,
     /// Whether the model in force still reads an effort level.
     ///
     /// The listing answers it where the session is assembled, because that is where the listing is
@@ -453,7 +495,8 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             .with_deadlines(self.deadlines)
             .with_auto_vetting(self.auto_vetting)
             .already_asked_about(self.asked_about.clone())
-            .already_exposed(self.exposed.clone());
+            .already_exposed(self.exposed.clone())
+            .addressing(self.agent.as_ref().map(|agent| agent.name.clone()));
 
         // The mode as the session holds it. The confirmer below is what enforces it, and the task
         // above is the half the planner is told about; both are set from the one value, and
@@ -510,7 +553,12 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
                 failure: None,
                 notices: outcome.notices.clone(),
                 clean: outcome.clean,
-                not_served: self.substituted(&outcome.model),
+                // Skipped for a definition's model, because the turn compared that model itself
+                // and reported it in the definition's words (ADDRESS-11).
+                not_served: match self.agent.as_ref().and_then(|agent| agent.model.as_ref()) {
+                    Some(_) => None,
+                    None => self.substituted(&outcome.model),
+                },
             },
             // From the reporter rather than the outcome, there being no outcome: a turn that could
             // not run still said what its hooks did, and those sentences are the person's own to

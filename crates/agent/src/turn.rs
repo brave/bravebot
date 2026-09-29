@@ -869,6 +869,12 @@ pub struct Task {
     /// routing table, and the kernel matches it against the set this turn resolves, so a name
     /// matching nothing ends the turn before anything is sent.
     pub addressing: Option<String>,
+    /// Whether [`Task::model`] outranks the model an addressed definition names.
+    ///
+    /// Set only by a caller whose model was named on its own command line. CLI-9 ranks that flag
+    /// above everything else, and a definition is not one of the layers it ranks. The turn reports
+    /// it on the outcome where it changed the model asked for (ADDRESS-11).
+    pub model_outranks_a_definition: bool,
     /// The MCP servers this session reached at its start, each by the alias it was declared
     /// under.
     ///
@@ -981,6 +987,7 @@ impl Task {
             attribution: bravebot_config::Attribution::default(),
             delegate: None,
             addressing: None,
+            model_outranks_a_definition: false,
             servers: Vec::new(),
             mcp: None,
         }
@@ -1100,6 +1107,12 @@ impl Task {
     /// Address a definition by the name a person typed, or `None` for the session's own planner.
     pub fn addressing(mut self, name: Option<String>) -> Self {
         self.addressing = name;
+        self
+    }
+
+    /// Say that [`Task::model`] was named on the command line, so it outranks a definition's.
+    pub fn model_outranks_a_definition(mut self, outranks: bool) -> Self {
+        self.model_outranks_a_definition = outranks;
         self
     }
 
@@ -2761,10 +2774,25 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // The definition's model where an addressed one named a model, and no turn at all where that
         // model needs a sign-in this machine has not made. Running it on the session's model instead
         // would spend past a boundary the definition drew (ADDRESS-11).
-        let definition_model = addressed
+        //
+        // Unless the command line named a model, which outranks it. The definition's model is then
+        // not asked for, so its sign-in and substitution checks do not apply, and the turn reports
+        // that the definition's model was not used.
+        let named = addressed
             .as_ref()
-            .and_then(|addressed| addressed.model())
-            .map(|written| (written.to_string(), config.model_named(written)));
+            .and_then(|addressed| addressed.model().map(|written| (addressed, written)));
+        if let (true, Some((addressed, written))) = (task.model_outranks_a_definition, named) {
+            let said = t!(
+                agent_model_outranked,
+                definition = addressed.name(),
+                model = written
+            );
+            reporter.notice(said.clone());
+            notices.push(crate::skills::Notice::from_message(said));
+        }
+        let definition_model = named
+            .filter(|_| !task.model_outranks_a_definition)
+            .map(|(_, written)| (written.to_string(), config.model_named(written)));
         if let (Some(addressed), Some((written, resolved))) = (&addressed, &definition_model)
             && crate::backend::Backend::needs_sign_in(config, resolved)
         {

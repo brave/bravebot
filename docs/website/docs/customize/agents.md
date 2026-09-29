@@ -35,6 +35,13 @@ You can also run one yourself, without the planner choosing it:
 of your own under the definition's body, model and narrowing rather than a delegate, so it can still
 ask you questions and what it reads stays in the conversation.
 
+To address every turn of a session to it, start the session with
+[`bravebot --agent rule-reviewer`](../reference/cli.md#--agent-name). That includes `/loop` ticks
+and `/goal` rounds, and `/agent other <task>` still addresses another definition for one turn.
+`bravebot --agent rule-reviewer -p "check this branch"` does the same for one run. A one-shot run
+does not ask whether to trust the checkout, so it reads only the definitions in
+`~/.bravebot/agents`.
+
 ## The keys
 
 | Key | Required | Meaning |

@@ -71,6 +71,8 @@ pub struct Facts<'a> {
     /// The session's own directory outside the project, or `None` where it has none.
     pub scratch: Option<&'a Path>,
     pub model: Option<&'a str>,
+    /// The definition every turn is addressed to, where `--agent` named one (CLI-17).
+    pub agent: Option<&'a crate::state::Addressed>,
     /// How hard the model is asked to think, or `None` where nothing is asked and the service
     /// applies its own default.
     pub effort: Option<bravebot_aichat::protocol::Effort>,
@@ -238,11 +240,25 @@ pub fn report(facts: &Facts<'_>) -> Report {
         );
     }
 
-    lines.push(match facts.model {
-        Some(model) => Line::new(t!(status_model), model).with_note(t!(status_model_chosen)),
-        None => Line::new(t!(status_model), &facts.config.default_model)
+    // The definition's model where it names one, since `/model` was not what chose it.
+    let definitions = facts
+        .agent
+        .and_then(|agent| agent.model.as_deref().map(|model| (agent, model)));
+    lines.push(match (definitions, facts.model) {
+        (Some((agent, model)), _) => Line::new(t!(status_model), model)
+            .with_note(t!(status_model_definitions, definition = &agent.name)),
+        (None, Some(model)) => {
+            Line::new(t!(status_model), model).with_note(t!(status_model_chosen))
+        }
+        (None, None) => Line::new(t!(status_model), &facts.config.default_model)
             .with_note(t!(status_model_default)),
     });
+
+    // Nothing else on the screen shows that the session is not the planner's, since the input box
+    // is unchanged.
+    if let Some(agent) = facts.agent {
+        lines.push(Line::new(t!(status_agent), &agent.name).with_note(t!(status_agent_every_turn)));
+    }
 
     // What actually answered, where that is not what was asked for. The endpoint substitutes a
     // model it will not serve rather than refusing, so the line above can name Opus for a whole
@@ -714,6 +730,7 @@ mod tests {
             // one looks like. The test about the line sets it itself.
             scratch: None,
             model: None,
+            agent: None,
             effort: None,
             model_reads_effort: true,
             // Nothing observed, which is what a session looks like before its first turn. Tests
@@ -857,6 +874,64 @@ mod tests {
             line.note.contains('1'),
             "the report did not say how many rounds had gone: {}",
             line.note
+        );
+    }
+
+    /// CLI-17. The note saying a session works under a definition scrolls away, and the input box
+    /// looks the same either way, so the report is where a person sees which definition every turn
+    /// is addressed to. A session started under none shows no such line. A model the definition
+    /// names is reported as the definition's, since `/model` did not choose it.
+    #[test]
+    fn the_report_names_the_definition_every_turn_is_addressed_to() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let labelled = |report: &Report, label: &str| {
+            report
+                .lines
+                .iter()
+                .find(|line| line.label.trim() == label)
+                .map(|line| (line.value.clone(), line.note.clone()))
+        };
+        let agent_line = |report: &Report| labelled(report, t!(status_agent));
+        let model_line = |report: &Report| labelled(report, t!(status_model));
+
+        assert_eq!(agent_line(&report(&facts(&config, &trust))), None);
+
+        let naming_no_model = crate::state::Addressed {
+            name: "rule-reviewer".to_string(),
+            model: None,
+        };
+        let naming_a_model = crate::state::Addressed {
+            name: "rule-reviewer".to_string(),
+            model: Some("the-definitions-model".to_string()),
+        };
+        let mut facts = facts(&config, &trust);
+        facts.model = Some("the-sessions-model");
+        facts.agent = Some(&naming_no_model);
+        assert_eq!(
+            agent_line(&report(&facts)),
+            Some((
+                "rule-reviewer".to_string(),
+                t!(status_agent_every_turn).to_string()
+            ))
+        );
+        assert_eq!(
+            model_line(&report(&facts)),
+            Some((
+                "the-sessions-model".to_string(),
+                t!(status_model_chosen).to_string()
+            ))
+        );
+
+        facts.model = Some("the-definitions-model");
+        facts.agent = Some(&naming_a_model);
+        assert_eq!(
+            model_line(&report(&facts)),
+            Some((
+                "the-definitions-model".to_string(),
+                t!(status_model_definitions, definition = "rule-reviewer").to_string()
+            )),
+            "the definition's model was reported as one /model chose"
         );
     }
 

@@ -12,12 +12,16 @@ governs:
   - crates/agent/src/delegate.rs
   - crates/agent/src/tools.rs
   - crates/agent/src/turn.rs
+  - crates/cli/src/main.rs
+  - crates/cli/src/plain.rs
+  - crates/tui/src/status.rs
 guards:
   - symbol: Policy::address
   - symbol: Session::address
 documented-by:
   - docs/website/docs/reference/commands.md
   - docs/website/docs/customize/agents.md
+  - docs/website/docs/reference/cli.md
 ---
 
 ## Scope
@@ -45,9 +49,13 @@ again for that turn and the kernel decides the rest in `Policy::address`: the ca
 offered, and the refusal of a name that is not there. The driver offers only those tools and refuses
 a call to any other by name, and the interface draws the reply under the name the driver matched.
 
-`bravebot -p` and the desktop front end address nothing. The first is an open question below.
-[MEMORY-10](definition-memory.md#MEMORY-10) specifies that every turn in a desktop bot's
-conversation addresses the bot's definition, and nothing yet builds it.
+`--agent <name>` on the command line selects a definition for every turn of an interactive session,
+a session in lines or a one-shot run ([CLI-17](cli.md#CLI-17)). The name is matched against the same
+set before the first turn, and each turn then carries it as a `/agent` line's turn does.
+
+The desktop front end addresses nothing. [MEMORY-10](definition-memory.md#MEMORY-10) specifies
+that every turn in a desktop bot's conversation addresses the bot's definition, and nothing yet
+builds it.
 
 ## The comparison, and what it is worth
 
@@ -115,14 +123,17 @@ is the shape every other command here already has, and the whole word is the com
 
 A turn stopped before it did anything puts the whole line back in the box, name and all, as a
 stopped prompt is put back. The task alone would be a prompt for the session's own planner, and
-Enter on it would run the work under everything the definition was there to take away.
+Enter on it would run the work under everything the definition was there to take away. In a session
+started under that definition ([CLI-17](cli.md#CLI-17)) only the task comes back, because Enter on
+it already addresses the definition.
 
 `verified-by: bravebot_tui::app::a_session_can_address_a_definition`
 `verified-by: bravebot_tui::app::a_longer_word_starting_with_agent_is_a_prompt`
 `verified-by: bravebot_tui::app::a_stopped_addressed_turn_puts_the_whole_agent_line_back_in_the_box`
+`verified-by: bravebot_tui::app::a_stopped_turn_comes_back_naming_a_definition_only_where_the_session_would_not`
 
 <a id="ADDRESS-3"></a>
-### ADDRESS-3: only a line a person typed into the box
+### ADDRESS-3: only a line a person typed into the box, or the command line that started the session
 
 The line comes off the input box and from nowhere else. Never a line the planner produced, never
 text read out of a file, never anything a processor returned, never one reconstructed from a
@@ -133,13 +144,20 @@ screen as six characters.
 narrowing it did not choose, which is a decision a turn is not allowed to take on its own. The
 endorsement for it is the keystroke, so the keystroke is the only thing that may produce one.
 
+The command line that started a session or a run is the other source. `--agent <name>`
+([CLI-17](cli.md#CLI-17)) is an argument a person typed, so the reasoning above applies to it, and
+it is read before any turn exists, so no turn's output can set it. It names the definition for every
+turn of the session, while a `/agent` line names one for a single turn.
+
 [MEMORY-10](definition-memory.md#MEMORY-10), which nothing yet builds, adds a second source: a
 turn in a desktop bot's conversation addresses that bot's definition. The name comes from the
 conversation a person opened rather than from a line, and nothing a turn produced chooses it, so
 what stands in for the keystroke is making the bot and opening its conversation.
 
 `verified-by: bravebot_tui::app::a_line_addressing_a_definition_queued_while_a_turn_ran_addresses_it_when_the_turn_ends`
-`verified-by: by-construction (a name reaches a turn only through Session::address; its one caller settles the Action::Address that only the /agent branch of dispatch_command returns; dispatch_command is reached from the input box's key handler and from the queue that handler filled; and the turn takes the name off the session as it starts, so nothing a turn produced sets one)`
+`verified-by: bravebot_cli::main::the_agent_flag_is_taken_out_with_the_name_it_gave`
+`verified-by: bravebot_tui::app::a_name_from_the_command_line_is_worked_under_where_it_was_written_and_refused_where_not`
+`verified-by: by-construction (in the interface a name reaches a turn only through Session::address or Session::work_under; the first's one caller settles the Action::Address that only the /agent branch of dispatch_command returns, and dispatch_command is reached from the input box's key handler and from the queue that handler filled; the second's one caller is the event loop before its first turn, with the name main took off the command line; a session in lines and a one-shot run put a name on a Task only from that same argument; and the turn reads the name off the session as it starts, so nothing a turn produced sets one)`
 
 <a id="ADDRESS-4"></a>
 ### ADDRESS-4: a conversation that has met untrusted content addresses a definition anyway
@@ -176,11 +194,16 @@ keystroke. The set it is compared against is the thing an attacker would want to
 that is already settled: a definition loads from a trusted source or it is dropped, so a name
 nobody vouched for never entered the set to be matched.
 
+A one-shot run does not ask whether to trust its directory, so it counts the checkout's definitions
+without reading them. A name that only the checkout defines is refused, and the refusal says how
+many definitions were not read ([CLI-17](cli.md#CLI-17)).
+
 `verified-by: bravebot_core::policy::a_name_this_session_did_not_resolve_is_refused_with_the_names_it_did`
 `verified-by: bravebot_agent::turn::a_name_this_session_did_not_resolve_sends_nothing_and_lists_what_it_did`
 `verified-by: bravebot_agent::agents::the_set_an_interface_resolves_is_the_one_a_turn_would`
 `verified-by: bravebot_tui::app::a_name_this_session_did_not_resolve_runs_nothing_and_lists_what_it_did`
 `verified-by: bravebot_tui::app::a_name_with_no_task_runs_nothing_and_says_a_task_is_needed`
+`verified-by: bravebot_cli::running::a_run_refuses_a_definition_only_an_untrusted_checkout_holds_and_says_it_counted_one`
 
 <a id="ADDRESS-6"></a>
 ### ADDRESS-6: a resolved name is printed where somebody asked for it, and never offered in the box
@@ -267,11 +290,14 @@ turn, at the depth every other turn starts from.
 watch's fire starts is a turn of the session's planner ([ADDRESS-10](#ADDRESS-10)), holding
 everything the session holds. A reader addressed so that nothing is written could otherwise arm a
 turn that writes, with nobody typing anything. Carrying the name onto that later turn would keep
-the narrowing, and would make a turn nobody typed an addressed one, which is the question
-[ADDRESS-3](#ADDRESS-3) answers no to for now. [MEMORY-10](definition-memory.md#MEMORY-10), which
-nothing yet builds, would address two kinds of turn nobody typed in a bot's conversation, the
-desktop's own turn and the fire of a watch a person armed there, and neither is this kind: the run
-chooses a later look, and chooses neither of those.
+the narrowing, and would make a turn the run chose an addressed one, which
+[ADDRESS-3](#ADDRESS-3) leaves to a person. In a session started under a definition
+([CLI-17](cli.md#CLI-17)) every turn is addressed, so the later turn would keep the narrowing. The
+two are still withheld there, because the run would still choose when that turn happens, and a
+definition is offered the same tools whether `/agent` or `--agent` selected it.
+[MEMORY-10](definition-memory.md#MEMORY-10), which nothing yet builds, would address two kinds of
+turn nobody typed in a bot's conversation, the desktop's own turn and the fire of a watch a person
+armed there, and neither is this kind: the run chooses a later look, and chooses neither of those.
 
 **The cost of this clause is that one file reads two ways.** A definition naming `ask_user` under
 `tools:` is a definition loaded without it when a planner spawns it, and with it when a person
@@ -308,12 +334,27 @@ one a person wants depends on whether they are watching.
 The next line is a prompt for the session's own planner unless it addresses a definition again.
 There is no mode, nothing about the input box changes, and nothing has to be left.
 
+A person can also select a definition before the session starts, with `--agent`
+([CLI-17](cli.md#CLI-17)). Every turn that session sends is addressed to the definition, including
+`/loop` ticks and `/goal` rounds. A `/agent` line naming another definition addresses that one for
+one turn, and the next line goes to the session's definition again. The input box does not change,
+and `/status` names the definition, because the note shown at the start scrolls away.
+
 **Why.** A mode would have to answer what happens to the conversation so far, what the box looks
 like while it is on, what key leaves it, and what a queued line means when the mode changes under
 it. What a person wants from a file they checked in is that it does the piece of work they named,
 and the line they typed is where they named it. Addressing it twice costs one word.
 
+`--agent` does not raise those questions. The choice is made once, before there is a conversation,
+a queued line or a key to leave by, and a person who wants the planner back starts a new session.
+Ticks and rounds are addressed too, because addressing only narrows what a turn can do
+([ADDRESS-7](#ADDRESS-7)). An unaddressed tick would have more tools than the turns the person
+typed.
+
 `verified-by: bravebot_tui::app::an_addressed_line_runs_the_named_definition_on_its_task_for_one_turn`
+`verified-by: bravebot_tui::app::a_session_started_under_a_definition_addresses_every_turn_a_loop_tick_included`
+`verified-by: bravebot_tui::app::a_definition_named_on_the_line_lasts_one_turn_under_the_one_the_session_works_under`
+`verified-by: bravebot_tui::status::the_report_names_the_definition_every_turn_is_addressed_to`
 `verified-by: bravebot_agent::turn::the_turn_after_an_addressed_one_holds_the_exchange_and_not_the_definition`
 
 <a id="ADDRESS-11"></a>
@@ -324,14 +365,18 @@ the person is told which definition asked for which model. The session's own mod
 substituted. Where the endpoint answers with a model other than the one asked for, that is said
 too, naming the definition and the model it named, and a reply from the model the definition named
 is not reported as the session's model substituted. A delegate the run spawns whose own definition
-names no model inherits the addressed definition's, not the session's.
+names no model inherits the addressed definition's, not the session's. Where `--model` named a model
+for a one-shot run ([CLI-17](cli.md#CLI-17)), that model is asked for in place of the definition's,
+and the run says which model the definition asked for and was not given.
 
 **Why.** A definition naming a cheap model is often a cost boundary, and running it on the
 session's model would spend past that boundary without anybody choosing to. The person is at the
 keyboard, so a refusal costs them a sign-in and a second line, which is the outcome they would have
 chosen. The substitution is said because the endpoint substitutes rather than refuses a name it
 will not serve, so without it a definition could ask for one model and be answered by another every
-time.
+time. The command line outranks the definition for the reason in [CLI-9](cli.md#CLI-9): `--model`
+names the model for this one invocation. The run says so, so that whoever reads it knows the
+definition did not get the model it asked for.
 
 `verified-by: bravebot_agent::turn::an_addressed_definition_whose_model_needs_a_sign_in_sends_nothing_and_says_so`
 `verified-by: bravebot_tui::app::a_definition_whose_model_needs_a_sign_in_runs_nothing_and_says_so`
@@ -339,6 +384,7 @@ time.
 `verified-by: bravebot_agent::turn::a_delegate_an_addressed_turn_spawns_inherits_the_definitions_model`
 `verified-by: bravebot_tui::app::addressing_a_definition_that_names_a_model_carries_that_model`
 `verified-by: bravebot_tui::app::an_addressed_turn_is_held_against_the_model_its_definition_named`
+`verified-by: bravebot_agent::turn::a_model_the_command_line_named_outranks_the_definitions_and_the_turn_says_so`
 
 <a id="ADDRESS-12"></a>
 ### ADDRESS-12: the driver says which definition answered
@@ -358,12 +404,6 @@ the one that matched the name.
 `verified-by: bravebot_tui::render::a_reply_from_an_addressed_turn_is_drawn_under_the_name_the_driver_matched`
 
 ## Open questions
-
-- **Whether the one-shot command line gets the same reach.** `bravebot -p` composes a task from an
-  argument, which is a person's own line by the same argument [ADDRESS-3](#ADDRESS-3) makes for the
-  input box, so a switch naming a definition would be sound. Whether it is wanted is a separate
-  question from whether the interactive surface is, and answering it here would put a second
-  surface in a spec that has not had its first agreed to.
 
 - **Whether a definition may say that it is meant to be addressed.** Nothing above lets a file
   exclude itself from what a planner may select, or from what a person may address. A field saying
@@ -397,6 +437,14 @@ the one that matched the name.
   wants a definition to look again addresses it again. That is the price of
   [ADDRESS-8](#ADDRESS-8)'s exception, and a person who wanted the session to keep looking can ask
   the session rather than the definition.
+
+- **A session started under a definition cannot be resumed under it.** The session record does not
+  keep the name, so `--agent` is refused with `--resume`, `--continue` and `--fork`, and a session
+  resumed without it goes to the planner from then on.
+
+- **A self-paced `/loop` in such a session stops after one tick.** The tick is addressed, so it
+  cannot schedule the next one ([ADDRESS-8](#ADDRESS-8)). A `/loop` with an interval is scheduled
+  by the session and keeps running.
 
 - **The name is drawn only in the session that addressed it.** The session record does not keep
   which definition answered, so a resumed session and an exported transcript show the reply as the

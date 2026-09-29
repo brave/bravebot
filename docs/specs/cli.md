@@ -462,9 +462,9 @@ in, over a file it was told it could open.
 
 A run given the flag writes one object, on one line, whether it finished, failed before the turn
 began, or was refused something along the way. It holds how the run ended, the status and
-identifier of CLI-6, the message where there is one, the reply, the model that answered, how many
-rounds it took, what it cost in tokens, every tool it called with what it acted on and whether that
-call was refused, and every refusal with the principle it upholds. A tool is named as the driver
+identifier of CLI-6, the message where there is one, the reply, the model that answered, the
+definition the turn was addressed to where there was one (CLI-17), how many rounds it took, what it
+cost in tokens, every tool it called with what it acted on and whether that call was refused, and every refusal with the principle it upholds. A tool is named as the driver
 matched it rather than by the word a person is shown. What a call acted on is the name it was given
 rather than a resolved path, since the driver carries that argument without reading it.
 
@@ -499,6 +499,7 @@ what may change, every field is either frozen by accident or broken without warn
 `verified-by: bravebot_cli::json::a_failure_before_the_turn_is_still_a_result_object`
 `verified-by: bravebot_cli::json::a_refusal_names_the_principle_it_upholds`
 `verified-by: bravebot_cli::json::content_cannot_break_out_of_the_object_it_is_written_in`
+`verified-by: bravebot_cli::running::a_run_under_a_definition_names_it_in_the_result_object`
 
 <a id="CLI-13"></a>
 ### CLI-13: `--settings` names a file that outranks every layer found
@@ -507,7 +508,7 @@ what may change, every field is either frozen by accident or broken without warn
 [backends.md](backends.md) resolves, for the length of the run. It resolves as those do, a name at
 a time, so a file setting one value leaves the rest of what a person and a checkout configured in
 force. The flag and its path are taken out of the arguments before anything dispatches on them, so
-it composes with every way of starting and with the other two flags that are taken out there. Given
+it composes with every way of starting and with the other flags that are taken out there. Given
 twice, the last file is the one read, and a path naming a file that is already one of the three is
 read once. A path naming no file, and a path that is blank, are refused by name and the run stops
 before it starts, with the result object of CLI-12 where one was asked for.
@@ -577,8 +578,8 @@ it is trusting the directory for that reason, when, and how to be asked again. R
 not offered here, and nothing here writes the record.
 
 It composes with `--incognito`, `--dangerously-skip-permissions` and the `--settings` file of
-CLI-13, which belong to every way of starting, and with nothing else: it starts a session rather
-than describing one.
+CLI-13, which belong to every way of starting, with the `--agent` of CLI-17, and with nothing else:
+it starts a session rather than describing one.
 
 **Why.** A viewport repainted in place is not a document a screen reader can follow, and what
 leaves the top of it is in this program's own scroller rather than in the terminal's scrollback,
@@ -628,6 +629,7 @@ needs the terminal put in a state a session in lines does not put it in.
 `verified-by: bravebot_cli::plain::an_answer_in_lines_is_asked_for_and_never_kept`
 `verified-by: bravebot_cli::running::a_session_in_lines_is_refused_where_its_input_is_not_a_terminal`
 `verified-by: bravebot_cli::main::a_named_settings_file_composes_with_the_other_flags_before_dispatch`
+`verified-by: bravebot_cli::main::the_agent_flag_is_taken_out_with_the_name_it_gave`
 
 <a id="CLI-15"></a>
 ### CLI-15: `--vet` lets a check that finds nothing answer, for this run
@@ -651,7 +653,7 @@ critical path. Both are the price of the screening rather than side effects of i
 wants neither leaves the flag off.
 
 The flag is taken out of the arguments before anything dispatches on them, so it composes with
-every way of starting and with the other three flags taken out there, `--plain` included. Given
+every way of starting and with the other flags taken out there, `--plain` included. Given
 twice it is given once, which is asking for something that is already on rather than an error to
 report.
 
@@ -700,3 +702,92 @@ at all is [BACKEND-22](backends.md#BACKEND-22)'s question, as it is for any othe
 `verified-by: bravebot_cli::main::an_effort_flag_names_the_level_a_run_asks_for`
 `verified-by: bravebot_cli::main::an_effort_flag_naming_no_level_is_refused`
 `verified-by: bravebot_cli::running::a_run_sends_the_level_the_command_line_named_over_every_other`
+
+<a id="CLI-17"></a>
+### CLI-17: `--agent` addresses every turn of a session or a run to one definition
+
+`--agent <name>` addresses every turn of an interactive session, a session in lines (CLI-14) or a
+one-shot run to the definition `name` selects, as a `/agent` line addresses one for a single turn
+([addressing-a-definition.md](addressing-a-definition.md)). The flag and its name are taken out of
+the arguments before anything dispatches on them, as `--settings` is. If the flag is given twice,
+the last name is used. It is refused when no name follows it, when the name is blank or opens with
+`-`, and when it is given with `--resume`, `--continue`, `--fork`, `--mode manifest` or a command
+that starts neither a session nor a task.
+
+The name is matched against the set a turn starting now would resolve
+([ADDRESS-5](addressing-a-definition.md#ADDRESS-5)), before any turn is sent. A session matches it
+after the startup question about the directory ([trust-map.md](trust-map.md)) is answered, because
+the set depends on that answer. A one-shot run does not ask that question, so its set holds the
+built-in kinds and the person's own definitions, and it counts the definitions in a checkout's
+`.bravebot/agents` without reading them. A name the set does not hold is refused with the names it
+does hold. If the checkout held definitions the run did not read, the refusal says how many. A
+definition whose model needs a sign-in this machine has not made is refused as well
+([ADDRESS-11](addressing-a-definition.md#ADDRESS-11)). A refusal exits with the status for an
+argument (CLI-6), writes the result object of CLI-12 if one was asked for, and sends nothing.
+
+Every turn the session sends is addressed to the definition: typed lines, `/loop` ticks and `/goal`
+rounds. The later look and the watch that a turn could otherwise arrange are still withheld
+([ADDRESS-8](addressing-a-definition.md#ADDRESS-8)). A `/agent` line naming another definition
+addresses that one for one turn, and the next turn goes to the session's definition again
+([ADDRESS-10](addressing-a-definition.md#ADDRESS-10)). Replies are drawn under the definition's
+name, `/status` names it, and the input box is unchanged.
+
+A model the definition names is the session's model, so the context window, the effort level and
+the model `/status` reports are that model's. `/model` is refused in such a session and says why,
+and the model a person picked in an earlier session stays recorded.
+
+On a one-shot run, `--model` outranks the definition's model, and the run says so on stderr. Stdout
+is still only the reply (CLI-5), and the result object names the definition in `agent`. Without
+`--model`, the check that some service is configured is made for the definition's model, since that
+is the model the run asks for.
+
+**Why.** A definition is a prompt, a model and a smaller set of tools that a person wrote. With only
+`/agent`, the person has to name it on every line, and a line that leaves the name out runs with
+every tool the session has. A `-p` run has no input line, so the flag is the only way to address a
+definition there.
+
+Only definitions a person vouched for are read, because every turn runs under the one selected. A
+definition read from an untrusted checkout would put text from whoever wrote that checkout into the
+prompt of a run nobody is watching ([DELEGATE-20](delegation.md#DELEGATE-20)). The refusal gives
+the count so that a person who can see the file knows why it is not in the list.
+
+Ticks and rounds are addressed too, because addressing only narrows what a turn can do
+([ADDRESS-7](addressing-a-definition.md#ADDRESS-7)). An unaddressed tick would have more tools than
+the turns the person typed.
+
+It is refused with a recorded session because the record does not store which definition the
+session used. The recorded turns were the planner's, and continuing under a definition would mix
+turns from both in one transcript with nothing marking which is which. It is refused with
+`--mode manifest` because a manifest run plans every step before any runs and none of the steps is
+addressed, while a definition is addressed one turn at a time.
+
+`--model` outranks the definition for the reason in CLI-9: it names the model for this one
+invocation, so a person who gives both flags has said which model this run should use. `/model` in
+a session does not, because it comes after the session was started under the definition, and the
+definition's model is part of that definition ([ADDRESS-11](addressing-a-definition.md#ADDRESS-11)).
+Picking a model no turn asks for would only change what `/status` says.
+
+A name opening with `-` is refused because it is the next flag. Taken as the name, `--json` would
+be removed from the arguments and the run would answer in the other format. No definition's name
+may open with `-`, so no name is lost.
+
+**Known costs.** A self-paced `/loop` under a definition stops after one tick, because an addressed
+turn cannot schedule the next one. A `/loop` with an interval keeps running. There is no settings
+key for the definition, so a checkout that always wants one has to pass `--agent` each time.
+
+`verified-by: bravebot_cli::main::the_agent_flag_is_taken_out_with_the_name_it_gave`
+`verified-by: bravebot_cli::main::the_last_definition_named_is_the_one_worked_under`
+`verified-by: bravebot_cli::main::an_agent_flag_with_no_name_is_refused`
+`verified-by: bravebot_cli::main::a_definition_is_refused_where_nothing_would_work_under_it`
+`verified-by: bravebot_cli::running::a_run_under_a_definition_nobody_wrote_is_refused_with_the_names_that_exist`
+`verified-by: bravebot_cli::running::a_run_refuses_a_definition_only_an_untrusted_checkout_holds_and_says_it_counted_one`
+`verified-by: bravebot_cli::running::a_run_under_a_definition_is_offered_only_the_definitions_tools`
+`verified-by: bravebot_cli::running::a_run_under_a_definition_names_it_in_the_result_object`
+`verified-by: bravebot_cli::running::a_run_under_a_definition_is_checked_for_a_service_that_serves_the_definitions_model`
+`verified-by: bravebot_agent::turn::a_model_the_command_line_named_outranks_the_definitions_and_the_turn_says_so`
+`verified-by: bravebot_agent::turn::an_addressed_turn_arranges_no_later_look_and_arms_no_watch`
+`verified-by: bravebot_tui::app::a_session_started_under_a_definition_addresses_every_turn_a_loop_tick_included`
+`verified-by: bravebot_tui::app::a_definition_named_on_the_line_lasts_one_turn_under_the_one_the_session_works_under`
+`verified-by: bravebot_tui::app::a_name_from_the_command_line_is_worked_under_where_it_was_written_and_refused_where_not`
+`verified-by: bravebot_tui::app::a_session_under_a_definition_naming_a_model_works_on_it_and_refuses_the_picker`
+`verified-by: bravebot_tui::status::the_report_names_the_definition_every_turn_is_addressed_to`

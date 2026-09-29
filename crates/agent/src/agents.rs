@@ -335,6 +335,18 @@ pub fn resolved<S: Sink>(
     discover(&mut policy, workspace, home).0
 }
 
+/// How many definition files the project holds that [`resolved`] counted and did not read.
+///
+/// Zero where the directory is trusted, because those were read. It returns a count and never a
+/// name, for the reason `discover_workspace` gives: a file name in an untrusted directory is
+/// untrusted content.
+pub fn not_vouched_for(workspace: &Workspace, trust: &bravebot_core::trust::TrustStore) -> usize {
+    match trust.is_trusted(WORKSPACE_AGENTS) {
+        true => 0,
+        false => definition_files(&workspace.root().join(WORKSPACE_AGENTS)).len(),
+    }
+}
+
 /// Definitions from `~/.bravebot/agents`, labelled from where they sit.
 fn discover_home<S: Sink>(
     policy: &mut Policy<'_, S>,
