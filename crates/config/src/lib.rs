@@ -1282,6 +1282,20 @@ impl Config {
         resolved_model(name, self.tier_account(), self.serves_aichat())
     }
 
+    /// What to write down for a chosen model: the tier word where a tier variable named it, so the
+    /// record follows the variable when an inference-profile ARN is replaced.
+    ///
+    /// [`Config::model_named`] reads the result back as `model`.
+    pub fn name_to_record<'a>(&self, model: &'a str) -> &'a str {
+        self.tier_account()
+            .and_then(|account| {
+                bedrock::Tier::ALL
+                    .into_iter()
+                    .find(|tier| account.model_for(*tier).is_some_and(|named| named == model))
+            })
+            .map_or(model, |tier| tier.alias())
+    }
+
     /// Full URL for the OpenAI-compatible chat completions endpoint.
     ///
     /// This is the v2 API: the version is inferred from the path by the server, so
@@ -2745,6 +2759,40 @@ mod tests {
             config.model_named("llama-3-8b-instruct"),
             "llama-3-8b-instruct"
         );
+    }
+
+    /// BACKEND-47: a model a tier variable named is written down as the tier word, which reads back
+    /// as whatever that variable names at the next start. Anything else is written as it is.
+    #[test]
+    fn a_tier_model_is_recorded_as_its_word_and_read_back_through_the_variable() {
+        let with_sonnet = |arn: &'static str| {
+            Config::from_lookup(move |key| match key {
+                env_var::USE_BEDROCK => Some("1".into()),
+                env_var::AWS_REGION => Some("us-west-2".into()),
+                env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+                env_var::BEDROCK_SONNET_MODEL => Some(arn.into()),
+                other => complete_env(other),
+            })
+            .unwrap()
+        };
+        let before = with_sonnet("sonnet-arn-1");
+
+        assert_eq!(before.name_to_record("opus-arn"), "opus");
+        let recorded = before.name_to_record("sonnet-arn-1");
+        assert_eq!(recorded, "sonnet");
+        assert_eq!(before.model_named(recorded), "sonnet-arn-1");
+        assert_eq!(
+            with_sonnet("sonnet-arn-2").model_named(recorded),
+            "sonnet-arn-2"
+        );
+
+        for other in [
+            bedrock::Tier::Haiku.brave_model(),
+            "llama-3-8b-instruct",
+            DEFAULT_MODEL,
+        ] {
+            assert_eq!(before.name_to_record(other), other);
+        }
     }
 
     /// Leo's automatic routing name is rewritten to bravebot's own entry.

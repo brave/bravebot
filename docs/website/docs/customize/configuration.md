@@ -145,7 +145,8 @@ today. The choice is written to `~/.bravebot/model`, so it outlives the session 
 applies in every directory, except one whose own settings name a [`model`](#model): a checkout that
 says which model it wants gets that one in the next session. A one-shot run reads the same record,
 so a script uses the model you picked unless [`--model`](../reference/cli.md#--model-name) names
-another.
+another. A model your AWS account named for a tier is written as that tier's word, `opus`, `sonnet`
+or `haiku`, so the record names whatever the tier variable names when the ARN is replaced.
 
 **Type to narrow the list rather than arrowing through it.** A search matches the name shown, the name
 a request would carry and the service that answers, ignoring case and anywhere in any of them, and
@@ -511,6 +512,8 @@ A choice recorded by `/model` sits **between your own file and a checkout's**: i
 `~/.bravebot/settings.json`, and loses to one in `.bravebot/settings.json`,
 `.bravebot/settings.local.json` or the file `--settings` names. So a project that says which model it
 wants gets that model whatever you last picked elsewhere, and your own default gives way to a pick.
+A pick that no configured service serves, such as an ARN whose profile was replaced, gives way to
+the model beneath it instead, and each start says which pick it ignored until you pick another.
 [`--model`](../reference/cli.md#--model-name) on a one-shot run, and a model picked in the session
 that is running, win over everything. A key left blank names nothing, so a pick still wins over it,
 but it hides the key in a file below it: with nothing picked, the exported variable or the build

@@ -668,14 +668,24 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
     // the run over: below the flag the model is whatever was recorded or configured, and a script
     // that never named one did not ask for what it did not get.
     let named_on_the_command_line = named.is_some();
+    let pick = match named_on_the_command_line {
+        true => bravebot_agent::backend::Pick::Absent,
+        false => bravebot_agent::backend::pick(
+            &config,
+            bravebot_session::store::model(bravebot_session::store::load_model(), &settings),
+        ),
+    };
+    if let bravebot_agent::backend::Pick::SetAside(model) = &pick {
+        eprintln!(
+            "{}",
+            t!(session_model_pick_set_aside, model = model.as_str())
+        );
+    }
     let mut task = Task::new(prompt)
         .with_home(bravebot_agent::home::directory())
         .with_profile(bravebot_agent::home::profile())
         .with_cache(bravebot_agent::home::cache())
-        .with_model(model_asked_for(
-            named,
-            bravebot_session::store::model(bravebot_session::store::load_model(), &settings),
-        ))
+        .with_model(model_asked_for(named, pick.into_model()))
         // The flag, then the settings layers and the saved pick ranked as BACKEND-43 ranks them.
         // The layers are the only route a machine where nobody ever opens the interface has to a
         // level that outlives one run.
@@ -1149,20 +1159,24 @@ fn model_asked_for(named: Option<String>, stored: Option<String>) -> Option<Stri
 /// The model this run or session will ask a service for.
 ///
 /// The same three sources the task below is built from, in the same order: a name given on the
-/// command line, the one a session recorded where no checkout's settings outrank it, and the
-/// configured default. `named` is the raw
-/// argument, resolved against the configuration here for the reason the task resolves it, since a
-/// tier word names a model only the configuration knows.
+/// command line, the one a session recorded where no checkout's settings outrank it and nothing
+/// sets it aside, and the configured default. `named` is the raw argument, resolved against the
+/// configuration here for the reason the task resolves it, since a tier word names a model only
+/// the configuration knows.
 ///
 /// A function because the question is asked before the task exists, and because an answer that
 /// differed from the task's would refuse a run over a model it was never going to request.
 fn model_for_this_run(named: Option<&str>, config: &Config) -> String {
     model_asked_for(
         named.map(|name| config.model_named(name)),
-        bravebot_session::store::model(
-            bravebot_session::store::load_model(),
-            &bravebot_config::Settings::load(),
-        ),
+        bravebot_agent::backend::pick(
+            config,
+            bravebot_session::store::model(
+                bravebot_session::store::load_model(),
+                &bravebot_config::Settings::load(),
+            ),
+        )
+        .into_model(),
     )
     .unwrap_or_else(|| config.default_model.clone())
 }
@@ -2104,9 +2118,22 @@ fn doctor() -> ExitCode {
             // configured default and reporting only the default would explain the wrong thing. Not
             // where a checkout's settings outrank the choice, since naming it then would explain
             // the wrong thing the other way round.
-            match bravebot_session::store::model(bravebot_session::store::load_model(), &settings) {
-                Some(chosen) => fact(t!(doctor_model), t!(doctor_model_chosen, model = chosen)),
-                None => fact(
+            match bravebot_agent::backend::pick(
+                &config,
+                bravebot_session::store::model(bravebot_session::store::load_model(), &settings),
+            ) {
+                bravebot_agent::backend::Pick::InForce(chosen) => {
+                    fact(t!(doctor_model), t!(doctor_model_chosen, model = chosen))
+                }
+                bravebot_agent::backend::Pick::SetAside(pick) => fact(
+                    t!(doctor_model),
+                    t!(
+                        doctor_model_set_aside,
+                        model = &config.default_model,
+                        pick = pick
+                    ),
+                ),
+                bravebot_agent::backend::Pick::Absent => fact(
                     t!(doctor_model),
                     t!(doctor_model_default, model = &config.default_model),
                 ),

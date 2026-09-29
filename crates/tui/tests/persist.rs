@@ -391,7 +391,7 @@ fn a_recorded_model_answers_between_a_checkouts_file_and_the_persons_own() {
         // A session that does not persist is handed nobody's pick, for the reason it is handed no
         // recorded level.
         let mut session = bravebot_tui::state::Session::new("test");
-        session.adopt_model(&settings("{}", "{}"));
+        session.adopt_model(&settings("{}", "{}"), &a_config(|_| None));
         assert_eq!(session.model(), None);
     });
 }
@@ -399,8 +399,90 @@ fn a_recorded_model_answers_between_a_checkouts_file_and_the_persons_own() {
 /// The model a session that persists opens on, given the settings in force.
 fn opened_on(settings: &bravebot_config::Settings) -> Option<String> {
     let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
-    session.adopt_model(settings);
+    session.adopt_model(settings, &a_config(|_| None));
     session.model().map(str::to_string)
+}
+
+/// A configuration signed for an endpoint that is not Brave's unless `lookup` names one, with
+/// whatever else `lookup` answers.
+fn a_config(lookup: impl Fn(&str) -> Option<&'static str>) -> bravebot_config::Config {
+    bravebot_config::Config::from_lookup(|key| {
+        lookup(key)
+            .or(match key {
+                "SERVICES_KEY_AICHAT" => Some("a-signing-key"),
+                "BRAVE_SERVICES_KEY_ID" => Some("a-key-id"),
+                "BRAVE_AI_CHAT_ENDPOINT" => Some("https://example.invalid"),
+                _ => None,
+            })
+            .map(str::to_string)
+    })
+    .expect("config")
+}
+
+/// An AWS account whose Sonnet tier is `arn`.
+fn sonnet_is(arn: &'static str) -> bravebot_config::Config {
+    a_config(move |key| match key {
+        "BRAVEBOT_USE_BEDROCK" => Some("1"),
+        "AWS_REGION" => Some("us-west-2"),
+        "ANTHROPIC_DEFAULT_SONNET_MODEL" => Some(arn),
+        _ => None,
+    })
+}
+
+/// BACKEND-47. Picking a tier's model records the tier word, so the next session opens on whatever
+/// the variable names by then. A model no tier named is recorded as it is.
+#[test]
+fn a_picked_tier_is_recorded_as_its_word_and_follows_the_variable() {
+    with_temp_home("model-tier", || {
+        let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+        session.choose_model("sonnet-arn-1", &sonnet_is("sonnet-arn-1"));
+        assert_eq!(session.model(), Some("sonnet-arn-1"));
+        assert_eq!(store::load_model().as_deref(), Some("sonnet"));
+
+        let mut next = bravebot_tui::state::Session::new("test").with_stored_history();
+        next.adopt_model(&settings("{}", "{}"), &sonnet_is("sonnet-arn-2"));
+        assert_eq!(next.model(), Some("sonnet-arn-2"));
+
+        session.choose_model("claude-3-haiku", &sonnet_is("sonnet-arn-1"));
+        assert_eq!(store::load_model().as_deref(), Some("claude-3-haiku"));
+    });
+}
+
+/// BACKEND-47. A recorded pick nothing configured serves is set aside for the default where the
+/// default is served, the transcript says which pick that was, and the record is left as it is.
+#[test]
+fn a_pick_nothing_serves_is_set_aside_and_named() {
+    with_temp_home("model-set-aside", || {
+        let serde_json::Value::Object(block) = serde_json::json!({"provider": {"openrouter": {
+            "env": ["A_TOKEN_VARIABLE"],
+            "options": {"baseURL": "https://openrouter.example.invalid/api/v1"},
+            "models": {"z-ai/glm-4.6": {}}
+        }}}) else {
+            panic!("not an object");
+        };
+        // Brave's endpoint and no premium host, so nothing reads a credential store.
+        let mut config = a_config(|key| match key {
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("https://ai-chat.bsg.brave.com"),
+            _ => None,
+        });
+        config.providers = bravebot_config::provider::Provider::all(&block);
+        config.default_model = "z-ai/glm-4.6".to_string();
+        store::save_model("an-arn-nothing-offers");
+
+        let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+        session.adopt_model(&settings("{}", "{}"), &config);
+
+        assert_eq!(session.model(), None);
+        let said = session.transcript.last().map(|entry| entry.text.as_str());
+        assert!(
+            said.is_some_and(|text| text.contains("an-arn-nothing-offers")),
+            "{said:?}"
+        );
+        assert_eq!(
+            store::load_model().as_deref(),
+            Some("an-arn-nothing-offers")
+        );
+    });
 }
 
 /// The effort choice outlives the session that made it, the same way the model choice does.

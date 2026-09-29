@@ -124,7 +124,15 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         false => PermissionMode::Ask,
     };
 
-    let model = bravebot_session::store::model(bravebot_session::store::load_model(), &settings);
+    let pick = bravebot_agent::backend::pick(
+        &config,
+        bravebot_session::store::model(bravebot_session::store::load_model(), &settings),
+    );
+    let set_aside = match &pick {
+        bravebot_agent::backend::Pick::SetAside(recorded) => Some(recorded.clone()),
+        _ => None,
+    };
+    let model = pick.into_model();
     let mut asking = Prompting::new(std::io::BufReader::new(std::io::stdin()), std::io::stderr());
 
     asking.say(&t!(
@@ -134,6 +142,9 @@ pub fn session(skip_permissions: bool) -> ExitCode {
             .clone()
             .unwrap_or_else(|| config.default_model.clone())
     ));
+    if let Some(recorded) = set_aside {
+        asking.say(&t!(session_model_pick_set_aside, model = recorded));
+    }
     for problem in &rejected {
         asking.say(&t!(
             session_permission_rule_ignored,
