@@ -33,6 +33,7 @@ fn opening_answers(
     let permissions = rules_from(
         session,
         &settings,
+        root,
         sources.grants(root).as_ref(),
         Whence::Asked,
         "the-first-session",
