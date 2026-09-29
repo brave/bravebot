@@ -7697,6 +7697,33 @@ five
         }
     }
 
+    /// On macOS `head -n 1 -` prints a file called `-`, not stdin. Read the GNU way it reads only
+    /// stdin, which is trusted when nothing is piped in, so with that file refused the line would
+    /// run unasked and its output would come back trusted.
+    #[test]
+    fn a_line_reading_a_refused_file_called_dash_still_asks() {
+        let line = plan_of(vec![step_named("head", &["-n", "1", "-"])]);
+
+        let mut sink = RecordingSink::new();
+        let mut policy = in_a_project(&mut sink, &["-"]);
+        assert!(
+            policy.plan_needs_approval(&line),
+            "a line that can read a refused file called - ran unasked"
+        );
+        assert!(
+            !label_of(&mut policy, &line).is_trusted(),
+            "bytes that can come from a refused file called - came back trusted"
+        );
+
+        // Counted as a path rather than refused: where the project vouches for it, nobody is asked.
+        let mut sink = RecordingSink::new();
+        let mut policy = in_a_project(&mut sink, &[]);
+        assert!(
+            !policy.plan_needs_approval(&line),
+            "a line reading a vouched-for file called - asked anyway"
+        );
+    }
+
     /// A recursive search reads a whole tree, so a directory the user refused inside a project they
     /// vouched for has to decide the answer about that project. A label taken from the directory
     /// named on the line would be taken from the one path in the walk nobody objected to.

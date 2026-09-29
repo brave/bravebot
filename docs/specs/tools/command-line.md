@@ -388,7 +388,9 @@ makes the value optional, a separate word after it is the value to one and an op
 **An option written after an operand proves nothing.** GNU reads it as an option, while BSD `head`,
 `tail`, `wc` and `cut`, and GNU with `POSIXLY_CORRECT` set, stop reading options at the first
 operand and open every later word as a file, `--` included. `-` alone is not such a word: both read
-it as an operand wherever it is written.
+it as an operand wherever it is written. What it names differs instead: GNU and BSD `cut` and `grep`
+read standard input for it, and BSD `head`, `tail` and `wc` open a file called `-`, so for those
+three it is counted as a path.
 
 A stage whose program resolves to a file inside the workspace is not read-proven, and neither is one
 whose line named a path rather than a program, one carrying an environment assignment, or one opening
@@ -482,12 +484,14 @@ interpreters, and `awk`'s `system()` reaches the shell this repository excludes.
 `verified-by: bravebot_core::pure::a_flag_naming_a_file_of_names_proves_nothing`
 `verified-by: bravebot_core::pure::a_word_past_the_end_of_flags_marker_is_an_operand`
 `verified-by: bravebot_core::pure::a_dash_occupies_an_operands_place`
+`verified-by: bravebot_core::pure::a_lone_dash_is_a_path_where_bsd_opens_a_file_by_that_name`
 `verified-by: bravebot_core::pure::an_operand_a_program_has_no_reading_for_proves_nothing`
 `verified-by: bravebot_core::pure::interpreters_never_qualify_however_harmless_they_look`
 `verified-by: bravebot_core::trust::a_subtree_is_trusted_only_when_nothing_beneath_it_is_not`
 `verified-by: bravebot_core::policy::a_line_that_only_reads_vouched_for_paths_comes_back_trusted`
 `verified-by: bravebot_core::policy::a_line_reading_an_unvouched_path_still_asks`
 `verified-by: bravebot_core::policy::a_line_bsd_and_gnu_read_different_files_from_still_asks`
+`verified-by: bravebot_core::policy::a_line_reading_a_refused_file_called_dash_still_asks`
 `verified-by: bravebot_core::policy::a_recursive_search_takes_its_label_from_the_whole_subtree`
 `verified-by: bravebot_core::policy::one_step_nothing_can_account_for_makes_the_whole_line_opaque`
 `verified-by: bravebot_core::policy::an_environment_assignment_leaves_a_step_unproven`
@@ -530,6 +534,7 @@ trip; what this clause adds is the first prompt, not the readable output.
 `verified-by: bravebot_core::policy::a_line_that_only_reads_vouched_for_paths_does_not_ask`
 `verified-by: bravebot_core::policy::a_line_reading_an_unvouched_path_still_asks`
 `verified-by: bravebot_core::policy::a_line_bsd_and_gnu_read_different_files_from_still_asks`
+`verified-by: bravebot_core::policy::a_line_reading_a_refused_file_called_dash_still_asks`
 `verified-by: bravebot_core::policy::a_recursive_search_takes_its_label_from_the_whole_subtree`
 `verified-by: bravebot_core::policy::a_path_climbing_out_of_the_project_still_asks`
 `verified-by: bravebot_core::policy::a_line_reading_a_tree_the_map_says_nothing_about_still_asks`

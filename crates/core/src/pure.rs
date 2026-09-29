@@ -70,6 +70,10 @@
 //! well as `a.md`. The two readings name different files, so a call with such a word proves
 //! nothing. `-` alone is not such a word: both read it as an operand wherever it is written.
 //!
+//! What that operand names differs instead. GNU and BSD `cut` and `grep` read standard input for
+//! it, while BSD `head`, `tail` and `wc` open a file called `-`, so for those three it is counted
+//! as a path.
+//!
 //! # An option that supplies the instruction is excluded, not parsed
 //!
 //! Which operand is a file depends on how many of them the program was told to treat as its
@@ -121,6 +125,14 @@ pub struct Filter {
     /// all: `tr` takes two character sets and reads only stdin, so a third operand is a call
     /// nothing here recognises rather than a file, and it proves nothing.
     pub reads_files: bool,
+    /// Whether a file operand of `-` names standard input under every implementation.
+    ///
+    /// GNU reads standard input for it, and so do BSD `cut` and `grep`. BSD `head`, `tail` and `wc`
+    /// open a file called `-`, so for them it stays in the answer as a path: the answer then covers
+    /// the file one reads, and the caller's meet over stdin covers the stream the other reads.
+    /// False for a program that reads no file, where a `-` past its instruction is an operand it
+    /// has no reading for.
+    pub dash_is_stdin: bool,
 }
 
 /// One option a program in the table may be called with.
@@ -200,6 +212,7 @@ pub const FILTERS: &[Filter] = &[
         numeric: false,
         operands: 0,
         reads_files: true,
+        dash_is_stdin: false,
     },
     Filter {
         program: "head",
@@ -218,6 +231,7 @@ pub const FILTERS: &[Filter] = &[
         numeric: true,
         operands: 0,
         reads_files: true,
+        dash_is_stdin: false,
     },
     Filter {
         program: "tail",
@@ -238,6 +252,7 @@ pub const FILTERS: &[Filter] = &[
         numeric: true,
         operands: 0,
         reads_files: true,
+        dash_is_stdin: false,
     },
     Filter {
         program: "cut",
@@ -260,6 +275,7 @@ pub const FILTERS: &[Filter] = &[
         numeric: false,
         operands: 0,
         reads_files: true,
+        dash_is_stdin: true,
     },
     // SET1 and SET2 are character sets, not files. tr reads only stdin.
     Filter {
@@ -280,6 +296,7 @@ pub const FILTERS: &[Filter] = &[
         numeric: false,
         operands: 2,
         reads_files: false,
+        dash_is_stdin: false,
     },
     // The first operand is the pattern; anything after it is a path.
     Filter {
@@ -377,6 +394,7 @@ pub const FILTERS: &[Filter] = &[
         numeric: true,
         operands: 1,
         reads_files: true,
+        dash_is_stdin: true,
     },
     // Operates on the string it is given rather than on a file of that name.
     Filter {
@@ -386,6 +404,7 @@ pub const FILTERS: &[Filter] = &[
         numeric: false,
         operands: 2,
         reads_files: false,
+        dash_is_stdin: false,
     },
     Filter {
         program: "dirname",
@@ -394,6 +413,7 @@ pub const FILTERS: &[Filter] = &[
         numeric: false,
         operands: 1,
         reads_files: false,
+        dash_is_stdin: false,
     },
     // Takes no input at all: it reports the working directory, which the user established, so it
     // reads neither a path nor stdin.
@@ -404,6 +424,7 @@ pub const FILTERS: &[Filter] = &[
         numeric: false,
         operands: 0,
         reads_files: false,
+        dash_is_stdin: false,
     },
 ];
 
@@ -466,12 +487,12 @@ pub fn read_set(program: &str, args: &[String]) -> Option<Vec<String>> {
     }
 
     // The first `operands` of them are part of the instruction, such as grep's pattern or tr's
-    // character sets. Beyond that they are paths, except `-`, which names standard input: the
-    // caller's meet covers that already, and it is not a file anybody vouched for.
+    // character sets. Beyond that they are paths, except a `-` the entry says names standard input:
+    // the caller's meet covers that already, and it is not a file anybody vouched for.
     let paths: Vec<String> = operands
         .iter()
         .skip(filter.operands)
-        .filter(|operand| **operand != "-")
+        .filter(|operand| !(filter.dash_is_stdin && **operand == "-"))
         .map(|path| (*path).to_string())
         .collect();
 
@@ -522,8 +543,9 @@ fn recognise(filter: &Filter, arg: &str) -> Option<Argument> {
         return Some(Argument::EndOfFlags);
     }
 
-    // `-` alone names standard input. An operand rather than an option, because it occupies an
-    // operand's place: for a program whose first operand is an instruction, reading it as an option
+    // `-` alone names standard input or a file called `-`, as [`Filter::dash_is_stdin`] says. An
+    // operand rather than an option, because it occupies an operand's place: for a program whose
+    // first operand is an instruction, reading it as an option
     // would make the next word the instruction and leave the file it actually reads out of the
     // answer.
     if arg == "-" || !arg.starts_with('-') {
@@ -675,10 +697,27 @@ mod tests {
         assert!(!is_pure_filter("grep", &args(&["error", "log.txt"])));
     }
 
-    /// A bare `-` means stdin, which is the case this exists for.
+    /// A bare `-` means stdin to GNU and to BSD `cut` and `grep`, so it stays out of their answer.
+    /// BSD `head`, `tail` and `wc` open a file called `-`, and an answer without it would leave
+    /// that file out.
     #[test]
-    fn a_lone_dash_is_stdin_not_an_operand() {
-        assert!(is_pure_filter("wc", &args(&["-l", "-"])));
+    fn a_lone_dash_is_a_path_where_bsd_opens_a_file_by_that_name() {
+        assert!(is_pure_filter("cut", &args(&["-c1-3", "-"])));
+        assert!(is_pure_filter("grep", &args(&["TODO", "-"])));
+        let calls: &[(&str, &[&str])] = &[
+            ("head", &["-n", "1", "-"]),
+            ("tail", &["-"]),
+            ("wc", &["-l", "-"]),
+        ];
+        for (program, call) in calls {
+            assert_eq!(
+                read_set(program, &args(call)),
+                Some(vec!["-".to_string()]),
+                "{program} {call:?} left out the file BSD opens"
+            );
+        }
+        // tr reads no file, so a `-` past its two sets is an operand it has no reading for.
+        assert_eq!(read_set("tr", &args(&["a", "b", "-"])), None);
     }
 
     /// `grep -f` names a pattern file, so it reads from disk without looking like it does.
@@ -969,7 +1008,6 @@ mod tests {
         // And where the dash is the input rather than the instruction, it names stdin and not a
         // file anybody vouched for.
         assert_eq!(read_set("grep", &args(&["pattern", "-"])), Some(vec![]));
-        assert_eq!(read_set("wc", &args(&["-l", "-"])), Some(vec![]));
     }
 
     /// Nothing may appear in both tables, or the answer would depend on which was consulted first.
