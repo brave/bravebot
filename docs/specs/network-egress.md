@@ -107,7 +107,8 @@ A request that knows how long its reply can run says so, and is given that long 
 place of the bound on a reply of unstated length. A reply written in full before any of it is sent
 is given it for the wait and again for the whole. A stream, which begins at once, is given it from
 the moment it begins, and waits to begin no longer than any other reply. The gap allowed between
-two pieces of a reply is the same whatever the request says.
+two pieces of a reply is the same however long the request says its reply may take. A stream from
+this machine that asks is the one exception ([NET-10](#NET-10)).
 
 A reply cut at the end of its time is reported as out of time, apart from one that stopped arriving,
 and is not worth another attempt. It was still being written when it was cut, and asked for again it
@@ -252,6 +253,33 @@ into plaintext and hand a third party what only it had.
 
 `verified-by: bravebot_net::lib::a_redirect_may_not_take_an_https_chain_into_cleartext`
 
+<a id="NET-10"></a>
+### NET-10: a stream from this machine may take as long as it takes
+
+A request that asks is waited on without the bounds [NET-5](#NET-5) sets from the moment it is sent:
+not on its start, its length, or the gaps in it. The ask is honoured only where the URL the caller
+named is on this machine, meaning `localhost` or a loopback address, and no proxy carries it.
+Resolving and connecting keep their bounds, and so does every hop past a redirect. The chat client
+asks on every streamed reply and on nothing else.
+
+**Why.** Every bound on a reply is there to tell a slow answer from a connection that died without
+saying so, and a connection to this machine does not die that way: when the server goes, the socket
+says it has. A local model can be silent for a long time. Ollama 0.33, asked for a tool call by a
+model writing an image as SVG, sent nothing at all, not even its headers, for 540 seconds, and then
+sent the whole call at once. Cut at the gap bound, the turn failed with the call half written. The
+bounds a model on this machine would need are those of the slowest machine it runs on, and no one
+number is that.
+
+A redirect is named by a server, and how long its target is waited on is not a server's to
+lengthen. A proxy is another machine, so a request through one is another machine's request. A
+whole reply is not waited on this way, because the call that fetches one cannot be stopped while it
+waits, and a stream can.
+
+`verified-by: bravebot_net::egress::a_stream_from_this_machine_that_asks_is_waited_on_through_any_silence`
+`verified-by: bravebot_net::egress::a_redirect_from_this_machine_keeps_the_bounds`
+`verified-by: bravebot_net::lib::only_this_machine_is_this_machine`
+`verified-by: bravebot_aichat::client::a_model_on_this_machine_that_goes_quiet_while_it_writes_is_waited_for`
+
 ## Known costs
 
 - **`bravebot-net` is not the only crate that opens a socket.** `bravebot-skus` builds its own
@@ -328,3 +356,11 @@ into plaintext and hand a third party what only it had.
   passes between two reads rather than during one, runs on. A reply streamed by a model is waiting
   on its next piece almost all the time, so its deadline nearly always passes during a read. What
   would close it is checking the deadline between reads here, which is not done.
+
+- **A server on this machine that never answers is waited on until somebody stops it.** A stream
+  under [NET-10](#NET-10) has no bound after it is sent, so a local server that took the request and
+  then hung holds the turn until a person presses stop, and the thread reading it until the server
+  lets go. So does a port on this machine forwarded to another one, a tunnel for instance, whose far
+  end went away without the forward noticing. A bound long enough for the slowest local model would
+  still be a guess, and one that ran out would cut a working reply, which is the failure the clause
+  is there to remove.

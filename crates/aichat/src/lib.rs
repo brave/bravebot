@@ -677,7 +677,12 @@ impl<'a> AichatClient<'a> {
             return Err(ChatError::Cancelled);
         }
 
-        let http = self.prepare(request)?.header("accept", "text/event-stream");
+        // A model on this machine may send nothing at all for minutes while it writes a tool call,
+        // Ollama not even its headers, and this wait can be stopped at any moment of it.
+        let http = self
+            .prepare(request)?
+            .header("accept", "text/event-stream")
+            .patient_on_this_machine();
 
         self.attempts += 1;
         let stream = self.egress.fetch_streaming(

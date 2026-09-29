@@ -911,6 +911,42 @@ fn a_stream_that_breaks_after_it_began_is_a_reply_that_stopped() {
     assert_eq!(received.try_iter().count(), 3);
 }
 
+/// A model on this machine goes quiet while it writes a tool call, for minutes where it is large,
+/// and the stream carrying it is not given up on for that. Cut at the gap bound, the turn failed
+/// with the call half written.
+#[test]
+fn a_model_on_this_machine_that_goes_quiet_while_it_writes_is_waited_for() {
+    let endpoint = serve_stream_paced(
+        vec![
+            frame(r#"{"choices":[{"delta":{"content":"Let me write it."}}]}"#),
+            frame(r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#),
+        ],
+        Duration::from_millis(800),
+    );
+    let config = config_for(&endpoint);
+    let egress = Egress::with_timeouts(bravebot_net::Timeouts {
+        reply: Duration::from_millis(300),
+        idle: Duration::from_millis(300),
+        ..bravebot_net::Timeouts::default()
+    });
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut client = AichatClient::new(&config, &egress);
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+    client
+        .complete_streaming(&mut policy, &request, |_| {})
+        .expect("a quiet local model is waited for");
+
+    assert_eq!(client.attempts(), 1);
+}
+
 /// The same failure with none of the body arrived is still the connection's, so the reply that
 /// stopped is told apart by what arrived and not by the stream having been opened.
 #[test]

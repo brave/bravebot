@@ -879,6 +879,139 @@ fn a_reply_that_stops_arriving_is_given_up_on_however_long_its_request_said_it_m
     }
 }
 
+/// A local model writing a tool call, as Ollama sends one: nothing at all while the model thinks,
+/// not even the headers, then a first piece, then nothing again while the call is written, then
+/// the rest.
+fn serve_like_a_local_model(host: &str, silence: Duration) -> String {
+    let listener = TcpListener::bind((host, 0)).expect("bind loopback");
+    let port = listener.local_addr().expect("addr").port();
+
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+        let mut line = String::new();
+        let mut length = 0;
+        while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            if line == "\r\n" || line == "\n" {
+                break;
+            }
+            let header = line.to_ascii_lowercase();
+            if let Some(value) = header.strip_prefix("content-length:") {
+                length = value.trim().parse().unwrap_or(0);
+            }
+            line.clear();
+        }
+        // Read whole, so closing afterwards is a clean end rather than a reset.
+        let _ = reader.read_exact(&mut vec![0; length]);
+
+        thread::sleep(silence);
+        let (first, rest) = ("a preamble, ", "and then a tool call");
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            first.len() + rest.len()
+        );
+        let _ = stream.write_all(head.as_bytes());
+        let _ = stream.write_all(first.as_bytes());
+        let _ = stream.flush();
+        thread::sleep(silence);
+        let _ = stream.write_all(rest.as_bytes());
+        let _ = stream.flush();
+    });
+
+    format!("http://{host}:{port}")
+}
+
+/// Every bound on a reply is there to tell a slow answer from a connection that died without
+/// saying so, and a connection to this machine cannot: when the server goes, the socket says it
+/// has. A local model can be silent for minutes while it writes a tool call, and a gap bound cut
+/// that silence as though the connection had gone.
+#[test]
+fn a_stream_from_this_machine_that_asks_is_waited_on_through_any_silence() {
+    for host in ["127.0.0.1", "localhost"] {
+        for patient in [true, false] {
+            let base = serve_like_a_local_model(host, Duration::from_millis(800));
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .expect("policy begins");
+
+            // Each silence outlasts both the wait for the reply and the gap within it.
+            let egress = Egress::with_timeouts(Timeouts {
+                reply: Duration::from_millis(300),
+                idle: Duration::from_millis(300),
+                ..Timeouts::default()
+            });
+            let request = Request::post(&base, b"{}".to_vec());
+            let request = if patient {
+                request.patient_on_this_machine()
+            } else {
+                request
+            };
+
+            // To its end: the server states the body's length, so a clean end is all of it.
+            let read = egress
+                .fetch_streaming(&mut policy, request, Label::untrusted_public(), None)
+                .and_then(|mut stream| {
+                    let mut pieces = 0;
+                    while stream.next_chunk()?.is_some() {
+                        pieces += 1;
+                    }
+                    Ok(pieces)
+                });
+
+            if patient {
+                let pieces = read.unwrap_or_else(|error| panic!("{host}: {error:?}"));
+                assert!(pieces >= 2, "{host}: both halves arrive, got {pieces}");
+            } else {
+                assert!(
+                    matches!(read, Err(EgressError::Transport { .. })),
+                    "{host}: without the ask the silence is still cut: {read:?}"
+                );
+            }
+        }
+    }
+}
+
+/// A server here may redirect anywhere, and how long the next hop is waited on is not something
+/// a server gets to lengthen.
+#[test]
+fn a_redirect_from_this_machine_keeps_the_bounds() {
+    let second = serve_like_a_local_model("127.0.0.1", Duration::from_millis(800));
+    let first = serve(vec![redirect_to(&format!("{second}/v1"))]);
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy begins");
+
+    let egress = Egress::with_timeouts(Timeouts {
+        reply: Duration::from_millis(300),
+        idle: Duration::from_millis(300),
+        ..Timeouts::default()
+    });
+    let error = egress
+        .fetch_streaming(
+            &mut policy,
+            Request::get(format!("{first}/v1")).patient_on_this_machine(),
+            Label::untrusted_public(),
+            None,
+        )
+        .map(|_| ())
+        .expect_err("the hop past a redirect is bounded");
+
+    assert!(
+        matches!(error, EgressError::Transport { .. }),
+        "expected a transport failure, got {error:?}"
+    );
+}
+
 /// A buffered read has to tell the difference too. Silently handing back the part that arrived
 /// turns a dead connection into whatever those bytes happen to parse as, which for a JSON reply
 /// is a puzzling decoding error somewhere far from the cause.
