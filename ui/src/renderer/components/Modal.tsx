@@ -2,18 +2,6 @@ import { useEffect, useLayoutEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { Dialog } from '../nala'
 
-// A wrapping <label> does not name Leo's inner field: the host is not a
-// labelable element. Copy the label text onto that field so the accessible
-// name matches the text beside it.
-const nameWrappedFields = (root: HTMLElement) => {
-  for (const label of root.querySelectorAll('label')) {
-    const name = [...label.childNodes].filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent ?? '').join('').trim()
-    if (!name) continue
-    const field = label.querySelector('leo-input, leo-textarea')?.shadowRoot?.querySelector('input, textarea')
-    if (field && field.getAttribute('aria-label') !== name) field.setAttribute('aria-label', name)
-  }
-}
-
 const focusableControls = (dialog: HTMLElement): HTMLElement[] => {
   const selector = 'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled)'
   const found: HTMLElement[] = []
@@ -49,11 +37,14 @@ export function Modal({
   title,
   onClose,
   children,
+  actions,
   className = '',
 }: {
   title: string
   onClose?: () => void
   children: React.ReactNode
+  /** Footer buttons, in Leo's actions slot: pinned under the body, which scrolls on its own. */
+  actions?: React.ReactNode
   className?: string
 }): React.JSX.Element {
   const previousFocus = useRef<HTMLElement | null>(
@@ -80,6 +71,10 @@ export function Modal({
       if (root.getAttribute('aria-label') !== title) root.setAttribute('aria-label', title)
       const dialog = root.shadowRoot?.querySelector('dialog')
       if (!dialog) return
+      // Leo's own close button is an icon with no name. Name it for what it closes.
+      const close = dialog.querySelector<HTMLElement>('.close-button button')
+        ?? dialog.querySelector('.close-button leo-button')?.shadowRoot?.querySelector<HTMLElement>('button')
+      if (close && close.getAttribute('aria-label') !== `Close ${title}`) close.setAttribute('aria-label', `Close ${title}`)
       if (dialog.getAttribute('role') !== 'presentation') dialog.setAttribute('role', 'presentation')
       if (dialog.dataset.tabWrap === '1') return
       dialog.dataset.tabWrap = '1'
@@ -112,7 +107,7 @@ export function Modal({
         })
       })
     }
-    const sync = () => { label(); nameWrappedFields(root) }
+    const sync = () => label()
     sync()
     const shadow = root.shadowRoot
     if (!shadow) return
@@ -136,6 +131,7 @@ export function Modal({
     >
       <span slot="title">{title}</span>
       {children}
+      {actions && <div slot="actions" className="modal-actions">{actions}</div>}
     </Dialog>,
     document.body,
   )

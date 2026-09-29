@@ -44,9 +44,6 @@ export function About({ info, onClose }: { info: AboutInfo; onClose: () => void 
   }
 
   return <Modal title="About Brave Bot" onClose={onClose} className="about">
-    <button className="about-close" aria-label="Close About Brave Bot" onClick={onClose} data-test="about-close">
-      <Icon name="close" style={{ '--leo-icon-size': '18px' } as React.CSSProperties} />
-    </button>
     <div className="about-hero">
       <div className="about-stage">
         <button className="about-mascot" aria-label="Make Brave Bot wink"

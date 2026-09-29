@@ -20,7 +20,19 @@ interface Props {
  */
 export function TrustPrompt({ directory, keeping, onAnswer }: Props): React.JSX.Element {
   return (
-    <Modal title="Project trust" className="trust">
+    <Modal title="Project trust" className="trust" actions={<>
+      <Button kind="outline" size="small" onClick={() => onAnswer(false)} data-test="trust-decline">
+        Don't trust
+      </Button>
+      {keeping && (
+        <Button kind="plain" size="small" onClick={() => onAnswer(true, true)} data-test="trust-remember">
+          Trust and remember
+        </Button>
+      )}
+      <Button kind="filled" size="small" onClick={() => onAnswer(true)} data-test="trust-approve">
+        Trust this directory
+      </Button>
+    </>}>
         <h2 id="trust-title">Do you trust this directory?</h2>
         <code className="path">{directory}</code>
         <p>
@@ -48,19 +60,6 @@ export function TrustPrompt({ directory, keeping, onAnswer }: Props): React.JSX.
         <Alert type="info" className="trust-aside">
           Trusted writes may apply directly. Changes involving untrusted content require review. This conversation keeps your answer{keeping ? ', and later sessions keep it only if you remember it' : ''}.
         </Alert>
-        <div className="trust-actions">
-          <Button kind="outline" size="small" onClick={() => onAnswer(false)} data-test="trust-decline">
-            Don't trust
-          </Button>
-          {keeping && (
-            <Button kind="plain" size="small" onClick={() => onAnswer(true, true)} data-test="trust-remember">
-              Trust and remember
-            </Button>
-          )}
-          <Button kind="filled" size="small" onClick={() => onAnswer(true)} data-test="trust-approve">
-            Trust this directory
-          </Button>
-        </div>
     </Modal>
   )
 }

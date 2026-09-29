@@ -26,7 +26,8 @@ export function Permissions({ session, onClose, onRemembered }: { session: strin
     finally { setBusy(false) }
   }
   useEffect(() => { void request('permissions.list') }, [session])
-  return <Modal title="Conversation permissions" onClose={onClose}>
+  return <Modal title="Conversation permissions" onClose={onClose}
+    actions={<Button size="small" kind="filled" onClick={onClose} data-test="permissions-done">Done</Button>}>
     <p>These grants are saved with this conversation. Revocation affects future actions; it cannot remove content already read by the model.</p>
     {problem && <Alert type="error" data-test="permissions-error">{problem}</Alert>}
     <Button size="small" kind="outline" isDisabled={busy} onClick={() => void request('permissions.list')} data-test="permissions-refresh">{busy ? 'Loading…' : 'Refresh'}</Button>
@@ -39,7 +40,6 @@ export function Permissions({ session, onClose, onRemembered }: { session: strin
     <p className="bot-note">Kept outside this conversation: sessions started in exactly this directory are trusted without asking. Forgetting it makes the next one ask; this conversation keeps its own grants.</p>
     {grants?.remembered && <div className="permission-row"><code>{grants.remembered.path}</code><Button size="small" kind="plain-faint" isDisabled={busy} onClick={() => void request('permissions.revoke', { kind: 'remembered' })}>Forget</Button></div>}
     {grants && !grants.remembered && <p>No answer is remembered for this directory.</p>}
-    <Button size="small" kind="filled" onClick={onClose} data-test="permissions-done">Done</Button>
   </Modal>
 }
 

@@ -58,7 +58,14 @@ export function AppearancePicker(props: Props): React.JSX.Element {
   }
 
   return (
-    <Modal title="Appearance" className="appearance-picker" onClose={cancel}>
+    <Modal title="Appearance" className="appearance-picker" onClose={cancel} actions={<>
+      <Button kind="plain-faint" size="small" onClick={cancel} data-test="appearance-cancel">
+        Cancel
+      </Button>
+      <Button kind="filled" size="small" onClick={keep} data-test="appearance-keep">
+        Use
+      </Button>
+    </>}>
       <div onKeyDownCapture={keys}>
         <SegmentedControl
           value={selected}
@@ -79,14 +86,6 @@ export function AppearancePicker(props: Props): React.JSX.Element {
       <p className="theme-aside">
         System follows the OS. Light and Dark stay put regardless of it.
       </p>
-      <div className="theme-actions">
-        <Button kind="plain-faint" size="small" onClick={cancel} data-test="appearance-cancel">
-          Cancel
-        </Button>
-        <Button kind="filled" size="small" onClick={keep} data-test="appearance-keep">
-          Use
-        </Button>
-      </div>
     </Modal>
   )
 }

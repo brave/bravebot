@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Modal } from './Modal'
 import type { AgentSettings as Report, Hook, HooksDocument } from '../../shared/agent-settings'
 import { composeHooks } from '../../shared/agent-settings'
-import { Alert, Button, Collapse, Dropdown, Input, TabItem, Tabs } from '../nala'
+import { Alert, Button, Collapse, Dropdown, Input, ProgressRing, TabItem, Tabs } from '../nala'
 const fieldText = (event: { value?: unknown; target?: EventTarget | null }): string | null => {
   if (typeof event.value === 'string') return event.value
   const target = event.target
@@ -148,16 +148,14 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
     queueMicrotask(place)
   }, [tab])
   return <Modal title="Agent settings" onClose={busy ? undefined : close} className="agent-settings">
-    <div className="settings-heading"><div><p>Configuration and automation for this app.</p></div>
-      <Button size="small" kind="plain-faint" fab onClick={close} isDisabled={busy} aria-label="Close agent settings" data-test="settings-close">×</Button>
-    </div>
+    <p className="settings-lede">Configuration and automation for this app.</p>
     <Tabs ref={tabsRoot} className="settings-tabs" value={tab} data-test="settings-tabs"
       onChange={({ value }) => { if (value) { setTab(value); setProblem(''); setStatus('') } }}>
       {sections.map((name) => <TabItem key={name} value={name}>{name}{name === 'Hooks' && dirty ? ' •' : ''}</TabItem>)}
     </Tabs>
     {problem && <div className="settings-error"><Alert type="error" role="alert" data-test="settings-error">{problem}</Alert>{tab !== 'Hooks' && <Button size="small" kind="outline" isDisabled={busy} onClick={() => void load()}>Retry diagnostics</Button>}</div>}
-    {status && <p role="status">{status}</p>}
-    {busy && <p role="status">Working…</p>}
+    {status && <Alert type="success" size="small" role="status">{status}</Alert>}
+    {busy && <p role="status" className="settings-busy"><ProgressRing mode="indeterminate" /> Working…</p>}
     <div className="settings-body" data-test="settings-body">
       {tab === 'Connection' && report && <>
         <section><h3>{report.configured ? 'Model service configured' : 'Choose a model service'}</h3>
@@ -185,30 +183,27 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
           ? 'The agent could not read this file, so it declares no hooks. Open it yourself to see why.'
           : 'The agent did not read all of this file, so saving it from here could drop what it passed over. Edit it directly.'}</Alert>}
         {document && document.entire && hooks.length === 0 && <p>No hooks configured.</p>}
+        {/* A disabled fieldset does not reach into Leo's shadow roots, so each control is told. */}
         {hooks.map((hook, index) => <fieldset key={index} disabled={busy || !editable} className="hook-editor"><legend>Hook {index + 1}</legend>
-          <label>When
-            <Dropdown value={hook.on} data-test={`hook-when-${index}`}
-              onChange={(detail) => change(index, { ...hook, on: String(detail.value) as Hook['on'] })}>
-              <leo-option value="turn-started">Turn starts</leo-option>
-              <leo-option value="tool-finished">Tool finishes</leo-option>
-              <leo-option value="turn-finished">Turn ends</leo-option>
-            </Dropdown>
-          </label>
-          {(hook.on === 'tool-finished' || hook.tool !== null) && <label>Tool filter (optional)
-            <Input value={hook.tool ?? ''} placeholder="All tools"
-              onInput={(event) => { const value = fieldText(event); if (value !== null) change(index, { ...hook, tool: value.trim() || null }) }} />
-          </label>}
+          <Dropdown value={hook.on} disabled={busy || !editable} data-test={`hook-when-${index}`}
+            onChange={(detail) => change(index, { ...hook, on: String(detail.value) as Hook['on'] })}>
+            <span slot="label">When</span>
+            <leo-option value="turn-started">Turn starts</leo-option>
+            <leo-option value="tool-finished">Tool finishes</leo-option>
+            <leo-option value="turn-finished">Turn ends</leo-option>
+          </Dropdown>
+          {(hook.on === 'tool-finished' || hook.tool !== null) &&
+            <Input value={hook.tool ?? ''} placeholder="All tools" disabled={busy || !editable}
+              onInput={(event) => { const value = fieldText(event); if (value !== null) change(index, { ...hook, tool: value.trim() || null }) }}>Tool filter (optional)</Input>}
           {!dirty && document?.hooks[index]?.firesForNothing && <Alert type="warning" role="alert">This hook fires for nothing: only a finished tool call carries a tool name. Clear the filter, or choose Tool finishes.</Alert>}
-          <label>Program
-            <Input value={hook.run[0]} placeholder="/path/to/program" data-test={`hook-program-${index}`}
-              onInput={(event) => { const value = fieldText(event); if (value !== null) change(index, { ...hook, run: [value, ...hook.run.slice(1)] }) }} />
-          </label>
-          {hook.run.slice(1).map((argument, i) => <div key={i} className="hook-argument"><label>Argument {i + 1}
-            <Input value={argument} onInput={(event) => { const value = fieldText(event); if (value !== null) change(index, { ...hook, run: hook.run.map((word, j) => j === i + 1 ? value : word) }) }} />
-          </label><Button size="small" kind="plain-faint" onClick={() => change(index, { ...hook, run: hook.run.filter((_, j) => j !== i + 1) })} aria-label={`Remove argument ${i + 1} from hook ${index + 1}`}>Remove</Button></div>)}
+          <Input value={hook.run[0]} placeholder="/path/to/program" disabled={busy || !editable} data-test={`hook-program-${index}`}
+            onInput={(event) => { const value = fieldText(event); if (value !== null) change(index, { ...hook, run: [value, ...hook.run.slice(1)] }) }}>Program</Input>
+          {hook.run.slice(1).map((argument, i) => <div key={i} className="hook-argument">
+            <Input value={argument} disabled={busy || !editable} onInput={(event) => { const value = fieldText(event); if (value !== null) change(index, { ...hook, run: hook.run.map((word, j) => j === i + 1 ? value : word) }) }}>{`Argument ${i + 1}`}</Input>
+          <Button size="small" kind="plain-faint" isDisabled={busy || !editable} onClick={() => change(index, { ...hook, run: hook.run.filter((_, j) => j !== i + 1) })} aria-label={`Remove argument ${i + 1} from hook ${index + 1}`}>Remove</Button></div>)}
           <div className="settings-actions">
-            <Button size="small" kind="plain" onClick={() => change(index, { ...hook, run: [...hook.run, ''] })}>Add argument</Button>
-            <Button size="small" kind="plain-faint" onClick={() => { setHooks(rows => rows.filter((_, i) => i !== index)); setDirty(true) }}>Remove hook</Button>
+            <Button size="small" kind="plain" isDisabled={busy || !editable} onClick={() => change(index, { ...hook, run: [...hook.run, ''] })}>Add argument</Button>
+            <Button size="small" kind="plain-faint" isDisabled={busy || !editable} onClick={() => { setHooks(rows => rows.filter((_, i) => i !== index)); setDirty(true) }}>Remove hook</Button>
           </div>
         </fieldset>)}
         <p>Arguments are passed exactly as entered; shell syntax is not interpreted. Failed hooks appear in the turn’s notices.</p>
