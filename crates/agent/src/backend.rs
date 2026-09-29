@@ -215,6 +215,8 @@ fn of_egress(error: &bravebot_net::EgressError) -> Diagnosis {
         // A withdrawn request is reported as a stop before it reaches here. Named so the match
         // stays exhaustive rather than because a caller sees it.
         | EgressError::Stopped { .. } => Diagnosis::of(Category::Transport),
+        // The service answered and was still writing: nothing about the connection to check.
+        EgressError::OutOfTime { .. } => Diagnosis::of(Category::Incomplete),
         EgressError::Status { status, .. } => Diagnosis::of(match status {
             401 | 403 => Category::Unauthorized,
             429 => Category::RateLimited,
@@ -1264,6 +1266,19 @@ mod tests {
     fn a_reply_that_stopped_arriving_is_reported_as_unfinished_and_not_as_unreachable() {
         for stopped in [BedrockError::Incomplete, BedrockError::Stalled] {
             let failure = BackendError::from(stopped).counted(1, None, None);
+            assert_eq!(failure.diagnosis().category, Category::Incomplete);
+            assert!(!failure.is_unreachable());
+        }
+
+        // A reply still being written when its time ran out, on either backend.
+        let out_of_time = || bravebot_net::EgressError::OutOfTime {
+            url: "https://bedrock.example/invoke".to_string(),
+        };
+        for failure in [
+            BackendError::from(BedrockError::Egress(out_of_time())),
+            BackendError::from(ChatError::Egress(out_of_time())),
+        ] {
+            let failure = failure.counted(1, None, None);
             assert_eq!(failure.diagnosis().category, Category::Incomplete);
             assert!(!failure.is_unreachable());
         }
