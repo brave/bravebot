@@ -51,6 +51,11 @@ Each press starts one run. The next message is an ordinary turn. A run cannot ta
 files, and a bot cannot start one. The run is saved as its own record and is not part of the
 conversation, so a later turn is not sent what the run said.
 
+A run's record is listed with the conversations and marked **Plan run**. Choosing one reads
+it: the task, the goal, the plan, the steps that ran, and why it stopped if it did. It has
+no message box, because a run has no conversation to continue. **New session here** starts
+a session in the run's project. Runs started in the terminal are listed and read the same way.
+
 Drafts and reading positions survive conversation switches and restarts. A running
 conversation can continue in the background. Drafting during a run does not send
 anything: **Queue message** explicitly queues a follow-up. Stop or an error pauses

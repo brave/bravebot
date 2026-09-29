@@ -12,7 +12,7 @@
 
 use crate::bridge::{failure_fields, merge, rules_json};
 use crate::emit::Emitter;
-use crate::protocol::Event;
+use crate::protocol::{ErrorCode, Event, Failure, Request};
 use crate::running::State;
 use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink};
 use bravebot_agent::Workspace;
@@ -189,4 +189,50 @@ pub(crate) fn walk(walk: Walk) {
     drop(state);
     finished.store(true, Ordering::Release);
     emitter.send(event);
+}
+
+/// Read a saved manifest run back, for a front end to show.
+///
+/// Takes `directory` and `id`, as `session.open` does. It opens no session: a run has no
+/// conversation, so there is nothing to resume, no trust question to ask and nothing to close.
+///
+/// `manifest` holds what the run produced, in the fields `manifest.done` and `manifest.error`
+/// send as `attempt`, and `failure`, the agent's sentence about why the run stopped, which is
+/// null for a run that finished.
+pub(crate) fn read(request: &Request) -> Result<Value, Failure> {
+    let directory = std::path::PathBuf::from(request.string("directory")?);
+    let id = request.string("id")?;
+    let record = crate::store::load(&directory, &id).ok_or_else(|| {
+        Failure::new(
+            ErrorCode::NoSuchSession,
+            format!("no session `{id}` in {}", directory.display()),
+        )
+    })?;
+    let Some(run) = &record.manifest else {
+        return Err(Failure::bad_request(format!(
+            "`{id}` is a session and not a manifest run. Open it with session.open"
+        )));
+    };
+    Ok(json!({
+        "record": {
+            "id": record.id,
+            "directory": record.directory,
+            "branch": record.branch,
+            "title": record.title,
+            "started": record.started,
+            "updated": record.updated,
+            "turns": record.turns,
+            "tokens": record.tokens,
+            "build": record.build,
+            "front": record.front,
+        },
+        "model": record.model,
+        "manifest": {
+            "goal": run.shape,
+            "proposed": run.proposed,
+            "plan": run.plan,
+            "steps": run.steps,
+            "failure": run.failure,
+        },
+    }))
 }

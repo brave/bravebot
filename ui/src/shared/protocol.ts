@@ -112,6 +112,11 @@ export interface SessionSummary {
   title: string
   updated: number
   bytes: number
+  /**
+   * Whether the record is a manifest run. A run has no conversation, so it is read with
+   * `manifest.read` and cannot be opened or continued. Absent from an older bridge.
+   */
+  manifest?: boolean
 }
 
 export interface SessionRecord {
@@ -404,6 +409,18 @@ export interface PlanAttempt {
   proposed: string | null
   plan: string | null
   steps: string[]
+}
+
+/**
+ * A saved manifest run, read back with `manifest.read`.
+ *
+ * `failure` is the agent's sentence about why the run stopped, and is null for a run that
+ * finished. What the run released for a screen is not saved, so it is not here.
+ */
+export interface RunRecord {
+  record: SessionRecord
+  model: string | null
+  manifest: PlanAttempt & { failure: string | null }
 }
 
 /** A manifest run that finished. `record` names the run's own record, where one was written. */

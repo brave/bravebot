@@ -139,6 +139,7 @@ impl Bridge {
             "fetch.reply" => self.reply_decision(request, Reply::Fetch),
             "server.reply" => self.reply_decision(request, Reply::Server),
             "manifest.run" => self.start_manifest(request),
+            "manifest.read" => crate::manifest::read(request),
             "manifest.reply" => self.reply_decision(request, Reply::Manifest),
             "ask.reply" => self.reply_ask(request),
             "trust.reply" => self.reply_trust(request),
@@ -201,6 +202,9 @@ impl Bridge {
                     "title": entry.summary.title,
                     "updated": entry.summary.updated,
                     "bytes": entry.summary.bytes,
+                    // Whether the record is a manifest run. A run has no conversation, so it
+                    // is read with `manifest.read` and `session.open` refuses it.
+                    "manifest": entry.summary.manifest,
                 })
             })
             .collect();
@@ -218,6 +222,14 @@ impl Bridge {
                 format!("no session `{id}` in {}", directory.display()),
             )
         })?;
+        // A manifest run has no conversation to resume (MANIFEST-11). Opening one as a session
+        // would offer to continue a run that cannot be continued, so it is refused, as the
+        // terminal's picker refuses it.
+        if record.manifest.is_some() {
+            return Err(Failure::bad_request(format!(
+                "`{id}` is a manifest run, which cannot be continued. Read it with manifest.read"
+            )));
+        }
 
         // A record that recorded a trust map was answered for by the person now resuming
         // it, and inherits it. One that did not is asked again: nothing recorded is not

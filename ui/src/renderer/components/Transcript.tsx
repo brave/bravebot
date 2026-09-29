@@ -2,7 +2,7 @@ import { Watches } from './Watches'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
 import { useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
-import { isConfined, type Ambient, type ManifestError, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
+import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import type { Side } from '../columns'
 import type { Asked } from '../App'
@@ -19,6 +19,7 @@ import type { Bot } from '../../shared/bots'
 import { projectLabel } from '../../shared/recents'
 import { conversationPreferences, setConversation, setExperience, useExperience } from '../experience'
 import { ErrorCard } from './ErrorCard'
+import { RunRecord } from './RunRecord'
 import { failureSummary } from '../failure'
 import { FilePreview } from './FilePreview'
 import { TurnFooter, TurnNotices, type OpenAudit } from './TurnDetails'
@@ -79,6 +80,8 @@ interface Props {
   onResumeQueued: () => void
   onRemoveQueued: (index: number) => void
   live: Live | null
+  /** A saved manifest run being read. Drawn in place of a session, which it is not. */
+  reading?: SavedRun | null
   /** The bot whose session this is, if one is. Its name is what the header says instead of a title. */
   bot: Bot | null
   /** What that bot is doing, for its face in the header. Derived in `App`, where the turn is known. */
@@ -183,6 +186,7 @@ export function Transcript({
   onModel,
   onSubmit,
   onPlan,
+  reading,
   onCancel,
   onDecide,
   onAnswer,
@@ -333,6 +337,15 @@ export function Transcript({
         {/* Rendered even with nothing to name: it is what holds the two toggles at
             opposite ends of the header, and without it they collect in the corner. */}
         <div className="head-titles">
+          {!live && reading && (
+            <>
+              <h1>{reading.record.title}</h1>
+              <span className="where" title={reading.record.directory}>
+                Plan run · {reading.record.directory}
+                {reading.record.branch && ` · ${reading.record.branch}`}
+              </span>
+            </>
+          )}
           {live && (
             <>
               {/* A bot's session is titled by whatever was asked first, like every session — but a
@@ -398,6 +411,17 @@ export function Transcript({
       {live?.forkedFrom && <ForkBanner from={live.forkedFrom} onOpen={onOpenParent} />}
     </header>
   )
+
+  if (!live && reading) {
+    return (
+      <main className="transcript run-record">
+        {head}
+        <div className="entries">
+          <RunRecord run={reading} onNew={onNew} />
+        </div>
+      </main>
+    )
+  }
 
   if (!live) {
     return (
