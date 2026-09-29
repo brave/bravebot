@@ -38,6 +38,8 @@
 //!
 //! [TRACE-2]: ../../../docs/specs/trace.md
 
+use std::net::{IpAddr, Ipv4Addr};
+
 use crate::command::Plan;
 
 /// An authority nothing here has custody of and nobody can refuse a use of.
@@ -374,6 +376,72 @@ pub fn spent_by(plan: &Plan) -> Vec<Spent> {
 /// substring test here would name the metadata service for a request that never goes near it.
 /// That is the one place in this module where a generous match costs something, since the
 /// sentence it draws would be false rather than merely unnecessary.
+///
+/// One dotted part of an address spelling, as a number of the bytes it holds.
+///
+/// A leading `0x` is hexadecimal and a leading `0` octal, which are how `getaddrinfo` reads a
+/// part, so `0xA9` and `0251` are both 169 here as well.
+fn part_bytes(part: &str, bytes: usize) -> Option<u32> {
+    let value = if let Some(rest) = part.strip_prefix("0x").or_else(|| part.strip_prefix("0X")) {
+        u32::from_str_radix(rest, 16).ok()?
+    } else if part.len() > 1 && part.starts_with('0') {
+        u32::from_str_radix(&part[1..], 8).ok()?
+    } else if part.is_empty() {
+        return None;
+    } else {
+        part.parse::<u32>().ok()?
+    };
+    // The part names however many bytes are given it, which is one for everything but the last.
+    let limit = 1u64 << (8 * bytes);
+    ((value as u64) < limit).then_some(value)
+}
+
+/// The address a host spelling denotes, when that spelling is a number rather than a name.
+///
+/// `std` reads `169.254.169.254` but not the other spellings of the same number, and name
+/// resolution reads them all: a dword such as `2852039166`, a hexadecimal one such as
+/// `0xA9FEA9FE`, and dotted forms whose last part carries the bytes the earlier parts leave
+/// over, such as `169.254.43518`. The POSIX rules are the ones such a resolver holds to: one to
+/// four parts, each earlier part one byte, and the last part however many bytes are left.
+fn parse_ipv4(host: &str) -> Option<Ipv4Addr> {
+    let parts = host.split('.').collect::<Vec<_>>();
+    let (last, earlier) = parts.split_last()?;
+    if parts.len() > 4 || earlier.iter().any(|part| part.is_empty()) {
+        return None;
+    }
+    let earlier = earlier
+        .iter()
+        .map(|part| part_bytes(part, 1))
+        .collect::<Option<Vec<_>>>()?;
+    let last = part_bytes(last, 5 - parts.len())?;
+    let mut octets = [0u8; 4];
+    for (index, value) in earlier.iter().enumerate() {
+        octets[index] = *value as u8;
+    }
+    // The last part holds the most significant of its bytes first, as `169.254.43518` being
+    // 169.254.169.254 shows.
+    for (index, byte) in last.to_be_bytes()[4 - (5 - parts.len())..]
+        .iter()
+        .enumerate()
+    {
+        octets[earlier.len() + index] = *byte;
+    }
+    Some(Ipv4Addr::from(octets))
+}
+
+/// The address a host spelling denotes, whether that spelling is `std`'s or a resolver's.
+///
+/// An address that only `getaddrinfo` reads is the same host as the one `std` reads, so a host
+/// is parsed here before it is compared, and a spelling of the metadata service's address is
+/// named as the service however the number was written.
+fn parse_address(host: &str) -> Option<IpAddr> {
+    if let Ok(address) = host.parse::<IpAddr>() {
+        Some(address)
+    } else {
+        parse_ipv4(host).map(IpAddr::V4)
+    }
+}
+
 pub fn at_host(host: &str) -> Option<Spent> {
     // A bracketed IPv6 literal and a trailing root dot are both spellings of the same host, and
     // the authority is a property of the host rather than of how a URL wrote it.
@@ -381,13 +449,26 @@ pub fn at_host(host: &str) -> Option<Spent> {
         .trim_start_matches('[')
         .trim_end_matches(']')
         .trim_end_matches('.');
-    METADATA
-        .iter()
-        .find(|address| address.eq_ignore_ascii_case(host))
-        .map(|address| Spent {
-            authority: Authority::MetadataService,
-            named: address,
-        })
+    // An address is compared by value rather than by spelling, so `2852039166` and
+    // `0xA9FEA9FE` are the metadata service as much as `169.254.169.254` is. The literals are
+    // all addresses, so the comparison is an address one; an IPv4 address and an IPv6 one are
+    // different addresses even where one is a mapped spelling of the other, which is how
+    // `std` reads them too.
+    let parsed = parse_address(host);
+    let named = METADATA.iter().find(|address| {
+        if let Some(spelled) = parse_address(address) {
+            match (&parsed, spelled) {
+                (Some(found), candidate) => found == &candidate,
+                (None, _) => address.eq_ignore_ascii_case(host),
+            }
+        } else {
+            address.eq_ignore_ascii_case(host)
+        }
+    });
+    named.map(|address| Spent {
+        authority: Authority::MetadataService,
+        named: address,
+    })
 }
 
 /// The last component of a program as a line spelled it, without the extension Windows writes.
@@ -618,5 +699,40 @@ mod tests {
     fn a_host_that_merely_contains_the_address_is_not_the_metadata_service() {
         assert_eq!(at_host("169.254.169.254.example.test"), None);
         assert_eq!(at_host("not-metadata.google.internal"), None);
+    }
+
+    /// Name resolution reads a number as an address however it is spelled, and every spelling of
+    /// the metadata service's address is the metadata service: a prompt naming it only when the
+    /// spelling is the usual one would be silent about the request that goes where the usual one
+    /// does.
+    #[test]
+    fn a_numeric_spelling_of_the_metadata_address_is_the_metadata_service() {
+        for spelling in [
+            "169.254.169.254",
+            "169.254.169.254.",
+            "2852039166",
+            "0xA9FEA9FE",
+            "0xA9.0xFE.0xA9.0xFE",
+            "0251.0376.0251.0376",
+            "169.254.43518",
+        ] {
+            assert_eq!(
+                at_host(spelling),
+                Some(Spent {
+                    authority: Authority::MetadataService,
+                    named: "169.254.169.254",
+                }),
+                "{spelling}"
+            );
+        }
+    }
+
+    /// A number one past the address, or an address on the same subnet, is somebody else's host,
+    /// and naming the metadata service for it would be as untrue as missing the service itself.
+    #[test]
+    fn a_numeric_spelling_of_another_address_is_not_the_metadata_service() {
+        assert_eq!(at_host("169.254.169.255"), None);
+        assert_eq!(at_host("2852039167"), None);
+        assert_eq!(at_host("evil.example"), None);
     }
 }
