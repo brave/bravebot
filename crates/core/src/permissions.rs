@@ -1679,7 +1679,13 @@ mod tests {
                 "a deny rule about a drive did not reach '{named}', the same drive in another case"
             );
         }
+    }
 
+    /// Where the filesystem folds case `/d:` and `/D:` are one directory whatever the separator is,
+    /// so this holds only on a case-sensitive host.
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[test]
+    fn a_directory_named_d_colon_is_not_a_drive_where_a_slash_is_the_only_separator() {
         let slash_only = rules(&["Read(//D:/added/**)"], &[], &[]);
         assert_eq!(
             slash_only.for_path(Subject::Read, "/d:/added/secret"),
