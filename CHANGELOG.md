@@ -1,5 +1,7 @@
 ## Unreleased
 
+ - Fixed the desktop app's icon-only buttons having no accessible name, and toggles reporting no state: Leo's wrappers dropped `aria-*` props. Its text fields no longer jump ahead of the rest of the page in tab order. Dialogs take their intended widths, the duplicate close buttons are gone, and a hooks file the agent only partly read can no longer be edited.
+ - Changed the desktop app's remaining hand-made controls to Leo components: buttons, banners and status text, the find bar and composer, the conversation and bot menus, and the context panel's sections.
  - Changed the desktop app to Brave's Nala (Leo) design system for colours, type scale, and shared controls. Appearance is System / Light / Dark; the earlier named palette picker is gone. Fonts stay the system stack.
 
 ## [0.12.0](https://github.com/brave/bravebot/releases/tag/v0.12.0)

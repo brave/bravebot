@@ -20,6 +20,27 @@ advice, and write approvals show the processor's remark beside the diff.
 
 ## Current regression checks
 
+### Writing selectors for Leo controls
+
+Most controls are Leo custom elements whose real `<button>`, `<input>` or `<textarea>` sits
+in a shadow root. Playwright's role, label and CSS locators pierce it, but a few habits
+matter:
+
+- Find controls by role and accessible name (`getByRole('button', { name: 'Close audit
+  inspector' })`) or by `data-test`, not by tag. A class lands on the host, so
+  `.tree-tool.dotfiles` names the host and `.tree-find input` names the field inside it.
+- `fill` and `press` need the field, not the host: `.composer textarea` works; a bare
+  `.session-find` does not.
+- A focused Leo control is reported as its host by `document.activeElement`. Compare the
+  host as well as the element (`el === document.activeElement ||
+  el.getRootNode().host === document.activeElement`).
+- Selected and open state is on the element Leo draws: a segmented control's items are
+  `[role="option"]` with an `aria-selected` attribute, and a collapse's state is the `open`
+  property of the `<details>` in its shadow root.
+- A dialog is `getByRole('dialog', { name })`; Leo draws its box in the top layer, so measure
+  it through `shadowRoot.querySelector('dialog')`.
+
+
 - `npm run drive:manual-walkthrough`: the manual 0.9 verification through the real app
   and backend, with a local model fixture. Runs in CI; detailed coverage is below.
 - After building, `node scripts/drive-agent-settings.mjs`: 0.9 settings, hook forms and

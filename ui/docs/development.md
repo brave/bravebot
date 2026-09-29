@@ -31,6 +31,41 @@ once with `corepack enable` (ships with Node 18+); `npm ci` and `npm install` th
 | `npm run drive` / `npm run drive:<name>` | Run a named Electron driver; see [testing](testing.md) |
 | `npm run demo -- --record` | Record a walkthrough; see [demo costs and setup](demo.md) |
 
+## Working with Leo (Nala) components
+
+Renderer code imports Leo from `src/renderer/nala.ts`, never from `@brave/leo` directly.
+Three things about Leo's React wrappers shape how the components are used:
+
+- **`aria-*` props are dropped.** The wrappers hand only the Svelte component's own props to
+  its custom element, so `aria-label`, `aria-expanded`, `aria-pressed` and friends never
+  become attributes. `Button`, `Input`, `TextArea`, `Checkbox`, `RadioButton` and `Toggle` are
+  therefore wrapped by `withShadowAttrs` (`nala-a11y.tsx`), which writes those attributes, and
+  `title`, onto the host and onto the control drawn inside its shadow root, and puts them
+  back when Leo rebuilds it. Write `<Button aria-label="Close">` as usual. It also flattens
+  the `tabindex="1"` Leo puts on every field it draws.
+- **`ButtonMenu` wraps its anchor in `role="button"`.** The wrapper (`withPlainMenuAnchor`)
+  takes that element out of the accessibility tree and the tab order, so a `Button` in the
+  anchor slot is the only button. Put `aria-haspopup` and `aria-expanded` on that `Button`.
+- **Shadow boxes do not see the host's CSS.** A dialog's width, padding and radius come from
+  `--leo-dialog-*` custom properties, a collapse's chrome from `--leo-collapse-*`, a field's
+  from `--leo-control-*`, and a button's from `--leo-button-*`. A `width` or `border` on the
+  host lands on an empty element. A disabled `<fieldset>` does not reach a Leo control either,
+  so pass `disabled` / `isDisabled` to each one.
+
+Labels go in the component's default slot (`<Input>Name</Input>`), which Leo renders as a real
+`<label>` around the field, rather than in a wrapping `<label>`.
+
+Some UI is deliberately not Leo, because it has no equivalent or because the swap would lose
+behaviour: the trust-marked cards (`.quarantine`, `.confirm`), which tests assert as markup;
+external links in rendered Markdown; the column splitter; the avatar; the file tree's rows;
+the session and bot rows; `Fold`, kept for group headers, the archive and tree folders, whose
+headers carry a second action or tree semantics that a `<summary>` cannot; and the ask
+card's choices, which can be clicked again to clear, as a radio button cannot.
+
+`npm run typecheck` runs `scripts/check-nala.mjs`, which fails on a hard-coded colour or font
+size in the two stylesheets and reports how many raw `box-shadow`s, inline icon sizes and
+pixel spacings remain.
+
 TypeScript uses strict checking, including `noUncheckedIndexedAccess`,
 `noUnusedLocals` and `noUnusedParameters`. There is no ESLint or Prettier gate.
 See [testing](testing.md#what-ci-runs) for exactly what CI checks and what must run locally.
