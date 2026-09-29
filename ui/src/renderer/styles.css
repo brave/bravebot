@@ -7,6 +7,12 @@
 
 :root {
   color-scheme: light dark;
+}
+/* A forced appearance must also flip native parts (scrollbars, form controls). */
+:root[data-theme='light'] { color-scheme: light; }
+:root[data-theme='dark'] { color-scheme: dark; }
+
+:root {
   --bg: var(--leo-color-page-background);
   /* The transcript is the raised surface; the side columns stay on the page ground. */
   --bg-main: var(--leo-color-container-background);
@@ -175,7 +181,7 @@ leo-collapse {
      12px sides. */
   width: calc(100% - 24px);
   min-width: calc(var(--col-left-open) - 24px);
-  margin: 46px 12px 8px;
+  margin: 46px var(--leo-spacing-l) var(--leo-spacing-m);
   padding: 0;
   -webkit-app-region: no-drag;
   flex: none;
@@ -195,7 +201,7 @@ leo-collapse {
 .sidebar-body[hidden] { display: none !important; }
 
 .sessions-head {
-  padding: 6px 12px 8px;
+  padding: 6px var(--leo-spacing-l) var(--leo-spacing-m);
   -webkit-app-region: drag;
 }
 
@@ -209,12 +215,14 @@ leo-collapse {
 .sidebar-actions .new {
   width: 100%;
   flex-grow: 1;
+  /* One line at the column's narrowest, so the label is not what gives way. */
+  white-space: nowrap;
+  --leo-button-padding: var(--leo-spacing-s) var(--leo-spacing-m);
 }
 
 /* The filter and the grouping toggle share a row, so the spacing above them is set once
    here rather than by whichever of them happens to come first. */
-.session-tools { display: flex; gap: 4px; align-items: stretch; margin-top: 6px; }
-.sidebar-actions { display: flex; align-items: stretch; gap: 4px; }
+.sidebar-actions { display: flex; align-items: stretch; gap: var(--leo-spacing-s); }
 .sidebar-create { flex: 1; min-width: 0; }
 .sidebar-actions .new-split { width: 100%; }
 /* Leo's button host defaults to flex-grow: 1; keep the icon actions compact. */
@@ -225,7 +233,7 @@ leo-collapse {
   flex: none;
   flex-grow: 0;
 }
-.sidebar-search { display: flex; gap: 4px; margin-top: 8px; align-items: center; }
+.sidebar-search { display: flex; gap: var(--leo-spacing-s); margin-top: var(--leo-spacing-m); align-items: center; }
 
 /* Leo Input owns the field chrome. Only size the host here — painting background/border
    on `leo-input` left a gray frame around the real control. */
@@ -240,8 +248,8 @@ leo-collapse {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 8px;
+  gap: var(--leo-spacing-m);
+  padding: var(--leo-spacing-m);
 }
 
 /* The same language the context panels' own headings speak — 11px, uppercase, a count
@@ -270,7 +278,7 @@ leo-collapse {
   gap: 6px;
   flex: 1;
   min-width: 0;
-  padding: 8px 4px 6px 10px;
+  padding: var(--leo-spacing-m) var(--leo-spacing-s) 6px 10px;
   border: 0;
   background: transparent;
   text-align: left;
@@ -291,41 +299,23 @@ leo-collapse {
 .session-group-head:hover {
   background: linear-gradient(var(--hover-wash), var(--hover-wash)), var(--ground);
 }
-.session-group-fold:focus-visible,
-.session-group-new:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
+.session-group-fold:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
 .session-group-fold .chevron { flex: none; color: var(--ink-faint); }
 
 /* Starting a session in the checkout the heading names. Quiet by default — a dozen of these
    at full strength would compete with the names they sit beside — and always present rather
    than revealed on hover: a shortcut nobody can see is not much of a shortcut, and a control
    that appears only under the pointer cannot be found by someone who never moves it there. */
-.session-group-new {
-  flex: none;
-  padding: 8px 10px 6px 4px;
-  border: 0;
-  background: transparent;
-  color: var(--ink-faint);
-  font-size: var(--leo-typography-components-tableheader-font-size);
-  font-weight: 600;
-  line-height: 1;
-}
-.session-group-new:hover { color: var(--accent-text); }
+.session-group-new { flex: none; align-self: center; margin-right: var(--leo-spacing-s); }
 
 /* The column narrows to 200px, which is not enough for every checkout's name. */
 .session-group-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.session-group-fold .count {
-  margin-left: auto;
-  flex: none;
-  padding: 1px 6px;
-  border-radius: var(--leo-radius-m);
-  background: var(--hover-wash);
-  font-size: var(--leo-typography-x-small-regular-font-size);
-}
-.session-group-section + .session-group-section { margin-top: 8px; }
+.session-group-fold .count { margin-left: auto; flex: none; }
+.session-group-section + .session-group-section { margin-top: var(--leo-spacing-m); }
 
 .empty, .none {
   color: var(--ink-faint);
-  padding: 8px 6px;
+  padding: var(--leo-spacing-m) 6px;
   font-size: var(--leo-typography-small-regular-font-size);
 }
 .empty code { font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); }
@@ -333,9 +323,9 @@ leo-collapse {
 .session {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--leo-spacing-xs);
   width: 100%;
-  padding: 8px 10px;
+  padding: var(--leo-spacing-m) 10px;
   border: 0;
   border-radius: var(--leo-radius-m);
   background: transparent;
@@ -370,7 +360,7 @@ leo-collapse {
 .bot-open .bot-where { color: var(--ink-dim); }
 
 .build {
-  padding: 8px 14px;
+  padding: var(--leo-spacing-m) 14px;
   border-top: 1px solid var(--line);
   font-family: var(--mono);
   font-size: var(--leo-typography-x-small-regular-font-size);
@@ -563,15 +553,15 @@ leo-collapse {
 .entries {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 20px;
+  padding: var(--leo-spacing-xl) 20px;
   display: flex;
   flex-direction: column;
 }
 .bubble {
   max-width: 78%;
-  padding: 8px 12px;
+  padding: var(--leo-spacing-m) var(--leo-spacing-l);
   border-radius: var(--radius);
-  margin: 8px 0;
+  margin: var(--leo-spacing-m) 0;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -638,13 +628,13 @@ leo-collapse {
 .bubble.assistant code {
   font-family: var(--mono);
   font-size: var(--leo-typography-x-small-regular-font-size);
-  padding: 1px 4px;
+  padding: 1px var(--leo-spacing-s);
   border-radius: var(--leo-radius-xs);
   background: var(--code-bg);
 }
 .bubble.assistant pre {
   margin: 0.7em 0;
-  padding: 8px 10px;
+  padding: var(--leo-spacing-m) 10px;
   max-width: 100%;
   overflow-x: auto;
   border-radius: var(--leo-radius-s);
@@ -665,7 +655,7 @@ leo-collapse {
 .bubble.assistant th,
 .bubble.assistant td {
   border: 1px solid var(--line);
-  padding: 3px 8px;
+  padding: 3px var(--leo-spacing-m);
   text-align: left;
   white-space: nowrap;
 }
@@ -689,15 +679,15 @@ leo-collapse {
   max-width: 100%;
 }
 
-.narration { color: var(--ink-dim); font-style: italic; margin: 8px 2px; }
+.narration { color: var(--ink-dim); font-style: italic; margin: var(--leo-spacing-m) var(--leo-spacing-xs); }
 
 .tool {
   display: flex;
   align-items: baseline;
   gap: 6px;
   flex-wrap: wrap;
-  padding: 3px 8px;
-  margin: 2px 0;
+  padding: 3px var(--leo-spacing-m);
+  margin: var(--leo-spacing-xs) 0;
   border-left: 2px solid var(--line);
   font-size: var(--leo-typography-small-regular-font-size);
   color: var(--ink-dim);
@@ -716,21 +706,7 @@ leo-collapse {
 /* A run of calls, and the lid on it. The header is the quietest thing in the transcript
    that is still a control: this is apparatus between a question and its answer, and it
    should not compete with either. */
-.tool-run { margin: 2px 0; }
-.tool-run-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 8px;
-  border: 0;
-  border-left: 2px solid var(--line);
-  border-radius: 0;
-  background: transparent;
-  font-size: var(--leo-typography-x-small-regular-font-size);
-  color: var(--ink-faint);
-}
-.tool-run-head:hover { color: var(--ink-dim); }
-.tool-run-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tool-run { margin: var(--leo-spacing-xs) 0; }
 
 .confined {
   padding: 0 5px;
@@ -757,7 +733,7 @@ leo-collapse {
 }
 .quarantine-head {
   display: flex;
-  gap: 8px;
+  gap: var(--leo-spacing-m);
   align-items: baseline;
   padding: 6px 10px;
   background: var(--bg);
@@ -774,7 +750,7 @@ leo-collapse {
 .quarantine-head .label { font-family: var(--mono); color: var(--ink-faint); }
 .preview {
   margin: 0;
-  padding: 8px 10px;
+  padding: var(--leo-spacing-m) 10px;
   background: var(--bg);
   font-family: var(--mono);
   font-size: var(--leo-typography-x-small-regular-font-size);
@@ -792,7 +768,7 @@ leo-collapse {
 
 /* An approval a reviewer cannot read is decorative. */
 .confirm {
-  margin: 12px 0;
+  margin: var(--leo-spacing-l) 0;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   overflow: hidden;
@@ -826,7 +802,7 @@ leo-collapse {
 /* The argv, one stage per line, with the resolved binary under each. Monospaced and
    allowed to wrap: a long command must be readable in full, since approving what is cut
    off at the edge of a card is the thing this card exists to prevent. */
-.stages { list-style: none; margin: 0; padding: 8px 12px; }
+.stages { list-style: none; margin: 0; padding: var(--leo-spacing-m) var(--leo-spacing-l); }
 .stages li { padding: 3px 0; }
 .stages li + li { border-top: 1px dashed var(--line); margin-top: 3px; padding-top: 6px; }
 .stages .argv {
@@ -854,7 +830,7 @@ leo-collapse {
 .confirm.ask .confirm-head .intent { color: var(--accent-text); }
 .confirm.ask .confirm-head .path { font-family: inherit; color: var(--ink-dim); }
 
-.ask-question { margin: 0; padding: 10px 12px; border: 0; border-bottom: 1px solid var(--line); }
+.ask-question { margin: 0; padding: 10px var(--leo-spacing-l); border: 0; border-bottom: 1px solid var(--line); }
 .ask-question legend { display: flex; align-items: baseline; gap: 6px; padding: 0; }
 .ask-question .header {
   font-size: var(--leo-typography-x-small-regular-font-size);
@@ -872,9 +848,9 @@ leo-collapse {
   background: var(--hover-wash);
   color: var(--ink-dim);
 }
-.ask-question .question { margin: 4px 0 8px; }
+.ask-question .question { margin: var(--leo-spacing-s) 0 var(--leo-spacing-m); }
 
-.choices { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 5px; }
+.choices { list-style: none; margin: 0 0 var(--leo-spacing-m); padding: 0; display: grid; gap: 5px; }
 .choice {
   display: block;
   width: 100%;
@@ -893,7 +869,7 @@ leo-collapse {
    a person who has to pick anyway has been put words into their mouth. */
 .typed {
   width: 100%;
-  padding: 5px 8px;
+  padding: 5px var(--leo-spacing-m);
   border: 1px solid var(--line);
   border-radius: var(--leo-radius-s);
   background: var(--bg);
@@ -904,9 +880,9 @@ leo-collapse {
 
 .confirm-actions .approve .aside { opacity: 0.75; font-size: var(--leo-typography-x-small-regular-font-size); }
 
-.asked-answer { padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.asked-answer { padding: var(--leo-spacing-m) var(--leo-spacing-l); border-bottom: 1px solid var(--line); }
 .asked-answer .question { font-size: var(--leo-typography-small-regular-font-size); color: var(--ink-dim); }
-.asked-answer .given { font-size: var(--leo-typography-small-regular-font-size); margin-top: 2px; }
+.asked-answer .given { font-size: var(--leo-typography-small-regular-font-size); margin-top: var(--leo-spacing-xs); }
 .asked-answer .given::before { content: '→ '; color: var(--ink-faint); }
 
 /* Remembering answers every later question about these programs, so it is drawn as the
@@ -915,9 +891,9 @@ leo-collapse {
 
 .confirm-head {
   display: flex;
-  gap: 8px;
+  gap: var(--leo-spacing-m);
   align-items: baseline;
-  padding: 8px 12px;
+  padding: var(--leo-spacing-m) var(--leo-spacing-l);
   background: var(--bubble-agent);
   border-bottom: 1px solid var(--line);
 }
@@ -932,7 +908,7 @@ leo-collapse {
 
 .warn {
   margin: 0;
-  padding: 7px 12px;
+  padding: 7px var(--leo-spacing-l);
   background: var(--warn-bg);
   color: var(--warn);
   font-size: var(--leo-typography-x-small-regular-font-size);
@@ -947,7 +923,7 @@ leo-collapse {
   font-size: var(--leo-typography-x-small-regular-font-size);
   line-height: 1.45;
 }
-.diff .line { display: flex; padding: 0 8px; white-space: pre-wrap; }
+.diff .line { display: flex; padding: 0 var(--leo-spacing-m); white-space: pre-wrap; }
 .diff .sign { width: 1.2em; flex-shrink: 0; color: var(--ink-faint); }
 .diff .added { background: var(--added-bg); color: var(--added); }
 .diff .removed { background: var(--removed-bg); color: var(--removed); }
@@ -955,30 +931,30 @@ leo-collapse {
 
 .confirm-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--leo-spacing-m);
   justify-content: flex-end;
-  padding: 10px 12px;
+  padding: 10px var(--leo-spacing-l);
   border-top: 1px solid var(--line);
 }
-.confirm-actions button, .trust-actions button {
+.confirm-actions button {
   padding: 6px 14px;
   border-radius: var(--leo-radius-s);
   border: 1px solid var(--line);
   background: transparent;
 }
-.confirm-actions .approve, .trust-actions .approve {
+.confirm-actions .approve {
   background: var(--accent);
   color: var(--accent-ink);
   border-color: transparent;
   font-weight: 500;
 }
-.confirm-actions .reject:hover, .trust-actions .decline:hover {
+.confirm-actions .reject:hover {
   background: var(--removed-bg);
   color: var(--removed);
 }
 
 .decided {
-  padding: 8px 12px;
+  padding: var(--leo-spacing-m) var(--leo-spacing-l);
   border-top: 1px solid var(--line);
   font-size: var(--leo-typography-x-small-regular-font-size);
 }
@@ -989,8 +965,8 @@ leo-collapse {
 .working {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 2px;
+  gap: var(--leo-spacing-m);
+  padding: var(--leo-spacing-m) var(--leo-spacing-xs);
   color: var(--ink-dim);
   font-size: var(--leo-typography-small-regular-font-size);
 }
@@ -1015,34 +991,46 @@ leo-collapse {
 
 .composer {
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 12px 20px 16px;
-  border-top: 1px solid var(--line);
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--leo-spacing-m);
+  padding: var(--leo-spacing-m) 20px var(--leo-spacing-xl);
 }
-.composer textarea {
-  flex: 1;
-  min-width: 0;
-  height: 38px;
-  min-height: 38px;
-  max-height: 160px;
-  padding: 9px 12px;
+.composer-box {
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--leo-radius-xl);
   background: var(--bg-main);
-  color: var(--ink);
-  font: inherit;
-  line-height: 18px;
-  resize: vertical;
 }
-.composer textarea:focus { outline: none; border-color: var(--accent); }
-/* Leo's button host defaults to flex-grow: 1; keep Send a compact trailing action. */
+.composer-box:focus-within { border-color: var(--accent); }
+.composer leo-textarea {
+  /* Plain mode: no chrome of Leo's own, because the composer box around it already carries the
+     border and the focus state. It also has no padding, so the host supplies it. */
+  --leo-control-font: var(--leo-font-large-regular);
+  --leo-control-focus-effect: none;
+  display: block;
+  min-width: 0;
+  padding: var(--leo-spacing-l) var(--leo-spacing-xl) var(--leo-spacing-s);
+  box-sizing: border-box;
+}
+/* Leo's button host defaults to flex-grow: 1; keep the round action a compact trailing control. */
 .composer .send,
 .composer-toolbar .send,
-.composer-toolbar .stop {
+.composer-toolbar .stop,
+.composer .attach-files {
   flex-grow: 0;
   align-self: center;
   width: auto;
+}
+.composer .send {
+  --leo-icon-size: var(--leo-icon-m);
+  --leo-button-radius: var(--leo-radius-full);
+}
+.composer .attach-files {
+  --leo-button-color: var(--leo-color-icon-default);
+  --leo-icon-size: var(--leo-icon-m);
+  --leo-button-padding: var(--leo-spacing-s);
 }
 .composer .send:disabled { opacity: 0.4; cursor: default; }
 
@@ -1132,70 +1120,12 @@ leo-collapse {
   padding-top: 0;
 }
 
-/* The row of connected buttons at the top of the column, one per panel.
-   Connected rather than five separate controls, because it is one choice about one column: the
-   shape a segmented control has on this platform. Borders on the insides only, so the row reads
-   as a single object with divisions in it. */
-.context-head { padding: 0 14px 8px; }
-.panel-bar {
-  display: flex;
-  border: 1px solid var(--line);
-  border-radius: var(--leo-radius-s);
-  overflow: hidden;
-  /* Nothing of its own. The lit segments are the light ones, so the ground has to be the
-     column's, or the panels that are *off* would be the ones glowing white. */
-  background: transparent;
-}
-.panel-pick {
-  flex: 1;
-  height: 26px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 0;
-  border-left: 1px solid var(--line);
-  background: transparent;
-  color: var(--ink-faint);
-}
-.panel-pick:first-child { border-left: 0; }
-.panel-pick:hover { background: var(--hover-wash); color: var(--ink-dim); }
-/* On, in the accent and on a ground of its own. Two differences rather than one: colour alone
-   would leave the state invisible to anybody who cannot see this particular orange, and
-   `aria-pressed` is what says it to a screen reader either way. */
-.panel-pick[aria-pressed='true'] {
-  background: var(--tree-bg);
-  color: var(--accent-text);
-}
-.panel-icon { display: block; }
-
 .panel { border-bottom: 1px solid var(--line); }
 /* Turned off from the bar. `display: none` rather than a fold: this is not a movement somebody
    should watch, and it takes the panel out of the tab order and the accessibility tree with it. */
 .panel.off { display: none; }
-.panel-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 10px 14px;
-  border: 0;
-  background: transparent;
-  font-size: var(--leo-typography-x-small-regular-font-size);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--ink-dim);
-}
 .chevron { transition: transform var(--panel-motion); display: inline-block; }
 .chevron.open { transform: rotate(90deg); }
-.panel-head .count {
-  margin-left: auto;
-  padding: 1px 6px;
-  border-radius: var(--leo-radius-m);
-  background: var(--hover-wash);
-  font-size: var(--leo-typography-x-small-regular-font-size);
-}
 /* Opening a panel grows it into place rather than snapping. The mechanism is in Fold.tsx,
    which explains why it is a grid track and not a height. Shared with the runs of tool
    calls in the transcript, so both kinds of fold in this window move the same way. */
@@ -1223,7 +1153,28 @@ leo-collapse {
   .fold, .fold:not(.open) > .fold-clip, .chevron { transition: none; }
 }
 
-.panel-inner { padding: 0 14px 12px; }
+.panel-inner { padding: 0 14px var(--leo-spacing-l); }
+
+/* Leo's Collapse is a raised card by default; in the context column and the transcript a
+   disclosure is only a heading that opens, so the chrome is switched off and what is left is
+   the title, the arrow and the animation. */
+.flat-collapse {
+  --leo-collapse-background-color: transparent;
+  --leo-collapse-background-color-hover: transparent;
+  --leo-collapse-border-color: transparent;
+  --leo-collapse-border-color-hover: transparent;
+  --leo-collapse-shadow: none;
+  --leo-collapse-shadow-hover: none;
+  --leo-collapse-radius: 0;
+  --leo-collapse-summary-padding: var(--leo-spacing-m) var(--leo-spacing-xl);
+  --leo-collapse-content-padding: 0;
+  --leo-collapse-summary-color: var(--ink-dim);
+  --leo-collapse-summary-color-hover: var(--ink);
+  --leo-collapse-icon-size: 16px;
+}
+.panel-title { display: flex; align-items: center; gap: var(--leo-spacing-m); width: 100%; font: var(--leo-font-small-semibold); }
+.panel-title .count { margin-left: auto; }
+.tool-run-collapse { --leo-collapse-summary-padding: var(--leo-spacing-s) var(--leo-spacing-l); font: var(--leo-font-small-regular); }
 
 .todos, .files, .confined-list { list-style: none; margin: 0; padding: 0; font-size: var(--leo-typography-small-regular-font-size); }
 .todos li { display: flex; gap: 6px; padding: 3px 0; color: var(--ink-dim); }
@@ -1244,16 +1195,6 @@ leo-collapse {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.files .tag {
-  margin-left: auto;
-  font-size: var(--leo-typography-x-small-regular-font-size);
-  text-transform: uppercase;
-  color: var(--ink-faint);
-}
-.files li.confined .tag { color: var(--confine); }
-.files li.applied .tag { color: var(--added); }
-.files li.refused .tag { color: var(--removed); }
-.files li.waiting .tag { color: var(--warn); }
 
 .confined-list li { padding: 5px 0; border-bottom: 1px solid var(--line); }
 .confined-list .origin { font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); word-break: break-all; }
@@ -1261,26 +1202,12 @@ leo-collapse {
 
 /* ---------------------------------------------------------------- trust */
 
-.scrim {
-  position: fixed;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  background: var(--scrim);
-  backdrop-filter: blur(3px);
-}
-.trust {
-  width: 460px;
-  padding: 22px 24px;
-  border-radius: var(--leo-radius-l);
-  background: var(--bg);
-  box-shadow: 0 18px 60px var(--scrim);
-}
+.modal.trust { --leo-dialog-width: min(460px, calc(100vw - 48px)); }
 .trust h2 { margin: 0 0 10px; font-size: var(--leo-typography-default-regular-font-size); }
 .trust .path {
   display: block;
   padding: 7px 10px;
-  margin-bottom: 12px;
+  margin-bottom: var(--leo-spacing-l);
   border-radius: var(--leo-radius-s);
   background: var(--bubble-agent);
   font-family: var(--mono);
@@ -1290,7 +1217,6 @@ leo-collapse {
 .trust p { margin: 0 0 9px; color: var(--ink-dim); font-size: var(--leo-typography-small-regular-font-size); }
 .trust .aside { color: var(--ink-faint); font-size: var(--leo-typography-x-small-regular-font-size); }
 .trust .aside code { font-family: var(--mono); word-break: break-all; }
-.trust-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 
 /* A line from the record, which has no outcome behind it. */
 .files li.from-record code { opacity: 0.7; }
@@ -1304,7 +1230,7 @@ leo-collapse {
 .tree-tools {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--leo-spacing-s);
   padding-bottom: 6px;
 }
 .tree-root {
@@ -1336,7 +1262,7 @@ leo-collapse {
 .tree-tool:hover { background: var(--hover-wash); color: var(--ink-dim); }
 .tree-tool.on { color: var(--accent-text); }
 /* Wide enough for two characters, and in the mono face so `.*` reads as the filename it is. */
-.tree-tool.dotfiles { width: auto; padding: 0 4px; font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); }
+.tree-tool.dotfiles { width: auto; padding: 0 var(--leo-spacing-s); font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); }
 
 /* The same box as the session filter next door, at the size this column speaks in. One shape for
    "type to narrow this list" wherever the window offers it. */
@@ -1344,7 +1270,7 @@ leo-collapse {
   appearance: none;
   width: 100%;
   margin-bottom: 6px;
-  padding: 4px 7px;
+  padding: var(--leo-spacing-s) 7px;
   border: 1px solid var(--line);
   border-radius: var(--leo-radius-s);
   background: var(--tree-bg);
@@ -1374,7 +1300,7 @@ leo-collapse {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--tree-bg);
-  padding: 4px 2px;
+  padding: var(--leo-spacing-s) var(--leo-spacing-xs);
   max-height: 44vh;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -1388,12 +1314,12 @@ leo-collapse {
 .context-files { display: flex; flex-direction: column; overflow: hidden; }
 .context-files .context-head { flex: none; }
 .files-panel.off { display: none; }
-.files-panel { flex: 1; min-height: 0; padding: 8px 14px 14px; display: flex; }
+.files-panel { flex: 1; min-height: 0; padding: var(--leo-spacing-m) 14px 14px; display: flex; }
 .files-panel .tree { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .files-panel .tree-body { flex: 1; min-height: 0; max-height: none; }
 .tree-tools { flex: none; }
 .tree-tools .tree-tool { display: grid; place-items: center; min-width: 28px; height: 28px; }
-.tree-search { display: flex; gap: 4px; flex: none; margin-bottom: 8px; }
+.tree-search { display: flex; gap: var(--leo-spacing-s); flex: none; margin-bottom: var(--leo-spacing-m); }
 .tree-search .tree-find { flex: 1; min-width: 0; margin-bottom: 0; }
 .tree-search .tree-tool { width: 28px; height: 28px; font-size: var(--leo-typography-components-button-jumbo-font-size); }
 
@@ -1405,7 +1331,7 @@ leo-collapse {
 .tree-row {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--leo-spacing-xs);
   width: 100%;
   padding: 2px 4px 2px calc(4px + var(--depth) * 11px);
   border: 0;
@@ -1456,63 +1382,24 @@ leo-collapse {
 
 /* Both of these are said in the panel rather than in a dialog: they are about one folder, and the
    folder is on screen. */
-.tree-body .none { padding: 4px 6px; font-size: var(--leo-typography-x-small-regular-font-size); }
-.tree-list .none { padding-left: 12px; }
+.tree-body .none { padding: var(--leo-spacing-s) 6px; font-size: var(--leo-typography-x-small-regular-font-size); }
+.tree-list .none { padding-left: var(--leo-spacing-l); }
 .tree-more {
-  padding: 3px 4px;
+  padding: 3px var(--leo-spacing-s);
   font-size: var(--leo-typography-x-small-regular-font-size);
   color: var(--ink-faint);
 }
 
-/* Not a modal: this is not dismissable, because nothing in the window fixes it. */
-.unconfigured {
-  position: fixed;
-  inset: 0;
-  padding: 18vh 12vw;
-  background: var(--bg);
-  overflow-y: auto;
-}
-.unconfigured h2 { margin: 0 0 12px; font-size: var(--leo-typography-large-regular-font-size); }
-.unconfigured p { color: var(--ink-dim); max-width: 60ch; }
-.unconfigured ol { color: var(--ink-dim); max-width: 60ch; padding-left: 20px; }
-.unconfigured li { margin-bottom: 7px; }
-.unconfigured code {
-  padding: 1px 5px;
-  border-radius: var(--leo-radius-xs);
-  background: var(--bubble-agent);
-  font-family: var(--mono);
-  font-size: var(--leo-typography-x-small-regular-font-size);
-}
-.unconfigured .aside { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-faint); }
-.unconfigured details { margin-top: 18px; font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-faint); }
-.unconfigured pre {
-  padding: 8px 10px;
-  border-radius: var(--leo-radius-s);
-  background: var(--bubble-agent);
-  font-family: var(--mono);
-  white-space: pre-wrap;
-}
 
 /* ------------------------------------------------------------- notice */
 
 /* Shares the trust dialog's scrim and card, but wider and scrollable: this holds output
    from `bravebot doctor`, whose length nobody controls. */
-.notice {
-  width: 560px;
-  max-height: 70vh;
-  display: flex;
-  flex-direction: column;
-  padding: 22px 24px;
-  border-radius: var(--leo-radius-l);
-  background: var(--bg);
-  box-shadow: 0 18px 60px var(--scrim);
-}
-.notice h2 { margin: 0 0 12px; font-size: var(--leo-typography-default-regular-font-size); }
+.modal.notice { --leo-dialog-width: min(560px, calc(100vw - 48px)); }
 .notice-body {
-  flex: 1;
-  min-height: 0;
+  max-height: 50vh;
   margin: 0;
-  padding: 10px 12px;
+  padding: 10px var(--leo-spacing-l);
   overflow: auto;
   border-radius: var(--leo-radius-s);
   background: var(--bubble-agent);
@@ -1522,16 +1409,15 @@ leo-collapse {
   white-space: pre-wrap;
   word-break: break-word;
 }
-.notice-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
 
 /* Present only to catch a right-click on a transcript entry. It must not be a box: the
    entries are block-level with collapsing margins, and a wrapper that generated one would
    change the spacing of every row. */
 .entry-hit { display: contents; }
 
-/* ------------------------------------------------------------- popmenu */
+/* -------------------------------------------------------------- new session */
 
-.new-split { display: flex; gap: 4px; align-items: stretch; }
+.new-split { display: flex; gap: var(--leo-spacing-s); align-items: stretch; }
 .new-split .new { flex: 1; flex-grow: 1; }
 .new-split .new-recent { flex: none; flex-grow: 0; }
 
@@ -1557,97 +1443,6 @@ leo-collapse {
   color: var(--leo-color-text-tertiary);
 }
 .recent-menu leo-menu-item[aria-disabled='true'] { opacity: 0.45; cursor: default; }
-
-/* Opaque, not translucent. The window is already `vibrancy: 'sidebar'`, and a blurred panel
-   over a blurred window blurs twice into something neither legible nor Mac-like.
-
-   Chrome and item metrics follow Leo ButtonMenu / Menu defaults
-   (https://nala.s.brave.dev/?path=/story/components-buttonmenu--default): soft highlight on
-   hover or keyboard focus, interactive blue only while pressed — never on the focused row
-   alone, or the first item would look chosen the moment the menu opens. */
-.popmenu {
-  position: fixed;
-  z-index: 10;
-  min-width: 220px;
-  max-width: 380px;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--leo-spacing-s);
-  border: 1px solid var(--leo-color-divider-subtle);
-  border-radius: var(--leo-radius-l);
-  background: var(--leo-color-container-background);
-  color: var(--leo-color-text-primary);
-  box-shadow: var(--leo-effect-elevation-03);
-  animation: popmenu-in 90ms ease-out;
-}
-@keyframes popmenu-in {
-  from { opacity: 0; transform: scale(0.95); }
-  to { opacity: 1; transform: scale(1); }
-}
-.popitem {
-  display: block;
-  width: auto;
-  margin: 0 var(--leo-spacing-s);
-  padding: var(--leo-spacing-m) var(--leo-spacing-xl);
-  border: none;
-  border-radius: var(--leo-radius-m);
-  background: none;
-  color: var(--leo-color-text-primary);
-  font: var(--leo-font-default-regular);
-  text-align: left;
-  cursor: pointer;
-}
-.popitem:first-child { margin-top: var(--leo-spacing-s); }
-.popitem:last-child { margin-bottom: var(--leo-spacing-s); }
-.popitem:hover:not([aria-disabled]) {
-  background: var(--leo-color-container-highlight);
-  color: var(--leo-color-text-primary);
-}
-.popitem:active:not([aria-disabled]) {
-  background: var(--leo-color-container-interactive);
-  color: var(--leo-color-text-interactive);
-}
-.popitem:focus-visible {
-  outline: none;
-  box-shadow: var(--leo-effect-focus-state);
-}
-.popitem[aria-disabled] { opacity: 0.45; cursor: default; }
-.popitem-label { display: block; }
-.popitem-detail {
-  display: block;
-  font-family: var(--mono);
-  font-size: var(--leo-typography-x-small-regular-font-size);
-  color: var(--leo-color-text-tertiary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* A menu with a setting in it keeps a tick column for every row, the way a native one does:
-   the labels stay in one line down the left, and turning the setting on moves nothing. */
-.popmenu.checkable .popitem {
-  display: grid;
-  grid-template-columns: 13px 1fr;
-  column-gap: 4px;
-  align-items: baseline;
-}
-.popmenu.checkable .popitem-label, .popmenu.checkable .popitem-detail { grid-column: 2; }
-.popitem-tick { font-size: var(--leo-typography-x-small-regular-font-size); line-height: 1.2; color: var(--leo-color-icon-default, currentColor); }
-
-/* A rule where a group below is a different kind of thing — a setting above, the formats
-   that read it below. Drawn on the first row of the group rather than as a row of its own,
-   which would be an item the arrow keys had to learn to skip. */
-.popitem.separated {
-  margin-top: var(--leo-spacing-s);
-  border-top: 1px solid var(--leo-color-divider-subtle);
-  border-radius: 0 0 var(--leo-radius-m) var(--leo-radius-m);
-  padding-top: calc(var(--leo-spacing-m) + var(--leo-spacing-s));
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .popmenu { animation: none; }
-}
 
 /* ---------------------------------------------------------------- export */
 
@@ -1684,7 +1479,7 @@ leo-collapse {
   /* Tighter than it looks: the figure is drawn with air around it inside its own square, so a gap
      matched to the text would leave the name floating away from the face. */
   gap: 6px;
-  padding: 8px 10px;
+  padding: var(--leo-spacing-m) 10px;
   border: 0;
   border-radius: var(--leo-radius-m);
   background: transparent;
@@ -1694,7 +1489,7 @@ leo-collapse {
 }
 .bot-open-button:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
 
-.bot-said { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.bot-said { display: flex; flex-direction: column; min-width: 0; gap: var(--leo-spacing-xs); }
 .bot-where {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1706,17 +1501,8 @@ leo-collapse {
 .bot-edit {
   flex: none;
   align-self: center;
-  width: 28px;
-  height: 28px;
-  margin-right: 4px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--leo-radius-xs);
-  background: transparent;
-  color: var(--ink-dim);
-  font: inherit;
+  margin-right: var(--leo-spacing-s);
 }
-.bot-edit:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
 
 /* The avatar: a small figure turning slowly, drawn by the shared renderer in `avatar/stage.ts`.
    Nothing here paints the figure — its colours are its own, from a fixed set, and deliberately do
@@ -1766,7 +1552,7 @@ leo-collapse {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin: 4px 0;
+  margin: var(--leo-spacing-s) 0;
   padding: 10px;
   border: 1px solid var(--line);
   border-radius: var(--leo-radius-m);
@@ -1777,7 +1563,7 @@ leo-collapse {
   display: grid;
   grid-template-columns: 88px minmax(0, 1fr);
   align-items: center;
-  gap: 12px;
+  gap: var(--leo-spacing-l);
 }
 .bot-form-identity .bot-field { min-width: 0; padding-bottom: 20px; }
 .bot-form-identity leo-input { min-width: 0; width: 100%; }
@@ -1802,14 +1588,14 @@ leo-collapse {
   height: 24px;
 }
 
-.bot-field { display: flex; flex-direction: column; gap: 4px; }
+.bot-field { display: flex; flex-direction: column; gap: var(--leo-spacing-s); }
 .bot-field > span { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-dim); }
 .bot-field leo-input,
 .bot-field leo-textarea { width: 100%; min-width: 0; }
 
 .bot-fixed {
   margin: 0;
-  padding: 5px 8px;
+  padding: 5px var(--leo-spacing-m);
   border: 1px dashed var(--line);
   border-radius: var(--leo-radius-s);
   background: transparent;
@@ -1834,7 +1620,7 @@ leo-collapse {
   max-height: 160px;
   overflow: auto;
   margin: 0;
-  padding: 8px;
+  padding: var(--leo-spacing-m);
   border-radius: var(--leo-radius-s);
   background: var(--code-bg);
   color: var(--ink-dim);
@@ -1868,16 +1654,12 @@ leo-collapse {
 .bot-archive {
   flex: none;
   border-top: 1px solid var(--line);
-  padding: 0 8px 4px;
+  padding: 0 var(--leo-spacing-m) var(--leo-spacing-s);
 }
 .bot-archive .session-group-head { position: static; background: none; }
 .bot-archive .session-group-head:hover { background: var(--hover-wash); }
 .bot-archive .session-group-fold { color: var(--ink-faint); font-weight: 500; }
 .bot-archive .session-group-head:hover .session-group-fold { color: var(--ink-dim); }
-.bot-archive .session-group-fold .count {
-  background: var(--hover-wash);
-  color: var(--ink-faint);
-}
 
 /* Scrolls on its own past a few. The column below the list is not somewhere a fold can grow into,
    and an archive that pushed the bots still in use off the top would have taken the tab over. */
@@ -1889,7 +1671,7 @@ leo-collapse {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 10px;
+  padding: var(--leo-spacing-m) 10px;
   border-radius: var(--leo-radius-m);
   color: var(--ink-dim);
 }
@@ -1899,18 +1681,7 @@ leo-collapse {
 /* Text rather than bordered buttons, unlike the form's. Those sit in a row of their own at the
    end of a form and are the point of it; these sit beside a name in a list, and two boxes per
    row down a fold of them would make the archive louder than the bots still in use. */
-.bot-archived button {
-  flex: none;
-  padding: 3px 6px;
-  border: none;
-  border-radius: var(--leo-radius-s);
-  background: transparent;
-  color: var(--ink-faint);
-  font: inherit;
-  font-size: var(--leo-typography-x-small-regular-font-size);
-}
-.bot-archived button:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
-.bot-restore:hover { color: var(--accent-text); }
+.bot-archived leo-button { flex: none; }
 
 /* The one act in this window that cannot be taken back.
 
@@ -1919,8 +1690,7 @@ leo-collapse {
    the rows themselves — because they are all reversible and a column of coloured words would be
    shouting about nothing. This one is not reversible, and a person deciding which of two buttons
    to press should not have to hover one to find that out. */
-.bot-archived .bot-delete { color: var(--removed); }
-.bot-delete:hover { background: var(--removed-bg); }
+.bot-archived .bot-delete { --leo-button-color: var(--removed); }
 
 /* Asked, not yet done. The row picks up the ground so the question reads as belonging to one bot
    rather than floating in the fold, and the second Delete is filled in rather than outlined: the
@@ -1933,20 +1703,14 @@ leo-collapse {
   color: var(--removed);
   font-size: var(--leo-typography-x-small-regular-font-size);
 }
-.bot-archived .bot-delete-armed {
-  background: var(--removed);
-  color: var(--bg);
-  font-weight: 600;
-}
-.bot-delete-armed:hover { background: var(--removed); opacity: 0.85; }
+.bot-archived .bot-delete-armed { --leo-button-color: var(--removed); font-weight: 600; }
 /* The way out, and the wider of the two targets in every sense that matters: it is first, it is
    where Restore just was, and it is the one a stray press lands on. */
-.bot-keep:hover { color: var(--ink); }
 
 /* A file put in front of the planner because somebody named it. The same quiet register the tool
    lines are in, because that is what it is: something that happened on the way to a reply. */
 .attached {
-  margin: 8px 2px;
+  margin: var(--leo-spacing-m) var(--leo-spacing-xs);
   color: var(--ink-faint);
   font-size: var(--leo-typography-x-small-regular-font-size);
   font-family: var(--mono);
@@ -1968,38 +1732,40 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .app { position: relative; }
 .app.comfortable .session,
 .app.comfortable .bot-open-button,
-.app.comfortable .bot-archived { padding-top: 12px; padding-bottom: 12px; }
+.app.comfortable .bot-archived { padding-top: var(--leo-spacing-l); padding-bottom: var(--leo-spacing-l); }
 .app .session-where, .app .bot-where, .app .where, .app .none { font-size: var(--leo-typography-small-regular-font-size); }
-.app .panel-head { font-size: var(--leo-typography-small-regular-font-size); letter-spacing: .02em; text-transform: none; }
-.app .entries { padding: 24px clamp(18px, 3vw, 44px); gap: 18px; }
+.app .entries { padding: var(--leo-spacing-2xl) clamp(18px, 3vw, 44px); gap: 18px; }
 .app .bubble { max-width: 100%; font-size: var(--leo-typography-default-regular-font-size); line-height: 1.65; }
-.app .bubble.user { max-width: 85%; width: fit-content; align-self: flex-end; padding: 10px 16px; border-radius: var(--leo-radius-l) var(--leo-radius-l) var(--leo-radius-xs) var(--leo-radius-l); }
+.app .bubble.user { max-width: 85%; width: fit-content; align-self: flex-end; padding: 10px var(--leo-spacing-xl); border-radius: var(--leo-radius-l) var(--leo-radius-l) var(--leo-radius-xs) var(--leo-radius-l); }
 .app .bubble.assistant { background: transparent; padding: 6px 0; width: 100%; }
 .app .bubble pre { font-size: var(--leo-typography-small-regular-font-size); }
-.app.compact .entries { gap: 10px; padding: 16px 22px; }
+.app.compact .entries { gap: 10px; padding: var(--leo-spacing-xl) 22px; }
 .app.compact .bubble { font-size: var(--leo-typography-components-tableheader-font-size); line-height: 1.5; }
 .conversation-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 5px 20px 10px; align-items: center; }
 .conversation-toolbar > leo-button,
 .conversation-toolbar > leo-buttonmenu { flex-grow: 0; }
-.conversation-search { display: flex; align-items: center; gap: 6px; padding: 8px 20px; border-top: 1px solid var(--line); }
-.conversation-search input { flex: 1; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: var(--leo-radius-s); color: var(--ink); background: var(--bg); }
+.conversation-search { display: flex; align-items: center; gap: 6px; padding: var(--leo-spacing-m) 20px; border-top: 1px solid var(--line); }
+.conversation-search input { flex: 1; min-width: 0; padding: var(--leo-spacing-m); border: 1px solid var(--line); border-radius: var(--leo-radius-s); color: var(--ink); background: var(--bg); }
 .conversation-search button { min-width: 28px; min-height: 30px; border: 1px solid var(--line); background: var(--bg); border-radius: var(--leo-radius-s); }
 .conversation-search span { font-size: var(--leo-typography-small-regular-font-size); white-space: nowrap; color: var(--ink-dim); }
-.app .composer { display: flex; flex-direction: column; align-items: stretch; padding: 12px 20px 16px; gap: 10px; background: var(--bg-main); }
-.app .composer textarea { width: 100%; flex: none; min-height: 70px; max-height: 210px; line-height: 1.5; padding: 14px; resize: none; border-radius: var(--leo-radius-l); }
-.composer-toolbar { display: flex; align-items: center; gap: 8px; }
-.composer-toolbar .model-picker { max-width: 220px; align-self: center; }
-.composer-hint { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-dim); flex: 1; min-width: 0; }
-/* Keep Stop, model, and Send as one trailing group on the right. */
-.composer-toolbar .stop,
-.composer-toolbar .model-picker { margin-left: auto; flex-grow: 0; }
-.composer-toolbar .stop ~ .model-picker { margin-left: 0; }
-.app .composer .send { white-space: nowrap; flex-grow: 0; }
-.attention-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 20px; color: var(--ink-dim); font-size: var(--leo-typography-small-regular-font-size); min-height: 34px; }
+.app .composer { background: var(--bg-main); }
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: var(--leo-spacing-m);
+  padding: var(--leo-spacing-m) var(--leo-spacing-m) var(--leo-spacing-m) var(--leo-spacing-xl);
+}
+.composer-toolbar .model-picker { max-width: 220px; align-self: center; margin-left: auto; flex-grow: 0; width: auto; min-width: 0; }
+.composer .model-trigger { width: auto; max-width: 100%; --leo-button-color: var(--leo-color-text-tertiary); }
+.composer .model-current { max-width: 180px; }
+.composer-box .attachment-chips { padding: var(--leo-spacing-m) var(--leo-spacing-xl) 0; }
+.app .composer .send { flex-grow: 0; }
+.attention-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--leo-spacing-m); padding: 6px 20px; color: var(--ink-dim); font-size: var(--leo-typography-small-regular-font-size); min-height: 34px; }
 .attention-bar button { border: 1px solid var(--line); border-radius: var(--leo-radius-s); padding: 6px 10px; background: var(--bg); }
 .attention-bar .pending-jump { background: var(--warn-bg); color: var(--warn); text-align: left; font-weight: 600; }
-.queued-messages { font-size: var(--leo-typography-small-regular-font-size); padding: 8px 12px; border-radius: var(--leo-radius-m); background: var(--bubble-agent); }
-.queued-messages > div { display: flex; align-items: center; gap: 8px; }
+.queued-messages { font-size: var(--leo-typography-small-regular-font-size); padding: var(--leo-spacing-m) var(--leo-spacing-l); border-radius: var(--leo-radius-m); background: var(--bubble-agent); }
+.queued-messages > div { display: flex; align-items: center; gap: var(--leo-spacing-m); }
 .queued-messages span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .queued-messages button { border: 0; background: transparent; min-width: 28px; min-height: 28px; }
 .error-card { margin: 0; }
@@ -2021,37 +1787,50 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   --leo-collapse-icon-color: var(--leo-color-systemfeedback-error-icon);
   --leo-collapse-icon-color-hover: var(--leo-color-systemfeedback-error-icon);
 }
-.error-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.modal { width: min(680px, calc(100vw - 48px)); max-height: calc(100vh - 64px); overflow-y: auto; padding: 28px; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: var(--leo-radius-xl); box-shadow: var(--leo-effect-elevation-05); }
+.error-actions { display: flex; flex-wrap: wrap; gap: var(--leo-spacing-m); }
+.modal {
+  /* Leo draws the dialog box inside its shadow root and sizes it from these; a width, padding
+     or border on the host would land on the empty element that carries the class. */
+  --leo-dialog-width: min(680px, calc(100vw - 48px));
+  --leo-dialog-padding: var(--leo-spacing-2xl);
+  /* The host itself paints nothing (the box is in the top layer, in the shadow root), but a
+     host with no box at all is reported as hidden to anything that asks whether the dialog is
+     visible, including the drivers. One fixed pixel keeps it a real, unobtrusive element. */
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+}
 .modal h2 { margin-top: 0; }
-.scrim { z-index: 100; }
+.settings-lede { margin-top: 0; color: var(--ink-dim); }
+/* Footer buttons sit in a row at the end, not stacked as Leo does on a narrow dialog. */
+.modal-actions { flex-direction: row; flex-wrap: wrap; justify-content: flex-end; }
 .background-tasks { position: fixed; left: 12px; bottom: 12px; width: 220px; z-index: 25; display: grid; gap: 6px; }
-.background-tasks button { padding: 8px 10px; background: var(--bg); border: 1px solid var(--accent); border-radius: var(--leo-radius-m); font-size: var(--leo-typography-small-regular-font-size); box-shadow: var(--leo-effect-elevation-01); text-align: left; }
 .welcome-mark { width: 50px; height: 50px; display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); font-size: var(--leo-typography-heading-h2-font-size); font-weight: 700; border-radius: var(--leo-radius-xl); margin-bottom: 22px; }
-.empty-body > div { width: min(560px, 100%); padding: 24px; }
+.empty-body > div { width: min(560px, 100%); padding: var(--leo-spacing-2xl); }
 .empty-body h1 { font-size: var(--leo-typography-heading-h1-font-size); line-height: 1.2; letter-spacing: -.5px; }
 .empty-body p { line-height: 1.6; }
-.empty-body .welcome-open { flex-grow: 0; margin-top: 8px; }
-.welcome-recents { display: grid; gap: 6px; margin-top: 32px; }
+.empty-body .welcome-open { flex-grow: 0; margin-top: var(--leo-spacing-m); }
+.welcome-recents { display: grid; gap: 6px; margin-top: var(--leo-spacing-3xl); }
 .welcome-recents h2 { font-size: var(--leo-typography-components-tableheader-font-size); color: var(--ink-dim); }
-.welcome-recents button { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 10px 12px; background: transparent; border: 1px solid var(--line); border-radius: var(--leo-radius-m); }
+.welcome-recents button { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 10px var(--leo-spacing-l); background: transparent; border: 1px solid var(--line); border-radius: var(--leo-radius-m); }
 .welcome-recents span { font-size: var(--leo-typography-small-regular-font-size); color: var(--ink-dim); overflow-wrap: anywhere; }
-.welcome-hint { font-size: var(--leo-typography-small-regular-font-size); color: var(--ink-dim); margin-top: 24px; }
+.welcome-hint { font-size: var(--leo-typography-small-regular-font-size); color: var(--ink-dim); margin-top: var(--leo-spacing-2xl); }
 @media (max-width: 1120px) {
   .app { grid-template-columns: var(--col-left) 1px minmax(0, 1fr) 0 0; }
   .app .context { position: absolute; right: 0; top: 0; bottom: 0; width: 310px; z-index: 35; background: var(--bg); box-shadow: var(--leo-effect-elevation-02); }
   .app.right-folded .context { pointer-events: none; }
   .app .gutter.right { display: none; }
-  .composer-hint { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .entries { scroll-behavior: auto; } }
 
+.inspector-title leo-button { flex: none; }
 .inspector-title { display: flex; justify-content: space-between; align-items: center; padding-bottom: 14px; font-size: var(--leo-typography-components-tableheader-font-size); }
-.inspector-title button { background: transparent; border: 0; min-width: 28px; min-height: 28px; font-size: var(--leo-typography-heading-h3-font-size); }
 .inspector-tabs {
   display: block;
   width: 100%;
-  margin: 0 0 8px;
+  margin: 0 0 var(--leo-spacing-m);
   --leo-tabs-width: 100%;
   border-bottom: none;
 }
@@ -2063,27 +1842,26 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   justify-content: center;
   --leo-tab-item-font: var(--leo-font-default-semibold);
 }
-.app .context-head { padding: 14px 14px 8px; }
-.app .panel-inner .none { padding: 0; margin: 4px 0 10px; }
-.app .panel-inner { padding: 8px 14px 14px; }
+.app .context-head { padding: 14px 14px var(--leo-spacing-m); }
+.app .panel-inner .none { padding: 0; margin: var(--leo-spacing-s) 0 10px; }
+.app .panel-inner { padding: var(--leo-spacing-m) 14px 14px; }
 .app .panel { flex: none; }
-.context-link { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; border: 0; background: transparent; font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); padding: 4px 0; color: var(--ink); min-width: 0; }
-.context-link:hover { text-decoration: underline; }
-.files .approved .tag, .files .applying .tag { color: var(--warn); }
-.files .failed .tag { color: var(--removed); }
-.code-block, .diff-review { border: 1px solid var(--line); border-radius: var(--leo-radius-m); overflow: hidden; margin: 12px 0; }
-.code-toolbar { display: flex; align-items: center; gap: 8px; padding: 7px 10px; background: var(--bubble-agent); border-bottom: 1px solid var(--line); font-size: var(--leo-typography-small-regular-font-size); }
+.context-link { display: block; min-width: 0; --leo-button-padding: 0; --leo-button-color: var(--ink); text-align: left; font-family: var(--mono); }
+.context-link::part(button) { justify-content: flex-start; }
+.files .tag { margin-left: auto; flex: none; }
+.code-block, .diff-review { border: 1px solid var(--line); border-radius: var(--leo-radius-m); overflow: hidden; margin: var(--leo-spacing-l) 0; }
+.code-toolbar { display: flex; align-items: center; gap: var(--leo-spacing-m); padding: 7px 10px; background: var(--bubble-agent); border-bottom: 1px solid var(--line); font-size: var(--leo-typography-small-regular-font-size); }
 .code-toolbar > span { flex: 1; color: var(--ink-dim); }
 .code-toolbar h2 { flex: 1; margin: 0; font-size: var(--leo-typography-large-regular-font-size); }
-.code-toolbar button { font-size: var(--leo-typography-small-regular-font-size); border: 1px solid var(--line); border-radius: var(--leo-radius-xs); padding: 4px 8px; background: var(--bg); min-height: 28px; }
+.code-toolbar button { font-size: var(--leo-typography-small-regular-font-size); border: 1px solid var(--line); border-radius: var(--leo-radius-xs); padding: var(--leo-spacing-s) var(--leo-spacing-m); background: var(--bg); min-height: 28px; }
 .app .code-block pre { margin: 0; border-radius: 0; }
 .app .code-block .code-wrapped, .app .code-block .code-wrapped code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .diff.unwrapped .line { white-space: pre; }
-.expanded-diff { width: min(1080px, calc(100vw - 48px)); }
+.modal.expanded-diff { --leo-dialog-width: min(1080px, calc(100vw - 48px)); }
 .expanded-diff .diff { max-height: 65vh; }
 .confirm-actions { position: sticky; bottom: 0; z-index: 1; background: var(--bg); flex-wrap: wrap; }
 .confirm-actions .always { background: transparent; color: var(--ink); border-color: var(--line); }
-.permission-scope { margin: 0; padding: 10px 12px; font-size: var(--leo-typography-small-regular-font-size); border-top: 1px solid var(--line); color: var(--ink-dim); overflow-wrap: anywhere; }
+.permission-scope { margin: 0; padding: 10px var(--leo-spacing-l); font-size: var(--leo-typography-small-regular-font-size); border-top: 1px solid var(--line); color: var(--ink-dim); overflow-wrap: anywhere; }
 
 /* Conversations / Archived as Leo Tabs, equal halves across the sidebar. */
 .session-scope {
@@ -2095,8 +1873,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 }
 .session-row,
 .bot { position: relative; display: flex; align-items: center; border-radius: var(--leo-radius-m); }
-.session-row .session { flex: 1; min-width: 0; padding-right: 32px; }
-.session-row .session-more { position: absolute; right: 4px; top: 10px; padding: 0; width: 28px; height: 28px; border: 0; background: transparent; border-radius: var(--leo-radius-xs); color: var(--ink-dim); }
+.session-row .session { flex: 1; min-width: 0; padding-right: var(--leo-spacing-3xl); }
+.session-row .session-more-menu { position: absolute; right: 4px; top: 8px; }
 .session-row:hover:not(.current),
 .bot:hover:not(.bot-open) { background: var(--leo-color-container-highlight); }
 .session-row:hover:not(.current) .session,
@@ -2105,18 +1883,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .bot-open { background: var(--leo-color-container-background); }
 .session-row.current .session,
 .bot-open .bot-open-button { background: transparent; color: var(--ink); }
-.session-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.session-badges { display: flex; flex-wrap: wrap; gap: var(--leo-spacing-s); margin-top: 5px; }
 
-.file-search-scope { display: flex; margin: 10px 0 8px; gap: 4px; }
-.file-search-scope button, .preview-actions button { padding: 6px 8px; border: 1px solid var(--line); background: var(--bg); border-radius: var(--leo-radius-s); font-size: var(--leo-typography-small-regular-font-size); }
+.file-search-scope { display: flex; margin: 10px 0 var(--leo-spacing-m); gap: var(--leo-spacing-s); }
+.file-search-scope button, .preview-actions button { padding: 6px var(--leo-spacing-m); border: 1px solid var(--line); background: var(--bg); border-radius: var(--leo-radius-s); font-size: var(--leo-typography-small-regular-font-size); }
 .file-search-scope button[aria-pressed="true"] { background: var(--bubble-agent); font-weight: 600; }
 .file-search-results { padding: 6px; }
-.file-search-results > button { display: block; width: 100%; border: 0; background: transparent; text-align: left; padding: 8px; overflow-wrap: anywhere; font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); }
+.file-search-results > button { display: block; width: 100%; border: 0; background: transparent; text-align: left; padding: var(--leo-spacing-m); overflow-wrap: anywhere; font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); }
 .file-search-results > button:hover { background: var(--bubble-agent); }
-.file-preview { width: min(1000px, calc(100vw - 48px)); }
+.modal.file-preview { --leo-dialog-width: min(1000px, calc(100vw - 48px)); }
 .file-preview .code-toolbar strong { flex: 1; overflow-wrap: anywhere; }
-.preview-boundary { padding: 10px 12px; background: var(--confine-bg); border-left: 3px solid var(--confine); font-size: var(--leo-typography-small-regular-font-size); }
-.preview-actions { display: flex; gap: 8px; }
+.preview-boundary { padding: 10px var(--leo-spacing-l); background: var(--confine-bg); border-left: 3px solid var(--confine); font-size: var(--leo-typography-small-regular-font-size); }
+.preview-actions { display: flex; gap: var(--leo-spacing-m); }
 .file-preview pre { max-height: 60vh; overflow: auto; padding: 14px; font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); line-height: 1.6; background: var(--code-bg); }
 .file-preview pre.wrapped { white-space: pre-wrap; overflow-wrap: anywhere; }
 .local-file-link { background: transparent; border: 0; padding: 0; color: var(--accent-quiet); text-decoration: underline; display: inline; }
@@ -2124,120 +1902,100 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .bot-editor { scroll-padding-block: 28px 90px; }
 .bot-editor .bot-form { margin: 0; padding: 0; border: 0; background: transparent; }
 .bot-editor .bot-field { margin-top: 18px; }
-.bot-editor .bot-field > span { font-size: var(--leo-typography-components-tableheader-font-size); font-weight: 600; }
+.bot-editor .bot-field > span { font: var(--leo-font-default-regular); color: var(--leo-color-text-primary); }
 .bot-editor .bot-fixed { white-space: normal; overflow-wrap: anywhere; }
-.bot-overview-title { display: flex; gap: 16px; align-items: center; }
+.bot-overview-title { display: flex; gap: var(--leo-spacing-xl); align-items: center; }
 .bot-overview-title h2 { margin: 0; }
-.bot-overview-title p { margin: 4px 0; font-size: var(--leo-typography-small-regular-font-size); color: var(--ink-dim); overflow-wrap: anywhere; }
-.bot-overview h3 { font-size: var(--leo-typography-components-tableheader-font-size); margin-top: 24px; }
-.bot-overview-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.bot-overview-title p { margin: var(--leo-spacing-s) 0; font-size: var(--leo-typography-small-regular-font-size); color: var(--ink-dim); overflow-wrap: anywhere; }
+.bot-overview h3 { font-size: var(--leo-typography-components-tableheader-font-size); margin-top: var(--leo-spacing-2xl); }
+.bot-overview-actions { display: flex; flex-wrap: wrap; gap: var(--leo-spacing-m); margin-top: 18px; }
 .bot-history-search { width: 100%; margin-bottom: 10px; }
 .bot-conversations { display: grid; gap: 6px; margin-bottom: 20px; max-height: 300px; overflow-y: auto; }
-.bot-conversations button, .bot-history-unavailable { display: grid; gap: 4px; text-align: left; padding: 10px 12px; }
+.bot-conversations leo-button { display: block; }
+.bot-conversations leo-button strong, .bot-conversations leo-button span { display: block; text-align: left; }
 .bot-conversations strong { font-size: var(--leo-typography-components-tableheader-font-size); overflow-wrap: anywhere; }
 .bot-conversations span, .bot-conversations code { color: var(--ink-dim); font-size: var(--leo-typography-small-regular-font-size); }
-.bot-history-unavailable { border: 1px dashed var(--line); border-radius: var(--leo-radius-s); }
 
-.bot-memory-panel { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 16px; }
-.bot-memory-panel h3 { margin: 0 0 8px; font-size: var(--leo-typography-default-regular-font-size); }
-.memory-tabs, .memory-actions { display: flex; gap: 6px; margin: 10px 0; }
-.memory-tabs button[aria-pressed="true"] { background: var(--bubble-agent); font-weight: 600; }
+.bot-memory-panel { margin-top: var(--leo-spacing-2xl); border-top: 1px solid var(--line); padding-top: var(--leo-spacing-xl); }
+.bot-memory-panel h3 { margin: 0 0 var(--leo-spacing-m); font-size: var(--leo-typography-default-regular-font-size); }
+.memory-actions { display: flex; gap: 6px; margin: 10px 0; }
+.memory-tabs { margin: 10px 0; }
 .memory-readable { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--leo-typography-default-regular-font-size); line-height: 1.65; padding: 14px; background: var(--bubble-agent); max-height: 300px; overflow: auto; border-radius: var(--leo-radius-m); }
 .memory-history details { padding: 10px 0; border-bottom: 1px solid var(--line); }
 .memory-history pre { max-height: 240px; overflow: auto; white-space: pre-wrap; font-size: var(--leo-typography-small-regular-font-size); }
-.bot-memory-panel > textarea { width: 100%; font-family: var(--mono); font-size: var(--leo-typography-small-regular-font-size); line-height: 1.5; padding: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: var(--leo-radius-m); }
-.memory-reset { padding: 12px; border: 1px solid var(--warn); border-radius: var(--leo-radius-m); }
-.theme-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 12px; }
-.theme-actions button { border: 1px solid var(--line); background: var(--bg); border-radius: var(--leo-radius-s); padding: 7px 12px; }
+.memory-reset { margin-top: var(--leo-spacing-l); }
+.memory-reset .memory-actions { margin: 0; }
 
-.backend-status { display: flex; flex-direction: column; gap: 5px; padding: 12px 20px; background: var(--warn-bg); font-size: var(--leo-typography-small-regular-font-size); }
+.backend-status { display: flex; flex-direction: column; gap: 5px; padding: var(--leo-spacing-l) 20px; background: var(--warn-bg); font-size: var(--leo-typography-small-regular-font-size); }
 .backend-status > div { display: flex; gap: 6px; }
-.backend-status button { border: 1px solid var(--line); background: var(--bg); border-radius: var(--leo-radius-xs); padding: 5px 8px; }
+.backend-status button { border: 1px solid var(--line); background: var(--bg); border-radius: var(--leo-radius-xs); padding: 5px var(--leo-spacing-m); }
 .app .model-capability, .app .model-detail, .app .model-footnote { font-size: var(--leo-typography-x-small-regular-font-size); }
 .app .model-name { font-size: var(--leo-typography-components-tableheader-font-size); }
 
-.permission-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.permission-row { display: flex; justify-content: space-between; align-items: center; gap: var(--leo-spacing-l); padding: 10px 0; border-bottom: 1px solid var(--line); }
 .permission-row code { font-size: var(--leo-typography-small-regular-font-size); overflow-wrap: anywhere; }
-.permission-row button { padding: 5px 10px; border: 1px solid var(--line); border-radius: var(--leo-radius-s); background: var(--bg); }
 
 .attach-files { white-space: nowrap; }
 .attachment-chips { display: flex; flex-wrap: wrap; gap: 6px; font-size: var(--leo-typography-small-regular-font-size); }
-.attachment-chips p { width: 100%; margin: 0 0 4px; color: var(--warn); }
+.attachment-chips p { width: 100%; margin: 0 0 var(--leo-spacing-s); color: var(--warn); }
 .attachment-chips > span { display: flex; border: 1px solid var(--line); border-radius: var(--leo-radius-s); max-width: 100%; }
-.attachment-chips button { background: transparent; border: 0; padding: 5px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-chips button { background: transparent; border: 0; padding: 5px var(--leo-spacing-m); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .app.no-session { grid-template-columns: var(--col-left) 1px minmax(0, 1fr) 0 0; }
 .app.no-session .context, .app.no-session .gutter:last-of-type { visibility: hidden; }
 .app .transcript.empty-state .empty-body { text-align: left; align-items: flex-start; justify-content: center; overflow-y: auto; }
 .app .transcript.empty-state .empty-body h1 { font-size: var(--leo-typography-heading-h1-font-size); margin: 0 0 14px; color: var(--ink); }
-.app .panel:has(.none) .panel-inner { padding: 0 14px 4px; }
-.app .composer-toolbar { flex-wrap: wrap; align-items: center; }
-.app .composer-hint { min-width: 130px; }
-
+.app .panel:has(.none) .panel-inner { padding: 0 14px var(--leo-spacing-s); }
 /* Dense chrome: Leo buttons must not stretch to fill a flex row. */
 .composer-toolbar leo-button,
 .settings-actions leo-button,
-.theme-actions leo-button,
-.trust-actions leo-button,
+.modal-actions leo-button,
 .error-actions leo-button {
   flex-grow: 0;
 }
 
-/* Shared dialog controls retain visible keyboard focus and the app's visual language. */
-.modal button:not(:where(.model-trigger, .model-option)) {
-  min-height: 32px; padding: 6px 12px; border: 1px solid var(--line);
-  border-radius: var(--leo-radius-s); background: var(--bg); color: var(--ink); font: inherit;
-}
-.modal button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
 /* Information scoped to a turn, beneath its prompt and reply. */
-.turn-notices { border-left: 2px solid var(--line); margin: 12px 0 16px; padding: 0 0 0 12px; color: var(--ink-dim); font-size: var(--leo-typography-small-regular-font-size); }
-.turn-notices summary, .turn-statistics summary, .audit-inspector summary { cursor: pointer; padding: 5px 0; }
+.turn-notices { border-left: 2px solid var(--line); margin: var(--leo-spacing-l) 0 var(--leo-spacing-xl); padding: 0 0 0 var(--leo-spacing-l); color: var(--ink-dim); font-size: var(--leo-typography-small-regular-font-size); }
 .turn-notices ul { margin: 6px 0 0; padding-left: 18px; }
 .turn-notices li { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; color: var(--ink); }
-.turn-footer { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: -4px 0 18px; color: var(--ink-dim); font-size: var(--leo-typography-small-regular-font-size); }
+.turn-footer { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--leo-spacing-s) var(--leo-spacing-l); margin: -4px 0 18px; color: var(--ink-dim); font-size: var(--leo-typography-small-regular-font-size); }
 .turn-statistics { min-width: 0; max-width: 100%; }
-.turn-statistics summary { overflow-wrap: anywhere; }
-.turn-statistics-body { background: var(--code-bg); padding: 12px 14px; margin: 6px 0; border-radius: var(--leo-radius-m); color: var(--ink); }
+.turn-statistics-body { background: var(--code-bg); padding: var(--leo-spacing-l) 14px; margin: 6px 0; border-radius: var(--leo-radius-m); color: var(--ink); }
 .turn-statistics-body strong { font-weight: 500; }
 .turn-statistics-body dl { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px 18px; margin: 10px 0; }
 .turn-statistics-body dt { color: var(--ink-dim); }
 .turn-statistics-body dd { text-align: right; margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.turn-statistics-body p { margin: 8px 0 0; color: var(--ink-dim); }
+.turn-statistics-body p { margin: var(--leo-spacing-m) 0 0; color: var(--ink-dim); }
 .turn-audit-link { border: 0; background: transparent; color: var(--ink-dim); font: inherit; font-size: var(--leo-typography-small-regular-font-size); padding: 5px 0; cursor: pointer; text-align: left; }
 .turn-audit-link:hover { color: var(--ink); text-decoration: underline; }
 .turn-audit-link.has-refusal { color: var(--warn); }
 .working { flex-wrap: wrap; }
 .audit-inspector { flex: 1; min-height: 0; overflow-y: auto; overflow-wrap: anywhere; padding: 14px; font-size: var(--leo-typography-small-regular-font-size); }
-.audit-inspector .inspector-title { margin-bottom: 12px; }
-.audit-close { display: grid; place-items: center; border: 0; background: transparent; color: var(--ink-dim); width: 28px; height: 28px; font-size: var(--leo-typography-components-button-jumbo-font-size); cursor: pointer; flex: none; }
+.audit-inspector .inspector-title { margin-bottom: var(--leo-spacing-l); }
 .audit-status, .audit-sequence { color: var(--ink-dim); }
-.audit-inspector p { margin: 8px 0; }
-.audit-event { padding: 12px; margin: 12px 0; background: var(--bg); border: 1px solid var(--line); border-radius: var(--leo-radius-m); }
+.audit-inspector p { margin: var(--leo-spacing-m) 0; }
+.audit-event { padding: var(--leo-spacing-l); margin: var(--leo-spacing-l) 0; background: var(--bg); border: 1px solid var(--line); border-radius: var(--leo-radius-m); }
 .audit-event strong { display: block; font-weight: 500; margin-top: 5px; }
 .audit-refusal { border-color: var(--warn); }
 .audit-refusal .audit-sequence, .audit-retention { color: var(--warn); }
-.audit-labels { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; margin: 10px 0; }
+.audit-labels { display: grid; grid-template-columns: 1fr 1fr; gap: var(--leo-spacing-s) var(--leo-spacing-m); margin: 10px 0; }
 .audit-labels dt { color: var(--ink-dim); }
 .audit-labels dd { margin: 0; }
-.audit-event pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); line-height: 1.6; padding: 8px; background: var(--code-bg); border-radius: var(--leo-radius-xs); }
-.audit-all { margin: 16px 0; border-top: 1px solid var(--line); padding-top: 8px; }
+.audit-event pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); line-height: 1.6; padding: var(--leo-spacing-m); background: var(--code-bg); border-radius: var(--leo-radius-xs); }
+.audit-all { margin: var(--leo-spacing-xl) 0; border-top: 1px solid var(--line); padding-top: var(--leo-spacing-m); }
 @media (pointer: coarse) {
-  .turn-notices summary, .turn-statistics summary, .audit-inspector summary, .turn-audit-link, .audit-close { min-height: 44px; }
+  .turn-audit-link, .audit-close { min-height: 44px; }
   .audit-close { min-width: 44px; }
 }
-.modal button:disabled { opacity: .5; }
 
 .diff .line-number { width: 3.5em; flex: 0 0 3.5em; text-align: right; padding-right: .7em; color: var(--ink-dim); user-select: none; font-variant-numeric: tabular-nums; }
 
-.interrupted-request { padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--leo-radius-m); color: var(--ink-dim); }
+.interrupted-request { padding: var(--leo-spacing-l) var(--leo-spacing-xl); border: 1px solid var(--line); border-radius: var(--leo-radius-m); color: var(--ink-dim); }
 .interrupted-request pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
 /* The card it was is drawn inside the fold, marking and all, so it needs room of its own. */
-.interrupted-request details { margin-top: 8px; }
-.interrupted-request details > .confirm, .interrupted-request details > .quarantine { margin-top: 8px; }
 
 .memory-readable { white-space: normal; }
-.memory-readable p { margin: 0 0 12px; }
+.memory-readable p { margin: 0 0 var(--leo-spacing-l); }
 .memory-readable pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* Keep focus mode readable on wide windows while leaving space for code and diffs. */
@@ -2248,70 +2006,61 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .diff { font-size: var(--leo-typography-components-tableheader-font-size); line-height: 1.65; }
 
 .modal .bot-avatar-refresh { width: 32px; height: 32px; }
-.memory-readable h1, .memory-readable h2, .memory-readable h3 { font-size: var(--leo-typography-large-regular-font-size); line-height: 1.4; margin: 0 0 12px; }
+.memory-readable h1, .memory-readable h2, .memory-readable h3 { font-size: var(--leo-typography-large-regular-font-size); line-height: 1.4; margin: 0 0 var(--leo-spacing-l); }
 .memory-readable ul, .memory-readable ol { padding-left: 22px; }
-.bot-editor .bot-actions { background: transparent; padding-block: 12px; }
+.bot-editor .bot-actions { background: transparent; padding-block: var(--leo-spacing-l); }
 
 /* About: a small stage for the app's own mascot. */
-.modal.about { position: relative; width: min(440px, calc(100vw - 32px)); padding: 30px 28px 22px; animation: about-arrive 220ms ease-out; }
-.about .about-close { position: absolute; z-index: 1; top: 12px; right: 12px; display: grid; place-items: center; width: 32px; padding: 0; border-color: transparent; background: transparent; color: var(--ink-dim); }
-.about .about-close:hover { background: var(--code-bg); color: var(--ink); }
+.modal.about { --leo-dialog-width: min(440px, calc(100vw - 32px)); }
 .about-hero { text-align: center; }
 .about-stage { position: relative; display: grid; justify-items: center; padding: 10px 0 22px; }
 .about-stage::before { content: ''; position: absolute; width: 220px; height: 180px; top: -4px; pointer-events: none; background: radial-gradient(ellipse, color-mix(in srgb, var(--accent) 19%, transparent), transparent 70%); }
 .about .about-mascot { position: relative; display: grid; place-items: center; padding: 0; width: 156px; height: 156px; border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
 .about-figure { display: block; }
-.about .about-hero h2 { margin: 14px 0 8px; font-size: var(--leo-typography-heading-display3-font-size); font-weight: 650; letter-spacing: -1.1px; line-height: 1.15; }
+.about .about-hero h2 { margin: 14px 0 var(--leo-spacing-m); font-size: var(--leo-typography-heading-display3-font-size); font-weight: 650; letter-spacing: -1.1px; line-height: 1.15; }
 .about-version { display: inline-block; margin-top: 18px; padding: 5px 11px; border: 1px solid var(--line); border-radius: 20px; background: var(--code-bg); color: var(--ink-dim); font-size: var(--leo-typography-small-regular-font-size); overflow-wrap: anywhere; max-width: 100%; }
-.about-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 24px; margin: 24px 0 28px; font-size: var(--leo-typography-components-tableheader-font-size); }
+.about-links { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--leo-spacing-2xl); margin: var(--leo-spacing-2xl) 0 28px; font-size: var(--leo-typography-components-tableheader-font-size); }
 .about a { color: var(--accent-text); text-decoration: none; text-underline-offset: 3px; }
 .about a:hover { text-decoration: underline; }
 .about a:focus-visible, .about summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: var(--leo-radius-2xs); }
-.about-links a span { margin-left: 2px; opacity: .65; }
+.about-links a span { margin-left: var(--leo-spacing-xs); opacity: .65; }
 .about-details { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: var(--leo-typography-small-regular-font-size); }
-.about-details summary { padding: 15px 0; color: var(--ink-dim); cursor: pointer; }
-.about-details summary:hover { color: var(--ink); }
-.about-details dl { margin: 0 0 16px; }
-.about-details dl > div { display: grid; grid-template-columns: 65px minmax(0, 1fr); gap: 12px; margin: 10px 0; }
+.about-details dl { margin: 0 0 var(--leo-spacing-xl); }
+.about-details dl > div { display: grid; grid-template-columns: 65px minmax(0, 1fr); gap: var(--leo-spacing-l); margin: 10px 0; }
 .about-details dt { color: var(--ink-dim); }
 .about-details dd { margin: 0; font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); line-height: 1.6; overflow-wrap: anywhere; user-select: text; }
-.about-copy { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-bottom: 16px; }
+.about-copy { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-bottom: var(--leo-spacing-xl); }
 .about-copy [role='status'] { color: var(--ink-dim); font-size: var(--leo-typography-x-small-regular-font-size); }
-.about-footer { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 20px; color: var(--ink-dim); font-size: var(--leo-typography-x-small-regular-font-size); }
+.about-footer { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--leo-spacing-m); margin-top: 20px; color: var(--ink-dim); font-size: var(--leo-typography-x-small-regular-font-size); }
 .about-footer a { color: inherit; }
-@keyframes about-arrive { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) {
   .modal.about { animation: none; }
 }
 
 /* Agent 0.9 controls share the existing modal and evidence hierarchy. */
-.agent-settings, .watch-settings { width: min(760px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); overflow: auto; }
-.settings-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
-.settings-heading h2 { margin-bottom: 8px; }
-.settings-heading p { margin-top: 0; color: var(--ink-dim); }
+.modal.agent-settings, .modal.watch-settings { --leo-dialog-width: min(760px, calc(100vw - 32px)); }
 .settings-tabs {
   display: block;
   width: 100%;
-  margin: 12px 0;
+  margin: var(--leo-spacing-l) 0;
   --leo-tabs-width: 100%;
 }
-.settings-body section { padding: 12px 0; border-bottom: 1px solid var(--line); }
-.settings-body h3 { margin: 8px 0; }
+.settings-body section { padding: var(--leo-spacing-l) 0; border-bottom: 1px solid var(--line); }
+.settings-body h3 { margin: var(--leo-spacing-m) 0; }
 .settings-body p, .watch-settings p { line-height: 1.5; }
-.settings-body dl { display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; }
+.settings-body dl { display: grid; grid-template-columns: 140px 1fr; gap: var(--leo-spacing-m) var(--leo-spacing-xl); }
 .settings-body dt { color: var(--ink-dim); }
 .settings-body dd { margin: 0; overflow-wrap: anywhere; }
 .settings-body pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--leo-typography-small-regular-font-size); padding: 10px; background: var(--bg); border-radius: var(--leo-radius-s); }
 .settings-path { overflow-wrap: anywhere; font-family: var(--mono); font-size: var(--leo-typography-small-regular-font-size); }
-.settings-error { border-left: 3px solid var(--accent); padding-left: 12px; }
-.settings-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0 4px; }
-.hook-editor { border: 1px solid var(--line); border-radius: var(--leo-radius-m); margin: 16px 0; padding: 16px; }
-.hook-editor label, .watch-settings label { display: grid; gap: 6px; margin: 10px 0; }
-.hook-editor input, .hook-editor select, .watch-settings input { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--leo-radius-s); color: inherit; background: var(--bg); }
-.hook-argument { display: flex; align-items: center; gap: 8px; }
-.hook-argument label { flex: 1; }
+.settings-error { border-left: 3px solid var(--accent); padding-left: var(--leo-spacing-l); }
+.settings-actions { display: flex; gap: var(--leo-spacing-m); flex-wrap: wrap; margin: 14px 0 var(--leo-spacing-s); }
+.hook-editor { border: 1px solid var(--line); border-radius: var(--leo-radius-m); margin: var(--leo-spacing-xl) 0; padding: var(--leo-spacing-xl); }
+.hook-editor leo-input, .hook-editor leo-dropdown, .watch-settings leo-input { display: block; margin: 10px 0; }
+.hook-argument { display: flex; align-items: center; gap: var(--leo-spacing-m); }
+.hook-argument leo-input { flex: 1; }
 .watch-list { list-style: none; padding: 0; }
-.watch-list li { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.watch-list li { display: flex; align-items: center; justify-content: space-between; gap: var(--leo-spacing-xl); padding: 14px 0; border-bottom: 1px solid var(--line); }
 .watch-list strong { overflow-wrap: anywhere; }
 .watch-list p { margin: 6px 0; }
 .watch-list small { color: var(--ink-dim); }
@@ -2320,22 +2069,25 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   display: block;
   width: calc(var(--col-left-open) - 32px);
   min-width: calc(var(--col-left-open) - 32px);
-  margin: 10px 16px;
+  margin: 10px var(--leo-spacing-xl);
   flex-shrink: 0;
   flex-grow: 0;
   box-sizing: border-box;
 }
-.vetting-notice, .processor-remark, .credential-finding { padding: 12px 16px; margin: 12px; border: 1px solid var(--line); border-radius: var(--leo-radius-m); }
+.vetting-notice, .processor-remark, .credential-finding { padding: var(--leo-spacing-l) var(--leo-spacing-xl); margin: var(--leo-spacing-l); border: 1px solid var(--line); border-radius: var(--leo-radius-m); }
 .vetting-notice.caution { border-left: 3px solid var(--accent); }
-.vetting-notice p, .processor-remark pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; }
+.vetting-notice p, .processor-remark pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: var(--leo-spacing-m) 0; }
 .vetting-notice small, .processor-remark small, .credential-finding small { color: var(--ink-dim); line-height: 1.5; }
 /* The one notice that is a question about the lines below it: the warn colours carry a light,
    a dark and a high-contrast definition already, so both themes follow from the variables. */
 .credential-finding { background: var(--warn-bg); border-color: var(--warn); }
 .credential-finding strong { color: var(--warn); }
-.credential-finding ul { list-style: none; padding: 0; margin: 8px 0; }
-.credential-finding li { font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); overflow-wrap: anywhere; margin: 4px 0; }
+.credential-finding ul { list-style: none; padding: 0; margin: var(--leo-spacing-m) 0; }
+.credential-finding li { font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); overflow-wrap: anywhere; margin: var(--leo-spacing-s) 0; }
 .context-status { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-dim); padding: 6px 20px; flex-shrink: 0; }
-.watch-turn { display: grid; gap: 6px; padding: 12px 16px; border-left: 2px solid var(--accent); }
+.watch-turn { display: grid; gap: 6px; padding: var(--leo-spacing-l) var(--leo-spacing-xl); border-left: 2px solid var(--accent); }
 .watch-turn span { font-size: var(--leo-typography-small-regular-font-size); color: var(--ink-dim); }
 @media (max-width: 640px) { .settings-body dl { grid-template-columns: 1fr; gap: 5px; } .settings-body dd { margin-bottom: 10px; } .settings-tabs { flex-wrap: wrap; } }
+
+/* A Leo spinner beside a line of status text. */
+[role='status']:has(> leo-progressring) { display: flex; align-items: center; gap: var(--leo-spacing-m); }
