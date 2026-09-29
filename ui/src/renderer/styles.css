@@ -808,7 +808,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
   max-width: 100%;
 }
 
-.narration { color: var(--ink-dim); font-style: italic; margin: 8px 2px; }
+/* Line breaks are kept: a manifest run narrates its goal and its plan as several lines. */
+.narration { color: var(--ink-dim); font-style: italic; margin: 8px 2px; white-space: pre-wrap; }
 
 .tool {
   display: flex;
@@ -939,6 +940,31 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .confirm.server.builds { border-color: var(--warn); border-width: 2px; }
 .confirm.server .confirm-head .server-language { font-family: inherit; }
 .confirm.server .permission-scope code { overflow-wrap: anywhere; }
+
+/* A plan to approve. The steps scroll inside the card so a long plan keeps its buttons in reach. */
+.confirm.manifest .confirm-head .manifest-count { font-family: inherit; color: var(--ink-dim); }
+.manifest-steps { list-style: none; margin: 0; padding: 8px 12px; max-height: 320px; overflow: auto; border-top: 1px solid var(--line); }
+.manifest-steps li { padding: 2px 0; }
+.manifest-steps code { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* The task of a manifest run. Drawn where a prompt is, and marked so it is not taken for one. */
+.bubble.user.plan-task { border: 1px dashed var(--accent-quiet); }
+.plan-task-mark { display: block; font-size: 10px; font-weight: 700; text-transform: uppercase; opacity: 0.75; margin-bottom: 2px; }
+
+/* What a run released for a screen. Bordered as confined content is, since it can be a file's text. */
+.plan-reply { border: 1px solid var(--confine); border-radius: var(--radius); margin: 8px 0; overflow: hidden; }
+.plan-reply-head { display: flex; gap: 8px; align-items: baseline; padding: 6px 12px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--ink-dim); }
+.plan-reply-head .mark { text-transform: uppercase; font-size: 10px; font-weight: 700; color: var(--confine); }
+.plan-reply-foot { padding: 6px 12px; border-top: 1px solid var(--line); font-size: 11px; color: var(--ink-dim); }
+
+.plan-ended { border: 1px solid var(--line); border-radius: var(--radius); margin: 8px 0; padding: 10px 12px; }
+.plan-ended.failed { border-color: var(--removed); }
+.plan-ended p { margin: 4px 0; color: var(--ink-dim); font-size: 12px; }
+.plan-ended summary { cursor: pointer; font-size: 12px; margin-top: 6px; }
+.plan-text { margin: 4px 0 0; font-family: var(--mono); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+
+.composer-toolbar .plan-first { background: transparent; color: var(--accent-text); border: 1px solid var(--accent); border-radius: var(--radius); padding: 0 12px; }
+.composer-toolbar .plan-first:disabled { opacity: 0.45; cursor: default; }
 .confirm.output .confirm-head .intent,
 .confirm.vouch .confirm-head .intent { color: var(--confine); }
 
@@ -2149,6 +2175,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .composer-hint { font-size: 11px; color: var(--ink-dim); flex: 1; }
 .composer-toolbar .stop { min-height: 36px; padding: 6px 12px; border: 1px solid var(--removed); color: var(--removed); background: var(--bg); border-radius: 8px; }
 .app .composer .send { white-space: nowrap; margin-left: auto; min-height: 36px; height: auto; }
+/* Plan first sits beside Send on the right, so it takes the gap and Send follows it. */
+.app .composer .plan-first { white-space: nowrap; margin-left: auto; min-height: 36px; }
+.app .composer .plan-first + .send { margin-left: 0; }
 .attention-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 20px; color: var(--ink-dim); font-size: 12px; min-height: 34px; }
 .attention-bar button { border: 1px solid var(--line); border-radius: 7px; padding: 6px 10px; background: var(--bg); }
 .attention-bar .pending-jump { background: var(--warn-bg); color: var(--warn); text-align: left; font-weight: 600; }

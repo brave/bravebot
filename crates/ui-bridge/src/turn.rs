@@ -45,6 +45,8 @@ pub enum Kind {
     Fetch,
     /// Whether to start a language server for the session.
     Server,
+    /// Whether to run a frozen plan. Asked once per manifest run, before its first step.
+    Manifest,
     Ask,
 }
 
@@ -79,6 +81,7 @@ pub enum Reply {
     Vet(Decision),
     Fetch(Decision),
     Server(Decision),
+    Manifest(Decision),
     /// One answer per question, in the order they were asked. Empty means nobody could be
     /// asked — see [`Confirmer::ask_user`].
     Ask(Vec<Answer>),
@@ -94,6 +97,7 @@ impl Reply {
             Reply::Vet(_) => Kind::Vet,
             Reply::Fetch(_) => Kind::Fetch,
             Reply::Server(_) => Kind::Server,
+            Reply::Manifest(_) => Kind::Manifest,
             Reply::Ask(_) => Kind::Ask,
         }
     }
@@ -110,7 +114,8 @@ impl Reply {
             | Reply::Vouch(decision)
             | Reply::Vet(decision)
             | Reply::Fetch(decision)
-            | Reply::Server(decision) => Some(*decision),
+            | Reply::Server(decision)
+            | Reply::Manifest(decision) => Some(*decision),
             Reply::Run(_) | Reply::Ask(_) => None,
         }
     }
@@ -134,6 +139,7 @@ impl Kind {
             Kind::Vet => Reply::Vet(Decision::Reject),
             Kind::Fetch => Reply::Fetch(Decision::Reject),
             Kind::Server => Reply::Server(Decision::Reject),
+            Kind::Manifest => Reply::Manifest(Decision::Reject),
             // No answers at all, which is how this question says nobody was asked.
             Kind::Ask => Reply::Ask(Vec::new()),
         }
@@ -274,6 +280,8 @@ impl Reporter for BridgeReporter {
 pub struct BridgeSink {
     emitter: Emitter,
     session: String,
+    /// The key the number below is sent under: `turn`, or `run` for a manifest run.
+    counted: &'static str,
     turn: usize,
     trail: bravebot_session::audit::Trail,
 }
@@ -283,8 +291,20 @@ impl BridgeSink {
         Self {
             emitter,
             session: session.into(),
+            counted: "turn",
             turn,
             trail: bravebot_session::audit::Trail::new(),
+        }
+    }
+
+    /// A sink for a manifest run, whose events carry `run` and no `turn`.
+    ///
+    /// A run is not one of the session's turns, so its events must not be filed under a turn
+    /// number. A front end that groups audit events by turn leaves these out.
+    pub fn for_run(emitter: Emitter, session: impl Into<String>, run: usize) -> Self {
+        Self {
+            counted: "run",
+            ..Self::new(emitter, session, run)
         }
     }
 
@@ -299,7 +319,7 @@ impl Sink for BridgeSink {
         // Projected with the agent's own function rather than a second spelling of it:
         // two renderings of one trail would drift the moment either changed.
         let data = json!({
-            "turn": self.turn,
+            self.counted: self.turn,
             "event": bravebot_session::audit::as_json(&event, self.trail.recording()),
         });
         self.emitter.send(Event::new("audit", &self.session, data));
@@ -327,6 +347,8 @@ pub struct BridgeConfirmer {
     answers: Receiver<Reply>,
     next: u64,
     cancel: bravebot_core::cancel::Cancel,
+    /// Whether a plan was put to the person and not approved. See [`Self::declined_a_plan`].
+    declined_a_plan: bool,
 }
 
 impl BridgeConfirmer {
@@ -344,7 +366,17 @@ impl BridgeConfirmer {
             answers,
             next: 0,
             cancel,
+            declined_a_plan: false,
         }
+    }
+
+    /// Whether a plan was put to the person and came back without a yes.
+    ///
+    /// A run that ends this way fails with the agent's sentence about an unapproved plan. A
+    /// front end is sent this flag so that it does not have to read that sentence to tell a
+    /// declined plan from a failed one.
+    pub fn declined_a_plan(&self) -> bool {
+        self.declined_a_plan
     }
 
     /// Put one question to whoever is watching, and block until it is answered.
@@ -490,8 +522,17 @@ impl Confirmer for BridgeConfirmer {
         })
     }
 
-    fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {
-        Decision::Reject
+    /// Ask whether to run a frozen plan (MANIFEST-10).
+    ///
+    /// The request carries the task and every step. An approval covers this plan only and is not
+    /// remembered. It does not approve the plan's writes: each write is still asked about when
+    /// its step is reached.
+    fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+        let decision = self.yes_or_no(Kind::Manifest, "manifest.request", |id| {
+            wire::manifest_request(id, request)
+        });
+        self.declined_a_plan = decision == Decision::Reject;
+        decision
     }
 
     fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {

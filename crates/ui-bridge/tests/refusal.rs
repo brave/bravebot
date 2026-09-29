@@ -482,19 +482,53 @@ fn cancelling_before_a_question_cannot_leave_it_waiting() {
     assert!(harness.events.lock().unwrap().is_empty());
 }
 
-/// Newly added upstream powers stay denied until the window can present their consent.
+/// The questions the window has no card for are refused, and refusing one takes no answer that
+/// was sent for another question.
 #[test]
 fn unsupported_approvals_refuse_without_consuming_other_answers() {
-    use bravebot_agent::confirm::ManifestRequest;
+    use bravebot_agent::confirm::{ExposureRequest, McpCallRequest, MoveRequest, ToolListRequest};
     let mut h = harness();
     h.running
         .answers
         .send(Reply::Write(Decision::Approve))
         .unwrap();
     assert_eq!(
-        h.confirmer.confirm_manifest(&ManifestRequest {
-            task: "work".into(),
-            steps: vec!["run command".into()],
+        h.confirmer.confirm_exposing_read(&ExposureRequest {
+            path: "config/secrets.toml".into(),
+            credentials: vec!["an API key on line 3".into()],
+        }),
+        Decision::Reject
+    );
+    assert_eq!(
+        h.confirmer.confirm_tool_list(&ToolListRequest {
+            alias: "weather".into(),
+            tools: Vec::new(),
+            refused: 0,
+            changed: false,
+            verdict: bravebot_core::vetting::Verdict::Safe,
+            reason: None,
+        }),
+        Decision::Reject
+    );
+    assert_eq!(
+        h.confirmer
+            .confirm_mcp_call(&McpCallRequest {
+                alias: "weather".into(),
+                tool: "get_forecast".into(),
+                arguments: Vec::new(),
+                description: None,
+                may_stand: true,
+            })
+            .decision,
+        Decision::Reject
+    );
+    assert_eq!(
+        h.confirmer.confirm_move(&MoveRequest {
+            alias: "weather".into(),
+            declared: "https://weather.example/mcp".into(),
+            destination: "https://elsewhere.example/mcp".into(),
+            authority: "elsewhere.example:443".into(),
+            may_record: true,
         }),
         Decision::Reject
     );
@@ -594,6 +628,7 @@ fn a_fetch_is_put_to_the_window_and_takes_no_answer_but_its_own() {
         Reply::Vouch(Decision::Approve),
         Reply::Vet(Decision::Approve),
         Reply::Server(Decision::Approve),
+        Reply::Manifest(Decision::Approve),
     ] {
         let mut h = harness();
         h.running.answers.send(other.clone()).unwrap();
@@ -682,6 +717,7 @@ fn every_kind_of_question_is_refused_in_its_own_shape() {
         Kind::Vet,
         Kind::Fetch,
         Kind::Server,
+        Kind::Manifest,
         Kind::Ask,
     ] {
         let refusal = kind.refusal();
@@ -735,6 +771,7 @@ fn a_server_is_put_to_the_window_and_takes_no_answer_but_its_own() {
         Reply::Vouch(Decision::Approve),
         Reply::Vet(Decision::Approve),
         Reply::Fetch(Decision::Approve),
+        Reply::Manifest(Decision::Approve),
     ] {
         let mut h = harness();
         h.running.answers.send(other.clone()).unwrap();
@@ -810,6 +847,125 @@ fn refusing_a_pending_server_reaches_the_turn_as_a_server() {
     });
 
     let decision = harness.confirmer.confirm_server(&a_server());
+    answerer.join().expect("the answerer should not panic");
+    assert_eq!(decision, Decision::Reject);
+}
+
+fn a_plan() -> bravebot_agent::confirm::ManifestRequest {
+    bravebot_agent::confirm::ManifestRequest {
+        task: "write the release notes".into(),
+        steps: vec![
+            "1. [read] read CHANGELOG.md into `log`".into(),
+            "2. [write] write NOTES.md from `log`".into(),
+        ],
+    }
+}
+
+/// A plan nobody could be asked about does not run.
+#[test]
+fn an_unanswerable_plan_refuses() {
+    let mut harness = harness();
+    drop(harness.running);
+
+    assert_eq!(
+        harness.confirmer.confirm_manifest(&a_plan()),
+        Decision::Reject
+    );
+}
+
+/// The question goes out under its own name with the task and every step, and only an answer to
+/// a plan answers it.
+///
+/// An approval here covers a whole run. Every other approval is about one effect, so one read as
+/// this would run steps nobody was shown.
+#[test]
+fn a_plan_is_put_to_the_window_and_takes_no_answer_but_its_own() {
+    for other in [
+        Reply::Write(Decision::Approve),
+        Reply::Run(RunDecision::approve_always()),
+        Reply::Output(Decision::Approve),
+        Reply::Vouch(Decision::Approve),
+        Reply::Vet(Decision::Approve),
+        Reply::Fetch(Decision::Approve),
+        Reply::Server(Decision::Approve),
+    ] {
+        let mut h = harness();
+        h.running.answers.send(other.clone()).unwrap();
+        assert_eq!(
+            h.confirmer.confirm_manifest(&a_plan()),
+            Decision::Reject,
+            "{other:?} approved a plan"
+        );
+        assert!(h.running.pending.lock().unwrap().is_none());
+    }
+
+    let mut h = harness();
+    h.running
+        .answers
+        .send(Reply::Manifest(Decision::Approve))
+        .unwrap();
+    assert_eq!(h.confirmer.confirm_manifest(&a_plan()), Decision::Approve);
+
+    let events = h.events.lock().unwrap();
+    let [asked] = events.as_slice() else {
+        panic!("one question was expected, and the window was sent {events:?}");
+    };
+    assert_eq!(asked.name, "manifest.request");
+    assert_eq!(asked.data["task"], "write the release notes");
+    assert_eq!(
+        asked.data["steps"],
+        serde_json::json!([
+            "1. [read] read CHANGELOG.md into `log`",
+            "2. [write] write NOTES.md from `log`",
+        ])
+    );
+}
+
+/// An approval of a plan is not an approval of a write, which is asked about when its step is
+/// reached (MANIFEST-10), or of anything else that is waiting.
+#[test]
+fn an_approved_plan_answers_no_other_question() {
+    let harness = harness();
+    let running = harness.running;
+
+    for kind in [
+        Kind::Write,
+        Kind::Run,
+        Kind::Output,
+        Kind::Vouch,
+        Kind::Vet,
+        Kind::Fetch,
+        Kind::Server,
+    ] {
+        *running.pending.lock().expect("not poisoned") = Some(Question { id: 1, kind });
+        assert!(
+            !running.answer(1, Reply::Manifest(Decision::Approve)),
+            "a plan approval answered a waiting {kind:?}"
+        );
+    }
+}
+
+/// Refused in its own shape, for the reason a run is: a refusal of another kind is discarded by the
+/// kind check, and the run would wait on a channel nothing else writes to.
+#[test]
+fn refusing_a_pending_plan_reaches_the_run_as_a_plan() {
+    let mut harness = harness();
+    let running = harness.running;
+    let pending = Arc::clone(&running.pending);
+
+    let answerer = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            if pending.lock().expect("not poisoned").is_some() {
+                running.refuse_pending();
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("the plan was never registered as pending");
+    });
+
+    let decision = harness.confirmer.confirm_manifest(&a_plan());
     answerer.join().expect("the answerer should not panic");
     assert_eq!(decision, Decision::Reject);
 }

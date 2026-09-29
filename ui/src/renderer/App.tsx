@@ -889,6 +889,36 @@ export function App(): React.JSX.Element {
     [readBots],
   )
 
+  /**
+   * Start a manifest run for a task: plan all of it, ask once, then walk the plan.
+   *
+   * One run per press. The session does not hold this as a mode, so the next message is an
+   * ordinary turn unless the button is pressed again.
+   */
+  const plan = useCallback(async (task: string) => {
+    const handle = handleRef.current
+    if (!handle) return
+    const model = openedLives.current.get(handle)?.model ?? null
+    updateSession(handle, (old) => old ? { ...old, running: true, entries: [...old.entries, t.planAsked(task)] } : old)
+    try {
+      await call('manifest.run', { session: handle, task, model })
+    } catch (error) {
+      if (error instanceof Unconfigurable) setUnconfigured(error.message)
+      updateSession(handle, (old) => old ? { ...old, running: false, queuePaused: true, entries: [...old.entries, t.errored(error instanceof Unconfigurable ? error.message : String(error))] } : old)
+    }
+  }, [])
+
+  /** Start a run from whatever is in the composer, where a run can take it. */
+  const submitPlan = useCallback(() => {
+    const task = draft.trim()
+    if (!task || !handleRef.current || live?.running || live?.askingTrust || backendReady === false) return
+    // A run reads nothing before it plans, so it cannot take attached files, and a bot's turn
+    // carries a briefing a run has no place for.
+    if (live?.attachments?.length || live?.bot) return
+    setDraft('')
+    void plan(task)
+  }, [draft, live?.running, live?.askingTrust, live?.attachments, live?.bot, plan, backendReady])
+
   /** Send whatever is in the composer, on the same terms the Send button uses. */
   const submit = useCallback(() => {
     const prompt = draft.trim()
@@ -1297,6 +1327,7 @@ export function App(): React.JSX.Element {
         onDraft={setDraft}
         onModel={(model) => void chooseModel(model)}
         onSubmit={submit}
+        onPlan={submitPlan}
         onCancel={cancel}
         canExport={canExport}
         includeTools={includeTools}
@@ -1423,6 +1454,19 @@ export function apply(
         return { ...old, entries: [...old.entries, t.askedFetch(message.data)] }
       case 'server.request':
         return { ...old, entries: [...old.entries, t.askedServer(message.data)] }
+      case 'manifest.request':
+        return { ...old, entries: [...old.entries, t.askedManifest(message.data)] }
+      // A run is not a turn, so it adds no turn marker and no reply to the conversation.
+      case 'manifest.started':
+        return { ...old, running: true, phase: null, checking: null, tokens: 0 }
+      case 'manifest.done':
+        refresh()
+        return { ...old, running: false, phase: null, checking: null, outcome: 'complete',
+          entries: [...old.entries, t.planReplied(message.data.reply, message.data.record)] }
+      case 'manifest.error':
+        refresh()
+        return { ...old, running: false, phase: null, checking: null, queuePaused: true,
+          entries: [...t.interruptPending(old.entries), t.planEnded(message.data)] }
       case 'vouch.request':
         return { ...old, entries: [...old.entries, t.askedVouch(message.data)] }
       case 'ask.request':

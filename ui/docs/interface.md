@@ -24,15 +24,15 @@ Three columns, each side one resizable and foldable:
   agents with a purpose and a memory, each pinned to one checkout. See *Bots* below.
 - **Transcript** — the conversation, with the turn's tool calls gathered into runs that
   fold away, and confined content shown as what it is rather than as text the model read.
-  Seven kinds of question are put here and answered here: a **write** (as a diff), a
+  Eight kinds of question are put here and answered here: a **write** (as a diff), a
   **command** to run (as the argv, plus the binary each name resolved to), whether the
   planner may **read what a command printed** (as the bytes in full), whether to **vouch**
   for a quarantined path, whether to **fetch** an address (as the address, and the host it
   reaches on a line of its own), whether to **start a language server** (as the binary and
-  the tree it would index, saying where that runs build tooling), and a **series of
-  questions** the planner wants to put to you: choices to pick from, or your own words. The
-  turn blocks until one is answered. Window close and app shutdown refuse outstanding
-  questions. For the last of the seven that means *no answers at all* rather than a decline per question: a decline
+  the tree it would index, saying where that runs build tooling), whether to **run a plan**
+  (as the task and every step), and a **series of questions** the planner wants to put to
+  you: choices to pick from, or your own words. The turn blocks until one is answered. Window
+  close and app shutdown refuse outstanding questions. For the last of the eight that means *no answers at all* rather than a decline per question: a decline
   somebody made and a question that never reached them must not look alike.
 - **Context** — an inspector with **Overview**, **Changes** and **Files** tabs.
   Overview summarises the plan, reads and confined material; Changes distinguishes
@@ -44,6 +44,12 @@ Three columns, each side one resizable and foldable:
 The two side columns fold from controls in the transcript header, and their widths
 and fold states survive a relaunch. Focus mode hides the sidebars; density can be
 comfortable or compact.
+
+**Plan first**, beside Send, starts a manifest run from the draft. The agent plans the
+whole task before reading anything, shows you the plan, and runs it only if you approve.
+Each press starts one run. The next message is an ordinary turn. A run cannot take attached
+files, and a bot cannot start one. The run is saved as its own record and is not part of the
+conversation, so a later turn is not sent what the run said.
 
 Drafts and reading positions survive conversation switches and restarts. A running
 conversation can continue in the background. Drafting during a run does not send
@@ -434,9 +440,10 @@ over an approval card covers the diff or the argv the decision rests on. The exc
 **Run and don't ask again**, whose tooltip lists the programs the vouch would cover, which
 is the one thing its label cannot say.
 
-**No key answers a question.** The seven the agent can ask (a write, a command, whether the
+**No key answers a question.** The eight the agent can ask (a write, a command, whether the
 planner may read output, whether to vouch, whether to fetch, whether to start a language
-server, and a series of questions) are answered in the transcript and nowhere else. An approval is a claim that somebody looked at
+server, whether to run a plan, and a series of questions) are answered in the transcript and
+nowhere else. An approval is a claim that somebody looked at
 the evidence, and a keystroke can be typed from muscle memory into a window whose contents
 changed a frame ago. The absence is structural: no command id names an approval, and the dispatch table in
 `src/renderer/commands.ts` is not given the callbacks that answer.

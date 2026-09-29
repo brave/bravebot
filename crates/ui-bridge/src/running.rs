@@ -81,6 +81,11 @@ pub struct State {
     pub rewind: Vec<bravebot_session::sessions::RewindPoint>,
     /// The first thing the user asked, which is what a list calls the session.
     pub first_prompt: Option<String>,
+    /// How many manifest runs this open session has started. Numbers the runs in events.
+    ///
+    /// Not saved: a run is written as its own record (MANIFEST-11), and the session's record
+    /// holds nothing about it.
+    pub runs: usize,
     /// The language servers this session has started (LSP-8). `None` until a turn builds the set.
     ///
     /// The session holds the set so that an approved server answers later turns. A set owned by
@@ -112,6 +117,7 @@ impl State {
             asides: Vec::new(),
             rewind: Vec::new(),
             first_prompt: None,
+            runs: 0,
             servers: None,
         }
     }
@@ -152,6 +158,7 @@ impl State {
             asides: bravebot_session::sessions::recall(project, record).asides,
             rewind: record.rewind_points(project),
             first_prompt: Some(record.title.clone()),
+            runs: 0,
             servers: None,
         }
     }
@@ -209,6 +216,7 @@ impl State {
             asides: Vec::new(),
             rewind: Vec::new(),
             first_prompt,
+            runs: 0,
             servers: None,
         }
     }

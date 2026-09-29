@@ -1000,3 +1000,25 @@ fn a_server_prompt_carries_what_would_run_and_whether_it_builds() {
         "a server that builds nothing was said to build"
     );
 }
+
+/// Every step crosses, in order and unshortened, because the answer covers the whole plan
+/// (MANIFEST-10). The question carries no answer of its own.
+#[test]
+fn a_plan_prompt_carries_the_task_and_every_step() {
+    use bravebot_agent::confirm::ManifestRequest;
+    let steps: Vec<String> = (1..=40)
+        .map(|number| format!("{number}. [read] read file-{number}.md into `slot{number}`"))
+        .collect();
+    let value = wire::manifest_request(
+        8,
+        &ManifestRequest {
+            task: "summarise every file".into(),
+            steps: steps.clone(),
+        },
+    );
+
+    assert_eq!(
+        value,
+        json!({ "request": 8, "task": "summarise every file", "steps": steps })
+    );
+}
