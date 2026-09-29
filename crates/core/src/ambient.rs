@@ -369,19 +369,15 @@ pub fn spent_by(plan: &Plan) -> Vec<Spent> {
     spent
 }
 
-/// The authority a host is, where reaching it is reaching one.
-///
-/// Matched whole rather than searched for, because a host is a name and not a line:
-/// `169.254.169.254.example.test` is somebody's domain and resolves wherever they say, so a
-/// substring test here would name the metadata service for a request that never goes near it.
-/// That is the one place in this module where a generous match costs something, since the
-/// sentence it draws would be false rather than merely unnecessary.
-///
 /// One dotted part of an address spelling, as a number of the bytes it holds.
 ///
 /// A leading `0x` is hexadecimal and a leading `0` octal, which are how `getaddrinfo` reads a
 /// part, so `0xA9` and `0251` are both 169 here as well.
 fn part_bytes(part: &str, bytes: usize) -> Option<u32> {
+    // `from_str_radix` accepts a leading sign, which a resolver does not.
+    if part.starts_with(['+', '-']) || part.strip_prefix("0x").is_some_and(|r| r.starts_with('+')) {
+        return None;
+    }
     let value = if let Some(rest) = part.strip_prefix("0x").or_else(|| part.strip_prefix("0X")) {
         u32::from_str_radix(rest, 16).ok()?
     } else if part.len() > 1 && part.starts_with('0') {
@@ -442,6 +438,13 @@ fn parse_address(host: &str) -> Option<IpAddr> {
     }
 }
 
+/// The authority a host is, where reaching it is reaching one.
+///
+/// Matched whole rather than searched for, because a host is a name and not a line:
+/// `169.254.169.254.example.test` is somebody's domain and resolves wherever they say, so a
+/// substring test here would name the metadata service for a request that never goes near it.
+/// That is the one place in this module where a generous match costs something, since the
+/// sentence it draws would be false rather than merely unnecessary.
 pub fn at_host(host: &str) -> Option<Spent> {
     // A bracketed IPv6 literal and a trailing root dot are both spellings of the same host, and
     // the authority is a property of the host rather than of how a URL wrote it.
@@ -734,5 +737,13 @@ mod tests {
         assert_eq!(at_host("169.254.169.255"), None);
         assert_eq!(at_host("2852039167"), None);
         assert_eq!(at_host("evil.example"), None);
+    }
+
+    /// A sign is not part of a number to a resolver, so a spelling holding one is not an address.
+    #[test]
+    fn a_signed_part_is_not_a_spelling_of_the_metadata_address() {
+        assert_eq!(at_host("+169.254.169.254"), None);
+        assert_eq!(at_host("169.254.169.+254"), None);
+        assert_eq!(at_host("0x+A9FEA9FE"), None);
     }
 }

@@ -330,6 +330,9 @@ one thing available before confinement is that nobody grants it thinking they gr
 `verified-by: bravebot_core::ambient::a_line_that_reaches_a_container_daemon_names_it`
 `verified-by: bravebot_core::ambient::a_tool_that_spends_on_one_command_is_named_for_that_command_alone`
 `verified-by: bravebot_core::ambient::the_metadata_service_is_named_by_the_address_and_not_by_the_argument`
+`verified-by: bravebot_core::ambient::a_numeric_spelling_of_the_metadata_address_is_the_metadata_service`
+`verified-by: bravebot_core::ambient::a_numeric_spelling_of_another_address_is_not_the_metadata_service`
+`verified-by: bravebot_core::ambient::a_signed_part_is_not_a_spelling_of_the_metadata_address`
 `verified-by: bravebot_tui::confirm::a_run_prompt_names_the_ambient_authority_a_line_reaches`
 `verified-by: bravebot_tui::confirm::a_fetch_prompt_says_what_the_metadata_service_is`
 `verified-by: bravebot_agent::turn::spending_an_ambient_authority_is_recorded_in_the_trail_and_an_ordinary_line_is_not`
