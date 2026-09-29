@@ -2894,6 +2894,26 @@ fn a_directory_by_name_is_refused_where_reads_stay_in_the_workspace() {
         "a refused directory was opened anyway"
     );
 
+    // A directory inside the workspace is refused by the same standing rule, since the refusal is
+    // made before the name is looked at. What it says must therefore hold for that name too: a
+    // reason claiming the path is outside the workspace would be false here, and would send
+    // somebody hunting for a path that resolves when none does.
+    let within = scratch.path.join("within");
+    std::fs::create_dir_all(&within).expect("create a directory inside the workspace");
+    let inside = within.to_str().expect("utf-8 path");
+    let said = workspace
+        .resolve_directory(inside)
+        .expect_err("a directory inside the workspace must not resolve either")
+        .to_string();
+    assert!(
+        said.contains("permissions.readsStayInWorkspace"),
+        "the refusal did not name the key that made it: {said}"
+    );
+    assert!(
+        !said.contains("outside"),
+        "the refusal called a path inside the workspace outside it: {said}"
+    );
+
     // And the same workspace without the key behaves exactly as one always has, so the refusal is
     // the setting rather than something else this fixture did.
     let mut ordinary = Workspace::new(&scratch.path)

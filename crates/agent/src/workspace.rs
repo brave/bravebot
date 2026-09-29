@@ -616,8 +616,13 @@ impl Workspace {
         if self.reads_stay_inside {
             return Err(WorkspaceError::Invalid {
                 path: directory.to_string(),
-                reason: "is outside the workspace, and permissions.readsStayInWorkspace keeps the \
-                         file tools inside it",
+                // Not "is outside the workspace": the refusal is returned above without looking at
+                // the name, so it is also given for a path inside the workspace, and a reason
+                // stating where the path sits would be false there. What is true of every name is
+                // that none opens while the key is set, which is also what tells somebody not to
+                // try a different path.
+                reason: "cannot be opened while permissions.readsStayInWorkspace keeps the file \
+                         tools inside the workspace",
             });
         }
         let candidate = Path::new(directory);
