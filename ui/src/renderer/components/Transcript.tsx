@@ -1673,6 +1673,59 @@ function Card({
       )
     }
 
+    case 'exposure': {
+      const { request, decision } = entry
+      const found = request.credentials.length
+      return (
+        <div className="confirm exposure">
+          <div className="confirm-head">
+            <span className="intent">send file</span>
+            <code className="path">{request.path}</code>
+            <span className="counts">
+              {found} finding{found === 1 ? '' : 's'}
+            </span>
+          </div>
+
+          <p className="warn">
+            The model asked to read this file, and what it reads goes to whoever performs
+            inference. The scan found something in it that looks like a credential. Sending
+            the file discloses that value.
+          </p>
+
+          {/* Each finding as the agent wrote it: a kind, a place and a mask. The value is
+              not sent to this window, so there is none here to draw. */}
+          <div className="permission-scope">
+            <strong>What the scan found, without any of the value:</strong>
+            <ul className="exposure-findings">
+              {request.credentials.map((finding, index) => (
+                <li key={index}>
+                  <code>{finding}</code>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <p className="permission-scope">
+            Keeping it back keeps this file’s text from the model and changes nothing else.
+            Your answer covers this file until this conversation closes. It is not saved, and
+            it does not change whether the file is trusted.
+          </p>
+
+          <YesOrNo
+            kind="exposure"
+            request={request.request}
+            answerable={answerable}
+            decision={decision}
+            onDecide={onDecide}
+            reject="Keep it back"
+            approve="Send it anyway"
+            approved="You sent this file to the model"
+            rejected="You kept this file back"
+          />
+        </div>
+      )
+    }
+
     case 'plan-task':
       return (
         <div className="bubble user plan-task">
@@ -1779,6 +1832,8 @@ function waitingOn(kind: t.Asking['kind']): string {
       return 'Answer the language server'
     case 'manifest':
       return 'Answer the plan'
+    case 'exposure':
+      return 'Answer the file with a credential'
     case 'vouch':
       return 'Answer the vouch'
     case 'ask':

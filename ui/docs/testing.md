@@ -12,9 +12,9 @@ and network diagnostics include every certificate trust problem reported upstrea
 The bridge uses policy-audited model-list decoding and Bedrock's per-model names and
 context windows. Trust maps are rooted in the session project. Resuming a terminal
 session preserves its saved side conversations and rewind checkpoints.
-The UI presents fetch, language-server and plan approvals. It does not yet present
-credential-exposure or MCP approvals; those requests are refused without consuming another
-pending approval.
+The UI presents fetch, language-server, plan and credential-exposure approvals. It does not
+present MCP approvals; those requests are refused without consuming another pending
+approval.
 
 Vetted reads now have one-time approval cards, existing output/path approvals include checker
 advice, and write approvals show the processor's remark beside the diff.
@@ -39,6 +39,10 @@ advice, and write approvals show the processor's remark beside the diff.
   whether it ran is read off the disk. Covers an approved plan, a declined plan, and a turn
   taken afterwards, which is sent nothing the run said. Then reads both runs' records from
   the session list, and checks that a record has no message box. No paid inference.
+- `npm run drive:exposure`: a read of a file holding a credential, through the real app and
+  bridge, against a model service the script serves itself. An approval hands the model the
+  file, a refusal keeps it back, and a new conversation asks again. The script checks that
+  the value is nowhere in the window's markup at any point. No paid inference.
 - After building, `node scripts/drive-agent-rpc.mjs`: an actual automatic watch turn against
   a local fake gateway, real lifecycle hook subprocesses, context measurements and stop/close.
   Uses an isolated agent home; no paid inference or real credentials.
@@ -98,6 +102,7 @@ at, that a control keeps keyboard focus through an animation.
 | `npm run drive:fetch` | Approving and refusing a fetch from the window, end to end, against a local model service and website |
 | `npm run drive:language-server` | Starting a language server from the window, that it is kept for the conversation, and that it ends with the app |
 | `npm run drive:plan` | Starting a manifest run from the composer, approving and declining its plan, that the run stays out of the conversation, and that its record is read and cannot be typed into |
+| `npm run drive:exposure` | Answering a read that would expose a credential, and that the value is never drawn |
 | `npm run drive:ask` | Answering a series of questions the planner asks, likewise live |
 | `npm run drive:menu` | The application menu: what it offers, what it greys, and what it refuses to offer |
 | `npm run drive:export` | Exporting a conversation to text, Markdown and PDF — with and without the tool calls, and what the file leaves out either way |

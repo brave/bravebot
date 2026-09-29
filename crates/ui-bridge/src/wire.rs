@@ -23,8 +23,8 @@
 //! typed.
 
 use bravebot_agent::confirm::{
-    Decision, FetchRequest, Intent, ManifestRequest, OutputRequest, RunDecision, RunRequest,
-    ServerRequest, VetRequest, VouchRequest, WriteRequest,
+    Decision, ExposureRequest, FetchRequest, Intent, ManifestRequest, OutputRequest, RunDecision,
+    RunRequest, ServerRequest, VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::conversation::{Composed, Said};
 use bravebot_agent::diff::Change;
@@ -490,6 +490,20 @@ pub fn manifest_request(id: u64, request: &ManifestRequest) -> Value {
         "request": id,
         "task": request.task,
         "steps": request.steps,
+    })
+}
+
+/// A vouched file the planner asked to read, which the scan found a credential in.
+///
+/// `credentials` has one line per finding, as the agent wrote it: the kind, where it is, and a
+/// mask of the value. No line holds any part of a value, and the file's text is not sent
+/// (CRED-19). A front end draws the lines as sent.
+pub fn exposure_request(id: u64, request: &ExposureRequest) -> Value {
+    json!({
+        "request": id,
+        "path": request.path,
+        "credentials": request.credentials,
+        "summary": request.summary(),
     })
 }
 

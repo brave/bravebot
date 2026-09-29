@@ -47,6 +47,8 @@ pub enum Kind {
     Server,
     /// Whether to run a frozen plan. Asked once per manifest run, before its first step.
     Manifest,
+    /// Whether the planner may be given a vouched file the scan found a credential in.
+    Exposure,
     Ask,
 }
 
@@ -82,6 +84,7 @@ pub enum Reply {
     Fetch(Decision),
     Server(Decision),
     Manifest(Decision),
+    Exposure(Decision),
     /// One answer per question, in the order they were asked. Empty means nobody could be
     /// asked — see [`Confirmer::ask_user`].
     Ask(Vec<Answer>),
@@ -98,6 +101,7 @@ impl Reply {
             Reply::Fetch(_) => Kind::Fetch,
             Reply::Server(_) => Kind::Server,
             Reply::Manifest(_) => Kind::Manifest,
+            Reply::Exposure(_) => Kind::Exposure,
             Reply::Ask(_) => Kind::Ask,
         }
     }
@@ -115,7 +119,8 @@ impl Reply {
             | Reply::Vet(decision)
             | Reply::Fetch(decision)
             | Reply::Server(decision)
-            | Reply::Manifest(decision) => Some(*decision),
+            | Reply::Manifest(decision)
+            | Reply::Exposure(decision) => Some(*decision),
             Reply::Run(_) | Reply::Ask(_) => None,
         }
     }
@@ -140,6 +145,7 @@ impl Kind {
             Kind::Fetch => Reply::Fetch(Decision::Reject),
             Kind::Server => Reply::Server(Decision::Reject),
             Kind::Manifest => Reply::Manifest(Decision::Reject),
+            Kind::Exposure => Reply::Exposure(Decision::Reject),
             // No answers at all, which is how this question says nobody was asked.
             Kind::Ask => Reply::Ask(Vec::new()),
         }
@@ -479,15 +485,21 @@ impl Confirmer for BridgeConfirmer {
         })
     }
 
-    // The capabilities below have no approval UI yet. Never grant authority for a request the
-    // person could not review.
-
-    /// Refuses, for the reason the rest of these do: this application draws no screen for it, and
-    /// a yes here would send a credential to a model on nobody's word. What it costs is the text
-    /// of one file, and the planner is told why it did not get it.
-    fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
-        Decision::Reject
+    /// Ask whether the planner may read a vouched file the scan found a credential in (CRED-15).
+    ///
+    /// The request names the file and each finding: a kind, a location and a masked preview. It
+    /// carries no part of a value and no text of the file (CRED-19).
+    ///
+    /// An approval discloses the file to the model. It covers this file for the session and
+    /// writes no rule. A refusal keeps the file's text from the planner, which is told why.
+    fn confirm_exposing_read(&mut self, request: &ExposureRequest) -> Decision {
+        self.yes_or_no(Kind::Exposure, "exposure.request", |id| {
+            wire::exposure_request(id, request)
+        })
     }
+
+    // The questions below are about MCP servers, which this application does not start. It
+    // has no card for them, so each is refused.
 
     fn confirm_tool_list(
         &mut self,

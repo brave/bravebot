@@ -37,7 +37,7 @@ it under whatever the trust map says about that path. See
 ## Decisions and refusal
 
 The transcript presents write, command, command-output, path-vouch, fetch, language-server,
-plan and user-question requests. Replies must match both the pending request ID and its kind. Within a turn, an unknown
+plan, credential-exposure and user-question requests. Replies must match both the pending request ID and its kind. Within a turn, an unknown
 or consumed ID cannot approve another request. Clients discard pending questions
 when a turn ends because IDs may recur in later turns. Malformed decisions decline;
 question answers are checked against the offered choices.
@@ -64,9 +64,15 @@ write is still asked about when its step is reached. What a run releases for a s
 a file's text, so the window draws it as plain text in a marked container and never formats
 it. A run is not part of the conversation and is left out of an export.
 
-The agent also asks before a read that would expose a credential, and before starting or
-calling an MCP server. The UI does not present those requests yet; the bridge refuses them
-without taking an answer intended for another pending question.
+A credential-exposure approval is asked when the planner reads a trusted file that the scan
+found a credential in. The card names the file and each finding, which is a kind, a place
+and a mask. The value is not sent to the window, so it is never drawn. An approval sends the
+file to the model and covers that file until the conversation closes. It is not saved and
+does not change whether the file is trusted. A refusal keeps the file's text from the model.
+
+The agent also asks before starting or calling an MCP server. The desktop app starts no MCP
+server, and the bridge refuses those requests without taking an answer intended for another
+pending question.
 
 Vetted-content approval releases only the displayed bytes once; it does not create a trust
 rule for future reads. Checker verdicts are advisory. Checking already sends the content

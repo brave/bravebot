@@ -941,6 +941,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .confirm.server .confirm-head .server-language { font-family: inherit; }
 .confirm.server .permission-scope code { overflow-wrap: anywhere; }
 
+/* A file that holds a credential is bordered as a warning, since a yes discloses the value. */
+.confirm.exposure { border-color: var(--warn); border-width: 2px; }
+.exposure-findings { margin: 4px 0 0; padding-left: 18px; }
+.exposure-findings code { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+
 /* A plan to approve. The steps scroll inside the card so a long plan keeps its buttons in reach. */
 .confirm.manifest .confirm-head .manifest-count { font-family: inherit; color: var(--ink-dim); }
 .manifest-steps { list-style: none; margin: 0; padding: 8px 12px; max-height: 320px; overflow: auto; border-top: 1px solid var(--line); }

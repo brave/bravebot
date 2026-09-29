@@ -141,6 +141,7 @@ impl Bridge {
             "manifest.run" => self.start_manifest(request),
             "manifest.read" => crate::manifest::read(request),
             "manifest.reply" => self.reply_decision(request, Reply::Manifest),
+            "exposure.reply" => self.reply_decision(request, Reply::Exposure),
             "ask.reply" => self.reply_ask(request),
             "trust.reply" => self.reply_trust(request),
             "permissions.list" => self.permissions(request, false),

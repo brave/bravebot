@@ -148,9 +148,9 @@ Honest limits. Two things could eventually want an upstream change, and neither 
 - **Structured `doctor` output.** The checks live in `crates/cli/src/main.rs`, a binary,
   so they cannot be called as a library. v1 shells out to `bravebot doctor` and shows its text
   (§7.3). A small upstream extraction would be nicer and is optional.
-- **New approval types.** Command, fetch, language-server and plan approval are
-  implemented. Credential-exposure and MCP requests are currently refused; adding UI support
-  requires adapting the bridge, not editing upstream.
+- **New approval types.** Command, fetch, language-server, plan and credential-exposure
+  approval are implemented. MCP requests are currently refused; adding UI support requires
+  adapting the bridge, not editing upstream.
 
 If anything else appears to need an upstream edit, that is a signal the bridge is
 reaching for something it should not, and it should be raised rather than patched.
@@ -617,10 +617,10 @@ See §8. Returns `{}`. An unknown or already-answered `request` errors
 #### Other decision replies
 
 `run.reply`, `output.reply`, `vouch.reply`, `fetch.reply`, `server.reply`,
-`manifest.reply` and `ask.reply` all require `session` and `request`, and must match the
-pending question's kind as well as its ID. `run.reply` accepts `decision` and `remember`; only an approval with literal
-`remember: true` records a command grant. Output, vouch, fetch, server and manifest replies
-accept `decision`. A fetch reply has no `remember`: an approval covers the one URL it was given
+`manifest.reply`, `exposure.reply` and `ask.reply` all require `session` and `request`, and
+must match the pending question's kind as well as its ID. `run.reply` accepts `decision` and `remember`; only an approval with literal
+`remember: true` records a command grant. Output, vouch, fetch, server, manifest and
+exposure replies accept `decision`. A fetch reply has no `remember`: an approval covers the one URL it was given
 for. A server reply has none either: an approval lasts as long as the session does.
 `ask.reply` accepts an `answers` array, whose entries contain `typed` text or `chosen`
 indices; unreadable entries decline. Choices are fitted to the question before use.
@@ -733,6 +733,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `manifest.started` | `{ run }` | a manifest run began; `run` counts runs in this open session |
 | `manifest.done` | `{ run, reply, model, steps, clean, tokens, outputTokens, notices, attempt, record, trust }` | a run finished |
 | `manifest.error` | `{ run, kind, message, category, attempts, status, stopped, declined, problem, attempt, record, notices }` | a run stopped |
+| `exposure.request` | `{ request, path, credentials, summary }` | let the planner read a file holding a credential |
 | `ask.request` | `{ request, prompts }` | user questions |
 | `trust.request` | `{ directory, keeping }` | initial project trust; `keeping` as §9 |
 | `turn.done` | see §8.2 | `Ok(Outcome)` |
@@ -980,8 +981,8 @@ the directory was made.
 
 ## 11. Current limits
 
-- Credential-exposure and MCP approval requests are refused until their UI is implemented.
-  Command, output, vouch, fetch, language-server, plan and question approvals are implemented.
+- MCP approval requests are refused until their UI is implemented. Command, output, vouch,
+  fetch, language-server, plan, credential-exposure and question approvals are implemented.
 - A manifest run's audit events carry `run` and no `turn`. The window does not show them yet.
 - What a manifest run released for a screen is not saved, so a run read back does not show it.
 - Replies arrive whole in `turn.done`; output-token events report counts, not text.
@@ -1197,4 +1198,10 @@ Still open:
   `proposed`, `plan` and `steps`, as `attempt` does, and `failure`, which is the agent's
   sentence about why the run stopped and is null for a run that finished. It is refused with
   `bad_request` for a session's record, and with `no_such_session` for an id that names none.
+- `exposure.request` carries `request`, `path`, `credentials` and `summary`. `credentials` has
+  one line per finding, as the agent wrote it: the kind, where it is, and a mask of the value.
+  No part of a value and no text of the file is sent. `exposure.reply` carries the session,
+  request and explicit decision, and its kind is distinct from every other reply's.
+- An approval covers the file for the session, as the agent keeps it. It is not written to the
+  record, so a reopened or new session asks again.
 
