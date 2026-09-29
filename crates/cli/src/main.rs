@@ -2153,6 +2153,24 @@ fn doctor() -> ExitCode {
                     ),
                 );
             }
+            for path in settings.providers_ignored() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_provider_ignored,
+                        path = path.display().to_string()
+                    ),
+                );
+            }
+            for path in settings.model_ignored() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_model_ignored,
+                        path = path.display().to_string()
+                    ),
+                );
+            }
 
             // The same, for the other name a checkout cannot answer on its own: an `allow` entry
             // stops a prompt, so one read out of a file that arrived with a clone would run a

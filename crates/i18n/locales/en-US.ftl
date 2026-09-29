@@ -334,6 +334,12 @@ doctor-settings-overridden = { $name } from { $path }
 doctor-settings-ignored = ignored
 doctor-settings-vetting-ignored =
     vetting.auto in { $path } is not obeyed: it is read from ~/.bravebot/settings.json only
+# A provider block or a model key a layer that may not pick a backend wrote, named for the same
+# reason: a checkout cannot choose where requests go, and a line that does nothing is worth saying so.
+doctor-settings-provider-ignored =
+    provider in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-model-ignored =
+    model in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 # An allow rule a layer that may not grant one wrote. Named one at a time and with its file, for
 # the reason the vetting line gives: a rule that looks like configuration and does nothing is the
 # one worth saying out loud.
