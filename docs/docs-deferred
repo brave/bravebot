@@ -6,5 +6,5 @@
 # `docs-ref.py changes` replays these ahead of the new span. Drop one with
 # `docs-ref.py resolve <sha>` once its behaviour is documented.
 
-bd84f979124de860f4c1874291ca8d86ea3ead75 MCP tool failures carry the server's detail, but no settings key wires up a server yet
 035a6112c4d7118e1aa8135e8d4154d5313e88d9 credential-protection.md is status: proposed with every clause verified-by: none, so documenting it would describe behaviour not in force; fold it in when the spec goes normative and its clauses are pinned
+cb739c3c9dc4288bfaf26f2d84218b6aec64d1bf DROP-10: the drop list a front end sends over the protocol is desktop or bridge behaviour, and no page describes a desktop or bridge front end yet; fold it in when one exists

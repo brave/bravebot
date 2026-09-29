@@ -373,7 +373,7 @@ bare invocation alike. It cannot be turned off once the session has started.
 
 ### What it does not cover
 
-Seven things still reach the filesystem:
+Nine things still reach the filesystem:
 
 - **Your project.** `write_file` and `edit_file` go on editing it. Those edits are the work rather
   than a trace of it.
@@ -388,6 +388,10 @@ Seven things still reach the filesystem:
   directory on the same terms as the editor's file and goes with the session. Its name says which
   program made it and nothing about which project or which session, so an empty one records only that
   this program ran at this time.
+- **A language server's index.** A server indexes the workspace before it can answer anything, and
+  the index is too large to hold in memory. It goes to a directory of its own in the system temporary
+  directory and goes with the session, so the next session indexes again. It is never written into the
+  project.
 - **A local MCP server's home.** A [server](../customize/mcp-servers.md) is given a directory of its
   own to keep its files in, such as a runner's cache. Here it sits in the system temporary directory
   on the same terms and goes once the server stops, so a runner fetches its package again each
@@ -400,6 +404,10 @@ Seven things still reach the filesystem:
   fetched for the same subscription and written to the same file, rather than thrown away when you
   exit. What ends up in the file is credentials for a subscription you imported before the session
   and which of them are spent, and nothing about the project or what you asked.
+- **The copy of a picture you are asked to open.** When a [vetting](../security/vetting.md) prompt is
+  about a picture, you are handed a copy to open in your own viewer. It is written to
+  `bravebot/vetting` under your cache directory, readable by you alone, and removed when the prompt
+  closes. A process killed with the prompt open leaves it behind.
 - **A memory left untrusted.** Where the session writes something nobody vouched for into a
   [delegate definition's memory](../customize/agents.md#memory),
   the path is recorded under `~/.bravebot/untrusted`, so that your next session does not read it as

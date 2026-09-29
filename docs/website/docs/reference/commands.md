@@ -411,8 +411,8 @@ Plans one task in full, shows you the plan, then runs it with nothing re-planned
 **It is a run, not a mode the session holds.** The session starts one run, waits for it, and comes
 back to the turn loop. It is blocked for the duration: you can read, edit and stop, but not send.
 
-The conversation is neither read nor written. The task string is what the planner gets, so nothing
-from the conversation goes in, and a step's result is quarantined with no planner left to show it to,
+The conversation is neither read nor written. The task string is what the planner gets, along with
+any picture you pasted or dropped beside it, so nothing else from the conversation goes in, and a step's result is quarantined with no planner left to show it to,
 so nothing comes back out. What the transcript shows is the goal as the planner understood it, the
 frozen plan, each step as it runs, and the reply. The run leaves the conversation exactly as a
 declined plan leaves the workspace.
@@ -632,8 +632,9 @@ the keystroke is the only thing that may produce one.
 **The whole word, and an argument only after a space.** `/statusline` is not `/status`, and
 `what does /add-dir do` is a question. The set of words this program claims is taken out of the
 language you can use to talk to the planner, so it is claimed as narrowly as possible. The bare word
-with nothing after it is the command with an empty argument, answered by saying what it needs rather
-than by doing nothing quietly.
+with nothing after it is the command with an empty argument, answered by saying what it needs, or by
+doing what the bare word means where it means something of its own (`/loop` says what is repeating),
+rather than by doing nothing quietly.
 
 **In shell mode the line is a command line, not a command.** `! /usr/bin/env` runs a program. Nothing
 is offered for completion there either, since `/usr/bin/env` is a path, and a turn running changes
@@ -646,7 +647,10 @@ model. A session asked to shorten itself must not answer by talking about shorte
 **The argument is taken verbatim**, spaces and all, with the surrounding whitespace trimmed and
 nothing else done to it. A leading `~` is expanded only as a whole first segment, so a directory whose
 own name begins with a tilde is not a home-relative path. Nothing shortens it, splits it, or asks the
-planner what it meant.
+planner what it meant. The one exception is the marker for a picture you pasted or a file you dropped
+beside the line. A command that cannot carry it gets words in place of a picture and the file's name in
+place of a drop. `/btw`, `/manifest` and `/loop` send their argument, so a marker stays in
+it and the picture or file goes with it.
 
 **While a turn runs the word waits.** A command typed mid-turn comes off the box and joins the lines
 waiting for the turn to end, exactly as a prompt does: the box clears, the history remembers it, and it

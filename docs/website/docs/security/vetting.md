@@ -109,7 +109,12 @@ check reads what the answer covers.
 All three, because otherwise the quickest way past a check is to ask for the prompt that does not run
 one. The one exemption is [bypassing mode](permissions.md), which draws no prompt at all: there a check
 would be a model call whose word nobody reads, so the verdict is filled in as inconclusive, which claims
-nothing.
+nothing. That holds when the run asked for no screening. With `--vet` the check is made on the two
+prompts that release one slot, because its word is what answers.
+
+A check takes a moment, so the interface says when one begins, with how many lines it was given (or
+that it is a picture or a PDF), and says when it is over, including when it ended in a failure. The
+notice carries nothing of the content and nothing of the verdict.
 
 ## What comes back
 

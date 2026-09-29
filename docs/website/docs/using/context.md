@@ -128,6 +128,21 @@ A screenshot somebody sent you is content you have not read and are vouching for
 turn as trusted input on the strength of the gesture alone.
 :::
 
+## Pictures and files on a slash command
+
+A [slash command](../reference/commands.md) that sends words to a model takes a pasted picture or a
+dropped image or PDF along with them: [`/btw`](../reference/commands.md#btw-question) and
+[`/manifest`](../reference/commands.md#manifest-task) send the file with the question or the task.
+A text file dropped onto either becomes its name in the words, because those requests have no room
+for its contents. [`/loop`](../reference/commands.md#loop-interval-prompt) sends the picture or file
+on its first run, and every later run sends the marker as the file's name. A command that the
+interface carries out itself sends nothing to a model, so a marker on its line becomes the file's
+name, or words saying a picture was pasted and cannot be shown, and you are told it did not go.
+
+The same holds for a command that waited behind a running turn. Running a slash command counts as
+sending the line: what it named comes off the box with it, so nothing stays attached to a line that is
+no longer there.
+
 ## Piping
 
 ```sh

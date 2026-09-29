@@ -14,7 +14,12 @@ At startup you are asked whether you trust the working directory.
 - **Trust and remember** (`r` in the terminal interface, a third button in the desktop app) trusts it
   as a yes does and writes the answer down, so later sessions started in exactly that directory are
   not asked. See [Remembering the answer](#remembering-the-answer).
-- **Leaving at the question starts no session.**
+- **Leaving at the question starts no session.** It takes Ctrl-C twice, because a program writing
+  into your terminal, such as an editor activating a virtualenv, can send one Ctrl-C by itself.
+
+A question like this is answered only by a key that arrived on its own. Several keys arriving together
+are a paste or another program typing, so they answer nothing and are carried to the input box
+instead, where you can read what they were.
 
 That record is the **trust map**, and it is the thing every read and every write consults.
 

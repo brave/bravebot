@@ -31,7 +31,9 @@ growing further. It keeps growing while a turn runs.
 | Shift-Tab | choose how much the session asks before it acts |
 | `?` | on an empty line, list every key |
 
-Enter on an empty line does nothing. Shift-Enter needs a terminal that reports the modifier
+Enter on an empty line does nothing. An Enter that arrives in the same read as other keys, as when a
+program writes a line and its return into the terminal, does not send: the line stays in the box and
+the row beneath says so. Pressing Enter again on its own sends it. Shift-Enter needs a terminal that reports the modifier
 (Ghostty, Kitty, WezTerm) or one configured to send a newline; **Ctrl-J is the fallback that always
 works**, in every terminal and in shell mode too.
 
@@ -432,10 +434,18 @@ Escape only ever stops, and never leaves. Ctrl-C is read against what is happeni
 |---|---|
 | a turn in flight, or a command running | stops it, and the session stays where it was |
 | nothing running, a line in the box | takes the line, and offers the way out |
-| nothing running, an empty box | ends the session |
+| nothing running, an empty box | offers the way out |
+| nothing running, an empty box, the way out already offered | ends the session |
 
-Taking the line says so, on the row beneath the box, and names the key that ends the session. That
-offer lives for exactly one press.
+Offering the way out says so on the row beneath the box, and names the key that ends the session.
+Ctrl-D leaves an empty box the same way. The offer lives for exactly one press: any input that is not
+one of the two keys that leave withdraws it, a mouse report or a resize included, and letting go of a
+key does not.
+
+**Leaving takes two separate presses.** Ctrl-C or Ctrl-D that arrives in the same read as other input
+does not count, and neither does one that answers an offer made by the same read. A program that
+writes into the terminal, such as an editor activating a virtualenv, therefore cannot end the session
+with one byte or with two. Stopping a turn still answers the first press.
 
 **Stopping shows a cancelled status**, which is its own outcome rather than a failure or an answer.
 The reply stops arriving, and the prompt comes back to the box for editing when the box can take it:
@@ -647,7 +657,9 @@ See [Adding context](context.md) for what each kind of attachment does.
 
 ## Slash commands and `@path`
 
-Typing `/` offers the commands, and typing `@` opens a picker over the workspace with directories
+Typing `/` offers the commands and, beneath them, the [skills](../customize/skills.md#naming-a-skill-after-a-slash)
+the session has. A command or skill typed in full is drawn in the prompt's colour, and once a space
+follows it the argument it takes appears dimly after the caret. Typing `@` opens a picker over the workspace with directories
 first: a prefix narrows it, a slash descends, Tab completes without disturbing the rest of the
 sentence, and version-control and build directories are not offered. Sending a prompt that ends in a
 half-typed reference completes it rather than sending the fragment.
@@ -709,7 +721,8 @@ delegate a later turn spawned would be inserted above it and move its place.
 
 The view opens on an aside the moment it is answered, which is the one thing that opens this mode
 without your having pressed the key. You typed the question a moment ago, and an answer left behind a
-key nobody told you about is not an answer. Leaving puts the turn's own view back where it was.
+key nobody told you about is not an answer. Any other mode you opened while you waited is put away as it opens, and leaving puts the turn's own
+view back where it was.
 
 **An aside leaves the transcript alone.** Neither the question nor the answer is drawn there, and an
 answer arriving while the turn is still going is not drawn over it: the aside lives in this view and
@@ -727,14 +740,16 @@ to a delegate: it was given one task, has nobody to ask, and takes no line typed
 
 **What is on the screen only moves when you ask.** A delegate finishing leaves the view on it; a
 delegate starting takes the screen from neither an older one you are reading nor a command you have
-open, and does not move the cursor in the list either. Nothing the turn reports moves an open view.
+open, and does not move the cursor in the list either. Nothing the turn reports moves an open view, and nor does anything that happens without a press: a
+queued prompt starting its turn, a loop tick coming due, a watch firing, a goal sending the work back,
+or a command line that waited being run.
 
 Escape and Ctrl-C reach this mode before they reach what is running behind it, whether that is a turn,
 a summary, an aside or the check a goal is judged by, so the press that closes the view leaves all of
 them alone and a goal armed behind a check is not touched.
 
-A delegate keeps more of its work than its block draws, and drops its oldest once it has made several
-hundred calls, so arriving late at a very long run means reading from wherever that bound has reached.
+A delegate keeps more of its work than its block draws, and drops its oldest once it holds several
+hundred lines, so arriving late at a very long run means reading from wherever that bound has reached.
 
 **None of this reaches a model.** The planner that asked is told the report and nothing else, no
 delegate is part of the record a session is resumed from, and `/clear` forgets them and what the

@@ -77,9 +77,11 @@ Everything that should outlive a session lives here:
 |---|---|
 | `~/.bravebot/AGENTS.md` | standing instructions for every project |
 | `~/.bravebot/skills/<name>/SKILL.md` | skills available in every project |
+| `~/.bravebot/agents/<name>.md` | [delegate definitions](agents.md) available in every project |
 | `~/.bravebot/sessions/<directory>/` | session records and audit trails |
 | `~/.bravebot/lsp/<workspace>/` | a language server's index, one per workspace ([`lsp`](../reference/tools.md#the-index-is-cached-and-it-is-not-small)) |
 | `~/.bravebot/findings/<workspace>.jsonl` | the credentials a turn's own writes were found to hold, one per workspace |
+| `~/.bravebot/granted/<directory>.jsonl` | the permission rules a checkout proposed that you granted, one file per directory ([`permissions`](#permissions)) |
 | `~/.bravebot/trusted/<directory>.jsonl` | the answer to the startup question you pressed `r` for, one per directory ([remembering the answer](../security/trust.md#remembering-the-answer)) |
 | `~/.bravebot/untrusted/<directory>.jsonl` | the [delegate definitions' memories](agents.md#memory) a write left untrusted, one per directory |
 | `~/.bravebot/history` | prompts you have sent |
@@ -400,7 +402,7 @@ one thing leaves everything else in force:
 | What | How the files combine |
 |---|---|
 | `env`, `provider`, `attribution`, `keybindings` | per name one level down; the value under a name is replaced whole |
-| `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories` | every file's entries are kept |
+| `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
 | `model`, anything else | the closest file that set it wins |
 
