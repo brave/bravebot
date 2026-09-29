@@ -329,6 +329,7 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
             json!({
                 "program": stage.program,
                 "resolved": stage.resolved,
+                "startedAs": stage.started_as,
                 "args": stage.args,
                 "display": stage.as_written(),
             })

@@ -861,7 +861,7 @@ fn program(request: &RunRequest) -> Vec<String> {
         lines.push(shown(&step.as_written()));
         // The binary under the name, because a name is not a program: `$PATH` decides what `grep`
         // means, and this is what will run.
-        lines.push(format!("  {}", shown(&step.resolved.to_string_lossy())));
+        lines.push(format!("  {}", shown(&step.binary())));
     }
     if !request.plan.writes.is_empty() {
         lines.push(t!(run_writes).to_string());
@@ -1693,6 +1693,28 @@ mod tests {
         assert!(
             !lines.contains(t!(run_spends_authority)),
             "a line reaching no ambient authority was said to spend one: {lines}"
+        );
+    }
+
+    /// A name that reached its file through a link is asked about with the link beside the file,
+    /// since the link is what starts and an entry for the line is keyed on both.
+    #[test]
+    fn a_run_started_through_a_link_is_asked_about_with_the_link() {
+        let pipeline =
+            bravebot_core::command::Pipeline::new(vec![bravebot_core::command::Stage::new(
+                "python",
+                vec!["-V".to_string()],
+            )]);
+        let mut request =
+            RunRequest::from_pipeline(&pipeline, &["/usr/bin/python3.12".to_string()], "/work");
+        if let bravebot_core::command::Steps::Pipeline(steps) = &mut request.plan.steps {
+            steps[0].started_as = "/work/.venv/bin/python".into();
+        }
+
+        let lines = program(&request).join("\n");
+        assert!(
+            lines.contains("/work/.venv/bin/python -> /usr/bin/python3.12"),
+            "the question does not say the link is what starts: {lines}"
         );
     }
 

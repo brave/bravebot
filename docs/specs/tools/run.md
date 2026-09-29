@@ -70,10 +70,33 @@ Untrusted text never becomes one. The endorsement is bound to that exact plan, s
 for the same steps joined differently, not for the same steps writing somewhere else, and not for
 the same steps in another directory.
 
+**A program is started by the path its name was found by.** That path is the name made absolute
+against the plan's directory, without following links. Some programs read the path they were started
+by, so `venv/bin/python` started by the interpreter it links to does not find its venv. On Windows
+the path is the file itself, since a virtual environment's `python.exe` there is a copy of the
+interpreter. The prompt shows the path and the file it leads to, and an entry records both
+([RUN-8](#RUN-8)). Just before each pipeline starts, each of its steps' paths is resolved again. If
+one no longer leads to the approved file, the pipeline is refused before any of its steps starts or
+any file it writes is opened.
+
+**An accepted gap.** A link repointed between that check and a step's spawn runs whatever it then
+points to. Starting by the resolved file closes the gap and breaks every venv, and refusing to start
+through a link refuses every venv too. The gap lasts from the check to the last step's spawn, and the
+steps before that one are running during part of it. Only a link the approval named can be changed
+in it.
+
 `verified-by: bravebot_core::policy::a_plan_without_an_endorsement_is_refused`
 `verified-by: bravebot_core::policy::an_endorsement_does_not_authorise_a_plan_that_writes_elsewhere`
 `verified-by: bravebot_agent::exec::a_stage_runs_the_binary_it_was_resolved_to`
 `verified-by: bravebot_agent::exec::a_pipeline_with_missing_resolutions_does_not_run`
+`verified-by: bravebot_agent::exec::a_program_named_through_a_link_is_started_by_the_link`
+`verified-by: bravebot_agent::exec::a_link_pointed_elsewhere_after_approval_is_refused`
+`verified-by: bravebot_agent::exec::a_background_link_pointed_elsewhere_after_approval_is_refused`
+`verified-by: bravebot_agent::programs::a_link_is_started_by_its_own_path`
+`verified-by: bravebot_core::command::two_spellings_of_one_binary_encode_apart`
+`verified-by: bravebot_core::command::an_argument_holding_an_arrow_is_quoted`
+`verified-by: bravebot_tui::confirm::a_run_prompt_shows_the_link_a_program_is_started_by`
+`verified-by: bravebot_cli::plain::a_run_started_through_a_link_is_asked_about_with_the_link`
 
 <a id="RUN-3"></a>
 ### RUN-3: stdin is content and may be untrusted
@@ -253,7 +276,7 @@ and do not let anything else mint an entry.
 `verified-by: bravebot_core::policy::a_turn_inherits_what_the_session_vouched_for`
 
 <a id="RUN-8"></a>
-### RUN-8: an entry is keyed by resolved path, exact arguments, and the tree it was given in
+### RUN-8: an entry is keyed by resolved path, the path that starts it, exact arguments, and the tree it was given in
 
 `git log` says nothing about `git push`, and nothing about `git log --all`. `$PATH` and aliases
 decide what a name means, so an assertion must not follow a name onto a different binary. Never
@@ -279,6 +302,12 @@ too.
 `sub` are one tree, and three keys for it would be three chances for a prompt somebody has already
 answered to appear again. Resolution happens where the I/O does, before a plan exists, for the
 reason the program is the resolved path.
+
+**The path that starts the program is keyed with the file.** One file started by two paths can
+behave as two programs ([RUN-2](#RUN-2)), for example a venv's `python` and the interpreter it links
+to, or a multi-call binary that reads the name it was started by. An entry holds both paths, so an
+answer about `venv/bin/python` covers the interpreter only when it is started by that link. A record
+with no start path reads back as the file started by its own path.
 
 **The path itself, and never a rendering of it.** A path is bytes, and not every sequence of bytes is
 text. `to_string_lossy` maps every byte it cannot read onto one replacement character, so two files
@@ -313,16 +342,14 @@ question is put before a rule in a settings file is consulted, as
 run together, a rendering an assignment is not in, so no rule anybody could write tells the two lines
 apart.
 
-**A key is built by destructuring the step, never by reading its fields.** The three paragraphs above
-were each written after the same defect: a key holding less than the prompt displayed, so one answer
-covered a line nobody read. The environment was missing, then the tree, then the path's own bytes.
-Each was corrected where it was found, and nothing stopped the next function from being written the
-same way, because reading two fields of a step and stopping there is not something a compiler has any
+**A key is built by destructuring the step, never by reading its fields.** The paragraphs above
+name the fields of a step that decide what runs, and a key that leaves one out lets one answer cover
+a line nobody read. Reading two fields of a step and stopping there is not something a compiler has any
 reason to report. So every function that builds a key, an entry, or an encoding of a step opens by
 destructuring it, naming a field `_` where it is deliberately left out, and a field added to the step
-stops the build at each one until somebody decides whether the key holds it. The same holds of the
-code that applies a step to a process: a field that changes what runs and is in no key is a line
-running differently from the one that was approved.
+stops the build at each one until somebody decides whether the key holds it. The same holds of the code that applies a step to a process: a
+field that changes what runs and is in no key is a line running differently from the one that was
+approved.
 
 A compiler reports the field added to the step, and `make check-security` reports the function newly
 written to read one field at a time, which is the half a compiler cannot see. Neither is a habit
@@ -331,8 +358,9 @@ somebody has to hold, and the second fails the same pull request that introduces
 A function may read a step field by field for something that is not a key, and the two that do are
 named under `reads_a_step_without_keying` above rather than left to be recognised. `plan_lines` builds
 the rendering a `deny` rule is matched against, which is the program and its arguments run together
-and deliberately not the whole step. `read_proven` refuses a step carrying an assignment or a route
-before it reads anything else, so the fields it goes on to read are the only ones such a step has. A
+and deliberately not the whole step. `read_proven` first refuses a step that carries an assignment or
+a route, is started from inside the project, or is started by a name other than its file's. The
+fields it reads after that are the only ones such a step has that can change what it does. A
 third one is an edit to this list, which is the point: admitting one is something somebody reviews.
 
 **A known cost.** `NO_COLOR=1 cargo test` and `RUST_LOG=debug ./demo` are ordinary work, and they are
@@ -369,6 +397,12 @@ meaning is not in its argv, not the setting of a variable.
 `verified-by: bravebot_core::command::a_spelling_names_the_path_it_was_taken_from`
 `verified-by: bravebot_core::command::a_text_spelling_holding_a_replacement_character_names_no_path`
 `verified-by: bravebot_core::command::a_path_that_really_holds_a_replacement_character_still_names_itself`
+`verified-by: bravebot_core::programs::two_spellings_of_one_binary_are_two_entries`
+`verified-by: bravebot_core::programs::a_command_started_through_a_link_reads_back_as_the_link_and_the_file`
+`verified-by: bravebot_core::programs::arguments_that_spell_a_link_draw_apart_from_the_link`
+`verified-by: bravebot_core::policy::vouching_does_not_follow_a_binary_onto_another_path_it_is_started_by`
+`verified-by: bravebot_core::policy::a_program_started_by_another_name_or_from_the_project_is_not_proven`
+`verified-by: bravebot_session::sessions::the_path_a_command_was_started_by_comes_back_with_it`
 
 <a id="RUN-9"></a>
 ### RUN-9: the vouched list belongs to the session
@@ -809,10 +843,11 @@ relabelling exists to stop meaning two things, read by a person who has met the 
 elsewhere.
 
 **What is recorded is the line, not text a pattern could be read out of.** The stage as it was
-approved: the program's name, the binary that name resolved to, the argument list as it was given
-with each argument its own field, every environment assignment the line carried with each name and
-each value its own field, and where its output was sent. A later line is covered when every one of
-those is the same and the name still resolves to the same binary, and in no other case. The name is
+approved: the program's name, the binary that name resolved to, the path that started it
+([RUN-2](#RUN-2)), the argument list as it was given with each argument its own field, every
+environment assignment the line carried with each name and each value its own field, and where its
+output was sent. A later line is covered when every one of those is the same and the name still
+resolves to the same binary by the same path, and in no other case. The name is
 recorded as well as the binary because a name is what the person read, and a second name for the same
 binary is a line they have not seen; [RUN-8](#RUN-8) is what keeps a name from carrying the coverage
 on its own. Nothing in the record has a spelling that means "any text", so no key at this prompt can
@@ -827,7 +862,7 @@ reason. An assignment decides what a program loads and reads before its own argu
 which is why the hand-audited table refuses to prove a line carrying one
 ([command-line.md](command-line.md)), so a record that left it out would cover the line the person
 read with anything at all put in front of it. This is still a narrower key than a vouch has. A vouch
-is keyed on the resolved path and the exact arguments and nothing else ([RUN-8](#RUN-8)), so a
+is keyed on the program's two paths and the exact arguments and nothing else ([RUN-8](#RUN-8)), so a
 vouched entry covers the same program with its two streams merged; the session it was given in is
 what bounds that, and a record that outlives the session has no such bound.
 
@@ -987,6 +1022,7 @@ begun in either. And a line whose arguments differ every time is not helped at a
 `verified-by: bravebot_core::remembered::no_entry_reaches_a_second_argument_list`
 `verified-by: bravebot_core::remembered::a_second_name_for_the_same_binary_is_not_the_line_that_was_read`
 `verified-by: bravebot_core::remembered::an_answer_does_not_follow_a_name_onto_a_different_binary`
+`verified-by: bravebot_core::remembered::an_answer_does_not_follow_a_binary_onto_another_path_it_is_started_by`
 `verified-by: bravebot_core::remembered::an_environment_assignment_makes_a_different_line`
 `verified-by: bravebot_core::remembered::sending_the_streams_somewhere_else_makes_a_different_line`
 `verified-by: bravebot_core::remembered::a_pipeline_is_covered_only_where_every_stage_is`
@@ -1005,6 +1041,7 @@ begun in either. And a line whose arguments differ every time is not helped at a
 `verified-by: bravebot_core::policy::a_record_handed_over_again_replaces_what_it_held`
 `verified-by: bravebot_agent::remembered::a_line_written_by_one_session_is_read_back_by_another`
 `verified-by: bravebot_agent::remembered::every_field_of_a_line_survives_being_written_and_read`
+`verified-by: bravebot_agent::remembered::an_entry_with_no_start_path_covers_only_the_file_started_as_itself`
 `verified-by: bravebot_agent::remembered::a_second_answer_is_added_rather_than_replacing_the_first`
 `verified-by: bravebot_agent::remembered::a_line_answered_in_one_directory_does_not_answer_in_another`
 `verified-by: bravebot_agent::remembered::a_directory_sharing_a_key_with_another_is_not_answered_by_its_lines`

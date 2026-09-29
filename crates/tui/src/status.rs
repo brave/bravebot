@@ -1083,6 +1083,7 @@ mod tests {
                         bravebot_core::remembered::RememberedStep {
                             program: "make".to_string(),
                             resolved: std::path::PathBuf::from("/usr/bin/make"),
+                            started_as: std::path::PathBuf::from("/usr/bin/make"),
                             args: vec![format!("check{nth}")],
                             environment: Vec::new(),
                             routes: Vec::new(),

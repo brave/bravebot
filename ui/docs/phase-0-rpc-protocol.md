@@ -628,7 +628,7 @@ indices; unreadable entries decline. Choices are fitted to the question before u
 `permissions.list` takes `session` and returns `paths`, `commands` and `remembered`, the
 kept answer about the session's directory as §9 has it, read when the list is asked for.
 `permissions.revoke` takes `session` plus either `kind: "path"` and `path`,
-`kind: "command"` and `command: { program, args }`, or `kind: "remembered"`, which removes
+`kind: "command"` and `command: { program, startedAs, args }`, or `kind: "remembered"`, which removes
 every answer kept about the directory so the next session there is asked, and leaves this
 session's map as it is. It returns the updated lists, and refuses `kind: "remembered"` with
 `bad_request` where nothing is kept. These methods refuse with `turn_in_flight` while the

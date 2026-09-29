@@ -59,6 +59,12 @@ pub struct RememberedStep {
     ///
     /// [RUN-19]: ../../../docs/specs/tools/run.md
     pub resolved: PathBuf,
+    /// The path the step was started by, absolute and with no link in it followed.
+    ///
+    /// `python3` found through two entries in `$PATH` is one name and one file reached by two links,
+    /// and a program can read which of them started it. So this path is held beside the name and
+    /// the file.
+    pub started_as: PathBuf,
     /// The arguments, in order, each its own value.
     pub args: Vec<String>,
     /// `NAME=value` written in front of the program, each name and value its own value.
@@ -94,6 +100,7 @@ impl RememberedStep {
         let Step {
             program,
             resolved,
+            started_as,
             args,
             environment,
             routes,
@@ -101,6 +108,7 @@ impl RememberedStep {
         Self {
             program: program.clone(),
             resolved: resolved.clone(),
+            started_as: started_as.clone(),
             args: args.clone(),
             environment: environment.clone(),
             routes: routes.clone(),
@@ -127,6 +135,7 @@ impl RememberedStep {
         Step {
             program: self.program.clone(),
             resolved: self.resolved.clone(),
+            started_as: self.started_as.clone(),
             args: self.args.clone(),
             environment: self.environment.clone(),
             routes: self.routes.clone(),
@@ -358,6 +367,7 @@ mod tests {
         Step {
             program: program.to_string(),
             resolved: PathBuf::from(format!("/usr/bin/{program}")),
+            started_as: PathBuf::from(format!("/usr/bin/{program}")),
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
             environment: Vec::new(),
             routes: Vec::new(),
@@ -428,6 +438,7 @@ mod tests {
         let renamed = plan_of(Steps::Pipeline(vec![Step {
             program: "gmake".to_string(),
             resolved: PathBuf::from("/usr/bin/make"),
+            started_as: PathBuf::from("/usr/bin/gmake"),
             args: vec!["check".to_string()],
             environment: Vec::new(),
             routes: Vec::new(),
@@ -444,11 +455,23 @@ mod tests {
         let elsewhere = plan_of(Steps::Pipeline(vec![Step {
             program: "make".to_string(),
             resolved: PathBuf::from("/tmp/make"),
+            started_as: PathBuf::from("/tmp/make"),
             args: vec!["check".to_string()],
             environment: Vec::new(),
             routes: Vec::new(),
         }]));
         assert!(!record.covers(&elsewhere));
+    }
+
+    /// RUN-19: nor onto another path that starts the same binary, under the same name.
+    #[test]
+    fn an_answer_does_not_follow_a_binary_onto_another_path_it_is_started_by() {
+        let record = remembering(&one("make", &["check"]));
+        let through_a_link = plan_of(Steps::Pipeline(vec![Step {
+            started_as: PathBuf::from("/opt/tools/make"),
+            ..step("make", &["check"])
+        }]));
+        assert!(!record.covers(&through_a_link));
     }
 
     /// RUN-19: onto the binary's own bytes. `to_string_lossy` maps every byte that is not valid

@@ -1836,3 +1836,122 @@ fn a_ceiling_too_large_to_count_in_seconds_does_not_collapse_every_deadline() {
         "the floor still holds at the bottom"
     );
 }
+
+// A program named through a link starts by the link, while the link leads to the approved file.
+
+/// Point `name` in `at` at `target`, replacing whatever it pointed at before.
+#[cfg(unix)]
+fn link(at: &std::path::Path, name: &str, target: &std::path::Path) {
+    let path = at.join(name);
+    let _ = std::fs::remove_file(&path);
+    std::os::unix::fs::symlink(target, &path).expect("make the link");
+}
+
+/// RUN-2: a program named through a link is started by the link.
+///
+/// A script's `$0` is the path it was started by, so what it prints is that path.
+#[cfg(unix)]
+#[test]
+fn a_program_named_through_a_link_is_started_by_the_link() {
+    let scratch = Scratch::new("started-as-link");
+    let file = script(&scratch.path, "tool.sh", "#!/bin/sh\necho \"$0\"\n");
+    link(&scratch.path, "link", &file);
+
+    let plan = bravebot_agent::cmdline::compile("./link", &scratch.path, None, &mut |_, _| Ok(()))
+        .expect("the line compiles");
+    let ran =
+        past_text_file_busy(|| exec::run_plan(&plan, &Cancel::new(), exec::LIMIT, None, None))
+            .expect("the link runs");
+
+    assert_eq!(
+        ran.stdout.trim(),
+        std::path::absolute(scratch.path.join("link"))
+            .unwrap()
+            .to_string_lossy()
+    );
+    assert_ne!(ran.stdout.trim(), file.to_string_lossy());
+}
+
+/// RUN-2: a link repointed after the line was compiled is refused rather than run, and the refusal
+/// comes before the line opens the file it writes to.
+#[cfg(unix)]
+#[test]
+fn a_link_pointed_elsewhere_after_approval_is_refused() {
+    let scratch = Scratch::new("started-as-repointed");
+    let approved = script(&scratch.path, "approved.sh", "#!/bin/sh\necho approved\n");
+    let other = script(&scratch.path, "other.sh", "#!/bin/sh\ntouch other-ran\n");
+    link(&scratch.path, "tool", &approved);
+
+    let plan =
+        bravebot_agent::cmdline::compile("./tool > out.txt", &scratch.path, None, &mut |_, _| {
+            Ok(())
+        })
+        .expect("the line compiles");
+    link(&scratch.path, "tool", &other);
+
+    let refused =
+        past_text_file_busy(|| exec::run_plan(&plan, &Cancel::new(), exec::LIMIT, None, None));
+    assert!(
+        matches!(&refused, Err(ExecError::NotStarted { program, .. }) if program == "./tool"),
+        "a repointed link was not refused: {refused:?}"
+    );
+    assert!(
+        !scratch.path.join("other-ran").exists(),
+        "the file the link now leads to ran"
+    );
+    assert!(
+        !scratch.path.join("out.txt").exists(),
+        "a refused line opened its destination"
+    );
+
+    link(&scratch.path, "tool", &approved);
+    past_text_file_busy(|| exec::run_plan(&plan, &Cancel::new(), exec::LIMIT, None, None))
+        .expect("pointed back, the link runs");
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("out.txt")).unwrap(),
+        "approved\n"
+    );
+}
+
+/// RUN-2: the same holds of a line left running, and pointed back it is started by the link.
+#[cfg(unix)]
+#[test]
+fn a_background_link_pointed_elsewhere_after_approval_is_refused() {
+    let scratch = Scratch::new("started-as-repointed-background");
+    let approved = script(&scratch.path, "approved.sh", "#!/bin/sh\necho \"$0\"\n");
+    let other = script(&scratch.path, "other.sh", "#!/bin/sh\ntouch other-ran\n");
+    link(&scratch.path, "tool", &approved);
+
+    let plan = bravebot_agent::cmdline::compile("./tool", &scratch.path, None, &mut |_, _| Ok(()))
+        .expect("the line compiles");
+    let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
+        panic!("one program is one pipeline");
+    };
+    link(&scratch.path, "tool", &other);
+
+    match past_text_file_busy(|| exec::start_steps(steps, &scratch.path, None)) {
+        Err(ExecError::NotStarted { program, .. }) => assert_eq!(program, "./tool"),
+        Err(other) => panic!("refused for the wrong reason: {other}"),
+        Ok(_) => panic!("a repointed link was started in the background"),
+    }
+    assert!(
+        !scratch.path.join("other-ran").exists(),
+        "the file the link now leads to ran"
+    );
+
+    link(&scratch.path, "tool", &approved);
+    let mut job = past_text_file_busy(|| exec::start_steps(steps, &scratch.path, None))
+        .expect("pointed back, the line starts");
+    for _ in 0..100 {
+        if job.ended() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        job.printed().trim(),
+        std::path::absolute(scratch.path.join("tool"))
+            .unwrap()
+            .to_string_lossy()
+    );
+}

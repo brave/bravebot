@@ -4,7 +4,7 @@ import type { KeptTrust } from '../../shared/protocol'
 
 interface Grants {
   paths: { path: string; integrity: string }[]
-  commands: { program: string; args: string[]; display: string }[]
+  commands: { program: string; startedAs: string; args: string[]; display: string }[]
   /** The yes kept about this directory for later sessions (TRUST-23), read when this was asked. */
   remembered?: KeptTrust | null
 }
@@ -33,7 +33,7 @@ export function Permissions({ session, onClose, onRemembered }: { session: strin
     <PathPermissions paths={grants?.paths ?? []} busy={busy} onRevoke={(path) => void request('permissions.revoke', { kind: 'path', path })} />
     <h3>Remembered commands</h3>
     <p className="bot-note">Each grant covers the resolved program and its exact arguments, including trust in its output.</p>
-    {grants?.commands.map((command) => <div className="permission-row" key={JSON.stringify(command)}><code>{command.display}</code><button disabled={busy} onClick={() => void request('permissions.revoke', { kind: 'command', command: { program: command.program, args: command.args } })}>Revoke</button></div>)}
+    {grants?.commands.map((command) => <div className="permission-row" key={JSON.stringify(command)}><code>{command.display}</code><button disabled={busy} onClick={() => void request('permissions.revoke', { kind: 'command', command: { program: command.program, startedAs: command.startedAs, args: command.args } })}>Revoke</button></div>)}
     {grants?.commands.length === 0 && <p>No remembered command grants.</p>}
     <h3>Remembered for this directory</h3>
     <p className="bot-note">Kept outside this conversation: sessions started in exactly this directory are trusted without asking. Forgetting it makes the next one ask; this conversation keeps its own grants.</p>

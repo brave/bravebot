@@ -313,6 +313,8 @@ export interface Stage {
    * the binary and the word for it are two different claims and a reviewer needs both.
    */
   resolved: string | null
+  /** The path the program is started by, which is `resolved` unless the name reached it through a link. */
+  startedAs?: string
   args: string[]
   /** The agent's own rendering of the argv, so both front-ends show the same characters. */
   display: string

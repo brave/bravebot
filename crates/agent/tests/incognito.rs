@@ -58,6 +58,7 @@ fn a_line() -> RememberedLine {
         steps: Steps::Pipeline(vec![Step {
             program: "make".to_string(),
             resolved: PathBuf::from("/usr/bin/make"),
+            started_as: PathBuf::from("/usr/bin/make"),
             args: vec!["check".to_string()],
             environment: Vec::new(),
             routes: Vec::new(),

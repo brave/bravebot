@@ -320,9 +320,13 @@ pub fn spent_by(plan: &Plan) -> Vec<Spent> {
         // The routes are what the line opens rather than what it reaches, so a redirection names
         // nothing on this account: a destination is the write set's question and is drawn on the
         // same prompt, above this.
+        //
+        // The path a step is started by ends in the name the line used, which is read already. A
+        // multi-call binary started through a link called `docker` is caught by that name.
         let crate::command::Step {
             program,
             resolved,
+            started_as: _,
             args,
             environment,
             routes: _,
@@ -419,6 +423,7 @@ mod tests {
         Step {
             program: program.to_string(),
             resolved: PathBuf::from(format!("/usr/bin/{}", program_name(program))),
+            started_as: PathBuf::from(format!("/usr/bin/{}", program_name(program))),
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
             environment: Vec::new(),
             routes: Vec::new(),

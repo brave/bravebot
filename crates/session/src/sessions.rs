@@ -766,6 +766,7 @@ fn stored_programs(programs: &TrustedPrograms, project: &Path) -> Vec<StoredComm
         .iter()
         .map(|c| StoredCommand {
             program: StoredPath::of(&c.program),
+            started_as: (c.started_as != c.program).then(|| StoredPath::of(&c.started_as)),
             args: c.args.clone(),
             directory: Some(StoredPath::of(
                 c.directory.strip_prefix(project).unwrap_or(&c.directory),
@@ -796,11 +797,15 @@ fn restored_programs(programs: &[StoredCommand], root: &Path) -> TrustedPrograms
                 written => root.join(written),
             },
         };
-        Some(bravebot_core::programs::Command::new(
-            c.program.to_path()?,
-            c.args.clone(),
-            directory,
-        ))
+        let program = c.program.to_path()?;
+        let started_as = match &c.started_as {
+            Some(written) => written.to_path()?,
+            None => program.clone(),
+        };
+        Some(
+            bravebot_core::programs::Command::new(program, c.args.clone(), directory)
+                .started_as(started_as),
+        )
     }))
 }
 
@@ -995,6 +1000,13 @@ pub struct StoredCommand {
     /// The resolved binary the vouch was given for, spelled so that two of them cannot share one
     /// entry: see [`StoredPath`].
     pub program: StoredPath,
+    /// The path the program is started by, or absent where that is `program` itself.
+    ///
+    /// A record written before this field existed has none. The build that wrote it started every
+    /// program by the file it resolved to, so absent reads as `program`. Written only where the two
+    /// paths differ, so an entry started by its own file is spelled as that build spelled it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_as: Option<StoredPath>,
     #[serde(default)]
     pub args: Vec<String>,
     /// The tree the vouch was given in, relative to the project where it is inside it and absolute
@@ -2229,11 +2241,13 @@ mod tests {
         record.programs = vec![
             StoredCommand {
                 program: StoredPath::Text("/usr/bin/git".to_string()),
+                started_as: None,
                 args: vec!["log".to_string()],
                 directory: Some(StoredPath::Text("/work".to_string())),
             },
             StoredCommand {
                 program: StoredPath::Text("/bin/ls".to_string()),
+                started_as: None,
                 args: Vec::new(),
                 directory: Some(StoredPath::Text("/work/sub".to_string())),
             },
@@ -2241,16 +2255,28 @@ mod tests {
         let vouched = record.trusted_programs(Path::new("/work"));
         assert!(vouched.contains(
             Path::new("/usr/bin/git"),
+            Path::new("/usr/bin/git"),
             &["log".to_string()],
             Path::new("/work")
         ));
-        assert!(vouched.contains(Path::new("/bin/ls"), &[], Path::new("/work/sub")));
+        assert!(vouched.contains(
+            Path::new("/bin/ls"),
+            Path::new("/bin/ls"),
+            &[],
+            Path::new("/work/sub")
+        ));
         assert!(
-            !vouched.contains(Path::new("/bin/ls"), &[], Path::new("/work")),
+            !vouched.contains(
+                Path::new("/bin/ls"),
+                Path::new("/bin/ls"),
+                &[],
+                Path::new("/work")
+            ),
             "an entry recorded in a subdirectory came back covering the workspace root"
         );
         assert!(
             !vouched.contains(
+                Path::new("/usr/bin/git"),
                 Path::new("/usr/bin/git"),
                 &["push".to_string()],
                 Path::new("/work")
@@ -2259,6 +2285,7 @@ mod tests {
         );
         assert!(
             !vouched.contains(
+                Path::new("/opt/homebrew/bin/git"),
                 Path::new("/opt/homebrew/bin/git"),
                 &["log".to_string()],
                 Path::new("/work")
@@ -2281,11 +2308,13 @@ mod tests {
         let vouched = record.trusted_programs(Path::new("/work"));
         assert!(vouched.contains(
             Path::new("/usr/bin/git"),
+            Path::new("/usr/bin/git"),
             &["log".to_string()],
             Path::new("/work")
         ));
         assert!(
             !vouched.contains(
+                Path::new("/usr/bin/git"),
                 Path::new("/usr/bin/git"),
                 &["log".to_string()],
                 Path::new("/work/sub")
@@ -2337,16 +2366,19 @@ mod tests {
         record.programs = vec![
             StoredCommand {
                 program: StoredPath::Text("/usr/bin/make".to_string()),
+                started_as: None,
                 args: vec!["check".to_string()],
                 directory: Some(StoredPath::Text("sub".to_string())),
             },
             StoredCommand {
                 program: StoredPath::Text("/usr/bin/git".to_string()),
+                started_as: None,
                 args: vec!["log".to_string()],
                 directory: Some(StoredPath::Text(String::new())),
             },
             StoredCommand {
                 program: StoredPath::Text("/bin/ls".to_string()),
+                started_as: None,
                 args: Vec::new(),
                 directory: Some(StoredPath::Text("/elsewhere".to_string())),
             },
@@ -2356,15 +2388,26 @@ mod tests {
 
         let check = ["check".to_string()];
         assert!(
-            vouched.contains(Path::new("/usr/bin/make"), &check, Path::new("/moved/sub")),
+            vouched.contains(
+                Path::new("/usr/bin/make"),
+                Path::new("/usr/bin/make"),
+                &check,
+                Path::new("/moved/sub")
+            ),
             "a tree written down relative did not come back under the resumed root"
         );
         assert!(
-            !vouched.contains(Path::new("/usr/bin/make"), &check, Path::new("/work/sub")),
+            !vouched.contains(
+                Path::new("/usr/bin/make"),
+                Path::new("/usr/bin/make"),
+                &check,
+                Path::new("/work/sub")
+            ),
             "a tree written down relative came back under a root nobody resumed"
         );
         assert!(
             vouched.contains(
+                Path::new("/usr/bin/git"),
                 Path::new("/usr/bin/git"),
                 &["log".to_string()],
                 Path::new("/moved")
@@ -2372,7 +2415,12 @@ mod tests {
             "the project root, which is written down as the empty string, did not come back"
         );
         assert!(
-            vouched.contains(Path::new("/bin/ls"), &[], Path::new("/elsewhere")),
+            vouched.contains(
+                Path::new("/bin/ls"),
+                Path::new("/bin/ls"),
+                &[],
+                Path::new("/elsewhere")
+            ),
             "a tree written down in full did not come back as it was written"
         );
     }
@@ -2385,6 +2433,53 @@ mod tests {
         let mut bytes = prefix.as_bytes().to_vec();
         bytes.push(last);
         std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&bytes))
+    }
+
+    /// The path a command was started by comes back with it (RUN-8). A command started by its own
+    /// file is written with no such field, and a record with none reads back as started by its own
+    /// file.
+    #[test]
+    fn the_path_a_command_was_started_by_comes_back_with_it() {
+        let root = Path::new("/work");
+        let interpreter = Path::new("/usr/local/bin/python3.12");
+        let link = Path::new("/work/venv/bin/python");
+        let version = ["-V".to_string()];
+        let written = stored_programs(
+            &TrustedPrograms::from_iter([
+                bravebot_core::programs::Command::new(interpreter, version.to_vec(), root)
+                    .started_as(link),
+                bravebot_core::programs::Command::new("/usr/bin/git", vec!["log".into()], root),
+            ]),
+            root,
+        );
+
+        let json = serde_json::to_string(&written).expect("a record is written as JSON");
+        assert_eq!(
+            json.matches("started_as").count(),
+            1,
+            "a command started by its own file was written differently from an earlier build: {json}"
+        );
+        let read: Vec<StoredCommand> = serde_json::from_str(&json).expect("and read back");
+        let vouched = restored_programs(&read, root);
+        assert!(
+            vouched.contains(interpreter, link, &version, root),
+            "the command started through a link did not come back"
+        );
+        assert!(
+            !vouched.contains(interpreter, interpreter, &version, root),
+            "a record vouched for the interpreter started as itself"
+        );
+
+        let earlier: Vec<StoredCommand> =
+            serde_json::from_str(r#"[{"program":"/usr/bin/git","args":["log"],"directory":""}]"#)
+                .expect("a record from an earlier build reads");
+        let vouched = restored_programs(&earlier, root);
+        assert!(vouched.contains(
+            Path::new("/usr/bin/git"),
+            Path::new("/usr/bin/git"),
+            &["log".to_string()],
+            root
+        ));
     }
 
     /// A binary and a tree are written as bytes wherever they have no text spelling, so a resumed
@@ -2412,15 +2507,15 @@ mod tests {
 
         let check = ["check".to_string()];
         assert!(
-            vouched.contains(&program(0xff), &check, &tree(0xff)),
+            vouched.contains(&program(0xff), &program(0xff), &check, &tree(0xff)),
             "the entry that was written down did not come back"
         );
         assert!(
-            !vouched.contains(&program(0xfe), &check, &tree(0xff)),
+            !vouched.contains(&program(0xfe), &program(0xfe), &check, &tree(0xff)),
             "a record vouched for a binary whose path only renders the same way"
         );
         assert!(
-            !vouched.contains(&program(0xff), &check, &tree(0xfe)),
+            !vouched.contains(&program(0xff), &program(0xff), &check, &tree(0xfe)),
             "a record vouched in a tree whose path only renders the same way"
         );
     }
@@ -2436,11 +2531,13 @@ mod tests {
         record.programs = vec![
             StoredCommand {
                 program: StoredPath::Text("/usr/bin/make-\u{fffd}".to_string()),
+                started_as: None,
                 args: vec!["check".to_string()],
                 directory: Some(StoredPath::Text(String::new())),
             },
             StoredCommand {
                 program: StoredPath::Text("/usr/bin/git".to_string()),
+                started_as: None,
                 args: vec!["log".to_string()],
                 directory: Some(StoredPath::Text(String::new())),
             },
@@ -2449,6 +2546,7 @@ mod tests {
         let vouched = record.trusted_programs(Path::new("/work"));
         assert!(
             !vouched.contains(
+                Path::new("/usr/bin/make-\u{fffd}"),
                 Path::new("/usr/bin/make-\u{fffd}"),
                 &["check".to_string()],
                 Path::new("/work")
@@ -2461,6 +2559,7 @@ mod tests {
             "one entry nothing can read took the rest of the list with it"
         );
         assert!(vouched.contains(
+            Path::new("/usr/bin/git"),
             Path::new("/usr/bin/git"),
             &["log".to_string()],
             Path::new("/work")

@@ -18001,9 +18001,12 @@ mod tests {
             "moving forgot a run prompt already drawn"
         );
         assert!(
-            !answers
-                .programs
-                .contains(&make.program, &make.args, workspace.root()),
+            !answers.programs.contains(
+                &make.program,
+                &make.started_as,
+                &make.args,
+                workspace.root()
+            ),
             "a program vouched for in one tree covered the tree moved to"
         );
 

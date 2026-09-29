@@ -59,18 +59,15 @@ impl std::fmt::Debug for LanguageServers {
     }
 }
 
-/// Resolve a server's name to the file on `$PATH` that answers to that name.
+/// Resolve a server's name to the file on `$PATH` that answers to that name, with no link followed.
 ///
-/// Deliberately **not** [`crate::programs::resolve`], which canonicalises: that is right for `run`,
-/// where RUN-8 says an approval must not follow a name onto a different binary, and wrong here. A
-/// multi-call binary dispatches on the name it was invoked as, and `~/.cargo/bin/rust-analyzer` is a
-/// symlink to `rustup`: canonicalised, the exec runs `rustup` with no arguments, which prints its
-/// usage and exits. So the link is kept and the name is what runs.
+/// A multi-call binary dispatches on the name it was invoked as. `~/.cargo/bin/rust-analyzer` is a
+/// symlink to `rustup`, and started as the file it leads to it runs `rustup` with no arguments,
+/// which prints its usage and exits.
 ///
-/// The two rules do not conflict, because the thing being approved differs. `run` approves a program
-/// somebody read off a prompt, and a symlink could point it elsewhere. Here the program is chosen
-/// from a fixed table in this repository and the person approves *a language server for a language*,
-/// so following the link would answer a question nobody asked.
+/// [`crate::programs::find`] also starts the link, and adds the file it leads to because `run` asks
+/// the person about both paths (RUN-8). Nothing here is asked about a path. The program comes from
+/// a fixed table in this repository and the person approves *a language server for a language*.
 fn resolve_program(program: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
