@@ -21,7 +21,7 @@ fn restore_for_test(
     let mut current = TrustStore::new(workspace.root());
     current.trust(".");
     let target = current.clone();
-    bravebot_agent::rewind::restore(workspace, backups, &mut current, &target, &mut None)
+    bravebot_agent::rewind::restore(workspace, backups, &mut current, &target, &mut None, None)
 }
 
 /// A scratch directory that removes itself, so tests do not leave state behind.
@@ -5512,4 +5512,131 @@ fn a_status_below_the_root_is_asked_about_its_own_directory() {
         "a status read a working tree with a distrusted directory in it: {:?}",
         refused.map(|answer| answer.label())
     );
+}
+
+/// A policy for one write into `workspace`, with its map trusting the whole directory.
+fn trusting_all_of<'sink>(
+    workspace: &Workspace,
+    sink: &'sink mut RecordingSink,
+) -> Policy<'sink, RecordingSink> {
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+    Policy::begin(routing(), ReleasePlan::new(), all_file_capabilities(), sink)
+        .expect("policy")
+        .with_trust(trust)
+        .with_root(workspace.root())
+}
+
+/// What the record in `home` names under `workspace`.
+fn recorded_in(home: &Scratch, workspace: &Workspace) -> Vec<String> {
+    bravebot_agent::memory::Record::new(
+        &home.path,
+        &bravebot_agent::workspace::key_of(workspace.root()),
+    )
+    .paths()
+}
+
+/// The map key of the memory `notes` under `workspace`.
+fn memory_key(workspace: &Workspace) -> String {
+    format!(
+        "{}/.bravebot/memory/notes.md",
+        bravebot_agent::workspace::key_of(workspace.root())
+    )
+}
+
+/// MEMORY-5: a write of model output into a definition's memory leaves the path untrusted in this
+/// session's map, which the next session would not have. So it is recorded in the state directory,
+/// and a write anywhere else is not.
+#[test]
+fn an_untrusted_write_to_a_memory_is_recorded_in_the_state_directory() {
+    let scratch = Scratch::new("memory-recorded");
+    let home = Scratch::new("memory-recorded-home");
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .keeping_memories(Some(home.path.clone()));
+    let mut sink = RecordingSink::new();
+    let mut policy = trusting_all_of(&workspace, &mut sink);
+    let model_output = || Labelled::new("NOTES".to_string(), Label::untrusted_public());
+
+    workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted("summary.md".to_string()),
+            &model_output(),
+        )
+        .expect("model output is written to a file that is no memory");
+    assert!(
+        recorded_in(&home, &workspace).is_empty(),
+        "a file that is no memory was recorded"
+    );
+
+    workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted(".bravebot/memory/notes.md".to_string()),
+            &model_output(),
+        )
+        .expect("model output is written to a memory");
+
+    assert_eq!(recorded_in(&home, &workspace), vec![memory_key(&workspace)]);
+    assert!(policy.read_is_quarantined(&memory_key(&workspace)));
+}
+
+/// MEMORY-5's refusal. With no state directory to record it in, the next session would read model
+/// output in a memory as trusted, so the write does not land. A write of model output to any other
+/// file still does, as `untrusted_contents_may_be_written_to_a_trusted_path` shows.
+#[test]
+fn an_untrusted_write_to_a_memory_with_nowhere_to_record_it_is_refused() {
+    let scratch = Scratch::new("memory-unrecorded");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = trusting_all_of(&workspace, &mut sink);
+
+    let refused = workspace.write(
+        &mut policy,
+        &Labelled::trusted(".bravebot/memory/notes.md".to_string()),
+        &Labelled::new("NOTES".to_string(), Label::untrusted_public()),
+    );
+
+    assert!(
+        matches!(refused, Err(WorkspaceError::Io { .. })),
+        "model output was written to a memory nothing recorded: {refused:?}"
+    );
+    assert!(
+        !scratch.path.join(".bravebot/memory/notes.md").exists(),
+        "the refused write landed anyway"
+    );
+}
+
+/// MEMORY-5: a write of trusted bytes over a recorded memory leaves it trusted, so it leaves the
+/// record, and with no state directory it needs no record and is not refused.
+#[test]
+fn a_trusted_write_to_a_memory_takes_it_out_of_the_record() {
+    let scratch = Scratch::new("memory-trusted-again");
+    let home = Scratch::new("memory-trusted-again-home");
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .keeping_memories(Some(home.path.clone()));
+    bravebot_agent::memory::Record::new(
+        &home.path,
+        &bravebot_agent::workspace::key_of(workspace.root()),
+    )
+    .keep(&memory_key(&workspace))
+    .expect("seed the record");
+    let mut sink = RecordingSink::new();
+    let mut policy = trusting_all_of(&workspace, &mut sink);
+    let path = Labelled::trusted(".bravebot/memory/notes.md".to_string());
+
+    workspace
+        .write(&mut policy, &path, &Labelled::trusted("NOTES".to_string()))
+        .expect("trusted bytes are written to a memory");
+    assert!(
+        recorded_in(&home, &workspace).is_empty(),
+        "a memory written with trusted bytes is still recorded"
+    );
+
+    let without_a_home = Workspace::new(&scratch.path).expect("workspace");
+    without_a_home
+        .write(&mut policy, &path, &Labelled::trusted("MORE".to_string()))
+        .expect("trusted bytes need no record");
 }

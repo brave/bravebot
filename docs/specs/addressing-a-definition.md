@@ -73,8 +73,8 @@ the three clauses standing in the way is about a run nobody is watching. That is
 
 A definition supplies four things to the run a person addresses: the prompt, the narrowing, the
 model, and the skills it names ([DELEGATE-23](delegation.md#DELEGATE-23)).
-[MEMORY-4](definition-memory.md#MEMORY-4) adds a fifth, which nothing yet builds: where the memory
-it keeps is, which the run reads itself. It supplies nothing else, and in particular it does not
+[MEMORY-4](definition-memory.md#MEMORY-4) adds a fifth: where the memory it keeps is, which the run
+reads itself. It supplies nothing else, and in particular it does not
 make the run a delegate. The person is at the keyboard, so the run holds the screen, the confirmer,
 the task list and the way to ask a question, exactly as any turn of theirs does.
 
@@ -372,8 +372,9 @@ the one that matched the name.
   small and a person reading a name they do not recognise loses nothing by it.
 
 - **What the desktop front end does with this.** [definition-memory.md](definition-memory.md)
-  proposes an answer: a definition keeps a memory, and each desktop bot becomes a definition its
-  conversation addresses. Nothing of it is built, so until it is the desktop addresses nothing.
+  proposes an answer: a definition keeps a memory, which is built, and each desktop bot becomes a
+  definition its conversation addresses, which is not, so until it is the desktop addresses
+  nothing.
 
 ## Known costs
 

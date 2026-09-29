@@ -103,16 +103,21 @@ impl RewindCoverage {
 ///
 /// Each path goes back through `workspace`, so one that now resolves outside it is refused like
 /// one that would not write.
+///
+/// A definition's memory the old bytes can land in untrusted is recorded in the state directory
+/// `home` before they do, as a write's are, and a restore that cannot be recorded is refused
+/// (MEMORY-5).
 pub fn restore(
     workspace: &Workspace,
     backups: Vec<Backup>,
     current: &mut TrustStore,
     target: &TrustStore,
     servers: &mut Option<crate::lsp::LanguageServers>,
+    home: Option<&Path>,
 ) -> Vec<PathBuf> {
     // The owning turn has joined. Stop tracked servers before any file restoration.
     drop(servers.take());
-    restore_with(backups, current, target, |path, was| {
+    restore_with(backups, current, target, home, |path, was| {
         workspace.put_back(path, was)
     })
 }
@@ -121,10 +126,12 @@ fn restore_with(
     backups: Vec<Backup>,
     current: &mut TrustStore,
     target: &TrustStore,
+    home: Option<&Path>,
     mut write: impl FnMut(&Path, &Before) -> Result<(), WorkspaceError>,
 ) -> Vec<PathBuf> {
     *current = current.meet(target);
     let mut refused = Vec::new();
+    let mut restored = Vec::new();
     for backup in backups {
         if matches!(backup.was, Before::NotKept) {
             refused.push(backup.path);
@@ -134,19 +141,27 @@ fn restore_with(
         // host resolved it to.
         let path = crate::workspace::key_of(&backup.path);
         current.distrust(&path);
+        let bytes = matches!(backup.was, Before::Bytes(_));
+        let ends_trusted = backup.captured_trust == Integrity::Trusted && target.is_trusted(&path);
+        if bytes && !ends_trusted && crate::memory::record_before_write(home, &path).is_err() {
+            refused.push(backup.path);
+            continue;
+        }
         if write(&backup.path, &backup.was).is_err() {
             refused.push(backup.path);
-        } else if matches!(backup.was, Before::Bytes(_))
-            && backup.captured_trust == Integrity::Trusted
-        {
+        } else if bytes && backup.captured_trust == Integrity::Trusted {
             match target.integrity_of(&path) {
                 Some(Integrity::Trusted) => current.trust(&path),
                 Some(Integrity::Untrusted) => {}
                 None => current.undecide(&path),
             }
         }
+        if bytes {
+            restored.push(path);
+        }
         // A restored absence stays distrusted; it cannot vouch for future contents.
     }
+    crate::memory::after_rewind(home, current, &restored);
     refused
 }
 
@@ -167,6 +182,7 @@ mod tests {
             }],
             &mut current,
             &TrustStore::new("/work"),
+            None,
             |_, _| Ok(()),
         );
         assert!(refused.is_empty());
@@ -210,16 +226,22 @@ mod tests {
                 _ => Before::Bytes(b"original".to_vec()),
             },
         });
-        let refused = restore_with(backups.into(), &mut current, &target, |path, before| {
-            if path == root.join("broken") {
-                std::fs::write(path, "partial").unwrap();
-                return Err(WorkspaceError::Io {
-                    path: path.display().to_string(),
-                    detail: "failure after truncation".to_string(),
-                });
-            }
-            workspace.put_back(path, before)
-        });
+        let refused = restore_with(
+            backups.into(),
+            &mut current,
+            &target,
+            None,
+            |path, before| {
+                if path == root.join("broken") {
+                    std::fs::write(path, "partial").unwrap();
+                    return Err(WorkspaceError::Io {
+                        path: path.display().to_string(),
+                        detail: "failure after truncation".to_string(),
+                    });
+                }
+                workspace.put_back(path, before)
+            },
+        );
         assert_eq!(refused, [root.join("broken"), root.join("unavailable")]);
         assert_eq!(std::fs::read(root.join("broken")).unwrap(), b"partial");
         assert_eq!(std::fs::read(root.join("good")).unwrap(), b"original");
@@ -242,6 +264,90 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// MEMORY-5 for a rewind. Old bytes put back into a memory the map will not trust are recorded
+    /// first, and with nowhere to record them they are not put back. Bytes that end trusted need
+    /// no record and take the memory out of one, and a rewind that undoes a yes records it again.
+    #[test]
+    fn a_rewind_into_a_memory_is_recorded_as_a_write_is() {
+        let home = crate::testutil::scratch_dir("rewind-memory-home");
+        let _ = std::fs::remove_dir_all(&home);
+        let memory = "/work/.bravebot/memory/notes.md";
+        let record = crate::memory::Record::new(&home, "/work");
+        let mut trusting = TrustStore::new("/work");
+        trusting.trust(".");
+        let rewind = |captured_trust, home: Option<&Path>| {
+            let mut current = trusting.clone();
+            let mut written = 0;
+            let refused = restore_with(
+                vec![Backup {
+                    path: memory.into(),
+                    was: Before::Bytes(b"old notes".to_vec()),
+                    captured_trust,
+                }],
+                &mut current,
+                &trusting,
+                home,
+                |_, _| {
+                    written += 1;
+                    Ok(())
+                },
+            );
+            (refused, written)
+        };
+
+        assert_eq!(
+            rewind(Integrity::Untrusted, None),
+            (vec![PathBuf::from(memory)], 0),
+            "untrusted bytes were put back into a memory nothing could record"
+        );
+        assert_eq!(rewind(Integrity::Untrusted, Some(&home)), (Vec::new(), 1));
+        assert_eq!(record.paths(), [memory]);
+
+        assert_eq!(
+            rewind(Integrity::Trusted, None),
+            (Vec::new(), 1),
+            "trusted bytes were refused for want of a record they do not need"
+        );
+        assert_eq!(rewind(Integrity::Trusted, Some(&home)), (Vec::new(), 1));
+        assert!(
+            record.paths().is_empty(),
+            "a memory put back trusted is still recorded"
+        );
+
+        let mut undone = trusting.clone();
+        undone.distrust(memory);
+        let mut current = trusting.clone();
+        let refused = restore_with(
+            vec![Backup {
+                path: memory.into(),
+                was: Before::Bytes(b"old notes".to_vec()),
+                captured_trust: Integrity::Trusted,
+            }],
+            &mut current,
+            &undone,
+            None,
+            |_, _| Ok(()),
+        );
+        assert_eq!(
+            refused,
+            [PathBuf::from(memory)],
+            "trusted bytes a rewound map no longer trusts were put back with nowhere to record them"
+        );
+        restore_with(
+            Vec::new(),
+            &mut current,
+            &undone,
+            Some(&home),
+            |_, _| Ok(()),
+        );
+        assert_eq!(
+            record.paths(),
+            [memory],
+            "a rewind that undid a yes left the memory out of the record"
+        );
+        let _ = std::fs::remove_dir_all(home);
+    }
+
     /// Unwinding from an entered effect cannot leave the earlier grant over changed bytes.
     #[test]
     fn restore_distrusts_before_entering_the_effect() {
@@ -257,6 +363,7 @@ mod tests {
                 }],
                 &mut current,
                 &target,
+                None,
                 |_, _| panic!("entered"),
             );
         }));

@@ -7,12 +7,19 @@ governs:
   - crates/agent/src/preamble.rs
   - crates/agent/src/delegate.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/memory.rs
+  - crates/agent/src/workspace.rs
+  - crates/agent/src/tools.rs
+  - crates/agent/src/rewind.rs
+  - crates/agent/src/manifest.rs
   - crates/core/src/delegate.rs
+  - crates/core/src/policy.rs
   - crates/ui-bridge/src/bridge.rs
   - ui/src/shared/bots.ts
   - ui/src/main/bots.ts
   - ui/src/main/memory.ts
-documented-by: none (gap: nothing here is built yet, so there is no behaviour for a page to describe)
+documented-by:
+  - docs/website/docs/customize/agents.md
 ---
 
 ## Scope
@@ -27,14 +34,18 @@ What a definition is, where one is read from and what it is trusted for is
 paths are trusted is [trust-map.md](trust-map.md). Where a clause here changes one of those, that
 file says so at the place it changes.
 
-Nothing in this file is built. It is a design, written to be agreed before the work starts.
+The memory and the checkout are built, [MEMORY-2](#MEMORY-2) to [MEMORY-7](#MEMORY-7). The desktop
+half is not: [MEMORY-1](#MEMORY-1), [MEMORY-8](#MEMORY-8) to [MEMORY-11](#MEMORY-11), and the
+sentences in [MEMORY-4](#MEMORY-4) about the desktop's panel are a design, written to be agreed
+before that work starts.
 
 ## What exists today
 
-A definition is read for its name, description, kind, tools, model, skills and rounds, and every
-other key is ignored. It keeps nothing between runs: a delegate begins with the task it was given,
-and a run a person addresses begins with the session's conversation. It works in whichever
-directory the session is in.
+A definition is read for its name, description, kind, tools, model, skills, rounds and memory, and
+every other key is ignored. One whose `memory:` is `project` or `local` keeps a memory in the
+working directory ([MEMORY-2](#MEMORY-2)), and every other definition keeps nothing between runs: a
+delegate begins with the task it was given, and a run a person addresses begins with the session's
+conversation. It works in whichever directory the session is in.
 
 The desktop front end's bots are a format of their own. A bot is a row in the desktop's store: a
 name, a purpose, a model, a folder chosen when it was made, and a history of conversations. Its
@@ -90,6 +101,8 @@ write one.
 when the bot is made ([MEMORY-3](#MEMORY-3)), since its memory is named after it. What a person
 calls the bot is free text they may change, like its avatar.
 
+Nothing builds this yet.
+
 `verified-by: none`
 
 ## The memory
@@ -99,8 +112,8 @@ calls the bot is free text they may change, like its avatar.
 
 A definition with `memory: project` or `memory: local` keeps its memory in one file,
 `.bravebot/memory/<name>.md` under the session's working directory, named after the definition. A
-definition with no `memory:` key keeps none, as today. Any other value, `user` included, is a
-definition that loads and keeps no memory, and the turn says so, naming the definition's file and
+definition with no `memory:` key, or an empty one, keeps none. Any other value, `user` included, is
+a definition that loads and keeps no memory, and the turn says so, naming the definition's file and
 the value. Where that path falls inside the person's own directory, `~/.bravebot`, as it does for a
 session in the home directory, no memory is kept either, and the turn says so.
 
@@ -129,7 +142,12 @@ for the same reason. It is said, because an author not told would believe a memo
 it may do ([MEMORY-6](#MEMORY-6)). Two definitions of one name that both keep a memory keep the same
 one, since the file is named after the name.
 
-`verified-by: none`
+`verified-by: bravebot_agent::agents::a_definition_keeping_its_memory_in_the_project_or_locally_keeps_one`
+`verified-by: bravebot_agent::agents::a_memory_value_nothing_here_keeps_loads_the_definition_and_says_it_keeps_none`
+`verified-by: bravebot_agent::agents::a_memory_that_would_sit_in_the_state_directory_is_kept_in_home`
+`verified-by: bravebot_agent::agents::a_memory_that_would_sit_inside_the_state_directory_is_not_kept_and_is_said`
+`verified-by: bravebot_core::delegate::a_later_definition_takes_over_whether_a_memory_is_kept`
+`verified-by: bravebot_core::delegate::keeping_no_memory_clears_it_from_every_definition_and_nothing_else`
 
 <a id="MEMORY-3"></a>
 ### MEMORY-3: only a definition whose name is a slug keeps a memory
@@ -147,7 +165,8 @@ This amends the sentence in [DELEGATE-21](delegation.md#DELEGATE-21) saying a na
 resolved against anything. The name of a definition that keeps no memory is held to nothing beyond
 that clause.
 
-`verified-by: none`
+`verified-by: bravebot_agent::memory::only_a_lowercase_hyphenated_name_of_64_characters_or_fewer_is_a_slug`
+`verified-by: bravebot_agent::agents::a_definition_whose_name_is_no_slug_keeps_no_memory_and_says_why`
 
 <a id="MEMORY-4"></a>
 ### MEMORY-4: the run is told where its memory is and what the map says of it, and reads it itself
@@ -159,7 +178,7 @@ not there. The run is told, in the driver's words:
 | The path | What the run is told |
 |---|---|
 | not trusted | its path, and that the memory is withheld; a read of it is quarantined like any other |
-| trusted, and a link or reached through one | its path, and that it is not read |
+| trusted, and a link, reached through one, or not a file | its path, and that it is not read |
 | trusted, and nothing is there | its path, and that nothing is kept yet |
 | trusted, and a file is there | its path, and that its notes are there to read |
 
@@ -167,9 +186,11 @@ That sentence goes after the definition's body and before what the run cannot do
 ([DELEGATE-5](delegation.md#DELEGATE-5)), alike for a run a person addressed and for a delegate a
 planner spawned, since each is a run under the definition. What the memory holds reaches the run
 only through a read the run makes, on the map's terms, as any file's does. Nothing puts its bytes in
-the prompt or the conversation, and nothing keeps a copy of them under another path. The desktop's
-history of earlier versions is retired, and restoring one with it. Its panel still shows the file
-to the person, and a change they save there is written as a program they run writes a file.
+the prompt or the conversation, and nothing keeps a copy of them under another path.
+
+In the desktop front end, which nothing yet builds this for, the history of earlier versions is
+retired, and restoring one with it. Its panel still shows the file to the person, and a change they
+save there is written as a program they run writes a file.
 
 **Why the path and not the bytes.** A delegate's prompt holds the driver's words and its
 definition's body, and no word a planner wrote ([DELEGATE-5](delegation.md#DELEGATE-5)). A memory
@@ -202,7 +223,11 @@ briefing or a list of earlier versions, is read on that path's terms, and in a v
 are trusted. Restoring one could put back bytes a write had left untrusted, after a later write had
 made the path trusted again: a copy is how untrusted bytes are laundered.
 
-`verified-by: none`
+`verified-by: bravebot_agent::memory::a_trusted_memory_stands_as_what_is_at_its_path`
+`verified-by: bravebot_agent::memory::a_memory_the_map_does_not_trust_is_withheld_whatever_is_there`
+`verified-by: bravebot_agent::delegate::a_delegates_memory_is_said_after_its_body_and_before_what_it_cannot_do`
+`verified-by: bravebot_agent::turn::an_addressed_run_is_told_where_its_memory_is_and_not_what_it_holds`
+`verified-by: bravebot_agent::turn::a_delegate_under_a_definition_keeping_a_memory_is_told_where_it_is`
 
 <a id="MEMORY-5"></a>
 ### MEMORY-5: a memory a write left untrusted is still untrusted in the next session
@@ -211,17 +236,26 @@ The map belongs to the session ([TRUST-6](trust-map.md#TRUST-6)), so a fresh one
 an earlier session's writes marked untrusted. [trust-map.md](trust-map.md) accepts that as a cost
 for files in general. For a memory it does not hold.
 
-A write that leaves a memory's path untrusted is recorded before the write lands, naming the path in
-full, in a file under `~/.bravebot` kept beside the remembered answers to the startup question and
-keyed as they are. The record also holds the old notes [MEMORY-11](#MEMORY-11) puts in it. Before
-every turn, each path the record names is untrusted in the session's map, as though the session's
-own write had marked it, so the memory is withheld ([MEMORY-4](#MEMORY-4)) and a read of it is
+A write that leaves a memory's path untrusted, whether a file tool makes it or a command's
+redirection does, is recorded before the write lands, naming the path in full, in
+`~/.bravebot/untrusted/`, beside the remembered answers to the startup question and keyed as they
+are. A write that cannot be recorded, because the session has no state directory or the record
+cannot be written, does not land. A rewind putting back bytes the map will not trust is recorded
+first in the same way, and is not put back where it cannot be. The record will also hold the old
+notes [MEMORY-11](#MEMORY-11) puts in it, which nothing yet builds. Before every turn, a planned one
+included, each path the record names is untrusted in the session's map, as though the session's own
+write had marked it, so the memory is withheld ([MEMORY-4](#MEMORY-4)) and a read of it is
 quarantined. That holds however the session came to the directory: started there, cleared, resumed,
 reopened, or moved there with `/cd`.
 
-A path leaves the record when a session trusts it again: by a later write that leaves it trusted, or
-by a person's yes when a read of it is quarantined ([TRUST-8](trust-map.md#TRUST-8)). The record is
-kept in every session, incognito included.
+A path leaves the record when a session trusts it again: by a later write that leaves it trusted, by
+a rewind that puts back bytes the map trusts, by a person's yes when a read of it is quarantined
+([TRUST-8](trust-map.md#TRUST-8)), or by their naming it with `@`, dropping it or attaching it, which
+vouches for it as the yes does. A rewind past that grant takes it back, and the path is recorded
+again, since a rewind point holds the map with the record's rules in it. A path already distrusted
+by a rule of its own is left as it is when the record is read again, so a run starting changes
+nothing another run's command is labelled by. A run and its delegates changing the record at once
+lose no line either wrote. The record is kept in every session, incognito included.
 
 **Why a memory and not every file.** Every other file reaches a run because something asked to
 read it. A memory is read because the driver tells every run under the definition where it is, and
@@ -242,14 +276,35 @@ check found in all of it, which is what vouching for any file is. A record that 
 would take it back on the next turn.
 
 **Why before the write lands.** A session killed between the two would leave the bytes and no
-record, which is the case this clause is for.
+record, which is the case this clause is for. A write that cannot be recorded at all would leave the
+same, so it is refused.
 
 **Why incognito keeps it.** The record names a path and nothing a person typed. Without it, the next
 session would read what the incognito one poisoned as trusted. It does record that a session wrote
 in that directory, which [INCOG-3](incognito.md#INCOG-3) otherwise refuses, so
 [INCOG-8](incognito.md#INCOG-8) lists it with the other things that mode still writes.
 
-`verified-by: none`
+`verified-by: bravebot_agent::memory::a_recorded_memory_is_read_back_for_its_directory_alone`
+`verified-by: bravebot_agent::memory::a_directory_sharing_a_record_file_reads_none_of_the_other_s_lines`
+`verified-by: bravebot_agent::memory::an_untrusted_memory_write_with_nowhere_to_record_it_is_refused`
+`verified-by: bravebot_agent::memory::a_record_that_cannot_be_written_refuses_the_write`
+`verified-by: bravebot_agent::memory::a_path_trusted_again_leaves_the_record_and_the_rest_stays`
+`verified-by: bravebot_agent::memory::trusting_the_last_recorded_path_again_removes_the_record`
+`verified-by: bravebot_agent::memory::a_path_recorded_after_a_half_written_line_is_read_back`
+`verified-by: bravebot_agent::memory::a_path_recorded_while_another_is_trusted_again_stays_recorded`
+`verified-by: bravebot_agent::memory::the_map_a_rewind_point_holds_distrusts_every_recorded_memory`
+`verified-by: bravebot_agent::workspace::an_untrusted_write_to_a_memory_is_recorded_in_the_state_directory`
+`verified-by: bravebot_agent::workspace::an_untrusted_write_to_a_memory_with_nowhere_to_record_it_is_refused`
+`verified-by: bravebot_agent::workspace::a_trusted_write_to_a_memory_takes_it_out_of_the_record`
+`verified-by: bravebot_agent::turn::a_memory_a_write_left_untrusted_is_withheld_from_the_next_session_until_trusted_again`
+`verified-by: bravebot_agent::turn::a_persons_yes_to_a_recorded_memory_takes_it_out_of_the_record`
+`verified-by: bravebot_agent::turn::a_recorded_memory_named_dropped_or_attached_leaves_the_record`
+`verified-by: bravebot_agent::turn::a_redirection_into_a_memory_is_recorded_before_it_opens_it`
+`verified-by: bravebot_agent::rewind::a_rewind_into_a_memory_is_recorded_as_a_write_is`
+`verified-by: bravebot_agent::manifest::a_memory_an_earlier_session_left_untrusted_is_untrusted_in_a_plan`
+`verified-by: bravebot_agent::manifest::a_plan_writing_untrusted_bytes_into_a_memory_records_it`
+`verified-by: bravebot_agent::incognito::a_memory_left_untrusted_is_still_recorded`
+`verified-by: bravebot_core::policy::a_remembered_path_already_distrusted_is_left_as_it_is_and_said_once`
 
 <a id="MEMORY-6"></a>
 ### MEMORY-6: a memory is kept with the tools the run holds, and keeping one adds none
@@ -273,7 +328,7 @@ definition meant to keep its memory is written as a kind that writes.
 is. Every other write is gated on whether the data and the destination are trusted, and that is the
 gate a memory needs.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::keeping_a_memory_offers_no_tool_the_kind_does_not_hold`
 
 ## The checkout
 
@@ -298,7 +353,7 @@ own store ([MEMORY-1](#MEMORY-1)), and a bot's conversation is a session in that
 
 `isolation:` is not read either, and is an open question below rather than a refusal.
 
-`verified-by: none`
+`verified-by: by-construction (a definition is read for its named keys alone, none of which is a directory, and every run works in the session's workspace)`
 
 ## The desktop's bots
 
@@ -332,6 +387,8 @@ reached ([ADDRESS-7](addressing-a-definition.md#ADDRESS-7)), less a later look a
 addressed run is never offered ([ADDRESS-8](addressing-a-definition.md#ADDRESS-8)). A person
 narrows it further by editing the file.
 
+Nothing builds this yet.
+
 `verified-by: none`
 
 <a id="MEMORY-9"></a>
@@ -344,6 +401,8 @@ new bot to.
 
 **Why not the whole file.** The file is the person's as much as the desktop's. A form that wrote the
 whole file back would undo whatever it does not show, such as a narrowing somebody made by hand.
+
+Nothing builds this yet.
 
 `verified-by: none`
 
@@ -393,6 +452,8 @@ This amends [ADDRESS-3](addressing-a-definition.md#ADDRESS-3), which admits only
 the box, [ADDRESS-12](addressing-a-definition.md#ADDRESS-12), and the sentence in
 [addressing-a-definition.md](addressing-a-definition.md) saying the desktop addresses nothing.
 
+Nothing builds this yet.
+
 `verified-by: none`
 
 <a id="MEMORY-11"></a>
@@ -420,6 +481,8 @@ the run writes from notes a person let it read is what it writes from any file i
 
 **Why not handed as a file.** A file handed to a turn is one a person is recorded as vouching for,
 and nobody vouched for these notes.
+
+Nothing builds this yet.
 
 `verified-by: none`
 
@@ -455,7 +518,7 @@ and nobody vouched for these notes.
 - **Keeping quarantined content in a memory costs the memory.** Passing a fetched page on by
   reference, or a processor's reading of a file nobody vouched for, asks before it is written, and
   after a yes the memory is withheld until a write that leaves it trusted replaces it, or a person
-  shown it says yes ([MEMORY-5](#MEMORY-5)). Deleting it empties it and does not put it back. What
+  shown it says yes or names it ([MEMORY-5](#MEMORY-5)). Deleting it empties it and does not put it back. What
   the run writes in its own words after such a read is trusted and asks nothing.
 
 - **A memory is one read away.** Claude Code puts the head of one in the prompt. Here a run that

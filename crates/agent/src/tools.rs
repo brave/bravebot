@@ -2979,6 +2979,13 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         };
         if confirmer.confirm_vouch(&request) == Decision::Approve {
             approval_outlived = !policy.vouch_if_unchanged(&keyed, preview_revision);
+            // A record that outlived the yes would take it back on the next turn (MEMORY-5).
+            if !approval_outlived {
+                crate::memory::trusted_again(
+                    workspace.memories(),
+                    &policy.file_authority().key(&keyed),
+                );
+            }
         }
     }
 
@@ -5760,6 +5767,10 @@ fn run<S: Sink, C: Confirmer>(
             if effects.contains_key(&key) {
                 return Ok(());
             }
+            // Whatever the line's label: a line that stops short leaves every destination
+            // untrusted, and whether it will is not known until it has (MEMORY-5).
+            crate::memory::record_before_write(tools.workspace.memories(), &key)
+                .map_err(|e| crate::exec::ExecError::Io(e.to_string()))?;
             policy.capture_files(|policy, capture| {
                 let prior = if !policy.read_is_quarantined(&key) {
                     bravebot_core::label::Integrity::Trusted
@@ -5845,6 +5856,9 @@ fn run<S: Sink, C: Confirmer>(
             };
             effect.complete(integrity);
         }
+    }
+    for destination in &standing {
+        crate::memory::after_write(policy, tools.workspace.memories(), &destination.key);
     }
     if !left.scanned.refused().is_empty() {
         return credential_refusal_after_a_line(&displayed, &left, &stuck);

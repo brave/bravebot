@@ -2050,6 +2050,18 @@ delegate-rounds-not-a-count = { $definition } was skipped: its rounds must be a 
 # A definition asked for more rounds than its kind may make. The kind is its key's value (reader,
 # checker or worker), left as written because it is typed.
 delegate-rounds-held = { $definition } asks for { $asked } rounds, more than the { $most } a { $kind } may make, so its delegate is given { $most }
+# A definition's memory line named a value other than project or local, so the definition loads
+# keeping no memory. The definition is its file's path and the value is that file's own words, both
+# from a vouched-for file. "memory", "project" and "local" are the key and its values, and stay as
+# they are.
+delegate-memory-not-kept = { $definition } keeps no memory: its memory line says { $value }, and only project and local keep one
+# A definition asked to keep a memory and its name is not one its memory file can be named after.
+# The definition is its file's path.
+delegate-memory-not-a-slug = { $definition } keeps no memory: a definition keeping one needs a name of lowercase letters and digits in runs joined by single hyphens, 64 characters at most
+# A definition asked to keep a memory in a working directory where the memory would fall inside the
+# person's own ~/.bravebot, as it does for a session in the home directory. The definition is its
+# file's path, and ~/.bravebot stays as it is.
+delegate-memory-in-home = { $definition } keeps no memory here: in this directory its memory would be inside ~/.bravebot, which no write can leave untrusted
 
 # Advisory checks shown only in a Bravebot source checkout.
 doctor-development = development environment { $path }

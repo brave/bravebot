@@ -1787,6 +1787,12 @@ delegate-rounds-not-a-count =
     { $definition } a été ignoré : son nombre de cycles (rounds) doit être un entier supérieur à zéro
 delegate-rounds-held =
     { $definition } demande { $asked } cycles, plus que les { $most } permis à un { $kind } : son délégué en reçoit { $most }
+delegate-memory-not-kept =
+    { $definition } ne garde aucune mémoire : sa ligne memory indique { $value }, et seuls project et local en gardent une
+delegate-memory-not-a-slug =
+    { $definition } ne garde aucune mémoire : une définition qui en garde une doit avoir un nom fait de lettres minuscules et de chiffres, en suites reliées par des tirets simples, de 64 caractères au plus
+delegate-memory-in-home =
+    { $definition } ne garde aucune mémoire ici : dans ce répertoire, sa mémoire serait dans ~/.bravebot, qu'aucune écriture ne peut laisser non fiable
 
 ## Regarder ce que fait un delegue
 

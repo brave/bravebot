@@ -330,6 +330,7 @@ fn a_server_approved_in_one_turn_answers_the_next() {
         &mut trust,
         &target,
         &mut servers,
+        None,
     );
     assert!(refused.is_empty());
     assert!(servers.is_none());

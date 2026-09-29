@@ -314,3 +314,21 @@ fn a_directory_an_earlier_session_kept_is_still_trusted() {
         "an incognito session read no kept answer back"
     );
 }
+
+/// MEMORY-5, INCOG-8: the record of the memories a write left untrusted is kept in a private
+/// session too. It names a path and nothing a person typed, and without it the next session would
+/// read what this one left untrusted as trusted.
+#[test]
+fn a_memory_left_untrusted_is_still_recorded() {
+    let scratch = Scratch::new("records-untrusted-memory");
+    let record = bravebot_agent::memory::Record::new(&scratch.home, "/work");
+
+    record
+        .keep("/work/.bravebot/memory/notes.md")
+        .expect("an incognito session refused to record an untrusted memory");
+
+    assert_eq!(
+        record.paths(),
+        vec!["/work/.bravebot/memory/notes.md".to_string()]
+    );
+}

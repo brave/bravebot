@@ -47,6 +47,7 @@ ask you questions and what it reads stays in the conversation.
 | `skills` | no | the [skills](skills.md) this delegate is offered, out of the ones the turn found; absent means all of them, and an empty line none |
 | `mcpServers` | no | the [MCP servers](mcp-servers.md) a `worker` calls, by alias, out of the ones the turn may; absent means all of them unless `tools` is written, and an empty line none |
 | `rounds` | no | how many rounds of tools this delegate may take before it has to answer, up to its kind's ceiling; absent or empty means the kind's own |
+| `memory` | no | `project` or `local` keeps [a memory](#memory), a file its runs read and write themselves; absent or empty means none |
 | body | no | the standing instruction |
 
 Keys other than these are ignored rather than refused, so a definition written for another agent
@@ -129,6 +130,48 @@ A name may not open with `-`, may not contain a colon, which stays reserved for 
 inside a namespace, and may not be `reader`, `checker` or `worker`: those belong to the kinds, so
 that `reader` means the same thing in every project.
 
+## Memory
+
+A definition with `memory: project` or `memory: local` keeps notes from one run to the next, in one
+file named after it: `.bravebot/memory/<name>.md` in the directory the session is working in. Each
+run under it, a delegate the planner started or a turn you ran with `/agent`, is told where that
+file is and reads it itself. Nothing puts the notes in its prompt.
+
+```markdown
+---
+name: release-notes
+description: Drafts the release notes for this branch. Use when asked what changed since the last tag.
+kind: worker
+memory: project
+---
+
+Keep the conventions the maintainers asked for in your memory, and follow them.
+```
+
+The run keeps the file up to date with the tools its kind already has, on the same terms as any
+other file it writes. `memory` adds no tool, so a `reader` or a `checker` can read a memory
+something else wrote and cannot change it.
+
+`project` and `local` are the same file here: whether it is committed is up to you and your ignore
+rules, and bravebot writes none. Any other value, `user` included, loads the definition keeping no
+memory, and the turn says so:
+
+```
+~/.bravebot/agents/release-notes.md keeps no memory: its memory line says user, and only project and local keep one
+```
+
+A definition keeping a memory needs a name of lowercase letters and digits in runs joined by single
+hyphens, at most 64 characters, since the file is named after it. A session in your home directory
+keeps none, because the file would be inside `~/.bravebot`.
+
+**A memory is read on the [trust map](../security/trust.md)'s terms.** In a directory you did not
+vouch for, the run is told its memory is withheld, and reading it is a quarantined read like any
+other. Where a write leaves the file untrusted, because it passed on something from a page or a file
+nobody vouched for, the path is recorded in `~/.bravebot/untrusted`, and later sessions withhold the
+memory too. Saying yes when a read of it is quarantined, naming it with `@`, dropping or attaching
+it, or a later write that leaves it trusted, takes it out of that record. A write that cannot be
+recorded there is refused.
+
 ## Which one wins
 
 Your own directory is read first and the project second, so a project definition of the same name
@@ -136,8 +179,8 @@ replaces yours, which is the same "most specific wins" the trust map uses for pa
 directory resolve by file name, so which is live is the same on every machine.
 
 **It wins about what the definition is for, and never about what it may do.** The project's file
-takes over the description, the body, the model, the skills and the rounds, held to the ceiling of
-the kind it is loaded as. The kind is the narrower of the two, and the `tools` and `mcpServers`
+takes over the description, the body, the model, the skills, the rounds and the memory, the rounds
+held to the ceiling of the kind it is loaded as. The kind is the narrower of the two, and the `tools` and `mcpServers`
 lists are met name by name, so a checkout you vouched for cannot turn a `reader` you wrote into a
 `worker`, and cannot hand back a tool or a server your own lines took away.
 Vouching for a project is a decision about the project, not one about a name you had already

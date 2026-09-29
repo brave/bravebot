@@ -241,6 +241,15 @@ pub struct Workspace {
     /// among the directories they opened, and `/cd` leaves it alone rather than closing it for
     /// overlapping the directory being moved to.
     scratch: Option<PathBuf>,
+    /// The state directory a write that leaves a definition's memory untrusted is recorded in,
+    /// where the session has one ([MEMORY-5]).
+    ///
+    /// Carried here rather than passed to each write, because every route into a file goes
+    /// through this and a route that forgot to pass it would land a memory unrecorded. `None`
+    /// refuses such a write, which is the direction that trusts nothing.
+    ///
+    /// [MEMORY-5]: ../../../docs/specs/definition-memory.md
+    memories: Option<PathBuf>,
     /// How many files a search may walk. [`MAX_SEARCH_FILES`] unless the settings named another.
     ///
     /// A field rather than a constant because the right number is a property of the tree: a
@@ -420,6 +429,7 @@ impl Workspace {
             root: canonical,
             added: Vec::new(),
             scratch: None,
+            memories: None,
             search_files: MAX_SEARCH_FILES,
             search_time: MAX_SEARCH_TIME,
             backups: Arc::new(Mutex::new(Vec::new())),
@@ -462,6 +472,20 @@ impl Workspace {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Record a write that leaves a definition's memory untrusted in the state directory `home`.
+    ///
+    /// `None` is a session with no state directory, where such a write is refused.
+    #[must_use]
+    pub fn keeping_memories(mut self, home: Option<PathBuf>) -> Self {
+        self.memories = home;
+        self
+    }
+
+    /// The state directory [`Workspace::keeping_memories`] named.
+    pub(crate) fn memories(&self) -> Option<&Path> {
+        self.memories.as_deref()
     }
 
     /// Reach the session's own directory outside the project, or stop reaching one.
@@ -1326,6 +1350,18 @@ impl Workspace {
         expected_revision: Option<u64>,
     ) -> Result<PathBuf, WorkspaceError> {
         let resolved = self.resolve(&relative)?;
+        let written = policy.file_authority().key(&self.trust_key(&relative));
+        // Before the capture rather than inside it, so no other write waits on the record's sync.
+        // A write refused after this leaves a line distrusting a path it did not change, which
+        // is the direction that trusts nothing.
+        if contents.label().integrity == bravebot_core::label::Integrity::Untrusted {
+            crate::memory::record_before_write(self.memories(), &written).map_err(|e| {
+                WorkspaceError::Io {
+                    path: relative.clone(),
+                    detail: e.to_string(),
+                }
+            })?;
+        }
         let effect = policy.capture_files(|policy, capture| {
             let key = self.trust_key(&relative);
             if expected_revision.is_some_and(|revision| revision != capture.revision_of(&key)) {
@@ -1366,6 +1402,7 @@ impl Workspace {
         #[cfg(test)]
         self.interrupt_after_write()?;
         effect.complete(contents.label().integrity);
+        crate::memory::after_write(policy, self.memories(), &written);
         Ok(resolved)
     }
 

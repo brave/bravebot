@@ -2113,3 +2113,99 @@ fn what_a_planned_write_changed_is_diffed_inside_the_kernel_before_it_is_release
         sink.events()
     );
 }
+
+/// MEMORY-5 in a plan: a memory an earlier session's write left untrusted is untrusted in the
+/// run's map too, since a step can read a definition's memory as a turn can. The file beside it is
+/// the control: the map the run was given trusts the whole directory.
+#[test]
+fn a_memory_an_earlier_session_left_untrusted_is_untrusted_in_a_plan() {
+    let scratch = Scratch::new("recorded-memory");
+    let home = Scratch::new("recorded-memory-home");
+    std::fs::write(scratch.path.join("notes.txt"), "ours").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let directory = bravebot_agent::workspace::key_of(workspace.root());
+    bravebot_agent::memory::Record::new(&home.path, &directory)
+        .keep(&format!("{directory}/.bravebot/memory/notes-keeper.md"))
+        .expect("seed the record");
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "notes.txt", "out_slot": "doc"}},
+            {"capability": "ANSWER", "args": {"from_slot": "doc"}},
+        ])),
+    ]);
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+
+    let outcome = manifest::run(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what is in notes.txt?").with_home(Some(home.path.clone())),
+        skipping_permissions!(),
+        &mut bravebot_agent::IgnoreReports,
+        &mut RecordingSink::new(),
+        trust,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("runs");
+
+    assert!(outcome.trust.is_trusted("notes.txt"));
+    assert!(
+        !outcome.trust.is_trusted(".bravebot/memory/notes-keeper.md"),
+        "a plan's map trusts a memory an earlier session left untrusted"
+    );
+}
+
+/// MEMORY-5 for a plan's write. A memory this session's map does not trust, rewritten by a
+/// processor from what it held, is still untrusted, so it is recorded in the state directory
+/// before the bytes land and the next session reads it back as untrusted.
+#[test]
+fn a_plan_writing_untrusted_bytes_into_a_memory_records_it() {
+    let scratch = Scratch::new("plan-memory-write");
+    let home = Scratch::new("plan-memory-write-home");
+    std::fs::create_dir_all(scratch.path.join(".bravebot/memory")).unwrap();
+    std::fs::write(
+        scratch.path.join(".bravebot/memory/notes-keeper.md"),
+        "from a page",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": ".bravebot/memory/notes-keeper.md", "out_slot": "notes"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["notes"], "instruction": "tidy it", "out_slot": "tidied"}},
+            {"capability": "FILE_WRITE", "args": {"path": ".bravebot/memory/notes-keeper.md", "from_slot": "tidied"}},
+        ])),
+        processor_reply("TIDIED-FROM-A-PAGE"),
+    ]);
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust(".bravebot/memory/notes-keeper.md");
+
+    let outcome = manifest::run(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("tidy the notes").with_home(Some(home.path.clone())),
+        skipping_permissions!(),
+        &mut bravebot_agent::IgnoreReports,
+        &mut RecordingSink::new(),
+        trust,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".bravebot/memory/notes-keeper.md")).unwrap(),
+        "TIDIED-FROM-A-PAGE"
+    );
+    assert!(!outcome.trust.is_trusted(".bravebot/memory/notes-keeper.md"));
+    let directory = bravebot_agent::workspace::key_of(workspace.root());
+    assert_eq!(
+        bravebot_agent::memory::Record::new(&home.path, &directory).paths(),
+        vec![format!("{directory}/.bravebot/memory/notes-keeper.md")],
+        "a plan left a memory untrusted and nothing recorded it"
+    );
+}

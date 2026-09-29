@@ -2580,8 +2580,14 @@ fn rewind(
     stored.retain_rewind_coverage(&point.coverage);
     let gaps = point.coverage.gaps();
     let snapshot = point.snapshot;
-    let refused =
-        bravebot_agent::rewind::restore(workspace, point.backups, trust, &snapshot.trust, servers);
+    let refused = bravebot_agent::rewind::restore(
+        workspace,
+        point.backups,
+        trust,
+        &snapshot.trust,
+        servers,
+        bravebot_agent::home::directory().as_deref(),
+    );
     if !refused.is_empty() {
         session.record_rewind_gap(bravebot_agent::rewind::CoverageGap::BackupUnavailable);
     }
@@ -3450,7 +3456,15 @@ fn event_loop(
                 let mut sending = Some((prompt, whose));
                 while let Some((prompt, wrote)) = sending {
                     let history_start = conversation.recounted().len();
-                    let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
+                    // With the record's rules, which the turn about to run will read: without them a
+                    // yes this turn gives to a recorded memory would outlive rewinding past it.
+                    let recorded = bravebot_agent::memory::with_recorded(
+                        &trust,
+                        &workspace,
+                        bravebot_agent::home::directory().as_deref(),
+                    );
+                    let point =
+                        rewind_point(&session, &conversation, &recorded, &programs, &stored);
                     let _ = workspace.take_backups();
                     session.open_rewind_point(point, prompt.clone());
                     session.bind_rewind_coverage(&workspace);
