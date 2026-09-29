@@ -392,6 +392,8 @@ pub(crate) fn normalise(path: &str) -> String {
 pub(crate) fn covers(prefix: &str, path: &str) -> bool {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     let (prefix, path) = (prefix.to_lowercase(), path.to_lowercase());
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let (prefix, path) = (prefix.as_str(), path.as_str());
     // The filesystem root covers everything, and is the one key with no segment of its own.
     if prefix == "/" {
         return true;
@@ -399,12 +401,12 @@ pub(crate) fn covers(prefix: &str, path: &str) -> bool {
     // The empty key is not a second one of those. It is what a map made against something that is
     // not a path keys its own root under, and a full path is never under such a root.
     if prefix.is_empty() {
-        return !is_absolute_key(&path);
+        return !is_absolute_key(path);
     }
     if path == prefix {
         return true;
     }
-    path.strip_prefix(&*prefix)
+    path.strip_prefix(prefix)
         .is_some_and(|rest| rest.starts_with('/'))
 }
 
