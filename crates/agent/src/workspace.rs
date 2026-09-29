@@ -2784,6 +2784,121 @@ pub fn key_of(resolved: &Path) -> String {
     to_key(&resolved.to_string_lossy(), BACKSLASH_SEPARATES).into_owned()
 }
 
+/// An empty trust map for the workspace at `root`, comparing names the way the volume it is on
+/// does (TRUST-2).
+///
+/// What a front end makes a map with, in place of [`bravebot_core::TrustStore::new`] and
+/// [`key_of`] separately: the map cannot ask the volume, since `bravebot-core` performs no I/O.
+#[must_use]
+pub fn trust_store(root: &Path) -> bravebot_core::TrustStore {
+    bravebot_core::TrustStore::new(key_of(root)).folding_case(volume_folds_case(root))
+}
+
+/// Whether the volume `root` is on holds two spellings differing only in case as one file.
+///
+/// `false` whenever that cannot be told, because the answer only widens what a rule reaches: a
+/// rule about `Docs` covers `docs` where they are one file and would cover a different file where
+/// they are two. A volume that folds and is read as one that does not costs a missed distrust
+/// rule, which is why the answer is asked of the volume instead of being read from the platform.
+///
+/// The question is put with the working directory's own name, a path the person chose, and only
+/// the answer of the filesystem is used. No file is created and no name in the tree is read.
+#[must_use]
+pub fn volume_folds_case(root: &Path) -> bool {
+    static ANSWERS: std::sync::OnceLock<Mutex<std::collections::HashMap<PathBuf, bool>>> =
+        std::sync::OnceLock::new();
+    let answers = ANSWERS.get_or_init(Default::default);
+    if let Some(known) = answers.lock().ok().and_then(|held| held.get(root).copied()) {
+        return known;
+    }
+    let Some(answer) = folds_case_by(root, &file_id) else {
+        return false;
+    };
+    if let Ok(mut held) = answers.lock() {
+        held.insert(root.to_path_buf(), answer);
+    }
+    answer
+}
+
+/// What the filesystem says a path is: the volume it is on and which file it names there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileId {
+    volume: u64,
+    file: String,
+}
+
+#[cfg(unix)]
+fn file_id(path: &Path) -> std::io::Result<FileId> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(path)?;
+    Ok(FileId {
+        volume: meta.dev(),
+        file: meta.ino().to_string(),
+    })
+}
+
+#[cfg(windows)]
+fn file_id(path: &Path) -> std::io::Result<FileId> {
+    // A canonical path spells a file as the volume stores it, so two spellings of one file
+    // canonicalise alike and two files never do.
+    Ok(FileId {
+        volume: 0,
+        file: std::fs::canonicalize(path)?.to_string_lossy().into_owned(),
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn file_id(_path: &Path) -> std::io::Result<FileId> {
+    Err(std::io::ErrorKind::Unsupported.into())
+}
+
+/// `name` with the case of every letter reversed.
+fn swapped_case(name: &str) -> String {
+    name.chars()
+        .flat_map(|c| -> Vec<char> {
+            if c.is_lowercase() {
+                c.to_uppercase().collect()
+            } else if c.is_uppercase() {
+                c.to_lowercase().collect()
+            } else {
+                vec![c]
+            }
+        })
+        .collect()
+}
+
+/// Ask `id` whether the name of `root`, or of the nearest directory above it with a letter in its
+/// name, is also the file named by the same name in the other case.
+///
+/// `None` where nothing could be asked or the filesystem gave no answer: an error, a name with no
+/// letter anywhere on the path, or a directory that is a mount point, whose name lives on the
+/// volume above it and so says nothing about the volume `root` is on. A caller reads that as
+/// "does not fold" and does not remember it.
+fn folds_case_by(root: &Path, id: &dyn Fn(&Path) -> std::io::Result<FileId>) -> Option<bool> {
+    let volume = id(root).ok()?.volume;
+    let mut dir = root;
+    while let Some(parent) = dir.parent() {
+        let here = id(dir).ok()?;
+        if here.volume != volume || id(parent).ok()?.volume != volume {
+            return None;
+        }
+        if let Some(name) = dir.file_name().and_then(|name| name.to_str()) {
+            let flipped = swapped_case(name);
+            if flipped != name {
+                // A miss is the volume saying they are two names; another file under the other
+                // spelling is the volume saying the same. Only the same file is one name.
+                return match id(&parent.join(flipped)) {
+                    Ok(other) => Some(other == here),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(false),
+                    Err(_) => None,
+                };
+            }
+        }
+        dir = parent;
+    }
+    None
+}
+
 /// The part of `named` written below `opened`, for a name that reaches it through an ancestor.
 ///
 /// The ancestor is matched on where it lands, so any spelling of the open directory is found, and
@@ -2814,6 +2929,134 @@ fn written_below(named: &Path, opened: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::io;
+
+    /// A filesystem that holds the paths it is given, on volume 1, each its own file, and answers
+    /// to the other spelling of a name when `folds` says the volume does.
+    fn volume(paths: &[&str], folds: bool) -> impl Fn(&Path) -> io::Result<FileId> {
+        let held: HashMap<String, usize> = paths
+            .iter()
+            .enumerate()
+            .map(|(n, p)| (p.to_lowercase(), n))
+            .collect();
+        let exact: Vec<String> = paths.iter().map(|p| p.to_string()).collect();
+        move |path| {
+            let spelled = path.to_string_lossy().into_owned();
+            let found = if folds {
+                held.get(&spelled.to_lowercase()).copied()
+            } else {
+                exact.iter().position(|p| *p == spelled)
+            };
+            found
+                .map(|n| FileId {
+                    volume: 1,
+                    file: n.to_string(),
+                })
+                .ok_or_else(|| io::ErrorKind::NotFound.into())
+        }
+    }
+
+    const TREE: &[&str] = &["/", "/Users", "/Users/me", "/Users/me/Proj"];
+
+    /// A volume answering to either spelling of `Proj` is one whose rules have to fold.
+    #[test]
+    fn a_volume_answering_to_either_spelling_folds_case() {
+        let id = volume(TREE, true);
+        assert_eq!(folds_case_by(Path::new("/Users/me/Proj"), &id), Some(true));
+    }
+
+    /// A volume holding `Proj` and `pROJ` apart is one where a rule about `Docs` must not cover
+    /// `docs`, so it does not fold, and this is the answer that keeps trust from widening.
+    #[test]
+    fn a_volume_holding_the_spellings_apart_does_not_fold_case() {
+        let id = volume(TREE, false);
+        assert_eq!(folds_case_by(Path::new("/Users/me/Proj"), &id), Some(false));
+
+        let both = volume(
+            &[
+                "/",
+                "/Users",
+                "/Users/me",
+                "/Users/me/Proj",
+                "/Users/me/pROJ",
+            ],
+            false,
+        );
+        assert_eq!(
+            folds_case_by(Path::new("/Users/me/Proj"), &both),
+            Some(false)
+        );
+    }
+
+    /// A probe that fails or cannot tell reads as a volume that does not fold, and is not
+    /// remembered.
+    #[test]
+    fn a_probe_that_cannot_tell_does_not_fold_case() {
+        let denied = |path: &Path| -> io::Result<FileId> {
+            if path == Path::new("/Users/me/pROJ") {
+                Err(io::ErrorKind::PermissionDenied.into())
+            } else {
+                volume(TREE, true)(path)
+            }
+        };
+        assert_eq!(folds_case_by(Path::new("/Users/me/Proj"), &denied), None);
+
+        let nothing =
+            |_: &Path| -> io::Result<FileId> { Err(io::ErrorKind::PermissionDenied.into()) };
+        assert_eq!(folds_case_by(Path::new("/Users/me/Proj"), &nothing), None);
+
+        let mixed = |path: &Path| -> io::Result<FileId> {
+            let mut id = volume(TREE, true)(path)?;
+            if path == Path::new("/Users/me/Proj") {
+                id.volume = 2;
+            }
+            Ok(id)
+        };
+        assert_eq!(
+            folds_case_by(Path::new("/Users/me/Proj"), &mixed),
+            None,
+            "a name held on the volume above was read as the answer for a mount point"
+        );
+    }
+
+    /// A working directory whose name has no letter is asked about the nearest directory above it
+    /// that has one, on the same volume.
+    #[test]
+    fn a_name_without_a_letter_is_asked_of_the_directory_above() {
+        let tree = &[
+            "/",
+            "/Users",
+            "/Users/me",
+            "/Users/me/Proj",
+            "/Users/me/Proj/2024",
+        ];
+        assert_eq!(
+            folds_case_by(Path::new("/Users/me/Proj/2024"), &volume(tree, true)),
+            Some(true)
+        );
+        assert_eq!(
+            folds_case_by(Path::new("/Users/me/Proj/2024"), &volume(tree, false)),
+            Some(false)
+        );
+    }
+
+    /// The store a front end makes takes the volume's answer, and an unreadable directory
+    /// compares bytes.
+    #[test]
+    fn a_trust_store_takes_the_answer_of_the_volume_it_is_on() {
+        let root = crate::testutil::scratch_dir("Volume-Case-Probe");
+        std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+
+        // The oracle asks the same filesystem the other way, with a file of the test's own.
+        std::fs::write(root.join("probe-file"), b"").unwrap();
+        let folds = root.join("PROBE-FILE").exists();
+
+        assert_eq!(volume_folds_case(&root), folds);
+        assert_eq!(trust_store(&root).folds_case(), folds);
+        assert!(!trust_store(&root.join("does-not-exist")).folds_case());
+    }
 
     /// Losing the journal lock cannot turn an attempted mutation into an empty complete backup.
     #[test]

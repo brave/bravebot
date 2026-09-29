@@ -82,11 +82,19 @@ A rule is about a **path**, not about the files that were in it when the rule wa
 consulted when a file is read rather than when the rule is written. A file that appears in a
 trusted directory afterwards is therefore read as trusted, whoever put it there.
 
-**Case.** On macOS and Windows, where a filesystem answers to either case of a name by default,
-two spellings that differ only in case are one path: a rule about `src/fetched.json` decides
-`SRC/fetched.json` too, in both polarities. Linux compares bytes. On a case-sensitive volume the
-fold can make a rule reach a path it was not written about, so a trust rule can cover a sibling
-that differs only in case there. Where two rules differ only in case, the one that sorts first
+**Case.** Whether two spellings that differ only in case are one path is a fact about the volume
+the working directory is on, so it is asked of the volume and not read from the operating system.
+The front end that makes the map asks by looking the working directory's own name up in the other
+case (the nearest directory above it with a letter in its name, on the same volume) and comparing
+which file each spelling names. No file is created and no name inside the tree is read. Where they
+name one file, `src/fetched.json` and `SRC/fetched.json` are one path and a rule about either
+decides both, in both polarities. Where they name different files, or the lookup misses, the map
+compares bytes, and a rule about `Docs` decides nothing about `docs`. Where the volume cannot be
+asked (an error, a mount point, a name with no letter anywhere on the path, a host with no way of
+telling files apart), the map also compares bytes: the answer only widens what a rule reaches, and
+a map that does not fold has never made trust cover a path it was not written about. A map made
+without the answer compares bytes, and a map moved to another directory takes that directory's
+answer. Where two rules differ only in case on a volume that folds, the one that sorts first
 decides, and the map does not replace one with the other.
 
 **Why.** Per-file exceptions in both directions are the only way `@vendor/lib.js` can be trusted
@@ -110,6 +118,14 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_core::trust::every_equivalent_spelling_of_a_path_reaches_the_same_rule`
 `verified-by: bravebot_agent::workspace::a_second_spelling_of_a_distrusted_file_is_read_as_untrusted`
 `verified-by: bravebot_core::trust::a_rule_covers_a_case_variant_spelling_of_the_same_file`
+`verified-by: bravebot_core::trust::a_folding_volume_applies_a_rule_in_both_polarities_to_the_other_spelling`
+`verified-by: bravebot_core::trust::a_case_sensitive_volume_keeps_spellings_apart`
+`verified-by: bravebot_core::trust::a_map_moved_takes_the_new_volumes_answer`
+`verified-by: bravebot_agent::workspace::a_volume_answering_to_either_spelling_folds_case`
+`verified-by: bravebot_agent::workspace::a_volume_holding_the_spellings_apart_does_not_fold_case`
+`verified-by: bravebot_agent::workspace::a_probe_that_cannot_tell_does_not_fold_case`
+`verified-by: bravebot_agent::workspace::a_name_without_a_letter_is_asked_of_the_directory_above`
+`verified-by: bravebot_agent::workspace::a_trust_store_takes_the_answer_of_the_volume_it_is_on`
 `verified-by: bravebot_agent::workspace::a_case_variant_spelling_of_a_distrusted_file_is_read_as_untrusted`
 `verified-by: bravebot_core::trust::a_later_decision_replaces_an_earlier_one`
 `verified-by: bravebot_core::trust::a_path_named_in_full_reaches_the_rule_its_relative_name_wrote`

@@ -153,11 +153,11 @@ fn a_second_spelling_of_a_distrusted_file_is_read_as_untrusted() {
     assert!(policy.finish());
 }
 
-/// On a filesystem that answers to either spelling of a name — macOS volumes are
-/// case-insensitive by default — a file read as `SRC/fetched.json` is the very file the
-/// distrust rule was written about, so the rule has to reach that spelling too, or a fetched
-/// page laundered into trusted content by nothing more than typing it in capitals.
-#[cfg(target_os = "macos")]
+/// On a volume that answers to either spelling of a name (a macOS volume is case-insensitive by
+/// default, and can be formatted otherwise), a file read as `SRC/fetched.json` is the very file
+/// the distrust rule was written about, so the rule has to reach that spelling too, or a fetched
+/// page laundered into trusted content by nothing more than typing it in capitals. The map is told
+/// by asking the volume, and a volume that holds the two spellings apart is asked nothing more.
 #[test]
 fn a_case_variant_spelling_of_a_distrusted_file_is_read_as_untrusted() {
     let scratch = Scratch::new("case-spelled-past-a-rule");
@@ -167,9 +167,21 @@ fn a_case_variant_spelling_of_a_distrusted_file_is_read_as_untrusted() {
 
     // The state a turn leaves behind after writing a fetched page into a vouched-for tree: the
     // workspace is trusted, and the file that page landed in is not.
-    let mut trust = TrustStore::new(workspace.root());
+    let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
     trust.trust(".");
     trust.distrust("src/fetched.json");
+
+    if !scratch.path.join("SRC/fetched.json").exists() {
+        assert!(
+            !trust.folds_case(),
+            "the volume holds the spellings apart but the map folded them"
+        );
+        return;
+    }
+    assert!(
+        trust.folds_case(),
+        "the volume answers to both spellings but the map compared bytes"
+    );
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(

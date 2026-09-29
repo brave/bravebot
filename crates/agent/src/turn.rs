@@ -1465,7 +1465,7 @@ pub fn run<S: Sink + Send, C: Confirmer + Send>(
         task,
         confirmer,
         sink,
-        TrustStore::new(crate::workspace::key_of(workspace.root())),
+        crate::workspace::trust_store(workspace.root()),
     )
 }
 

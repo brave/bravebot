@@ -3798,9 +3798,10 @@ fn change_directory(
         rules,
     } = answers;
     *exposed = bravebot_core::credentials::Exposed::new();
-    *trust = trust.rebased(std::path::Path::new(&bravebot_agent::workspace::key_of(
-        &moved.root,
-    )));
+    *trust = trust.rebased(
+        std::path::Path::new(&bravebot_agent::workspace::key_of(&moved.root)),
+        bravebot_agent::workspace::volume_folds_case(&moved.root),
+    );
     trust.trust(".");
     // The servers go, and LSP-5 is why: what a person approved was a server reading *that* tree,
     // and a set indexes the root it was built with. Kept across the move it would answer questions
