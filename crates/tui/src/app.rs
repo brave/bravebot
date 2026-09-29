@@ -13740,6 +13740,7 @@ mod tests {
         .map(|(name, source)| crate::skills::Skill {
             name: name.to_string(),
             description: format!("what {name} is for"),
+            argument_hint: None,
             source,
         })
         .collect()
@@ -13841,10 +13842,10 @@ mod tests {
         assert_eq!(session.input(), "/mode ");
     }
 
-    /// Read once as a slash word begins rather than once a key, and let go once it ends, so a
-    /// skill written since is offered the next time.
+    /// Read once as the line first holds a slash word rather than once a key, and let go once it
+    /// holds none, so a skill written since is offered the next time.
     #[test]
-    fn the_skills_are_resolved_once_a_word_and_let_go_after_it() {
+    fn the_skills_are_resolved_once_a_line_and_let_go_after_it() {
         let mut session = Session::new("none");
         let mut resolved = 0;
         for c in "/re x /c".chars() {
@@ -13853,11 +13854,28 @@ mod tests {
                 resolved += 1;
                 skills()
             });
-            if c == ' ' {
-                assert!(session.held_skills().is_empty(), "held past the word");
-            }
+            assert!(
+                !session.held_skills().is_empty(),
+                "let go with a slash word still in the line"
+            );
         }
-        assert_eq!(resolved, 2, "one read for each of the two slash words");
+        assert_eq!(resolved, 1, "one read for the line, not one for each word");
+
+        for _ in 0.."/re x /c".len() {
+            handle_key(&mut session, key(KeyCode::Backspace));
+            session.settle_skills(|| {
+                resolved += 1;
+                skills()
+            });
+        }
+        assert_eq!(session.input(), "");
+        assert!(session.held_skills().is_empty(), "held past the line");
+        handle_key(&mut session, key(KeyCode::Char('/')));
+        session.settle_skills(|| {
+            resolved += 1;
+            skills()
+        });
+        assert_eq!(resolved, 2, "a slash on a line that had none reads again");
     }
 
     /// With the `!` mode armed a slash begins a path, so no skill is read or offered, and inside a

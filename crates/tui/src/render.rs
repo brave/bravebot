@@ -2377,19 +2377,110 @@ fn input_height(session: &Session, width: u16, height: u16) -> u16 {
 /// An empty range is the caret past the end of the line, where there is no cell to occupy, so a
 /// highlighted space is added. That is the one place the caret still takes a column, and
 /// [`input_text_width`] reserves it.
-fn caret_spans(row: &str, at: usize, through: usize, colour: Color) -> Vec<Span<'static>> {
+///
+/// `words` are the stretches of the row that name a command or a skill, drawn in the colour of
+/// the prompt around the caret.
+fn caret_spans(
+    row: &str,
+    at: usize,
+    through: usize,
+    colour: Color,
+    words: &[(usize, usize)],
+) -> Vec<Span<'static>> {
     // Reversed rather than a chosen pair of colours, so the cells invert whatever the terminal's
     // own foreground and background happen to be and stay legible on either kind of theme.
     let block = Style::default().fg(colour).add_modifier(Modifier::REVERSED);
 
-    let mut spans = vec![Span::raw(row[..at].to_string())];
+    let mut spans = text_spans(row, 0, at, words);
     if through > at {
         spans.push(Span::styled(row[at..through].to_string(), block));
-        spans.push(Span::raw(row[through..].to_string()));
+        spans.extend(text_spans(row, through, row.len(), words));
     } else {
         spans.push(Span::styled(" ", block));
     }
     spans
+}
+
+/// `row[from..to]` as plain text, with the stretches in `words` drawn as a recognised word.
+///
+/// `words` are in row offsets, in order and not overlapping. A stretch is cut at `from` and `to`,
+/// so the caret block can take the middle of a word and leave the rest of it coloured.
+fn text_spans(row: &str, from: usize, to: usize, words: &[(usize, usize)]) -> Vec<Span<'static>> {
+    let named = Style::default().fg(theme::brand_primary());
+    let mut spans = Vec::new();
+    let mut at = from;
+    for &(start, end) in words {
+        let start = start.clamp(at, to);
+        let end = end.clamp(start, to);
+        if start > at {
+            spans.push(Span::raw(row[at..start].to_string()));
+        }
+        if end > start {
+            spans.push(Span::styled(row[start..end].to_string(), named));
+        }
+        at = end;
+    }
+    if at < to {
+        spans.push(Span::raw(row[at..to].to_string()));
+    }
+    spans
+}
+
+/// Where the line names a command or a skill, as byte ranges of the line.
+///
+/// A command only where the line is that command, since `/undo the last change` is a prompt and
+/// is drawn as one. A skill anywhere, since it may be named mid-sentence, but not inside a command
+/// line, whose argument is taken verbatim. The same reading the completion list makes, so a word
+/// is drawn as recognised exactly where taking it from the list would leave it recognised.
+///
+/// The line is the person's own typing and the names are the program's and the trusted skills', so
+/// the only thing decided from them is a colour.
+fn named_words(session: &Session) -> Vec<(usize, usize)> {
+    if session.shell {
+        return Vec::new();
+    }
+    let line = session.input();
+    if let Some(name) = crate::app::command_typed(line) {
+        let start = line.len() - line.trim_start().len();
+        return vec![(start, start + name.len())];
+    }
+    let held = session.held_skills();
+    let mut words = Vec::new();
+    let mut offset = 0;
+    for piece in line.split_inclusive(char::is_whitespace) {
+        let word = piece.trim_end_matches(char::is_whitespace);
+        if crate::skills::named(held, word).is_some() {
+            words.push((offset, offset + word.len()));
+        }
+        offset += piece.len();
+    }
+    words
+}
+
+/// What the line is ready to be given, drawn after the caret, or `None` where nothing is.
+///
+/// Only where the line is a command or a skill that takes something, a space has been typed after
+/// it, and nothing else has: the first character of the argument replaces the hint. At the end of
+/// the line, since that is where the argument will be typed.
+fn argument_hint(session: &Session) -> Option<String> {
+    let line = session.input();
+    if session.shell || session.caret() != line.len() {
+        return None;
+    }
+    let word = line.trim_end_matches(' ');
+    if word.len() == line.len() || word.contains(char::is_whitespace) {
+        return None;
+    }
+    let hint = match crate::app::commands()
+        .iter()
+        .find(|command| command.name == word)
+    {
+        Some(command) => command.argument,
+        None => crate::skills::named(session.held_skills(), word)?
+            .argument_hint
+            .as_deref()?,
+    };
+    (!hint.is_empty()).then(|| printable(hint))
 }
 
 /// What opens a row of the box: the prompt character, or the indent a continuation lines up under.
@@ -2532,6 +2623,8 @@ fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
     let (first, rows) = wrapped.window(visible);
     let marker = session.marker_at_caret();
     let selection = session.vi_selection();
+    let words = named_words(session);
+    let hint = argument_hint(session);
 
     // Shell mode is coloured throughout rather than only in the marker, because the whole line
     // means something different: it goes to a shell instead of the model, and that is worth more
@@ -2559,23 +2652,36 @@ fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
             //
             // Drawn at all because a selection nobody can see is the failure this mode has: the next
             // key acts on a stretch, and a person who cannot see which one is guessing.
+            let named: Vec<(usize, usize)> = words
+                .iter()
+                .filter_map(|&word| covered(row, wrapped.starts[index], word))
+                .collect();
             if let Some((at, through)) =
                 selection.and_then(|span| covered(row, wrapped.starts[index], span))
             {
-                spans.extend(caret_spans(row, at, through, colour));
+                spans.extend(caret_spans(row, at, through, colour, &named));
                 return Line::from(spans);
             }
             // A marker is one thing to the caret, so the caret covers the whole of it rather than
             // the one character it happens to start with. The span is located in the line, not in
             // the row, because the wrap is free to put a long marker across two of them.
             match marker.and_then(|span| covered(row, wrapped.starts[index], span)) {
-                Some((at, through)) => spans.extend(caret_spans(row, at, through, colour)),
+                Some((at, through)) => {
+                    spans.extend(caret_spans(row, at, through, colour, &named));
+                }
                 None if index == wrapped.cursor_row => {
                     let at = wrapped.cursor_index;
                     let on = row[at..].chars().next().map_or(at, |c| at + c.len_utf8());
-                    spans.extend(caret_spans(row, at, on, colour));
+                    spans.extend(caret_spans(row, at, on, colour, &named));
+                    // Past the caret, and cut to the row rather than wrapped, since the box was
+                    // sized for the line and a hint that wrapped would take a row nobody reserved.
+                    let room =
+                        input_text_width(area.width).saturating_sub(wrap::display_width(row));
+                    if let (Some(hint), true) = (&hint, room >= 2) {
+                        spans.push(Span::styled(head_of(hint, room), dim()));
+                    }
                 }
-                None => spans.push(Span::raw(row.clone())),
+                None => spans.extend(text_spans(row, 0, row.len(), &named)),
             }
             Line::from(spans)
         })
@@ -7354,11 +7460,13 @@ mod tests {
                 crate::skills::Skill {
                     name: "release-notes".to_string(),
                     description: "Draft the notes\nfrom the \u{1b}[31mchangelog, ".repeat(8),
+                    argument_hint: None,
                     source: Source::Workspace,
                 },
                 crate::skills::Skill {
                     name: "release-check".to_string(),
                     description: "Check a tag".to_string(),
+                    argument_hint: None,
                     source: Source::Home,
                 },
             ]
@@ -7389,6 +7497,176 @@ mod tests {
             !rows[1].contains(['\u{1b}', '\n']),
             "an escape or a line break reached the row: {rows:?}"
         );
+    }
+
+    /// The first row of the box after its border and prompt, one cell to an entry with the colour
+    /// it is drawn in.
+    fn input_cells_at(session: &Session, width: u16, height: u16) -> Vec<(String, Color)> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw(frame, session);
+            })
+            .expect("draw succeeds");
+        let buffer = terminal.backend().buffer();
+        let row = (0..height)
+            .find(|&row| {
+                buffer.cell((0, row)).expect("cell").symbol() == "│"
+                    && matches!(buffer.cell((1, row)).expect("cell").symbol(), ">" | "!")
+            })
+            .expect("the box has a first row");
+        (3..width - 1)
+            .map(|column| {
+                let cell = buffer.cell((column, row)).expect("cell");
+                (cell.symbol().to_string(), cell.fg)
+            })
+            .collect()
+    }
+
+    fn input_row(session: &Session, width: u16) -> String {
+        input_cells_at(session, width, 24)
+            .iter()
+            .map(|(symbol, _)| symbol.as_str())
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    /// The characters of the box drawn as a recognised word, in the order they appear. The caret
+    /// is a coloured space, so spaces are left out.
+    fn recognised_in_the_box(session: &Session) -> String {
+        input_cells_at(session, 90, 24)
+            .into_iter()
+            .filter(|(symbol, colour)| symbol != " " && *colour == theme::brand_primary())
+            .map(|(symbol, _)| symbol)
+            .collect()
+    }
+
+    fn skills_taking_arguments() -> Vec<crate::skills::Skill> {
+        use bravebot_agent::skills::Source;
+        [
+            ("code-review", Some("[low|high] [--fix] [<pr#>|<path>]")),
+            ("release-notes", None),
+        ]
+        .into_iter()
+        .map(|(name, hint)| crate::skills::Skill {
+            name: name.to_string(),
+            description: format!("what {name} is for"),
+            argument_hint: hint.map(str::to_string),
+            source: Source::Home,
+        })
+        .collect()
+    }
+
+    fn typed_with_skills(line: &str) -> Session {
+        let mut session = typed(line);
+        session.settle_skills(skills_taking_arguments);
+        session
+    }
+
+    /// The box says what a command takes once the command is typed and a space is after it, and
+    /// takes it back as soon as anything else is. The list beneath the box names the argument at
+    /// every stage, so the row of the box itself is what is read.
+    #[test]
+    fn a_command_shows_what_it_takes_once_it_is_typed() {
+        let hint = "[[interval] <prompt> | stop]";
+        assert!(input_row(&typed_with_skills("/loop "), 90).ends_with(hint));
+        assert!(
+            !input_row(&typed_with_skills("/loop"), 90).contains(hint),
+            "shown before the word was finished"
+        );
+        assert!(
+            !input_row(&typed_with_skills("/loop 5m"), 90).contains(hint),
+            "shown after the argument was begun"
+        );
+        assert!(
+            !input_row(&typed_with_skills("/loop  5m"), 90).contains(hint),
+            "shown over an argument after two spaces"
+        );
+        assert_eq!(
+            input_row(&typed_with_skills("/undo "), 90),
+            "/undo",
+            "a command with nothing to take showed something"
+        );
+        assert_eq!(
+            input_row(&typed_with_skills("/nosuch "), 90),
+            "/nosuch",
+            "a word that is no command showed a hint"
+        );
+    }
+
+    /// A skill's hint is the one its file gave, only at the start of the line where a command's
+    /// would be, and a skill whose file gave none shows nothing.
+    #[test]
+    fn a_skill_shows_the_hint_its_file_gave() {
+        let hint = "[low|high] [--fix] [<pr#>|<path>]";
+        assert!(input_row(&typed_with_skills("/code-review "), 90).ends_with(hint));
+        assert!(!input_row(&typed_with_skills("/code-review x"), 90).contains(hint));
+        assert!(
+            !input_row(&typed_with_skills("see /code-review "), 90).contains(hint),
+            "shown mid-sentence, where the word is not the whole line"
+        );
+        assert_eq!(
+            input_row(&typed_with_skills("/release-notes "), 90),
+            "/release-notes"
+        );
+    }
+
+    /// The hint is one row however narrow the terminal is, cut where it reaches the edge with an
+    /// ellipsis, and a file's own escape in it is drawn as a glyph.
+    #[test]
+    fn a_hint_is_cut_to_the_row_and_holds_no_escape() {
+        let narrow = input_row(&typed_with_skills("/loop "), 24);
+        assert!(narrow.starts_with("/loop  [[interval]"), "{narrow}");
+        assert!(narrow.ends_with('…'), "{narrow}");
+
+        let mut session = typed("/code-review ");
+        session.settle_skills(|| {
+            vec![crate::skills::Skill {
+                argument_hint: Some("<a\u{1b}[31mb>".to_string()),
+                ..skills_taking_arguments().remove(0)
+            }]
+        });
+        let row = input_row(&session, 90);
+        assert!(row.ends_with("<a␛[31mb>"), "{row}");
+    }
+
+    /// A word that names a command or a skill is drawn in the colour of the prompt, and a word
+    /// that only looks like one is not: the colour is a claim that the word is recognised.
+    #[test]
+    fn a_word_that_names_a_command_or_skill_is_drawn_in_its_own_colour() {
+        for (line, recognised) in [
+            ("/loop 5m check", "/loop"),
+            ("/loop", "/loop"),
+            ("/code-review", "/code-review"),
+            ("see /code-review now", "/code-review"),
+            (
+                "/release-notes and /code-review",
+                "/release-notes/code-review",
+            ),
+            ("/undo the last change", ""),
+            ("see /code-rev now", ""),
+            ("/nosuch", ""),
+            ("/btw see /code-review", "/btw"),
+            ("/renamed it", ""),
+        ] {
+            assert_eq!(
+                recognised_in_the_box(&typed_with_skills(line)),
+                recognised,
+                "{line:?}"
+            );
+        }
+    }
+
+    /// A line in shell mode is a command line, where a slash begins a path.
+    #[test]
+    fn nothing_is_drawn_as_recognised_in_shell_mode() {
+        let mut session = typed_with_skills("/loop 5m");
+        session.shell = true;
+        assert_eq!(recognised_in_the_box(&session), "");
+        let mut session = typed_with_skills("/loop ");
+        session.shell = true;
+        assert_eq!(input_row(&session, 90), "/loop");
     }
 
     /// The figure a person needs to decide whether to compact by hand, on the line they already

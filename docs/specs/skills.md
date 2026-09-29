@@ -25,8 +25,9 @@ Which files are looked for, where, and in what order is a separate question, and
 ### SKILL-1: a skill is one `SKILL.md` with `name` and `description` in frontmatter
 
 Both keys are required, and a file missing either is skipped with a note saying so. Other keys are
-ignored, so a skill written for another agent works here. A file with no frontmatter is not a
-skill.
+ignored, so a skill written for another agent works here, except `argument-hint`: an interface
+draws it after the skill's name to say what the skill takes ([commands.md](commands.md)), and it is
+never given to the planner. A file with no frontmatter is not a skill.
 
 ```markdown
 ---
@@ -41,6 +42,8 @@ Write the subject in the imperative. Explain why in the body, never what.
 `verified-by: bravebot_agent::skills::a_file_with_no_frontmatter_is_not_a_skill`
 `verified-by: bravebot_agent::skills::an_unterminated_frontmatter_block_is_skipped_rather_than_swallowing_the_body`
 `verified-by: bravebot_agent::skills::keys_other_than_name_and_description_are_ignored`
+`verified-by: bravebot_agent::skills::an_argument_hint_is_read_when_the_file_has_one`
+`verified-by: bravebot_agent::skills::an_argument_hint_reaches_the_interface_and_not_the_planner`
 `verified-by: bravebot_agent::skills::the_body_is_everything_after_the_closing_marker`
 `verified-by: bravebot_agent::skills::a_marker_inside_the_body_is_left_alone`
 
