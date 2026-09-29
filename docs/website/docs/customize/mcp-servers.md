@@ -328,6 +328,18 @@ to you whatever you [vouched for](../security/permissions.md#vouching-for-a-comm
 file is. The words a server describes its tools with stay public, since it hands the same list to
 whoever connects.
 
+### When a call fails
+
+A tool that ran and reported its own failure is handled like any other result: you see what the
+server said about it behind the margin, and the model is handed a reference to it and told the
+call failed. The model is never sent the server's account of the failure.
+
+Every other failure is reported in bravebot's own words, which name the tool, the protocol method
+and the code the server answered with, and nothing the server wrote. A server that fails for a
+reason only its own sentence gives, or a reply bravebot cannot parse, therefore shows a code and a
+method and nothing more. A server's own error output is shown in `--plain` and a one-shot run and
+not in the full-screen interface, so to read it run the server by hand.
+
 ### Asking again
 
 ```sh
@@ -563,13 +575,29 @@ why is said once, as the session opens.
 ```
 $ bravebot mcp list
 declared in /Users/you/.bravebot/mcp.json
+for a session started in /Users/you/work/app
   docs     http   unapproved  256e540f
+             requested by /Users/you/work/app/.bravebot/settings.json: a session at a terminal here asks before starting it, and holds a grant to call it only after a yes
+             nothing is answered for it here
   weather  stdio  approved    25edc5e8
+             requested by /Users/you/work/app/.bravebot/settings.json: a session here starts it unasked, and holds a grant to call it
+             answered here: call get_forecast without asking
+  maps     http   approved    9c1e07b2
+             not requested here, so no session here holds a grant to call it
+             nothing is answered for it here
 ```
 
-An unapproved server is listed as unapproved rather than left out. An entry that cannot be used,
-because it was edited by hand into something a declaration cannot be, is listed with what is wrong
-with it, and the list then fails so that a script notices.
+An unapproved server is listed as unapproved rather than left out. Under each server are the file
+in this directory that asks for it, whether a session started here would start it unasked, ask you
+first, or not start it (with the reason), and the standing answers recorded for it in this project:
+answer 2 at the server question and the tools answer 2 stopped asking about. The rows are for a
+session at a terminal. Where nobody can be asked, a server that would be asked about is not started.
+A server a file here asks for and nobody declared is a row of its own, ending with the command that
+declares it. An entry that cannot be used, because it was edited by hand into something a
+declaration cannot be, is listed with what is wrong with it, and the list then fails so that a
+script notices.
+
+`bravebot doctor` prints the same rows and fails where `list` does.
 
 `bravebot mcp get weather` shows one declaration in full, with the whole digest:
 

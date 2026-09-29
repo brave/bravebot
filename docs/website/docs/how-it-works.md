@@ -131,6 +131,11 @@ reading.
 | Reads | whatever its capabilities and the paths you vouched for allow |
 | Writes | files, each shown to you first, and slots in a quarantine of its own |
 
+Three kinds come with bravebot, and a [definition](customize/agents.md) you write in a file adds
+one more, with its own standing instructions and, if you set them, its own model, skills, tools and
+MCP servers. A definition only narrows what its kind holds. The planner chooses a kind or a
+definition by name and cannot describe one.
+
 A planner that runs the build reads the whole log. A planner that asks a delegate to run the build is
 told what failed. The work happens either way, and only the first spends the conversation on it.
 

@@ -34,19 +34,23 @@ against the issuer's key before it is stored, and tokens are matched by value ra
 
 Credentials arrive in batches covering a few days and are spent one per request. A spent credential is
 never offered again, consecutive spends hand out different credentials, and spending past the end of a
-batch is refused.
+batch is refused. This holds across every `bravebot` running on the machine, delegates included: each
+spend is recorded in the file before the credential is sent, so two sessions never present the same one.
+A credential recorded as spent whose request was then abandoned is not offered again either.
 
 **A credential is never sent to the non-premium host.** The premium host and the credential travel
 together, because a credential belongs to a deployment. A build with no premium host configured stays
 on the free tier rather than sending one where it does not belong.
 
 Nothing is written back unless a credential was actually spent, so a session that spends nothing never
-touches the store.
+touches the store. A write that is interrupted leaves the last good batch in place rather than half of a
+new one.
 
 ## Where they are kept
 
-In one file under `~/.bravebot`, created mode 0600 before anything is written to it and still 0600
-after a re-import over an existing one. Nothing asks you for a password, and the file is not
+In one file under `~/.bravebot`, readable by your account alone before anything is written to it and
+still after a re-import over an existing one: mode 0600 on macOS and Linux, and on Windows an access
+list granting only your account. A platform with neither has the import refused. Nothing asks you for a password, and the file is not
 encrypted at rest, as the browser these are imported from keeps the same secret unencrypted in its own
 profile.
 
@@ -106,8 +110,9 @@ picking it means.
 
 ## Requirements and limits
 
-- **macOS and Linux**, including a machine with no desktop session. Nothing here needs one. Windows
-  is not supported.
+- **macOS and Linux** to import, including a machine with no desktop session. Nothing here needs one.
+  Importing is not supported on Windows, since no Brave profile is located there. A batch imported on
+  another machine and copied to `~/.bravebot` on Windows is spent normally.
 - The build must know the premium host. Without it, premium is unavailable.
 - A credential only works against the deployment that issued it, so import from the Brave channel
   matching the environment the binary is configured for. A mismatch is refused before a request is

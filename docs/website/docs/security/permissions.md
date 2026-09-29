@@ -340,7 +340,12 @@ behind a reference, so in this mode every file the planner asks to read is shown
 holding instructions rather than data is read as instructions. The [startup trust
 question](trust.md) is not put either: the session starts with the rule a yes would have written,
 since the tree becomes trusted a file at a time in any case. A directory your settings file asked for
-is opened and vouched for without being put to you.
+is opened and vouched for without being put to you. So are the three questions about a server a
+checkout asks for: whether to start it, whether to offer its tools, and whether to make a call to
+one of them. Each is answered yes and none is written to the files that remember an answer, so a
+later run without the flag asks. A remote server whose reply points somewhere else is still not
+followed: a yes would rewrite your declaration to an address the server chose, so the hop is refused
+without asking. See [MCP servers](../customize/mcp-servers.md#approving-one).
 
 **No check runs where nothing would read its word.** A [vetting check](vetting.md) normally sits in front
 of every prompt whose answer would promote quarantined content, and this is the one mode where those
@@ -442,9 +447,11 @@ starting there would. `/clear` reads the rules again for the directory you are i
 in, so neither the prompt you still get nor the one you no longer get is a mystery. Waiving a prompt
 for *every* project is still your own file, or a file passed on the command line for one run.
 
-**Three prompts no rule can answer.** A run that would put your private data into a program asks
+**Four prompts no rule can answer.** A run that would put your private data into a program asks
 whatever the rules say, because a rule saying which commands may run is not consent to hand one your
-data. A write whose destination is known only through a reference asks too: that prompt is the only
+data. A call that would put your private data into an [MCP server's](../customize/mcp-servers.md#each-call)
+tool asks for the same reason, and a standing answer to that server does not cover it. A write whose
+destination is known only through a reference asks too: that prompt is the only
 moment such a path is shown to anybody, so nothing a pattern says can stand in for having looked. And a
 run carrying a variable set in front of one of its programs asks, because a rule is matched against the
 program and its arguments run together: `Bash(git log)` matches `LD_PRELOAD=./evil.so git log`, and no
@@ -485,6 +492,9 @@ A fresh session in the same directory restores neither of the first two and asks
 [Auto-vetting](vetting.md) is not one of the three and is not in the record either. It is not a grant
 about any particular thing: it says which of two questions a session asks, so a resumed session reads
 it from a flag or a settings file exactly as a fresh one does.
+
+A turn that fails or that you cancel keeps the commands you said to stop asking about, so the next
+turn does not ask again. It does not turn a single-use approval or a refusal into a standing one.
 
 **Nothing else survives.** A single-use endorsement is created by one approval, is bound to one value,
 and is never written down, so a resumed turn cannot replay a write or a run an earlier turn was

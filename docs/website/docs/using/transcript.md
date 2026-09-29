@@ -48,6 +48,11 @@ margin. A command shows its last five lines, because that is where a build or a 
 went. A file, a listing or a search shows its first five. A line under them says how many were left
 out. A quarantined result shows its marked block instead, never a plain glimpse.
 
+**A call that ran a model inside itself says how long it waited there**, on its own row beside what
+came of it. That is a confined check before quarantined content is shown to you, and a processor's own
+round. Every other call waited on this machine and says nothing, and a wait too short to state is left
+off.
+
 ## The end of a turn
 
 A finished turn gets a row of its own: which turn it was, what it cost, and how long it took. The row

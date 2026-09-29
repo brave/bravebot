@@ -232,10 +232,12 @@ The credentials Brave Bot reaches a model with are overwritten in memory when th
 them goes, rather than handed back to the allocator with the bytes still in them, and the process
 turns off its own core dump before it reads the first one, so a crash leaves no file with a key in
 it. The single-use credentials of an imported Leo Premium subscription are held the same way, and
-so is the text of the file they are read out of. Two things are not covered: swap, because keeping
-pages out of it needs the allocator those buffers come from, and the one-shot presentation a
-premium request carries, which is derived from a credential rather than being one and lives only as
-long as the request.
+so is the text of the file they are read out of. A key held in a settings file is also kept out of
+swap on macOS and Linux, unless the kernel refuses the lock, and on Windows it is held in ordinary
+memory. Three things are not covered: swap for the buffers a credential passes through on its way in,
+the copy in the process's environment when you exported it as a variable, and the one-shot
+presentation a premium request carries, which is derived from a credential rather than being one and
+lives only as long as the request.
 
 ## Reporting a problem
 

@@ -71,16 +71,18 @@ Reads a UTF-8 text file from the workspace and returns its lines.
 Long files come back one page at a time. The result says so and gives the offset to continue from. A
 file that is not text is reported as binary, a picture being the exception.
 
-**A picture is quarantined whatever the trust map says, and only a processor looks at it.** A file
-whose extension names a picture or a PDF comes back as a reference saying what kind of thing it is,
-and vouching for the directory does not change that: what the trust map answers is whether a file's
-*text* may be read, and a picture has none. Handed to [`spawn_processor`](#spawn_processor) it arrives
-as a picture rather than as base64, so the model looks at it, and what the processor says back is
-quarantined like any other processor's answer.
+**A picture is quarantined whatever the trust map says, and leaves quarantine only through
+[`vet_content`](#vet_content).** A file whose extension names a picture or a PDF comes back as a
+reference saying what kind of thing it is, and vouching for the directory does not change that: what
+the trust map answers is whether a file's *text* may be read, and a picture has none. Handed to
+[`spawn_processor`](#spawn_processor) it arrives as a picture rather than as base64, so the model
+looks at it, and what the processor says back is quarantined like any other processor's answer.
+The planner sees the picture itself only if it asks for that one with `vet_content` and it is let
+through.
 
-The reason is that a screenshot carries whatever words are in it, and a picture in the planner's
-context is restricted to one you put there yourself. A picture you dropped on the terminal is that;
-a path in model output is not. What kind of file it is comes from the extension and never from the
+The reason is that a screenshot carries whatever words are in it, so a picture reaches the planner's
+context only if you put it there (a picture you dropped on the terminal) or a check looked at it and
+you let it through. A path in model output is neither. What kind of file it is comes from the extension and never from the
 bytes, so a file cannot become a picture by holding something that looks like one, and a picture
 cannot become text by being called `.txt`.
 
@@ -450,6 +452,16 @@ literal argument vector, together with every file the line would write. That pla
 
 A name is looked up on `PATH`; a path is taken relative to the workspace.
 
+**A program is started by the path its name was found by**, and a link on that path is not followed
+first. That keeps `venv/bin/python` finding its virtual environment. The prompt shows the path and
+the file it leads to, and your answer covers the file only when it is started by that same path.
+Just before the pipeline starts, each path is resolved again, and one that no longer leads to the
+file you approved refuses the whole pipeline before any step runs.
+
+Every step's program is found when the line is compiled, before anything runs. A line therefore
+cannot run a program an earlier step in it creates: `python3 -m venv v && v/bin/python x.py` is
+refused, and the refusal says the step that creates the program has to run on its own first.
+
 ### The directory carries over, and nothing else does
 
 A call may name a `directory` to run in, inside the workspace or inside a directory you added. Without
@@ -597,8 +609,10 @@ than the ones to reject. A list to reject fails open: `-S` makes BSD `grep` foll
 meets while walking, and `grep -A 1 -r TODO` walks the working directory while appearing to name a
 path. An option the entry does not list leaves the step unproven, so the line is asked about as usual.
 
-Four other things leave a step unproven. Naming the program by path rather than by name, since a file
-called `wc` in the directory the line runs in would otherwise answer as the audited one. An
+Five other things leave a step unproven. Naming the program by path rather than by name, since a file
+called `wc` in the directory the line runs in would otherwise answer as the audited one. A name that
+resolves to a file inside the workspace, for the same reason: a `PATH` entry in the project can put
+one there. An
 environment assignment, which decides what a program loads before its own arguments are read. A
 redirection, which opens a file the argument list does not name. And running anywhere but the
 directory the trust map's rules are written against.
@@ -876,8 +890,13 @@ If you agree, the bytes come back as text the planner may read. If you do not, i
 to work with what it has or to say what it needed, rather than being left to ask again. Nothing the
 check wrote goes back either way.
 
-Refused for a reference to nothing, for a picture (a check reads text, and a picture slot holds a data
-URI), for a private `expects`, and for a call from a delegate. A reference to a file nothing has read
+A picture or a PDF is vetted the same way, except that the check is given the file and you are shown a
+copy of it to open. If you let it through, it is attached to the planner's next request and is not
+returned as text. See [A picture or a PDF](../security/vetting.md#a-picture-or-a-pdf).
+
+Refused for a reference to nothing, for a private `expects`, and for a call from a delegate. A
+picture is also refused where the model in use takes no pictures, or where there is nowhere to put a
+copy of it for you to open. A reference to a file nothing has read
 yet is opened rather than refused, since naming one is the ordinary way to ask about a file the planner
 may not read.
 
@@ -1014,7 +1033,7 @@ of capabilities, and gets back one report.
 
 | Parameter | |
 |---|---|
-| `kind` | `reader`, `checker` or `worker` |
+| `kind` | `reader`, `checker` or `worker`, or the name of a [definition](../customize/agents.md) |
 | `task` | the whole of what the delegate is told |
 | `each` | optional; starts one delegate per entry, each told `task` followed by its own entry |
 
@@ -1028,6 +1047,9 @@ The call answers as soon as the delegate has been approved, so the planner has i
 the work goes on behind it, and what the delegate says arrives on its own later. Several delegates
 can be going at once, each numbered in the order the turn started them, and every report says whose
 work it describes.
+
+A name that is neither a kind nor a definition is refused, and the refusal lists the names that would
+have worked.
 
 A delegate holds its kind's capabilities **narrowed by its parent's**, so delegation redistributes
 authority and never creates it, and a kind asking for more gets a delegate without it. The planner

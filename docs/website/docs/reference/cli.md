@@ -350,7 +350,9 @@ is every path, branch name and pasted fragment somebody has typed.
 errors of that kind: a named path that yielded no certificate, a set of trust roots that leaves
 nothing trusted, a proxy named in a protocol this build cannot connect through, and a configuration
 naming nothing that will serve a turn. A missing state directory is reported rather than failed on,
-because a container or a daemon with no profile directory runs as designed.
+because a container or a daemon with no profile directory runs as designed. The report ends on the
+configuration error and exits with status 3, printing `BB1003` in front of it as any
+[failed run](#exit-codes) does.
 
 In a Bravebot source checkout it also reports whether the root `AGENTS.md` resolves to
 `agents/AGENTS.md` and whether `direnv` is executable on PATH. These are development advice, do not
