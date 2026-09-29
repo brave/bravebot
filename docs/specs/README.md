@@ -75,7 +75,7 @@ the routing-versus-content split they share.
 | [tools/lsp.md](tools/lsp.md) | `LSP` | 10 | `lsp` |
 | [tools/write-file.md](tools/write-file.md) | `WRITE` | 4 | `write_file` |
 | [tools/edit-file.md](tools/edit-file.md) | `EDIT` | 4 | `edit_file` |
-| [tools/spawn-processor.md](tools/spawn-processor.md) | `SPAWN` | 4 | `spawn_processor` |
+| [tools/spawn-processor.md](tools/spawn-processor.md) | `SPAWN` | 5 | `spawn_processor` |
 | [tools/spawn-agent.md](tools/spawn-agent.md) | `AGENT` | 5 | `spawn_agent` |
 | [tools/run.md](tools/run.md) | `RUN` | 23 | `run` |
 | [tools/command-line.md](tools/command-line.md) | `CMDLINE` | 16 | `run`'s command line, compiled rather than interpreted |

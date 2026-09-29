@@ -2750,14 +2750,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         about: Option<SlotId>,
         slots: &crate::slot::SlotStore,
     ) -> Gated<crate::processor::ProcessorSpec> {
+        // Not named by `id`: that is made from the references it reads, and here there are none.
         if reads.is_empty() {
             return Err(self.deny(
                 "processor",
                 Principle::Confinement,
-                format!(
-                    "{id} names no references to read, so there is nothing quarantined for it \
-                     to work on"
-                ),
+                "a processor that names no references to read has nothing quarantined to work on"
+                    .to_string(),
             ));
         }
 
