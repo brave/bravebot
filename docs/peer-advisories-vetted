@@ -1,0 +1,12 @@
+# Peer advisories vetted against this tree, one per line, sorted by id:
+#
+#   <GHSA id> <verdict> <issue or -> <commit> <date> <reason>
+#
+# affected  bravebot has the defect, and <issue> tracks it
+# known     bravebot has it, and a spec records it as an accepted cost
+# holds     bravebot has the surface, and the attack fails on it
+# absent    bravebot has nothing the attack needs
+# deferred  not decided; every run offers it again
+#
+# <commit> is the main commit the advisory was vetted against. The peer-advisories skill writes
+# this file: agents/skills/peer-advisories/SKILL.md.

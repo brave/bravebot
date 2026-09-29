@@ -143,3 +143,6 @@ the defect costs on the path it is on. A `severity/low` finding that nothing pin
 The [security-audit skill](../../agents/skills/security-audit/SKILL.md) applies `security`,
 `needs-security-review`, a kind, a `severity` and an `area` to every finding it files, and no
 axis: an unread finding does not belong in anybody's queue.
+The [peer-advisories skill](../../agents/skills/peer-advisories/SKILL.md), which files what
+another coding agent's published advisory finds here, applies the same set, except that
+`security`, `needs-security-review` and `severity` go only on a finding about the guarantee.
