@@ -63,6 +63,11 @@ pub struct TrustStore {
     /// A `BTreeMap` rather than a hash map so iteration order is deterministic, which keeps
     /// the audit trail reproducible.
     rules: BTreeMap<String, Option<Integrity>>,
+    /// Whether two spellings differing only in case are one path, because the volume the working
+    /// directory is on answers to either. Told by the caller, which has probed the volume, since
+    /// this crate performs no I/O. `false` unless the caller says otherwise, so a map made without
+    /// the answer compares bytes and never extends a rule to a spelling it was not written about.
+    folds_case: bool,
 }
 
 impl TrustStore {
@@ -71,11 +76,31 @@ impl TrustStore {
     /// `root` is the working directory, absolute: the one `Workspace::new` resolves, keyed the way
     /// the workspace keys every other name. It is not a rule and grants nothing, which is what keeps
     /// an empty map an empty map.
+    ///
+    /// Names are compared byte for byte until [`TrustStore::folding_case`] says the volume does not.
     pub fn new(root: impl AsRef<Path>) -> Self {
         Self {
             root: normalise(&root.as_ref().to_string_lossy()),
             rules: BTreeMap::new(),
+            folds_case: false,
         }
+    }
+
+    /// This map, comparing names with case folded where `folds` is true.
+    ///
+    /// For a caller that has asked the volume whether it holds `Docs` and `docs` as one file. Where
+    /// it does, a rule about one spelling has to decide the other, in both polarities, or a
+    /// distrusted file read under a second spelling is read as trusted. Where it does not, they are
+    /// two files, and folding would let a rule about one cover the other.
+    #[must_use]
+    pub fn folding_case(mut self, folds: bool) -> Self {
+        self.folds_case = folds;
+        self
+    }
+
+    /// Whether names are compared with case folded.
+    pub fn folds_case(&self) -> bool {
+        self.folds_case
     }
 
     /// The key `path` is held under: the full path it names.
@@ -167,6 +192,7 @@ impl TrustStore {
         Self {
             root: self.root.clone(),
             rules,
+            folds_case: self.folds_case,
         }
     }
 
@@ -191,26 +217,50 @@ impl TrustStore {
 
     fn decision_at_key(&self, path: &str) -> Option<Option<Integrity>> {
         // Probe only whole-segment ancestors, from the most specific to the least.
-        // Each lookup costs O(log rules), independent of unrelated paths.
+        // Each lookup costs O(log rules). Where the volume folds case, a probe with no exact hit
+        // also scans every rule.
         let mut prefix = path;
         while !prefix.is_empty() && prefix != "/" {
-            if let Some(decision) = self.rules.get(prefix) {
+            if let Some(decision) = self.rule_at(prefix) {
                 return Some(*decision);
             }
             prefix = prefix.rsplit_once('/').map_or("", |(parent, _)| parent);
         }
         // As in covers(), "/" covers even relative keys in a store with no root.
         // It wins the equal-specificity tie with the empty key.
-        self.rules
-            .get("/")
+        self.rule_at("/")
             .or_else(|| {
                 if is_absolute_key(path) {
                     None
                 } else {
-                    self.rules.get("")
+                    self.rule_at("")
                 }
             })
             .copied()
+    }
+
+    /// The decision recorded under `key`, reached however the key was spelled.
+    ///
+    /// A direct hit by the map's own keying first. Where the volume answers to either spelling of a
+    /// name ([`TrustStore::folding_case`]), a spelling that missed directly is then looked up
+    /// case-insensitively: a rule written about `src/fetched.json` decides the very same bytes read
+    /// as `SRC/fetched.json`, and a probe that could not see it would answer from the trusted rule
+    /// above the file instead, the laundering spelled-past-a-rule closes elsewhere. Folding only
+    /// reaches a rule already written, and on such a volume the two spellings are one file, so no
+    /// rule reaches a file it was not about. Otherwise the map stays byte-exact.
+    /// The scan costs one pass over the rules a person's decisions have written.
+    fn rule_at(&self, key: &str) -> Option<&Option<Integrity>> {
+        if let Some(decision) = self.rules.get(key) {
+            return Some(decision);
+        }
+        if !self.folds_case {
+            return None;
+        }
+        let folded = key.to_lowercase();
+        self.rules
+            .iter()
+            .find(|(rule, _)| rule.to_lowercase() == folded)
+            .map(|(_, decision)| decision)
     }
 
     /// The integrity of everything at or beneath `path`, by the meet of every rule that bears on
@@ -240,7 +290,7 @@ impl TrustStore {
             .unwrap_or(Integrity::Untrusted);
         let path = self.key(path);
         for (prefix, integrity) in self.keyed() {
-            if covers(&path, prefix) {
+            if covers(&path, prefix, self.folds_case) {
                 answer = answer.meet(integrity.unwrap_or(Integrity::Untrusted));
             }
         }
@@ -294,11 +344,13 @@ impl TrustStore {
     ///
     /// `to` is an absolute path, and the caller is responsible for having canonicalised it: a
     /// second spelling of one directory would read the rules written under the first as though
-    /// they were about somewhere else.
-    pub fn rebased(&self, to: &Path) -> Self {
+    /// they were about somewhere else. `folds_case` is the answer for the volume `to` is on, which
+    /// may not be the one the map came from.
+    pub fn rebased(&self, to: &Path, folds_case: bool) -> Self {
         Self {
             root: normalise(&to.to_string_lossy()),
             rules: self.rules.clone(),
+            folds_case,
         }
     }
 }
@@ -355,7 +407,26 @@ pub(crate) fn normalise(path: &str) -> String {
 ///
 /// Segment-wise so `src` does not cover `srcfoo`, which a plain string prefix test would
 /// wrongly accept, and that mistake would hand trust to a path the user never named.
-pub(crate) fn covers(prefix: &str, path: &str) -> bool {
+///
+/// With `folds_case`, two spellings differing only in case are compared as one: a distrust rule
+/// written about `src/fetched.json` must also reach the file opened as `SRC/fetched.json`, which
+/// names the same bytes on a volume that answers to either case and would otherwise launder
+/// untrusted content past the rule, the same class of spelling bypass as git CVE-2014-9390. The
+/// caller says so only of a volume it has probed, and elsewhere the comparison stays byte-exact so
+/// that a rule about `Docs` never covers a different file called `docs`.
+pub(crate) fn covers(prefix: &str, path: &str, folds_case: bool) -> bool {
+    let (prefix, path) = if folds_case {
+        (
+            std::borrow::Cow::Owned(prefix.to_lowercase()),
+            std::borrow::Cow::Owned(path.to_lowercase()),
+        )
+    } else {
+        (
+            std::borrow::Cow::Borrowed(prefix),
+            std::borrow::Cow::Borrowed(path),
+        )
+    };
+    let (prefix, path) = (prefix.as_ref(), path.as_ref());
     // The filesystem root covers everything, and is the one key with no segment of its own.
     if prefix == "/" {
         return true;
@@ -412,7 +483,7 @@ mod tests {
                 let expected = store
                     .rules
                     .iter()
-                    .filter(|(prefix, _)| covers(prefix, path))
+                    .filter(|(prefix, _)| covers(prefix, path, store.folds_case))
                     .max_by_key(|(prefix, _)| {
                         if prefix.is_empty() || *prefix == "/" {
                             0
@@ -637,6 +708,81 @@ mod tests {
                 "{spelling} missed the rule, so the workspace root rule decided instead"
             );
         }
+    }
+
+    /// On a volume that answers to either spelling of a name, two spellings differing only in case
+    /// name one file, so a rule written about one spelling has to reach the other: the same bytes
+    /// read under another spelling must not slip past the rule written about them. Names that
+    /// differ beyond case stay distinct.
+    #[test]
+    fn a_rule_covers_a_case_variant_spelling_of_the_same_file() {
+        assert!(covers("src/fetched.json", "SRC/fetched.json", true));
+        assert!(covers("src/fetched.json", "src/FETCHED.JSON", true));
+        assert!(covers("SRC/fetched.json", "src/fetched.json", true));
+
+        assert!(!covers("src/fetched.json", "SRC/other.json", true));
+        assert!(!covers("src/fetched.json", "src/FETCHED.json.bak", true));
+        assert!(!covers("src", "SRCFOO", true));
+    }
+
+    /// Both polarities carry across the spellings of a folding volume, since a distrust that missed
+    /// would launder the file and a trust that missed would only ask again.
+    #[test]
+    fn a_folding_volume_applies_a_rule_in_both_polarities_to_the_other_spelling() {
+        let mut store = TrustStore::new("/work").folding_case(true);
+        store.trust("src");
+        store.distrust("src/Fetched.json");
+
+        assert_eq!(
+            store.integrity_of("src/fetched.json"),
+            Some(Integrity::Untrusted)
+        );
+        assert_eq!(
+            store.integrity_of("SRC/other.json"),
+            Some(Integrity::Trusted)
+        );
+        assert_eq!(
+            store.integrity_beneath("SRC"),
+            Some(Integrity::Untrusted),
+            "a distrusted file beneath a directory was not seen under another spelling of it"
+        );
+    }
+
+    /// On a volume that holds `Docs` and `docs` apart they are two files, so a rule about one
+    /// decides nothing about the other, and trust does not widen to a sibling.
+    #[test]
+    fn a_case_sensitive_volume_keeps_spellings_apart() {
+        let mut store = TrustStore::new("/work");
+        assert!(!store.folds_case());
+        store.trust("Docs");
+        store.distrust("Notes/Secret.txt");
+
+        assert_eq!(store.integrity_of("Docs/a.md"), Some(Integrity::Trusted));
+        assert_eq!(
+            store.integrity_of("docs/a.md"),
+            None,
+            "a trust rule about Docs covered a different file called docs"
+        );
+        assert_eq!(
+            store.integrity_of("Notes/secret.txt"),
+            None,
+            "a distrust rule reached a different file that differs only in case"
+        );
+        assert!(!covers("Docs", "docs/a.md", false));
+    }
+
+    /// The answer belongs to the volume, so a map moved to another directory takes the answer for
+    /// that one, and a meet keeps the one it was made with.
+    #[test]
+    fn a_map_moved_takes_the_new_volumes_answer() {
+        let mut store = TrustStore::new("/work").folding_case(true);
+        store.trust("src");
+
+        let moved = store.rebased(Path::new("/other"), false);
+        assert!(!moved.folds_case());
+        let back = moved.rebased(Path::new("/work"), true);
+        assert!(back.folds_case());
+        assert!(store.meet(&TrustStore::new("/work")).folds_case());
     }
 
     /// Re-deciding must replace the earlier decision rather than accumulating rules whose
@@ -869,7 +1015,7 @@ mod tests {
         let mut store = TrustStore::new("/work");
         store.trust(".");
 
-        let moved = store.rebased(Path::new("/other"));
+        let moved = store.rebased(Path::new("/other"), false);
         assert_eq!(
             moved.integrity_of("src/main.rs"),
             None,
@@ -886,7 +1032,7 @@ mod tests {
         store.trust(".");
         store.distrust("src/vendor");
 
-        let moved = store.rebased(Path::new("/work/src"));
+        let moved = store.rebased(Path::new("/work/src"), false);
         assert_eq!(
             moved.integrity_of("vendor/lib.js"),
             Some(Integrity::Untrusted),
@@ -902,7 +1048,7 @@ mod tests {
         store.trust("/Users/me/notes");
         store.distrust("/Users/me/notes/private");
 
-        let moved = store.rebased(Path::new("/Users/me/notes"));
+        let moved = store.rebased(Path::new("/Users/me/notes"), false);
         assert!(moved.is_trusted("todo.md"));
         assert_eq!(
             moved.integrity_of("private/diary.md"),
@@ -917,7 +1063,7 @@ mod tests {
         let mut store = TrustStore::new("/work");
         store.distrust("srcfoo");
 
-        let moved = store.rebased(Path::new("/work/src"));
+        let moved = store.rebased(Path::new("/work/src"), false);
         assert_eq!(
             moved.integrity_of("foo"),
             None,
@@ -938,7 +1084,7 @@ mod tests {
         store.distrust("vendor");
         store.trust("/Users/me/notes");
 
-        let moved = store.rebased(Path::new("/other"));
+        let moved = store.rebased(Path::new("/other"), false);
         assert_eq!(moved.rules().count(), 3);
         assert!(moved.is_trusted("/work/src/main.rs"));
         assert_eq!(

@@ -20,7 +20,7 @@ use crate::{store, wire};
 use bravebot_agent::Workspace;
 use bravebot_agent::trusted;
 use bravebot_agent::turn::{self as agent_turn, Task, TurnError};
-use bravebot_agent::workspace::{WorkspaceError, key_of};
+use bravebot_agent::workspace::WorkspaceError;
 use bravebot_config::{Config, Settings};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::trust::TrustStore;
@@ -874,7 +874,7 @@ impl Bridge {
         // Trusting records the workspace root, which covers everything beneath it.
         // Declining records nothing, leaving a map in which no path is trusted. The same
         // outcomes the terminal offers, so an answer means the same in both.
-        let mut trust = TrustStore::new(key_of(&open.project));
+        let mut trust = bravebot_agent::workspace::trust_store(&open.project);
         if trusted {
             trust.trust(".");
         }
@@ -1664,7 +1664,7 @@ impl Opening {
         let kept = record.as_ref().and_then(|(store, identity)| {
             Some((store.kept(identity)?, store.path().to_path_buf()))
         });
-        let mut trust = TrustStore::new(key_of(project));
+        let mut trust = bravebot_agent::workspace::trust_store(project);
         match kept {
             Some(remembered) => {
                 trust.trust(".");

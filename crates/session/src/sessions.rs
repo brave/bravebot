@@ -727,7 +727,7 @@ fn vouched_for(trust: &TrustStore, path: &Path, backslash_separates: bool) -> bo
 
 /// Load weaker decisions last so equivalent path spellings cannot hide them.
 fn restored_rules(root: &Path, rules: &[StoredRule]) -> TrustStore {
-    let mut trust = TrustStore::new(bravebot_agent::workspace::key_of(root));
+    let mut trust = bravebot_agent::workspace::trust_store(root);
     for rule in rules.iter().filter(|rule| rule.integrity == TRUSTED) {
         trust.trust(&replayed(&rule.path));
     }

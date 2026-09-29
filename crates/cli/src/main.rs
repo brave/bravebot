@@ -21,7 +21,6 @@ use bravebot_config::{Config, Managed};
 use bravebot_core::ask::{Answer, Asking};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::{Event, RecordingSink, Role};
-use bravebot_core::trust::TrustStore;
 use bravebot_i18n::t;
 use bravebot_net::Transport;
 use bravebot_net::transport::{
@@ -928,7 +927,7 @@ fn run_task(args: &[String], skip_permissions: bool, agent: Option<String>) -> E
             &mut confirmer,
             &mut reporter,
             &mut sink,
-            TrustStore::new(bravebot_agent::workspace::key_of(workspace.root())),
+            bravebot_agent::workspace::trust_store(workspace.root()),
             &Cancel::new(),
         ),
         Mode::Manifest => bravebot_agent::manifest::run(
@@ -939,7 +938,7 @@ fn run_task(args: &[String], skip_permissions: bool, agent: Option<String>) -> E
             &mut confirmer,
             &mut reporter,
             &mut sink,
-            TrustStore::new(bravebot_agent::workspace::key_of(workspace.root())),
+            bravebot_agent::workspace::trust_store(workspace.root()),
             &Cancel::new(),
         ),
     };
@@ -1264,7 +1263,7 @@ fn definition_for_a_run(
     name: &str,
     model_named: bool,
 ) -> Result<Option<String>, String> {
-    let trust = TrustStore::new(bravebot_agent::workspace::key_of(workspace.root()));
+    let trust = bravebot_agent::workspace::trust_store(workspace.root());
     let definitions = bravebot_agent::agents::resolved(
         workspace,
         bravebot_agent::home::directory().as_deref(),
@@ -2103,7 +2102,11 @@ fn report_mcp_declared(settings: &bravebot_config::Settings, ending: &mut Ending
 ///
 /// Nothing is said about a skill whose every key is read, which is the ordinary case, so a report on
 /// a machine with nothing to fix carries no skills section at all.
-fn skill_keys_unread(workspace: &Workspace, home: Option<&Path>, trust: TrustStore) -> Vec<String> {
+fn skill_keys_unread(
+    workspace: &Workspace,
+    home: Option<&Path>,
+    trust: bravebot_core::TrustStore,
+) -> Vec<String> {
     bravebot_agent::skills::resolved(workspace, home, trust, &mut bravebot_core::event::NullSink)
         .iter()
         .filter(|skill| !skill.unread.is_empty())
@@ -2127,7 +2130,7 @@ fn skill_keys_unread(workspace: &Workspace, home: Option<&Path>, trust: TrustSto
 /// A remembered yes answers here as it answers there (TRUST-23); anything else is a directory
 /// nothing has vouched for, which is what an unanswered question leaves. Nothing is written and
 /// nobody is asked: `doctor` changes nothing and puts no question.
-fn trust_already_answered(root: &Path) -> TrustStore {
+fn trust_already_answered(root: &Path) -> bravebot_core::TrustStore {
     let kept = bravebot_agent::trusted::record_for(
         bravebot_agent::home::directory().as_deref(),
         bravebot_agent::home::profile().as_deref(),
@@ -2136,7 +2139,7 @@ fn trust_already_answered(root: &Path) -> TrustStore {
     .and_then(|(store, identity)| store.kept(&identity));
     match kept {
         Some(_) => bravebot_tui::trust_prompt::trusting_the_workspace(root),
-        None => TrustStore::new(bravebot_agent::workspace::key_of(root)),
+        None => bravebot_agent::workspace::trust_store(root),
     }
 }
 

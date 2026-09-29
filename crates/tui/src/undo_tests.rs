@@ -52,7 +52,7 @@ fn oversized_undo(ending: &str, resumed: bool) {
         vec![b'X'; bravebot_agent::workspace::MAX_REWIND_BYTES + 1],
     )
     .unwrap();
-    let mut trust = TrustStore::new(root);
+    let mut trust = bravebot_agent::workspace::trust_store(root);
     trust.trust(".");
     trust.trust("unaffected.txt");
     trust.distrust("input.txt");
@@ -297,7 +297,7 @@ fn complete_and_failed_restores_keep_files_trust_programs_and_history_aligned() 
         std::fs::create_dir_all(&root).unwrap();
         let workspace = Workspace::new(&root).unwrap();
         let root = workspace.root();
-        let mut trust = TrustStore::new(root);
+        let mut trust = bravebot_agent::workspace::trust_store(root);
         trust.trust(".");
         trust.trust("kept-child");
         trust.distrust("old-refusal");
@@ -452,7 +452,7 @@ fn undo_refuses_the_paths_a_directory_since_linked_out_of_the_workspace_would_ca
         std::fs::write(outside.join("fresh.txt"), "another file outside").unwrap();
         let workspace = Workspace::new(&root).unwrap();
         let root = workspace.root();
-        let mut trust = TrustStore::new(root);
+        let mut trust = bravebot_agent::workspace::trust_store(root);
         trust.trust(".");
         let mut programs = TrustedPrograms::new();
         let mut conversation = Conversation::new();
@@ -594,7 +594,7 @@ fn bridge_handoff(ending: &str) {
     let root = workspace.root();
     std::fs::write(root.join("input.txt"), SENTINEL).unwrap();
     std::fs::write(root.join("output.txt"), "original").unwrap();
-    let mut trust = TrustStore::new(root);
+    let mut trust = bravebot_agent::workspace::trust_store(root);
     trust.trust(".");
     trust.distrust("input.txt");
     let mut programs = TrustedPrograms::new();
@@ -826,7 +826,7 @@ fn editing_then_running_a_program_keeps_undo_and_warns() {
         let root = scratch_dir(&format!("undo-program-{name}"));
         std::fs::create_dir_all(&root).unwrap();
         let workspace = Workspace::new(&root).unwrap();
-        let mut trust = TrustStore::new(workspace.root());
+        let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
         trust.trust(".");
         let mut programs = TrustedPrograms::new();
         let mut conversation = Conversation::new();
@@ -958,7 +958,7 @@ fn matching_hooks_keep_undo_with_saved_coverage_warnings() {
         .unwrap();
         let workspace = Workspace::new(&root).unwrap();
         let root = workspace.root();
-        let mut trust = TrustStore::new(root);
+        let mut trust = bravebot_agent::workspace::trust_store(root);
         trust.trust(".");
         let programs = TrustedPrograms::new();
         let mut conversation = Conversation::new();
@@ -1048,7 +1048,7 @@ fn immediate_undo_after_resume_keeps_server_warnings_for_later_turns() {
     let root = scratch_dir("undo-immediate-resume");
     std::fs::create_dir_all(&root).unwrap();
     let workspace = Workspace::new(&root).unwrap();
-    let mut trust = TrustStore::new(workspace.root());
+    let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
     let mut programs = TrustedPrograms::new();
     let mut conversation = Conversation::new();
     let mut session = Session::new("test");
@@ -1138,7 +1138,7 @@ fn undo_warnings_name_recorded_causes() {
         let workspace = Workspace::new(&root).unwrap();
         let mut session = Session::new("test");
         let mut conversation = Conversation::new();
-        let mut trust = TrustStore::new(workspace.root());
+        let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
         let mut programs = TrustedPrograms::new();
         let mut stored = sessions::Handle::begin(
             workspace.root(),
@@ -1207,7 +1207,7 @@ fn resumed_undo_keeps_the_record_when_gap_evidence_is_missing() {
         let workspace = Workspace::new(&root).unwrap();
         let mut session = Session::new("test");
         let mut conversation = Conversation::new();
-        let mut trust = TrustStore::new(workspace.root());
+        let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
         let mut programs = TrustedPrograms::new();
         let mut stored = sessions::Handle::begin(
             workspace.root(),
@@ -1288,7 +1288,7 @@ fn ordinary_tui_endings_keep_exact_approvals_advice_and_exposure() {
             )
             .unwrap();
             let workspace = Workspace::new(&root).unwrap();
-            let mut trust = TrustStore::new(workspace.root());
+            let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
             trust.trust(".");
             let home = bravebot_agent::home::directory().unwrap();
             let authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
