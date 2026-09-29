@@ -731,6 +731,14 @@ So a single leading slash is **not** the filesystem root. A specifier with no sl
 and matches at any depth, which makes `Read(.env)` and `Read(**/.env)` one rule. Relative and
 absolute patterns are separate namespaces and neither reaches into the other.
 
+On Windows a path on a drive is a full path, with the drive as its first segment:
+`Read(//D:/work/secrets/**)` covers `D:\work\secrets\key` whichever separator the path is written
+with, and whichever case the drive letter is in. A rule written from the drive letter is the same
+rule, though in a JSON file each backslash is doubled, `"Read(D:\\work\\secrets\\**)"`, so the
+forward-slash form is easier to write. `~/x` starts at your home directory on its drive in the same
+way. `Read(/D:/work/**)`, with one slash, is still about the settings file's directory. A workspace
+rule such as `Read(.env)` does not cover a file on a drive outside the workspace.
+
 **A one-segment relative pattern floats where it restricts and not where it grants.** `Edit(src/**)`
 in `deny` or `ask` covers a `src` directory at any depth, including a copy under `vendor`; the same
 pattern in `allow` covers only the `src` at the top. Anchor it as `Edit(/src/**)` to pin it to one

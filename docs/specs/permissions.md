@@ -123,19 +123,32 @@ that way first, whatever the host separates with, and both are respelled where t
 and where they are asked rather than at each gate: a gate added later cannot be the one that forgot.
 The host's answer is supplied to the rule language rather than asked for by it, since nothing there
 has a filesystem, and it is the same answer the keys [trust-map.md](trust-map.md) holds its rules
-under are spelled with. Two things are left as they arrive. A command specifier is matched against
-argv, where a backslash is an argument's own byte because there is no shell (PERM-1). And a name
-carrying a root there is no `/`-spelling for stays one opaque name, because respelling decides how a
-name is spelled and not which of the two namespaces it is in: such a name reads as relative here, so
-cutting it into segments would match it against the patterns written about the workspace and a rule
-anchored at the project would reach a file outside it.
+under are spelled with. Where a backslash separates, a name rooted at a drive letter is spelled the
+way those keys are, from `/` with the drive as its first segment, so `D:\added\secret`,
+`D:/added/secret` and `\\?\D:\added\secret` are all `/D:/added/secret`. That is a full path, so
+`Read(//D:/added/**)` covers it and `Read(.env)`, which is about the workspace, does not. The home
+and settings directories a `~/` or `/` pattern starts at are spelled the same way, and so is a
+specifier written from a drive letter without the `//`: `Read(D:\added\**)` is the same rule as
+`Read(//D:/added/**)`. `Read(/D:/added/**)`, with one slash, is still about the settings directory.
+The drive letter is read in upper case on both sides, since that host never tells `d:` from `D:`:
+`Read(//D:/added/**)` covers `d:\added\secret`. Nothing else in a name is folded.
+
+Two things are left as they arrive. A command specifier is matched against argv, where a backslash
+is an argument's own byte because there is no shell (PERM-1). And a name carrying a root there is no
+`/`-spelling for stays one opaque name: a share, a device path, a name from the current drive's root
+such as `\x`, and one such as `C:x` that is relative to wherever the process last was on that drive.
+Respelling decides how a name is spelled and not which of the two namespaces it is in. Such a name
+reads as relative here, so cutting it into segments would match it against the patterns written
+about the workspace, and a rule anchored at the project would reach a file outside it.
 
 Where a slash is the only separator a backslash is a legal filename byte, so a name holding one is
 one segment and no rule about a directory reaches it. Without the respelling that is what *every*
 path below the workspace root is on a host that separates with something else: `Read(src/**)` covers
 nothing under `src`, `Read(.env)` covers nothing called `.env` below the top, and a rule written with
 the host's own separator is one segment while the path it names is several, so every path rule a
-person wrote is inert in both directions.
+person wrote is inert in both directions. A name on a drive left as it arrived reads as relative, so
+the rules miss it the other way round: `Read(//D:/added/**)` refuses nothing, and `Edit(*.md)` in
+`allow` grants `D:\added\a.md`, which is not in the project.
 
 Where the host's filesystem folds case (macOS, Windows), both the pattern and the path are lowercased
 segment by segment before they are matched, so `Read(.env)` covers `.ENV`, which opens the same file.
@@ -150,6 +163,12 @@ match is byte-exact.
 `verified-by: bravebot_core::permissions::a_pattern_written_with_the_hosts_own_separator_is_the_same_rule`
 `verified-by: bravebot_core::permissions::a_command_rule_keeps_a_backslash_where_a_path_rule_would_not`
 `verified-by: bravebot_core::permissions::a_workspace_rule_does_not_reach_a_path_carrying_a_root_of_its_own`
+`verified-by: bravebot_core::permissions::a_rule_about_a_full_path_on_a_drive_covers_the_file_it_names`
+`verified-by: bravebot_core::permissions::a_rule_anchored_at_a_home_on_a_drive_covers_the_file_it_names`
+`verified-by: bravebot_core::permissions::a_rule_written_from_a_drive_letter_is_about_the_full_path_it_names`
+`verified-by: bravebot_core::permissions::a_drive_letter_names_one_drive_whichever_case_it_is_written_in`
+`verified-by: bravebot_core::spelling::a_name_rooted_at_a_drive_letter_is_keyed_from_slash_where_a_backslash_separates`
+`verified-by: bravebot_core::spelling::a_name_with_no_slash_spelling_is_not_keyed_as_a_full_path`
 `verified-by: bravebot_core::spelling::a_name_below_a_root_is_respelled_where_a_backslash_separates`
 `verified-by: bravebot_core::spelling::a_name_holding_a_backslash_is_left_alone_where_a_slash_is_the_only_separator`
 `verified-by: bravebot_core::spelling::a_name_carrying_a_root_of_its_own_is_left_whole`
