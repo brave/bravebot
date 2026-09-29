@@ -5447,12 +5447,14 @@ impl Session {
         self.completion = 0;
     }
 
-    /// Hold the skills a slash word could become while one is being typed, and let them go once
-    /// nothing is.
+    /// Hold the skills a slash word could become while the line holds a slash word, and let them go
+    /// once it holds none.
+    ///
+    /// Held for the whole line rather than for the word being typed, because the names are also
+    /// what says a finished word is a skill, drawn in its own colour with what it takes after it.
     pub fn settle_skills(&mut self, resolve: impl FnOnce() -> Vec<crate::skills::Skill>) {
-        let typing = !self.shell
-            && self.status != Status::Working
-            && crate::skills::typed(&self.input).is_some();
+        let typing =
+            !self.shell && self.status != Status::Working && crate::skills::mentioned(&self.input);
         match (typing, self.skills.is_some()) {
             (true, false) => self.skills = Some(resolve()),
             (false, true) => self.skills = None,

@@ -288,9 +288,9 @@ A slash word at the start of the line is offered the commands it could still bec
 them, the skills whose names start with it. A slash word after other words is offered the skills
 alone, since there a command is a prompt (CMD-2). The skills are the ones a turn starting now would
 advertise to the planner, read the same way, and each row says when to use the skill and where it
-was found: the project, the person's own directory, or this program. They are read as a slash word
-begins and let go as it ends, so a skill written while the box sat idle is offered at the next
-slash.
+was found: the project, the person's own directory, or this program. They are read when a line
+first holds a slash word and let go when it holds none (CMD-10 also needs the names of a finished
+word), so a skill written while the box sat idle is offered at the next line with a slash.
 
 Tab, or Enter on a half-typed name, replaces the word with `/name ` and nothing else; Enter on a
 name typed in full sends the line, unless the arrows moved onto another row first. Either way the line is a prompt, sent as it reads. The planner
@@ -308,7 +308,7 @@ keeps the choice where every other skill choice is made: the planner asks for th
 fetches it, so one named this way is loaded, recorded and bounded exactly as one it chose on its
 own.
 
-Reading the skills once a word, rather than once a session or once a key, is because resolving
+Reading the skills once a line, rather than once a session or once a key, is because resolving
 reads directories: once a session would go on offering a skill that was deleted, and once a key
 would read them on every letter.
 
@@ -316,7 +316,7 @@ would read them on every letter.
 `verified-by: bravebot_tui::app::a_skill_is_completed_mid_sentence_and_sent_as_a_prompt`
 `verified-by: bravebot_tui::app::enter_completes_a_half_typed_skill_and_sends_a_whole_one`
 `verified-by: bravebot_tui::app::the_arrows_walk_from_the_commands_onto_the_skills`
-`verified-by: bravebot_tui::app::the_skills_are_resolved_once_a_word_and_let_go_after_it`
+`verified-by: bravebot_tui::app::the_skills_are_resolved_once_a_line_and_let_go_after_it`
 `verified-by: bravebot_tui::app::no_skill_is_offered_in_a_command_line_or_inside_a_command`
 `verified-by: bravebot_tui::app::nothing_is_offered_for_completion_while_a_turn_runs`
 `verified-by: bravebot_tui::skills::the_word_being_typed_is_the_last_one_on_the_line`
@@ -327,6 +327,35 @@ would read them on every letter.
 `verified-by: bravebot_agent::skills::the_set_an_interface_resolves_is_the_one_a_turn_would`
 `verified-by: bravebot_agent::skills::each_skill_records_which_of_the_three_places_it_came_from`
 `verified-by: bravebot_agent::preamble::a_turn_offered_skills_is_told_a_slash_name_is_the_user_asking_for_one`
+
+<a id="CMD-10"></a>
+### CMD-10: a recognised slash word is drawn in its own colour, and shows what it takes
+
+In the box, a word that names a command or a skill in full is drawn in the colour of the prompt.
+A command is recognised where the line is that command (CMD-2), so `/undo the last change` is
+drawn as the prompt it is. A skill is recognised anywhere in the line, since it may be named
+mid-sentence, and not inside a command line, whose argument is taken verbatim. A half-typed name,
+a name nothing holds, and every word in shell mode are drawn as any other text.
+
+When the line is a recognised word, a space is after it and the caret is at the end, what the word
+takes is drawn dimly after the caret: the argument the command table names, or the skill's
+`argument-hint` where its file has one ([skills.md](skills.md)). The first character typed
+replaces it. It is cut to the row with an ellipsis rather than wrapped, so it never takes a row
+the box was not sized for, and a control character in a skill's hint is drawn as a glyph.
+
+**Why.** Colour says the word was understood before Enter is pressed, and the hint says what to
+type next without opening a list that has already been closed by the space. Both are read off
+names the program holds and the person typed, and the only thing decided from them is how a cell
+is drawn. The skills are held while the line holds a slash word, and not only while one is being
+typed, because a finished word's name is what is checked. A turn running holds none, so a skill
+is not drawn as recognised then, while a command is.
+
+`verified-by: bravebot_tui::render::a_word_that_names_a_command_or_skill_is_drawn_in_its_own_colour`
+`verified-by: bravebot_tui::render::nothing_is_drawn_as_recognised_in_shell_mode`
+`verified-by: bravebot_tui::render::a_command_shows_what_it_takes_once_it_is_typed`
+`verified-by: bravebot_tui::render::a_skill_shows_the_hint_its_file_gave`
+`verified-by: bravebot_tui::render::a_hint_is_cut_to_the_row_and_holds_no_escape`
+`verified-by: bravebot_tui::app::the_skills_are_resolved_once_a_line_and_let_go_after_it`
 
 ## Known costs
 

@@ -13,6 +13,8 @@ use bravebot_session::audit::Trail;
 pub struct Skill {
     pub name: String,
     pub description: String,
+    /// What follows the name when it is typed, drawn after it as the line stands ready for it.
+    pub argument_hint: Option<String>,
     pub source: Source,
 }
 
@@ -31,6 +33,7 @@ pub fn resolved(workspace: &Workspace, trust: TrustStore) -> Vec<Skill> {
     .map(|skill| Skill {
         name: skill.name.clone(),
         description: skill.description.clone(),
+        argument_hint: skill.argument_hint.clone(),
         source: skill.source,
     })
     .collect()
@@ -52,6 +55,11 @@ pub fn typed(line: &str) -> Option<&str> {
     Some(name)
 }
 
+/// Whether any word of the line begins with a slash, so a skill could be named in it.
+pub fn mentioned(line: &str) -> bool {
+    line.split_whitespace().any(|word| word.starts_with('/'))
+}
+
 /// The held skills whose names start with what was typed, in name order.
 ///
 /// A name with a space or a control character in it is left out, since taking one would write a
@@ -66,6 +74,16 @@ pub fn matching(held: &[Skill], typed: &str) -> Vec<Skill> {
         .collect();
     found.sort_by(|a, b| a.name.cmp(&b.name));
     found
+}
+
+/// The held skill a word names in full, or `None` where it names nothing offered.
+///
+/// The word as typed, with its slash. Exact where [`matching`] is by prefix: a half-typed name
+/// is still being completed and has not yet named anything.
+pub fn named<'a>(held: &'a [Skill], word: &str) -> Option<&'a Skill> {
+    let name = word.strip_prefix('/')?;
+    held.iter()
+        .find(|skill| skill.name == name && offerable(&skill.name))
 }
 
 fn offerable(name: &str) -> bool {
@@ -84,6 +102,7 @@ mod tests {
         Skill {
             name: name.to_string(),
             description: format!("what {name} is for"),
+            argument_hint: None,
             source: Source::Home,
         }
     }

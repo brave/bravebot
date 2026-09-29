@@ -39,6 +39,9 @@ of them drops the last ones, skills first: everything is still typeable in full,
 narrows the list back onto the screen, but a short terminal costs you the discovery the list is there
 for.
 
+A command typed in full is drawn in the prompt's colour, and once a space follows it, the argument
+it takes appears dimly after the cursor until you start typing one.
+
 ## `/status`
 
 Reports everything the session knows about itself:
