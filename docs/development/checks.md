@@ -92,9 +92,10 @@ Run `npm --prefix ui run build` afterwards to restore a configured development b
 failures reach the caller, and that scanner failures cannot pass as empty scans. The installer
 half also holds `check-npm` to reaching the installer test before anything installs a dependency
 for it to depend on, and to failing rather than passing when that test is no longer there. It runs
-`check-all-selftest`, `check-reviewdog-selftest` and `check-affected-selftest`, which can also run
-separately. The last holds each rule of the classifier, and holds every workflow condition reading
-it to running its job on anything but an explicit `false`.
+`check-all-selftest`, `check-reviewdog-selftest`, `check-rebase-selftest`, `check-affected-selftest`
+and `check-peer-advisories-selftest`, which can also run separately. `check-affected-selftest` holds
+each rule of the classifier, and holds every workflow condition reading it to running its job on
+anything but an explicit `false`.
 To also exercise the installed reviewdog binary, set `REVIEWDOG_TEST_BINARY` to its
 absolute path when running the target. Without it, that integration test is reported as skipped.
 

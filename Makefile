@@ -353,8 +353,10 @@ check-affected-containers:
 	@targets="$$(python3 contrib/affected-checks.py --containers $(if $(BASE),--base '$(BASE)'))" && \
 		{ [ -z "$$targets" ] || $(MAKE) --no-print-directory -k $$targets; }
 
-.PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest
-check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest
+.PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
+	check-peer-advisories-selftest
+check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
+	check-peer-advisories-selftest
 
 check-all-selftest:
 	python3 contrib/check-all-selftest.py
@@ -367,6 +369,9 @@ check-reviewdog-selftest:
 
 check-rebase-selftest:
 	python3 agents/skills/rebase/selftest.py
+
+check-peer-advisories-selftest:
+	python3 agents/skills/peer-advisories/selftest.py
 
 # CI and local runs share the same desktop checks. Linux uses a virtual display;
 # macOS uses the logged-in desktop session.
