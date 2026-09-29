@@ -220,7 +220,7 @@ of the session, and the interface reports it as reading none rather than going o
 as in force. What one model refuses says nothing about another, on Bedrock or on the same gateway. A
 request refused with the level already gone settles nothing and is not remembered.
 
-A level you wrote into a model's own [`options`](#what-a-models-options-can-and-cannot-do) is not
+A level you wrote into a model's own [`options`](providers/openai-compatible.md#what-a-models-options-can-and-cannot-do) is not
 given up this way. That field is carried into the request as it stands, so it fills the level again
 after the one you chose in the interface has been withdrawn, and a service that does not take it
 refuses the request as it would refuse any other option it does not know.
@@ -436,7 +436,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `editorMode` | whether the input box edits the ordinary way or vi's ([below](#editormode)) |
 | `env` | variables, in Claude Code's own shape |
 | `permissions` | which actions to refuse, and which to ask about ([below](#permissions)) |
-| `provider` | an OpenAI-compatible gateway ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](#naming-more-than-three-models)) |
+| `provider` | an OpenAI-compatible gateway ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](providers/bedrock.md#naming-more-than-three-models)) |
 | `run.scrubEnv` | further variables to keep from a program the agent runs ([below](#runscrubenv)) |
 | `run.maxOutput` | how much of what a command printed the agent reads ([below](#runmaxoutput)) |
 | `run.defaultSeconds`, `run.maxSeconds` | how long a command may run ([below](#rundefaultseconds-and-runmaxseconds)) |
@@ -580,7 +580,7 @@ a checkout, which is why a file in a repository is the weaker claim.
 ```
 
 Variables to withhold from a program the agent runs, on top of bravebot's own credentials, which are
-withheld with no configuration at all. See [`run`](../reference/tools.md#what-a-program-is-handed).
+withheld with no configuration at all. See [`run`](../reference/run-tool.md#what-a-program-is-handed).
 
 A hook and a language server are withheld these names too. A line you typed yourself at the `!`
 prompt is not: it keeps your whole environment, because it is meant to behave as your own terminal
@@ -660,7 +660,7 @@ would end at the moment it began.
 
 **Reaching the deadline is not a failure.** The command is stopped and whatever it printed comes back,
 which is why a server or a watcher is better started with `background: true` instead: see
-[the tools reference](../reference/tools.md#a-line-has-a-deadline).
+[the tools reference](../reference/run-tool.md#a-line-has-a-deadline).
 
 A figure of `0` leaves the built-in one in force rather than meaning "no limit": so does anything that
 is not a whole number of seconds. The agent is told both figures, so a ceiling you raise is one it
@@ -952,7 +952,7 @@ decide where your key is sent.
 **A running Ollama.** Ollama is asked what it has pulled at the address `OLLAMA_HOST` names, read as
 Ollama reads it, or at `http://localhost:11434` where it is unset. Only an address on this machine is
 asked; one on another machine is named as left, and nothing is sent to it. A server that answers is
-offered as [the block below](#a-local-ollama-or-another-gateway-that-wants-no-key), with the newest
+offered as [the block on the gateway page](providers/openai-compatible.md#a-local-ollama-or-another-gateway-that-wants-no-key), with the newest
 model that can call tools as `model`:
 
 ```
@@ -1000,265 +1000,18 @@ has nothing to write.
 
 ## Reaching a model through AWS Bedrock
 
-Set these variables to reach models through your own AWS account:
-
-| Variable | What it sets |
-|---|---|
-| `BRAVEBOT_USE_BEDROCK` | turns the backend on |
-| `AWS_REGION` | which region to reach Bedrock in (**required** once it is on) |
-| `AWS_PROFILE` | which profile names the credentials to sign with (optional) |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL` | the model the Opus tier names |
-| `ANTHROPIC_DEFAULT_SONNET_MODEL` | the model the Sonnet tier names |
-| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | the model the Haiku tier names |
-
-Three services can answer a request: the aichat endpoint Brave runs, AWS Bedrock through your own
-AWS account, and an [OpenAI-compatible gateway](#reaching-an-openai-compatible-gateway) you
-configured. Every build can reach Brave; the other two are what you configure.
-
-Each tier takes either a model id or an inference-profile ARN. With `AWS_PROFILE` unset the AWS CLI
-resolves credentials as it would for any other command, which is what a machine on instance
-credentials already relies on.
-
-**Any model your account can reach, whoever makes it.** A request is built in the body Bedrock
-states for every provider it hosts rather than in one provider's own, so a tier can name a Claude,
-an OpenAI, a Nova or a Llama model, or an inference profile standing for one, and nothing here has
-to work out which provider is behind it. Nothing local checks the name you set, and Bedrock refuses
-one your account cannot reach.
-
-**The tier words stay `opus`, `sonnet` and `haiku`.** They name a slot in your configuration rather
-than a model family, so a tier is whichever model you pointed it at.
-
-**A tier you do not name is left out rather than guessed at.** An ARN cannot be derived from a model
-name. Set one tier and one tier is offered.
-
-**Configuring Bedrock takes nothing away from Brave.** Both rosters are offered together in `/model`,
-so this adds models rather than replacing them. It also does not move the default: what answers when
-nobody has chosen stays what it was.
-
-**The model names the service.** A request goes to whichever service offers the model it names, and
-nothing else participates: not which configuration is present, not which service answered last.
-Bedrock refuses a model it does not recognise rather than substituting one, and the aichat endpoint has
-never heard of an inference-profile ARN.
-
-Your tiers sit under a heading reading `Bedrock, your my-profile AWS profile`, or
-`Bedrock, your AWS account` with no profile set. The profile is named because it is what decides which
-credentials sign the request, and because Brave serves part of its own roster through Bedrock too.
-Every configured tier is marked free: premium means a Leo subscription, and reaching a model through
-your own account does not involve one.
-
-There is no automatic entry among them. On the Brave roster it means "let the server choose", which
-Bedrock does not offer. A request names one model and gets it or an error.
-
-If one service cannot say what it offers, the models known from your configuration alone are still
-offered; a choice is refused only when nothing is left to choose. That is the position somebody
-offline is most likely to be in.
-
-### Naming more than three models
-
-The tier variables name three models. A `provider` block keyed `amazon-bedrock` names as many as
-your file lists, each under the id a request sends:
-
-```json
-{
-  "provider": {
-    "amazon-bedrock": {
-      "options": { "region": "us-west-2", "profile": "my-profile" },
-      "models": {
-        "openai.gpt-5.6-sol": {},
-        "arn:aws:bedrock:us-west-2:…:application-inference-profile/abc": {
-          "name": "Sol on Bedrock",
-          "limit": { "context": 1050000, "output": 128000 }
-        }
-      }
-    }
-  }
-}
-```
-
-`options.region` is **required**, for the reason `AWS_REGION` is: a guessed region is a request that
-fails somewhere far from the mistake. An entry without one configures no service at all.
-`options.profile` picks which credentials sign, exactly as `AWS_PROFILE` does, and is optional on the
-same terms.
-
-**There is no credential to name here.** Bedrock takes a signature over the request rather than a
-bearer token, so this entry reads neither `env` nor `options.apiKey`. Which AWS credentials sign
-comes from the profile, resolved at the moment a request needs it.
-
-**This adds to the tier variables rather than replacing them.** A name either of them offers reaches
-your account, and everything else on the page above holds unchanged: the models are offered in
-`/model` alongside Brave's roster, the default does not move, and each is marked free.
-
-A model named this way has no tier, so its picker row carries the `name` you gave it and falls back
-to the id where you gave none. Write one: an inference-profile ARN is not a name anybody reads. A
-model named here is also chosen by that id exactly as written, without the gateway's
-[`id/name` prefix](#naming-one) in front of it.
-
-`limit.context` states that model's window, which is worth setting here because the figure otherwise
-assumed is [deliberately low](#the-assumed-context-window). Following opencode, it needs `output`
-beside it or it is not read, and `output` is itself
-[how far a reply may run](#how-long-a-reply-may-run).
-
-### Signing in
-
-Where AWS has no usable session, the sign-in happens **before the turn starts**, and only for the
-service the next request will actually go to. A turn served entirely by Brave never stops to
-authenticate against AWS. The URL and code the AWS CLI prints appear line by line where you are
-already reading, because collected up and printed at the end they would arrive once the code had
-stopped working.
-
-Credentials are resolved by running the AWS CLI, which is the tool you already sign in with. It holds
-short-lived keys that expire during a session. `aws sso logout` clears them, and it takes no option to
-narrow itself: it removes every cached token, so other tools sharing that cache need a fresh
-`aws sso login` afterwards.
-
-### The assumed context window
-
-Every configured tier is assumed to have a 131,072-token window. Nothing at AWS reports a context
-window, and an inference-profile ARN does not say which model it resolves to, so one deliberately low
-figure stands in for all of them. Being wrong upward would stop the shortening of a conversation
-altogether: every round asks, no round qualifies, and the session runs to exhaustion. Set
-`BRAVEBOT_CONTEXT_BUDGET` if you know your model's real window and want to use it, or state it per
-model with [`limit.context`](#naming-more-than-three-models).
+Set `BRAVEBOT_USE_BEDROCK` and `AWS_REGION` to reach models through your own AWS account, and name
+the models with the `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL` and
+`ANTHROPIC_DEFAULT_HAIKU_MODEL` variables or a `provider` block keyed `amazon-bedrock`. The models
+are offered in `/model` beside Brave's roster. [Reaching a model through AWS Bedrock](providers/bedrock.md)
+has the variables, the signing in, and the assumed context window.
 
 ## Reaching an OpenAI-compatible gateway
 
-A `provider` block names a gateway, the models it offers and where its credential lives. An entry
-keyed `amazon-bedrock` names [an AWS account](#naming-more-than-three-models) instead, which is
-reached by signing rather than by a token; everything below is about the other entries. The models
-a gateway ends up with are offered in `/model` beside Brave's roster and any AWS tiers. It takes nothing away
-from those rosters and does not move the default: what answers when nobody has chosen stays what it
-was, and the conversation budget stays where it was too.
-
-```json
-{
-  "provider": {
-    "openrouter": {
-      "name": "OpenRouter",
-      "env": ["OPENROUTER_API_KEY"],
-      "models": {
-        "z-ai/glm-4.6": { "limit": { "context": 200000, "output": 8192 } }
-      }
-    }
-  }
-}
-```
-
-| Where | Field | What it holds |
-|---|---|---|
-| the key under `provider` | | the gateway's id, which is also what a picker row names it by |
-| the entry | `name` | something friendlier to show than the id |
-| | `env` | variable names that may hold the bearer token, tried in order |
-| | `models` | the models to offer, keyed by the name the gateway knows each by |
-| `options` | `baseURL` | where requests go |
-| | `apiKey` | a token written into the file directly |
-| a model | `limit.context` | that model's context window, in prompt tokens |
-| | `options` | anything extra to put in the request body |
-
-**The block is opencode's, field for field**, so one copied out of `opencode.json` works unedited.
-Nothing is required that opencode does not require, and a field bravebot does not know is read past
-rather than refused. opencode's `cost`, `modality` and `package` fields do nothing here.
-
-### Where the requests go
-
-**A gateway bravebot already knows an endpoint for needs no `baseURL`.** `openrouter` is the name it
-knows today. Any other id needs one written down, and an entry with neither a known name nor a stated
-endpoint configures no service. A stated `baseURL` always wins, so a known name stays usable against a
-proxy or a private deployment.
-
-The names it knows are compiled in, and nothing is fetched to resolve one. This value is where a
-bearer credential gets sent, so a service that could decide it could redirect your token by answering
-a request.
-
-### The credential
-
-Name a variable in `env` and keep the token wherever you already keep secrets. `options.apiKey` is
-read too, because it is opencode's field, but a variable wins where both are present. A long-lived
-token in a settings file is a token in a file people paste into issues.
-
-It is read at the point a request needs it rather than once at startup, so exporting a new one takes
-effect in a session already open. A block that names somewhere for a credential to live and finds
-nothing there is a stale or missing token, and its requests are refused with the remedy named rather
-than sent. `bravebot doctor` says whether a credential was found, and never what it was. It
-prints an `ends` line for the block too, naming the host the token is presented to: that host
-is the only surface that revokes it, and deleting the value from this file, or unsetting the
-variable, ends this machine's custody and leaves the token live there.
-
-**A block naming no credential at all is a different statement, and a supported one.** No `env` and no
-`options.apiKey` is you saying this gateway wants none: its requests carry no `authorization` header
-and its roster is asked for without one. `doctor` reports it as needing none rather than as missing
-one. Deciding this by endpoint instead would refuse the same local service reached across a LAN or
-through a reverse proxy, and a dummy `apiKey` would just teach people to write fake credentials into a
-file they paste into issues.
-
-### A local Ollama, or another gateway that wants no key
-
-Ollama wants no API key, so its block names none:
-
-```json
-{
-  "provider": {
-    "ollama": {
-      "name": "Ollama (local)",
-      "options": { "baseURL": "http://localhost:11434/v1" }
-    }
-  },
-  "model": "ollama/qwen3-coder:30b"
-}
-```
-
-`baseURL` is written down because `ollama` is not one of the names an endpoint is
-[compiled in](#where-the-requests-go) for. There is no `models` key, so Ollama is asked what it has
-pulled and `/model` lists what came back. A first run with nothing configured offers to write this
-block for you where Ollama is running ([Importing from Claude Code, opencode or
-Ollama](#importing-from-claude-code-opencode-or-ollama)).
-
-### Which models are offered
-
-**A block that lists `models` is taken at its word**, in the order you wrote them, and costs no round
-trip. That is what keeps a configured gateway working with no network, and is the way to pin a short
-list out of a service offering hundreds.
-
-**A block that lists none has the gateway asked.** That is the ordinary case rather than a mistake:
-opencode resolves its roster from a registry it fetches, so the commonest block copied out of it names
-a credential and nothing else. What your credential may reach is asked for first, and the service's
-full catalogue answers only where a gateway does not offer the narrower question. Models that cannot
-call tools are left out.
-
-Nothing is capped. Ordering does that work instead: the model a session would use comes first and the
-rest are sorted by name. A listing that cannot be fetched contributes nothing and takes nothing away
-from the rest of the roster.
-
-### Naming one
-
-Where one model is reachable through more than one service, put the gateway's id in front of the name
-to say which you mean:
-
-```
-openrouter/z-ai/glm-4.6
-```
-
-The name is split once, at the first slash, because most gateway names contain one. The id picks the
-service and only the remainder is sent, the id being bravebot's own filing that no gateway has heard
-of. A bare name your block lists still finds its gateway, so a choice already recorded by `/model`
-keeps working.
-
-### The context window
-
-`limit.context` is optional. A model that states none is assumed to have 131,072 prompt tokens, the
-same deliberately low figure a Bedrock tier gets and for the same reason: a budget above the real
-window does not compact a conversation late, it stops compacting it at all. A window a gateway reports
-is taken where the file stated none; a figure in the file outranks it. Following opencode, `limit`
-needs `output` alongside `context` or it is not a `limit` and its figure is not read. `output` states
-[how far a reply may run](#how-long-a-reply-may-run).
-
-### What a model's `options` can and cannot do
-
-Whatever you put there reaches the request body as it stands. Nothing parses it, knows what any of its
-fields mean, or validates them, so a misspelled routing field is a request the gateway rejects, or
-worse one it silently routes somewhere you did not intend.
-
-It cannot replace what the turn itself built. The settings file names a destination, not what was
-asked.
+A `provider` block in a settings file names a gateway, the models it offers and the variable that
+holds its credential. It is opencode's block, so one copied from `opencode.json` works unedited, and
+a local Ollama needs no key. [Reaching an OpenAI-compatible gateway](providers/openai-compatible.md)
+has the fields, the credential, which models are offered, and how to name one.
 
 ## Context budget
 
