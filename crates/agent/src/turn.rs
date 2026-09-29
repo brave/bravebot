@@ -3852,11 +3852,20 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 _ => None,
                             };
 
+                            // Nothing to keep from anybody, so no reference to it and no advice about
+                            // one. From the size the slot states, which the reference would have put
+                            // in front of the planner as "0 bytes" anyway, so no byte is read to decide.
+                            let printed_nothing = output.printed_by.is_some()
+                                && matches!(
+                                    &presented,
+                                    Presentation::Quarantined(reference) if reference.bytes == Some(0)
+                                );
+
                             // Only where the result is workspace content. A read of a file the planner
                             // already holds a reference to answers with a sentence the driver wrote, and
                             // reporting that the model has read *that* is true, useless, and read by a
                             // person as a claim about their file.
-                            if output.content {
+                            if output.content && !printed_nothing {
                                 reporter.landed(match (&presented, &output.deferred) {
                                     (_, Some(_)) => crate::report::Landing::Reserved,
                                     (Presentation::Visible(_), _) => {
@@ -3940,6 +3949,20 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     }
                                     format!(
                                         "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{text}{rest}",
+                                        output.tool
+                                    )
+                                }
+                                // Told a mkdir's empty output was quarantined, with the ways to
+                                // process, vet or read it, a planner went looking for something to
+                                // do with nothing.
+                                Presentation::Quarantined(_) if printed_nothing => {
+                                    let nothing = if output.tool == "run" {
+                                        "It printed nothing."
+                                    } else {
+                                        "It has printed nothing new."
+                                    };
+                                    format!(
+                                        "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{nothing}",
                                         output.tool
                                     )
                                 }

@@ -696,6 +696,10 @@ shown the output and a run the mode approved vouches for nothing: the planner is
 `read_output` hands it back as text it can read, and, on a run's result, that `read: true` returns it
 in the same result. The advice does not name the mode, which the planner is told only in plan mode.
 
+A command that printed nothing, such as a `mkdir`, has nothing to keep back. The planner is told it
+printed nothing, with no reference and no advice, and the transcript does not mark it as kept from
+the planner. That is decided from the size of the output alone.
+
 **Every result says how the run ended**, in front of what the program printed: that every step
 exited zero, which step did not and with what code, or that the line outstayed
 [its deadline](#a-line-has-a-deadline) and was stopped. It is said for quarantined output too,
