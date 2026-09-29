@@ -1192,7 +1192,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         reply,
         attempt: Some(attempt.clone()),
         addressed: None,
-        skill_chose_the_model: false,
+        compared_the_model_itself: false,
         model,
         steps: plan.len(),
         clean: planning_was_clean && policy.finish(),

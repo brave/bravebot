@@ -1419,8 +1419,9 @@ pub struct Outcome {
     /// The kernel's match rather than anything the reply says about itself, so an interface
     /// drawing the reply under a name is drawing the driver's word for it (ADDRESS-12).
     pub addressed: Option<bravebot_core::delegate::Addressed>,
-    /// Whether a loaded skill moved the turn's last rounds onto a model of its own (SKILL-15).
-    pub(crate) skill_chose_the_model: bool,
+    /// Whether the turn compared the model that answered with one it asked for itself: an
+    /// addressed definition's (ADDRESS-11) or a loaded skill's (SKILL-15).
+    pub(crate) compared_the_model_itself: bool,
 }
 
 impl Outcome {
@@ -1435,15 +1436,13 @@ impl Outcome {
     /// Whether the turn's last round was asked of the session's own model, so that a front end
     /// may compare [`Outcome::model`] with it.
     ///
-    /// False where an addressed definition or a loaded skill named the model. The turn has
-    /// already compared that model with the one that answered (ADDRESS-11, SKILL-15), and a
-    /// comparison with the session's would report a substitution that did not happen.
+    /// False where an addressed definition's model was asked for or a loaded skill named the
+    /// model. The turn has already compared that model with the one that answered (ADDRESS-11,
+    /// SKILL-15), and a comparison with the session's would report a substitution that did not
+    /// happen. True for a definition whose model the command line's outranked, since the
+    /// command line's is what was asked for.
     pub fn ran_on_the_sessions_model(&self) -> bool {
-        !self.skill_chose_the_model
-            && self
-                .addressed
-                .as_ref()
-                .is_none_or(|addressed| addressed.model().is_none())
+        !self.compared_the_model_itself
     }
 }
 
@@ -2876,8 +2875,11 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         }
         // The definition whose model this turn runs on, where one named a model: the addressed
         // definition, or the delegate's. A skill loaded in the turn keeps that model (SKILL-15).
+        // Not a definition the command line outranked, whose model this turn does not run on.
         let pinned_by = match (&addressed, &task.delegate) {
-            (Some(addressed), _) => addressed.model().map(|_| addressed.name().to_string()),
+            (Some(addressed), _) => definition_model
+                .as_ref()
+                .map(|_| addressed.name().to_string()),
             (None, Some(spec)) => spec.model().map(|_| spec.definition().to_string()),
             (None, None) => None,
         };
@@ -4712,7 +4714,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             notices: notices.into_iter().map(|n| n.message).collect(),
             attempt: None,
             addressed,
-            skill_chose_the_model: switched_by.is_some(),
+            compared_the_model_itself: definition_model.is_some() || switched_by.is_some(),
         })
     })();
     let decisions = Decisions {

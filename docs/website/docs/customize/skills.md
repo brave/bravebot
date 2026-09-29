@@ -53,7 +53,9 @@ it happens, so you see when a skill moves a turn onto a dearer model.
 
 A skill does not replace a model that a definition named. When you address a definition that names
 a model, or a delegate's definition names one, a skill loaded in that turn keeps the definition's
-model and the session says so. The skill's `effort` still applies.
+model and the session says so. The skill's `effort` still applies. Where `--model` on the command
+line took the place of the definition's model, a skill's model replaces the command line's, as it
+would with no definition addressed.
 
 If the service answers a skill's rounds with a different model than the one the skill named, which
 it does for a misspelt name or a premium model with no subscription in hand, the session says so.

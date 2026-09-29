@@ -19571,6 +19571,10 @@ fn an_addressed_turn_runs_under_its_definitions_prompt_model_and_kind() {
         "the turn did not run on the definition's model: {request}"
     );
     assert!(
+        !outcome.ran_on_the_sessions_model(),
+        "a front end would compare the definition's model with the session's"
+    );
+    assert!(
         request.contains("REVIEW-BY-THE-RULES")
             && request.contains("addressed this turn to rule-reviewer"),
         "the turn was not told what its definition is for: {request}"
@@ -19645,6 +19649,10 @@ fn a_model_the_command_line_named_outranks_the_definitions_and_the_turn_says_so(
         outcome.notices.iter().any(|notice| notice == said),
         "the turn's account did not say the definition's model was not asked for: {:?}",
         outcome.notices
+    );
+    assert!(
+        outcome.ran_on_the_sessions_model(),
+        "the model the command line named was kept from the command line's comparison"
     );
 }
 
@@ -32156,6 +32164,67 @@ fn a_skill_loaded_by_an_addressed_definition_keeps_the_definitions_model() {
             .iter()
             .any(|said| said.contains("asks the rest of this turn of")),
         "a switch that did not happen was reported: {:?}",
+        outcome.notices
+    );
+}
+
+/// Where the command line's model outranked the addressed definition's (CLI-9), the turn does not
+/// run on the definition's model, so a skill's model replaces the command line's as it would in any
+/// one-shot run, and the switch is what the person is told.
+#[test]
+fn a_skill_under_a_definition_the_command_line_outranked_switches_the_model() {
+    let scratch = Scratch::new("skill-under-outranked");
+    let home = Scratch::new("skill-under-outranked-home");
+    define(
+        &home,
+        "cheap-reviewer",
+        "kind: reader\nmodel: haiku\n",
+        "REVIEW",
+    );
+    write_project_skill_declaring(&scratch.path, "dear", "model: opus\n");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("load_skill", r#"{"name":"dear"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let opus = config.model_named("opus");
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = turn::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-TASK", &home, "cheap-reviewer").model_outranks_a_definition(true),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains(&format!(r#""model":"{opus}""#)),
+        "the skill's model did not replace the command line's: {second}"
+    );
+    assert!(
+        outcome
+            .notices
+            .iter()
+            .any(|said| said == "dear asks the rest of this turn of opus"),
+        "the switch was not reported: {:?}",
+        outcome.notices
+    );
+    assert!(
+        !outcome
+            .notices
+            .iter()
+            .any(|said| said.contains("stays on the model")),
+        "the turn claimed to keep a model it was not running on: {:?}",
         outcome.notices
     );
 }

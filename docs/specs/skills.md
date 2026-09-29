@@ -250,6 +250,9 @@ definition ([ADDRESS-11](addressing-a-definition.md#ADDRESS-11)) or the delegate
 the notice names the skill, the model it asked for, and the definition. Both specs treat that model
 as a cost boundary the definition's file drew, and a skill the planner loads during the turn is not
 a choice the person made. The skill's `effort` still applies, since a definition names none.
+Where `--model` was asked for in place of the addressed definition's model
+([ADDRESS-11](addressing-a-definition.md#ADDRESS-11)), the turn does not run on the definition's
+model, so a skill's model replaces the command line's, as it would with no definition addressed.
 
 **A skill's model is compared with the model that answered.** The endpoint substitutes a model it
 will not serve rather than refusing it, so where the rounds after a switch are answered by another
@@ -267,6 +270,7 @@ unless its own definition names one.
 `verified-by: bravebot_agent::turn::a_loaded_skill_asks_the_rounds_after_it_of_its_own_model_and_effort`
 `verified-by: bravebot_agent::turn::a_skill_naming_neither_key_leaves_the_session_its_own_choice`
 `verified-by: bravebot_agent::turn::a_skill_loaded_by_an_addressed_definition_keeps_the_definitions_model`
+`verified-by: bravebot_agent::turn::a_skill_under_a_definition_the_command_line_outranked_switches_the_model`
 `verified-by: bravebot_agent::turn::a_skill_loaded_by_a_delegate_keeps_its_definitions_model`
 `verified-by: bravebot_agent::turn::a_skill_answered_by_its_own_model_is_not_reported_as_a_substitution`
 `verified-by: bravebot_agent::turn::a_skill_answered_by_a_model_other_than_its_own_says_so`
