@@ -771,9 +771,10 @@ every file that was found. The flag that names one, and the path it refuses, are
 
 | What | How layers combine |
 |---|---|
-| `env`, `provider`, `attribution`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
+| `env`, `attribution`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
-| `model`, anything else | the closest layer that set it wins |
+| `provider`, `model` | home layer only; a project or local layer naming either is ignored, and the file is reported as one whose naming was dropped |
+| anything else | the closest layer that set it wins |
 
 The project layers are read from the directory the process started in and no ancestor of it. Each
 layer fails independently: one that is missing, larger than 64 KB, or unparseable leaves the others
@@ -786,6 +787,12 @@ Overriding per name is what makes putting one value in a checkout worth doing, s
 is restating an entire configuration to change a host. Going deeper than a name would make one
 request's destination the product of two files with no single place to read that says where it goes,
 which is why a gateway entry is replaced whole and a project file naming one must name its host too.
+
+`provider` and `model` are the exception on the other side: which host every request goes to and
+which credential signs it is exactly what a file nobody opened must not decide, and the credential
+value comes from the person's own environment under names the layer would choose. A project layer
+naming either is dropped whole and reported, so the destination of every request stays something
+the person's own files named.
 
 The two names under `attribution` combine per name for the same reason `env` does: they are
 unrelated destinations that happen to share a block, and a file answering for one must not answer
@@ -829,12 +836,17 @@ with it.
 `verified-by: bravebot_config::settings::every_layer_adds_to_the_permission_rules`
 `verified-by: bravebot_config::settings::every_layer_adds_to_the_directories_a_file_makes_reachable`
 `verified-by: bravebot_config::settings::every_layers_request_is_read_and_each_alias_is_kept_once`
-`verified-by: bravebot_config::settings::the_closest_layer_that_named_a_model_wins`
+`verified-by: bravebot_config::settings::a_project_layer_cannot_pick_a_backend`
+`verified-by: bravebot_config::settings::a_project_provider_block_leaves_the_home_ones_alone`
+`verified-by: bravebot_config::settings::a_named_layer_cannot_pick_a_backend`
+`verified-by: bravebot_config::settings::a_project_layer_cannot_smuggle_a_provider_env_name`
+`verified-by: bravebot_config::settings::a_project_layer_cannot_pick_a_model`
+`verified-by: bravebot_config::settings::a_project_model_leaves_the_default_in_force`
+`verified-by: bravebot_config::settings::a_layer_above_the_home_one_does_not_pick_a_model`
+`verified-by: bravebot_config::settings::a_layer_above_that_names_nothing_does_not_outrank_a_saved_pick`
 `verified-by: bravebot_config::settings::a_layer_answering_for_one_attribution_name_leaves_the_other`
 `verified-by: bravebot_config::settings::a_layer_capping_one_side_of_a_search_leaves_the_other`
 `verified-by: bravebot_config::settings::a_layer_naming_no_model_leaves_the_one_below_it`
-`verified-by: bravebot_config::settings::a_project_layer_replaces_one_gateway_and_leaves_the_others`
-`verified-by: bravebot_config::settings::a_project_gateway_naming_no_host_replaces_one_that_did`
 `verified-by: bravebot_config::settings::an_unparseable_project_layer_leaves_the_global_one_in_force`
 `verified-by: bravebot_config::settings::an_oversized_project_layer_leaves_the_global_one_in_force`
 `verified-by: bravebot_config::settings::a_directory_with_no_project_layer_reads_the_global_one_alone`
@@ -2014,15 +2026,14 @@ BACKEND-39 because importing it again is what serves the pick, and the refusal s
   in, which BACKEND-12 already declines for the tier words and for the same reason: the service owns
   the names, and a copy here is a copy that goes stale.
 
-- **A layer a checkout carries is trusted as far as the person's own file is.** A `.bravebot`
-  directory arrives with whatever produced the checkout, so a `settings.json` in one can name the host
-  every request goes to and the credential that signs it, and somebody who has not read it would not
-  know. Nothing here distinguishes the layers, because the resolution being copied does not. For every
-  field but one, what limits the damage is the same rule that limits it anywhere: a file names a
-  destination and grants no capability, so the worst it does is send a request somewhere useless or
-  somewhere watching. Refusing the fields that name a destination in the project layers is the fix if
-  that trade stops being worth it, and it would cost the main reason to put a value in a checkout at
-  all.
+- **A layer a checkout carries is trusted as far as the person's own file is, except where it is
+  not.** A `.bravebot` directory arrives with whatever produced the checkout, so a `settings.json` in
+  one arrives unasked. The fields that name a destination and the credential that signs it —
+  `provider` and `model` ([BACKEND-24](#BACKEND-24)) — are refused from the project layers outright,
+  because the credential value comes from the person's own environment under names the layer would
+  choose, and a file nobody read must not pick either. For the remaining fields, what limits the
+  damage is the same rule that limits it anywhere: a file names a destination and grants no
+  capability, so the worst it does is send a request somewhere useless or somewhere watching.
 
   The one field that is not a destination is `attribution`, whose value [BACKEND-30](#BACKEND-30)
   states to the planner. A checkout can therefore put a string of its own choosing in front of every
