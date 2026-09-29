@@ -1396,10 +1396,18 @@ fn work(work: Work) {
     );
 
     // Cleanup has finished on every return, including cancellation and request errors.
-    state.trust = completed.decisions.trust;
-    state.programs = completed.decisions.programs;
-    state.asked_about = completed.decisions.asked_about;
-    state.exposed = completed.decisions.exposed;
+    // Taken apart with no `..`, so an answer a turn learns to remember does not build until this
+    // front-end says what becomes of it.
+    let agent_turn::Decisions {
+        trust,
+        programs,
+        asked_about,
+        exposed,
+    } = completed.decisions;
+    state.trust = trust;
+    state.programs = programs;
+    state.asked_about = asked_about;
+    state.exposed = exposed;
     let outcome = completed.outcome;
 
     // The prompt joins the history the terminal also reads, so recall works across both

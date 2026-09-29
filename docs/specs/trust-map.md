@@ -509,6 +509,11 @@ Nor do the answers to the credential question ([CRED-15](credential-protection.m
 about a file inside the working directory is kept under the file's name from there, and from a new
 one that name is another file, so every answer is dropped and such a file is asked about again.
 
+The commands vouched for do travel. Each names the tree it was given in
+([RUN-8](tools/run.md#RUN-8)), so after the move it covers that tree and no other, the new working
+directory included. So does the list of run prompts already drawn, which grants nothing
+([RUN-20](tools/run.md#RUN-20)).
+
 **Why.** A yes given for one project must not become a yes for another, and a no given inside the
 old one must not be forgotten. Both follow from a rule naming the file rather than the directory it
 was written from, and neither grants nor withdraws anything, which is what makes this something
@@ -529,6 +534,7 @@ them.
 `verified-by: bravebot_agent::workspace::moving_leaves_an_unrelated_added_directory_open`
 `verified-by: bravebot_tui::app::changing_directory_moves_the_workspace_and_vouches_for_where_it_moved`
 `verified-by: bravebot_tui::app::changing_directory_leaves_the_previous_answer_where_it_was_given`
+`verified-by: bravebot_tui::app::moving_keeps_the_programs_vouched_for_and_the_prompts_already_drawn`
 `verified-by: bravebot_tui::app::moving_into_a_directory_keeps_the_answers_given_inside_it`
 `verified-by: bravebot_tui::app::a_rule_granted_in_one_checkout_is_not_in_force_after_moving_to_another`
 `verified-by: bravebot_tui::app::an_answer_to_show_a_file_does_not_cover_the_file_by_that_name_after_moving`
