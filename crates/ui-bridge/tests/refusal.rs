@@ -8,7 +8,8 @@
 //! failing, the question is not how to make it pass.
 
 use bravebot_agent::confirm::{
-    Confirmer, Decision, Intent, OutputRequest, RunDecision, RunRequest, VouchRequest, WriteRequest,
+    Confirmer, Decision, Intent, OutputRequest, RunDecision, RunRequest, VouchRequest,
+    WriteDecision, WriteRequest,
 };
 // `Question` is also the bridge's name for an outstanding request, so this one stays
 // qualified as `ask::Question` rather than shadowing it.
@@ -40,6 +41,8 @@ fn a_write() -> WriteRequest {
         untrusted: false,
         remark: None,
         credentials: Vec::new(),
+        may_always: false,
+        record: None,
     }
 }
 
@@ -95,7 +98,7 @@ fn polling_for_interjections_leaves_approval_replies_untouched() {
     // Consuming the queued approval would leave a closed channel and return a refusal.
     assert_eq!(
         harness.confirmer.confirm_write(&a_write()),
-        Decision::Approve
+        WriteDecision::approve()
     );
 }
 
@@ -109,16 +112,21 @@ fn a_closed_answer_channel_refuses() {
 
     assert_eq!(
         harness.confirmer.confirm_write(&a_write()),
-        Decision::Reject
+        WriteDecision::reject()
     );
 }
 
-/// An explicit refusal, sent while the turn waits.
+/// An explicit refusal, sent while the turn waits. The desktop has no key for a standing answer,
+/// so a yes to a write the terminal would offer one for is still a yes to that write alone.
 #[test]
 fn an_answered_write_gets_the_answer_that_was_sent() {
+    let write = WriteRequest {
+        may_always: true,
+        ..a_write()
+    };
     for (sent, expected) in [
-        (Decision::Approve, Decision::Approve),
-        (Decision::Reject, Decision::Reject),
+        (Decision::Approve, WriteDecision::approve()),
+        (Decision::Reject, WriteDecision::reject()),
     ] {
         let mut harness = harness();
         let running = harness.running;
@@ -140,7 +148,7 @@ fn an_answered_write_gets_the_answer_that_was_sent() {
             panic!("the write was never registered as pending");
         });
 
-        assert_eq!(harness.confirmer.confirm_write(&a_write()), expected);
+        assert_eq!(harness.confirmer.confirm_write(&write), expected);
         answerer.join().expect("the answerer should not panic");
     }
 }
@@ -204,7 +212,7 @@ fn refusing_the_pending_write_sends_a_rejection() {
 
     assert_eq!(
         harness.confirmer.confirm_write(&a_write()),
-        Decision::Reject
+        WriteDecision::reject()
     );
     closer.join().expect("the closer should not panic");
 }
@@ -249,7 +257,7 @@ fn refusing_nothing_queues_nothing() {
     assert!(running.answer(id, Reply::Write(Decision::Approve)));
     assert_eq!(
         handle.join().expect("confirmer"),
-        Decision::Approve,
+        WriteDecision::approve(),
         "a stale refusal must not have been queued"
     );
 }
@@ -457,7 +465,7 @@ fn cancelling_wakes_a_waiting_confirmer_without_approval() {
         finished_rx
             .recv_timeout(std::time::Duration::from_secs(1))
             .unwrap(),
-        Decision::Reject
+        WriteDecision::reject()
     );
     assert!(running.pending.lock().unwrap().is_none());
     worker.join().unwrap();
@@ -469,7 +477,7 @@ fn cancelling_before_a_question_cannot_leave_it_waiting() {
     harness.running.cancel.cancel();
     assert_eq!(
         harness.confirmer.confirm_write(&a_write()),
-        Decision::Reject
+        WriteDecision::reject()
     );
     assert!(harness.events.lock().unwrap().is_empty());
 }
@@ -507,7 +515,10 @@ fn unsupported_approvals_refuse_without_consuming_other_answers() {
         Decision::Reject
     );
     assert!(h.events.lock().unwrap().is_empty());
-    assert_eq!(h.confirmer.confirm_write(&a_write()), Decision::Approve);
+    assert_eq!(
+        h.confirmer.confirm_write(&a_write()),
+        WriteDecision::approve()
+    );
 }
 
 #[test]

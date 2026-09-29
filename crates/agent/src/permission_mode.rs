@@ -22,7 +22,7 @@
 
 use crate::confirm::{
     Confirmer, Decision, OutputRequest, RunDecision, RunRequest, VetRequest, VouchRequest,
-    WriteRequest,
+    WriteDecision, WriteRequest,
 };
 use bravebot_core::vetting::{Endorsed, Verdict};
 
@@ -32,11 +32,14 @@ pub enum PermissionMode {
     /// Every effect is put to the person. What a session has always done, and the default.
     #[default]
     Ask,
-    /// Writes go through unasked. Commands are still asked about.
+    /// Writes go through unasked. Commands are still asked about, and so is a write that would
+    /// create a credential.
     ///
     /// The two are not the same risk: a write lands in a tree the person can read afterwards, and
     /// `git diff` will show them all of it. A command runs with everything their own shell has and
-    /// leaves no diff, so it keeps its prompt.
+    /// leaves no diff, so it keeps its prompt. A credential is the exception on the write side:
+    /// the diff shows it to the person, and it shows it too late, since the value is in the tree
+    /// by then. See [`Confining::confirm_write`].
     AcceptEdits,
     /// Nothing is written. The session is for deciding what to do, not doing it.
     Plan,
@@ -71,11 +74,6 @@ impl PermissionMode {
             true => Self::Ask,
             false => Self::LADDER[rung + 1],
         }
-    }
-
-    /// Whether a write happens without anybody being asked.
-    pub fn writes_unasked(self) -> bool {
-        matches!(self, Self::AcceptEdits | Self::Bypass)
     }
 
     /// Whether writing is refused however the person would have answered.
@@ -197,11 +195,25 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// something wanted to prompt, and a write into a path the trust map covers or a rule allows
     /// wants no prompt. The write tools refuse on the mode itself, before any of that. What this
     /// arm holds is the mode's answer wherever a write prompt does get raised.
-    fn confirm_write(&mut self, request: &WriteRequest) -> Decision {
+    ///
+    /// Accepting edits does not answer a write that would create a credential. CRED-13 puts an
+    /// inferred one to a person, and a mode that said yes here would be that person: the approval
+    /// is for the exact bytes that were shown, and nobody was shown them. So where the policy layer
+    /// listed a finding, the question goes to the inner confirmer, and an unattended one refuses.
+    /// The branch reads the findings the policy layer produced and never the body, which is
+    /// untrusted.
+    ///
+    /// Bypassing does answer it, as it answers every other question here: the flag is the record
+    /// that somebody accepted not being asked. A declared credential is refused before this is
+    /// reached, in this mode as in every other. Neither yes remembers anything, since no prompt was
+    /// drawn for a key to reach.
+    fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
+        let creates_a_credential = !request.credentials.is_empty();
         match self.mode {
-            PermissionMode::AcceptEdits | PermissionMode::Bypass => Decision::Approve,
-            PermissionMode::Plan => Decision::Reject,
-            PermissionMode::Ask => self.inner.confirm_write(request),
+            PermissionMode::Plan => WriteDecision::reject(),
+            PermissionMode::Bypass => WriteDecision::approve(),
+            PermissionMode::AcceptEdits if !creates_a_credential => WriteDecision::approve(),
+            PermissionMode::Ask | PermissionMode::AcceptEdits => self.inner.confirm_write(request),
         }
     }
 
@@ -420,6 +432,80 @@ mod tests {
             untrusted: false,
             remark: None,
             credentials: Vec::new(),
+            may_always: false,
+            record: None,
+        }
+    }
+
+    /// A write the policy layer found a value in that only a person may decide about. The finding
+    /// is already described, as the write tools describe one, so nothing here is the value.
+    fn a_credential_write() -> WriteRequest {
+        WriteRequest {
+            path: "config/master.key".to_string(),
+            contents: "a generated value\n".to_string(),
+            credentials: vec!["line 1: a value rare enough to be a secret".to_string()],
+            ..a_write()
+        }
+    }
+
+    /// Gives every write one answer and counts the times it was asked; refuses everything else.
+    struct ShownWrites(usize, WriteDecision);
+
+    impl ShownWrites {
+        fn answering(answer: WriteDecision) -> Self {
+            Self(0, answer)
+        }
+    }
+
+    impl Confirmer for ShownWrites {
+        fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+            self.0 += 1;
+            self.1
+        }
+        fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+            Unattended.confirm_run(request)
+        }
+        fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
+            Unattended.confirm_read_output(request)
+        }
+        fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+            Unattended.confirm_vetted_read(request)
+        }
+        fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
+            Unattended.confirm_fetch(request)
+        }
+        fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
+            Unattended.confirm_server(request)
+        }
+        fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+            Unattended.confirm_manifest(request)
+        }
+        fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
+            Unattended.confirm_vouch(request)
+        }
+        fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
+            Unattended.confirm_exposing_read(request)
+        }
+        fn confirm_tool_list(&mut self, request: &crate::confirm::ToolListRequest) -> Decision {
+            Unattended.confirm_tool_list(request)
+        }
+        fn confirm_mcp_call(
+            &mut self,
+            request: &crate::confirm::McpCallRequest,
+        ) -> crate::confirm::CallDecision {
+            Unattended.confirm_mcp_call(request)
+        }
+        fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
+            Unattended.confirm_move(request)
+        }
+        fn ask_user(
+            &mut self,
+            asking: &bravebot_core::ask::Asking,
+        ) -> Vec<bravebot_core::ask::Answer> {
+            Unattended.ask_user(asking)
+        }
+        fn interjection(&mut self) -> Option<String> {
+            Unattended.interjection()
         }
     }
 
@@ -498,7 +584,7 @@ mod tests {
         let mut refusing = Unattended;
         let mut confining = Confining::new(&mut refusing, PermissionMode::Ask, false);
         // The inner confirmer's answer, whatever it is, rather than one this decided.
-        assert_eq!(confining.confirm_write(&a_write()), Decision::Reject);
+        assert_eq!(confining.confirm_write(&a_write()), WriteDecision::reject());
         assert!(!confining.confirm_run(&a_run()).approved());
     }
 
@@ -509,7 +595,10 @@ mod tests {
     fn accepting_edits_lets_writes_through_but_not_commands() {
         let mut refusing = Unattended;
         let mut confining = Confining::new(&mut refusing, PermissionMode::AcceptEdits, false);
-        assert_eq!(confining.confirm_write(&a_write()), Decision::Approve);
+        assert_eq!(
+            confining.confirm_write(&a_write()),
+            WriteDecision::approve()
+        );
         assert!(
             !confining.confirm_run(&a_run()).approved(),
             "accepting edits must not accept running programs"
@@ -522,7 +611,7 @@ mod tests {
     fn plan_mode_refuses_a_write_the_person_would_have_approved() {
         let mut approving = ApproveRuns;
         let mut confining = Confining::new(&mut approving, PermissionMode::Plan, false);
-        assert_eq!(confining.confirm_write(&a_write()), Decision::Reject);
+        assert_eq!(confining.confirm_write(&a_write()), WriteDecision::reject());
     }
 
     /// Research is most of what planning is, and `git log` is how it is done. The prompt stays,
@@ -539,7 +628,10 @@ mod tests {
     fn bypassing_answers_every_permission_question() {
         let mut refusing = Unattended;
         let mut confining = Confining::new(&mut refusing, PermissionMode::Bypass, false);
-        assert_eq!(confining.confirm_write(&a_write()), Decision::Approve);
+        assert_eq!(
+            confining.confirm_write(&a_write()),
+            WriteDecision::approve()
+        );
         let run = confining.confirm_run(&a_run());
         assert!(run.approved());
         assert!(!run.remember, "a standing permission outlived the mode");
@@ -550,12 +642,81 @@ mod tests {
         assert_eq!(confining.confirm_manifest(&a_plan()), Decision::Approve);
     }
 
+    /// MODE-2, CRED-13: accepting edits does not answer a write the policy layer found a
+    /// credential in. It goes to the confirmer the mode wraps, once, and whatever that answers is
+    /// the answer, a standing one included. An unattended confirmer refuses it, which is what an
+    /// unattended run gets. A write with no finding is still answered, so the arm is the finding
+    /// and not the path or the body.
+    ///
+    /// MODE-4: bypassing answers it, with screening asked for as well as without, and asks nobody.
+    /// The yes remembers nothing: no prompt was drawn for either key to reach.
+    ///
+    /// Plan mode still refuses and asks nobody, and asking puts it to the person.
+    #[test]
+    fn accepting_edits_puts_a_credential_write_to_the_person_and_bypassing_answers_it() {
+        for answer in [
+            WriteDecision::approve(),
+            WriteDecision::approve_always(),
+            WriteDecision::approve_and_record(),
+        ] {
+            let mut shown = ShownWrites::answering(answer);
+            let decided = Confining::new(&mut shown, PermissionMode::AcceptEdits, false)
+                .confirm_write(&a_credential_write());
+            assert_eq!(
+                (decided, shown.0),
+                (answer, 1),
+                "accepting edits answered a credential write instead of putting it to the person"
+            );
+        }
+
+        let mut refusing = Unattended;
+        assert_eq!(
+            Confining::new(&mut refusing, PermissionMode::AcceptEdits, false)
+                .confirm_write(&a_credential_write()),
+            WriteDecision::reject(),
+            "accepting edits created a credential nobody was there to be shown"
+        );
+
+        let mut shown = ShownWrites::answering(WriteDecision::reject());
+        let decided = Confining::new(&mut shown, PermissionMode::AcceptEdits, false)
+            .confirm_write(&a_write());
+        assert_eq!(
+            (decided, shown.0),
+            (WriteDecision::approve(), 0),
+            "accepting edits stopped answering a write with nothing found in it"
+        );
+
+        for screening in [false, true] {
+            for request in [a_credential_write(), a_write()] {
+                let mut shown = ShownWrites::answering(WriteDecision::reject());
+                let decided = Confining::new(&mut shown, PermissionMode::Bypass, screening)
+                    .confirm_write(&request);
+                assert_eq!(
+                    (decided, shown.0),
+                    (WriteDecision::approve(), 0),
+                    "bypassing stopped to ask about {}",
+                    request.path
+                );
+            }
+        }
+
+        let mut shown = ShownWrites::answering(WriteDecision::approve());
+        let decided = Confining::new(&mut shown, PermissionMode::Plan, false)
+            .confirm_write(&a_credential_write());
+        assert_eq!((decided, shown.0), (WriteDecision::reject(), 0));
+
+        let mut shown = ShownWrites::answering(WriteDecision::approve_always());
+        let decided = Confining::new(&mut shown, PermissionMode::Ask, false)
+            .confirm_write(&a_credential_write());
+        assert_eq!((decided, shown.0), (WriteDecision::approve_always(), 1));
+    }
+
     /// Says every server moved and counts the times it was asked; refuses everything else.
     #[derive(Default)]
     struct SaysItMoved(usize);
 
     impl Confirmer for SaysItMoved {
-        fn confirm_write(&mut self, request: &WriteRequest) -> Decision {
+        fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
             Unattended.confirm_write(request)
         }
         fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {

@@ -1910,9 +1910,9 @@ fn time_spent_waiting_for_an_approval_is_not_charged_to_the_tool() {
         fn confirm_write(
             &mut self,
             _request: &bravebot_agent::confirm::WriteRequest,
-        ) -> bravebot_agent::confirm::Decision {
+        ) -> bravebot_agent::confirm::WriteDecision {
             std::thread::sleep(std::time::Duration::from_millis(120));
-            bravebot_agent::confirm::Decision::Approve
+            bravebot_agent::confirm::WriteDecision::approve()
         }
 
         fn confirm_run(
@@ -2252,17 +2252,17 @@ fn an_approved_write_does_not_authorise_a_write_somewhere_else() {
 /// only on the outcome.
 struct RecordingConfirmer {
     seen: Vec<bravebot_agent::WriteRequest>,
-    decision: bravebot_agent::Decision,
+    decision: bravebot_agent::WriteDecision,
     /// The answer to every write after the first, where a test needs the two to differ.
     /// `None` answers them all the same way.
-    later: Option<bravebot_agent::Decision>,
+    later: Option<bravebot_agent::WriteDecision>,
 }
 
 impl RecordingConfirmer {
     fn approving() -> Self {
         Self {
             seen: Vec::new(),
-            decision: bravebot_agent::Decision::Approve,
+            decision: bravebot_agent::WriteDecision::approve(),
             later: None,
         }
     }
@@ -2270,7 +2270,7 @@ impl RecordingConfirmer {
     fn rejecting() -> Self {
         Self {
             seen: Vec::new(),
-            decision: bravebot_agent::Decision::Reject,
+            decision: bravebot_agent::WriteDecision::reject(),
             later: None,
         }
     }
@@ -2280,8 +2280,8 @@ impl RecordingConfirmer {
     fn approving_only_the_first() -> Self {
         Self {
             seen: Vec::new(),
-            decision: bravebot_agent::Decision::Approve,
-            later: Some(bravebot_agent::Decision::Reject),
+            decision: bravebot_agent::WriteDecision::approve(),
+            later: Some(bravebot_agent::WriteDecision::reject()),
         }
     }
 }
@@ -2299,7 +2299,7 @@ impl bravebot_agent::Confirmer for RecordingConfirmer {
     fn confirm_write(
         &mut self,
         request: &bravebot_agent::WriteRequest,
-    ) -> bravebot_agent::Decision {
+    ) -> bravebot_agent::WriteDecision {
         let answer = match self.later {
             Some(later) if !self.seen.is_empty() => later,
             _ => self.decision,
@@ -3117,8 +3117,8 @@ impl bravebot_agent::Confirmer for SaysOnce {
     fn confirm_write(
         &mut self,
         _request: &bravebot_agent::WriteRequest,
-    ) -> bravebot_agent::Decision {
-        bravebot_agent::Decision::Reject
+    ) -> bravebot_agent::WriteDecision {
+        bravebot_agent::WriteDecision::reject()
     }
 
     fn confirm_run(
@@ -4161,9 +4161,9 @@ fn a_stale_edit_is_refused() {
         fn confirm_write(
             &mut self,
             _request: &bravebot_agent::WriteRequest,
-        ) -> bravebot_agent::Decision {
+        ) -> bravebot_agent::WriteDecision {
             std::fs::write(&self.path, "stale\n").unwrap();
-            bravebot_agent::Decision::Approve
+            bravebot_agent::WriteDecision::approve()
         }
         fn confirm_run(
             &mut self,
@@ -6151,11 +6151,11 @@ fn a_cancelled_turn_stops_before_running_a_tool() {
         fn confirm_write(
             &mut self,
             _request: &bravebot_agent::WriteRequest,
-        ) -> bravebot_agent::Decision {
+        ) -> bravebot_agent::WriteDecision {
             self.asked
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.cancel.cancel();
-            bravebot_agent::Decision::Approve
+            bravebot_agent::WriteDecision::approve()
         }
 
         fn confirm_run(
@@ -11011,8 +11011,8 @@ impl bravebot_agent::Confirmer for AnswersWith {
     fn confirm_write(
         &mut self,
         _request: &bravebot_agent::WriteRequest,
-    ) -> bravebot_agent::Decision {
-        bravebot_agent::Decision::Reject
+    ) -> bravebot_agent::WriteDecision {
+        bravebot_agent::WriteDecision::reject()
     }
 
     fn confirm_run(
@@ -11480,7 +11480,7 @@ struct AskedAboutRuns {
     /// Answers for the first runs, in order, where a test needs them to differ. Empty means every
     /// run gets `answer`, and a run past the end of the queue gets it too.
     answers: std::collections::VecDeque<bravebot_agent::RunDecision>,
-    writes: bravebot_agent::Decision,
+    writes: bravebot_agent::WriteDecision,
     seen: std::sync::Arc<std::sync::Mutex<Vec<bravebot_agent::RunRequest>>>,
 }
 
@@ -11489,7 +11489,7 @@ impl AskedAboutRuns {
         Self {
             answer,
             answers: std::collections::VecDeque::new(),
-            writes: bravebot_agent::Decision::Reject,
+            writes: bravebot_agent::WriteDecision::reject(),
             seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
@@ -11507,7 +11507,7 @@ impl AskedAboutRuns {
     /// Also approves writes, for a test that follows a reference out of a result into a file.
     /// Separate from approving the run, so no test picks up a write approval it never asked for.
     fn approving_writes(mut self) -> Self {
-        self.writes = bravebot_agent::Decision::Approve;
+        self.writes = bravebot_agent::WriteDecision::approve();
         self
     }
 }
@@ -11525,7 +11525,7 @@ impl bravebot_agent::Confirmer for AskedAboutRuns {
     fn confirm_write(
         &mut self,
         _request: &bravebot_agent::WriteRequest,
-    ) -> bravebot_agent::Decision {
+    ) -> bravebot_agent::WriteDecision {
         self.writes
     }
 
@@ -13520,8 +13520,8 @@ impl bravebot_agent::Confirmer for ShownAfterAVet {
     fn confirm_write(
         &mut self,
         _request: &bravebot_agent::WriteRequest,
-    ) -> bravebot_agent::Decision {
-        bravebot_agent::Decision::Reject
+    ) -> bravebot_agent::WriteDecision {
+        bravebot_agent::WriteDecision::reject()
     }
 
     fn confirm_run(
@@ -16379,8 +16379,8 @@ impl bravebot_agent::Confirmer for ReadsWhatItRan {
     fn confirm_write(
         &mut self,
         _request: &bravebot_agent::WriteRequest,
-    ) -> bravebot_agent::Decision {
-        bravebot_agent::Decision::Reject
+    ) -> bravebot_agent::WriteDecision {
+        bravebot_agent::WriteDecision::reject()
     }
 
     fn confirm_run(
@@ -16849,8 +16849,8 @@ impl bravebot_agent::Confirmer for VouchesForFiles {
     fn confirm_write(
         &mut self,
         _request: &bravebot_agent::WriteRequest,
-    ) -> bravebot_agent::Decision {
-        bravebot_agent::Decision::Reject
+    ) -> bravebot_agent::WriteDecision {
+        bravebot_agent::WriteDecision::reject()
     }
 
     fn confirm_run(
@@ -22669,8 +22669,8 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
     fn confirm_write(
         &mut self,
         _request: &bravebot_agent::WriteRequest,
-    ) -> bravebot_agent::Decision {
-        bravebot_agent::Decision::Approve
+    ) -> bravebot_agent::WriteDecision {
+        bravebot_agent::WriteDecision::approve()
     }
 
     fn confirm_run(
@@ -27732,15 +27732,36 @@ const KEY_AS_A_WHOLE_FILE: &str = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB"; 
 #[derive(Default)]
 struct RemembersWrites {
     asked: Vec<bravebot_agent::confirm::WriteRequest>,
+    /// The keys pressed, one per write in order and the last for every write after it, whatever
+    /// the prompt offered; a plain yes where none is named.
+    pressing: Vec<bravebot_agent::confirm::WriteDecision>,
+}
+
+impl RemembersWrites {
+    fn pressing(answer: bravebot_agent::confirm::WriteDecision) -> Self {
+        Self::pressing_in_turn(&[answer])
+    }
+
+    fn pressing_in_turn(answers: &[bravebot_agent::confirm::WriteDecision]) -> Self {
+        Self {
+            pressing: answers.to_vec(),
+            ..Self::default()
+        }
+    }
 }
 
 impl bravebot_agent::confirm::Confirmer for RemembersWrites {
     fn confirm_write(
         &mut self,
         request: &bravebot_agent::confirm::WriteRequest,
-    ) -> bravebot_agent::confirm::Decision {
+    ) -> bravebot_agent::confirm::WriteDecision {
         self.asked.push(request.clone());
-        bravebot_agent::confirm::Decision::Approve
+        let answer = self
+            .pressing
+            .get(self.asked.len() - 1)
+            .or(self.pressing.last())
+            .copied();
+        answer.unwrap_or_else(bravebot_agent::confirm::WriteDecision::approve)
     }
 
     fn confirm_server(
@@ -27980,6 +28001,803 @@ fn the_prompt_says_which_value_it_is_asking_about() {
     );
 }
 
+/// A second 40-hex value, so a test can write two credentials and tell them apart.
+const ANOTHER_GENERATED_SECRET: &str = "7a5f3e1d8b6c4a2f0e8d5b3c9a7f6e2d4b0a1f8c";
+
+/// One turn making the tool `calls`, under `mode`, answered by `inner` behind that mode. Every
+/// standing answer a person could have given beforehand is given too: a rule allowing any write
+/// under `config/` and a trust map vouching for the whole tree. So whatever still asks is asking
+/// because of the credential and nothing else. Returns what the planner was told.
+fn a_turn_writing_under<C: bravebot_agent::confirm::Confirmer + Send>(
+    scratch: &Scratch,
+    mode: bravebot_agent::PermissionMode,
+    inner: &mut C,
+    calls: Vec<String>,
+) -> String {
+    a_turn_writing_as(scratch, None, None, &[], mode, inner, calls)
+}
+
+/// As [`a_turn_writing_under`], with `home` standing in for `~/.bravebot`, `session` naming the
+/// session a prompt's answer may be recorded for, which is a caller saying somebody is there, and
+/// `asking_about` the paths a rule says to ask about whatever else stands.
+fn a_turn_writing_as<C: bravebot_agent::confirm::Confirmer + Send>(
+    scratch: &Scratch,
+    home: Option<&std::path::Path>,
+    session: Option<&str>,
+    asking_about: &[&str],
+    mode: bravebot_agent::PermissionMode,
+    inner: &mut C,
+    calls: Vec<String>,
+) -> String {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies = calls;
+    replies.push(reply_with("understood"));
+    let (endpoint, received) = serve_sequence(replies);
+    let mut confirmer = bravebot_agent::Confining::new(inner, mode, false);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("finish setting the project up")
+            .with_permission_mode(mode)
+            .with_permissions(rules(&[], asking_about, &["Edit(config/**)"]))
+            .with_home(home.map(std::path::Path::to_path_buf))
+            .remembering(session.map(str::to_string)),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+    every_request(&received)
+        .last()
+        .map(|last| tool_results(last))
+        .unwrap_or_default()
+}
+
+/// A `write_file` call as a model would send it.
+fn writing(path: &str, contents: &str) -> String {
+    tool_request_2(
+        "write_file",
+        &format!(
+            r#"{{"path":"{path}","contents":{}}}"#,
+            serde_json::Value::String(contents.to_string())
+        ),
+    )
+}
+
+/// MODE-2, MODE-4 and CRED-13. Bypassing is the one mode that answers a write that would create a
+/// credential, since the flag is the record that somebody accepted not being asked. Asking and
+/// accepting edits put it to whoever is behind the mode, and where nobody is (a headless run) it is
+/// refused with no override. Nothing a person settled beforehand answers it either: a rule allowing
+/// the path and a trust map vouching for the tree are both given here, and a rule is an answer
+/// spelled in advance whose one blind spot is the value.
+///
+/// An ordinary write under the same settings is not asked in any of the three, so the rule and
+/// the mode are live and what asks is the credential.
+#[test]
+fn only_bypassing_answers_a_credential_write() {
+    use bravebot_agent::PermissionMode;
+    for mode in [
+        PermissionMode::Ask,
+        PermissionMode::AcceptEdits,
+        PermissionMode::Bypass,
+    ] {
+        let named = format!("{mode:?}").to_lowercase();
+        let key = format!("{GENERATED_SECRET}\n");
+        let bypassing = mode == PermissionMode::Bypass;
+
+        // Nobody behind the mode.
+        let scratch = Scratch::new(&format!("credential-mode-unattended-{named}"));
+        std::fs::create_dir(scratch.path.join("config")).unwrap();
+        let told = a_turn_writing_under(
+            &scratch,
+            mode,
+            &mut bravebot_agent::Unattended,
+            vec![writing("config/master.key", &key)],
+        );
+        assert!(
+            !told.contains(GENERATED_SECRET),
+            "{mode:?}: the value reached the planner's context: {told}"
+        );
+        if bypassing {
+            assert_eq!(
+                std::fs::read_to_string(scratch.path.join("config/master.key")).ok(),
+                Some(key.clone()),
+                "bypassing stopped for a credential write with nobody to stop for: {told}"
+            );
+        } else {
+            assert!(
+                !scratch.path.join("config/master.key").exists(),
+                "{mode:?} answered a credential write nobody was shown"
+            );
+            assert!(
+                told.contains("nothing was created"),
+                "{mode:?}: the planner was not told the value does not exist: {told}"
+            );
+        }
+
+        // A person behind the mode.
+        let scratch = Scratch::new(&format!("credential-mode-asked-{named}"));
+        std::fs::create_dir(scratch.path.join("config")).unwrap();
+        let mut person = RemembersWrites::default();
+        a_turn_writing_under(
+            &scratch,
+            mode,
+            &mut person,
+            vec![
+                writing("config/settings.toml", "port = 8080\n"),
+                writing("config/master.key", &key),
+            ],
+        );
+        let asked = person
+            .asked
+            .iter()
+            .map(|request| request.path.as_str())
+            .collect::<Vec<_>>();
+        if bypassing {
+            assert!(
+                asked.is_empty(),
+                "bypassing put a write to the person: {asked:?}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(scratch.path.join("config/master.key")).ok(),
+                Some(key.clone()),
+                "bypassing did not write the key"
+            );
+            continue;
+        }
+        assert_eq!(
+            asked,
+            ["config/master.key"],
+            "{mode:?}: the person was asked about the wrong writes"
+        );
+        assert!(
+            person.asked[0]
+                .credentials
+                .join("; ")
+                .contains("a secret standing as a file's whole contents"),
+            "{mode:?}: the person was not told why: {:?}",
+            person.asked[0].credentials
+        );
+        let written = std::fs::read_to_string(scratch.path.join("config/master.key")).unwrap();
+        assert_eq!(
+            written, person.asked[0].contents,
+            "{mode:?}: what was written is not what the person was shown"
+        );
+        assert_eq!(written, key, "{mode:?}: the approved write did not happen");
+    }
+}
+
+/// A plain yes to a credential write answers that write and nothing after it. Nothing is
+/// remembered: not the path, which a second value then goes to, and not the value, which then goes
+/// to a second path. Each is a value in a place the person has not seen, so each is asked again,
+/// and each time `a` is on offer.
+#[test]
+fn a_yes_to_a_credential_write_covers_no_write_after_it() {
+    let scratch = Scratch::new("credential-yes-once");
+    std::fs::create_dir(scratch.path.join("config")).unwrap();
+    let mut person = RemembersWrites::default();
+    a_turn_writing_under(
+        &scratch,
+        bravebot_agent::PermissionMode::AcceptEdits,
+        &mut person,
+        vec![
+            writing("config/master.key", &format!("{GENERATED_SECRET}\n")),
+            writing(
+                "config/master.key",
+                &format!("{ANOTHER_GENERATED_SECRET}\n"),
+            ),
+            writing("config/other.key", &format!("{GENERATED_SECRET}\n")),
+        ],
+    );
+    let asked = person
+        .asked
+        .iter()
+        .map(|request| {
+            (
+                request.path.as_str(),
+                !request.credentials.is_empty(),
+                request.may_always,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        asked,
+        [
+            ("config/master.key", true, true),
+            ("config/master.key", true, true),
+            ("config/other.key", true, true),
+        ],
+        "a yes to one credential write answered another"
+    );
+    let shown = person
+        .asked
+        .iter()
+        .map(|request| request.contents.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        shown,
+        [
+            format!("{GENERATED_SECRET}\n"),
+            format!("{ANOTHER_GENERATED_SECRET}\n"),
+            format!("{GENERATED_SECRET}\n"),
+        ],
+        "a write was not shown with the bytes it carried"
+    );
+    for (path, approved) in [
+        ("config/master.key", &shown[1]),
+        ("config/other.key", &shown[2]),
+    ] {
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join(path))
+                .ok()
+                .as_ref(),
+            Some(approved),
+            "{path} does not hold the bytes the person approved"
+        );
+    }
+}
+
+/// CRED-13's `a`. It settles the question for the one file the write landed in, for the rest of
+/// the session: a second value in that file is written unasked, however the planner spells the
+/// path, and the same value in another file is still asked about, even one of the same name. A
+/// session with no record to add to is not offered `r`.
+#[test]
+fn always_for_a_credential_write_covers_that_file_and_no_other() {
+    let scratch = Scratch::new("credential-always");
+    std::fs::create_dir(scratch.path.join("config")).unwrap();
+    std::fs::create_dir(scratch.path.join("keys")).unwrap();
+    let mut person =
+        RemembersWrites::pressing(bravebot_agent::confirm::WriteDecision::approve_always());
+    a_turn_writing_under(
+        &scratch,
+        bravebot_agent::PermissionMode::AcceptEdits,
+        &mut person,
+        vec![
+            writing("config/master.key", &format!("{GENERATED_SECRET}\n")),
+            writing(
+                "./config/master.key",
+                &format!("{ANOTHER_GENERATED_SECRET}\n"),
+            ),
+            writing("config/other.key", &format!("{GENERATED_SECRET}\n")),
+            writing("keys/master.key", &format!("{GENERATED_SECRET}\n")),
+        ],
+    );
+    assert_eq!(
+        person
+            .asked
+            .iter()
+            .map(|request| (request.path.as_str(), !request.credentials.is_empty()))
+            .collect::<Vec<_>>(),
+        [
+            ("config/master.key", true),
+            ("config/other.key", true),
+            ("keys/master.key", true)
+        ],
+        "`a` settled the wrong files"
+    );
+    assert!(
+        person.asked.iter().all(|request| request.record.is_none()),
+        "`r` was offered by a session with no record to add to: {:?}",
+        person.asked
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("config/master.key")).ok(),
+        Some(format!("{ANOTHER_GENERATED_SECRET}\n")),
+        "the write `a` covered did not happen"
+    );
+}
+
+/// `a` answers whether the file may hold a secret and nothing else. A rule saying to ask about
+/// the file makes every write to it a question for its own sake, and that question is still put
+/// after an `a`, saying nothing about a credential and offering no key for one.
+#[test]
+fn always_for_a_credential_write_settles_the_secret_and_not_the_write() {
+    let scratch = Scratch::new("credential-always-only-the-secret");
+    let mut person =
+        RemembersWrites::pressing(bravebot_agent::confirm::WriteDecision::approve_always());
+    a_turn_writing_as(
+        &scratch,
+        None,
+        None,
+        &["Edit(master.key)"],
+        bravebot_agent::PermissionMode::Ask,
+        &mut person,
+        vec![
+            writing("master.key", &format!("{GENERATED_SECRET}\n")),
+            writing("master.key", &format!("{ANOTHER_GENERATED_SECRET}\n")),
+        ],
+    );
+    assert_eq!(
+        person
+            .asked
+            .iter()
+            .map(|request| {
+                (
+                    request.path.as_str(),
+                    !request.credentials.is_empty(),
+                    request.may_always,
+                )
+            })
+            .collect::<Vec<_>>(),
+        [("master.key", true, true), ("master.key", false, false)],
+        "`a` answered more than the secret, or less"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("master.key")).ok(),
+        Some(format!("{ANOTHER_GENERATED_SECRET}\n")),
+    );
+}
+
+/// A front end answering with a key the prompt never drew grants nothing. The first question has
+/// no secret in it, so neither standing answer is offered, and a reply claiming both is a plain
+/// yes: a secret going into the same file is still asked about, and refusing it leaves nothing
+/// written down. The rule asking about the file is what puts the first write to anybody at all.
+#[test]
+fn a_standing_answer_the_prompt_did_not_offer_grants_nothing() {
+    let scratch = Scratch::new("credential-unoffered");
+    let home = Scratch::new("credential-unoffered-home");
+    let mut person = RemembersWrites::pressing_in_turn(&[
+        bravebot_agent::confirm::WriteDecision {
+            decision: bravebot_agent::Decision::Approve,
+            remember: true,
+            record: true,
+        },
+        bravebot_agent::confirm::WriteDecision::reject(),
+    ]);
+    a_turn_writing_as(
+        &scratch,
+        Some(&home.path),
+        Some("a-session"),
+        &["Edit(master.key)"],
+        bravebot_agent::PermissionMode::Ask,
+        &mut person,
+        vec![
+            writing("master.key", "placeholder\n"),
+            writing("master.key", &format!("{GENERATED_SECRET}\n")),
+        ],
+    );
+    assert_eq!(
+        person
+            .asked
+            .iter()
+            .map(|request| {
+                (
+                    request.credentials.is_empty(),
+                    request.may_always,
+                    request.record.is_some(),
+                )
+            })
+            .collect::<Vec<_>>(),
+        [(true, false, false), (false, true, true)],
+        "a key nobody was offered settled the file"
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    assert!(
+        !bravebot_agent::remembered::Store::new(&home.path, workspace.root())
+            .path()
+            .exists(),
+        "a key nobody was offered wrote the file into the record"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("master.key")).ok(),
+        Some("placeholder\n".to_string()),
+        "the refused secret was written"
+    );
+}
+
+/// CRED-13's `r`. It is offered where the session has a record to add to, names that record, and
+/// settles the file for every later session begun in the same directory: a fresh one writing a
+/// second value there is not asked. A turn nobody could put a prompt to has no session to name,
+/// reads no record, and refuses. A checkout elsewhere is another directory with another record, so
+/// the same name there is asked about.
+#[test]
+fn remembering_a_credential_write_covers_later_sessions_in_that_directory_only() {
+    use bravebot_agent::PermissionMode;
+    let home = Scratch::new("credential-remembered-home");
+    let scratch = Scratch::new("credential-remembered");
+    std::fs::create_dir(scratch.path.join("config")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let record = bravebot_agent::remembered::Store::new(&home.path, workspace.root())
+        .path()
+        .to_path_buf();
+
+    let mut person =
+        RemembersWrites::pressing(bravebot_agent::confirm::WriteDecision::approve_and_record());
+    a_turn_writing_as(
+        &scratch,
+        Some(&home.path),
+        Some("the-first-session"),
+        &[],
+        PermissionMode::AcceptEdits,
+        &mut person,
+        vec![writing(
+            "config/master.key",
+            &format!("{GENERATED_SECRET}\n"),
+        )],
+    );
+    assert_eq!(
+        person
+            .asked
+            .iter()
+            .map(|request| request.record.as_deref())
+            .collect::<Vec<_>>(),
+        [Some(record.as_path())],
+        "`r` was not offered, or named the wrong record"
+    );
+
+    let mut later = RemembersWrites::default();
+    a_turn_writing_as(
+        &scratch,
+        Some(&home.path),
+        Some("a-later-session"),
+        &[],
+        PermissionMode::AcceptEdits,
+        &mut later,
+        vec![writing(
+            "config/master.key",
+            &format!("{ANOTHER_GENERATED_SECRET}\n"),
+        )],
+    );
+    assert!(
+        later.asked.is_empty(),
+        "a later session in the directory was asked again: {:?}",
+        later.asked
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("config/master.key")).ok(),
+        Some(format!("{ANOTHER_GENERATED_SECRET}\n")),
+    );
+
+    let told = a_turn_writing_as(
+        &scratch,
+        Some(&home.path),
+        None,
+        &[],
+        PermissionMode::AcceptEdits,
+        &mut bravebot_agent::Unattended,
+        vec![writing(
+            "config/master.key",
+            &format!("{GENERATED_SECRET}\n"),
+        )],
+    );
+    assert!(
+        told.contains("nothing was created"),
+        "a turn nobody could be asked in exercised a recorded answer: {told}"
+    );
+
+    let elsewhere = Scratch::new("credential-remembered-elsewhere");
+    std::fs::create_dir(elsewhere.path.join("config")).unwrap();
+    let mut there = RemembersWrites::default();
+    a_turn_writing_as(
+        &elsewhere,
+        Some(&home.path),
+        Some("a-later-session"),
+        &[],
+        PermissionMode::AcceptEdits,
+        &mut there,
+        vec![writing(
+            "config/master.key",
+            &format!("{GENERATED_SECRET}\n"),
+        )],
+    );
+    assert_eq!(
+        there
+            .asked
+            .iter()
+            .map(|request| (request.path.as_str(), !request.credentials.is_empty()))
+            .collect::<Vec<_>>(),
+        [("config/master.key", true)],
+        "a record kept for one directory settled the same name in another"
+    );
+}
+
+/// `r` is offered only for a file inside the directory its record is kept for. A directory the
+/// session added is outside it, so a secret written there is offered `a` and not `r`: the record
+/// would not hold the file, and a key that writes nothing down is not drawn.
+#[test]
+fn remembering_is_offered_only_for_a_file_inside_the_directory() {
+    let home = Scratch::new("credential-remembered-added-home");
+    let scratch = Scratch::new("credential-remembered-added");
+    let outside = Scratch::new("credential-remembered-added-outside");
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let added = workspace
+        .add_directory(outside.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let key = added.join("master.key");
+    let (endpoint, _received) = serve_sequence(vec![
+        writing(&key.display().to_string(), &format!("{GENERATED_SECRET}\n")),
+        reply_with("understood"),
+    ]);
+    let mode = bravebot_agent::PermissionMode::AcceptEdits;
+    let mut person = RemembersWrites::default();
+    let mut confirmer = bravebot_agent::Confining::new(&mut person, mode, false);
+    let mut sink = RecordingSink::new();
+    let mut trust = trusting_the_workspace();
+    trust.trust(&added.display().to_string());
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("finish setting the project up")
+            .with_permission_mode(mode)
+            .with_home(Some(home.path.clone()))
+            .remembering(Some("a-session".to_string())),
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+    assert_eq!(
+        person
+            .asked
+            .iter()
+            .map(|request| {
+                (
+                    !request.credentials.is_empty(),
+                    request.may_always,
+                    request.record.is_some(),
+                )
+            })
+            .collect::<Vec<_>>(),
+        [(true, true, false)],
+        "`r` was offered for a file its record cannot hold"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&key).ok(),
+        Some(format!("{GENERATED_SECRET}\n")),
+        "the approved write did not happen"
+    );
+}
+
+/// The same question through `edit_file`. An edit that leaves a file holding only the value is a
+/// file created as that value, whatever it held before. Accepting edits, the mode whose whole grant
+/// is edits, puts it to the person and an unattended run refuses it; bypassing makes it unasked.
+#[test]
+fn only_bypassing_answers_an_edit_that_leaves_a_file_holding_a_credential() {
+    use bravebot_agent::PermissionMode;
+    let editing = tool_request_2(
+        "edit_file",
+        &format!(
+            r#"{{"path":"config/master.key","old_text":"changeme","new_text":"{GENERATED_SECRET}"}}"#
+        ),
+    );
+    for mode in [PermissionMode::AcceptEdits, PermissionMode::Bypass] {
+        let named = format!("{mode:?}").to_lowercase();
+        let bypassing = mode == PermissionMode::Bypass;
+
+        let scratch = Scratch::new(&format!("credential-edit-unattended-{named}"));
+        std::fs::create_dir(scratch.path.join("config")).unwrap();
+        std::fs::write(scratch.path.join("config/master.key"), "changeme\n").unwrap();
+        let told = a_turn_writing_under(
+            &scratch,
+            mode,
+            &mut bravebot_agent::Unattended,
+            vec![editing.clone()],
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join("config/master.key")).unwrap(),
+            match bypassing {
+                true => format!("{GENERATED_SECRET}\n"),
+                false => "changeme\n".to_string(),
+            },
+            "{mode:?}: {told}"
+        );
+        // A refused edit says nothing of the value; an edit that lands echoes the line it left, as
+        // any does.
+        assert!(
+            bypassing || !told.contains(GENERATED_SECRET),
+            "{mode:?}: the value reached the planner's context: {told}"
+        );
+
+        let scratch = Scratch::new(&format!("credential-edit-asked-{named}"));
+        std::fs::create_dir(scratch.path.join("config")).unwrap();
+        std::fs::write(scratch.path.join("config/master.key"), "changeme\n").unwrap();
+        let mut person = RemembersWrites::default();
+        a_turn_writing_under(&scratch, mode, &mut person, vec![editing.clone()]);
+        assert_eq!(
+            person
+                .asked
+                .iter()
+                .map(|request| !request.credentials.is_empty())
+                .collect::<Vec<_>>(),
+            match bypassing {
+                true => vec![],
+                false => vec![true],
+            },
+            "{mode:?}: the person was asked about the wrong edits"
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join("config/master.key")).unwrap(),
+            format!("{GENERATED_SECRET}\n"),
+            "{mode:?}: the approved edit did not happen"
+        );
+    }
+}
+
+/// `a` through `edit_file`, which reads and keeps it by the same resolved file a write does: the
+/// second edit leaving another value in the file is not asked about.
+#[test]
+fn always_for_an_edit_that_leaves_a_credential_covers_the_next_edit_to_that_file() {
+    let scratch = Scratch::new("credential-edit-always");
+    std::fs::create_dir(scratch.path.join("config")).unwrap();
+    std::fs::write(scratch.path.join("config/master.key"), "changeme\n").unwrap();
+    let editing = |old: &str, new: &str| {
+        tool_request_2(
+            "edit_file",
+            &format!(r#"{{"path":"config/master.key","old_text":"{old}","new_text":"{new}"}}"#),
+        )
+    };
+    let mut person =
+        RemembersWrites::pressing(bravebot_agent::confirm::WriteDecision::approve_always());
+    a_turn_writing_under(
+        &scratch,
+        bravebot_agent::PermissionMode::AcceptEdits,
+        &mut person,
+        vec![
+            editing("changeme", GENERATED_SECRET),
+            editing(GENERATED_SECRET, ANOTHER_GENERATED_SECRET),
+        ],
+    );
+    assert_eq!(
+        person.asked.len(),
+        1,
+        "`a` on an edit did not settle the file: {:?}",
+        person.asked
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("config/master.key")).unwrap(),
+        format!("{ANOTHER_GENERATED_SECRET}\n"),
+    );
+}
+
+/// CRED-13's scan reads only a body the policy layer can vouch for, and so does the arm that
+/// keeps a mode from answering: it reads the findings and never the body. A body drawn from a
+/// quarantined file produces no finding, since examining untrusted bytes to decide what to do is
+/// the one read the driver does not make, and so nothing here stops accepting edits from writing
+/// it. That is the documented gap, pinned: closing it by scanning the body would be the driver
+/// branching on untrusted content.
+///
+/// Under Ask the write is still put to the person, marked untrusted, with nothing claimed about
+/// a credential. The vouch the read offers is refused, since a yes to it would make the body
+/// trusted and turn this into the case the other tests cover.
+#[test]
+fn a_body_nobody_vouched_for_is_not_scanned_and_the_mode_decides() {
+    use bravebot_agent::PermissionMode;
+    for mode in [PermissionMode::Ask, PermissionMode::AcceptEdits] {
+        let scratch = Scratch::new(&format!(
+            "credential-untrusted-body-{}",
+            format!("{mode:?}").to_lowercase()
+        ));
+        std::fs::create_dir(scratch.path.join("vendor")).unwrap();
+        std::fs::create_dir(scratch.path.join("config")).unwrap();
+        std::fs::write(
+            scratch.path.join("vendor/key.txt"),
+            format!("{GENERATED_SECRET}\n"),
+        )
+        .unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, _received) = serve_sequence(vec![
+            tool_request_2("read_file", r#"{"path":"vendor/key.txt"}"#),
+            tool_request_2(
+                "write_file",
+                r#"{"path":"config/master.key","contents_ref":"ref:1"}"#,
+            ),
+            reply_with("understood"),
+        ]);
+        let mut trust = bravebot_core::trust::TrustStore::new("/work");
+        trust.trust(".");
+        trust.distrust("vendor");
+        let mut person = RemembersWrites::default();
+        let mut confirmer = bravebot_agent::Confining::new(&mut person, mode, false);
+        let mut sink = RecordingSink::new();
+        turn::run_with_trust(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("copy the key into place").with_permission_mode(mode),
+            &mut confirmer,
+            &mut sink,
+            trust,
+        )
+        .expect("turn runs");
+
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join("config/master.key")).ok(),
+            Some(format!("{GENERATED_SECRET}\n")),
+            "{mode:?}: the quarantined body was not written, so nothing here reached the arm"
+        );
+        match mode {
+            PermissionMode::Ask => {
+                assert_eq!(person.asked.len(), 1, "the write was not asked about");
+                assert!(
+                    person.asked[0].untrusted,
+                    "the body was not shown as untrusted"
+                );
+                assert!(
+                    person.asked[0].credentials.is_empty(),
+                    "a finding was produced from a body nobody vouched for: {:?}",
+                    person.asked[0].credentials
+                );
+            }
+            _ => assert!(
+                person.asked.is_empty(),
+                "{mode:?} asked about a write with no finding: {:?}",
+                person.asked
+            ),
+        }
+    }
+}
+
+/// A turn accepting edits that writes `master.key` itself and then hands a second write to the
+/// same file to a delegate, answered by `inner` behind the mode.
+fn a_delegate_writing_the_file_its_parent_did<C: bravebot_agent::confirm::Confirmer + Send>(
+    scratch: &Scratch,
+    inner: &mut C,
+) {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "HAVE-A-DELEGATE-CREATE-THE-KEY",
+            vec![
+                writing("master.key", &format!("{GENERATED_SECRET}\n")),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"REPLACE-MASTER-KEY"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("the delegate is done"),
+            ],
+        ),
+        (
+            "REPLACE-MASTER-KEY",
+            vec![
+                writing("master.key", &format!("{ANOTHER_GENERATED_SECRET}\n")),
+                reply_with("done"),
+            ],
+        ),
+    ]);
+    let mode = bravebot_agent::PermissionMode::AcceptEdits;
+    let mut confirmer = bravebot_agent::Confining::new(inner, mode, false);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("HAVE-A-DELEGATE-CREATE-THE-KEY").with_permission_mode(mode),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+}
+
+/// MODE-9 and CRED-13: a delegate inherits the mode and not an `a`. The spawning turn's answer
+/// covers the file for that turn, and a delegate starts from nothing agreed, so its write to the
+/// same file is put to the person again.
+#[test]
+fn a_delegate_inherits_no_always_for_a_credential_write() {
+    let scratch = Scratch::new("credential-delegate-always");
+    let mut person =
+        RemembersWrites::pressing(bravebot_agent::confirm::WriteDecision::approve_always());
+    a_delegate_writing_the_file_its_parent_did(&scratch, &mut person);
+    assert_eq!(
+        person
+            .asked
+            .iter()
+            .map(|request| (request.path.as_str(), !request.credentials.is_empty()))
+            .collect::<Vec<_>>(),
+        [("master.key", true), ("master.key", true)],
+        "the delegate's write was settled by the `a` its parent was given"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("master.key")).ok(),
+        Some(format!("{ANOTHER_GENERATED_SECRET}\n")),
+        "the delegate's approved write did not happen"
+    );
+}
+
 /// A finding is a record of where a credential is, so a collection of them is a map of every
 /// secret in the tree. It goes to the person watching, who owns the tree and can act on it, and
 /// not into the context of a model, which is the one place it would be read by something that
@@ -28097,7 +28915,7 @@ impl bravebot_agent::confirm::Confirmer for RemembersExposures {
     fn confirm_write(
         &mut self,
         request: &bravebot_agent::confirm::WriteRequest,
-    ) -> bravebot_agent::confirm::Decision {
+    ) -> bravebot_agent::confirm::WriteDecision {
         bravebot_agent::confirm::ApproveWrites.confirm_write(request)
     }
 

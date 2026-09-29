@@ -5,7 +5,7 @@ use bravebot_session::sessions::{self, Standing};
 use serde_json::json;
 
 #[path = "undo_endpoint.rs"]
-mod endpoint;
+pub(super) mod endpoint;
 
 const SENTINEL: &str = "UNTRUSTED_UNDO_REPLACEMENT_92817";
 

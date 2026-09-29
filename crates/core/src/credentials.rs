@@ -513,26 +513,33 @@ fn standing_alone(lines: &[&str]) -> Option<(usize, String)> {
     looks_rare(value).then(|| (index, value.to_string()))
 }
 
-/// The reads a person agreed to despite a finding, until the session ends or its working directory
-/// moves.
+/// The answers a person gave the scan's two prompts for the rest of the session, until the session
+/// ends or its working directory moves.
 ///
-/// Kept per path, so a planner that opens the same `.env` on three rounds asks once. A file inside
-/// the working directory is kept under its name from there, which after a move names another file,
-/// so a move starts this again ([TRUST-13]). An answer
-/// here grants nothing beyond the file it names: it is not a trust rule, it writes nothing to the
-/// map, and it moves no credential between tiers, which is what [CRED-17] requires of everything
-/// the scan produces.
+/// Two sets with one lifetime: the reads a person agreed to despite a finding, and the files they
+/// agreed a write may create a credential in ([CRED-13]). Kept per path, so a planner that opens
+/// the same `.env` on three rounds asks once. A file inside the working directory is kept under
+/// its name from there, which after a move names another file, so a move starts this again
+/// ([TRUST-13]). A write is kept under the file it lands in, which names no other file after a
+/// move, and is dropped with the reads anyway: the answer was given about a tree the session has
+/// left. An answer here grants nothing beyond the file it names: it is not a trust rule, it writes
+/// nothing to the map, and it moves no credential between tiers, which is what [CRED-17] requires
+/// of everything the scan produces.
 ///
 /// It does not outlive the session, and cannot. A fingerprint is salted with
 /// [`run_salt`], drawn once per process and kept nowhere, so there is no name an answer given
 /// today could be filed under tomorrow. Remembering the path instead is what this holds, and the
 /// cost of that is written down where the spec keeps its costs: the next session asks again.
 ///
+/// [CRED-13]: ../../../docs/specs/credential-protection.md
 /// [CRED-17]: ../../../docs/specs/credential-protection.md
 /// [TRUST-13]: ../../../docs/specs/trust-map.md
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Exposed {
     paths: std::collections::BTreeSet<String>,
+    /// Where each write lands, absolute and never a rendering: two files whose names differ only
+    /// in bytes that are not text are two files, and a rendering would answer for both.
+    created: std::collections::BTreeSet<std::path::PathBuf>,
 }
 
 impl Exposed {
@@ -553,6 +560,19 @@ impl Exposed {
     /// Whether this file is one they have already agreed to.
     pub fn holds(&self, path: &str) -> bool {
         self.paths.contains(path)
+    }
+
+    /// Record that a person agreed to writes creating a credential in this file, for the session.
+    ///
+    /// Only ever called because somebody pressed the key that says so at a write prompt listing
+    /// what the scan found. A plain yes is not that key and records nothing here.
+    pub fn allow_creating(&mut self, file: &std::path::Path) {
+        self.created.insert(file.to_path_buf());
+    }
+
+    /// Whether writes creating a credential in this file are ones they have already agreed to.
+    pub fn allows_creating(&self, file: &std::path::Path) -> bool {
+        self.created.contains(file)
     }
 }
 

@@ -1653,11 +1653,20 @@ fn write<S: Sink, C: Confirmer>(
     // A value the scan inferred rather than recognised is put to whoever is watching, here as
     // everywhere else. A manifest run that nobody is watching has a confirmer that refuses, so an
     // unattended run stops on a step whose body looks like a secret rather than writing it.
-    let to_approve: Vec<String> = scanned
+    let mut to_approve: Vec<String> = scanned
         .to_approve()
         .iter()
         .map(|finding| finding.describe())
         .collect();
+    // Unless the person already answered for this file, exactly as a turn's write asks it.
+    let standing = crate::tools::StandingAnswer::read(
+        policy,
+        workspace,
+        recording,
+        "write_file",
+        &path,
+        &mut to_approve,
+    );
     // What the step would change, compared inside the kernel and released once, exactly as a
     // turn's write does it.
     let reviewed =
@@ -1686,10 +1695,14 @@ fn write<S: Sink, C: Confirmer>(
             untrusted: !body_label.is_trusted(),
             remark,
             credentials: to_approve,
+            may_always: standing.may_always,
+            record: standing.record.clone(),
         };
-        if confirmer.confirm_write(&request) == Decision::Reject {
+        let answer = confirmer.confirm_write(&request);
+        if !answer.approved() {
             return Err(format!("the user did not approve writing {path}"));
         }
+        standing.keep(policy, answer);
     }
 
     policy.issue_grant("file_write", "path", path.clone());

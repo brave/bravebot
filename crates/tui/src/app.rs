@@ -3390,20 +3390,12 @@ fn event_loop(
                 ) else {
                     return Ok(left_behind(&stored));
                 };
-                let Answers {
-                    trust,
-                    programs,
-                    servers,
-                    asked_about,
-                    exposed,
-                    rules,
-                } = &mut answers;
-                *trust = fresh;
+                answers.trust = fresh;
                 // And the rules a new session opens with, for the root it is in: the grants the
                 // cleared session installed were answered by its user, and the files may have
                 // changed since. Where the person already granted a rule the record says so, and
                 // nothing is asked twice.
-                if !rules.read_for(
+                if !answers.rules.read_for(
                     &mut session,
                     workspace.root(),
                     whence,
@@ -3412,14 +3404,7 @@ fn event_loop(
                 ) {
                     return Ok(left_behind(&stored));
                 }
-                // A new session vouches for no program, on the same reasoning as the map: the
-                // list is a standing permission, and this begins a session that was never asked.
-                *programs = TrustedPrograms::new();
-                // And nothing has been asked about, since the questions this list holds were put
-                // in a session that is over.
-                *asked_about = AskedAbout::new();
-                // And nothing agreed to be shown, for the same reason.
-                *exposed = bravebot_core::credentials::Exposed::new();
+                answers.forget_what_was_agreed();
                 // And a new directory, since nothing in the old one outlives the session that
                 // wrote it. The old one is removed either way: what the cleared context wrote is
                 // not something the session after it should find lying there.
@@ -3427,7 +3412,7 @@ fn event_loop(
                 // The servers go with it, LSP-8: what was approved was a process for the session,
                 // so dropping the set shuts them down and the session beginning here is asked
                 // again before one starts.
-                *servers = None;
+                answers.servers = None;
                 needs_draw = true;
             }
             Action::Submit(prompt) => {
@@ -4659,6 +4644,18 @@ impl Answers {
             rules,
         }
     }
+
+    /// Forget what the session agreed to, for one beginning again in this process (`/clear`).
+    fn forget_what_was_agreed(&mut self) {
+        // A new session vouches for no program, on the same reasoning as the map: the list is a
+        // standing permission, and this begins a session that was never asked.
+        self.programs = TrustedPrograms::new();
+        // And nothing has been asked about, since the questions this list holds were put in a
+        // session that is over.
+        self.asked_about = AskedAbout::new();
+        // And nothing agreed to be shown, and no file agreed to hold a secret, for the same reason.
+        self.exposed = bravebot_core::credentials::Exposed::new();
+    }
 }
 
 /// The directories the names in a settings file would open, in the order they were named.
@@ -5600,7 +5597,7 @@ fn manifest_animated(
             // person as its step reaches it.
             crate::remote_confirm::ToMain::Write(request) => {
                 let answer = crate::confirm::ask(terminal, &request);
-                if answer == crate::confirm::Answer::Interrupt {
+                if answer.stops_the_turn() {
                     stop_what_is_running(session, &cancel);
                 }
                 let _ = answer_tx.send(crate::remote_confirm::Reply::Write(answer.decision()));
@@ -18833,3 +18830,7 @@ mod tests {
 #[cfg(test)]
 #[path = "undo_tests.rs"]
 mod undo_tests;
+
+#[cfg(test)]
+#[path = "credential_mode_tests.rs"]
+mod credential_mode_tests;

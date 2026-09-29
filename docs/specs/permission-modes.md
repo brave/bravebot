@@ -54,17 +54,40 @@ decision somebody made; this one is what holds when they have made none.
 `verified-by: bravebot_tui::state::a_session_starts_by_asking_about_everything`
 
 <a id="MODE-2"></a>
-### MODE-2: accepting edits answers the write prompt and no other
+### MODE-2: accepting edits answers the write prompt and no other, except where the write would create a credential
 
 A write goes through unasked. A run, a command's output and a file nobody vouched for are still put
 to the person.
+
+A write the credential scan found a value in that a person decides about
+([CRED-16](credential-protection.md#CRED-16)) is put to the person as well. The mode is not the
+person, and the approval is for the exact bytes they were shown. Where nobody is there to be shown
+them, the write is refused and the planner is told nothing was created
+([CRED-13](credential-protection.md#CRED-13)). The person may answer for the file for the rest of
+the session or past it, and the credential spec says how far each answer reaches. What decides this is the
+finding the policy layer produced, never the body of the write.
 
 **Why.** A write and a run are not the same risk. A write lands in a tree the person can read
 afterwards, and `git diff` shows them all of it; a program runs with everything their own shell has,
 leaves no diff, and its output is what the next stage reads. A mode named for edits that also
 stopped asking about programs would be granting the larger thing quietly.
 
+A credential is the exception on the write side. The diff shows the person the value, and by then it
+is in the tree, which is the one place [credential-protection.md](credential-protection.md#CRED-13)
+says it must not reach unasked. The question has to come before the write, and a mode chosen to
+stop reviewing diffs one at a time is not somebody saying they will not look at a secret, so the
+mode cannot be what answers it. Bypassing is that statement (MODE-4).
+
 `verified-by: bravebot_agent::permission_mode::accepting_edits_lets_writes_through_but_not_commands`
+`verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_credential_write_to_the_person_and_bypassing_answers_it`
+`verified-by: bravebot_agent::turn::only_bypassing_answers_a_credential_write`
+`verified-by: bravebot_agent::turn::only_bypassing_answers_an_edit_that_leaves_a_file_holding_a_credential`
+`verified-by: bravebot_agent::turn::a_yes_to_a_credential_write_covers_no_write_after_it`
+`verified-by: bravebot_agent::turn::always_for_a_credential_write_covers_that_file_and_no_other`
+`verified-by: bravebot_agent::manifest::approving_a_plan_is_not_approving_a_credential_it_writes`
+`verified-by: bravebot_tui::credential_mode_tests::always_for_a_credential_covers_a_later_write_to_the_same_file`
+`verified-by: bravebot_tui::credential_mode_tests::always_for_a_credential_does_not_follow_the_session_through_cd`
+`verified-by: bravebot_tui::credential_mode_tests::always_for_a_credential_does_not_outlive_clear`
 
 <a id="MODE-3"></a>
 ### MODE-3: plan mode refuses a write rather than asking about one
@@ -121,6 +144,13 @@ server a checkout asks for: whether to start it, whether to offer its list of to
 make a call to one of them ([SERVERS-13](mcp-servers.md#SERVERS-13)). Whether a remote server moved
 where its reply pointed is not answered: a yes would rewrite the person's declaration to a url the
 server wrote, so the hop is refused unasked ([SERVERS-11](mcp-servers.md#SERVERS-11)).
+
+**A write that would create a credential is answered too.** A value the credential scan inferred is
+a question for the person under MODE-2, and here the flag is the person's answer to it, as it is to
+every other question the scan raises: the write lands, with nobody asked and in an unattended run as
+in the terminal ([CRED-13](credential-protection.md#CRED-13)). The yes writes nothing down, so
+neither of the longer answers a person is offered is recorded by the mode. A value that declared
+itself is refused before the mode is reached, here as everywhere.
 
 The two prompts that promote one slot's bytes are answered yes unless the run also asked for
 auto-vetting ([CHECK-11](vetting.md#CHECK-11)). Where it did, the check's word is what answers in the
@@ -191,6 +221,11 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_cli::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
 `verified-by: bravebot_agent::mcp::bypassing_answers_both_prompts_and_records_nothing`
 `verified-by: bravebot_agent::permission_mode::bypassing_refuses_to_move_a_server`
+`verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_credential_write_to_the_person_and_bypassing_answers_it`
+`verified-by: bravebot_agent::turn::only_bypassing_answers_a_credential_write`
+`verified-by: bravebot_agent::turn::only_bypassing_answers_an_edit_that_leaves_a_file_holding_a_credential`
+`verified-by: bravebot_agent::manifest::bypassing_answers_a_credential_a_plan_writes`
+`verified-by: bravebot_tui::credential_mode_tests::bypassing_writes_a_credential_without_asking`
 
 ## Choosing one
 
@@ -276,6 +311,7 @@ said.
 
 `verified-by: bravebot_agent::turn::a_delegate_inherits_the_mode_of_the_turn_that_spawned_it`
 `verified-by: bravebot_agent::turn::screening_reaches_a_delegate_of_an_unattended_run`
+`verified-by: bravebot_agent::turn::a_delegate_inherits_no_always_for_a_credential_write`
 
 <a id="MODE-10"></a>
 ### MODE-10: a mode belongs to the sitting it was chosen in
@@ -298,7 +334,18 @@ wrong direction for this to be wrong in.
 - **Accepting edits accepts a write to any path the workspace reaches.** The mode answers the write
   prompt, and the prompt is the only thing that would have shown the person the path. A rule in the
   settings file is what narrows it, and a `deny` rule still holds (MODE-6); the mode itself does not
-  distinguish one file from another.
+  distinguish one file from another. The one write it does not accept is one the credential scan
+  found something in, and that is decided by the finding, not the path.
+- **Accepting edits still stops on a file that is only one rare value.** The shape a created
+  credential takes is also the shape of a file holding only a commit id, a UUID or a digest, so
+  those writes are put to the person in a mode chosen so as not to be asked about writes. `a` is
+  what stops it asking again about that file. The alternative was the mode approving a value nobody
+  saw, which is the shape most prompt reports have taken: an answer given in one place covering
+  something the person was never shown.
+- **A body nobody vouched for is written unasked by a mode that answers writes.** The scan does not
+  read content that arrived as quarantined bytes, so a write carrying one through a reference raises
+  no finding and the mode answers it as it answers any other write. Scanning it would be the driver
+  deciding on untrusted bytes. The credential spec's Known costs record the same bound.
 - **Bypassing gives up injection containment for files that are read.** Vouching is what decides
   whether a file's contents are shown to the planner or held behind a reference, so in that mode a
   file holding instructions rather than data is read as instructions. The guarantee that untrusted

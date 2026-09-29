@@ -23,7 +23,7 @@
 //! `write_file`'s `contents_ref` is what puts it in a file. Between them, the planner can
 //! change a file it never saw and the driver can write bytes it never opened.
 
-use crate::confirm::{Confirmer, Decision, Intent, Remark, WriteRequest};
+use crate::confirm::{Confirmer, Decision, Intent, Remark, WriteDecision, WriteRequest};
 use crate::diff::Diff;
 use crate::processor::{self, Chat};
 use crate::report::{Activity, Reporter};
@@ -2708,6 +2708,110 @@ fn credential_aware_rejection(path: &str, scanned: &Scanned) -> Produced {
     )
 }
 
+/// What a person already said about a write creating a credential in the file it lands in, and
+/// which of the two standing answers the prompt may offer them this time (CRED-13).
+///
+/// Keyed by the file the write lands in as [`Workspace::resolve`] finds it, and never by the name
+/// the planner gave or the one the prompt draws. The same name in another checkout, or one a link
+/// sends somewhere else, is another file, and an answer about a spelling would cover every file
+/// that spelling reaches.
+pub(crate) struct StandingAnswer<'a> {
+    file: Option<std::path::PathBuf>,
+    store: Option<(crate::remembered::Store, &'a str)>,
+    /// Whether the prompt may offer to answer for this file for the rest of the session.
+    pub(crate) may_always: bool,
+    /// The record the prompt may offer to add this file to, past the session.
+    pub(crate) record: Option<std::path::PathBuf>,
+}
+
+impl<'a> StandingAnswer<'a> {
+    /// Read what stands for the file `path` lands in, and empty `to_approve` where an earlier
+    /// answer covers that file.
+    ///
+    /// The record is read here, immediately before the question, for the reason a run reads its
+    /// own: the file is shared by every session begun in this directory, so an entry recorded or
+    /// deleted a minute ago in another one counts now. A turn with nobody to put a prompt to has no
+    /// session to name and reads nothing, so no recorded answer is exercised where nobody could
+    /// have given it.
+    pub(crate) fn read<S: Sink>(
+        policy: &mut Policy<'_, S>,
+        workspace: &Workspace,
+        recording: crate::findings::Recording<'a>,
+        tool: &str,
+        path: &str,
+        to_approve: &mut Vec<String>,
+    ) -> Self {
+        let file = workspace.resolve(path).ok();
+        let store = recording
+            .home
+            .zip(recording.session)
+            .map(|(home, session)| {
+                (
+                    crate::remembered::Store::new(home, workspace.root()),
+                    session,
+                )
+            });
+        if to_approve.is_empty() {
+            return Self {
+                file,
+                store,
+                may_always: false,
+                record: None,
+            };
+        }
+        if let Some((store, _)) = &store {
+            policy.recall(store.read());
+        }
+        if file
+            .as_deref()
+            .is_some_and(|file| policy.credential_creation_is_answered(tool, file))
+        {
+            to_approve.clear();
+        }
+        // Offered only where there is still a question, and only for a file the driver can name.
+        let may_always = !to_approve.is_empty() && file.is_some();
+        // And the record only for a file inside the tree it is kept for, where this session may
+        // add to it at all: a private one says no here and again inside the store.
+        let record = store
+            .as_ref()
+            .filter(|_| may_always && crate::remembered::may_be_added_to())
+            .filter(|_| {
+                file.as_deref()
+                    .is_some_and(|file| file.starts_with(workspace.root()))
+            })
+            .map(|(store, _)| store.path().to_path_buf());
+        Self {
+            file,
+            store,
+            may_always,
+            record,
+        }
+    }
+
+    /// Keep what the person answered, and only what the prompt offered them.
+    ///
+    /// Asked of what this read rather than of the answer alone: a front end answering with a key
+    /// the prompt never drew must not be able to excuse a file from the question, and the file kept
+    /// is the one this resolved, not anything the front end could send back.
+    pub(crate) fn keep<S: Sink>(&self, policy: &mut Policy<'_, S>, answer: WriteDecision) {
+        let Some(file) = self.file.as_deref() else {
+            return;
+        };
+        if !answer.approved() {
+            return;
+        }
+        if answer.remember && self.may_always {
+            policy.allow_creating_a_credential(file);
+        }
+        if answer.record
+            && self.record.is_some()
+            && let Some((store, session)) = &self.store
+        {
+            store.remember_file(file, session);
+        }
+    }
+}
+
 /// What the person watching is told beside a change that carries a credential it did not write.
 ///
 /// A change is refused for what the turn wrote and reported for what it found already there: a
@@ -3829,7 +3933,16 @@ fn write_file<S: Sink, C: Confirmer>(
     // A guess goes to the person rather than deciding by itself, and asking is the only way to put
     // it to them, so a body the scan has doubts about is a body somebody looks at even where the
     // path's own rule would not have asked.
-    let to_approve = describe_all(&scanned.to_approve());
+    let mut to_approve = describe_all(&scanned.to_approve());
+    // Unless the person already answered for this file, for the session or past it.
+    let standing = StandingAnswer::read(
+        policy,
+        workspace,
+        tools.recording(),
+        "write_file",
+        &proposed_path,
+        &mut to_approve,
+    );
 
     // What the write would change, compared inside the kernel and released once. The question
     // below is drawn from it and so is the line the person is told afterwards, which is the
@@ -3869,11 +3982,15 @@ fn write_file<S: Sink, C: Confirmer>(
             untrusted: !body_label.is_trusted(),
             remark,
             credentials: to_approve,
+            may_always: standing.may_always,
+            record: standing.record.clone(),
         };
 
-        if confirmer.confirm_write(&request) == Decision::Reject {
+        let answer = confirmer.confirm_write(&request);
+        if !answer.approved() {
             return credential_aware_rejection(&shown_path, &scanned);
         }
+        standing.keep(policy, answer);
     }
 
     // The approval is the path's authority rather than a relabelling of it, and it is bound to
@@ -4030,7 +4147,15 @@ fn edit_file<S: Sink, C: Confirmer>(
 
     // As in a whole-file write: a guess is put to a person rather than deciding on its own, and
     // asking is the only way to put it.
-    let to_approve = describe_all(&scanned.to_approve());
+    let mut to_approve = describe_all(&scanned.to_approve());
+    let standing = StandingAnswer::read(
+        policy,
+        workspace,
+        recording,
+        "edit_file",
+        &proposed_path,
+        &mut to_approve,
+    );
 
     // The same comparison the question is drawn from and the line afterwards states, made once
     // and inside the kernel. The pre-image is the labelled value the read produced rather than
@@ -4057,9 +4182,14 @@ fn edit_file<S: Sink, C: Confirmer>(
             // so there is nothing anybody said about it.
             remark: None,
             credentials: to_approve,
+            may_always: standing.may_always,
+            record: standing.record.clone(),
         };
 
-        if confirmer.confirm_write(&request) == Decision::Reject {
+        let answer = confirmer.confirm_write(&request);
+        if answer.approved() {
+            standing.keep(policy, answer);
+        } else {
             if !scanned.to_approve().is_empty() {
                 return credential_aware_rejection(&shown_path, &scanned);
             }
@@ -9418,8 +9548,8 @@ mod tests {
         }
 
         impl Confirmer for Watching {
-            fn confirm_write(&mut self, _request: &WriteRequest) -> Decision {
-                Decision::Reject
+            fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+                WriteDecision::reject()
             }
 
             fn confirm_run(

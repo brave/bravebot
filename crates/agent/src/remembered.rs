@@ -30,6 +30,9 @@
 //! Nothing a program printed. What goes into the file is the argument list a person read at the
 //! prompt, which is the driver's own compiled plan and trusted and public before it reaches any
 //! gate, and the identifier of the session they pressed the key in.
+//!
+//! Nothing a write held either. A file a person agreed may hold a credential is recorded by where
+//! it is, which they read at the write prompt, and never by what was written to it.
 
 use bravebot_core::command::{Route, Spelling};
 use bravebot_core::remembered::{Remembered, RememberedLine, RememberedStep, Shape};
@@ -109,20 +112,36 @@ impl Store {
         let Ok(contents) = std::fs::read_to_string(&self.path) else {
             return Remembered::new();
         };
-        contents
+        let mut record = Remembered::new();
+        for recorded in contents
             .lines()
             .filter(|line| !line.trim().is_empty())
-            .filter_map(|line| serde_json::from_str::<Written>(line).ok())
-            .filter_map(|entry| {
-                if entry.directory.to_path()? != self.directory {
-                    return None;
+            .filter_map(|line| serde_json::from_str::<Recorded>(line).ok())
+        {
+            match recorded {
+                Recorded::Line(entry) => {
+                    if entry.directory.to_path().as_ref() != Some(&self.directory) {
+                        continue;
+                    }
+                    if let Some(line) = entry.line.into_line() {
+                        record.record(line, entry.session);
+                    }
                 }
-                Some(bravebot_core::remembered::Entry {
-                    line: entry.line.into_line()?,
-                    answered_in: entry.session,
-                })
-            })
-            .collect()
+                // A file outside the directory covers nothing, however it came to be written:
+                // nothing here records one, so an entry naming one was put there by hand.
+                Recorded::File(entry) => {
+                    if entry.directory.to_path().as_ref() != Some(&self.directory) {
+                        continue;
+                    }
+                    if let Some(file) = entry.file.to_path()
+                        && file.starts_with(&self.directory)
+                    {
+                        record.record_file(file, entry.session);
+                    }
+                }
+            }
+        }
+        record
     }
 
     /// Add one line to the record, answered in the session named.
@@ -152,6 +171,57 @@ impl Store {
             let _ = file.write_all(encoded.as_bytes());
         }
     }
+
+    /// Add one file a write may create a credential in, answered in the session named.
+    ///
+    /// Appended and best effort, as [`Store::remember`] is. A file outside the directory is not
+    /// written at all: the record is this directory's, and [`Store::read`] would skip it.
+    pub fn remember_file(&self, file: &Path, session: &str) {
+        if !may_be_added_to() || !file.starts_with(&self.directory) {
+            return;
+        }
+        let Some(parent) = self.path.parent() else {
+            return;
+        };
+        if crate::home::create_directory(parent).is_err() {
+            return;
+        }
+        let Ok(mut encoded) = serde_json::to_string(&WrittenFile {
+            directory: WrittenPath::of(&self.directory),
+            session: session.to_string(),
+            file: WrittenPath::of(file),
+        }) else {
+            return;
+        };
+        encoded.push('\n');
+        if let Ok(mut record) = crate::home::append_to_file(&self.path) {
+            let _ = record.write_all(encoded.as_bytes());
+        }
+    }
+}
+
+/// One line of the record, whichever of the two kinds it is.
+///
+/// Untagged, because each kind already refuses the other's fields: a line with a `file` is not a
+/// [`Written`], and one with a `line` is not a [`WrittenFile`]. A build that knows only lines reads
+/// a file entry as a line it cannot parse and skips it, which asks.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum Recorded {
+    Line(Written),
+    File(WrittenFile),
+}
+
+/// A file a write may create a credential in, as it is spelled on disk.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WrittenFile {
+    /// The working directory this answer was given in, in full.
+    directory: WrittenPath,
+    /// The session the key was pressed in. Decides nothing.
+    session: String,
+    /// Where the write landed, in full.
+    file: WrittenPath,
 }
 
 /// One entry as it is spelled on disk.
@@ -740,5 +810,141 @@ mod tests {
         let read = store.read();
         assert_eq!(read.len(), 1);
         assert!(read.covers(&plan("make", &["check"])));
+    }
+
+    /// CRED-13: a file answered past the session is read back by the next one, in the directory it
+    /// was answered in and no other, and beside the lines rather than in place of them.
+    #[test]
+    fn a_file_written_by_one_session_is_read_back_by_another_in_that_directory_only() {
+        let scratch = Scratch::new("remembered-files");
+        let store = scratch.store("/work");
+        store.remember(&RememberedLine::of(&plan("make", &["check"])), "one");
+        store.remember_file(Path::new("/work/.env"), "two");
+
+        let read = scratch.store("/work").read();
+        assert!(read.covers_file(Path::new("/work/.env")));
+        assert!(read.covers(&plan("make", &["check"])));
+        assert_eq!(read.len(), 1, "a file was counted as a line");
+        assert_eq!(
+            read.files().next().expect("a file").answered_in,
+            "two",
+            "the session the key was pressed in was lost"
+        );
+        assert!(!read.covers_file(Path::new("/work/.env.local")));
+        assert!(
+            !scratch
+                .store("/other")
+                .read()
+                .covers_file(Path::new("/work/.env")),
+            "an answer given in one directory answered in another"
+        );
+    }
+
+    /// CRED-13: the record is one directory's, so a file outside it is neither written nor, when
+    /// somebody puts one there by hand, read back.
+    #[test]
+    fn a_file_outside_the_directory_is_neither_written_nor_read() {
+        let scratch = Scratch::new("remembered-file-outside");
+        let store = scratch.store("/work");
+        store.remember_file(Path::new("/elsewhere/.env"), "a-session");
+        assert!(
+            !store.path().exists(),
+            "a file outside the tree was written"
+        );
+
+        store.remember_file(Path::new("/work/.env"), "a-session");
+        let written = std::fs::read_to_string(store.path()).expect("the record");
+        let moved = written.replacen("/work/.env", "/elsewhere/.env", 1);
+        assert_ne!(
+            moved, written,
+            "the entry was not rewritten, so this test proves nothing"
+        );
+        std::fs::write(store.path(), moved).expect("rewritten");
+
+        let read = store.read();
+        assert!(!read.covers_file(Path::new("/elsewhere/.env")));
+        assert_eq!(read.files().count(), 0);
+    }
+
+    /// CRED-13: a file entry names the directory it was answered in, as a line does, so a directory
+    /// sharing the record's key is not answered by one, even for a file inside it.
+    #[test]
+    fn a_directory_sharing_a_key_with_another_is_not_answered_by_its_files() {
+        let scratch = Scratch::new("remembered-lossy-key-file");
+        let (mine, theirs) = ("/a/b", "/a-b");
+        assert_eq!(
+            crate::home::key_for(Path::new(mine)),
+            crate::home::key_for(Path::new(theirs)),
+            "this test needs two paths that reduce to one key"
+        );
+        let store = scratch.store(theirs);
+        store.remember_file(Path::new("/a-b/.env"), "a-session");
+        let written = std::fs::read_to_string(store.path()).expect("the record");
+        let moved = written.replacen(r#""file":"/a-b/.env""#, r#""file":"/a/b/.env""#, 1);
+        assert_ne!(
+            moved, written,
+            "the entry was not rewritten, so this test proves nothing"
+        );
+        std::fs::write(store.path(), moved).expect("rewritten");
+
+        assert!(
+            !scratch
+                .store(mine)
+                .read()
+                .covers_file(Path::new("/a/b/.env"))
+        );
+    }
+
+    /// CRED-13: a file whose name no rendering can show is read back as itself, for the reason a
+    /// binary is: an entry keyed on a rendering would answer for every file that renders alike.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_no_rendering_can_show_is_read_back_as_itself() {
+        let scratch = Scratch::new("remembered-unrenderable-file");
+        let store = scratch.store("/work");
+        store.remember_file(&unrenderable("/work/.env-", 0xff), "a-session");
+
+        let read = store.read();
+        assert!(read.covers_file(&unrenderable("/work/.env-", 0xff)));
+        assert!(!read.covers_file(&unrenderable("/work/.env-", 0xfe)));
+    }
+
+    /// CRED-13: a file entry this build does not fully understand covers nothing, as a line does
+    /// not, and neither kind can be read as the other.
+    #[test]
+    fn a_file_entry_this_build_does_not_fully_understand_covers_nothing() {
+        let scratch = Scratch::new("remembered-file-unknown-field");
+        let store = scratch.store("/work");
+        store.remember_file(Path::new("/work/.env"), "a-session");
+
+        let written = std::fs::read_to_string(store.path()).expect("the record");
+        let narrowed = written.replacen(
+            r#"{"directory""#,
+            r#"{"something-later-builds-key-on":"x","directory""#,
+            1,
+        );
+        assert_ne!(
+            narrowed, written,
+            "the entry was not rewritten, so this test proves nothing"
+        );
+        std::fs::write(store.path(), &narrowed).expect("rewritten");
+        assert_eq!(store.read().files().count(), 0);
+
+        std::fs::write(
+            store.path(),
+            concat!(
+                r#"{"directory":"/work","session":"a-session","file":"/work/.env","#,
+                r#""line":{"steps":{"shape":"pipeline","steps":[]}}}"#,
+                "\n"
+            ),
+        )
+        .expect("rewritten");
+        let read = store.read();
+        assert_eq!(
+            read.files().count(),
+            0,
+            "an entry with a line was read as a file"
+        );
+        assert!(read.is_empty(), "an entry with a file was read as a line");
     }
 }

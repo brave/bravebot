@@ -944,7 +944,7 @@ fn a_planned_answer_cannot_be_written_to_a_file_it_is_not_about() {
 /// A value that declares itself: AWS's own documentation key, which is the provider's prefix over
 /// the provider's alphabet at the provider's length. A refusal needs a declared kind, because a
 /// value merely inferred from its name goes to whoever is watching instead, and an unattended run
-/// with permissions skipped approves it.
+/// with permissions skipped then stops saying nobody approved the write, not that it held a key.
 const DECLARED_KEY: &str = "AKIAIOSFODNN7EXAMPLE";
 
 /// A credential in a proposed body is the run's own unless the file already held it, and "already
@@ -1192,6 +1192,8 @@ fn a_plan_may_write_a_body_it_fixed_in_advance() {
 #[derive(Default)]
 struct RecordsEveryQuestion {
     writes: Vec<bravebot_agent::confirm::WriteRequest>,
+    /// Answers a write with `a` where it is offered, rather than a plain yes.
+    always: bool,
 }
 
 impl bravebot_agent::confirm::Confirmer for RecordsEveryQuestion {
@@ -1205,9 +1207,13 @@ impl bravebot_agent::confirm::Confirmer for RecordsEveryQuestion {
     fn confirm_write(
         &mut self,
         request: &bravebot_agent::confirm::WriteRequest,
-    ) -> bravebot_agent::Decision {
+    ) -> bravebot_agent::WriteDecision {
         self.writes.push(request.clone());
-        bravebot_agent::Decision::Approve
+        if self.always && request.may_always {
+            bravebot_agent::WriteDecision::approve_always()
+        } else {
+            bravebot_agent::WriteDecision::approve()
+        }
     }
 
     fn confirm_run(
@@ -1362,8 +1368,8 @@ impl bravebot_agent::confirm::Confirmer for ApprovesThePlanOnly {
     fn confirm_write(
         &mut self,
         _request: &bravebot_agent::confirm::WriteRequest,
-    ) -> bravebot_agent::Decision {
-        bravebot_agent::Decision::Reject
+    ) -> bravebot_agent::WriteDecision {
+        bravebot_agent::WriteDecision::reject()
     }
 
     fn confirm_run(
@@ -1487,6 +1493,145 @@ fn approving_a_plan_is_not_approving_its_writes() {
         !scratch.path.join("notes.md").exists(),
         "the file was written without anyone seeing it"
     );
+}
+
+/// Forty hex characters and nothing else, which the scan infers is a secret rather than
+/// recognising one: the value a person is asked about rather than one refused outright.
+const GENERATED_SECRET: &str = "c8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7";
+
+/// Another generated value, so a second step puts a secret in the file that the first did not.
+const ROTATED_SECRET: &str = "9e2d4b6f8a0c1e3d5f7b9a2c4e6d8f0a1b3c5d7e";
+
+/// One planned run whose steps write `master.key` once per value in `secrets`, under `mode`,
+/// answered by `inner` behind it, with the whole tree vouched for.
+fn a_planned_credential_write<C: bravebot_agent::confirm::Confirmer>(
+    scratch: &Scratch,
+    mode: bravebot_agent::PermissionMode,
+    inner: &mut C,
+    secrets: &[&str],
+) -> Result<bravebot_agent::Outcome, bravebot_agent::TurnError> {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let steps = secrets
+        .iter()
+        .map(|secret| {
+            json!({"capability": "FILE_WRITE", "args": {"path": "master.key", "contents": format!("{secret}\n")}})
+        })
+        .collect::<Vec<_>>();
+    let (endpoint, _received) = serve(vec![any_shape(), plan(json!(steps))]);
+    let mut trust = TrustStore::new("/work");
+    trust.trust(".");
+    manifest::run(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("create the master key").with_permission_mode(mode),
+        &mut bravebot_agent::Confining::new(inner, mode, false),
+        &mut bravebot_agent::IgnoreReports,
+        &mut RecordingSink::new(),
+        trust,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+}
+
+/// MODE-2 and CRED-13 over a planned run. The step's write goes to the person, as a turn's does,
+/// and the yes the plan got is not an answer to it: a plan names a path and a body, and whether
+/// that body is a key nobody has seen is a question the plan's approval was never asked.
+#[test]
+fn approving_a_plan_is_not_approving_a_credential_it_writes() {
+    let mode = bravebot_agent::PermissionMode::AcceptEdits;
+
+    let scratch = Scratch::new("credential-plan-refused");
+    let failure = a_planned_credential_write(
+        &scratch,
+        mode,
+        &mut ApprovesThePlanOnly,
+        &[GENERATED_SECRET],
+    )
+    .expect_err("a credential write nobody approved must stop the run");
+    assert!(
+        failure
+            .to_string()
+            .contains("did not approve writing master.key"),
+        "got: {failure}"
+    );
+    assert!(
+        !scratch.path.join("master.key").exists(),
+        "a planned run created a credential nobody was shown"
+    );
+
+    let scratch = Scratch::new("credential-plan-asked");
+    let mut person = RecordsEveryQuestion::default();
+    a_planned_credential_write(&scratch, mode, &mut person, &[GENERATED_SECRET]).expect("runs");
+    assert_eq!(
+        person
+            .writes
+            .iter()
+            .map(|request| (request.path.as_str(), !request.credentials.is_empty()))
+            .collect::<Vec<_>>(),
+        [("master.key", true)],
+        "the step's credential write did not reach the person"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("master.key")).ok(),
+        Some(format!("{GENERATED_SECRET}\n")),
+        "the approved write did not happen"
+    );
+}
+
+/// MODE-4 and CRED-13 over a planned run: the flag answers the step's credential write as it
+/// answers the plan, so nothing is put to the person and the key is written.
+#[test]
+fn bypassing_answers_a_credential_a_plan_writes() {
+    let scratch = Scratch::new("credential-plan-bypassed");
+    a_planned_credential_write(
+        &scratch,
+        bravebot_agent::PermissionMode::Bypass,
+        &mut ApprovesThePlanOnly,
+        &[GENERATED_SECRET],
+    )
+    .expect("the flag answered the write");
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("master.key")).ok(),
+        Some(format!("{GENERATED_SECRET}\n")),
+        "bypassing did not write the key"
+    );
+}
+
+/// CRED-13's `a` over a planned run: a second step putting another secret in the same file is not
+/// asked about, and the run ends with the last value in it. The control is the same plan answered
+/// with a plain yes, which is asked twice.
+#[test]
+fn always_for_a_planned_credential_covers_a_later_step_to_the_same_file() {
+    let mode = bravebot_agent::PermissionMode::AcceptEdits;
+    for always in [false, true] {
+        let scratch = Scratch::new(&format!("credential-plan-always-{always}"));
+        let mut person = RecordsEveryQuestion {
+            always,
+            ..RecordsEveryQuestion::default()
+        };
+        a_planned_credential_write(
+            &scratch,
+            mode,
+            &mut person,
+            &[GENERATED_SECRET, ROTATED_SECRET],
+        )
+        .expect("runs");
+        assert!(
+            person.writes.iter().all(|request| request.may_always),
+            "`a` was not offered for a secret the person was asked about: {:?}",
+            person.writes
+        );
+        assert_eq!(
+            person.writes.len(),
+            if always { 1 } else { 2 },
+            "always: {always}: {:?}",
+            person.writes
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join("master.key")).ok(),
+            Some(format!("{ROTATED_SECRET}\n")),
+        );
+    }
 }
 
 /// A plan that fails the schema fails the run whole. Running the steps that happen to be valid

@@ -87,6 +87,27 @@ fn no_remembered_line_is_written_down() {
     assert!(scratch.store().read().is_empty());
 }
 
+/// INCOG-3, CRED-13: the same for a file a write may create a credential in. The key that would
+/// record one is not offered, and a front end answering with it anyway writes no file.
+#[test]
+fn no_file_a_credential_may_be_created_in_is_written_down() {
+    let scratch = Scratch::new("adds-no-file");
+    assert!(
+        !bravebot_agent::remembered::may_be_added_to(),
+        "the write prompt would still have offered the key"
+    );
+
+    scratch
+        .store()
+        .remember_file(Path::new("/work/.env"), "a-private-session");
+
+    assert!(
+        !scratch.store().path().exists(),
+        "an incognito session wrote a file into the record"
+    );
+    assert!(!scratch.store().read().covers_file(Path::new("/work/.env")));
+}
+
 /// INCOG-5: reading is unchanged. A line an earlier session recorded still stops the asking here,
 /// for the reason the chosen model and theme are still read: the promise is about what survives a
 /// session rather than about what the session may know.

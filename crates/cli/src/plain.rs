@@ -24,7 +24,7 @@ use crate::exit::{Ending, fail};
 use bravebot_agent::confirm::{
     CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest,
     McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
-    ToolListRequest, VetRequest, VouchRequest, WriteRequest,
+    ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
 use bravebot_agent::diff::Change;
 use bravebot_agent::turn::{self, Task};
@@ -878,9 +878,9 @@ fn program(request: &RunRequest) -> Vec<String> {
 }
 
 impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
-    fn confirm_write(&mut self, request: &WriteRequest) -> Decision {
+    fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
         let lines = change(request);
-        self.ask(&lines, t!(write_title))
+        self.ask(&lines, t!(write_title)).into()
     }
 
     /// Approves this once and nothing else.
@@ -1593,6 +1593,8 @@ mod tests {
             untrusted: false,
             remark: None,
             credentials: Vec::new(),
+            may_always: false,
+            record: None,
         };
 
         let lines = change(&request).join("\n");
@@ -1628,6 +1630,8 @@ mod tests {
                 label: "untrusted".to_string(),
             }),
             credentials: Vec::new(),
+            may_always: false,
+            record: None,
         };
 
         let lines = change(&request).join("\n");

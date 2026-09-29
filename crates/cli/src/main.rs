@@ -13,7 +13,7 @@ mod servers;
 use crate::exit::{Ending, fail};
 use bravebot_agent::confirm::{
     Confirmer, Decision, FetchRequest, ManifestRequest, OutputRequest, RunDecision, RunRequest,
-    ServerRequest, VetRequest, VouchRequest, WriteRequest,
+    ServerRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
 use bravebot_agent::turn::{self, Task};
 use bravebot_agent::{Mode, Workspace};
@@ -1324,7 +1324,7 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
         self.put_the_plan(request).unwrap_or(Decision::Reject)
     }
 
-    fn confirm_write(&mut self, request: &WriteRequest) -> Decision {
+    fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
         self.refusing.confirm_write(request)
     }
 
@@ -4337,6 +4337,8 @@ mod tests {
             untrusted: false,
             remark: None,
             credentials: Vec::new(),
+            may_always: false,
+            record: None,
         };
         let vouch = VouchRequest {
             path: "notes.md".to_string(),
@@ -4346,7 +4348,10 @@ mod tests {
             reason: None,
         };
 
-        assert_eq!(one_shot.confirm_write(&write), Decision::Reject);
+        assert_eq!(
+            one_shot.confirm_write(&write),
+            bravebot_agent::WriteDecision::reject()
+        );
         assert_eq!(one_shot.confirm_vouch(&vouch), Decision::Reject);
         assert!(one_shot.interjection().is_none());
         drop(one_shot);

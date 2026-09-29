@@ -25,7 +25,7 @@
 
 use crate::confirm::{
     Confirmer, Decision, OutputRequest, RunDecision, RunRequest, VetRequest, VouchRequest,
-    WriteRequest,
+    WriteDecision, WriteRequest,
 };
 use crate::report::{
     Activity, DelegateId, Delegation, Landing, Phase, Printed, Reported, Reporter, Returned, Shown,
@@ -263,7 +263,7 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
 }
 
 impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
-    fn confirm_write(&mut self, request: &WriteRequest) -> Decision {
+    fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
         self.lent.hold().confirm_write(request)
     }
 

@@ -979,7 +979,17 @@ write-unchanged = { $count ->
     [one] … { $count } unchanged line
    *[other] … { $count } unchanged lines
     }
+write-always-explained =
+    a: stop asking whether this file may hold a secret, for the rest of this session
+write-always-this-file = this file only: the same name in another directory is asked about again
+write-always-only-the-secret =
+    it settles the secret only: a write that would be asked about anyway still is
+write-remember-explained = r: stop asking whether this file may hold a secret, from now on
+write-remember-every-session = every session started in this directory reads it, not just this one
+write-remember-where = it is written down here, and deleting the line is the way back:
 write-yes = write it
+write-always = always this session
+write-remember = remember it
 write-no = leave it alone
 
 

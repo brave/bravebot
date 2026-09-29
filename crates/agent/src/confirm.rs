@@ -92,6 +92,22 @@ pub struct WriteRequest {
     /// decision is about these lines: somebody weighing a `POSTGRES_PASSWORD` wants the diff in
     /// front of them while they weigh it.
     pub credentials: Vec<String>,
+    /// Whether the prompt may offer to stop asking, for the rest of the session, about what the
+    /// scan finds in writes to this file ([CRED-13]).
+    ///
+    /// True exactly where `credentials` is not empty and the write lands somewhere the driver can
+    /// name in full. The answer is kept against that full path rather than against `path`, so a
+    /// false here means the key is not drawn and an answer carrying it anyway grants nothing.
+    ///
+    /// [CRED-13]: ../../../docs/specs/credential-protection.md
+    pub may_always: bool,
+    /// Where an answer that outlives the session would be written, where one may be.
+    ///
+    /// `Some` only where `may_always` is true, the session can keep such a record at all, and the
+    /// file is inside the directory the record belongs to. The path rather than a flag for the
+    /// reason [`RunRequest::record`] carries one: a person cannot endorse a record they were not
+    /// shown.
+    pub record: Option<std::path::PathBuf>,
 }
 
 /// What a processor said about the document it produced, released for the screen an approval is
@@ -775,6 +791,76 @@ impl RunDecision {
     }
 }
 
+/// What the user decided about a write.
+///
+/// The two standing answers are about what the credential scan found and nothing else ([CRED-13]).
+/// Neither approves a later write: that is still asked about wherever the mode asks, with its own
+/// diff, and only the scan's question is not put again. A refusal never remembers.
+///
+/// [CRED-13]: ../../../docs/specs/credential-protection.md
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WriteDecision {
+    pub decision: Decision,
+    /// Whether the person asked to stop being asked, this session, about what the scan finds in
+    /// writes to this file.
+    pub remember: bool,
+    /// Whether the person asked for the same past the session, in this directory.
+    pub record: bool,
+}
+
+impl WriteDecision {
+    /// Write it this once.
+    pub fn approve() -> Self {
+        Self {
+            decision: Decision::Approve,
+            remember: false,
+            record: false,
+        }
+    }
+
+    /// Write it, and stop asking about what the scan finds in this file for the session.
+    pub fn approve_always() -> Self {
+        Self {
+            decision: Decision::Approve,
+            remember: true,
+            record: false,
+        }
+    }
+
+    /// Write it, and record the file so every session in this directory stops asking about it.
+    pub fn approve_and_record() -> Self {
+        Self {
+            decision: Decision::Approve,
+            remember: false,
+            record: true,
+        }
+    }
+
+    /// Do not write it. Never remembers.
+    pub fn reject() -> Self {
+        Self {
+            decision: Decision::Reject,
+            remember: false,
+            record: false,
+        }
+    }
+
+    pub fn approved(self) -> bool {
+        self.decision == Decision::Approve
+    }
+}
+
+impl From<Decision> for WriteDecision {
+    /// A yes or a no with no standing answer in it, which is every answer a front end without the
+    /// two keys can give.
+    fn from(decision: Decision) -> Self {
+        match decision {
+            Decision::Approve => Self::approve(),
+            Decision::Reject => Self::reject(),
+        }
+    }
+}
+
 /// `1 stage`, `2 stages`. Local rather than shared, since this crate's other copy is private to
 /// the tools module.
 fn tally(count: usize, one: &str, many: &str) -> String {
@@ -802,7 +888,11 @@ pub enum Decision {
 /// read.
 pub trait Confirmer {
     /// Ask about a write. Implementations must default to refusal when they cannot ask.
-    fn confirm_write(&mut self, request: &WriteRequest) -> Decision;
+    ///
+    /// The answer carries whether to stop asking about what the scan found as well as whether to
+    /// write. An implementation that cannot ask must refuse **and** not remember, for the reason
+    /// [`Confirmer::confirm_run`] gives.
+    fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision;
 
     /// Ask about running a pipeline. Implementations must default to refusal when they cannot ask.
     ///
@@ -970,8 +1060,8 @@ impl Confirmer for Unattended {
         Decision::Reject
     }
 
-    fn confirm_write(&mut self, _request: &WriteRequest) -> Decision {
-        Decision::Reject
+    fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+        WriteDecision::reject()
     }
 
     fn confirm_run(&mut self, _request: &RunRequest) -> RunDecision {
@@ -1041,8 +1131,8 @@ impl Confirmer for ApproveWrites {
         Decision::Reject
     }
 
-    fn confirm_write(&mut self, _request: &WriteRequest) -> Decision {
-        Decision::Approve
+    fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+        WriteDecision::approve()
     }
 
     /// Refuses. The name says writes, and a test that wanted a program to run should have to say
@@ -1110,8 +1200,8 @@ impl Confirmer for ChoosesFirst {
         Decision::Reject
     }
 
-    fn confirm_write(&mut self, _request: &WriteRequest) -> Decision {
-        Decision::Reject
+    fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+        WriteDecision::reject()
     }
 
     fn confirm_run(&mut self, _request: &RunRequest) -> RunDecision {
@@ -1187,8 +1277,8 @@ impl Confirmer for ApproveRuns {
         Decision::Reject
     }
 
-    fn confirm_write(&mut self, _request: &WriteRequest) -> Decision {
-        Decision::Approve
+    fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+        WriteDecision::approve()
     }
 
     /// Approves this run without vouching for anything. A test that wants the trusted list
@@ -1258,8 +1348,8 @@ impl Confirmer for RemembersRuns {
         Decision::Reject
     }
 
-    fn confirm_write(&mut self, _request: &WriteRequest) -> Decision {
-        Decision::Reject
+    fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+        WriteDecision::reject()
     }
 
     fn confirm_run(&mut self, _request: &RunRequest) -> RunDecision {
@@ -1324,8 +1414,8 @@ impl Confirmer for ReadsOutput {
         Decision::Reject
     }
 
-    fn confirm_write(&mut self, _request: &WriteRequest) -> Decision {
-        Decision::Reject
+    fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+        WriteDecision::reject()
     }
 
     fn confirm_run(&mut self, _request: &RunRequest) -> RunDecision {
@@ -1395,8 +1485,8 @@ impl Confirmer for VetsContent {
         Decision::Reject
     }
 
-    fn confirm_write(&mut self, _request: &WriteRequest) -> Decision {
-        Decision::Reject
+    fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+        WriteDecision::reject()
     }
 
     fn confirm_run(&mut self, _request: &RunRequest) -> RunDecision {
@@ -1467,8 +1557,8 @@ impl Confirmer for ExposesReads {
         Decision::Reject
     }
 
-    fn confirm_write(&mut self, _request: &WriteRequest) -> Decision {
-        Decision::Reject
+    fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+        WriteDecision::reject()
     }
 
     fn confirm_run(&mut self, _request: &RunRequest) -> RunDecision {
@@ -1535,8 +1625,8 @@ impl Confirmer for ApproveFetches {
         Decision::Reject
     }
 
-    fn confirm_write(&mut self, _request: &WriteRequest) -> Decision {
-        Decision::Reject
+    fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+        WriteDecision::reject()
     }
 
     fn confirm_run(&mut self, _request: &RunRequest) -> RunDecision {
@@ -1598,8 +1688,8 @@ impl Confirmer for ApprovePlans {
     }
 
     /// Refuses: approving a plan is not approving the writes in it.
-    fn confirm_write(&mut self, _request: &WriteRequest) -> Decision {
-        Decision::Reject
+    fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+        WriteDecision::reject()
     }
 
     fn confirm_run(&mut self, _request: &RunRequest) -> RunDecision {
@@ -1690,7 +1780,7 @@ impl<'a, C: Confirmer + ?Sized> Timed<'a, C> {
 }
 
 impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
-    fn confirm_write(&mut self, request: &WriteRequest) -> Decision {
+    fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
         self.timing(|inner| inner.confirm_write(request))
     }
 
@@ -1788,6 +1878,8 @@ mod tests {
             untrusted: false,
             remark: None,
             credentials: Vec::new(),
+            may_always: false,
+            record: None,
         }
     }
 
@@ -1817,9 +1909,9 @@ mod tests {
     struct Slow(std::time::Duration);
 
     impl Confirmer for Slow {
-        fn confirm_write(&mut self, _request: &WriteRequest) -> Decision {
+        fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
             std::thread::sleep(self.0);
-            Decision::Approve
+            WriteDecision::approve()
         }
 
         /// Refuses, and takes just as long about it. That is the point of the test below: a wait is
@@ -1898,7 +1990,7 @@ mod tests {
         let mut slow = Slow(std::time::Duration::from_millis(30));
         let mut timed = Timed::new(&mut slow);
 
-        assert_eq!(timed.confirm_write(&a_write()), Decision::Approve);
+        assert_eq!(timed.confirm_write(&a_write()), WriteDecision::approve());
         assert!(
             timed.waited() >= std::time::Duration::from_millis(30),
             "the wait was not counted: {:?}",
@@ -1958,12 +2050,12 @@ mod tests {
     fn the_answer_passes_through_untouched() {
         let mut approving = ApproveWrites;
         let mut timed = Timed::new(&mut approving);
-        assert_eq!(timed.confirm_write(&a_write()), Decision::Approve);
+        assert_eq!(timed.confirm_write(&a_write()), WriteDecision::approve());
         assert!(!timed.confirm_run(&a_run()).approved());
 
         let mut refusing = Unattended;
         let mut timed = Timed::new(&mut refusing);
-        assert_eq!(timed.confirm_write(&a_write()), Decision::Reject);
+        assert_eq!(timed.confirm_write(&a_write()), WriteDecision::reject());
         assert!(timed.ask_user(&a_series()).is_empty());
     }
 
@@ -2101,6 +2193,8 @@ mod tests {
             untrusted: false,
             remark: None,
             credentials: Vec::new(),
+            may_always: false,
+            record: None,
         }
     }
 
@@ -2181,13 +2275,16 @@ mod tests {
     fn the_non_interactive_confirmer_refuses() {
         assert_eq!(
             Unattended.confirm_write(&request()),
-            Decision::Reject,
+            WriteDecision::reject(),
             "a non-interactive run must not approve writes"
         );
     }
 
     #[test]
     fn the_test_confirmer_approves() {
-        assert_eq!(ApproveWrites.confirm_write(&request()), Decision::Approve);
+        assert_eq!(
+            ApproveWrites.confirm_write(&request()),
+            WriteDecision::approve()
+        );
     }
 }

@@ -10,7 +10,7 @@
 use bravebot_agent::confirm::{
     CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, Intent, ManifestRequest,
     McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
-    ToolListRequest, VetRequest, VouchRequest, WriteRequest,
+    ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
 use bravebot_agent::diff::Change;
 use bravebot_agent::report::{Reach, Shown};
@@ -50,7 +50,7 @@ impl<'t, B: Backend> TerminalConfirmer<'t, B> {
 }
 
 impl<B: Backend> Confirmer for TerminalConfirmer<'_, B> {
-    fn confirm_write(&mut self, request: &WriteRequest) -> Decision {
+    fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
         ask(self.terminal, request).decision()
     }
 
@@ -144,11 +144,45 @@ impl Answer {
     }
 }
 
+/// What the user did with a write question.
+///
+/// Two answers more than the other prompts give, and only where the scan put a secret to the person:
+/// each settles that question for the file the write lands in, one for the session and one past it
+/// (CRED-13). Neither approves a later write by itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteAnswer {
+    Approve,
+    /// Write it, and stop asking whether this file may hold a secret for the rest of the session.
+    ApproveAlways,
+    /// Write it, and record the file so every session in this directory stops asking that too.
+    ApproveAndRecord,
+    Reject,
+    /// Refuse the write and stop the turn that asked for it.
+    Interrupt,
+}
+
+impl WriteAnswer {
+    /// What to tell the waiting turn. Interrupting refuses and keeps nothing, as [`Answer::decision`].
+    pub fn decision(self) -> WriteDecision {
+        match self {
+            WriteAnswer::Approve => WriteDecision::approve(),
+            WriteAnswer::ApproveAlways => WriteDecision::approve_always(),
+            WriteAnswer::ApproveAndRecord => WriteDecision::approve_and_record(),
+            WriteAnswer::Reject | WriteAnswer::Interrupt => WriteDecision::reject(),
+        }
+    }
+
+    /// Whether the turn that asked stops as well as being refused. As [`Answer::stops_the_turn`].
+    pub fn stops_the_turn(self) -> bool {
+        matches!(self, WriteAnswer::Interrupt)
+    }
+}
+
 /// Draw the prompt and wait for an answer.
 ///
 /// Standalone as well as available through [`TerminalConfirmer`], because a turn running on a
 /// worker thread cannot hold the terminal: the main thread calls this on its behalf.
-pub fn ask<B: Backend>(terminal: &mut Terminal<B>, request: &WriteRequest) -> Answer {
+pub fn ask<B: Backend>(terminal: &mut Terminal<B>, request: &WriteRequest) -> WriteAnswer {
     let mut scroll = 0u16;
     loop {
         // A terminal that cannot be drawn to cannot carry a question, so refuse rather
@@ -160,7 +194,7 @@ pub fn ask<B: Backend>(terminal: &mut Terminal<B>, request: &WriteRequest) -> An
             .draw(|frame| most = draw(frame, request, scroll))
             .is_err()
         {
-            return Answer::Reject;
+            return WriteAnswer::Reject;
         }
 
         match input::read() {
@@ -169,17 +203,50 @@ pub fn ask<B: Backend>(terminal: &mut Terminal<B>, request: &WriteRequest) -> An
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
-            Ok(TermEvent::Key(key)) => match answer_for(key) {
-                Some(Response::Answer(answer)) => return answer,
-                Some(Response::Scroll(by)) => {
+            Ok(TermEvent::Key(key)) => match write_answer_for(key, request) {
+                Some(WriteResponse::Answer(answer)) => return answer,
+                Some(WriteResponse::Scroll(by)) => {
                     scroll = scroll.saturating_add_signed(by).min(most);
                 }
                 None => continue,
             },
             Ok(_) => continue,
             // Losing the event stream must not approve anything.
-            Err(_) => return Answer::Reject,
+            Err(_) => return WriteAnswer::Reject,
         }
+    }
+}
+
+/// What a key press did at a write prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriteResponse {
+    Answer(WriteAnswer),
+    Scroll(i16),
+}
+
+/// Interpret one key press at a write prompt, or `None` for a key that answers nothing.
+///
+/// Takes the request for the reason [`run_answer_for`] does: `a` is bound only where the driver
+/// offered it and `r` only where it said where the answer would be written, so a key the screen
+/// does not draw is unbound rather than granting what the screen never offered.
+fn write_answer_for(key: KeyEvent, request: &WriteRequest) -> Option<WriteResponse> {
+    match key.code {
+        KeyCode::Char('a' | 'A')
+            if request.may_always && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            Some(WriteResponse::Answer(WriteAnswer::ApproveAlways))
+        }
+        KeyCode::Char('r' | 'R')
+            if request.record.is_some() && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            Some(WriteResponse::Answer(WriteAnswer::ApproveAndRecord))
+        }
+        _ => answer_for(key).map(|response| match response {
+            Response::Answer(Answer::Approve) => WriteResponse::Answer(WriteAnswer::Approve),
+            Response::Answer(Answer::Reject) => WriteResponse::Answer(WriteAnswer::Reject),
+            Response::Answer(Answer::Interrupt) => WriteResponse::Answer(WriteAnswer::Interrupt),
+            Response::Scroll(by) => WriteResponse::Scroll(by),
+        }),
     }
 }
 
@@ -357,6 +424,46 @@ fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16) -> u16 
         lines.push(Line::raw(""));
     }
 
+    // What `a` and `r` would settle, where they are offered, under the findings they settle and
+    // above a diff that may push anything below it out of sight: which file, how long, and that
+    // the rest of the write's question is untouched. Where `r` is written down is part of what it
+    // grants, so the path is on the screen.
+    if request.may_always {
+        let muted = Style::default().fg(theme::muted());
+        lines.push(Line::from(Span::styled(
+            format!("  {}", t!(write_always_explained)),
+            muted,
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(write_always_this_file)),
+            muted,
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(write_always_only_the_secret)),
+            Style::default().fg(theme::running()),
+        )));
+        if let Some(path) = &request.record {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                format!("  {}", t!(write_remember_explained)),
+                muted,
+            )));
+            lines.push(Line::from(Span::styled(
+                format!("     {}", t!(write_remember_every_session)),
+                muted,
+            )));
+            lines.push(Line::from(Span::styled(
+                format!("     {}", t!(write_remember_where)),
+                muted,
+            )));
+            lines.push(Line::from(Span::styled(
+                format!("       {}", path.display()),
+                Style::default().add_modifier(Modifier::BOLD),
+            )));
+        }
+        lines.push(Line::raw(""));
+    }
+
     // All of it. What does not fit is scrolled to, rather than dropped: the hunks nobody shows
     // you are exactly the ones an approval is supposed to cover.
     //
@@ -382,7 +489,7 @@ fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16) -> u16 
         lines.extend(marked_rows(&margin, &[body], inside.width as usize));
     }
 
-    let keys = Line::from(vec![
+    let mut key_spans = vec![
         Span::styled(
             "  y",
             Style::default()
@@ -390,6 +497,26 @@ fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16) -> u16 
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(format!(" {}    ", t!(write_yes))),
+    ];
+    if request.may_always {
+        key_spans.push(Span::styled(
+            "a",
+            Style::default()
+                .fg(theme::running())
+                .add_modifier(Modifier::BOLD),
+        ));
+        key_spans.push(Span::raw(format!(" {}    ", t!(write_always))));
+    }
+    if request.record.is_some() {
+        key_spans.push(Span::styled(
+            "r",
+            Style::default()
+                .fg(theme::running())
+                .add_modifier(Modifier::BOLD),
+        ));
+        key_spans.push(Span::raw(format!(" {}    ", t!(write_remember))));
+    }
+    key_spans.extend([
         Span::styled(
             "n",
             Style::default()
@@ -397,6 +524,9 @@ fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16) -> u16 
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(format!(" {}    ", t!(write_no))),
+    ]);
+    let answers = Line::from(key_spans);
+    let stop = Line::from(vec![
         Span::styled(
             "ctrl-c",
             Style::default()
@@ -408,12 +538,19 @@ fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16) -> u16 
             Style::default().fg(theme::muted()),
         ),
     ]);
+    // Both standing answers make the row wider than the box on a 100-column terminal, and the
+    // clip would take the key that stops the turn, so that key gets a row of its own instead. A
+    // prompt offering neither keeps its one row, and with it every row it had for the body.
+    let stop_below = request.may_always && answers.width() + stop.width() > inside.width as usize;
 
-    // One row for the keys, the rest for the diff. Split before the body is laid out, so the
-    // question keeps its row whatever the body turns out to be.
+    // The keys' rows, and the rest for the diff. Split before the body is laid out, so the
+    // question keeps its rows whatever the body turns out to be.
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(if stop_below { 2 } else { 1 }),
+        ])
         .split(inside);
 
     let body = Paragraph::new(lines).wrap(Wrap { trim: false });
@@ -424,15 +561,25 @@ fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16) -> u16 
     let offset = scroll.min(furthest);
     frame.render_widget(body.scroll((offset, 0)), rows[0]);
 
-    let mut keys = keys;
+    let mut keys = if stop_below {
+        let mut row = stop;
+        row.spans.insert(0, Span::raw("  "));
+        vec![answers, row]
+    } else {
+        let mut row = answers;
+        row.spans.extend(stop.spans);
+        vec![row]
+    };
     if furthest > 0 {
         let below = furthest - offset;
-        keys.push_span(Span::styled(
-            // Short, because the row is as wide as the box and the keys come first: a hint
-            // that gets clipped in half tells the reviewer less than no hint at all.
-            scroll_hint(below),
-            Style::default().fg(theme::brand_primary()),
-        ));
+        keys.last_mut()
+            .expect("a row of keys")
+            .push_span(Span::styled(
+                // Short, because the row is as wide as the box and the keys come first: a hint
+                // that gets clipped in half tells the reviewer less than no hint at all.
+                scroll_hint(below),
+                Style::default().fg(theme::brand_primary()),
+            ));
     }
     frame.render_widget(Paragraph::new(keys), rows[1]);
 
@@ -2809,6 +2956,8 @@ mod tests {
             untrusted: false,
             remark: None,
             credentials: Vec::new(),
+            may_always: false,
+            record: None,
         }
     }
 
@@ -4139,6 +4288,166 @@ mod tests {
         );
     }
 
+    /// A write that would create a credential, offering `a` where `may_always` and `r` where
+    /// there is a record to name, as the driver hands one over.
+    fn a_credential_write(may_always: bool, record: bool) -> WriteRequest {
+        WriteRequest {
+            path: "config/master.key".into(),
+            credentials: vec!["a secret standing as a file's whole contents".into()],
+            may_always,
+            record: record.then(|| "/home/someone/.bravebot/remembered/project".into()),
+            ..request("c8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7\n", None)
+        }
+    }
+
+    /// The same drawing on a terminal tall enough to hold the whole body.
+    fn fully_rendered(request: &WriteRequest) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(160, 48)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw(frame, request, 0);
+            })
+            .expect("draw");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    /// CRED-13: `a` and `r` are bound only where the driver offered them, so a key the screen
+    /// does not draw grants nothing. Holding Ctrl reaches neither, as at the run prompt.
+    #[test]
+    fn the_write_keys_bind_only_the_standing_answers_the_prompt_offers() {
+        let press = |code, modifiers, request: &WriteRequest| {
+            write_answer_for(KeyEvent::new(code, modifiers), request)
+        };
+        for (request, always, remember) in [
+            (request("new\n", None), None, None),
+            (
+                a_credential_write(true, false),
+                Some(WriteResponse::Answer(WriteAnswer::ApproveAlways)),
+                None,
+            ),
+            (
+                a_credential_write(true, true),
+                Some(WriteResponse::Answer(WriteAnswer::ApproveAlways)),
+                Some(WriteResponse::Answer(WriteAnswer::ApproveAndRecord)),
+            ),
+        ] {
+            assert_eq!(
+                press(KeyCode::Char('a'), KeyModifiers::NONE, &request),
+                always,
+                "{request:?}"
+            );
+            assert_eq!(
+                press(KeyCode::Char('r'), KeyModifiers::NONE, &request),
+                remember,
+                "{request:?}"
+            );
+            for key in ['a', 'r'] {
+                assert_eq!(
+                    press(KeyCode::Char(key), KeyModifiers::CONTROL, &request),
+                    None,
+                    "ctrl-{key} answered: {request:?}"
+                );
+            }
+            assert_eq!(
+                press(KeyCode::Char('y'), KeyModifiers::NONE, &request),
+                Some(WriteResponse::Answer(WriteAnswer::Approve)),
+            );
+        }
+    }
+
+    /// CRED-13: each key tells the turn the one lifetime it was drawn with, and refusing keeps
+    /// nothing.
+    #[test]
+    fn the_write_keys_separate_this_session_from_every_session() {
+        let always = WriteAnswer::ApproveAlways.decision();
+        assert!(always.approved() && always.remember && !always.record);
+        let recorded = WriteAnswer::ApproveAndRecord.decision();
+        assert!(recorded.approved() && recorded.record && !recorded.remember);
+        for answer in [
+            WriteAnswer::Approve,
+            WriteAnswer::Reject,
+            WriteAnswer::Interrupt,
+        ] {
+            let decision = answer.decision();
+            assert!(
+                !decision.remember && !decision.record,
+                "{answer:?} kept an answer"
+            );
+        }
+    }
+
+    /// CRED-13: the prompt draws each standing answer it offers with what it settles, and none it
+    /// does not. `r` names the record it would be written to, since deleting the line there is
+    /// the way back.
+    #[test]
+    fn a_write_prompt_draws_the_standing_answers_it_offers_and_no_other() {
+        let plain = fully_rendered(&request("new\n", None));
+        assert!(!plain.contains("always this session"), "{plain}");
+        assert!(!plain.contains("remember it"), "{plain}");
+        assert!(!plain.contains("may hold a secret"), "{plain}");
+
+        let always = fully_rendered(&a_credential_write(true, false));
+        assert!(always.contains("always this session"), "{always}");
+        assert!(
+            always.contains("for the rest of this session") && always.contains("this file only"),
+            "`a` was offered without saying what it settles: {always}"
+        );
+        assert!(
+            always.contains("it settles the secret only"),
+            "`a` was offered without saying the write's own question stands: {always}"
+        );
+        assert!(!always.contains("remember it"), "{always}");
+        assert!(!always.contains(".bravebot/remembered"), "{always}");
+
+        let remember = fully_rendered(&a_credential_write(true, true));
+        assert!(remember.contains("remember it"), "{remember}");
+        assert!(
+            remember.contains("every session started in this directory"),
+            "{remember}"
+        );
+        assert!(
+            remember.contains("/home/someone/.bravebot/remembered/project"),
+            "`r` was offered without saying where it is written: {remember}"
+        );
+    }
+
+    /// Both standing answers on offer make the row of keys wider than the box a 100-column
+    /// terminal draws, and every key is still drawn whole, the one that stops the turn included.
+    #[test]
+    fn a_write_prompt_offering_both_standing_answers_draws_every_key_whole() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw(frame, &a_credential_write(true, true), 0);
+            })
+            .expect("draw");
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        for key in [
+            "y write it",
+            "a always this session",
+            "r remember it",
+            "n leave it alone",
+            "ctrl-c stop the turn",
+        ] {
+            assert!(
+                screen.contains(key),
+                "`{key}` was not drawn whole: {screen}"
+            );
+        }
+    }
+
     /// The same at the run prompt, which has three ways of approving and one of refusing before
     /// the interrupt. Every one of them leaves the turn running, so a person who declines a
     /// command keeps the work that was going to use it.
@@ -4255,6 +4564,8 @@ mod tests {
             untrusted: false,
             remark: None,
             credentials: Vec::new(),
+            may_always: false,
+            record: None,
         });
 
         assert!(output.contains("Edit"));
@@ -4284,6 +4595,8 @@ mod tests {
             untrusted: true,
             remark: None,
             credentials: Vec::new(),
+            may_always: false,
+            record: None,
         });
 
         assert!(
@@ -4315,6 +4628,8 @@ mod tests {
             untrusted: false,
             remark: None,
             credentials: Vec::new(),
+            may_always: false,
+            record: None,
         });
 
         assert!(
@@ -4496,6 +4811,8 @@ mod tests {
             untrusted: true,
             remark: None,
             credentials: Vec::new(),
+            may_always: false,
+            record: None,
         };
         let drawn = rows_of(60, 24, |frame| {
             draw(frame, &request, 0);
@@ -4523,6 +4840,8 @@ mod tests {
                 label: "(U,priv)".to_string(),
             }),
             credentials: Vec::new(),
+            may_always: false,
+            record: None,
         };
         let output = rendered(&request);
 
@@ -4567,6 +4886,8 @@ mod tests {
                 label: "(U,priv)".to_string(),
             }),
             credentials: Vec::new(),
+            may_always: false,
+            record: None,
         };
         let drawn = rows_of(60, 24, |frame| {
             draw(frame, &request, 0);
@@ -4603,6 +4924,8 @@ mod tests {
                 label: "(U,priv)".to_string(),
             }),
             credentials: Vec::new(),
+            may_always: false,
+            record: None,
         };
 
         for (width, height) in [(80, 24), (100, 30), (60, 20)] {
@@ -4644,6 +4967,8 @@ mod tests {
                 label: "(U,priv)".to_string(),
             }),
             credentials: Vec::new(),
+            may_always: false,
+            record: None,
         };
         let output = rendered(&request);
 

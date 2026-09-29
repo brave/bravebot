@@ -4799,6 +4799,50 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Whether a person has already agreed that writes may create a credential in this file.
+    ///
+    /// Two answers count and nothing else: the key at a write prompt that says so for the rest of
+    /// the session, and the key that records it for every session in this directory. A plain yes,
+    /// a permission rule, the trust map and a mode are none of them, so none of them reaches this.
+    /// `file` is where the write lands, so another spelling of the same file is covered and the
+    /// same spelling in another tree is not ([CRED-13]).
+    ///
+    /// It answers the scan's half of the write prompt only. A write still asks wherever its path
+    /// would have asked with nothing found in it.
+    ///
+    /// [CRED-13]: ../../../docs/specs/credential-protection.md
+    pub fn credential_creation_is_answered(&mut self, tool: &str, file: &std::path::Path) -> bool {
+        let lasting = if self.exposed.allows_creating(file) {
+            "for this session"
+        } else if self.remembered.covers_file(file) {
+            "past the session"
+        } else {
+            return false;
+        };
+        self.allow(
+            "approval",
+            format!(
+                "{tool}: {}: the user agreed {lasting} to writes creating a credential in it, \
+                 not asking about what the scan found",
+                file.display()
+            ),
+        );
+        true
+    }
+
+    /// Record that a person, having read what the scan found, agreed to writes creating a
+    /// credential in this file for the rest of the session.
+    pub fn allow_creating_a_credential(&mut self, file: &std::path::Path) {
+        self.exposed.allow_creating(file);
+        self.allow(
+            "approval",
+            format!(
+                "{}: the user agreed to writes creating a credential in it for this session",
+                file.display()
+            ),
+        );
+    }
+
     /// Reconcile a completed write in a non-overlapping snapshot.
     ///
     /// Live filesystem callers must use `FileAuthority::capture` and its effect reservation
