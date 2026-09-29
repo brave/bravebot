@@ -120,7 +120,7 @@ pub fn session(skip_permissions: bool, agent: Option<String>) -> ExitCode {
     // the file is anchored at (PERM-3).
     let profile = bravebot_agent::home::profile();
     let (permissions, rejected) =
-        bravebot_agent::permissions::from_settings(&settings, profile.as_deref());
+        bravebot_agent::permissions::from_settings(&settings, profile.as_deref(), workspace.root());
 
     let mode = match skip_permissions {
         true => PermissionMode::Bypass,

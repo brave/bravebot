@@ -146,6 +146,11 @@ pub struct Anchors {
     /// backslash is a legal filename byte where a slash is the only separator
     /// ([`crate::spelling`]).
     pub backslash_separates: bool,
+    /// Whether the volume the paths live on holds two spellings that differ only in case as one
+    /// file. Supplied by the caller because this crate asks the host nothing, and false when the
+    /// caller cannot tell: folding reads a rule about `Docs` as also covering `docs`, which on a
+    /// volume that keeps them apart is a different file.
+    pub folds_case: bool,
 }
 
 impl Anchors {
@@ -260,11 +265,8 @@ impl Rule {
     /// `path` is workspace-relative or absolute, as the gates hold it. `restricting` selects the
     /// depth a single-segment pattern is matched at, which differs between the lists.
     ///
-    /// On hosts whose filesystem folds case (macOS APFS, Windows NTFS), both the pattern and the
-    /// path are folded to lowercase before matching, segment-wise, so a deny rule `Read(.env)`
-    /// also covers `.ENV`, which on such a host opens the very file the rule names. An allow rule
-    /// is folded the same way and covers the same file. On hosts where the filesystem is
-    /// case-sensitive the match stays byte-exact.
+    /// `path` arrives already folded where the volume folds case, and the pattern was stored folded
+    /// the same way, so the comparison here is byte-exact either way.
     fn covers_path(&self, path: &str, restricting: bool) -> bool {
         match &self.pattern {
             Pattern::Everything => true,
@@ -272,10 +274,10 @@ impl Rule {
                 false
             }
             Pattern::Relative(pattern) => {
-                !is_absolute_key(path) && pattern.matches(&segments_of(&fold(path)), restricting)
+                !is_absolute_key(path) && pattern.matches(&segments_of(path), restricting)
             }
             Pattern::Absolute(pattern) => {
-                is_absolute_key(path) && pattern.matches(&segments_of(&fold(path)), restricting)
+                is_absolute_key(path) && pattern.matches(&segments_of(path), restricting)
             }
         }
     }
@@ -405,6 +407,9 @@ pub struct Permissions {
     /// the patterns were. Defaults to a slash being the only separator, which is what a caller
     /// that never named a host gets.
     backslash_separates: bool,
+    /// The volume's answer, kept for the same reason: a path arrives folded or not according to
+    /// the volume the rules were read for, and the patterns were stored the way it says.
+    folds_case: bool,
 }
 
 impl Permissions {
@@ -441,6 +446,7 @@ impl Permissions {
             ask: read(ask),
             allow: read(allow),
             backslash_separates: anchors.backslash_separates,
+            folds_case: anchors.folds_case,
         };
         (permissions, rejected)
     }
@@ -461,7 +467,10 @@ impl Permissions {
     /// (PERM-3). Here rather than at each gate, so a path reaches the rules one way whichever gate
     /// it came through and a gate added later cannot be the one that forgot.
     pub fn for_path(&self, subject: Subject, path: &str) -> Decision {
-        let path = crate::spelling::to_slash(path, self.backslash_separates);
+        let path = fold(
+            &crate::spelling::to_slash(path, self.backslash_separates),
+            self.folds_case,
+        );
         self.decide(|rule, restricting| {
             rule.subject == subject && rule.covers_path(&path, restricting)
         })
@@ -585,27 +594,35 @@ fn tool_pattern(specifier: &str) -> Option<Pattern> {
 /// `~/x` does. A path specifier alone: a command pattern is matched against argv, where a
 /// backslash is an argument's own byte on every host.
 ///
-/// A pattern is stored folded where the filesystem folds case, since the path arrives folded at
-/// match time and both sides have to be in the one spelling.
+/// A pattern is stored folded where the volume folds case, since the path arrives folded at match
+/// time and both sides have to be in the one spelling.
 fn path_pattern(specifier: &str, anchors: &Anchors) -> Option<Pattern> {
     let specifier = &*crate::spelling::to_slash(specifier, anchors.backslash_separates);
     if let Some(rest) = specifier.strip_prefix("//") {
-        return Some(Pattern::Absolute(PathPattern::rooted(&fold(rest))));
+        return Some(Pattern::Absolute(PathPattern::rooted(&fold(
+            rest,
+            anchors.folds_case,
+        ))));
     }
     if let Some(rest) = specifier.strip_prefix("~/") {
         let home = anchors.home.as_deref()?;
-        return Some(Pattern::Absolute(PathPattern::rooted(&fold(&join(
-            home, rest,
-        )))));
+        return Some(Pattern::Absolute(PathPattern::rooted(&fold(
+            &join(home, rest),
+            anchors.folds_case,
+        ))));
     }
     if let Some(rest) = specifier.strip_prefix('/') {
         let base = anchors.settings_dir.as_deref()?;
-        return Some(Pattern::Absolute(PathPattern::rooted(&fold(&join(
-            base, rest,
-        )))));
+        return Some(Pattern::Absolute(PathPattern::rooted(&fold(
+            &join(base, rest),
+            anchors.folds_case,
+        ))));
     }
     let rest = specifier.strip_prefix("./").unwrap_or(specifier);
-    Some(Pattern::Relative(PathPattern::relative(&fold(rest))))
+    Some(Pattern::Relative(PathPattern::relative(&fold(
+        rest,
+        anchors.folds_case,
+    ))))
 }
 
 /// Join two path pieces with a single slash, whatever slashes they came with.
@@ -681,26 +698,22 @@ fn segments_of(path: &str) -> Vec<&str> {
         .collect()
 }
 
-/// Fold a path or a pattern to lowercase, one segment at a time.
+/// Fold a path or a pattern to lowercase, one segment at a time, where `folds` says the volume
+/// holds two spellings that differ only in case as one file.
 ///
-/// On a host whose filesystem folds case (macOS APFS, Windows NTFS) a planner's `.ENV` opens the
-/// same file as the `.env` a deny rule names, so both sides of a match are lowered before they
-/// are compared. Lowering segment-wise leaves the separators, and with them the anchor and
-/// relative/absolute logic and the `*` and `**` semantics, exactly as they were. Folding happens
-/// only where the filesystem is known to fold, since elsewhere it would make one rule cover
-/// another file.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn fold(path: &str) -> String {
+/// There a planner's `.ENV` opens the same file as the `.env` a deny rule names, so both sides of
+/// a match are lowered before they are compared. Lowering segment-wise leaves the separators, and
+/// with them the anchor and relative/absolute logic and the `*` and `**` semantics, exactly as
+/// they were. Nothing is folded where the volume keeps the spellings apart, since there it would
+/// make one rule cover another file.
+fn fold(path: &str, folds: bool) -> String {
+    if !folds {
+        return path.to_string();
+    }
     path.split('/')
         .map(str::to_lowercase)
         .collect::<Vec<_>>()
         .join("/")
-}
-
-/// Where the filesystem is case-sensitive, nothing is folded and the match stays byte-exact.
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn fold(path: &str) -> String {
-    path.to_string()
 }
 
 /// Whether a pattern's segments cover a path's, with `**` crossing directories and `*` not.
@@ -862,7 +875,24 @@ mod tests {
             home: Some("/home/someone".to_string()),
             settings_dir: Some("/home/someone/.bravebot".to_string()),
             backslash_separates: false,
+            folds_case: false,
         }
+    }
+
+    /// The same rules read for a volume with the given answer about case. The answer is the
+    /// caller's and no test here asks the machine it runs on, so the two outcomes are exercised on
+    /// every host.
+    fn rules_on_a_volume_that_folds_case(
+        folds_case: bool,
+        deny: &[&str],
+        ask: &[&str],
+        allow: &[&str],
+    ) -> Permissions {
+        let anchors = Anchors {
+            folds_case,
+            ..anchors()
+        };
+        read_with(&anchors, deny, ask, allow)
     }
 
     /// A line split at each space, for a stage none of whose words holds one.
@@ -1172,19 +1202,16 @@ mod tests {
         }
     }
 
-    /// A host whose filesystem folds case opens `.ENV` when it is asked for `.env`, so a deny
-    /// rule written in one spelling covers the other, whichever the planner writes. These run
-    /// only on the hosts that fold: folding there and matching byte-exactly here would fail them
-    /// by design.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    /// A volume that folds case opens `.ENV` when it is asked for `.env`, so a deny rule written
+    /// in one spelling covers the other, whichever the planner writes.
     #[test]
-    fn a_deny_rule_covers_the_case_spelling_the_filesystem_would_open() {
-        let permissions = rules(&["Read(.env)"], &[], &[]);
+    fn a_deny_rule_covers_the_case_spelling_a_folding_volume_would_open() {
+        let permissions = rules_on_a_volume_that_folds_case(true, &["Read(.env)"], &[], &[]);
         for path in [".ENV", ".Env"] {
             assert_eq!(
                 permissions.for_path(Subject::Read, path),
                 Decision::Ruled(Ruling::Deny),
-                "{path} opens .env on this host and was not covered"
+                "{path} opens .env on this volume and was not covered"
             );
         }
         assert_eq!(
@@ -1195,10 +1222,9 @@ mod tests {
 
     /// The same folding across a tree: an anchored rule about `src` also covers `SRC`, whose
     /// segments reach the matcher lowered on both sides.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
     fn a_tree_rule_covers_the_folded_spelling_of_its_path() {
-        let permissions = rules(&["Read(src/**)"], &[], &[]);
+        let permissions = rules_on_a_volume_that_folds_case(true, &["Read(src/**)"], &[], &[]);
         for path in ["src/x/y", "SRC/x/y", "Src/x/y"] {
             assert_eq!(
                 permissions.for_path(Subject::Read, path),
@@ -1206,6 +1232,62 @@ mod tests {
                 "{path} was not covered"
             );
         }
+    }
+
+    /// A rule that grants is folded like one that restricts, because on a volume that folds the two
+    /// spellings are one file.
+    #[test]
+    fn an_allow_rule_covers_the_folded_spelling_on_a_folding_volume() {
+        let permissions = rules_on_a_volume_that_folds_case(true, &[], &[], &["Edit(Docs/**)"]);
+        for path in ["Docs/a.md", "docs/a.md", "DOCS/a.md"] {
+            assert_eq!(
+                permissions.for_path(Subject::Edit, path),
+                Decision::Ruled(Ruling::Allow),
+                "{path} is the same file on this volume and was not granted"
+            );
+        }
+    }
+
+    /// On a volume that keeps `Docs` and `docs` apart they are two files, so a rule about one
+    /// decides nothing about the other, in both polarities. Folding here would widen a grant to a
+    /// file the person never named.
+    #[test]
+    fn a_rule_does_not_cover_a_case_variant_on_a_volume_that_keeps_them_apart() {
+        let allowing = rules_on_a_volume_that_folds_case(false, &[], &[], &["Edit(Docs/**)"]);
+        assert_eq!(
+            allowing.for_path(Subject::Edit, "Docs/a.md"),
+            Decision::Ruled(Ruling::Allow)
+        );
+        for path in ["docs/a.md", "DOCS/a.md"] {
+            assert_eq!(
+                allowing.for_path(Subject::Edit, path),
+                Decision::Unmatched,
+                "{path} is a different file on this volume and was granted"
+            );
+        }
+
+        let denying = rules_on_a_volume_that_folds_case(false, &["Read(.env)"], &[], &[]);
+        assert_eq!(
+            denying.for_path(Subject::Read, ".env"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            denying.for_path(Subject::Read, ".ENV"),
+            Decision::Unmatched,
+            ".ENV is a different file on this volume and was denied"
+        );
+    }
+
+    /// Rules read with no answer about the volume compare bytes, which is what a caller that
+    /// cannot tell gets: a probe that fails must not widen a rule.
+    #[test]
+    fn rules_read_without_an_answer_about_the_volume_compare_bytes() {
+        let permissions = rules(&[], &[], &["Edit(Docs/**)"]);
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "docs/a.md"),
+            Decision::Unmatched
+        );
+        assert!(!Anchors::none().folds_case);
     }
 
     /// The documented asymmetry, and the reason for it: a rule that restricts should cover the

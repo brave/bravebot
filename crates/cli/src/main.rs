@@ -736,6 +736,7 @@ fn run_task(args: &[String], skip_permissions: bool, agent: Option<String>) -> E
     let (permissions, rejected) = rules_for_a_one_shot_run(
         &settings,
         bravebot_agent::home::profile().as_deref(),
+        workspace.root(),
         skip_permissions,
     );
     for problem in &rejected {
@@ -1216,14 +1217,15 @@ fn what_ran(
 fn rules_for_a_one_shot_run(
     settings: &bravebot_config::Settings,
     profile: Option<&Path>,
+    workspace: &Path,
     skip_permissions: bool,
 ) -> (
     bravebot_core::permissions::Permissions,
     Vec<bravebot_core::permissions::Rejected>,
 ) {
     match skip_permissions {
-        true => bravebot_agent::permissions::from_settings(settings, profile),
-        false => bravebot_agent::permissions::for_an_unattended_run(settings, profile),
+        true => bravebot_agent::permissions::from_settings(settings, profile, workspace),
+        false => bravebot_agent::permissions::for_an_unattended_run(settings, profile, workspace),
     }
 }
 
@@ -2299,6 +2301,11 @@ fn doctor() -> ExitCode {
                     .map(|rule| rule.rule.clone())
                     .collect::<Vec<_>>(),
                 bravebot_agent::home::profile().as_deref(),
+                // The directory `doctor` ran in, whose volume answers about case. Empty where it
+                // cannot be read, which the probe reads as a volume that compares bytes.
+                &std::env::current_dir()
+                    .and_then(|cwd| cwd.canonicalize())
+                    .unwrap_or_default(),
             );
             fact(
                 t!(doctor_permissions),
@@ -5309,7 +5316,8 @@ mod tests {
             }"#,
         );
 
-        let (permissions, rejected) = rules_for_a_one_shot_run(&settings, None, false);
+        let (permissions, rejected) =
+            rules_for_a_one_shot_run(&settings, None, Path::new("."), false);
         assert!(rejected.is_empty());
         assert_eq!(
             permissions.for_path(Subject::Edit, "notes.md"),
@@ -5335,7 +5343,7 @@ mod tests {
         let settings =
             bravebot_config::Settings::parse(r#"{"permissions": {"allow": ["Edit(**)"]}}"#);
 
-        let (permissions, _) = rules_for_a_one_shot_run(&settings, None, true);
+        let (permissions, _) = rules_for_a_one_shot_run(&settings, None, Path::new("."), true);
         assert_eq!(
             permissions.for_path(Subject::Edit, "notes.md"),
             Decision::Ruled(Ruling::Allow)
