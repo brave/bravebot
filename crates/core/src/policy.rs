@@ -7208,7 +7208,7 @@ five
                 // Whichever server: what a call to one produces is a property of the
                 // protocol, and the alias decides who may make the call rather than what
                 // the answer is labelled.
-                Capability::McpCall(_) => Some(Label::untrusted_public()),
+                Capability::McpCall(_) => Some(Label::untrusted_private()),
                 Capability::FileWrite => None,
                 Capability::GitWrite => None,
             };

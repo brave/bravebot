@@ -30,11 +30,12 @@ use bravebot_core::policy::Denial;
 use bravebot_core::value::Labelled;
 use std::fmt;
 
-/// The label everything a server sends carries: a result, and the words it describes a tool with.
+/// The label the words a server describes its tools with arrive under.
 ///
-/// One function rather than a constant at each transport, because the two must not be able to
-/// disagree about it. MCP-1, SERVERS-8.
-pub fn result_label() -> Label {
+/// Public, because a server hands the same list to whoever connects. A result is not labelled
+/// here: it takes the call's capability's label, which is private, since what a call reads may be
+/// the person's own data. SERVERS-8, MCP-1.
+pub fn list_label() -> Label {
     Label::untrusted_public()
 }
 

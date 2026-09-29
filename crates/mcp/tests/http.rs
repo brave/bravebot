@@ -134,9 +134,15 @@ fn a_handshake_and_tool_list_round_trip() {
     assert!(first.contains("\"protocolVersion\""));
 }
 
+/// A tool result is untrusted and private, while the list the same server offers stays public:
+/// the list is what it tells whoever connects, a result is what it read for this person.
 #[test]
-fn a_tool_result_is_labelled_untrusted() {
-    let (url, _received) = serve(vec![json_response(INIT_OK), json_response(CALL_OK)]);
+fn a_tool_result_is_labelled_untrusted_and_private() {
+    let (url, _received) = serve(vec![
+        json_response(INIT_OK),
+        json_response(TOOLS_OK),
+        json_response(CALL_OK),
+    ]);
     let egress = Egress::new();
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -155,6 +161,9 @@ fn a_tool_result_is_labelled_untrusted() {
         .initialize(&mut policy, &egress, "bravebot", "0.1.0")
         .expect("handshake");
 
+    let listing = server
+        .list_tools(&mut policy, &egress)
+        .expect("tools listed");
     let result = server
         .call_tool(
             &mut policy,
@@ -164,7 +173,8 @@ fn a_tool_result_is_labelled_untrusted() {
         )
         .expect("tool call");
 
-    assert_eq!(result.label(), Label::untrusted_public());
+    assert_eq!(listing.list().label(), Label::untrusted_public());
+    assert_eq!(result.label(), Label::untrusted_private());
     assert!(policy.finish());
 }
 
@@ -192,7 +202,7 @@ fn an_sse_framed_reply_is_handled() {
     let result = server
         .call_tool(&mut policy, &egress, "lookup", serde_json::json!({}))
         .expect("tool call over sse");
-    assert_eq!(result.label(), Label::untrusted_public());
+    assert_eq!(result.label(), Label::untrusted_private());
 }
 
 /// MCP traffic is ordinary egress, so the network gate must see it.
@@ -480,7 +490,7 @@ fn a_tool_level_error_is_reported_as_a_failure() {
         panic!("got: {error}");
     };
     assert_eq!(tool, "lookup");
-    assert_eq!(detail.label(), Label::untrusted_public());
+    assert_eq!(detail.label(), Label::untrusted_private());
 
     let proof = policy.authorise_display_release("test inspects the failure");
     assert_eq!(detail.declassify(&proof), "no such record");
