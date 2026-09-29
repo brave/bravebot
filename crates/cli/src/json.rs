@@ -65,6 +65,9 @@ pub struct Report<'a> {
     pub message: Option<&'a str>,
     pub reply: &'a str,
     pub model: &'a str,
+    /// The definition the run's turn was addressed to, by the name its kernel matched, or `None`
+    /// where the turn was the planner's or ended with no outcome to say (CLI-17).
+    pub agent: Option<&'a str>,
     pub steps: usize,
     pub tokens: Tokens,
     pub calls: &'a [Call],
@@ -154,6 +157,7 @@ pub fn render(report: &Report<'_>) -> String {
         ("message", maybe(report.message)),
         ("reply", quoted(report.reply)),
         ("model", quoted(report.model)),
+        ("agent", maybe(report.agent)),
         ("steps", report.steps.to_string()),
         (
             "tokens",
@@ -187,6 +191,7 @@ mod tests {
             message: None,
             reply: "done",
             model: "qwen-3-235b",
+            agent: None,
             steps: 2,
             tokens: Tokens {
                 total: 4096,
@@ -263,6 +268,7 @@ mod tests {
             message: Some("l'adresse n'a pas de schema"),
             reply: "",
             model: "",
+            agent: None,
             steps: 0,
             tokens: Tokens::default(),
             calls: &[],
@@ -275,7 +281,7 @@ mod tests {
             concat!(
                 r#"{"schema":1,"ok":false,"status":3,"reason":"configuration","#,
                 r#""identifier":"BB1003","message":"l'adresse n'a pas de schema","#,
-                r#""reply":"","model":"","steps":0,"#,
+                r#""reply":"","model":"","agent":null,"steps":0,"#,
                 r#""tokens":{"total":0,"output":0,"context":0,"cache_read":0,"cache_written":0},"#,
                 r#""calls":[],"refusals":[],"notices":[]}"#,
             )

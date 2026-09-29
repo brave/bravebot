@@ -19590,6 +19590,64 @@ fn an_addressed_turn_runs_under_its_definitions_prompt_model_and_kind() {
     }
 }
 
+/// `--model` is a person choosing the model for this run (CLI-9), so it outranks the model a
+/// definition names. The definition's prompt and tools still apply, and the turn says which model
+/// it did not ask for, so nobody takes the reply for the definition model's.
+#[test]
+fn a_model_the_command_line_named_outranks_the_definitions_and_the_turn_says_so() {
+    let scratch = Scratch::new("address-outranked");
+    let home = Scratch::new("address-outranked-home");
+    define(
+        &home,
+        "rule-reviewer",
+        "kind: reader\nmodel: haiku\n",
+        "REVIEW-BY-THE-RULES",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) =
+        serve_by_marker(vec![("ADDRESSED-TASK", vec![reply_with("reviewed")])]);
+    let config = config_for(&endpoint);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = turn::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-TASK", &home, "rule-reviewer").model_outranks_a_definition(true),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let [request] = requests.as_slice() else {
+        panic!("one request, for one round: {requests:?}");
+    };
+    assert!(
+        request.contains(r#""model":"custom-parent-model""#),
+        "the definition's model outranked the one the command line named: {request}"
+    );
+    assert!(
+        request.contains("REVIEW-BY-THE-RULES") && !request.contains(r#""name":"write_file""#),
+        "outranking the model dropped the rest of the definition: {request}"
+    );
+    let said = "rule-reviewer asked for haiku, and --model outranks it, so this run asked for the \
+                model the command line named";
+    assert!(
+        reporter.notices.iter().any(|notice| notice == said),
+        "nobody watching was told the definition's model was not asked for: {:?}",
+        reporter.notices
+    );
+    assert!(
+        outcome.notices.iter().any(|notice| notice == said),
+        "the turn's account did not say the definition's model was not asked for: {:?}",
+        outcome.notices
+    );
+}
+
 /// ADDRESS-8's exception. A later look and a watch each start a turn of the session's planner,
 /// which holds what the definition took away, so an addressed turn is offered neither and its
 /// other tools do not tell it to use them. The first turn is the control: the same line with

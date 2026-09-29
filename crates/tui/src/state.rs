@@ -1474,6 +1474,14 @@ pub struct Session {
     /// with no mode to leave (ADDRESS-10). Private, because only [`Session::address`] may set it:
     /// that is what keeps a loop's tick, a goal or a watch from ever carrying one (ADDRESS-3).
     addressing: Option<Addressed>,
+    /// The definition `--agent` named, which every turn this session starts addresses unless a
+    /// `/agent` line addressed another for one turn.
+    ///
+    /// Separate from `addressing` because that one is taken by the turn it was set for, and this
+    /// one is never taken. Set once, before the first turn, by the caller holding the command line
+    /// (ADDRESS-3). A turn nobody typed carries it because the person started the session under
+    /// it, and nothing a turn produced can set it.
+    standing: Option<Addressed>,
     /// The standing watches this session holds, where a turn armed any.
     ///
     /// Private for the reason the loop and the goal are: a watch is looked at, fires, and has the
@@ -1713,6 +1721,7 @@ impl Session {
             watches: watch::Watches::new(),
             goal: None,
             addressing: None,
+            standing: None,
             rewind_points: Vec::new(),
             turn_start: TurnStart::default(),
             pending: crate::remote_confirm::Interjections::new(),
@@ -6979,8 +6988,32 @@ impl Session {
     }
 
     /// The definition the turn starting now was addressed to, taken so no later turn inherits it.
+    ///
+    /// Falls back to the session's standing definition where no `/agent` line named one. That one
+    /// is not taken, because every turn of a session started under `--agent` addresses it (CLI-17).
     pub fn take_addressing(&mut self) -> Option<Addressed> {
-        self.addressing.take()
+        self.addressing.take().or_else(|| self.standing.clone())
+    }
+
+    /// Work every turn of this session under `definition`, from the first one on.
+    ///
+    /// Only for the caller that read it off the command line, before the first turn (ADDRESS-3).
+    /// Nothing clears it. A session started under a definition keeps it until the session ends, and
+    /// a person who wants the planner back starts a new session.
+    ///
+    /// A model the definition names becomes the session's model, because every turn asks for it,
+    /// so the window, the effort level and `/status` have to be that model's. It is not recorded
+    /// as a pick, so a later session without `--agent` opens on the model it would have.
+    pub fn work_under(&mut self, definition: Addressed) {
+        if let Some(model) = &definition.model {
+            self.model = Some(model.clone());
+        }
+        self.standing = Some(definition);
+    }
+
+    /// The definition every turn of this session addresses, where it was started under one.
+    pub fn standing_definition(&self) -> Option<&Addressed> {
+        self.standing.as_ref()
     }
 
     /// Start looking again because the turn that just ended asked to, repeating the person's line.

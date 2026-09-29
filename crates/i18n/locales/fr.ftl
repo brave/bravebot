@@ -71,8 +71,8 @@ cli-plain-needs-a-terminal =
 # plutôt qu'il ne la décrit, donc il n'y a rien à combiner avec lui.
 cli-plain-takes-nothing-else =
     --plain démarre une session et ne prend aucun autre argument. --incognito,
-    --dangerously-skip-permissions et --settings vont avec lui ; tout le reste est une autre
-    manière de démarrer.
+    --dangerously-skip-permissions, --settings et --agent vont avec lui ; tout le reste est une
+    autre manière de démarrer.
 # Dit lorsque la question de démarrage n'est pas posée parce qu'une session antérieure ici a reçu
 # l'ordre de retenir la réponse (TRUST-23). Une session en lignes n'a pas de commandes à barre
 # oblique, donc les moyens de se faire reposer la question sont ceux qu'elle peut nommer.
@@ -89,6 +89,7 @@ cli-options-heading = Options :
 cli-option-file = Inclure un fichier de l'espace de travail comme contexte (répétable)
 cli-option-add-dir = Accéder à un répertoire hors de celui de travail (répétable)
 cli-option-settings = Lire ce fichier de réglages pour cette exécution, au-dessus de ceux trouvés sur le disque
+cli-option-agent = Adresser chaque tour à cette définition, comme /agent le fait pour un seul
 cli-option-mode = turn (par défaut) décide étape par étape ; manifest planifie tout le déroulement d'abord
 cli-option-model = Le modèle demandé par cette exécution, à la place de celui mémorisé ou configuré
 cli-option-effort = L'effort de réflexion demandé par cette exécution, à la place de celui mémorisé ou configuré
@@ -113,6 +114,25 @@ cli-file-needs-a-path = --file demande un chemin
 cli-add-dir-needs-a-path = --add-dir demande le chemin absolu d'un répertoire
 cli-settings-needs-a-path = --settings demande le chemin d'un fichier de réglages
 cli-settings-not-a-file = --settings ne nomme aucun fichier : { $path }
+cli-agent-needs-a-name = --agent demande le nom d'une définition
+# Le drapeau est l'un de --resume, --continue et --fork, tel qu'il a été tapé.
+cli-agent-not-with-a-recorded-session =
+    --agent démarre une nouvelle session, et { $flag } en reprend une enregistrée, qui ne garde pas
+    la définition sous laquelle elle travaillait
+cli-agent-not-for-a-command =
+    --agent nomme la définition sous laquelle travaille une session ou une tâche, et { $command }
+    ne démarre ni l'une ni l'autre
+cli-agent-not-with-a-manifest =
+    --agent ne va pas avec --mode manifest : une exécution planifiée prévoit chaque étape avant
+    qu'aucune ne s'exécute, et une définition est désignée un tour à la fois
+cli-agent-no-such-definition = aucune définition ne s'appelle { $name } ; cette exécution a résolu { $names }
+cli-agent-no-such-definition-unread =
+    { $count ->
+        [one] aucune définition ne s'appelle { $name } ; cette exécution a résolu { $names }. 1 définition dans .bravebot/agents n'a pas été lue : -p ne pose aucune question de confiance, donc il ne lit que ~/.bravebot/agents
+       *[other] aucune définition ne s'appelle { $name } ; cette exécution a résolu { $names }. { $count } définitions dans .bravebot/agents n'ont pas été lues : -p ne pose aucune question de confiance, donc il ne lit que ~/.bravebot/agents
+    }
+cli-plain-working-under = chaque demande est adressée à { $definition }
+cli-plain-working-under-model = chaque demande est adressée à { $definition }, qui demande { $model }
 cli-mode-needs-a-name = --mode demande l'un de : { $names }
 cli-model-needs-a-name = --model demande le nom d'un modèle
 cli-effort-needs-a-level = --effort demande l'un de : { $levels }
@@ -1176,6 +1196,9 @@ status-scratch-note = propre à cette session, qui peut y écrire, supprimé à 
 status-model = Modèle
 status-model-chosen = choisi avec /model
 status-model-default = la valeur par défaut configurée
+status-model-definitions = celui que { $definition } demande
+status-agent = Agent
+status-agent-every-turn = chaque tour lui est adressé, désigné avec --agent
 status-effort = Effort
 status-effort-chosen = choisi avec /effort
 status-effort-default = ce que le service fait de lui-même
@@ -1750,6 +1773,14 @@ agent-no-such-definition = aucune définition ne s'appelle { $name } ; cette ses
 # Affiché au-dessus d'une réponse d'un tour désigné. Le nom est celui que le pilote a trouvé, jamais
 # ce que la réponse dit d'elle-même.
 agent-answered = { $name } a répondu
+session-working-under =
+    chaque tour est adressé à { $definition } ; /agent <nom> <tâche> en désigne une autre pour un tour
+session-model-is-the-definitions =
+    chaque tour est adressé à { $definition }, qui demande { $model }, donc /model n'a rien à
+    changer ; lancez bravebot sans --agent pour choisir un modèle
+agent-model-outranked =
+    { $definition } a demandé { $model }, et --model l'emporte, donc cette exécution a demandé le
+    modèle nommé par la ligne de commande
 
 
 ## L'écran d'accueil
