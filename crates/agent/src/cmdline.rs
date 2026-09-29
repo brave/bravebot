@@ -582,7 +582,12 @@ impl<'a> Scan<'a> {
     fn tokens(mut self) -> Result<Vec<Tok>, Refused> {
         let mut out = Vec::new();
         loop {
-            while matches!(self.peek(), Some(' ' | '\t')) {
+            // Every whitespace `ends_word` counts separates words here too, line breaks aside:
+            // those are refused just below, as more than one line.
+            while matches!(
+                self.peek(),
+                Some(c) if c.is_whitespace() && !matches!(c, '\n' | '\r')
+            ) {
                 self.bump();
             }
             let start = self.offset();
@@ -736,6 +741,11 @@ impl<'a> Scan<'a> {
     fn word(&mut self) -> Result<Word, Refused> {
         let start = self.offset();
         let pieces = self.pieces(false)?;
+        if self.offset() == start {
+            // A word that read nothing cannot be, and letting one through would leave the scan
+            // where it was, going round the same character forever.
+            return Err(self.refuse(Span::new(start, start), Reason::Syntax("an empty word")));
+        }
         Ok(Word {
             pieces,
             span: Span::new(start, self.offset()),
@@ -2440,6 +2450,23 @@ mod tests {
             refused("echo a\necho b").reason,
             Reason::Syntax(_)
         ));
+    }
+
+    /// Whitespace past the space and the tab still separates words, so a line written with a
+    /// no-break space reads as the words it holds.
+    #[test]
+    fn unicode_whitespace_separates_words() {
+        assert_eq!(argv("echo a\u{00a0}b"), ["echo", "a", "b"]);
+    }
+
+    /// Whatever whitespace `ends_word` counts has to move the scan along, so a line built around
+    /// any one of them comes back as tokens or a refusal, never as a scan that cannot end.
+    #[test]
+    fn every_whitespace_lets_the_scan_finish() {
+        for c in ('\u{0}'..=char::MAX).filter(|c| c.is_whitespace()) {
+            // Returning at all, either way, is what the scan owes.
+            let _ = parse(&format!("echo a{c}b"));
+        }
     }
 
     /// Expansion inside double quotes is still expansion, so the quoting that makes a `$`
