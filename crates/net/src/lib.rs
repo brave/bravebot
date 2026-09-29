@@ -416,8 +416,9 @@ impl Request {
     /// it takes: no bound on its start, its length, or the gaps in it. Resolving and connecting
     /// keep theirs, and so does every hop past a redirect.
     ///
-    /// For a caller that can be stopped, since a server here that never answers is then waited on
-    /// until it is.
+    /// Honoured only by [`Egress::fetch_streaming`] given a [`Cancel`], since a server here that
+    /// never answers is then waited on until somebody stops it. The caller reading the stream has
+    /// to look at the token between pieces for that to be true.
     pub fn patient_on_this_machine(mut self) -> Self {
         self.patient_on_this_machine = true;
         self
@@ -524,7 +525,8 @@ impl Egress {
         label: Label,
         cancel: Option<&Cancel>,
     ) -> Result<Response, EgressError> {
-        let (status, content_type, reader) = self.fetch_checked(policy, &request, cancel)?;
+        // Never stoppable: the body is read to its end below, where no token is looked at.
+        let (status, content_type, reader) = self.fetch_checked(policy, &request, cancel, false)?;
         // The URL the caller asked for, not the one the body is arriving from: a redirect chain
         // ends somewhere a server chose, and this failure is reported to whoever asked.
         let (body, truncated) = read_capped(reader).map_err(|e| body_failure(&request.url, e))?;
@@ -551,7 +553,8 @@ impl Egress {
         label: Label,
         cancel: Option<&Cancel>,
     ) -> Result<Streamed<'static>, EgressError> {
-        let (status, content_type, reader) = self.fetch_checked(policy, &request, cancel)?;
+        let (status, content_type, reader) =
+            self.fetch_checked(policy, &request, cancel, cancel.is_some())?;
 
         Ok(Streamed {
             status,
@@ -580,9 +583,10 @@ impl Egress {
         policy: &mut Policy<'_, S>,
         request: &Request,
         cancel: Option<&Cancel>,
+        stoppable: bool,
     ) -> Result<(u16, Option<String>, Box<dyn std::io::Read + Send>), EgressError> {
         let mut redirected = false;
-        match self.follow(policy, request, cancel, &mut redirected) {
+        match self.follow(policy, request, cancel, stoppable, &mut redirected) {
             Err(error) if redirected => Err(error.into_a_failure_of(&request.url)),
             outcome => outcome,
         }
@@ -609,6 +613,7 @@ impl Egress {
         policy: &mut Policy<'_, S>,
         request: &Request,
         cancel: Option<&Cancel>,
+        stoppable: bool,
         redirected: &mut bool,
     ) -> Result<(u16, Option<String>, Box<dyn std::io::Read + Send>), EgressError> {
         let mut url = request.url.clone();
@@ -619,8 +624,12 @@ impl Egress {
             policy.before_network(&url)?;
 
             // The caller's URL only. A hop past it is somewhere a server named, and how long to
-            // wait on it is not the server's to lengthen.
-            let patient = request.patient_on_this_machine && hops == 0 && self.reaches_here(&url);
+            // wait on it is not the server's to lengthen. And only a caller that can walk away from
+            // the wait and the body both, since with no bound nothing else ends a server that hung.
+            let patient = request.patient_on_this_machine
+                && stoppable
+                && hops == 0
+                && self.reaches_here(&url);
             let response = match cancel {
                 Some(cancel) => self.send_watching(request, &url, patient, cancel)?,
                 None => send(&self.agent, self.timeouts, request, &url, patient)?,

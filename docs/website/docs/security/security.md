@@ -97,8 +97,8 @@ says which, and what it carries.
   decide anything.
 - **Each phase is bounded separately.** Connecting, starting to reply and continuing to reply are timed
   apart, so a slow answer is not confused with a dead connection. A model streaming from this
-  machine, with no proxy in between, is waited on for as long as it takes, since a local model can
-  go quiet for minutes while it writes a tool call. You can stop it at any point.
+  machine, with no proxy in between, is waited on for as long as it takes wherever you can stop it,
+  since a local model can go quiet for minutes while it writes a tool call.
 - **Only "not now" is retried.** A connection that gave out is worth another attempt; a refusal is not.
 
 One crate opens a socket of its own: the subscription client, for [Leo

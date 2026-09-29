@@ -4,6 +4,7 @@
 //! only appears when bytes actually move: that the policy gate runs before the request,
 //! that every redirect hop is revalidated, and that a response body arrives labelled.
 
+use bravebot_core::cancel::Cancel;
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::{Event, RecordingSink};
 use bravebot_core::label::Label;
@@ -927,6 +928,7 @@ fn serve_like_a_local_model(host: &str, silence: Duration) -> String {
 /// that silence as though the connection had gone.
 #[test]
 fn a_stream_from_this_machine_that_asks_is_waited_on_through_any_silence() {
+    let stop = Cancel::new();
     for host in ["127.0.0.1", "localhost"] {
         for patient in [true, false] {
             let base = serve_like_a_local_model(host, Duration::from_millis(800));
@@ -954,7 +956,7 @@ fn a_stream_from_this_machine_that_asks_is_waited_on_through_any_silence() {
 
             // To its end: the server states the body's length, so a clean end is all of it.
             let read = egress
-                .fetch_streaming(&mut policy, request, Label::untrusted_public(), None)
+                .fetch_streaming(&mut policy, request, Label::untrusted_public(), Some(&stop))
                 .and_then(|mut stream| {
                     let mut pieces = 0;
                     while stream.next_chunk()?.is_some() {
@@ -1001,7 +1003,7 @@ fn a_redirect_from_this_machine_keeps_the_bounds() {
             &mut policy,
             Request::get(format!("{first}/v1")).patient_on_this_machine(),
             Label::untrusted_public(),
-            None,
+            Some(&Cancel::new()),
         )
         .map(|_| ())
         .expect_err("the hop past a redirect is bounded");
@@ -1010,6 +1012,46 @@ fn a_redirect_from_this_machine_keeps_the_bounds() {
         matches!(error, EgressError::Transport { .. }),
         "expected a transport failure, got {error:?}"
     );
+}
+
+/// With no bound, the only end to a wait on a server here that took the request and hung is
+/// somebody stopping it. A stream fetched without a token cannot be, and a whole reply is read to
+/// its end where no token is looked at, so neither is waited on that way however it asks.
+#[test]
+fn a_wait_that_nobody_can_stop_keeps_the_bounds() {
+    let stop = Cancel::new();
+    for whole in [false, true] {
+        let base = serve_like_a_local_model("127.0.0.1", Duration::from_millis(800));
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("policy begins");
+
+        let egress = Egress::with_timeouts(Timeouts {
+            reply: Duration::from_millis(300),
+            idle: Duration::from_millis(300),
+            ..Timeouts::default()
+        });
+        let request = Request::post(&base, b"{}".to_vec()).patient_on_this_machine();
+        let read = if whole {
+            egress
+                .fetch_watching(&mut policy, request, Label::untrusted_public(), Some(&stop))
+                .map(|_| ())
+        } else {
+            egress
+                .fetch_streaming(&mut policy, request, Label::untrusted_public(), None)
+                .map(|_| ())
+        };
+
+        assert!(
+            matches!(read, Err(EgressError::Transport { .. })),
+            "whole: {whole}: the silence was waited through: {read:?}"
+        );
+    }
 }
 
 /// A buffered read has to tell the difference too. Silently handing back the part that arrived

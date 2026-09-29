@@ -257,10 +257,11 @@ into plaintext and hand a third party what only it had.
 ### NET-10: a stream from this machine may take as long as it takes
 
 A request that asks is waited on without the bounds [NET-5](#NET-5) sets from the moment it is sent:
-not on its start, its length, or the gaps in it. The ask is honoured only where the URL the caller
-named is on this machine, meaning `localhost` or a loopback address, and no proxy carries it.
-Resolving and connecting keep their bounds, and so does every hop past a redirect. The chat client
-asks on every streamed reply and on nothing else.
+not on its start, its length, or the gaps in it. The ask is honoured only on a stream whose caller
+passed a way to stop it, and only where the URL the caller named is on this machine, meaning
+`localhost` or a loopback address, and no proxy carries it. Resolving and connecting keep their
+bounds, and so does every hop past a redirect. The chat client asks on every streamed reply and on
+nothing else, so a chat request that nothing can stop keeps its bounds.
 
 **Why.** Every bound on a reply is there to tell a slow answer from a connection that died without
 saying so, and a connection to this machine does not die that way: when the server goes, the socket
@@ -271,14 +272,17 @@ bounds a model on this machine would need are those of the slowest machine it ru
 number is that.
 
 A redirect is named by a server, and how long its target is waited on is not a server's to
-lengthen. A proxy is another machine, so a request through one is another machine's request. A
-whole reply is not waited on this way, because the call that fetches one cannot be stopped while it
-waits, and a stream can.
+lengthen. A proxy is another machine, so a request through one is another machine's request. With
+no bound, the only end to a wait on a server that took the request and hung is somebody stopping
+it, so a request nobody can stop is not waited on this way. A whole reply is always one of those,
+because its body is read to the end without a stop being looked at.
 
 `verified-by: bravebot_net::egress::a_stream_from_this_machine_that_asks_is_waited_on_through_any_silence`
 `verified-by: bravebot_net::egress::a_redirect_from_this_machine_keeps_the_bounds`
+`verified-by: bravebot_net::egress::a_wait_that_nobody_can_stop_keeps_the_bounds`
 `verified-by: bravebot_net::lib::only_this_machine_is_this_machine`
 `verified-by: bravebot_aichat::client::a_model_on_this_machine_that_goes_quiet_while_it_writes_is_waited_for`
+`verified-by: bravebot_aichat::client::a_quiet_local_model_is_not_waited_on_without_bound_by_a_client_nobody_can_stop`
 
 ## Known costs
 
