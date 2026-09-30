@@ -151,12 +151,17 @@ a manifest someone edited from handing the relay to a different extension.
 ### BROWSER-5: the socket exists while the extension is connected
 
 The native host runs from the extension's connect until its port closes, and removes the socket and
-the secret as it exits. While no extension is connected there is no socket.
+the secret as it exits. While no extension is connected there is no socket. One host serves the
+directory at a time: a host holds a lock on the directory's `lock` file for as long as it runs, and
+one that cannot take it exits before it touches the socket or the secret.
 
 **Why.** Brave owns the host's lifetime and nothing else can start it. A socket left behind would
-point a connecting server at a relay that is not there.
+point a connecting server at a relay that is not there. Two hosts starting together would each find
+no socket, each write its secret over the other's, and the first to exit would remove the files the
+other still serves.
 
 `verified-by: bravebot_browser::relay::the_socket_and_secret_go_when_the_extension_disconnects`
+`verified-by: bravebot_browser::relay::a_host_does_not_start_while_another_holds_the_lock`
 
 <a id="BROWSER-6"></a>
 ### BROWSER-6: a call with no extension connected fails at once
@@ -328,7 +333,7 @@ when asked would leave no socket for a session to find.
 - The secret in [BROWSER-3](#BROWSER-3) is only as private as the directory. Any process of the
   person's that can read it can use the relay, which is the same account boundary a keychain gives.
 - One Brave profile at a time. A second profile with the extension installed starts a second host,
-  which finds the first one's socket accepting and exits.
+  which finds the first one holding the lock and exits.
 - A confined server can connect to the socket only while it has egress. A declaration that withholds
   egress, where a future version allows one to, cannot reach the relay on macOS.
 - Linux with Landlock ABI 9 was reasoned about and not measured.

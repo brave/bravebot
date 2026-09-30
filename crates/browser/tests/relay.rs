@@ -407,6 +407,37 @@ fn the_host_refuses_an_extension_it_was_not_installed_for() {
     assert!(!never_installed.path().join("socket").exists());
 }
 
+/// One host serves a directory at a time. A host that cannot take the lock is refused before it
+/// makes a socket or a secret, even with no socket there yet, which is how a second host starting
+/// alongside the first finds the directory. Once the lock is free a host starts.
+#[test]
+fn a_host_does_not_start_while_another_holds_the_lock() {
+    use rustix::fs::{FlockOperation, flock};
+
+    let directory = installed_for(OURS);
+    let lock = std::fs::File::create(directory.path().join("lock")).unwrap();
+    flock(&lock, FlockOperation::LockExclusive).unwrap();
+
+    let mut second = Extension::start(directory.path(), OURS);
+    let status = exit_status(&mut second.host, "the host is refused the lock");
+    assert!(!status.success());
+    assert!(!directory.path().join("socket").exists());
+    assert!(!directory.path().join("secret").exists());
+
+    drop(lock);
+    let first = Extension::connect(directory.path(), OURS);
+    let key = secret(directory.path());
+
+    // A second host while the first serves leaves the first one's files as they were.
+    let mut second = Extension::start(directory.path(), OURS);
+    let status = exit_status(&mut second.host, "the second host is refused the lock");
+    assert!(!status.success());
+    assert_eq!(secret(directory.path()), key);
+    let mut peer = Peer::connect(directory.path(), &key);
+    peer.send(&json!({"id": 1, "method": "list_tabs", "params": {}}));
+    assert_eq!(first.request()["method"], "list_tabs");
+}
+
 /// When the extension's port closes the host exits and takes its socket and secret with it, so a
 /// server connecting later is told the extension is gone rather than reaching a stale socket.
 #[test]

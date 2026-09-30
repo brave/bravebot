@@ -9,10 +9,11 @@
 
 use crate::framing;
 use crate::lines::{self, Line};
-use crate::paths::{self, EXTENSION, SECRET, SOCKET};
+use crate::paths::{self, EXTENSION, LOCK, SECRET, SOCKET};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{self, BufReader, Read, Write};
+use std::os::fd::OwnedFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -57,13 +58,11 @@ const PARSE_ERROR: i64 = -32700;
 pub fn run(directory: &Path, origin: &str) -> io::Result<()> {
     check_origin(directory, origin)?;
     paths::prepare(directory)?;
+    // Declared before everything this host creates, so it is released after they are removed:
+    // a host that starts next finds the directory as this one left it.
+    let _held = hold_the_lock(directory)?;
 
     let socket = directory.join(SOCKET);
-    if UnixStream::connect(&socket).is_ok() {
-        return Err(io::Error::other(
-            "another Brave profile is already connected to the relay, and only one can be",
-        ));
-    }
     match std::fs::remove_file(&socket) {
         Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
         _ => {}
@@ -115,6 +114,33 @@ fn bind_and_publish(
     after_bind(staged);
     std::fs::rename(staged, socket)?;
     Ok(listener)
+}
+
+/// The lock on the directory's [`LOCK`] file, held until what is returned is dropped.
+///
+/// A host that cannot take it is refused before it touches the socket or the secret, since another
+/// host holds it and serves them.
+fn hold_the_lock(directory: &Path) -> io::Result<OwnedFd> {
+    use rustix::fs::{FlockOperation, Mode, OFlags, flock, open};
+    use rustix::io::Errno;
+
+    let file = open(
+        directory.join(LOCK),
+        OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::from_raw_mode(0o600),
+    )?;
+    loop {
+        match flock(&file, FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => return Ok(file),
+            Err(Errno::INTR) => {}
+            Err(Errno::WOULDBLOCK) => {
+                return Err(io::Error::other(
+                    "another Brave profile is already connected to the relay, and only one can be",
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
 }
 
 /// Refuses an origin that is not the one extension `install` recorded.
