@@ -133,6 +133,9 @@ cli-agent-no-such-definition-unread =
     }
 cli-plain-working-under = chaque demande est adressée à { $definition }
 cli-plain-working-under-model = chaque demande est adressée à { $definition }, qui demande { $model }
+cli-bypass-unreachable =
+    --dangerously-skip-permissions est refusé : permissions.bypassUnreachable dans { $path } rend
+    ce mode inaccessible ici. Retirez-le de ce fichier, ou lancez sans l'option.
 cli-mode-needs-a-name = --mode demande l'un de : { $names }
 cli-model-needs-a-name = --model demande le nom d'un modèle
 cli-effort-needs-a-level = --effort demande l'un de : { $levels }
@@ -284,6 +287,12 @@ doctor-permissions-count =
        *[other] { $count } règles
     }
 doctor-permissions-unreadable = règle illisible
+doctor-skill-key-unread = clé non lue
+doctor-skill-keys-unread =
+    { $count ->
+        [one] { $skill } déclare { $keys }, que rien ici ne lit
+       *[other] { $skill } déclare { $keys }, dont rien ici ne lit aucune
+    }
 doctor-settings-no-variables = settings.json, ne nommant aucune variable
 doctor-settings-layer = couche
 doctor-settings-override = remplacement
@@ -298,6 +307,8 @@ doctor-settings-provider-ignored =
 doctor-settings-model-ignored =
     model dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
+doctor-settings-narrowing-ignored =
+    { $key } dans { $path } n'est pas un booléen, il est donc lu comme absent et ne refuse rien
 doctor-settings-allow-ignored =
     la règle allow { $rule } dans { $path } n'est pas accordée : une règle allow répond à une
     invite, le fichier d'un projet la propose donc et vous l'accordez au démarrage d'une session
@@ -1454,6 +1465,12 @@ command-exit = Partir
 skill-from-project = (projet)
 skill-from-user = (utilisateur)
 skill-from-built-in = (intégré)
+skill-effort-not-a-level = { $skill } demande l'effort { $effort }, qui n'est aucun de { $levels }, donc ses tours gardent celui de cette session
+skill-asks-a-model = { $skill } demande { $model } pour le reste de ce tour
+skill-asks-an-effort = { $skill } demande l'effort { $effort } pour le reste de ce tour
+skill-model-needs-sign-in = { $skill } demande { $model }, qui exige d'abord une connexion, donc ses tours gardent le modèle de cette session
+skill-model-kept-for-definition = { $skill } demande { $model }, mais ce tour reste sur le modèle que { $definition } a désigné
+skill-model-substituted = { $skill } a demandé { $model } et a reçu la réponse d'un autre modèle
 
 
 ## Ce que la session répond
@@ -1479,6 +1496,14 @@ session-rewind-goes-no-further =
         [one] cette session peut reculer d'un tour, pas plus
        *[other] cette session peut reculer de { $kept } tours, pas plus
     }
+session-rewind-uncovered = Des changements peuvent subsister. Non couvert en entier : { $causes }.
+session-rewind-cause-command = commandes
+session-rewind-cause-hook = hooks
+session-rewind-cause-scratch = écritures temporaires
+session-rewind-cause-server = serveurs de langage
+session-rewind-cause-desktop = tours du bureau
+session-rewind-cause-backup = sauvegardes indisponibles
+session-rewind-cause-unknown = couverture inconnue
 session-exported = transcription exportée vers { $path }
 session-export-failed = impossible d'exporter la transcription : { $problem }
 session-add-dir-needs-a-path = /add-dir demande un répertoire, comme /add-dir ~/notes
@@ -1905,3 +1930,5 @@ doctor-agents-conflict = conflit : résolvez d'abord le fichier ou le répertoir
 doctor-agents-unreadable = impossible d'inspecter ce chemin ; résolvez d'abord ses permissions d'accès
 doctor-direnv-ok = disponible dans le PATH
 doctor-direnv-missing = introuvable dans le PATH ; consultez https://direnv.net/ ou lancez `brew install direnv`
+
+status-undecided = non décidé
