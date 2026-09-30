@@ -286,22 +286,27 @@ is refused, and would report that no extension is connected while one is.
 
 The extension asks Brave for the host by the name `install` gives its manifest, and answers exactly
 the methods the server's tools call, with one switch for each in its options. The `key` in its
-manifest fixes its id, and that id is the one `install` records given none.
+manifest fixes its id, and that id is the one `install` records given none. Every string in an answer
+is well formed: an unpaired surrogate is sent as U+FFFD.
 
 **Why.** The two halves are written in two languages and released together, and nothing at run time
 would say they disagreed: a tool the extension does not answer fails like a page that cannot be
 read, and an id the host was not installed for is refused like an extension it should not serve.
+JSON carries an unpaired surrogate as an escape the host refuses to parse, so an answer holding one
+would leave the call waiting out its timeout.
 
 `verified-by: bravebot_browser::extension::the_extension_answers_every_tool_the_server_offers_and_no_other`
 `verified-by: bravebot_browser::extension::the_extension_connects_to_the_host_install_names`
 `verified-by: bravebot_browser::extension::the_id_install_records_is_the_one_the_extensions_key_gives`
+`verified-by: by-construction (extension/tests/tools.test.mjs asserts that answers from list_tabs and read_page holding an unpaired surrogate reach JSON with no surrogate escape and with U+FFFD in its place; it runs where the test under BROWSER-13 runs)`
 
 <a id="BROWSER-13"></a>
 ### BROWSER-13: a page is read from the tab at exactly its URL
 
 `read_page` reads the open tab whose URL is the one asked for, character for character, and no
 other. Where no tab is at that URL it fails without running anything in any tab. It returns at most
-100,000 characters of the page's text and says whether it cut the page short. A page the browser
+100,000 characters of the page's text, never ending it on half a character, and says whether it
+cut the page short. A page the browser
 will not let an extension read, such as its own settings, is a failure saying so.
 
 **Why.** The URL is what the person saw in the question before the call. A tab whose URL only

@@ -65,6 +65,32 @@ function text(params, name) {
   return value;
 }
 
+// The first `limit` UTF-16 code units of `text`, one fewer where the last of
+// them would be the first half of a character.
+function cut(text, limit) {
+  const kept = text.slice(0, limit);
+  const last = kept.charCodeAt(kept.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? kept.slice(0, -1) : kept;
+}
+
+// `value` with every string in it well formed: an unpaired surrogate becomes
+// U+FFFD. JSON carries one as an escape the host cannot parse, so a reply
+// holding one would be refused and the call left waiting.
+function wellFormed(value) {
+  if (typeof value === "string") {
+    return value.toWellFormed();
+  }
+  if (Array.isArray(value)) {
+    return value.map(wellFormed);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, inner]) => [key, wellFormed(inner)]),
+    );
+  }
+  return value;
+}
+
 // How many results to return: what the call asked for, kept between 1 and
 // MAX_RESULTS.
 function count(params) {
@@ -126,7 +152,7 @@ export const TOOLS = {
     return {
       url,
       title: page.title,
-      text: truncated ? page.text.slice(0, PAGE_TEXT_LIMIT) : page.text,
+      text: truncated ? cut(page.text, PAGE_TEXT_LIMIT) : page.text,
       truncated,
     };
   },
@@ -182,7 +208,7 @@ export async function handle(message, chrome) {
     return {
       jsonrpc: "2.0",
       id,
-      result: await tool(chrome, message.params ?? {}),
+      result: wellFormed(await tool(chrome, message.params ?? {})),
     };
   } catch (error) {
     const code = error instanceof ToolError ? error.code : SERVER_ERROR;

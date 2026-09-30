@@ -180,6 +180,40 @@ test("read_page reads the tab at exactly that URL and no other", async () => {
   assert.ok(!reached(near, "scripting.executeScript"));
 });
 
+// A long page is cut on a whole character. A character outside the Basic
+// Multilingual Plane takes two code units, and cutting between them would send
+// half of one, which the host cannot parse.
+test("read_page never ends a cut page on half a character", async () => {
+  const text = "x".repeat(PAGE_TEXT_LIMIT - 1) + "\u{1F600}and the rest";
+  const chrome = browser({ tabs, pages: { 1: { title: "Wide", text } } });
+  const reply = await handle(
+    { id: 1, method: "read_page", params: { url: "https://brave.com/" } },
+    chrome,
+  );
+  assert.equal(reply.result.text, "x".repeat(PAGE_TEXT_LIMIT - 1));
+  assert.equal(reply.result.truncated, true);
+});
+
+// JSON carries an unpaired surrogate as an escape the host refuses to parse,
+// which would leave the call waiting for a reply that never comes. Every
+// string in an answer is well formed, whichever tool gave it.
+test("an answer holds no unpaired surrogate", async () => {
+  const broken = "a\ud800b";
+  const chrome = browser({
+    tabs: [{ id: 1, windowId: 10, title: broken, url: "https://brave.com/" }],
+    pages: { 1: { title: broken, text: `text ${broken}` } },
+  });
+  for (const [method, params] of [
+    ["list_tabs", {}],
+    ["read_page", { url: "https://brave.com/" }],
+  ]) {
+    const reply = await handle({ id: 1, method, params }, chrome);
+    const sent = JSON.stringify(reply);
+    assert.ok(!/\\ud[89ab]/i.test(sent), `${method}: ${sent}`);
+    assert.ok(sent.includes("a\ufffdb"), `${method}: ${sent}`);
+  }
+});
+
 test("read_page cuts a long page at the limit and says it did", async () => {
   const long = "x".repeat(PAGE_TEXT_LIMIT + 5);
   const chrome = browser({ tabs, pages: { 1: { title: "Long", text: long } } });
