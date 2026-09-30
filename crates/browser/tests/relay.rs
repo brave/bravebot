@@ -755,6 +755,27 @@ fn installing_refuses_what_is_not_an_extension_id() {
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
 }
 
+/// JSON that is not a request object is answered with an error under no id, as JSON-RPC asks, so a
+/// client is never left waiting on a line the server read. A notification is still answered with
+/// nothing: only the two lines that are not requests get replies.
+#[test]
+fn a_line_that_is_not_a_request_is_answered_with_an_error() {
+    let directory = tempfile::tempdir().unwrap();
+    let replies = mcp(
+        directory.path(),
+        &[
+            json!([1, 2]),
+            json!("list_tabs"),
+            json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        ],
+    );
+    assert_eq!(replies.len(), 2, "{replies:?}");
+    for reply in &replies {
+        assert_eq!(reply["id"], Value::Null, "{reply}");
+        assert_eq!(reply["error"]["code"], -32600, "{reply}");
+    }
+}
+
 /// A person vouches for the list once and BraveBot records its digest, so the list is the same
 /// whether or not the extension is connected.
 #[test]
