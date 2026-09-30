@@ -327,12 +327,15 @@ time, which would answer a search of all of history with a day of it.
 ### BROWSER-15: the extension keeps its port open while Brave runs
 
 The extension opens the native messaging port as it starts and as Brave starts, and opens it again
-within a minute of losing it.
+within a minute of losing it. A reply goes back on the port its request came in on, and never on a
+port opened since.
 
 **Why.** The port is what keeps the host, and so the socket, alive. An extension that opened it only
-when asked would leave no socket for a session to find.
+when asked would leave no socket for a session to find. A port opened since belongs to another host,
+which numbers its requests from 1 as well, so a reply reaching it could be taken for the answer to a
+request of its own and handed to a session that never asked for it.
 
-`verified-by: by-construction (extension/tests/background.test.mjs loads the real service worker against fake runtime, alarm and native-port events, and asserts it connects at load and on startup and reconnects on the one-minute alarm after a disconnect; make check-extension runs it, and check-ui-build depends on that target, so the Front end CI job runs it on every change the classifier gives the ui area, which a change under extension/ is)`
+`verified-by: by-construction (extension/tests/background.test.mjs loads the real service worker against fake runtime, alarm, storage, tab and native-port events; it asserts the worker connects at load and on startup and reconnects on the one-minute alarm after a disconnect, and that a request answered after its port closed and another opened reaches only its own port; make check-extension runs it, and check-ui-build depends on that target, so the Front end CI job runs it on every change the classifier gives the ui area, which a change under extension/ is)`
 
 ## Known costs
 
