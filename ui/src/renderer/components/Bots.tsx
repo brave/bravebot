@@ -235,14 +235,13 @@ function BotRow({
         <BotAvatar seed={bot.avatar} doing={doing} size={28} />
         <span className="bot-said">
           <span className="bot-name">{bot.name}</span>
-          {/* The whole path in the tooltip, because the column clips it. */}
-          <span className="bot-where" data-tooltip={bot.directory}>
+          <span className="bot-where">
             {where}
             {bot.session === null && ' · not spoken to yet'}
           </span>
         </span>
       </button>
-      <IconButton icon="more-horizontal" size="tiny" className="bot-edit" label={`Edit ${bot.name}`} tooltip="Edit bot" onClick={onEdit} />
+      <IconButton icon="edit-pencil" size="tiny" className="bot-edit" label={`Edit ${bot.name}`} tooltip={false} onClick={onEdit} />
     </div>
   )
 }
