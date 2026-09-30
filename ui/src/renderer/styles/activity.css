@@ -1,0 +1,179 @@
+/* ==================================================================== activity
+   What happened on the way to a reply: tool calls, the runs they gather into, the line that
+   says a turn is under way, and the quiet meta lines. All of it sits a register below the
+   conversation, in meta and caption type and secondary or tertiary ink, so it never competes
+   with what was said. */
+
+/* ------------------------------------------------------------------ tool lines */
+
+.tool {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  min-width: 0;
+  min-height: var(--hit);
+  padding-inline: var(--leo-spacing-s);
+  font: var(--type-meta);
+  color: var(--ink-secondary);
+}
+.tool-status {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--icon-meta);
+  height: var(--icon-meta);
+  --leo-icon-size: var(--icon-meta);
+  --leo-icon-color: var(--ink-tertiary);
+}
+.tool.failed .tool-status { --leo-icon-color: var(--status-error); }
+.tool-ring {
+  --leo-progressring-size: 12px;
+  --leo-progressring-stroke-width: 2px;
+  --leo-progressring-color: var(--accent);
+}
+.tool .verb { flex: none; }
+/* The target is cut from the middle in the markup; this is only the backstop for a column
+   narrower than the budget it was cut to. */
+.tool .target {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: var(--type-code);
+  color: var(--ink-tertiary);
+}
+/* The planner's reason for the call, set apart from the outcome beside it, and the first thing
+   to give way when the line is short of room. */
+.tool .why {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-style: italic;
+  color: var(--ink-tertiary);
+}
+/* Clear of the generic `.note` warning chip, which this is not. */
+.tool .note {
+  flex: none;
+  margin: 0 0 0 auto;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.tool.failed .note { color: var(--status-error-ink); }
+.tool .confined { flex: none; }
+/* A replayed line has no outcome to show, so it is drawn quieter than a live one. */
+.tool.replayed { opacity: 0.6; }
+
+/* ------------------------------------------------------------------ runs
+   A run of calls under one line. The header is the quietest thing in the transcript that is
+   still a control: apparatus between a question and its answer. Open, its lines hang off a
+   hairline rail under the header's glyph. */
+
+.tool-run-collapse {
+  --leo-collapse-summary-padding: var(--leo-spacing-s);
+  --leo-collapse-content-padding: 0 0 var(--leo-spacing-s);
+  --leo-collapse-radius: var(--radius-control);
+  --leo-collapse-summary-color: var(--ink-secondary);
+  --leo-collapse-summary-color-hover: var(--ink-primary);
+  --leo-collapse-icon-size: var(--icon-meta);
+  --leo-collapse-icon-color: var(--ink-tertiary);
+  --leo-font-heading-h3: var(--type-meta);
+  font: var(--type-meta);
+}
+.tool-run-status {
+  display: grid;
+  place-items: center;
+  width: var(--icon-meta);
+  height: var(--icon-meta);
+  --leo-icon-size: var(--icon-meta);
+  --leo-icon-color: var(--ink-tertiary);
+}
+.tool-run-lines {
+  margin-left: calc(var(--leo-spacing-s) + var(--icon-meta) / 2);
+  padding-left: var(--leo-spacing-s);
+  border-left: 1px solid var(--border-hairline);
+}
+
+/* ------------------------------------------------------------------ working
+   One line while a turn runs. The phase word shimmers, which is the only motion in the
+   transcript that is not a response to something the reader did; with reduced motion it holds
+   still in secondary ink. */
+
+.working {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  min-height: var(--hit);
+  padding-inline: var(--leo-spacing-s);
+  font: var(--type-meta);
+  color: var(--ink-secondary);
+}
+.working-ring {
+  display: grid;
+  place-items: center;
+  width: var(--icon-meta);
+  --leo-progressring-size: 12px;
+  --leo-progressring-stroke-width: 2px;
+  --leo-progressring-color: var(--accent);
+}
+.working-word {
+  background: linear-gradient(90deg, var(--ink-tertiary) 20%, var(--ink-primary) 50%, var(--ink-tertiary) 80%);
+  background-size: 200% 100%;
+  background-clip: text;
+  color: transparent;
+  animation: working-shimmer 1.8s linear infinite;
+}
+@keyframes working-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+.working .count {
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.working .turn-audit-link { margin-left: auto; }
+
+@media (prefers-reduced-motion: reduce) {
+  .working-word { animation: none; background: none; color: var(--ink-secondary); }
+}
+@media (forced-colors: active) {
+  .working-word { background: none; color: CanvasText; }
+}
+
+/* ------------------------------------------------------------------ meta lines
+   The agent's own account, a file somebody attached, a memory update, and a turn a watch
+   started: things that happened rather than things anybody said. */
+
+.narration,
+.attached,
+.watch-turn {
+  display: flex;
+  align-items: baseline;
+  gap: var(--leo-spacing-m);
+  min-width: 0;
+  padding-inline: var(--leo-spacing-s);
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+  --leo-icon-size: var(--icon-caption);
+  --leo-icon-color: var(--ink-tertiary);
+}
+.narration leo-icon,
+.attached leo-icon,
+.watch-turn leo-icon { flex: none; align-self: center; }
+.narration { font-style: italic; }
+.attached {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+}
+.attached.consolidation { font-family: inherit; }
+.watch-turn { flex-wrap: wrap; }
+.watch-turn strong { font: var(--type-caption-strong); color: var(--ink-secondary); }

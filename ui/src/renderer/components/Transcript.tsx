@@ -1,26 +1,32 @@
 import { Watches } from './Watches'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
-import { useLayoutEffect, useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import { memo, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
+import { useEvent } from '../hooks'
+import { IconButton } from './IconButton'
+import { IconMenu } from './IconMenu'
+import { CopyButton } from './CopyButton'
 import { isConfined, type Ambient, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import type { Side } from '../columns'
 import type { Asked } from '../App'
 import type { ExportFormat } from '../../shared/export'
 import { Diff } from './Diff'
-import { ModelPicker } from './ModelPicker'
+import { BackendTray, Composer } from './Composer'
+import { Toasts } from './Toasts'
 import { ForkIcon } from './ForkIcon'
 import { ago, contextMenu } from './Sessions'
 import { Markdown } from './Markdown'
 import { BotAvatar, type Doing } from './BotAvatar'
 import type { Bot } from '../../shared/bots'
 import { projectLabel } from '../../shared/recents'
-import { conversationPreferences, setConversation, setExperience, useExperience } from '../experience'
+import { conversationPreferences, setConversation } from '../experience'
 import { ErrorCard } from './ErrorCard'
 import { FilePreview } from './FilePreview'
 import { TurnFooter, TurnNotices, type OpenAudit } from './TurnDetails'
 import type { Turns, TurnDisclosure } from '../turn-details'
-import { Alert, Button, ButtonMenu, Collapse, Icon, Input, ProgressRing, TextArea, type IconName } from '../nala'
+import { Alert, Button, Collapse, Icon, Input, Label, ProgressRing, type IconName } from '../nala'
+import { middleTruncate } from '../truncate'
 
 interface Live {
   model: string | null
@@ -85,6 +91,8 @@ interface Props {
   problem: string | null
   collapsed: Record<Side, boolean>
   onToggle: (side: Side) => void
+  /** Background sessions waiting on the reader, for the folded session list's toggle. */
+  attention: number
   /** The composer's text, owned by `App` so the Send menu item can be grey when it is empty. */
   draft: string
   onDraft: (draft: string) => void
@@ -109,40 +117,50 @@ interface Props {
   onTrustRemembered: (session: string, kept: KeptTrust | null) => void
 }
 
+/** Dispatched on `document` by the View menu's Find item. */
+export const FIND_EVENT = 'bravebot:find'
+/** Dispatched on `document` by the View menu's Focus Composer item. */
+export const FOCUS_COMPOSER_EVENT = 'bravebot:focus-composer'
+
 /**
- * Leo's button host does not put `aria-label` on the inner control the accessibility
- * tree reads. Icon-only composer actions need the name on that inner button, and a
- * slot update rebuilds it, so the name is applied again when the shadow tree changes.
+ * Run something once a menu has finished closing.
+ *
+ * A dialog opened from a menu item remembers what had focus to give it back on close. Opened in
+ * the click, that is the item, which is gone by then; a tick later it is the menu's trigger.
  */
-function useLeoButtonLabel(label: string) {
-  const labelRef = useRef(label)
-  labelRef.current = label
-  const host = useRef<HTMLElement | null>(null)
-  const observer = useRef<MutationObserver | null>(null)
-  const applyTo = (node: HTMLElement) => {
-    const name = labelRef.current
-    node.setAttribute('aria-label', name)
-    const inner = node.shadowRoot?.querySelector('button')
-    if (!inner) return
-    inner.setAttribute('aria-label', name)
-    inner.title = name
-  }
-  const ref = useCallback((node: HTMLElement | null) => {
-    observer.current?.disconnect()
-    observer.current = null
-    host.current = node
-    if (!node) return
-    applyTo(node)
-    const slots = new MutationObserver(() => queueMicrotask(() => applyTo(node)))
-    slots.observe(node, { childList: true })
-    if (node.shadowRoot) slots.observe(node.shadowRoot, { childList: true, subtree: true })
-    observer.current = slots
-  }, [])
+const afterMenu = (open: () => void): void => { setTimeout(open, 0) }
+
+/**
+ * The find bar's field.
+ *
+ * Keys are read by a listener on the host rather than through Leo's `onKeyDown`, whose handler is
+ * the one from the first render and would step through the matches of the first query typed.
+ */
+function FindInput({ query, onQuery, onClose, onStep }: {
+  query: string
+  onQuery: (query: string) => void
+  onClose: () => void
+  onStep: (back: boolean) => void
+}): React.JSX.Element {
+  const host = useRef<HTMLElement>(null)
+  const latest = useRef({ onClose, onStep })
+  latest.current = { onClose, onStep }
   useEffect(() => {
-    if (host.current) applyTo(host.current)
-  }, [label])
-  useEffect(() => () => observer.current?.disconnect(), [])
-  return ref
+    const element = host.current
+    if (!element) return
+    const key = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); latest.current.onClose() }
+      if (event.key === 'Enter') { event.preventDefault(); latest.current.onStep(event.shiftKey) }
+    }
+    element.addEventListener('keydown', key)
+    return () => element.removeEventListener('keydown', key)
+  }, [])
+  return (
+    <Input ref={host} autofocus type="search" size="small" className="find-input" aria-label="Find in conversation"
+      placeholder="Find in conversation" value={query} onInput={({ value }) => onQuery(value)}>
+      <Icon name="search" slot="left-icon" />
+    </Input>
+  )
 }
 
 /**
@@ -156,23 +174,27 @@ function useLeoButtonLabel(label: string) {
  *
  * The name stays put and `aria-expanded` carries the state, which is the disclosure
  * pattern: a label that flipped between "Show" and "Hide" would say the state twice and
- * rename a button the moment it was pressed. The verb goes in `title`, which is for the
+ * rename a button the moment it was pressed. The verb goes in the tooltip, which is for the
  * pointer. The mark swaps with that state: an open column shows the split it belongs to,
  * and a folded column shows the panel coming back.
+ *
+ * With the session list folded, the left toggle is the only place a background session can
+ * ask for attention, so it carries a count of the ones waiting on an answer or an approval.
  */
 function ColumnToggle({
   side,
   collapsed,
   onToggle,
+  attention = 0,
 }: {
   side: Side
   collapsed: boolean
   onToggle: (side: Side) => void
+  attention?: number
 }): React.JSX.Element {
   const what = side === 'left' ? 'the session list' : 'the context panel'
   const label = side === 'left' ? 'Session list' : 'Context panel'
   const controls = side === 'left' ? 'sessions-column' : 'context-column'
-  const title = `${collapsed ? 'Show' : 'Hide'} ${what}`
   const icon: IconName =
     side === 'left'
       ? collapsed
@@ -181,21 +203,24 @@ function ColumnToggle({
       : collapsed
         ? 'sidepanel-open'
         : 'browser-split-view-right'
+  const waiting = collapsed && attention > 0
+  const need = `${attention} ${attention === 1 ? 'session needs' : 'sessions need'} you`
 
   return (
-    <Button
-      kind="plain-faint"
-      size="small"
-      fab
-      className={`fold-toggle ${side}`}
-      title={title}
-      aria-label={label}
-      aria-expanded={!collapsed}
-      aria-controls={controls}
-      onClick={() => onToggle(side)}
-    >
-      <Icon name={icon} slot="icon-before" />
-    </Button>
+    <span className={`fold-toggle-slot ${side}`}>
+      <IconButton
+        icon={icon}
+        label={label}
+        tooltip={`${collapsed ? 'Show' : 'Hide'} ${what}${waiting ? ` · ${need}` : ''}`}
+        shortcut={side === 'left' ? '⌘⌥←' : '⌘⌥→'}
+        description={waiting ? need : undefined}
+        className={`fold-toggle ${side}`}
+        expanded={!collapsed}
+        controls={controls}
+        onClick={() => onToggle(side)}
+      />
+      {waiting && <span className="attention-badge num" aria-hidden="true">{attention}</span>}
+    </span>
   )
 }
 
@@ -222,6 +247,7 @@ export function Transcript({
   problem,
   collapsed,
   onToggle,
+  attention,
   draft,
   onDraft,
   onModel,
@@ -242,9 +268,6 @@ export function Transcript({
   const marked = useRef<HTMLDivElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const input = useRef<HTMLElement>(null)
-  const stopping = live?.running === true
-  const attachButton = useLeoButtonLabel('Attach files')
-  const submitButton = useLeoButtonLabel(stopping ? 'Stop' : 'Send')
   const following = useRef(true)
   const lastScroll = useRef(0)
   const scrollSave = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -261,26 +284,15 @@ export function Transcript({
   const [query, setQuery] = useState('')
   const [match, setMatch] = useState(0)
   const [recents, setRecents] = useState<string[]>([])
-  const preferences = useExperience()
-  const [focusedLayout, setFocusedLayout] = useState<Record<Side, boolean> | null>(null)
+  const [dismissed, setDismissed] = useState<string | null>(null)
+  const closeFind = (): void => {
+    setSearching(false)
+    document.querySelector<HTMLElement>('.transcript-head .find-open')?.focus()
+  }
   const jump = (element: HTMLElement | null) => element?.scrollIntoView({ block: 'nearest',
     behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
   const latest = () => { following.current = true; setUnseen(false); jump(bottom.current) }
   useEffect(() => { void window.bravebot.readRecents().then(setRecents).catch(() => {}) }, [live?.handle])
-  // Leo's TextArea only works out its rows while somebody types, so a restored draft would sit
-  // in a one-line box and scroll. Size the field Leo draws from its content instead.
-  useLayoutEffect(() => {
-    let frame = 0
-    let tries = 0
-    const fit = () => {
-      const field = input.current?.shadowRoot?.querySelector('textarea')
-      if (!field) { if (tries++ < 20) frame = requestAnimationFrame(fit); return }
-      field.style.height = 'auto'
-      field.style.height = `${Math.min(210, field.scrollHeight)}px`
-    }
-    fit()
-    return () => cancelAnimationFrame(frame)
-  }, [draft, live?.handle])
   useLayoutEffect(() => {
     const element = scroller.current
     if (!element) return
@@ -305,13 +317,26 @@ export function Transcript({
     if (id) jump(scroller.current?.querySelector<HTMLElement>(`[data-entry-id="${id}"]`)?.firstElementChild as HTMLElement | null)
   }, [match, matches])
   useEffect(() => {
+    // The menu's ⌘F arrives as FIND_EVENT. The key is still heard here for a window whose menu
+    // bar never sees it, which is every key a test types over CDP.
+    const find = () => {
+      setSearching(true)
+      requestAnimationFrame(() => document.querySelector<HTMLElement>('.find-bar .find-input')?.focus())
+    }
     const key = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
-        event.preventDefault(); setSearching(true)
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'f') {
+        event.preventDefault(); find()
       }
     }
+    const composer = () => input.current?.focus()
     document.addEventListener('keydown', key)
-    return () => document.removeEventListener('keydown', key)
+    document.addEventListener(FIND_EVENT, find)
+    document.addEventListener(FOCUS_COMPOSER_EVENT, composer)
+    return () => {
+      document.removeEventListener('keydown', key)
+      document.removeEventListener(FIND_EVENT, find)
+      document.removeEventListener(FOCUS_COMPOSER_EVENT, composer)
+    }
   }, [])
 
   /**
@@ -350,6 +375,44 @@ export function Transcript({
   const focusRef = useRef<number | null>(null)
   focusRef.current = live?.focus ?? null
 
+  // Stable, so the memoised list below is not re-drawn by a keystroke in the composer.
+  const stableDisclosure = useEvent(onTurnDisclosure)
+  const stableAudit = useEvent(onAudit)
+  // A decision is the reader's turn done; the next thing they do is write, so the field is
+  // where focus goes back to.
+  const toComposer = (): void => { requestAnimationFrame(() => input.current?.focus()) }
+  const stableDecide = useEvent((...args: Parameters<Answer>) => { onDecide(...args); toComposer() })
+  const stableAnswer = useEvent((...args: Parameters<AnswerQuestions>) => { onAnswer(...args); toComposer() })
+  const send = useEvent(() => { latest(); onSubmit(); toComposer() })
+  const queue = useEvent(onQueue)
+  const cancel = useEvent(onCancel)
+  const draftChanged = useEvent(onDraft)
+  const chooseModelFor = useEvent(onModel)
+  const attach = useEvent(onAttach)
+  const removeAttachment = useEvent(onRemoveAttachment)
+  const preview = useEvent((path: string) => setPreviewPath(path))
+  const resumeQueued = useEvent(onResumeQueued)
+  const removeQueued = useEvent(onRemoveQueued)
+  const setup = useEvent(onSetup)
+  const checkBackend = useEvent(onCheckBackend)
+  const diagnostics = useEvent(onDiagnostics)
+  const suggest = (text: string): void => {
+    onDraft(text)
+    requestAnimationFrame(() => {
+      input.current?.focus()
+      const field = input.current?.shadowRoot?.querySelector('textarea')
+      field?.setSelectionRange(text.length, text.length)
+    })
+  }
+  const stableFork = useEvent(onFork)
+  const recover = useEvent(() => {
+    onDraft((draft.trim() ? `${draft}\n\n` : '') + 'Continue the previous task from the current project state. First check which actions already completed; do not repeat successful commands or writes. Resolve the last error before proceeding.')
+    input.current?.focus()
+  })
+  const chooseModel = useEvent(() => {
+    (document.querySelector('.composer .model-trigger') as HTMLButtonElement | null)?.click()
+  })
+
   const activitySnapshot = useRef<{ handle?: string; entries?: t.Entry[]; phase?: Phase | null }>({})
   useEffect(() => {
     const previous = activitySnapshot.current
@@ -380,11 +443,12 @@ export function Transcript({
   // window's drag strip, and with no session open there would otherwise be neither: a
   // sessions column folded shut here could not be brought back, and the state outlives the
   // launch that caused it.
+  const where = live ? `${projectLabel(live.summary.directory)}${live.summary.branch ? ` · ${live.summary.branch}` : ''}` : ''
   const head = (
     <header className="transcript-head">
       <div className="drag" />
       <div className="head-row">
-        <ColumnToggle side="left" collapsed={collapsed.left} onToggle={onToggle} />
+        <ColumnToggle side="left" collapsed={collapsed.left} onToggle={onToggle} attention={attention} />
         {/* Rendered even with nothing to name: it is what holds the two toggles at
             opposite ends of the header, and without it they collect in the corner. */}
         <div className="head-titles">
@@ -393,107 +457,112 @@ export function Transcript({
               {/* A bot's session is titled by whatever was asked first, like every session — but a
                   bot is not an occasion, it is somebody, and a header saying "Hello." over a
                   conversation with the Custodian names the wrong thing. So a bot's own name and
-                  face stand where the title would, and the title becomes the second line beside
+                  face stand where the title would, and the title moves into the meta beside
                   the checkout: still there, no longer pretending to say whose this is. */}
-              <h1>
-                {bot && <BotAvatar seed={bot.avatar} size={30} doing={doing} />}
-                {bot ? bot.name : live.summary.title}
-              </h1>
-              {/* The same string in the tooltip, because this line ellipsises and the
-                  half it drops is the end of the path — which is the half that says which
-                  checkout of a project this is. */}
+              {bot && <BotAvatar seed={bot.avatar} size={20} doing={doing} />}
+              <h1>{bot ? bot.name : live.summary.title}</h1>
+              {/* The full path in the tooltip: the line names the project, and the checkout it
+                  is in is the half that says which copy of a project this is. */}
               <span
                 className="where"
-                title={`${live.summary.directory}${live.summary.branch ? ` · ${live.summary.branch}` : ''}`}
+                data-tooltip={`${live.summary.directory}${live.summary.branch ? ` · ${live.summary.branch}` : ''}`}
               >
                 {bot && `${live.summary.title} · `}
-                {live.summary.directory}
-                {live.summary.branch && ` · ${live.summary.branch}`}
+                {where}
               </span>
+              {live.autoVetting && (
+                <span className="vetting-chip" tabIndex={0}
+                  data-tooltip="Auto-vetting is on: a check that finds nothing reads content to the model without asking you.">
+                  <Icon name="shield-done" />Vetting on
+                </span>
+              )}
             </>
           )}
         </div>
+        {live && <div className="conversation-toolbar">
+          <IconButton icon="search" label="Find" tooltip="Find in conversation" shortcut="⌘F" pressed={searching}
+            className="find-open" onClick={() => setSearching((value) => !value)} />
+          <ExportMenu canExport={canExport} includeTools={includeTools} onToggleTools={onToggleTools} onExport={onExport} />
+          <IconMenu icon="more-horizontal" label="More" tooltip="More actions" className="conversation-more" data-test="conversation-more">
+            <leo-menu-item onClick={() => afterMenu(() => setPermissions(true))}>
+              <span className="menu-icon-row"><Icon name="shield-done" />Permissions…</span>
+            </leo-menu-item>
+            <leo-menu-item onClick={() => afterMenu(() => setWatches(true))}>
+              <span className="menu-icon-row"><Icon name="eye-on" />File watches…</span>
+            </leo-menu-item>
+          </IconMenu>
+        </div>}
         <ColumnToggle side="right" collapsed={collapsed.right} onToggle={onToggle} />
       </div>
-      {live && <div className="conversation-toolbar">
-        <Button kind={searching ? 'filled' : 'plain'} size="small" onClick={() => setSearching((value) => !value)} aria-expanded={searching}>Find</Button>
-        <Button kind={permissions ? 'filled' : 'plain'} size="small" onClick={() => setPermissions(true)} aria-haspopup="dialog">Permissions</Button>
-        <Button kind={watches ? 'filled' : 'plain'} size="small" onClick={() => setWatches(true)} aria-haspopup="dialog">Watches</Button>
-        <Button kind={focusedLayout ? 'filled' : 'plain'} size="small" onClick={() => {
-          if (focusedLayout) {
-            for (const side of ['left', 'right'] as const) if (collapsed[side] !== focusedLayout[side]) onToggle(side)
-            setFocusedLayout(null)
-          } else {
-            setFocusedLayout({ ...collapsed })
-            for (const side of ['left', 'right'] as const) if (!collapsed[side]) onToggle(side)
-          }
-        }}>{focusedLayout ? 'Exit focus' : 'Focus'}</Button>
-        <Button kind={preferences.density === 'compact' ? 'filled' : 'plain'} size="small" onClick={() => setExperience('density', preferences.density === 'compact' ? 'comfortable' : 'compact')}>
-          {preferences.density === 'compact' ? 'Comfortable view' : 'Compact view'}
-        </Button>
-        <ExportMenu canExport={canExport} includeTools={includeTools} onToggleTools={onToggleTools} onExport={onExport} />
-      </div>}
-      {backendReady === false && <Alert type="warning" size="small" className="backend-status" role="status" hasActions>
-        <span slot="title">Backend setup needed</span>
-        <span>You can browse conversations and prepare drafts.</span>
-        <div slot="actions" className="backend-actions">
-          <Button size="small" kind="outline" onClick={onSetup}>Setup help</Button>
-          <Button size="small" kind="outline" onClick={onCheckBackend}>Check again</Button>
-          <Button size="small" kind="plain" onClick={onDiagnostics}>Diagnostics</Button>
-        </div>
-      </Alert>}
-      {live && <div className="context-status" title="The model’s last request size, not accumulated token usage. New messages may change the next request.">
-        {live.phase === 'compacting' ? 'Summarising context…' : live.contextTokens === undefined ? 'Context measurement unavailable' : live.contextTokens === 0 ? 'Context not yet measured' : `${live.contextTokens.toLocaleString()} context tokens at last request`}
-        {!!live.archived && <span> · Earlier context summarised</span>}
-      </div>}
-      {problem && <ErrorCard detail={problem} />}
-      {searching && <div className="conversation-search">
-        <Input autofocus type="search" aria-label="Find in conversation" placeholder="Find in conversation…" value={query}
-          onChange={({ value }) => { setQuery(value); setMatch(0) }}
-          onKeyDown={({ innerEvent }) => {
-            const key = innerEvent as unknown as KeyboardEvent
-            if (key.key === 'Escape') setSearching(false)
-            if (key.key === 'Enter') setMatch((n) => n + (key.shiftKey ? -1 + matches.length : 1))
-          }} />
-        <span role="status">{matches.length ? `${match % matches.length + 1} of ${matches.length}` : query ? 'No matches' : ''}</span>
-        <Button kind="plain-faint" size="small" fab isDisabled={!matches.length} onClick={() => setMatch((n) => n + matches.length - 1)} aria-label="Previous match" title="Previous match">
-          <Icon name="arrow-up" slot="icon-before" />
-        </Button>
-        <Button kind="plain-faint" size="small" fab isDisabled={!matches.length} onClick={() => setMatch((n) => n + 1)} aria-label="Next match" title="Next match">
-          <Icon name="arrow-down" slot="icon-before" />
-        </Button>
-        <Button kind="plain-faint" size="small" fab onClick={() => setSearching(false)} aria-label="Close search" title="Close search">
-          <Icon name="close" slot="icon-before" />
-        </Button>
-      </div>}
-      {live?.trustRemembered && <RememberedBanner kept={live.trustRemembered} />}
-      {live?.autoVetting && <VettingBanner />}
-      {live?.forkedFrom && <ForkBanner from={live.forkedFrom} onOpen={onOpenParent} />}
     </header>
   )
+
+  const findBar = searching && live && (
+    <div className="find-bar" role="search" data-test="find-bar">
+      <FindInput query={query} onQuery={(value) => { setQuery(value); setMatch(0) }}
+        onClose={closeFind}
+        onStep={(back) => setMatch((n) => n + (back ? matches.length - 1 : 1))} />
+      <span className="find-count num" role="status">{matches.length ? `${match % matches.length + 1} of ${matches.length}` : query ? 'No matches' : ''}</span>
+      <IconButton icon="carat-up" label="Previous match" shortcut="⇧↩" size="tiny" disabled={!matches.length} onClick={() => setMatch((n) => n + matches.length - 1)} />
+      <IconButton icon="carat-down" label="Next match" shortcut="↩" size="tiny" disabled={!matches.length} onClick={() => setMatch((n) => n + 1)} />
+      <IconButton icon="close" label="Close search" shortcut="⎋" size="tiny" onClick={closeFind} />
+    </div>
+  )
+
+  const toast = problem && problem !== dismissed && (
+    <Alert type="error" isToast className="problem-toast" role="alert" data-test="problem-toast">
+      <Icon name="warning-circle-filled" slot="icon" />
+      <span slot="title">Something went wrong</span>
+      <span className="problem-text">{problem}</span>
+      <IconButton slot="content-after" icon="close" label="Dismiss" size="tiny" onClick={() => setDismissed(problem)} />
+    </Alert>
+  )
+
 
   if (!live) {
     return (
       <main className="transcript empty-state">
         {head}
+        <div className="toast-stack">{toast}<Toasts /></div>
         <div className="empty-body">
-          <div>
-            <div className="welcome-mark">B</div>
-            <h1>What would you like to build?</h1>
-            <p>Work with an agent in your project. Track changes and review approval requests as you work.</p>
-            <Button kind="filled" size="medium" className="welcome-open" onClick={() => onNew()} data-test="open-project">Open project</Button>
-            {!!recents.length && <div className="welcome-recents"><h2>Recent projects</h2>{recents.slice(0, 5).map((directory) =>
-              <button key={directory} onClick={() => onNew(directory)}><strong>{projectLabel(directory)}</strong><span>{directory}</span></button>)}</div>}
-            <p className="welcome-hint">Choose a conversation to resume work, or create a bot with a purpose and persistent memory.</p>
+          <div className="welcome">
+            <div className="welcome-mark" aria-hidden="true"><Icon name="product-brave-leo" /></div>
+            <h1>What should we build?</h1>
+            <p className="welcome-lede">Open a project to work with an agent in it. Changes and approvals stay in the conversation.</p>
+            <div className="welcome-actions">
+              <Button kind="filled" size="medium" className="welcome-open" onClick={() => onNew()} data-test="open-project">
+                <Icon name="folder-open" slot="icon-before" />Open project
+              </Button>
+              <kbd className="welcome-shortcut">⌘N</kbd>
+            </div>
+            {backendReady === false && <BackendTray onSetup={setup} onCheckBackend={checkBackend} onDiagnostics={diagnostics} />}
+            {!!recents.length && (
+              <section className="welcome-recents" aria-labelledby="welcome-recents-title">
+                <h2 id="welcome-recents-title">Recent projects</h2>
+                {recents.slice(0, 5).map((directory) => (
+                  <button key={directory} type="button" className="welcome-recent" onClick={() => onNew(directory)}>
+                    <Icon name="folder" />
+                    <span className="recent-text">
+                      <strong>{projectLabel(directory)}</strong>
+                      <span className="recent-path" data-tooltip={directory}>{directory}</span>
+                    </span>
+                  </button>
+                ))}
+              </section>
+            )}
           </div>
         </div>
       </main>
     )
   }
 
+  // Nothing said yet and nothing running: the composer is the whole of the page.
+  const fresh = live.entries.length === 0 && !live.running
   return (
-    <main className="transcript">
+    <main className={`transcript${fresh ? ' fresh' : ''}`}>
       {head}
+      {findBar}
+      <div className="toast-stack">{toast}<Toasts /></div>
 
       <div className="entries" ref={scroller} onScroll={(event) => {
         const element = event.currentTarget
@@ -503,115 +572,107 @@ export function Transcript({
         following.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80
         if (following.current) setUnseen(false)
       }}>
-        {runs(live.entries).map((run) =>
-          run.kind === 'run' ? (
-            <ToolRun key={run.id} entries={run.entries} />
-          ) : (
-            // Wrapped only to catch the right-click. `display: contents` keeps the wrapper
-            // out of the layout entirely, so the bubbles flow exactly as they did — the
-            // alternative was an `onContextMenu` on each of the eleven shapes `Row` returns.
-            <div
-              key={run.entry.id}
-              data-entry-id={run.entry.id}
-              className={`entry-hit ${run.entry.id === focused || run.entry.id === matches[match % (matches.length || 1)] ? 'focused' : ''}`}
-              ref={run.entry.id === focused ? marked : undefined}
-              // A prompt is the one row that came from the person reading it, and the only one
-              // a fork can be cut in front of, so it is a different kind of thing to
-              // right-click. The menu it gets is still decided in the main process.
-              onContextMenu={contextMenu(
-                run.entry.kind === 'user' ? 'entry-user' : 'entry',
-                run.entry.id,
-              )}
-            >
-              {run.entry.kind === 'turn-start' ? <TurnNotices details={live.turns[run.entry.number]} onDisclosure={onTurnDisclosure} /> : <Row
-                entry={run.entry}
-                onRecover={() => { onDraft((draft.trim() ? `${draft}\n\n` : '') + 'Continue the previous task from the current project state. First check which actions already completed; do not repeat successful commands or writes. Resolve the last error before proceeding.'); input.current?.focus() }}
-                onChooseModel={() => { (document.querySelector('.composer .model-trigger') as HTMLButtonElement | null)?.click() }}
-                onDecide={onDecide}
-                onAnswer={onAnswer}
-                onFork={onFork}
-                // Greyed rather than gone while a turn runs, the way the menu item is: a
-                // control that disappears is one the reader has to go looking for again. Greyed
-                // too for a prompt this window has sent and not yet been told the ordinal of:
-                // that prompt is in the conversation, but nothing here knows where.
-                forkable={!live.running && (run.entry.kind !== 'user' || run.entry.prompt !== undefined)}
-              />}
-              {(run.entry.kind === 'assistant' || (run.entry.kind === 'error' && run.entry.turn !== undefined)) &&
-                <TurnFooter details={run.entry.turn === undefined ? undefined : live.turns[run.entry.turn]} onDisclosure={onTurnDisclosure} onAudit={onAudit} />}
-            </div>
-          ),
+        {fresh && (
+          <div className="fresh-greeting">
+            <h1>Ready in <span className="fresh-project">{projectLabel(live.summary.directory)}</span></h1>
+            <p>Ask for a change, a review or an explanation. Nothing is written without your approval.</p>
+          </div>
         )}
+        <SessionNotices
+          forkedFrom={live.forkedFrom}
+          kept={live.trustRemembered ?? null}
+          vetting={live.autoVetting === true}
+          onOpenParent={onOpenParent}
+          onManage={() => setPermissions(true)}
+        />
+        <EntryList
+          entries={live.entries}
+          turns={live.turns}
+          running={live.running}
+          focused={focused}
+          matched={matches[match % (matches.length || 1)] ?? null}
+          marked={marked}
+          onTurnDisclosure={stableDisclosure}
+          onAudit={stableAudit}
+          onRecover={recover}
+          onChooseModel={chooseModel}
+          onDecide={stableDecide}
+          onAnswer={stableAnswer}
+          onFork={stableFork}
+        />
 
         {live.running && (
-          <div className={`working${bot ? ' working-bot' : ''}`}>
-            {/* For a bot, the bot itself, looking down at the page — the one place in the transcript
-                its face carries something the header does not: it is *here*, at the point of
-                attention, only while something is happening, and its posture is the indicator. It
-                mounts already working, since the row exists only while a turn runs. A plain session
-                has no face and keeps the spinner. */}
-            {bot ? (
-              <BotAvatar seed={bot.avatar} size={22} doing="working" />
-            ) : (
-              <ProgressRing mode="indeterminate" className="working-ring" data-test="working-ring" />
-            )}
-            {workingWord(live.phase, live.checking)}
-            {live.tokens > 0 && <span className="count"> · {live.tokens} tokens written</span>}
-            {Object.values(live.turns).filter((turn) => turn.status === 'running').slice(-1).map((turn) =>
-              <Button kind="plain" size="tiny" className="turn-audit-link" key={turn.turn} aria-controls="turn-audit-inspector" onClick={(event) => onAudit(turn.turn, event.currentTarget as HTMLButtonElement)}>Audit</Button>)}
-            <Button kind="plain-faint" size="tiny" className="cancel" onClick={onCancel} data-test="cancel-turn">
-              Cancel
-            </Button>
-          </div>
+          <WorkingRow
+            key={live.handle}
+            bot={bot}
+            word={workingWord(live.phase, live.checking)}
+            tokens={live.tokens}
+            turn={Object.values(live.turns).filter((turn) => turn.status === 'running').at(-1)?.turn ?? null}
+            onAudit={onAudit}
+          />
         )}
         <div ref={bottom} />
       </div>
 
-      <div className="attention-bar" aria-live="polite">
-        {pending ? <Button kind="outline" size="small" className="pending-jump" onClick={() => {
-          document.dispatchEvent(new CustomEvent('bravebot:reveal-entry', { detail: pending.id }))
-          const element = scroller.current?.querySelector<HTMLElement>(`[data-entry-id="${pending.id}"]`)
-          jump(element ?? bottom.current)
-        }}>{pending.kind === 'ask' ? 'Your answer is needed' : 'Approval needed'} · {waitingOn(pending.kind)} — Review ↑</Button> :
-          live.running ? <span>{workingWord(live.phase, live.checking)} · You can draft your next message</span> :
-          <span>{live.entries.at(-1)?.kind === 'error' ? 'Needs attention' : live.entries.length ? 'Ready for your next message' : 'Ready to begin'}</span>}
-        {unseen && <Button kind="outline" size="small" onClick={latest}>New activity ↓</Button>}
-      </div>
-      <footer className="composer">
-        {queued.length > 0 && <div className="queued-messages"><strong>{queuePaused ? 'Queue paused' : 'Queued after this turn'}</strong>{queuePaused && <Button kind="outline" size="tiny" isDisabled={live.running || backendReady === false} onClick={onResumeQueued}>Resume queue</Button>}{queued.map((text, index) => <div key={index}><span>{text}</span><Button kind="plain-faint" size="tiny" fab aria-label={`Remove queued message ${index + 1}`} title={`Remove queued message ${index + 1}`} onClick={() => onRemoveQueued(index)}><Icon name="close" slot="icon-before" /></Button></div>)}</div>}
-        <div className="composer-box">
-          {attachments.length > 0 && <div className="attachment-chips"><p>These files will be sent as trusted context with your message.</p>{attachments.map((file) => <span key={file.id}><Button kind="plain" size="tiny" onClick={() => setPreviewPath(file.path)}>{file.path}</Button><Button kind="plain-faint" size="tiny" fab aria-label={`Remove attachment ${file.path}`} title={`Remove attachment ${file.path}`} onClick={() => onRemoveAttachment(file.id)}><Icon name="close" slot="icon-before" /></Button></span>)}</div>}
-          <TextArea ref={input} mode="plain" minRows={1} maxRows={8} value={draft} aria-label="Message the agent" title="Enter to send · Shift+Enter for a new line. While a reply is generating, Enter queues the next message. Unsent drafts are saved on this device."
-            placeholder={pending ? 'Draft your next message while you review…' : 'How can I help you today?'}
-            onInput={({ value }) => onDraft(value)}
-            onKeyDown={({ innerEvent }) => {
-              const event = innerEvent as unknown as KeyboardEvent
-              if (event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey
-                && !event.isComposing && event.keyCode !== 229) {
-                event.preventDefault()
-                // The round button is Stop for the whole time a reply is generating. Enter still
-                // queues a follow-up, which is the path the button used to offer as "Queue message".
-                if (!event.repeat && !live.askingTrust && backendReady !== false && draft.trim()) {
-                  if (live.running) onQueue()
-                  else { latest(); onSubmit() }
-                }
-              }
-            }} />
-          <div className="composer-toolbar">
-            <Button ref={attachButton} kind="plain-faint" size="small" fab className="attach-files" onClick={onAttach} isDisabled={attachments.length >= 5} title="Attach files" aria-label="Attach files">
-              <Icon name="attachment" slot="icon-before" />
-            </Button>
-            <ModelPicker compact session={live.handle} scope={bot ? 'bot' : 'conversation'} key={live.handle} model={live.model} disabled={live.running} onChoose={onModel} />
-            <Button ref={submitButton} kind={stopping ? 'outline' : 'filled'} size="small" fab className={stopping ? 'send stop' : 'send'}
-              onClick={() => { if (stopping) onCancel(); else { latest(); onSubmit() } }}
-              isDisabled={!stopping && (!draft.trim() || !!live.askingTrust || backendReady === false)}
-              title={stopping ? 'Stop' : 'Send'}
-              aria-label={stopping ? 'Stop' : 'Send'}
-              data-test={stopping ? 'stop-turn' : 'send-message'}>
-              <Icon name={stopping ? 'stop-filled' : 'arrow-up'} slot="icon-before" />
-            </Button>
-          </div>
+      <div className="composer-dock">
+        {/* Kept in the tree while empty, so what arrives in it is announced. */}
+        <div className="attention-pills" aria-live="polite">
+          {pending && (
+            <button type="button" className="attention-pill warning pending-jump" data-tooltip={waitingOn(pending.kind)} onClick={() => {
+              document.dispatchEvent(new CustomEvent('bravebot:reveal-entry', { detail: pending.id }))
+              const element = scroller.current?.querySelector<HTMLElement>(`[data-entry-id="${pending.id}"]`)
+              jump(element ?? bottom.current)
+            }}>
+              {pending.kind === 'ask' ? 'Answer needed' : 'Approval needed'}<Icon name="arrow-up" />
+            </button>
+          )}
+          {unseen && (
+            <button type="button" className="attention-pill" onClick={latest}>
+              Jump to latest<Icon name="arrow-down" />
+            </button>
+          )}
         </div>
-      </footer>
+        <Composer
+          input={input}
+          session={live.handle}
+          model={live.model}
+          running={live.running}
+          askingTrust={!!live.askingTrust}
+          compacting={live.phase === 'compacting'}
+          contextTokens={live.contextTokens}
+          archived={live.archived}
+          pending={!!pending}
+          scope={bot ? 'bot' : 'conversation'}
+          draft={draft}
+          onDraft={draftChanged}
+          onSend={send}
+          onQueue={queue}
+          onCancel={cancel}
+          onModel={chooseModelFor}
+          attachments={attachments}
+          onAttach={attach}
+          onRemoveAttachment={removeAttachment}
+          onPreview={preview}
+          queued={queued}
+          queuePaused={queuePaused}
+          onResumeQueued={resumeQueued}
+          onRemoveQueued={removeQueued}
+          backendReady={backendReady}
+          onSetup={setup}
+          onCheckBackend={checkBackend}
+          onDiagnostics={diagnostics}
+        />
+        {fresh && (
+          <div className="suggestions" role="group" aria-label="Suggestions">
+            {SUGGESTIONS.map(([label, text]) => (
+              <button key={label} type="button" className="suggestion" onClick={() => suggest(text)}>{label}</button>
+            ))}
+          </div>
+        )}
+      </div>
+      {/* Takes the space under a fresh session's composer, which holds it in the middle of the
+          column; it gives the space up when the first message is sent. */}
+      <div className="composer-spacer" aria-hidden="true" />
       {watches && <Watches session={live.handle} onClose={() => setWatches(false)} />}
       {permissions && <Permissions session={live.handle} onClose={() => setPermissions(false)} onRemembered={(kept) => onTrustRemembered(live.handle, kept)} />}
       {previewPath && <FilePreview session={live.handle} path={previewPath} onClose={() => setPreviewPath(null)} />}
@@ -619,11 +680,18 @@ export function Transcript({
   )
 }
 
+/** What a fresh session offers to start with: a label, and the draft it fills in. */
+const SUGGESTIONS: readonly [string, string][] = [
+  ['Explain this codebase', 'Explain how this codebase is organised: its main parts, how they fit together, and where to start reading.'],
+  ['Find likely bugs', 'Look through this project for likely bugs. For each one, name the file and say why it looks wrong.'],
+  ['Add tests for…', 'Add tests for '],
+]
+
 /** The three files a conversation can become. Ordered plainest first. */
-const FORMATS: readonly { id: ExportFormat; label: string; detail: string }[] = [
-  { id: 'txt', label: 'Plain Text', detail: '.txt' },
-  { id: 'md', label: 'Markdown', detail: '.md' },
-  { id: 'pdf', label: 'PDF', detail: '.pdf' },
+const FORMATS: readonly { id: ExportFormat; label: string; detail: string; icon: IconName }[] = [
+  { id: 'txt', label: 'Plain Text', detail: '.txt', icon: 'file-text' },
+  { id: 'md', label: 'Markdown', detail: '.md', icon: 'file-code' },
+  { id: 'pdf', label: 'PDF', detail: '.pdf', icon: 'file-text' },
 ]
 
 /**
@@ -634,8 +702,6 @@ const FORMATS: readonly { id: ExportFormat; label: string; detail: string }[] = 
  * list is the exception; here there is no format worth guessing at, and a button that
  * exported a `.txt` because somebody clicked slightly to the left would be worse than one
  * that always asks.
- *
- * It sits at the end of the conversation toolbar, plain until the menu is open.
  */
 function ExportMenu({
   canExport,
@@ -648,53 +714,30 @@ function ExportMenu({
   onToggleTools: () => void
   onExport: (format: ExportFormat) => void
 }): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const trigger = useRef<HTMLElement>(null)
-
   return (
-    <ButtonMenu
-      className="export-menu"
-      isOpen={open}
-      placement="bottom-end"
-      positionStrategy="fixed"
-      onChange={(detail) => {
-        setOpen(detail.isOpen)
-        // Focus returns to the control that opened the menu, including after Escape.
-        if (!detail.isOpen) trigger.current?.focus()
-      }}
-    >
-      <Button
-        ref={trigger}
-        slot="anchor-content"
-        className="export-open"
-        kind={open ? 'filled' : 'plain'}
-        size="small"
-        isDisabled={!canExport}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        title={canExport ? 'Export this conversation' : 'Nothing has been said yet'}
-      >
-        Export
-        <Icon name={open ? 'carat-up' : 'carat-down'} slot="icon-after" />
-      </Button>
+    <IconMenu icon="download" label="Export" tooltip={canExport ? 'Export conversation' : 'Nothing has been said yet'}
+      disabled={!canExport} className="export-menu" triggerClassName="export-open">
       {/* What the file will contain, asked above what it will be called. A native save
           panel takes no controls of ours, so the question lives here, ticked or not, and
           the File menu carries the same row: see `session.export-tools` in
           `shared/commands.ts`. The tick is the state; a second line would say it twice.
           Choosing it closes the menu, the way a checkable menu item does. */}
-      <leo-menu-item className="export-tools" role="menuitemcheckbox" aria-checked={includeTools ? 'true' : 'false'} onClick={() => onToggleTools()}>
-        <span className="export-tools-row">
-          <Icon name={includeTools ? 'checkbox-checked' : 'checkbox-unchecked'} />
+      <leo-menu-item className="export-tools" data-role="menuitemcheckbox" aria-checked={includeTools ? 'true' : 'false'} onClick={() => onToggleTools()}>
+        <span className="menu-check-row">
+          <span className="menu-check">{includeTools && <Icon name="check-normal" />}</span>
           Include Tool Calls
         </span>
       </leo-menu-item>
       <hr />
       {FORMATS.map((format) => (
         <leo-menu-item key={format.id} onClick={() => onExport(format.id)}>
-          <span className="export-format">{format.label} ({format.detail})</span>
+          <span className="menu-icon-row">
+            <Icon name={format.icon} />
+            <span className="export-format">{format.label} <span className="menu-detail">({format.detail})</span></span>
+          </span>
         </leo-menu-item>
       ))}
-    </ButtonMenu>
+    </IconMenu>
   )
 }
 
@@ -732,6 +775,49 @@ export function workingWord(phase: Phase | null, checking: Checking | null): str
 }
 
 /**
+ * The line that says a turn is under way: what it is doing, for how long, and how much it has
+ * written. Stopping it is the composer's Stop, which is where the eye already is while waiting;
+ * a second Cancel here was one more thing to aim at for the same act.
+ */
+function WorkingRow({ bot, word, tokens, turn, onAudit }: {
+  bot: Bot | null
+  word: string
+  tokens: number
+  turn: number | null
+  onAudit: OpenAudit
+}): React.JSX.Element {
+  const [since] = useState(() => Date.now())
+  const [now, setNow] = useState(since)
+  useEffect(() => {
+    const tick = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(tick)
+  }, [])
+  const seconds = Math.floor((now - since) / 1000)
+  const elapsed = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`
+  return (
+    <div className={`working${bot ? ' working-bot' : ''}`}>
+      {/* For a bot, the bot itself, looking down at the page — the one place in the transcript
+          its face carries something the header does not: it is *here*, at the point of
+          attention, only while something is happening, and its posture is the indicator. It
+          mounts already working, since the row exists only while a turn runs. A plain session
+          has no face and keeps the spinner. */}
+      {bot ? (
+        <BotAvatar seed={bot.avatar} size={20} doing="working" />
+      ) : (
+        <ProgressRing mode="indeterminate" className="working-ring" data-test="working-ring" />
+      )}
+      <span className="working-word">{word}…</span>
+      <span className="count">
+        {seconds > 0 && elapsed}
+        {tokens > 0 && `${seconds > 0 ? ' · ' : ''}${tokens.toLocaleString()} tokens written`}
+      </span>
+      {turn !== null && <IconButton icon="shield-done" label="Audit" tooltip="Audit this turn" size="tiny" className="turn-audit-link"
+        controls="turn-audit-inspector" onClick={(event) => onAudit(turn, event.currentTarget as HTMLButtonElement)} />}
+    </div>
+  )
+}
+
+/**
  * Consecutive tool calls, gathered into one run.
  *
  * A turn that reads five files and writes five more puts ten lines between the question
@@ -763,34 +849,140 @@ export function runs(entries: t.Entry[]): Run[] {
   )
 }
 
-function ToolRun({ entries }: { entries: t.Entry[] }): React.JSX.Element {
-  const [open, setOpen] = useState(true)
+/**
+ * Every entry, drawn. Memoised on its props, which are the entries and stable callbacks, so
+ * nothing but a change to the conversation re-draws it.
+ */
+const EntryList = memo(function EntryList({
+  entries, turns, running, focused, matched, marked,
+  onTurnDisclosure, onAudit, onRecover, onChooseModel, onDecide, onAnswer, onFork,
+}: {
+  entries: t.Entry[]
+  turns: Turns
+  running: boolean
+  focused: string | null
+  matched: string | null
+  marked: React.RefObject<HTMLDivElement | null>
+  onTurnDisclosure: (turn: number, field: TurnDisclosure, open: boolean) => void
+  onAudit: OpenAudit
+  onRecover: () => void
+  onChooseModel: () => void
+  onDecide: Answer
+  onAnswer: AnswerQuestions
+  onFork: (id: string) => void
+}): React.JSX.Element {
+  const grouped = useMemo(() => runs(entries), [entries])
+  // The current turn is everything after its `turn-start`; its runs are the ones still open.
+  const current = useMemo(() => {
+    if (!running) return null
+    let from = entries.length - 1
+    while (from >= 0 && entries[from]!.kind !== 'turn-start') from--
+    return new Set(entries.slice(from + 1).map((entry) => entry.id))
+  }, [entries, running])
+  const lastReply = useMemo(() => [...entries].reverse().find((entry) => entry.kind === 'assistant')?.id, [entries])
+  return <>
+    {grouped.map((run) =>
+      run.kind === 'run' ? (
+        <ToolRun key={run.id} entries={run.entries} active={current?.has(run.id) ?? false} />
+      ) : (
+        // Wrapped only to catch the right-click. `display: contents` keeps the wrapper
+        // out of the layout entirely, so the bubbles flow exactly as they did — the
+        // alternative was an `onContextMenu` on each of the eleven shapes `Row` returns.
+        <div
+          key={run.entry.id}
+          data-entry-id={run.entry.id}
+          className={`entry-hit${run.entry.id === focused || run.entry.id === matched ? ' focused' : ''}${run.entry.id === lastReply ? ' last-reply' : ''}`}
+          ref={run.entry.id === focused ? marked : undefined}
+          // A prompt is the one row that came from the person reading it, and the only one
+          // a fork can be cut in front of, so it is a different kind of thing to
+          // right-click. The menu it gets is still decided in the main process.
+          onContextMenu={contextMenu(
+            run.entry.kind === 'user' ? 'entry-user' : 'entry',
+            run.entry.id,
+          )}
+        >
+          {run.entry.kind === 'turn-start' ? <TurnNotices details={turns[run.entry.number]} onDisclosure={onTurnDisclosure} /> : <Row
+            entry={run.entry}
+            onRecover={onRecover}
+            onChooseModel={onChooseModel}
+            onDecide={onDecide}
+            onAnswer={onAnswer}
+            onFork={onFork}
+            // Greyed rather than gone while a turn runs, the way the menu item is: a
+            // control that disappears is one the reader has to go looking for again. Greyed
+            // too for a prompt this window has sent and not yet been told the ordinal of:
+            // that prompt is in the conversation, but nothing here knows where.
+            forkable={!running && (run.entry.kind !== 'user' || run.entry.prompt !== undefined)}
+          />}
+          {(run.entry.kind === 'assistant' || (run.entry.kind === 'error' && run.entry.turn !== undefined)) &&
+            <TurnFooter details={run.entry.turn === undefined ? undefined : turns[run.entry.turn]} onDisclosure={onTurnDisclosure} onAudit={onAudit}
+              copy={run.entry.kind === 'assistant' ? run.entry.text : undefined} />}
+        </div>
+      ),
+    )}
+  </>
+})
+
+const nothing = (): undefined => undefined
+
+/**
+ * What a run did, in the agent's own verbs: "Read 3, Edit 1". Counted as sent rather than sorted
+ * into kinds, because the verbs arrive in the reader's language and a list of English words to
+ * match them against would miscount every other one.
+ */
+export function runSummary(entries: t.Entry[]): string {
+  const counts = new Map<string, number>()
+  for (const entry of entries) {
+    const verb = entry.kind === 'tool' ? entry.activity.verb : entry.kind === 'replayed-tool' ? 'Replayed' : null
+    if (verb) counts.set(verb, (counts.get(verb) ?? 0) + 1)
+  }
+  const verbs = [...counts].map(([verb, count]) => `${verb} ${count}`).join(', ')
+  return `Worked through ${entries.length} step${entries.length === 1 ? '' : 's'}${verbs ? ` · ${verbs}` : ''}`
+}
+
+/**
+ * A run of calls, folded under one line.
+ *
+ * Open while its turn is running, so the calls can be watched as they land, and folded when the
+ * turn is over, when they are the least interesting thing between the question and the answer.
+ * A saved conversation opens with every run folded for the same reason.
+ */
+const ToolRun = memo(function ToolRun({ entries, active }: { entries: t.Entry[]; active: boolean }): React.JSX.Element {
+  const [open, setOpen] = useState(active)
+  useEffect(() => { setOpen(active) }, [active])
   useEffect(() => {
     const reveal = (event: Event) => { if (entries.some((entry) => entry.id === (event as CustomEvent<string>).detail)) setOpen(true) }
     document.addEventListener('bravebot:reveal-entry', reveal)
     return () => document.removeEventListener('bravebot:reveal-entry', reveal)
   }, [entries])
+  const working = active && entries.some((entry) => entry.kind === 'tool' && entry.activity.note === null)
 
   return (
     <section className={`tool-run ${open ? 'open' : ''}`}>
       <Collapse className="flat-collapse tool-run-collapse" isOpen={open} onToggle={({ open: next }) => setOpen(next)}
-        title={`${entries.length} step${entries.length === 1 ? '' : 's'}`} data-test="tool-run">
-        {entries.map((entry) => (
-          <div key={entry.id} data-entry-id={entry.id}><Row
-            key={entry.id}
-            entry={entry}
-            onDecide={() => undefined}
-            onAnswer={() => undefined}
-            // A run holds tool lines and nothing else, so neither of these can be reached
-            // from in here — and a folded row carries no right-click either.
-            onFork={() => undefined}
-            forkable={false}
-          /></div>
-        ))}
+        title={runSummary(entries)} data-test="tool-run">
+        <span slot="icon" className="tool-run-status" aria-hidden="true">
+          {working ? <ProgressRing className="tool-ring" /> : <Icon name="window-console" />}
+        </span>
+        <div className="tool-run-lines">
+          {entries.map((entry) => (
+            <div key={entry.id} data-entry-id={entry.id}><Row
+              key={entry.id}
+              entry={entry}
+              onDecide={nothing}
+              onAnswer={nothing}
+              // A run holds tool lines and nothing else, so neither of these can be reached
+              // from in here — and a folded row carries no right-click either.
+              onFork={nothing}
+              forkable={false}
+            /></div>
+          ))}
+        </div>
       </Collapse>
     </section>
   )
-}
+}, (before, after) => before.active === after.active && before.entries.length === after.entries.length
+  && before.entries.every((entry, index) => entry === after.entries[index]))
 
 /**
  * A series of questions the planner is putting to the person.
@@ -850,12 +1042,7 @@ function Questions({
   if (answers || request.interrupted) {
     return (
       <div className="confirm ask">
-        <div className="confirm-head">
-          <span className="intent">asked</span>
-          <span className="path">
-            {prompts.length} question{prompts.length === 1 ? '' : 's'}
-          </span>
-        </div>
+        <CardHead icon="message-bubble" intent="Asked" subject={<span className="path">{prompts.length} question{prompts.length === 1 ? '' : 's'}</span>} />
         {prompts.map((prompt, at) => (
           // Keyed by position, not by `prompt.key`: that key is canonical *content*, and a
           // series may legitimately contain the same question twice. The order never
@@ -863,7 +1050,7 @@ function Questions({
           // both stable and unique where the content is only stable.
           <div className="asked-answer" key={at}>
             <div className="question">{prompt.question}</div>
-            {answers && <div className="given">{describe(prompt, answers[at])}</div>}
+            {answers && <div className="given"><Icon name="arrow-small-right" />{describe(prompt, answers[at])}</div>}
           </div>
         ))}
         {!answers && <Unanswered />}
@@ -873,12 +1060,7 @@ function Questions({
 
   return (
     <div className="confirm ask">
-      <div className="confirm-head">
-        <span className="intent">asked</span>
-        <span className="path">
-          {prompts.length} question{prompts.length === 1 ? '' : 's'}
-        </span>
-      </div>
+      <CardHead icon="message-bubble" intent="Asked" subject={<span className="path">{prompts.length} question{prompts.length === 1 ? '' : 's'}</span>} />
 
       {prompts.map((prompt, at) => (
         <fieldset className="ask-question" key={at}>
@@ -889,27 +1071,33 @@ function Questions({
           <div className="question">{prompt.question}</div>
 
           <ul className="choices">
-            {prompt.rows.map((row) => (
-              <li key={row.index}>
-                <button
-                  className={`choice ${(picked[at] ?? []).includes(row.index) ? 'picked' : ''}`}
-                  aria-pressed={(picked[at] ?? []).includes(row.index)}
-                  onClick={() => choose(at, row.index, prompt.multiple)}
-                >
-                  <span className="label">{row.label}</span>
-                  {row.detail && <span className="detail">{row.detail}</span>}
-                </button>
-              </li>
-            ))}
+            {prompt.rows.map((row) => {
+              const on = (picked[at] ?? []).includes(row.index)
+              return (
+                <li key={row.index}>
+                  <button
+                    className={`choice ${on ? 'picked' : ''}`}
+                    aria-pressed={on}
+                    onClick={() => choose(at, row.index, prompt.multiple)}
+                  >
+                    <Icon className="choice-mark" name={prompt.multiple ? (on ? 'checkbox-checked' : 'checkbox-unchecked') : (on ? 'radio-checked' : 'radio-unchecked')} />
+                    <span className="choice-text">
+                      <span className="label">{row.label}</span>
+                      {row.detail && <span className="detail">{row.detail}</span>}
+                    </span>
+                  </button>
+                </li>
+              )
+            })}
           </ul>
 
-          <input
+          <Input
             className="typed"
+            size="small"
             value={typed[at] ?? ''}
-            placeholder={prompt.rows.length > 0 ? 'or say something else…' : 'your answer…'}
-            onChange={(event) =>
-              setTyped((old) => old.map((text, index) => (index === at ? event.target.value : text)))
-            }
+            aria-label={`Your own answer to: ${prompt.question}`}
+            placeholder={prompt.rows.length > 0 ? 'Or say something else…' : 'Your answer…'}
+            onInput={({ value }) => setTyped((old) => old.map((text, index) => (index === at ? value : text)))}
           />
         </fieldset>
       ))}
@@ -917,7 +1105,7 @@ function Questions({
       <div className="confirm-actions">
         {/* Declining every question is a real answer and the turn continues, so it is a
             button here rather than something a person has to leave blank and guess at. */}
-        <Button kind="plain" size="small" className="reject" onClick={() => onAnswer(request.request.request, prompts.map(() => ({})))}>
+        <Button kind="plain-faint" size="small" className="reject" onClick={() => onAnswer(request.request.request, prompts.map(() => ({})))}>
           Decline
         </Button>
         <Button kind="filled" size="small" className="approve" onClick={() => onAnswer(request.request.request, collected())}>
@@ -935,70 +1123,55 @@ function Questions({
 }
 
 /**
- * The line at the top of a session that was cut out of another one.
+ * What the window says about a session rather than in it, at the top of the conversation.
  *
- * In the header, beside the notes about the branch and the build, rather than in the scroller.
- * Those are the other two things the window says *about* a session rather than in it, and a
- * transcript is long: an indicator that has to be scrolled back to is one nobody reads.
+ * Three notes, each one sentence and at most one link: that this session was cut out of another
+ * (history, so it is the first thing in the transcript), that a kept yes about this directory is
+ * why nothing asked (TRUST-23), and that auto-vetting was on when it opened (CHECK-11, which the
+ * header chip keeps saying for as long as the session is open).
  *
- * A button and not a link: nothing in this window navigates, and an `<a href>` here would be
- * the one thing on screen that could. It is also not a `t.Entry`, which is what keeps it out of
- * `t.conversation` and therefore out of every export — a note this window wrote about a session
- * is not something the session said.
+ * None of them is a `t.Entry`, which is what keeps them out of `t.conversation` and therefore out
+ * of every export: a note this window wrote about a session is not something the session said.
+ * The fork link is a button and not a link, because nothing in this window navigates.
  */
-function ForkBanner({
-  from,
-  onOpen,
-}: {
-  from: { title: string; prompt: number }
-  onOpen: () => void
-}): React.JSX.Element {
+function SessionNotices({ forkedFrom, kept, vetting, onOpenParent, onManage }: {
+  forkedFrom: { title: string; prompt: number } | null
+  kept: KeptTrust | null
+  vetting: boolean
+  onOpenParent: () => void
+  onManage: () => void
+}): React.JSX.Element | null {
+  if (!forkedFrom && !kept && !vetting) return null
   return (
-    <p className="fork-banner">
-      <span className="fork-mark">
-        <ForkIcon />
-      </span>{' '}
-      Forked from{' '}
-      <Button kind="plain" size="tiny" className="link" onClick={onOpen} title="Show the session this was forked from">
-        {from.title}
-      </Button>
-      , before prompt {from.prompt + 1}.
-    </p>
-  )
-}
-
-/**
- * That this session opened with auto-vetting on, which CHECK-11 has said at the top and kept said.
- *
- * In the header for the reason `ForkBanner` is: it stays on screen however far the transcript
- * scrolls, and it is not a `t.Entry`, so no export carries it. The mode's whole effect is a
- * question that never appears, which nothing else on screen could show. Nothing is drawn when the
- * mode is off, since asking is the ordinary state.
- */
-function VettingBanner(): React.JSX.Element {
-  return (
-    <Alert type="info" size="small" className="session-banner" role="note">
-      <span slot="title">Auto-vetting is on.</span>
-      A check that finds nothing reads content to the model
-      without asking you. Kept in <code>~/.bravebot/vetting</code>.
-    </Alert>
-  )
-}
-
-/**
- * That a yes about this directory is kept for later sessions (TRUST-23), and where.
- *
- * A session it settled was never asked, so this is the one thing on screen that says where its
- * trust came from and how to take it back.
- */
-function RememberedBanner({ kept }: { kept: KeptTrust }): React.JSX.Element {
-  return (
-    <Alert type="info" size="small" className="session-banner" role="note">
-      <span slot="title">Trust is remembered for this directory.</span>
-      You said to remember it {ago(kept.at)},
-      so sessions started here are not asked. Kept in <code>{kept.path}</code>; Permissions takes
-      it back.
-    </Alert>
+    <div className="session-notices">
+      {forkedFrom && (
+        <p className="fork-banner session-notice divider">
+          <span className="fork-mark"><ForkIcon /></span>
+          <span className="notice-text">
+            Forked from <strong>{forkedFrom.title}</strong>, before prompt {forkedFrom.prompt + 1}.
+          </span>
+          <Button kind="plain" size="tiny" className="link" onClick={onOpenParent} data-tooltip="Show the session this was forked from">
+            View original
+          </Button>
+        </p>
+      )}
+      {kept && (
+        <p className="session-banner session-notice" role="note" data-tooltip={`Remembered ${ago(kept.at)} · kept in ${kept.path}`}>
+          <Icon name="shield-done" />
+          <span className="notice-text">Trust is remembered for this directory, so sessions started here are not asked.</span>
+          <Button kind="plain" size="tiny" className="link" onClick={onManage}>Manage</Button>
+        </p>
+      )}
+      {vetting && (
+        <p className="session-banner session-notice" role="note">
+          <Icon name="shield-done" />
+          <span className="notice-text">
+            Auto-vetting is on. A check that finds nothing reads content to the model without asking you.
+            Kept in <code>~/.bravebot/vetting</code>.
+          </span>
+        </p>
+      )}
+    </div>
   )
 }
 
@@ -1074,7 +1247,8 @@ function YesOrNo({
 function AmbientNotice({ ambient }: { ambient?: Ambient[] }): React.JSX.Element | null {
   if (!ambient?.length) return null
   return (
-    <div className="warn">
+    <Alert type="warning" className="card-alert warn">
+      <Icon name="shield-alert" slot="icon" />
       This spends access that is yours elsewhere. Nobody is asked for it at the moment it
       is used, and nothing here takes it back afterwards.
       <ul>
@@ -1084,7 +1258,7 @@ function AmbientNotice({ ambient }: { ambient?: Ambient[] }): React.JSX.Element 
           </li>
         ))}
       </ul>
-    </div>
+    </Alert>
   )
 }
 
@@ -1117,7 +1291,7 @@ type RowProps = {
  * are shown inside a container of their own is decided here rather than in the components below,
  * so `scripts/marking.test.mjs` renders this to assert it.
  */
-export function Row({
+export const Row = memo(function Row({
   entry,
   onRecover,
   onChooseModel,
@@ -1152,7 +1326,7 @@ export function Row({
       </Collapse>
     </div>
   )
-}
+})
 
 /**
  * The card itself, which is the same card whether or not the turn it belongs to ended.
@@ -1176,25 +1350,29 @@ function Card({
     case 'user':
       return (
         <div className="bubble user">
-          {entry.text}
-          {/* Inside the bubble, and positioned out of it. The wrapper this row sits in is
+          <div className="bubble-text">{entry.text}</div>
+          {/* Inside the row rather than beside it. The wrapper this row sits in is
               `display: contents` and has no box to hang anything off, and the bubble is the
               only thing here that knows where the row actually is on screen. */}
-          <Button
-            kind="plain-faint"
-            size="tiny"
-            className="fork-here"
-            aria-label="Fork from here"
-            title={
-              forkable
-                ? 'Start a session from what was said before this'
-                : 'Wait for the turn to finish'
-            }
-            isDisabled={!forkable}
-            onClick={() => onFork(entry.id)}
-          >
-            <ForkIcon />
-          </Button>
+          <div className="message-actions">
+            <CopyButton text={() => entry.text} label="Copy message" />
+            <Button
+              kind="plain-faint"
+              size="tiny"
+              fab
+              className="fork-here icon-button plain-faint tiny"
+              aria-label="Fork from here"
+              data-tooltip={
+                forkable
+                  ? 'Fork from here · Start a session from what was said before this'
+                  : 'Wait for the turn to finish'
+              }
+              isDisabled={!forkable}
+              onClick={() => onFork(entry.id)}
+            >
+              <span slot="icon-before"><ForkIcon /></span>
+            </Button>
+          </div>
         </div>
       )
 
@@ -1207,15 +1385,15 @@ function Card({
       )
 
     case 'narration':
-      return <div className="narration">{entry.text}</div>
+      return <div className="narration"><Icon name="file-text" />{entry.text}</div>
 
     case 'attached':
       // A line rather than a bubble, and the path rather than the contents. This is the same
       // register the tool lines are in — something that happened on the way to the reply — which
       // is what it is: a file somebody named, read at the top of a turn.
       return (
-        <div className="attached" title={entry.path}>
-          Read {entry.path}
+        <div className="attached" data-tooltip={entry.path}>
+          <Icon name="file-text" />Read {entry.path}
         </div>
       )
 
@@ -1225,10 +1403,10 @@ function Card({
       // whole reason it has an entry of its own is that drawing it as a prompt would claim
       // otherwise. Reached only from the record's own tag, never from a message's wording, so
       // nothing anybody types earns this row.
-      return <div className="attached consolidation">Asked to bring its memory up to date</div>
+      return <div className="attached consolidation"><Icon name="refresh" />Asked to bring its memory up to date</div>
 
     case 'watch':
-      return <div className="watch-turn"><strong>{entry.text}</strong><span>Automatic turn · file contents still follow normal read permissions</span></div>
+      return <div className="watch-turn"><Icon name="eye-on" /><strong>{entry.text}</strong><span>Automatic turn · file contents still follow normal read permissions</span></div>
     case 'error':
       return <ErrorCard category={entry.category} attempts={entry.attempts} status={entry.status} cutOff={entry.cutOff} detail={entry.text} onRetry={onRecover} onModel={onChooseModel} />
 
@@ -1238,7 +1416,8 @@ function Card({
       // the prominence of a real line would be worse than the gap.
       return (
         <div className="tool replayed">
-          {entry.text}
+          <span className="tool-status" aria-hidden="true"><Icon name="check-normal" /></span>
+          <span className="verb">{entry.text}</span>
           {entry.why && <span className="why">{entry.why}</span>}
         </div>
       )
@@ -1248,21 +1427,22 @@ function Card({
       const running = activity.note === null
       return (
         <div className={`tool ${activity.failed ? 'failed' : ''} ${running ? 'running' : ''}`}>
+          <span className="tool-status" role="img" aria-label={running ? 'Running' : activity.failed ? 'Failed' : 'Done'}>
+            {running ? <ProgressRing className="tool-ring" /> : <Icon name={activity.failed ? 'close' : 'check-normal'} />}
+          </span>
           <span className="verb">{activity.verb}</span>
-          {activity.target && <span className="target">({activity.target})</span>}
+          {activity.target && <span className="target" data-tooltip={activity.target.length > TARGET_WIDTH ? activity.target : undefined}>{middleTruncate(activity.target, TARGET_WIDTH)}</span>}
           {activity.why && <span className="why">{activity.why}</span>}
-          {running ? (
-            <span className="ellipsis">…</span>
-          ) : (
+          {!running && (
             <span className="note">
               {activity.note}
               {waitedWord(activity.waitedSeconds)}
             </span>
           )}
           {landing && isConfined(landing) && (
-            <span className="confined" title={landingHint(landing)}>
+            <Label mode="outline" color="blue" className="confined" data-tooltip={landingHint(landing)}>
               {landing === 'quarantined' ? 'quarantined' : 'name only'}
-            </span>
+            </Label>
           )}
         </div>
       )
@@ -1273,9 +1453,10 @@ function Card({
       return (
         <div className="quarantine">
           <div className="quarantine-head">
+            <Icon name="shield-done" className="card-kind" />
             <span className="mark">confined</span>
             {/* Ellipsised, and it is a path: what gets cut is the part that identifies it. */}
-            <span className="origin" title={shown.origin}>
+            <span className="origin" data-tooltip={shown.origin}>
               {shown.origin}
             </span>
             <span className="label">{shown.label}</span>
@@ -1284,8 +1465,13 @@ function Card({
           <div className="quarantine-foot">
             {shown.lines} line{shown.lines === 1 ? '' : 's'} total ·{' '}
             {shown.reach === 'no_model'
-              ? 'in no model’s context: nothing can be sent to read this'
-              : 'not in the planner’s context; a processor can be sent to read it'}
+              ? 'in no model’s context'
+              : 'not in the planner’s context'}
+            <Collapse className="card-details" title="Details" isOpen={undefined}>
+              {shown.reach === 'no_model'
+                ? 'Nothing can be sent to read this. Only its line count and origin are known to the conversation.'
+                : 'A processor can be sent to read it in isolation. What it writes back is marked untrusted in turn.'}
+            </Collapse>
           </div>
         </div>
       )
@@ -1293,69 +1479,91 @@ function Card({
 
     case 'confirm': {
       const { request, decision } = entry
+      const stats = t.diffStats(request.changes)
       return (
-        <div className={`confirm ${request.untrusted ? 'untrusted' : ''}`}>
-          <div className="confirm-head">
-            <span className="intent">{request.intent}</span>
-            <code className="path">{request.path}</code>
-            <span className="counts">
-              +{request.added} −{request.removed}
-            </span>
-          </div>
-
+        <DecisionCard
+          className={`confirm ${request.untrusted ? 'untrusted' : ''}`}
+          answerable={answerable}
+          subject={request.path}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You approved this write' : 'You refused this write' }}
+          head={<CardHead icon="edit-box" intent={INTENT_WORD[request.intent]}
+            subject={<code className="path" data-tooltip={request.path}>{request.path}</code>}
+            counts={<span className="counts" aria-label={`${stats.added} added, ${stats.removed} removed`}><span className="stat added">+{stats.added}</span><span className="stat removed">−{stats.removed}</span></span>}
+            trust={request.untrusted && <Label mode="loud" color="yellow" className="trust-label"><Icon name="warning-triangle-filled" slot="icon-before" />Untrusted source</Label>} />}
+          actions={<>
+            <Button kind="plain-faint" size="small" className="reject" onClick={() => onDecide('confirm', request.request, false)}>
+              Don’t write
+            </Button>
+            <Button kind="filled" size="small" className="approve" onClick={() => onDecide('confirm', request.request, true)}>
+              {request.existing ? 'Apply this change' : 'Create this file'}
+            </Button>
+          </>}
+        >
           {request.untrusted && (
             <p className="warn">
-              This came from somewhere nobody vouched for. The agent never read it — an
-              isolated processor wrote it. Read it as you would a stranger’s patch.
+              <Icon name="warning-triangle-filled" />
+              <span>This came from somewhere nobody vouched for. The agent never read it — an
+              isolated processor wrote it. Read it as you would a stranger’s patch.</span>
             </p>
           )}
           {!request.exact && (
             <p className="warn">
-              The files were too dissimilar to diff exactly. This is an approximation of
-              the change.
+              <Icon name="warning-triangle-filled" />
+              <span>The files were too dissimilar to diff exactly. This is an approximation of
+              the change.</span>
             </p>
           )}
-
-<p className="permission-scope">{request.existing ? 'Update an existing project file.' : 'Create a new project file.'} This decision applies to the change shown below.</p>
-          {request.remark && <div className="processor-remark"><strong>Processor’s remark · untrusted</strong>
-            <pre>{request.remark.preview.join('\n')}</pre>
-            <small>{request.remark.label}{request.remark.lines > request.remark.preview.length ? ` · ${request.remark.lines - request.remark.preview.length} more lines not shown` : ''}. Review the diff before approving.</small>
-          </div>}
-          {request.credentials && request.credentials.length > 0 && <div className="credential-finding"><strong>This looks like it would put a secret in the tree</strong>
+          {request.credentials && request.credentials.length > 0 && <Alert type="warning" className="card-alert credential-finding">
+            <Icon name="shield-alert" slot="icon" />
+            <span slot="title">This looks like it would put a secret in the tree</span>
             <ul>{request.credentials.map((found) => <li key={found}>{found}</li>)}</ul>
             <small>Going by the name beside the value and how the value reads. Nothing recognised it as a particular provider’s key, so it is a guess and yours to settle.</small>
-          </div>}
-          <Diff changes={request.changes} />
-
-          {!answerable ? (
-            <Unanswered />
-          ) : decision === null ? (
-            <div className="confirm-actions">
-              <Button kind="plain" size="small" className="reject" onClick={() => onDecide('confirm', request.request, false)}>
-                Don’t write
-              </Button>
-              <Button kind="filled" size="small" className="approve" onClick={() => onDecide('confirm', request.request, true)}>
-                {request.existing ? 'Apply this change' : 'Create this file'}
-              </Button>
-            </div>
-          ) : (
-            <div className={`decided ${decision}`}>
-              {decision === 'approve' ? 'You approved this write' : 'You refused this write'}
-            </div>
-          )}
-        </div>
+          </Alert>}
+          <Diff changes={request.changes} path={request.path} untrusted={request.untrusted} />
+          <Collapse className="card-details" title="Details" isOpen={undefined}>
+            <p className="permission-scope">{request.existing ? 'Update an existing project file.' : 'Create a new project file.'} This decision applies to the change shown above.</p>
+            {request.remark && <div className="processor-remark"><strong>Processor’s remark · untrusted</strong>
+              <pre>{request.remark.preview.join('\n')}</pre>
+              <small>{request.remark.label}{request.remark.lines > request.remark.preview.length ? ` · ${request.remark.lines - request.remark.preview.length} more lines not shown` : ''}. Review the diff before approving.</small>
+            </div>}
+          </Collapse>
+        </DecisionCard>
       )
     }
 
     case 'run': {
       const { request, decision, remember } = entry
+      const commands = request.stages.length
       return (
-        <div className={`confirm run ${request.releasesPrivate ? 'releases' : ''}`}>
-          <div className="confirm-head">
-            <span className="intent">run</span>
-            <code className="path">{request.directory}</code>
-          </div>
-
+        <DecisionCard
+          className={`confirm run ${request.releasesPrivate ? 'releases' : ''}`}
+          answerable={answerable}
+          subject={request.stages.map((stage) => stage.display).join(' | ')}
+          decided={decision === null ? null : {
+            tone: decision,
+            text: decision === 'reject' ? 'You refused this command' : remember ? 'You ran this and vouched for the programs' : 'You ran this once',
+          }}
+          head={<CardHead icon="window-console" intent={commands === 1 ? 'Run a command' : `Run ${commands} commands`}
+            subject={<code className="path" data-tooltip={request.directory}>{request.directory}</code>} />}
+          actions={<>
+            <Button kind="plain-faint" size="small" className="reject" onClick={() => onDecide('run', request.request, false)}>
+              Don’t run
+            </Button>
+            {/* Separate from "Run once" rather than a checkbox beside it: remembering
+                answers every later question about these programs, so it should take its
+                own deliberate press. The tooltip says exactly what it would cover. */}
+            <Button
+              kind="outline" size="small" className="approve always"
+              data-tooltip={`Stop asking about: ${request.vouches.map((v) => v.display).join(', ')}`}
+              onClick={() => onDecide('run', request.request, true, true)}
+            >
+              Trust command and output
+            </Button>
+            <Button kind="filled" size="small" className="approve" onClick={() => onDecide('run', request.request, true)}>
+              Run once
+            </Button>
+          </>}
+        >
           {/* The line the planner wrote, above the plan and as context. It is not what the
               answer binds to: two spellings that compile alike are one thing to agree to, and
               the plan below is the one being agreed to. Drawn all the same, because a reader
@@ -1381,98 +1589,64 @@ function Card({
             ))}
           </ol>
 
-          <p className="permission-scope">Run this command in the project folder shown above. “Run once” approves only this execution.</p>
-          {answerable && decision === null && <p className="permission-scope"><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and trusts their output for this conversation, including after reopening it. Revoke through Permissions.</p>}
           <AmbientNotice ambient={request.ambient} />
           {request.releasesPrivate && (
-            <p className="warn">
+            <Alert type="warning" className="card-alert warn">
+              <Icon name="shield-alert" slot="icon" />
               This hands your own data to the program. Whatever it does with those bytes
               happens somewhere the agent stops governing them.
-            </p>
+            </Alert>
           )}
-
-          {!answerable ? (
-            <Unanswered />
-          ) : decision === null ? (
-            <div className="confirm-actions">
-              <Button kind="plain" size="small" className="reject" onClick={() => onDecide('run', request.request, false)}>
-                Don’t run
-              </Button>
-              <Button kind="filled" size="small" className="approve" onClick={() => onDecide('run', request.request, true)}>
-                Run once
-              </Button>
-              {/* Separate from "Run once" rather than a checkbox beside it: remembering
-                  answers every later question about these programs, so it should take its
-                  own deliberate press. The title says exactly what it would cover. */}
-              <Button
-                kind="outline" size="small" className="approve always"
-                title={`Stop asking about: ${request.vouches.map((v) => v.display).join(', ')}`}
-                onClick={() => onDecide('run', request.request, true, true)}
-              >
-                Trust command and output
-              </Button>
-            </div>
-          ) : (
-            <div className={`decided ${decision}`}>
-              {decision === 'reject'
-                ? 'You refused this command'
-                : remember
-                  ? 'You ran this and vouched for the programs'
-                  : 'You ran this once'}
-            </div>
-          )}
-        </div>
+          <Collapse className="card-details" title="Details" isOpen={undefined}>
+            <p className="permission-scope">Run this command in the project folder shown above. “Run once” approves only this execution.</p>
+            {answerable && decision === null && <p className="permission-scope"><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and trusts their output for this conversation, including after reopening it. Revoke through Permissions.</p>}
+          </Collapse>
+        </DecisionCard>
       )
     }
 
     case 'output': {
       const { request, decision } = entry
       return (
-        <div className="confirm output">
-          <div className="confirm-head">
-            <span className="intent">read output</span>
-            <code className="path">{request.command}</code>
-            <span className="counts">
-              {request.lines} line{request.lines === 1 ? '' : 's'}
-            </span>
-          </div>
-
+        <DecisionCard
+          className="confirm output"
+          answerable={answerable}
+          subject={request.command}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You let the planner read this' : 'You kept this out of the planner’s context' }}
+          head={<CardHead icon="eye-on" intent="Read output"
+            subject={<code className="path" data-tooltip={request.command}>{request.command}</code>}
+            counts={<span className="counts">{request.lines} line{request.lines === 1 ? '' : 's'}</span>}
+            trust={<VettingVerdict vetting={request.vetting} />} />}
+          actions={<>
+            <Button
+              kind="plain-faint" size="small" className="reject"
+              onClick={() => onDecide('output', request.request, false)}
+            >
+              Keep it out
+            </Button>
+            <Button
+              kind="filled" size="small" className="approve"
+              onClick={() => onDecide('output', request.request, true)}
+            >
+              Let the planner read it
+            </Button>
+          </>}
+        >
+          <VettingReason vetting={request.vetting} />
           <p className="warn">
-            The planner has not seen this. Read it yourself before deciding: approving is
+            <Icon name="warning-triangle-filled" />
+            <span>The planner has not seen this. Read it yourself before deciding: approving is
             what puts it into the model’s context, and anything in here that reads like an
-            instruction will be read there as one.
+            instruction will be read there as one.</span>
           </p>
 
           {/* In full, never truncated. The answer to this question rests on the bytes, so
               a preview would be asking for an approval of what nobody saw. */}
-          <VettingNotice vetting={request.vetting} />
           <pre className="preview">{request.output}</pre>
-
-          {!answerable ? (
-            <Unanswered />
-          ) : decision === null ? (
-            <div className="confirm-actions">
-              <Button
-                kind="plain" size="small" className="reject"
-                onClick={() => onDecide('output', request.request, false)}
-              >
-                Keep it out
-              </Button>
-              <Button
-                kind="filled" size="small" className="approve"
-                onClick={() => onDecide('output', request.request, true)}
-              >
-                Let the planner read it
-              </Button>
-            </div>
-          ) : (
-            <div className={`decided ${decision}`}>
-              {decision === 'approve'
-                ? 'You let the planner read this'
-                : 'You kept this out of the planner’s context'}
-            </div>
-          )}
-        </div>
+          <Collapse className="card-details" title="Details" isOpen={undefined}>
+            <VettingNotice vetting={request.vetting} />
+          </Collapse>
+        </DecisionCard>
       )
     }
 
@@ -1480,32 +1654,42 @@ function Card({
       const { request, decision } = entry
       if (request.picture) {
         const picture = request.picture
-        return <div className="confirm vetted-read">
-          <div className="confirm-head"><span className="intent">see once</span><code className="path">{request.origin}</code><span>{picture.media}, {picture.bytes} bytes</span></div>
+        return <DecisionCard className="confirm vetted-read" answerable={answerable} subject={request.origin}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You allowed this file once' : 'You kept this file out' }}
+          head={<CardHead icon="eye-on" intent="See once" subject={<code className="path" data-tooltip={request.origin}>{request.origin}</code>}
+            counts={<span className="counts">{picture.media}, {picture.bytes} bytes</span>} trust={<VettingVerdict vetting={request.vetting} />} />}
+          actions={<>
+            <Button kind="plain-faint" size="small" className="reject" onClick={() => onDecide('vet', request.request, false)}>Keep it out</Button>
+            <Button kind="filled" size="small" className="approve" onClick={() => onDecide('vet', request.request, true)}>Let the planner see it once</Button>
+          </>}>
+          <VettingReason vetting={request.vetting} />
           <p className="permission-scope">Expected contents: {request.expects}</p>
-          <VettingNotice vetting={request.vetting} />
-          <p className="warn">Approval shows the planner only this file. It does not trust this file for future reads.</p>
+          <p className="warn"><Icon name="warning-triangle-filled" /><span>A model reads words in a picture that a person can miss: small, faint, or nearly the colour of what is behind them. Look for writing before letting it through.</span></p>
+          {picture.media === 'application/pdf' && <p className="warn"><Icon name="warning-triangle-filled" /><span>A PDF can also hold text that no page draws, and the planner is given that text too.</span></p>}
           <p>Open this copy to see what the planner would be shown. It is deleted when you answer:</p>
           <pre className="preview">{picture.path}</pre>
-          <p className="warn">A model reads words in a picture that a person can miss: small, faint, or nearly the colour of what is behind them. Look for writing before letting it through.</p>
-          {picture.media === 'application/pdf' && <p className="warn">A PDF can also hold text that no page draws, and the planner is given that text too.</p>}
-          {!answerable ? <Unanswered /> : decision === null ? <div className="confirm-actions">
-            <Button kind="plain" size="small" className="reject" onClick={() => onDecide('vet', request.request, false)}>Keep it out</Button>
-            <Button kind="filled" size="small" className="approve" onClick={() => onDecide('vet', request.request, true)}>Let the planner see it once</Button>
-          </div> : <div className={`decided ${decision}`}>{decision === 'approve' ? 'You allowed this file once' : 'You kept this file out'}</div>}
-        </div>
+          <Collapse className="card-details" title="Details" isOpen={undefined}>
+            <p className="permission-scope">Approval shows the planner only this file. It does not trust this file for future reads.</p>
+            <VettingNotice vetting={request.vetting} />
+          </Collapse>
+        </DecisionCard>
       }
-      return <div className="confirm vetted-read">
-        <div className="confirm-head"><span className="intent">read once</span><code className="path">{request.origin}</code><span>{request.lines} lines</span></div>
-        <p className="permission-scope">Expected contents: {request.expects}</p>
-        <VettingNotice vetting={request.vetting} />
-        <p className="warn">Approval lets the planner read only this content. It does not trust this file for future reads.</p>
-        <pre className="preview">{request.content}</pre>
-        {!answerable ? <Unanswered /> : decision === null ? <div className="confirm-actions">
-          <Button kind="plain" size="small" className="reject" onClick={() => onDecide('vet', request.request, false)}>Keep it out</Button>
+      return <DecisionCard className="confirm vetted-read" answerable={answerable} subject={request.origin}
+        decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You allowed this content once' : 'You kept this content out' }}
+        head={<CardHead icon="eye-on" intent="Read once" subject={<code className="path" data-tooltip={request.origin}>{request.origin}</code>}
+          counts={<span className="counts">{request.lines} lines</span>} trust={<VettingVerdict vetting={request.vetting} />} />}
+        actions={<>
+          <Button kind="plain-faint" size="small" className="reject" onClick={() => onDecide('vet', request.request, false)}>Keep it out</Button>
           <Button kind="filled" size="small" className="approve" onClick={() => onDecide('vet', request.request, true)}>Let the planner read once</Button>
-        </div> : <div className={`decided ${decision}`}>{decision === 'approve' ? 'You allowed this content once' : 'You kept this content out'}</div>}
-      </div>
+        </>}>
+        <VettingReason vetting={request.vetting} />
+        <p className="permission-scope">Expected contents: {request.expects}</p>
+        <pre className="preview">{request.content}</pre>
+        <Collapse className="card-details" title="Details" isOpen={undefined}>
+          <p className="permission-scope">Approval lets the planner read only this content. It does not trust this file for future reads.</p>
+          <VettingNotice vetting={request.vetting} />
+        </Collapse>
+      </DecisionCard>
     }
     case 'fetch': {
       const { request, decision } = entry
@@ -1608,53 +1792,111 @@ function Card({
     case 'vouch': {
       const { request, decision } = entry
       return (
-        <div className="confirm vouch">
-          <div className="confirm-head">
-            <span className="intent">vouch</span>
-            <code className="path">{request.path}</code>
-          </div>
-
+        <DecisionCard
+          className="confirm vouch"
+          answerable={answerable}
+          subject={request.path}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You vouched for this path' : 'You left it confined' }}
+          head={<CardHead icon="shield-done" intent="Vouch for"
+            subject={<code className="path" data-tooltip={request.path}>{request.path}</code>}
+            trust={<VettingVerdict vetting={request.vetting} />} />}
+          actions={<>
+            <Button
+              kind="plain-faint" size="small" className="reject"
+              onClick={() => onDecide('vouch', request.request, false)}
+            >
+              Leave it confined
+            </Button>
+            <Button
+              kind="filled" size="small" className="approve"
+              onClick={() => onDecide('vouch', request.request, true)}
+            >
+              Vouch for this path
+            </Button>
+          </>}
+        >
+          <VettingReason vetting={request.vetting} />
           <p className="warn">
-            Vouching records a standing rule for this path, so it applies to later reads as
-            well as this one. Only do it for content you know the origin of.
+            <Icon name="warning-triangle-filled" />
+            <span>Vouching records a standing rule for this path, so it applies to later reads as
+            well as this one. Only do it for content you know the origin of.</span>
           </p>
 
-          <VettingNotice vetting={request.vetting} />
           <pre className="preview">{request.preview}</pre>
           {request.truncated && (
             <div className="quarantine-foot">
               This is the beginning of the file, not all of it.
             </div>
           )}
-
-          {!answerable ? (
-            <Unanswered />
-          ) : decision === null ? (
-            <div className="confirm-actions">
-              <Button
-                kind="plain" size="small" className="reject"
-                onClick={() => onDecide('vouch', request.request, false)}
-              >
-                Leave it confined
-              </Button>
-              <Button
-                kind="filled" size="small" className="approve"
-                onClick={() => onDecide('vouch', request.request, true)}
-              >
-                Vouch for this path
-              </Button>
-            </div>
-          ) : (
-            <div className={`decided ${decision}`}>
-              {decision === 'approve'
-                ? 'You vouched for this path'
-                : 'You left it confined'}
-            </div>
-          )}
-        </div>
+          <Collapse className="card-details" title="Details" isOpen={undefined}>
+            <VettingNotice vetting={request.vetting} />
+          </Collapse>
+        </DecisionCard>
       )
     }
   }
+}
+
+const INTENT_WORD: Record<import('../../shared/protocol').Intent, string> = { create: 'Create', overwrite: 'Overwrite', edit: 'Edit' }
+
+/** How much of a tool's target a line shows before it cuts from the middle. */
+const TARGET_WIDTH = 72
+
+/**
+ * The head every decision card shares: what kind of question it is, what it is about, how big it
+ * is, and how far to trust it. The kind is an icon and a verb so the five read apart at a glance.
+ */
+function CardHead({ icon, intent, subject, counts, trust }: {
+  icon: IconName
+  intent: string
+  subject?: React.ReactNode
+  counts?: React.ReactNode
+  trust?: React.ReactNode
+}): React.JSX.Element {
+  return <div className="confirm-head">
+    <Icon name={icon} className="card-kind" />
+    <span className="intent">{intent}</span>
+    {subject}
+    {counts}
+    {trust}
+  </div>
+}
+
+/**
+ * The frame of a decision card.
+ *
+ * Undecided, it shows the whole question and its answers. Decided, it folds to the one line that
+ * says what became of it, and can be opened again to see what was agreed to. A question whose
+ * turn ended keeps the whole card with `Unanswered` in the answers' place, because a fold would
+ * put away evidence that was never settled.
+ */
+function DecisionCard({ className, head, decided, subject, answerable, actions, children }: {
+  className: string
+  head: React.ReactNode
+  decided: { tone: 'approve' | 'reject'; text: string } | null
+  subject?: string
+  answerable: boolean
+  actions: React.ReactNode
+  children: React.ReactNode
+}): React.JSX.Element {
+  const [shown, setShown] = useState(false)
+  const settled = answerable && decided !== null
+  const line = settled && decided && (
+    <div className={`decided ${decided.tone}`}>
+      <Icon name={decided.tone === 'approve' ? 'check-normal' : 'close'} />
+      <span className="decided-text">{decided.text}</span>
+      {subject && !shown && <code className="decided-subject" data-tooltip={subject}>{middleTruncate(subject, 56)}</code>}
+      <Button kind="plain-faint" size="tiny" className="decided-toggle" aria-expanded={shown} onClick={() => setShown((open) => !open)}>
+        {shown ? 'Hide' : 'Show'}
+      </Button>
+    </div>
+  )
+  if (settled && !shown) return <div className={className} data-folded="true">{line}</div>
+  return <div className={className}>
+    {head}
+    <div className="card-body">{children}</div>
+    {!answerable ? <Unanswered /> : decided === null ? <div className="confirm-actions">{actions}</div> : line}
+  </div>
 }
 
 /**
@@ -1691,12 +1933,25 @@ function landingHint(landing: string): string {
     : 'read by nothing: only its name is known'
 }
 
+/** The checker's verdict, as the label in a card's head, where it is read before the content is. */
+function VettingVerdict({ vetting }: { vetting?: import('../../shared/protocol').Vetting }): React.JSX.Element {
+  const verdict = vetting?.verdict
+  return verdict === 'safe'
+    ? <Label mode="outline" color="green" className="vetting-verdict safe">No instructions detected</Label>
+    : verdict === 'unsafe'
+      ? <Label mode="loud" color="red" className="vetting-verdict unsafe"><Icon name="warning-triangle-filled" slot="icon-before" />Possible instructions detected</Label>
+      : <Label mode="outline" color="yellow" className="vetting-verdict">Check inconclusive</Label>
+}
+
+/** The checker's one-sentence reason, beside the content it is about: it is the evidence for the verdict. */
+function VettingReason({ vetting }: { vetting?: import('../../shared/protocol').Vetting }): React.JSX.Element | null {
+  return vetting?.reason ? <p className="vetting-reason"><span className="vetting-by">Checker</span>{vetting.reason}</p> : null
+}
+
+/** How far to lean on the checker, under a card's Details. */
 function VettingNotice({ vetting }: { vetting?: import('../../shared/protocol').Vetting }): React.JSX.Element {
   const verdict = vetting?.verdict
-  const label = verdict === 'safe' ? 'No instructions detected' : verdict === 'unsafe' ? 'Possible instructions detected' : 'Check inconclusive'
   return <div className={`vetting-notice ${verdict === 'safe' ? 'safe' : 'caution'}`}>
-    <strong>{label}</strong>
-    {vetting?.reason && <p>{vetting.reason}</p>}
     {vetting?.detail && <p>{vetting.detail}</p>}
     <small>{!vetting ? 'No checker assessment was recorded. Review the content before deciding.' : verdict === 'safe' || verdict === 'unsafe' ? 'The checker received this content at the backend before this question. Its assessment can be wrong; you decide whether the planner may read it.' : 'The check did not complete. Content may already have reached the backend. You still decide whether the planner may read it.'}</small>
   </div>

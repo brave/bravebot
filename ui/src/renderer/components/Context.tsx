@@ -1,9 +1,12 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { FileTree } from './FileTree'
 import { type PanelName } from '../../shared/state'
 import { isConfined, type Activity, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
 import type { Entry } from '../transcript'
-import { Button, Collapse, Icon, Label, TabItem, Tabs } from '../nala'
+import { Collapse, Icon, Label, ProgressRing, TabItem, Tabs, type IconName } from '../nala'
+import { FileGlyph } from './FileGlyph'
+import { IconButton } from './IconButton'
+import { middleTruncate } from '../truncate'
 
 interface Live {
   /** The session's handle. The file tree names it rather than naming a folder. */
@@ -36,7 +39,7 @@ interface Live {
  * the disk, because the question it answers — what else is in there, and what does this file look
  * like in a real editor — is not one the transcript can be asked.
  */
-export function Context({ live, onClose, audit }: { live: Live | null; onClose: () => void; audit?: React.ReactNode }): React.JSX.Element {
+export const Context = memo(function Context({ live, onClose, audit }: { live: Live | null; onClose: () => void; audit?: React.ReactNode }): React.JSX.Element {
   const [tab, setTab] = useState<'overview' | 'files'>('overview')
   const off = new Set<PanelName>(tab === 'overview' ? ['files'] : ['plan', 'read', 'writes', 'confined'])
   const reveal = (path: string) => {
@@ -84,29 +87,31 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
           column will come back at when it unfolds — which a full-width row of buttons plus its
           own margins overflows. The wrapper takes that width and the bar sits inside it. */}
       <div className="context-head">
-        <div className="inspector-title"><strong>Project context</strong>
-          <Button kind="plain-faint" size="small" fab className="drawer-close" onClick={onClose} aria-label="Close context panel" title="Close context panel" data-test="context-close">
-            <Icon name="close" slot="icon-before" />
-          </Button>
+        <div className="inspector-title">
+          <strong>Context</strong>
+          <IconButton icon="close" label="Close context panel" tooltip="Close context panel" className="drawer-close"
+            onClick={onClose} data-test="context-close" />
         </div>
-        <Tabs className="inspector-tabs" size="medium" value={tab} data-test="inspector-tabs"
+        <Tabs className="inspector-tabs" size="small" value={tab} data-test="inspector-tabs"
           onChange={({ value }) => { if (value === 'overview' || value === 'files') setTab(value) }}>
           <TabItem value="overview">Overview</TabItem>
           <TabItem value="files">Files</TabItem>
         </Tabs>
       </div>
 
-      <Section id="plan" title="Plan" count={live.todos.length} off={off.has('plan')}>
+      <Section id="plan" title="Plan" count={live.todos.length} off={off.has('plan')}
+        about="The steps the agent has set itself, and which it has done.">
         {live.todos.length === 0 ? (
-          <p className="none">{onlyReplayed ? 'No plan was recorded.' : 'No plan yet.'}</p>
+          <Empty icon="list-checks">{onlyReplayed ? 'No plan was recorded.' : 'No plan yet.'}</Empty>
         ) : (
           <ul className="todos">
             {live.todos.map((row, index) => (
               <li key={index} className={row.status}>
-                <span className="marker">
-                  {row.status === 'done' ? '✓' : row.status === 'active' ? '▸' : '·'}
+                <span className="marker" aria-hidden="true">
+                  {row.status === 'done' ? <Icon name="check-circle-filled" /> : row.status === 'active' ? <ProgressRing mode="indeterminate" /> : <Icon name="radio-unchecked" />}
                 </span>
-                {row.content}
+                <span className="todo-text">{row.content}</span>
+                <span className="visually-hidden">{row.status === 'done' ? ', done' : row.status === 'active' ? ', in progress' : ''}</span>
               </li>
             ))}
           </ul>
@@ -123,13 +128,14 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
         title={labels.read}
         count={onlyReplayed ? replayed.length : files.length}
         off={off.has('read')}
+        about={onlyReplayed ? 'Every call the saved turns made, from the record.' : 'Files the agent opened, and whether their contents were confined from the planner.'}
       >
         {onlyReplayed ? (
           <>
-            <p className="none">
+            <Empty icon="window-console">
               From the record. It keeps what each turn did, not what came of it, so
               there is nothing to say about where these landed.
-            </p>
+            </Empty>
             {/* Every path in this list and the two below it ellipsises, and a path clipped
                 on the right loses the filename — the one part of it somebody is reading
                 for. The tooltip is the whole string back. It repeats what is already on
@@ -139,40 +145,42 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
             <ul className="files">
               {replayed.map((entry) =>
                 entry.kind === 'replayed-tool' ? (
-                  <li key={entry.id} className="from-record">
-                    <code title={entry.text}>{entry.text}</code>
+                  <li key={entry.id} className="file-row from-record">
+                    <Icon name="window-console" className="row-icon" />
+                    <code className="file-path" data-tooltip={entry.text}>{entry.text}</code>
                   </li>
                 ) : null,
               )}
             </ul>
           </>
         ) : files.length === 0 ? (
-          <p className="none">Nothing read yet.</p>
+          <Empty icon="folder">Nothing read yet.</Empty>
         ) : (
           <ul className="files">
             {files.map((file) => (
-              <li key={file.target} className={file.confined ? 'confined' : ''}>
-                <Button kind="plain" size="tiny" className="context-link" onClick={() => reveal(file.target)} title={file.target}>{file.target}</Button>
-                {file.confined && <Label className="tag" color="yellow">confined</Label>}
+              <li key={file.target} className={`file-row${file.confined ? ' confined' : ''}`}>
+                <FileLink path={file.target} onReveal={reveal} />
+                {file.confined && <Label mode="outline" className="tag" color="blue">confined</Label>}
               </li>
             ))}
           </ul>
         )}
       </Section>
 
-      <Section id="writes" title="Changes" count={writes.length} off={off.has('writes')}>
+      <Section id="writes" title="Changes" count={writes.length} off={off.has('writes')}
+        about="Files the agent asked to write, and how far each write got.">
         {writes.length === 0 ? (
-          <p className="none">
+          <Empty icon="edit-box">
             {onlyReplayed
               ? 'Not recorded for past turns.'
               : 'Nothing has been written.'}
-          </p>
+          </Empty>
         ) : (
           <ul className="files">
             {writes.map((write) => (
-              <li key={write.target} className={write.state}>
-                <Button kind="plain" size="tiny" className="context-link" onClick={() => reveal(write.target)} title={write.target}>{write.target}</Button>
-                <Label className="tag" color={stateColor(write.state)}>{write.state}</Label>
+              <li key={write.target} className={`file-row ${write.state}`}>
+                <FileLink path={write.target} onReveal={reveal} />
+                <Label mode="outline" className="tag" color={stateColor(write.state)}>{write.state}</Label>
               </li>
             ))}
           </ul>
@@ -184,23 +192,23 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
         title="Confined content"
         count={live.quarantine.length}
         off={off.has('confined')}
+        about="Content held apart from the planner: shown to you, and to no model unless you let it through."
       >
         {live.quarantine.length === 0 ? (
-          <p className="none">
+          <Empty icon="shield-done">
             {onlyReplayed
               ? 'Not recorded for past turns. Confined content is never written down.'
               : 'Nothing confined.'}
-          </p>
+          </Empty>
         ) : (
           <ul className="confined-list">
             {live.quarantine.map((shown, index) => (
-              <li key={index}>
-                <div className="origin" title={shown.origin}>
-                  {shown.origin}
-                </div>
-                <div className="detail">
-                  {shown.lines} line{shown.lines === 1 ? '' : 's'} · {shown.label}
-                </div>
+              <li key={index} className="confined-row">
+                <Icon name="shield-done" className="row-icon" />
+                <span className="confined-text">
+                  <code className="origin" data-tooltip={shown.origin}>{middleTruncate(shown.origin, PATH_WIDTH)}</code>
+                  <span className="detail">{shown.lines} line{shown.lines === 1 ? '' : 's'} · {shown.label}</span>
+                </span>
               </li>
             ))}
           </ul>
@@ -228,7 +236,7 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
       {audit}
     </aside>
   )
-}
+})
 
 /** What a write's state means at a glance: done, refused or failed, or still moving. */
 function stateColor(state: string): 'green' | 'red' | 'yellow' | 'neutral' {
@@ -238,18 +246,41 @@ function stateColor(state: string): 'green' | 'red' | 'yellow' | 'neutral' {
   return 'neutral'
 }
 
+/** How many characters of a path fit a row of this column before the middle gives way. */
+const PATH_WIDTH = 40
+
+/** A path in one of the lists, which takes the transcript to where it was touched. */
+function FileLink({ path, onReveal }: { path: string; onReveal: (path: string) => void }): React.JSX.Element {
+  const shown = middleTruncate(path, PATH_WIDTH)
+  return (
+    <button type="button" className="context-link" onClick={() => onReveal(path)}
+      data-tooltip={shown === path ? `Show ${path} in the conversation` : path}>
+      <FileGlyph name={path} />
+      <span className="file-path">{shown}</span>
+    </button>
+  )
+}
+
+/** One caption line for a panel with nothing in it, under the panel's own icon. */
+function Empty({ icon, children }: { icon: IconName; children: React.ReactNode }): React.JSX.Element {
+  return <p className="panel-empty"><Icon name={icon} />{children}</p>
+}
+
 function Section({
   id,
   title,
   count,
+  about,
   off = false,
   children,
 }: {
   /** Which panel this is, so the button in the bar can point at it. */
   id: PanelName
   title: string
-  /** How many things are in it, for the pill in the head. Omitted where there is nothing to count. */
-  count?: number
+  /** How many things are in it, for the count in the head. Shown at zero as well: "none" is an answer. */
+  count: number
+  /** What the panel holds, for the tooltip on its heading. */
+  about: string
   /**
    * Whether the bar has turned it off. Distinct from folded: folding is about this panel's own
    * contents and lives in the head, where turning it off is a choice about the column and lives
@@ -262,9 +293,9 @@ function Section({
   return (
     <section className={`panel ${off ? 'off' : ''}`} id={`panel-${id}`}>
       <Collapse className="flat-collapse panel-collapse" isOpen={open} onToggle={({ open: next }) => setOpen(next)} data-test={`panel-${id}-collapse`}>
-        <span slot="title" className="panel-title">
+        <span slot="title" className="panel-title" data-tooltip={about}>
           {title}
-          {count !== undefined && count > 0 && <Label className="count" color="neutral">{count}</Label>}
+          <span className="count num" aria-label={`${count} ${count === 1 ? 'item' : 'items'}`}>{count}</span>
         </span>
         <div className="panel-inner">{children}</div>
       </Collapse>

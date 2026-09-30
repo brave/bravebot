@@ -1,5 +1,7 @@
 import type { TurnDetails as Details, TurnDisclosure } from '../turn-details'
-import { Button, Collapse } from '../nala'
+import { Collapse } from '../nala'
+import { CopyButton } from './CopyButton'
+import { IconButton } from './IconButton'
 
 export type OpenAudit = (turn: number | null, trigger: HTMLButtonElement) => void
 
@@ -19,12 +21,23 @@ export function TurnNotices({ details, onDisclosure }: {
 const exact = (value?: number): string => value === undefined ? 'Unavailable' : value.toLocaleString()
 const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
 
-export function TurnFooter({ details, onDisclosure, onAudit }: {
+/**
+ * The line under a reply: copy it, what it cost, and the way into its audit.
+ *
+ * Quiet until the row is hovered or is the last reply, except when a policy refused something in
+ * the turn, which stays in view because it is the one thing here a reader has to know.
+ */
+export function TurnFooter({ details, onDisclosure, onAudit, copy }: {
   details?: Details
   onDisclosure: (turn: number, field: TurnDisclosure, open: boolean) => void
   onAudit: OpenAudit
+  /** The reply's own text, for the Copy button. Absent under an error, which has its own details. */
+  copy?: string
 }): React.JSX.Element {
-  return <div className="turn-footer">
+  const blocked = details?.clean === false
+  const label = blocked ? 'Policy blocked an action' : details ? 'Audit' : 'Audit unavailable'
+  return <div className={`turn-footer${blocked ? ' has-refusal' : ''}${details?.statsOpen ? ' stats-open' : ''}`}>
+    {copy !== undefined && <CopyButton text={() => copy} label="Copy message" data-test="copy-message" />}
     {details?.status === 'complete' ? <Collapse className="turn-statistics" isOpen={details.statsOpen}
       title={`${details.model ?? 'Model unavailable'} · ${details.tokens === undefined ? 'Usage unavailable' : `${compact.format(details.tokens)} tokens`}`}
       onToggle={({ open }) => { if (open !== details.statsOpen) onDisclosure(details.turn, 'statsOpen', open) }}
@@ -35,13 +48,15 @@ export function TurnFooter({ details, onDisclosure, onAudit }: {
         <dt>Output tokens</dt><dd>{exact(details.outputTokens)}</dd>
         <dt>Tool-calling rounds</dt><dd>{exact(details.steps)}</dd>
       </dl><p>Usage is summed across requests in this turn.</p></div>
-    </Collapse> : details ? <span>Final usage unavailable</span> : null}
-    <Button size="small" kind="plain" className={`turn-audit-link${details?.clean === false ? ' has-refusal' : ''}`}
-      data-audit-turn={details?.turn ?? 'saved'}
+    </Collapse> : details ? <span className="turn-usage-missing">Final usage unavailable</span> : null}
+    <IconButton icon={blocked ? 'shield-alert' : 'shield-done'} label={label}
+      tooltip={blocked ? 'Policy blocked an action · Open the audit' : details ? 'Audit this turn' : 'Audit unavailable'}
+      size="tiny"
+      className={`turn-audit-link${blocked ? ' has-refusal' : ''}`}
+      dataset={{ 'audit-turn': details?.turn ?? 'saved' }}
       data-test="turn-audit"
-      aria-controls="turn-audit-inspector"
-      onClick={(event) => onAudit(details?.turn ?? null, event.currentTarget as HTMLButtonElement)}>
-      {details?.clean === false ? 'Policy blocked an action' : details ? 'Audit' : 'Audit unavailable'} <span aria-hidden="true">↗</span>
-    </Button>
+      controls="turn-audit-inspector"
+      onClick={(event) => onAudit(details?.turn ?? null, event.currentTarget as HTMLButtonElement)} />
+    {blocked && <span className="turn-refusal" aria-hidden="true">Policy blocked an action</span>}
   </div>
 }

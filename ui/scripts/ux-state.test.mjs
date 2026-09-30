@@ -226,6 +226,34 @@ test('diff line numbers account for elided spans, insertions and deletions', () 
   assert.equal(searchableText({ kind: 'user', id: 'internal-secret-id', text: 'Visible prompt' }), 'Visible prompt')
 })
 
+test('a rewritten line marks only the words that changed, on both sides', () => {
+  const { intraline, numberedDiffLines, diffStats } = load('src/renderer/transcript.ts')
+  const words = intraline('  private lock = new Mutex()', '  private readLock = new RwLock()')
+  const changed = (spans) => spans.filter((span) => span.changed).map((span) => span.text)
+  assert.deepEqual(changed(words.removed), ['lock', 'Mutex'])
+  assert.deepEqual(changed(words.added), ['readLock', 'RwLock'])
+  // Nothing is lost or invented: each side joins back into its own line.
+  assert.equal(words.removed.map((span) => span.text).join(''), '  private lock = new Mutex()')
+  assert.equal(words.added.map((span) => span.text).join(''), '  private readLock = new RwLock()')
+  // Two lines sharing only whitespace are a replacement, and emphasising all of it says nothing.
+  assert.equal(intraline('alpha beta', 'gamma delta'), null)
+
+  const lines = numberedDiffLines([
+    { kind: 'kept', text: 'class Store {' },
+    { kind: 'removed', text: 'let a = 1' },
+    { kind: 'added', text: 'let a = 2' },
+    { kind: 'added', text: 'let b = 3' },
+    { kind: 'removed', text: 'orphan' },
+  ])
+  assert.equal(lines[0].spans, undefined)
+  assert.deepEqual(changed(lines[1].spans), ['1'])
+  assert.deepEqual(changed(lines[2].spans), ['2'])
+  // The second addition has no removal to pair with, and the trailing removal follows no run.
+  assert.equal(lines[3].spans, undefined)
+  assert.equal(lines[4].spans, undefined)
+  assert.deepEqual(diffStats([{ kind: 'elided', lines: 9 }, { kind: 'added', text: 'x' }, { kind: 'removed', text: 'y' }, { kind: 'added', text: 'z' }]), { added: 2, removed: 1 })
+})
+
 
 test('ending a turn invalidates pending approvals without changing prior decisions', () => {
   const { interruptPending, outstanding } = load('src/renderer/transcript.ts')

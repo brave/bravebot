@@ -229,12 +229,10 @@ if (count === 0) {
     )
   }
   check(
-    await page.locator('.notice').count() === 1,
+    (await page.locator('.status-toast').filter({ hasText: 'Exported' }).count()) >= 1,
     'a saved file is reported in the window',
   )
   await page.screenshot({ path: join(OUT, '16-export-saved.png') })
-  await page.locator('.notice button').click()
-  await page.waitForTimeout(200)
 
   // --- the same session, with the calls in it ---------------------------------------------
   //
@@ -289,8 +287,6 @@ if (count === 0) {
       'no diff hunk crossed with the calls',
     )
   }
-  await page.locator('.notice button').click().catch(() => undefined)
-  await page.waitForTimeout(200)
 
   // Back off, so the PDF below is the default document.
   await button.click()
@@ -322,8 +318,6 @@ if (count === 0) {
     (await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)) === 1,
     'the window the pdf was printed from is gone afterwards',
   )
-  await page.locator('.notice button').click().catch(() => undefined)
-  await page.waitForTimeout(200)
 
   // --- a cancelled sheet is silent ------------------------------------------------------
   const txtPath = join(OUT, 'export-test.txt')
@@ -333,10 +327,12 @@ if (count === 0) {
     globalThis.__cancel = true
     globalThis.__target = p
   }, txtPath)
+  for (const dismiss of await page.locator('.status-toast').getByRole('button', { name: 'Dismiss' }).all()) await dismiss.click().catch(() => undefined)
+  await page.locator('.status-toast').first().waitFor({ state: 'detached' }).catch(() => undefined)
   await choose('Plain Text')
   await page.waitForTimeout(800)
   check(!existsSync(txtPath), 'cancelling the sheet writes nothing')
-  check(await page.locator('.notice').count() === 0, 'and says nothing about it')
+  check(await page.locator('.status-toast').count() === 0, 'and says nothing about it')
 }
 
 // KEEP=1 leaves the exports on disk, for looking at what a change actually produced.

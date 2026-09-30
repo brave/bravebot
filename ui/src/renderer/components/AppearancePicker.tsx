@@ -2,7 +2,9 @@ import { useState } from 'react'
 import { Modal } from './Modal'
 import { APPEARANCES, type Appearance } from '../../shared/theme'
 import { applyAppearance } from '../theme'
-import { Button, ControlItem, SegmentedControl } from '../nala'
+import { Button, ControlItem, Icon, SegmentedControl, type IconName } from '../nala'
+import { setExperience, useExperience } from '../experience'
+import type { Experience } from '../../shared/experience'
 
 interface Props {
   /** The appearance in force when the picker opened. */
@@ -18,17 +20,25 @@ const LABELS: Record<Appearance, string> = {
   light: 'Light',
   dark: 'Dark',
 }
+const ICONS: Record<Appearance, IconName> = {
+  system: 'theme-system',
+  light: 'theme-light',
+  dark: 'theme-dark',
+}
+type Density = Experience['density']
 
 /**
- * Choosing System / Light / Dark for this window.
+ * Choosing System / Light / Dark for this window, and how tightly the session list is packed.
  *
  * Replaces the twenty-two named palettes. Moving previews; Escape puts the previous
- * choice back; Use keeps it in `bravebot-ui.json`.
+ * choices back; Use keeps them in `bravebot-ui.json`.
  */
 export function AppearancePicker(props: Props): React.JSX.Element {
   const { chosen, onKeep, onClose } = props
   const opened = chosen
   const [selected, setSelected] = useState(chosen)
+  const density = useExperience().density
+  const [openedDensity] = useState(density)
 
   const preview = (value: Appearance): void => {
     applyAppearance(value)
@@ -37,6 +47,7 @@ export function AppearancePicker(props: Props): React.JSX.Element {
 
   const cancel = (): void => {
     applyAppearance(opened)
+    if (density !== openedDensity) setExperience('density', openedDensity)
     onClose()
   }
 
@@ -58,34 +69,54 @@ export function AppearancePicker(props: Props): React.JSX.Element {
   }
 
   return (
-    <Modal title="Appearance" className="appearance-picker" onClose={cancel} actions={<>
-      <Button kind="plain-faint" size="small" onClick={cancel} data-test="appearance-cancel">
+    <Modal title="Appearance" size="sm" subtitle="How this window looks. Changes preview as you choose them." className="appearance-picker" onClose={cancel} actions={<>
+      <Button kind="plain-faint" size="small" className="modal-leading" onClick={cancel} data-test="appearance-cancel">
         Cancel
       </Button>
       <Button kind="filled" size="small" onClick={keep} data-test="appearance-keep">
         Use
       </Button>
     </>}>
-      <div onKeyDownCapture={keys}>
+      <div className="appearance-field">
+        <span className="appearance-label" id="appearance-theme">Theme</span>
+        <div onKeyDownCapture={keys}>
+          <SegmentedControl
+            value={selected}
+            size="small"
+            aria-labelledby="appearance-theme"
+            data-test="appearance-control"
+            onChange={(detail) => {
+              const next = detail.value
+              if (next === 'system' || next === 'light' || next === 'dark') preview(next)
+            }}
+          >
+            {APPEARANCES.map((appearance) => (
+              <ControlItem key={appearance} value={appearance}>
+                <Icon name={ICONS[appearance]} slot="icon-before" />
+                {LABELS[appearance]}
+              </ControlItem>
+            ))}
+          </SegmentedControl>
+        </div>
+        <p className="theme-aside">System follows the OS. Light and Dark stay put regardless of it.</p>
+      </div>
+      <div className="appearance-field">
+        <span className="appearance-label" id="appearance-density">Density</span>
         <SegmentedControl
-          value={selected}
+          value={density}
           size="small"
-          data-test="appearance-control"
+          aria-labelledby="appearance-density"
+          data-test="density-control"
           onChange={(detail) => {
-            const next = detail.value
-            if (next === 'system' || next === 'light' || next === 'dark') preview(next)
+            const next = detail.value as Density
+            if (next === 'comfortable' || next === 'compact') setExperience('density', next)
           }}
         >
-          {APPEARANCES.map((appearance) => (
-            <ControlItem key={appearance} value={appearance}>
-              {LABELS[appearance]}
-            </ControlItem>
-          ))}
+          <ControlItem value="comfortable">Comfortable</ControlItem>
+          <ControlItem value="compact">Compact</ControlItem>
         </SegmentedControl>
+        <p className="theme-aside">Compact drops the project line from each session row.</p>
       </div>
-      <p className="theme-aside">
-        System follows the OS. Light and Dark stay put regardless of it.
-      </p>
     </Modal>
   )
 }

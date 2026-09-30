@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Modal } from './Modal'
 import type { AgentSettings as Report, Hook, HooksDocument } from '../../shared/agent-settings'
 import { composeHooks } from '../../shared/agent-settings'
-import { Alert, Button, Collapse, Dropdown, Input, ProgressRing, TabItem, Tabs } from '../nala'
+import { Alert, Button, Collapse, Dropdown, Icon, Input, ProgressRing, TabItem, Tabs, type IconName } from '../nala'
 const fieldText = (event: { value?: unknown; target?: EventTarget | null }): string | null => {
   if (typeof event.value === 'string') return event.value
   const target = event.target
@@ -11,6 +11,7 @@ const fieldText = (event: { value?: unknown; target?: EventTarget | null }): str
 }
 
 const sections = ['Connection', 'Hooks', 'Run settings']
+const sectionIcons: Record<string, IconName> = { Connection: 'globe', Hooks: 'window-console', 'Run settings': 'settings' }
 
 export function AgentSettings({ session, onClose, onChanged }: { session?: string; onClose: () => void; onChanged: () => void }): React.JSX.Element {
   const [tab, setTab] = useState('Connection')
@@ -147,11 +148,15 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
     }
     queueMicrotask(place)
   }, [tab])
-  return <Modal title="Agent settings" onClose={busy ? undefined : close} className="agent-settings">
-    <p className="settings-lede">Configuration and automation for this app.</p>
-    <Tabs ref={tabsRoot} className="settings-tabs" value={tab} data-test="settings-tabs"
+  const actions = tab === 'Hooks' ? <>
+    <Button size="small" kind="plain-faint" className="modal-leading" isDisabled={busy} onClick={() => { if (!dirty || window.confirm('Discard unsaved hook changes and reload?')) void loadHooks() }}>Reload hooks</Button>
+    <Button size="small" kind="outline" isDisabled={!editable || busy} onClick={() => { setHooks(rows => [...rows, { on: 'turn-finished', tool: null, run: [''], firesForNothing: false }]); setDirty(true) }} data-test="hook-add">Add hook</Button>
+    <Button size="small" kind="filled" isDisabled={!dirty || busy || !editable} onClick={() => void save()} data-test="hook-save">Save hooks</Button>
+  </> : <Button size="small" kind="filled" isDisabled={busy} onClick={close} data-test="settings-done">Done</Button>
+  return <Modal title="Agent settings" size="lg" subtitle="Configuration and automation for this app." onClose={busy ? undefined : close} className="agent-settings" actions={actions}>
+    <Tabs ref={tabsRoot} className="settings-tabs" size="small" value={tab} data-test="settings-tabs"
       onChange={({ value }) => { if (value) { setTab(value); setProblem(''); setStatus('') } }}>
-      {sections.map((name) => <TabItem key={name} value={name}>{name}{name === 'Hooks' && dirty ? ' •' : ''}</TabItem>)}
+      {sections.map((name) => <TabItem key={name} value={name}><Icon name={sectionIcons[name]!} slot="icon-before" />{name}{name === 'Hooks' && dirty ? ' •' : ''}</TabItem>)}
     </Tabs>
     {problem && <div className="settings-error"><Alert type="error" role="alert" data-test="settings-error">{problem}</Alert>{tab !== 'Hooks' && <Button size="small" kind="outline" isDisabled={busy} onClick={() => void load()}>Retry diagnostics</Button>}</div>}
     {status && <Alert type="success" size="small" role="status">{status}</Alert>}
@@ -174,7 +179,10 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
           <p>For a custom certificate authority, set <code>SSL_CERT_FILE</code> or <code>SSL_CERT_DIR</code> before opening the app. These replace bundled roots. Proxy and certificate changes require restarting the app.</p>
         </section>
         <section><h3>Managed configuration</h3>{report.managed.path ? <><p>{report.managed.path}</p><p>{report.managed.keys.length ? `Locked by your administrator: ${report.managed.keys.join(', ')}` : 'File found; no recognized values are pinned.'}</p></> : <p>No administrator-managed configuration found.</p>}<p>Administrator-pinned destinations take precedence over your settings and environment.</p></section>
-        <Button size="small" kind="outline" onClick={() => void load()} isDisabled={busy}>Refresh diagnostics</Button>
+        <div className="settings-row">
+          <div className="settings-row-text"><h3>Diagnostics</h3><p>Read the agent’s configuration again, after changing a file or the environment.</p></div>
+          <div className="settings-row-control"><Button size="small" kind="outline" onClick={() => void load()} isDisabled={busy}><Icon name="refresh" slot="icon-before" />Refresh diagnostics</Button></div>
+        </div>
       </>}
       {tab === 'Hooks' && <>
         <p>Hooks are shared with the terminal client. Run your own programs at specific moments. These commands run with your account’s permissions in the project directory. They cannot approve or block the agent.</p>
@@ -206,19 +214,19 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
             <Button size="small" kind="plain-faint" isDisabled={busy || !editable} onClick={() => { setHooks(rows => rows.filter((_, i) => i !== index)); setDirty(true) }}>Remove hook</Button>
           </div>
         </fieldset>)}
-        <p>Arguments are passed exactly as entered; shell syntax is not interpreted. Failed hooks appear in the turn’s notices.</p>
-        <div className="settings-actions">
-          <Button size="small" kind="outline" isDisabled={!editable || busy} onClick={() => { setHooks(rows => [...rows, { on: 'turn-finished', tool: null, run: [''], firesForNothing: false }]); setDirty(true) }} data-test="hook-add">Add hook</Button>
-          <Button size="small" kind="plain" isDisabled={busy} onClick={() => { if (!dirty || window.confirm('Discard unsaved hook changes and reload?')) void loadHooks() }}>Reload hooks</Button>
-          <Button size="small" kind="filled" isDisabled={!dirty || busy || !editable} onClick={() => void save()} data-test="hook-save">Save hooks</Button>
-        </div>
+        <p className="settings-caption">Arguments are passed exactly as entered; shell syntax is not interpreted. Failed hooks appear in the turn’s notices.</p>
       </>}
       {tab === 'Run settings' && report && <>
-        <h3>Model and connection override</h3><p>Choose a JSON settings file for this app run. It applies to future turns and model discovery, and is cleared when the app exits. Running turns keep their configuration. Terminal preferences and settings-file permission grants do not change this app’s approval controls.</p>
-        <p className="settings-path">{report.selected ?? 'No override selected'}</p>
-        <div className="settings-actions">
-          <Button size="small" kind="outline" isDisabled={busy} onClick={() => void select(false)}>Choose settings file…</Button>
-          <Button size="small" kind="plain-faint" isDisabled={busy || !report.selected} onClick={() => void select(true)}>Clear override</Button>
+        <div className="settings-row">
+          <div className="settings-row-text">
+            <h3>Model and connection override</h3>
+            <p>Choose a JSON settings file for this app run. It applies to future turns and model discovery, and is cleared when the app exits. Running turns keep their configuration. Terminal preferences and settings-file permission grants do not change this app’s approval controls.</p>
+            <p className="settings-path">{report.selected ?? 'No override selected'}</p>
+          </div>
+          <div className="settings-row-control">
+            <Button size="small" kind="outline" isDisabled={busy} onClick={() => void select(false)}>Choose settings file…</Button>
+            <Button size="small" kind="plain-faint" isDisabled={busy || !report.selected} onClick={() => void select(true)}>Clear override</Button>
+          </div>
         </div>
         <h3>Effective configuration</h3><p>Default model: <strong>{report.model ?? 'Not configured'}</strong></p>
         <p>Files merge in this order: home → project → project-local → selected override. Environment and built-in values can take precedence; administrator-pinned destinations always win.</p>

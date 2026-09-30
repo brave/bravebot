@@ -255,7 +255,7 @@ function createWindow(): void {
     ...(process.platform === 'darwin'
       ? {
           titleBarStyle: 'hiddenInset' as const,
-          trafficLightPosition: { x: 16, y: 18 },
+          trafficLightPosition: { x: 16, y: 24 },
           vibrancy: 'sidebar' as const,
           backgroundColor: '#00000000',
         }
@@ -270,6 +270,9 @@ function createWindow(): void {
   })
 
   window.once('ready-to-show', () => window?.show())
+  // The renderer quiets its accents while the window is in the background, as native windows do.
+  window.on('focus', () => window?.webContents.send('bravebot:window:active', true))
+  window.on('blur', () => window?.webContents.send('bravebot:window:active', false))
 
   // Nothing in this app navigates anywhere. A link opens in the user's browser, and an
   // in-window navigation is refused outright rather than sandboxed.

@@ -72,6 +72,7 @@ try {
   assert.equal(await notices.locator('li').count(), 2)
   const footer = page.locator('.turn-footer').last()
   await footer.locator('summary').click()
+  await footer.locator('.turn-statistics-body').waitFor()
   assert.match(await footer.innerText(), /12,840/)
   assert.match(await footer.innerText(), /1,620/)
   assert.match(await footer.innerText(), /Tool-calling rounds/)

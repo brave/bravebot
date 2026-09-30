@@ -119,7 +119,7 @@ try {
   const settingsButton = sidebar.getByRole('button', { name: 'Agent settings', exact: true })
   await settingsButton.waitFor()
   const divider = page.locator('.gutter').first()
-  for (const [key, presses, expectedWidth] of [['Home', 1, 250], ['Shift+ArrowLeft', 2, 200], ['Shift+ArrowRight', 7, 400]]) {
+  for (const [key, presses, expectedWidth] of [['Home', 1, 260], ['Shift+ArrowLeft', 2, 220], ['Shift+ArrowRight', 7, 400]]) {
     await divider.focus()
     for (let i = 0; i < presses; i++) await page.keyboard.press(key)
     await until(async () => Math.abs((await sidebar.boundingBox()).width - expectedWidth) < 1, 'sidebar resized')
@@ -214,7 +214,7 @@ try {
 
   // 5: actual poller (not a synthetic watch event), missing file, per-watch stop and stop-all.
   await page.setViewportSize({ width: 560, height: 780 })
-  await page.getByRole('button', { name: 'Watches', exact: true }).click()
+  await page.getByRole('button', { name: 'More', exact: true }).click(); await page.getByRole('menuitem', { name: 'File watches…', exact: true }).click()
   const watches = page.getByRole('dialog', { name: 'File watches', exact: true })
   await fillField(watches, 'Project file', 'missing.txt')
   await watches.getByRole('button', { name: 'Watch file', exact: true }).click()
@@ -230,7 +230,7 @@ try {
   writeFileSync(join(project, 'watched.txt'), 'PRIVATE_WATCH_CONTENT changed')
   await done(beforeWatch)
   await page.getByText(/File watch \d+: watched.txt/).waitFor()
-  await page.getByRole('button', { name: 'Watches', exact: true }).click()
+  await page.getByRole('button', { name: 'More', exact: true }).click(); await page.getByRole('menuitem', { name: 'File watches…', exact: true }).click()
   await watches.getByRole('button', { name: 'Stop watching watched.txt', exact: true }).click()
   await watches.getByText('No files watched.', { exact: false }).waitFor()
   const requestCount = requests.length
@@ -312,6 +312,7 @@ try {
     const before = await send('Use an isolated processor to change blue to green in notes.txt and propose the write.')
     await leaveConfined()
     const card = page.locator('.confirm.untrusted').last()
+    await card.locator('.card-details summary').click()
     await card.getByText('Processor’s remark · untrusted', { exact: true }).waitFor()
     await card.getByText('Changed blue to green.', { exact: true }).waitFor()
     assert.equal(readFileSync(join(project, 'notes.txt'), 'utf8'), original, 'no write before approval')

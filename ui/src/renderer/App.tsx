@@ -14,14 +14,16 @@ import type {
   TodoRow,
 } from '../shared/protocol'
 import { Sidebar } from './components/Sidebar'
-import { SessionInfo, type SessionInfoValue } from './components/Sessions'
-import { Transcript } from './components/Transcript'
+import { SessionInfo, type SessionInfoValue, type SessionStatus } from './components/Sessions'
+import { FIND_EVENT, FOCUS_COMPOSER_EVENT, Transcript } from './components/Transcript'
 import { Context } from './components/Context'
 import { Gutter, useColumns } from './components/Gutter'
 import { shown } from './columns'
 import { TrustPrompt } from './components/TrustPrompt'
 import { Unconfigured } from './components/Unconfigured'
 import { Notice } from './components/Notice'
+import { TooltipLayer } from './components/TooltipLayer'
+import { useEvent, useStableValue } from './hooks'
 import { About, type AboutInfo } from './components/About'
 import { conversationModel, rememberModel } from './models'
 import type { ExportFormat } from '../shared/export'
@@ -35,10 +37,10 @@ import { receiveTurn, type Turns, type TurnDisclosure } from './turn-details'
 import { AuditInspector } from './components/AuditInspector'
 import { conversationKey } from '../shared/experience'
 import { useExperience, conversationPreferences, setConversation, experienceError } from './experience'
+import { showToast } from './toasts'
 import { AppearancePicker } from './components/AppearancePicker'
 import { applyAppearance } from './theme'
 import { SYSTEM, parseAppearance, type Appearance } from '../shared/theme'
-import { Button } from './nala'
 
 /** What the app is doing, which decides most of what the interface offers. */
 interface Live {
@@ -335,6 +337,11 @@ export function App(): React.JSX.Element {
       .catch(() => undefined)
     return window.bravebot.onThemeChanged(take)
   }, [])
+
+  useEffect(() => window.bravebot.onWindowActive((active) => {
+    if (active) delete document.documentElement.dataset.windowInactive
+    else document.documentElement.dataset.windowInactive = ''
+  }), [])
 
   const refresh = useCallback(async () => {
     try {
@@ -717,40 +724,51 @@ export function App(): React.JSX.Element {
   const forked = useMemo(() => forkedSessions(forks), [forks])
 
   // Bot conversations and unsent drafts remain reachable from the unified session list.
-  const ownSessions = sessions.map((summary) => {
+  // Unrecorded sessions are stamped to the minute so the list serialises the same between
+  // keystrokes and the column is not re-rendered for a clock that nobody can see move.
+  const now = Math.floor(Date.now() / 60000) * 60
+  const unstableSessions = sessions.map((summary) => {
     const current = [...openedLives.current.values()].find((item) => item.summary.id === summary.id && item.summary.directory === summary.directory)
     return current ? { ...summary, title: current.summary.title } : summary
   })
   for (const current of openedLives.current.values()) {
     const id = current.summary.id ?? current.draftId
-    if (!id || ownSessions.some((summary) => summary.id === id && summary.directory === current.summary.directory)) continue
-    ownSessions.unshift({ ...current.summary, id, updated: Date.now() / 1000, bytes: 0 })
+    if (!id || unstableSessions.some((summary) => summary.id === id && summary.directory === current.summary.directory)) continue
+    unstableSessions.unshift({ ...current.summary, id, updated: now, bytes: 0 })
   }
   for (const [key, preference] of Object.entries(preferences.conversations)) {
     if (!preference.draft.trim()) continue
     try {
       const [directory, id]: unknown[] = JSON.parse(key)
-      if (typeof directory !== 'string' || typeof id !== 'string' || !id.startsWith('draft:') || ownSessions.some((session) => session.directory === directory && session.id === id)) continue
-      ownSessions.unshift({ id, directory, title: `Draft · ${preference.draft.slice(0, 60)}`, project: projectLabel(directory), branch: null, updated: Date.now() / 1000, bytes: 0 })
+      if (typeof directory !== 'string' || typeof id !== 'string' || !id.startsWith('draft:') || unstableSessions.some((session) => session.directory === directory && session.id === id)) continue
+      unstableSessions.unshift({ id, directory, title: `Draft · ${preference.draft.slice(0, 60)}`, project: projectLabel(directory), branch: null, updated: now, bytes: 0 })
     } catch { /* Ignore malformed preference keys. */ }
   }
-  const sessionInfo: Record<string, SessionInfoValue> = {}
+  const ownSessions = useStableValue(unstableSessions)
+  const unstableInfo: Record<string, SessionInfoValue> = {}
   for (const summary of ownSessions) {
     const current = [...openedLives.current.values()].find((item) => (item.summary.id ?? item.draftId) === summary.id && item.summary.directory === summary.directory)
     const owner = preferences.conversations[conversationKey(summary.directory, summary.id)]?.botSlug
     const bot = bots.find((item) => (item.conversations.includes(summary.id) || item.slug === owner) && item.directory === summary.directory)
+      ?? bots.find((item) => item.slug === current?.bot?.slug)
     const outstanding = current ? t.outstanding(current.entries) : undefined
-    const state = !current ? undefined
-      : outstanding ? { label: outstanding.kind === 'ask' ? 'Needs answer' : 'Needs approval', color: 'yellow' as const }
-        : current.running ? { label: 'Working', color: 'yellow' as const }
-          : current.entries.at(-1)?.kind === 'error' ? { label: 'Failed', color: 'red' as const }
-            : current.outcome === 'complete' ? { label: 'Completed', color: 'green' as const }
-              : { label: 'Ready', color: 'neutral' as const }
-    sessionInfo[conversationKey(summary.directory, summary.id)] = {
-      bot: bot?.name ?? bots.find((item) => item.slug === current?.bot?.slug)?.name,
-      state,
+    // Only what asks something of the reader. "Ready" and "Completed" were true of nearly
+    // every row and so said nothing about any of them.
+    const status: SessionStatus | undefined = !current ? undefined
+      : outstanding ? (outstanding.kind === 'ask' ? 'answer' : 'approval')
+        : current.running ? 'working'
+          : current.entries.at(-1)?.kind === 'error' ? 'failed'
+            : undefined
+    if (!bot && !status) continue
+    unstableInfo[conversationKey(summary.directory, summary.id)] = {
+      bot: bot ? { name: bot.name, avatar: bot.avatar } : undefined,
+      status,
     }
   }
+  const sessionInfo = useStableValue(unstableInfo)
+  const attention = Object.entries(sessionInfo).filter(([key, info]) =>
+    (info.status === 'answer' || info.status === 'approval') &&
+    key !== (live ? conversationKey(live.summary.directory, live.summary.id ?? live.draftId ?? '') : '')).length
 
   /**
    * Show a bot.
@@ -924,9 +942,8 @@ export function App(): React.JSX.Element {
    * Write the conversation to a file.
    *
    * The turns go over structured and the main process composes the document — see
-   * `shared/export.ts`. A saved file is reported through `Notice`, whose body is a `<pre>`,
-   * so a long path wraps instead of running off the panel; a failure goes to the header note
-   * where every other recoverable failure in this component already goes.
+   * `shared/export.ts`. A saved file is confirmed in a toast that names where it went; a failure
+   * goes to the problem toast where every other recoverable failure in this component goes.
    */
   const exportSession = useCallback(
     async (format: ExportFormat) => {
@@ -941,7 +958,7 @@ export function App(): React.JSX.Element {
         },
       })
       if (outcome.status === 'saved') {
-        setNotice({ title: 'Exported', body: `Saved to\n${outcome.where}` })
+        showToast('Exported', `Saved to ${outcome.where}`)
       } else if (outcome.status === 'failed') {
         setProblem(`Could not export that: ${outcome.message}`)
       }
@@ -964,7 +981,7 @@ export function App(): React.JSX.Element {
    * decision the planner benefits from.
    */
   const copy = useCallback((text: string) => {
-    void navigator.clipboard.writeText(text).catch(() => setProblem('Could not copy that.'))
+    void navigator.clipboard.writeText(text).then(() => showToast('Copied to clipboard'), () => setProblem('Could not copy that.'))
   }, [])
 
   const openSession = useCallback(
@@ -1123,6 +1140,8 @@ export function App(): React.JSX.Element {
     cancel: () => void cancel(),
     toggle,
     resetColumns,
+    find: () => document.dispatchEvent(new Event(FIND_EVENT)),
+    focusComposer: () => document.dispatchEvent(new Event(FOCUS_COMPOSER_EVENT)),
     about: () => void about(),
     doctor: () => void doctor(),
     openSession,
@@ -1152,6 +1171,19 @@ export function App(): React.JSX.Element {
   )
   usePublishedState(menuState)
 
+  // Stable, so the memoised columns either side of the transcript are not re-drawn by typing.
+  const newBotConversation = useEvent((bot: Bot) => { void create(bot.directory, { slug: bot.slug, model: bot.model }) })
+  const botConversation = useEvent((bot: Bot, summary: SessionSummary) => { void showSession(summary, undefined, { slug: bot.slug, model: bot.model }) })
+  const stableShowSession = useEvent(showSession)
+  const stableCreate = useEvent(create)
+  const openSettings = useEvent(() => setAgentSettings(true))
+  const closeContext = useEvent(() => toggle('right'))
+  const stableCloseAudit = useEvent(closeAudit)
+  const auditTurn = selectedAudit && selectedAudit.turn !== null ? live?.turns[selectedAudit.turn] : undefined
+  const auditPanel = useMemo(() => selectedAudit
+    ? <AuditInspector key={`${selectedAudit.handle}:${selectedAudit.turn}`} details={auditTurn} onClose={stableCloseAudit} />
+    : null, [selectedAudit, auditTurn, stableCloseAudit])
+
   return (
     <div
       className={[
@@ -1180,12 +1212,12 @@ export function App(): React.JSX.Element {
     >
       <SessionInfo.Provider value={sessionInfo}><Sidebar
         sessions={ownSessions}
-        onNewBotConversation={(bot) => { void create(bot.directory, { slug: bot.slug, model: bot.model }) }}
-        onBotConversation={(bot, summary) => { void showSession(summary, undefined, { slug: bot.slug, model: bot.model }) }}
+        onNewBotConversation={newBotConversation}
+        onBotConversation={botConversation}
         openId={live?.summary.id ?? live?.draftId ?? undefined}
         forked={forked}
-        onOpen={showSession}
-        onNew={create}
+        onOpen={stableShowSession}
+        onNew={stableCreate}
         bots={bots}
         openSlug={live?.bot?.slug ?? null}
         openDoing={openDoing}
@@ -1193,7 +1225,7 @@ export function App(): React.JSX.Element {
         onRetireBot={retireBot}
         onRemoveBot={removeBot}
         build={build}
-        onSettings={() => setAgentSettings(true)}
+        onSettings={openSettings}
       /></SessionInfo.Provider>
       <Gutter
         side="left"
@@ -1204,6 +1236,9 @@ export function App(): React.JSX.Element {
         onReset={reset}
         onNudge={nudge}
       />
+      {/* The conversation and the inspector share one raised card. A subgrid, so its columns
+          are still the window's tracks and a fold or a drag moves them without this knowing. */}
+      <div className="workspace">
       <Transcript
         onAudit={openAudit}
         onTurnDisclosure={discloseTurn}
@@ -1238,6 +1273,7 @@ export function App(): React.JSX.Element {
         problem={experienceError() || problem}
         collapsed={collapsed}
         onToggle={toggle}
+        attention={attention}
         draft={draft}
         onDraft={setDraft}
         onModel={(model) => void chooseModel(model)}
@@ -1265,17 +1301,8 @@ export function App(): React.JSX.Element {
         onReset={reset}
         onNudge={nudge}
       />
-      <Context live={live} onClose={() => toggle('right')} audit={selectedAudit ?
-        <AuditInspector key={`${selectedAudit.handle}:${selectedAudit.turn}`} details={selectedAudit.turn === null ? undefined : live?.turns[selectedAudit.turn]} onClose={closeAudit} /> : null} />
-      {[...openedLives.current.values()].some((item) => item.handle !== live?.handle && item.running) && (
-        <div className="background-tasks" aria-label="Background tasks">
-          {[...openedLives.current.values()].filter((item) => item.handle !== live?.handle && item.running).map((item) => (
-            <Button key={item.handle} kind="outline" size="small" onClick={() => setLive(item)}>
-              {t.outstanding(item.entries) ? t.outstanding(item.entries)?.kind === 'ask' ? 'Answer needed' : 'Approval needed' : 'Working'} · {item.summary.title}
-            </Button>
-          ))}
-        </div>
-      )}
+      <Context live={live} onClose={closeContext} audit={auditPanel} />
+      </div>
       {aboutInfo && <About info={aboutInfo} onClose={() => setAboutInfo(null)} />}
       {notice && (
         <Notice title={notice.title} body={notice.body} onClose={() => setNotice(null)} />
@@ -1296,6 +1323,7 @@ export function App(): React.JSX.Element {
           onClose={() => setPicking(false)}
         />
       )}
+      <TooltipLayer />
     </div>
   )
 }

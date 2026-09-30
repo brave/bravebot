@@ -1,71 +1,139 @@
 /**
- * Fail if styles.css / export.css still contain hardcoded colours or px font sizes
- * outside a short allowlist. Keeps the Nala migration from drifting back to custom tokens.
+ * Keeps the renderer on Nala: every colour, type size, shadow and icon comes from Leo.
+ *
+ * Fails on, across every stylesheet module:
+ * - hardcoded colours (hex, rgb) and px font sizes;
+ * - a raw `box-shadow` that is not `none`, a token, or a token-coloured focus ring;
+ * - a `var(--leo-…)` that Leo does not define, which is a typo that silently paints nothing;
+ * - the same selector declared twice in one module and one at-rule;
+ * - more raw px spacing, or more size-only `--leo-typography-*-font-size` reads, than the
+ *   ratchets below allow (they may only go down);
+ * - a raw `<svg` in the renderer outside the bot avatar illustration;
+ * - a unicode glyph used as an icon, in JSX text or CSS `content:`.
  */
 import { readFileSync, readdirSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { join, dirname, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const files = ['src/renderer/styles.css', 'src/renderer/export.css']
+const renderer = join(root, 'src/renderer')
 
-/** Layout-only values that are not colours or type sizes (e.g. column gutters). Empty for now. */
-const ALLOW = [
-  // Example: /--lights:\s*78px/,
-]
+/** Ratchets: the counts as of the last module that landed. Lower them; never raise them. */
+const PX_SPACING_MAX = 102
+const TYPOGRAPHY_SIZE_MAX = 44
+
+function walk(dir, test) {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(join(dir, e.name), test) : test(e.name) ? [join(dir, e.name)] : [],
+  )
+}
+
+const cssFiles = walk(renderer, (name) => name.endsWith('.css'))
+const tsxFiles = walk(renderer, (name) => name.endsWith('.tsx') || name.endsWith('.ts'))
+
+const leoTokens = new Set(
+  [...readFileSync(join(root, 'node_modules/@brave/leo/tokens/css/variables.css'), 'utf8').matchAll(/(--leo-[a-z0-9-]+)\s*:/g)].map((m) => m[1]),
+)
+/** Families whose every name is a Leo token. Component knobs (`--leo-button-color`) are not in the file. */
+const tokenFamily = /var\((--leo-(?:color|font|spacing|radius|effect|duration|easing|typography|gradient|elevation)-[a-z0-9-]+)/g
 
 const hex = /#[0-9a-fA-F]{3,8}\b/g
 const rgb = /rgba?\([^)]*\)/g
 const fontPx = /font-size:\s*[0-9.]+px/g
 const fontShorthandPx = /\bfont\s*:[^;]*\b[0-9.]+px\b/g
+const spacingPx = /\b(?:padding|margin|gap|inset|top|left|right|bottom)(?:-[a-z]+)?:[^;{}]*\b[1-9][0-9.]*px\b/g
+const typographySize = /var\(--leo-typography-[a-z0-9-]+-font-size\)/g
+const shadowValue = /box-shadow\s*:\s*([^;]+);?/g
+const ring = /^(inset\s+)?0 0 0 [0-9.]+px (var\(--[a-z0-9-]+\)|transparent)$/
+const shadowOk = (value) => value.split(/,(?![^(]*\))/).every((part) => {
+  const one = part.trim()
+  return one === 'none' || /^var\(--[a-z0-9-]+\)$/.test(one) || ring.test(one)
+})
+const glyphs = /[↑↓✓▸›⋯↗]/
+const cssContentArrow = /content\s*:\s*['"][^'"]*[→←↑↓✓▸›⋯↗]/
 
-let failed = false
-for (const rel of files) {
-  const text = readFileSync(join(root, rel), 'utf8')
+/** Prose arrows in sentences, not icons. `file:substring`. */
+const GLYPH_ALLOW = ['AgentSettings.tsx:home → project']
+
+const problems = []
+const fail = (file, line, message) => problems.push(`${relative(root, file)}:${line}: ${message}`)
+let pxSpacing = 0
+let typographySizes = 0
+
+const stripComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ' '))
+
+for (const file of cssFiles) {
+  const text = stripComments(readFileSync(file, 'utf8'))
   const lines = text.split('\n')
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    if (ALLOW.some((re) => re.test(line))) continue
+  lines.forEach((line, i) => {
     for (const re of [hex, rgb, fontPx, fontShorthandPx]) {
       re.lastIndex = 0
-      if (re.test(line)) {
-        console.error(`${rel}:${i + 1}: ${line.trim()}`)
-        failed = true
-      }
+      if (re.test(line)) fail(file, i + 1, `hardcoded colour or font size: ${line.trim()}`)
+    }
+    for (const m of line.matchAll(shadowValue)) {
+      if (!shadowOk(m[1].trim())) fail(file, i + 1, `raw box-shadow (use --shadow-* or --leo-effect-*): ${m[1].trim()}`)
+    }
+    for (const m of line.matchAll(tokenFamily)) {
+      if (!leoTokens.has(m[1])) fail(file, i + 1, `unknown Leo token ${m[1]}`)
+    }
+    if (cssContentArrow.test(line)) fail(file, i + 1, 'glyph icon in CSS content; use a Leo Icon')
+    pxSpacing += (line.match(spacingPx) ?? []).length
+    typographySizes += (line.match(typographySize) ?? []).length
+  })
+
+  // Duplicate selectors, per at-rule context. Legacy is the pile the modules are cut from.
+  if (file.endsWith('legacy.css')) continue
+  const seen = new Map()
+  const stack = []
+  let buffer = ''
+  let line = 1
+  for (const char of text) {
+    if (char === '\n') line++
+    if (char === '{') {
+      const selector = buffer.trim().replace(/\s+/g, ' ')
+      buffer = ''
+      const context = stack.join(' ⟩ ')
+      stack.push(selector)
+      if (selector.startsWith('@') || /^(from|to|[0-9.]+%)/.test(selector)) continue
+      const key = `${context}::${selector}`
+      if (seen.has(key)) fail(file, line, `selector declared twice (first at line ${seen.get(key)}): ${selector}`)
+      else seen.set(key, line)
+    } else if (char === '}') {
+      stack.pop()
+      buffer = ''
+    } else if (char === ';') {
+      buffer = ''
+    } else {
+      buffer += char
     }
   }
 }
 
-// Report-only until the token pass lands: these are counted so the migration can see them
-// shrink, then promoted to failures (see docs/development.md).
-const boxShadow = /box-shadow:\s*(?!none|var\(--leo-effect-elevation)[^;]*/g
-const inlineIconPx = /--leo-icon-size['"]?\s*:\s*['"`]?[0-9.]+px/g
-const spacingPx = /\b(?:padding|margin|gap)(?:-[a-z]+)?:[^;{}]*\b[0-9.]+px\b/g
-
-function tsxFiles(dir) {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
-    e.isDirectory() ? tsxFiles(join(dir, e.name)) : e.name.endsWith('.tsx') ? [join(dir, e.name)] : [],
-  )
+for (const file of tsxFiles) {
+  const text = readFileSync(file, 'utf8')
+  const name = relative(renderer, file)
+  text.split('\n').forEach((line, i) => {
+    const code = line.replace(/\/\/.*$/, '')
+    const trimmed = code.trim()
+    if (trimmed.startsWith('*') || trimmed.startsWith('/*') || trimmed.startsWith('{/*')) return
+    if (/<svg\b/.test(code) && !name.endsWith('BotAvatar.tsx')) fail(file, i + 1, 'raw <svg>; use a Leo Icon')
+    if (glyphs.test(code) && !GLYPH_ALLOW.some((allow) => {
+      const [where, what] = allow.split(':')
+      return name.endsWith(where) && line.includes(what)
+    })) fail(file, i + 1, `glyph used as an icon: ${trimmed.slice(0, 80)}`)
+    for (const m of code.matchAll(tokenFamily)) {
+      if (!leoTokens.has(m[1])) fail(file, i + 1, `unknown Leo token ${m[1]}`)
+    }
+  })
 }
 
-const report = { 'raw box-shadow': 0, 'inline icon px (tsx)': 0, 'px spacing': 0 }
-for (const rel of files) {
-  const text = readFileSync(join(root, rel), 'utf8')
-  report['raw box-shadow'] += (text.match(boxShadow) ?? []).length
-  report['px spacing'] += (text.match(spacingPx) ?? []).length
-}
-for (const file of tsxFiles(join(root, 'src/renderer'))) {
-  report['inline icon px (tsx)'] += (readFileSync(file, 'utf8').match(inlineIconPx) ?? []).length
-}
-console.log(
-  'check-nala (report-only): ' +
-    Object.entries(report)
-      .map(([k, n]) => `${k}: ${n}`)
-      .join(', '),
-)
+if (pxSpacing > PX_SPACING_MAX) problems.push(`raw px spacing: ${pxSpacing}, over the ratchet of ${PX_SPACING_MAX}; use --leo-spacing-*`)
+if (typographySizes > TYPOGRAPHY_SIZE_MAX) problems.push(`size-only --leo-typography-*-font-size reads: ${typographySizes}, over the ratchet of ${TYPOGRAPHY_SIZE_MAX}; use a --type-* role`)
 
-if (failed) {
-  console.error('\ncheck-nala: hardcoded colour or font-size found; use --leo-* tokens.')
+console.log(`check-nala: px spacing ${pxSpacing}/${PX_SPACING_MAX}, typography sizes ${typographySizes}/${TYPOGRAPHY_SIZE_MAX}`)
+if (problems.length) {
+  console.error(problems.join('\n'))
+  console.error(`\ncheck-nala: ${problems.length} problem${problems.length === 1 ? '' : 's'}; use Leo tokens, icons and the --type-*/--shadow-* roles.`)
   process.exit(1)
 }
 console.log('check-nala: ok')

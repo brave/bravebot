@@ -1,0 +1,396 @@
+/* ---------------------------------------------------------------- the conversation column
+
+   One header of identity and actions, a reading column centred at --reading-width, and the
+   floating surfaces that sit over it: the find bar and the problem toast. Nothing about the
+   session is said in the header beyond what it is and where; notes about it are the first rows
+   of the conversation. */
+
+.transcript {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* ---- header */
+
+.transcript-head {
+  position: relative;
+  flex: none;
+  padding: 0 var(--leo-spacing-l);
+  border-bottom: 1px solid var(--border-hairline);
+  /* Moves with the fold, on the same easing, so the toggle slides clear of the traffic lights
+     rather than passing under them somewhere in the middle. */
+  transition: padding-left var(--panel-motion);
+}
+/* With the session list folded away the lights are over this header, and it clears them. */
+.app.left-folded .transcript-head { padding-left: calc(var(--lights) - var(--card-gap)); }
+
+/* Positioned against its own header, so it is right at every frame of a fold and every width
+   of a drag. Everything that has to be pressed or hovered opts out with no-drag. */
+.drag {
+  position: absolute;
+  inset: 0 0 auto;
+  height: var(--titlebar);
+  -webkit-app-region: drag;
+}
+
+.head-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  height: var(--titlebar);
+}
+
+/* Title, place and the vetting chip on one line. The title gives way last: the place shrinks
+   a hundred times faster, so a long path ellipsises before a word of the title does. */
+.head-titles {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+}
+.head-titles > .bot-avatar-frame { flex: none; }
+.head-titles h1 {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--type-body-strong);
+  color: var(--ink-primary);
+}
+.head-titles .where {
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--type-meta);
+  color: var(--ink-tertiary);
+  -webkit-app-region: no-drag;
+}
+
+.vetting-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--leo-spacing-s);
+  padding: var(--leo-spacing-xs) var(--leo-spacing-m);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  font: var(--type-caption-strong);
+  color: var(--ink-secondary);
+  --leo-icon-size: var(--icon-meta);
+  --leo-icon-color: var(--leo-color-systemfeedback-success-icon);
+  -webkit-app-region: no-drag;
+}
+.vetting-chip:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+
+.conversation-toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-xs);
+  -webkit-app-region: no-drag;
+}
+
+/* The toggles sit on top of the drag strip and must stay clickable rather than moving the
+   window. The host stays icon-sized rather than growing to fill the row. */
+.fold-toggle {
+  -webkit-app-region: no-drag;
+  position: relative;
+  z-index: 1;
+  flex: none;
+}
+
+/* ---- find bar */
+
+.find-bar {
+  position: absolute;
+  z-index: 3;
+  top: calc(var(--titlebar) + var(--leo-spacing-m));
+  right: var(--leo-spacing-l);
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-xs);
+  width: min(380px, calc(100% - var(--leo-spacing-2xl)));
+  padding: var(--leo-spacing-s);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-floating);
+  animation: float-in var(--motion-fast);
+}
+.find-input {
+  flex: 1;
+  min-width: 0;
+  --leo-control-radius: var(--radius-control);
+  --leo-control-icon-color: var(--ink-tertiary);
+}
+.find-count {
+  flex: none;
+  min-width: 5.5em;
+  padding-inline: var(--leo-spacing-s);
+  text-align: right;
+  white-space: nowrap;
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+}
+.find-count:empty { min-width: 0; padding: 0; }
+
+@keyframes float-in {
+  from { opacity: 0; transform: translateY(calc(var(--leo-spacing-s) * -1)); }
+}
+
+/* ---- toasts
+   Bottom-right of the card, above where the composer sits. Confirmations go by themselves;
+   errors are not dismissed for you. */
+
+.toast-stack {
+  position: absolute;
+  z-index: 4;
+  right: var(--leo-spacing-xl);
+  bottom: var(--leo-spacing-9xl);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--leo-spacing-m);
+  width: min(400px, calc(100% - var(--leo-spacing-3xl)));
+  pointer-events: none;
+}
+.toast-stack:empty { display: none; }
+.transcript.empty-state > .toast-stack { bottom: var(--leo-spacing-xl); }
+.problem-toast, .status-toast {
+  width: 100%;
+  pointer-events: auto;
+  animation: float-in var(--motion-fast);
+}
+.status-toasts { display: contents; }
+.status-toast-body {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--type-caption);
+  color: var(--ink-secondary);
+}
+.problem-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* ---- reading column */
+
+.entries {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--part-gap);
+  padding-block: var(--leo-spacing-2xl) var(--leo-spacing-3xl);
+  padding-inline: max(var(--leo-spacing-2xl), calc((100% - var(--reading-width)) / 2));
+  scroll-padding-block: var(--leo-spacing-2xl);
+}
+/* A card that clips its own overflow would otherwise be squeezed to its border once the
+   conversation outgrows the column. */
+.entries > *,
+.entry-hit > * { flex-shrink: 0; }
+
+/* Wrapped only to catch the right-click; it has no box of its own. */
+.entry-hit { display: contents; }
+
+/* Where a fork's link or a find match landed. The wrapper cannot be painted, so the mark is
+   drawn on the row inside it, and it fades: it answers "which one did I ask for" and then
+   stops being a question. */
+.entry-hit.focused > * {
+  animation: entry-landed 1.6s var(--leo-easing-out);
+  border-radius: var(--radius-control);
+}
+@keyframes entry-landed {
+  0%,
+  60% { box-shadow: 0 0 0 3px var(--surface-panel), 0 0 0 5px var(--accent); }
+  100% { box-shadow: 0 0 0 3px var(--surface-panel), 0 0 0 5px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .entry-hit.focused > * {
+    animation: none;
+    box-shadow: 0 0 0 3px var(--surface-panel), 0 0 0 5px var(--accent);
+  }
+}
+
+/* ---- notes about the session, at the top of it */
+
+.session-notices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-s);
+  margin-bottom: var(--leo-spacing-l);
+}
+.session-notice {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  min-height: var(--hit);
+  margin: 0;
+  font: var(--type-caption);
+  color: var(--ink-secondary);
+  --leo-icon-size: var(--icon-meta);
+  --leo-icon-color: var(--ink-tertiary);
+}
+.session-notice > leo-icon { flex: none; }
+.session-notice .notice-text { min-width: 0; }
+.session-notice code { font-family: var(--mono); overflow-wrap: anywhere; }
+.session-notice .link { flex: none; }
+
+/* The fork is history, so it reads as a divider across the column rather than a note in it. */
+.session-notice.divider::before,
+.session-notice.divider::after {
+  content: '';
+  flex: 1 1 var(--leo-spacing-2xl);
+  height: 1px;
+  background: var(--border-hairline);
+}
+.session-notice.divider .notice-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-notice.divider strong { font-weight: 600; color: var(--ink-primary); }
+
+/* ---- messages */
+
+.bubble {
+  font: var(--type-body);
+  color: var(--ink-primary);
+  overflow-wrap: anywhere;
+}
+
+/* The person's own words: right-aligned, on a sunken surface, with no tail. */
+.bubble.user {
+  align-self: flex-end;
+  max-width: 80%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--leo-spacing-xs);
+  margin-top: calc(var(--turn-gap) - var(--part-gap));
+}
+.bubble.user .bubble-text {
+  padding: var(--leo-spacing-m) var(--leo-spacing-l);
+  border-radius: var(--radius-field);
+  background: var(--surface-sunken);
+  white-space: pre-wrap;
+}
+
+/* Copy and Fork under the prompt. Kept in the tree rather than rendered on hover, so they can
+   be tabbed to, and shown whenever something inside has focus. */
+.message-actions {
+  display: flex;
+  gap: var(--leo-spacing-xs);
+  user-select: none;
+}
+.message-actions > .icon-button {
+  opacity: 0;
+  transition: opacity var(--motion-fast), background-color var(--motion-fast);
+}
+.bubble.user:hover .message-actions > .icon-button,
+.message-actions:focus-within > .icon-button,
+.message-actions:has(.copied) > .icon-button { opacity: 1; }
+.fork-here .fork-icon { --leo-icon-size: var(--icon-control); }
+
+/* The planner's reply: full column width, no surface. Markdown emits real blocks with their
+   own margins, so white space collapses as it normally does. */
+.bubble.assistant {
+  width: 100%;
+  white-space: normal;
+}
+
+/* ---- the line under a reply */
+
+.turn-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--leo-spacing-s);
+  min-height: var(--hit);
+  margin-top: calc(var(--leo-spacing-s) * -1);
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+  opacity: 0;
+  transition: opacity var(--motion-fast);
+}
+.entry-hit:hover > .turn-footer,
+.entry-hit.last-reply > .turn-footer,
+.turn-footer:focus-within,
+.turn-footer.has-refusal,
+.turn-footer.stats-open,
+.turn-footer:has(.copied) { opacity: 1; }
+
+.turn-statistics,
+.turn-notices {
+  min-width: 0;
+  max-width: 100%;
+  --leo-collapse-background-color: transparent;
+  --leo-collapse-background-color-hover: transparent;
+  --leo-collapse-border-color: transparent;
+  --leo-collapse-border-color-hover: transparent;
+  --leo-collapse-shadow: none;
+  --leo-collapse-shadow-hover: none;
+  --leo-collapse-summary-color: var(--ink-tertiary);
+  --leo-collapse-summary-color-hover: var(--ink-secondary);
+  --leo-collapse-icon-color: var(--ink-tertiary);
+  --leo-collapse-icon-size: var(--icon-meta);
+  --leo-collapse-summary-padding: var(--leo-spacing-s) var(--leo-spacing-m);
+  --leo-collapse-content-padding: 0 var(--leo-spacing-m) var(--leo-spacing-m);
+  --leo-collapse-radius: var(--radius-control);
+  --leo-font-heading-h3: var(--type-caption);
+  font: var(--type-caption);
+}
+.turn-statistics-body {
+  margin-top: var(--leo-spacing-s);
+  padding: var(--leo-spacing-l) var(--leo-spacing-xl);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-control);
+  background: var(--surface-sunken);
+  font: var(--type-meta);
+  color: var(--ink-primary);
+}
+.turn-statistics-body strong { font: var(--type-meta-strong); }
+.turn-statistics-body dl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--leo-spacing-s) var(--leo-spacing-xl);
+  margin: var(--leo-spacing-m) 0;
+}
+.turn-statistics-body dt { color: var(--ink-secondary); }
+.turn-statistics-body dd { margin: 0; text-align: right; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.turn-statistics-body p { margin: var(--leo-spacing-m) 0 0; color: var(--ink-secondary); }
+.turn-usage-missing { padding-inline: var(--leo-spacing-m); }
+
+/* What the runtime told the reader about a turn, folded under the reply it belongs to. */
+.turn-notices ul {
+  margin: 0;
+  padding: var(--leo-spacing-m) var(--leo-spacing-xl) var(--leo-spacing-m) var(--leo-spacing-3xl);
+  border-left: 2px solid var(--border-hairline);
+  color: var(--ink-primary);
+  font: var(--type-meta);
+}
+.turn-notices li { margin-block: var(--leo-spacing-s); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.turn-audit-link.has-refusal { --leo-button-color: var(--status-error-ink); }
+.turn-refusal { font: var(--type-caption-strong); color: var(--status-error-ink); }
+
+@media (pointer: coarse) {
+  .message-actions > .icon-button,
+  .turn-footer { opacity: 1; }
+}
+

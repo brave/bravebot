@@ -149,6 +149,8 @@ const ALLOWED_IDS = [
   // agent asked. It reaches no agent method either — what crosses is a name, checked against the
   // list the main process built.
   'view.theme',
+  // Open the find bar and put the caret in the composer. Both move focus inside the window.
+  'view.find', 'view.focus-composer',
 ]
 const ours = every.filter((i) => i.id && !i.role).map((i) => i.id)
 check(
@@ -237,7 +239,8 @@ const widthOf = (selector) =>
 const before = await widthOf('.sessions')
 await click('view.fold-left')
 await page.waitForTimeout(400)
-check((await widthOf('.sessions')) < 1, `View → Hide Session List folds it (was ${Math.round(before)})`)
+const afterFold = await widthOf('.sessions')
+check(afterFold < 1, `View → Hide Session List folds it (was ${Math.round(before)}, now ${Math.round(afterFold)})`)
 check(
   (await page.locator('.fold-toggle.left').getAttribute('aria-expanded')) === 'false',
   'and the transcript header agrees the column is folded',
@@ -302,10 +305,12 @@ check(
   (await chevron.locator('leo-button').getAttribute('aria-expanded')) === 'true',
   'and the trigger now says it is open',
 )
-const rows = await page.locator('[role="menuitem"]').count()
+// Every session row keeps its own menu's items in the page, so count only this menu's.
+const recentRows = chevron.locator('[role="menuitem"]')
+const rows = await recentRows.count()
 check(rows === 2, `the two valid recents are listed and the bad one was dropped (${rows})`)
 check(
-  (await page.locator('[role="menuitem"]').first().textContent()).includes('alpha-project'),
+  (await recentRows.first().textContent()).includes('alpha-project'),
   'newest first, by folder name',
 )
 check(

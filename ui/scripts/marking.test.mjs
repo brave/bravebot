@@ -465,8 +465,8 @@ test('undecided path exceptions are not shown as refusals or grants', () => {
     busy: false,
     onRevoke() {},
   }))
-  assert.match(markup, /vendor<\/code><span>Untrusted/)
-  assert.match(markup, /vendor\/ours<\/code><span>Not decided/)
+  assert.match(markup, /vendor<\/code><span[^>]*>Untrusted/)
+  assert.match(markup, /vendor\/ours<\/code><span[^>]*>Not decided/)
   assert.match(markup, /require write approval/)
   assert.doesNotMatch(markup, /<button/)
 })

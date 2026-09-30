@@ -122,7 +122,7 @@ for (let at = 0; at < questions; at++) {
   if ((await block.locator('.choices .choice').count()) > 0) {
     await block.locator('.choices .choice').first().click()
   } else {
-    await block.locator('.typed').fill('whatever you think best')
+    await block.locator('.typed input').fill('whatever you think best')
   }
 }
 await page.waitForTimeout(200)
@@ -175,7 +175,7 @@ if (again) {
   )
   const secondChoices = await second.locator('.choices .choice').count()
   if (secondChoices > 0) await second.locator('.choices .choice').first().click()
-  else await second.locator('.typed').first().fill('either is fine')
+  else await second.locator('.typed input').first().fill('either is fine')
   await second.locator('.confirm-actions .approve').click()
   await page.waitForTimeout(1200)
   check(

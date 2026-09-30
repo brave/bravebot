@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ModelCatalogue, ModelOption } from '../../shared/protocol'
 import { setExperience, useExperience } from '../experience'
+import { rememberCatalogue } from '../context-window'
 import { Alert, Button, ButtonMenu, Hr, Icon, Input, Label, ProgressRing } from '../nala'
 
 const CAPABILITIES: Record<string, [string, string]> = {
@@ -65,7 +66,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
     void window.bravebot.request<ModelCatalogue>('models.list', { session }).then((answer) => {
       if (gone) return
       if (answer.error) setProblem(answer.error.message)
-      else setCatalogue(answer.ok ?? null)
+      else { setCatalogue(answer.ok ?? null); rememberCatalogue(session, answer.ok ?? null) }
     }).catch(() => {
       if (!gone) setProblem('Could not load models. Try again.')
     }).finally(() => { if (!gone) setLoading(false) })

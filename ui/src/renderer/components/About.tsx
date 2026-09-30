@@ -43,7 +43,7 @@ export function About({ info, onClose }: { info: AboutInfo; onClose: () => void 
     }
   }
 
-  return <Modal title="About Brave Bot" onClose={onClose} className="about">
+  return <Modal title="About Brave Bot" size="sm" onClose={onClose} className="about">
     <div className="about-hero">
       <div className="about-stage">
         <button className="about-mascot" aria-label="Make Brave Bot wink"
@@ -59,8 +59,8 @@ export function About({ info, onClose }: { info: AboutInfo; onClose: () => void 
       <span className="about-version">Version {agentVersion}</span>
     </div>
     <nav className="about-links" aria-label="Project resources">
-      <Link href={project} target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></Link>
-      <Link href={`${project}/releases`} target="_blank" rel="noreferrer">Release notes <span aria-hidden="true">↗</span></Link>
+      <Link href={project} target="_blank" rel="noreferrer">GitHub <Icon name="launch" className="link-out" /></Link>
+      <Link href={`${project}/releases`} target="_blank" rel="noreferrer">Release notes <Icon name="launch" className="link-out" /></Link>
     </nav>
     <Collapse className="about-details" title="Build & storage details" isOpen={undefined} data-test="about-details">
       <dl>

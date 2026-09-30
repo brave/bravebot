@@ -1,0 +1,82 @@
+/* ---------------------------------------------------------------- syntax colour
+
+   Seven roles and no more, from Leo's primitives: keyword, string, number, comment, function,
+   type, and punctuation in secondary ink. Calm enough to sit in a neutral window, and the same
+   set for every language, so a reader learns it once. */
+
+:root {
+  --syntax-keyword: var(--leo-color-primitive-purple-40);
+  --syntax-string: var(--leo-color-primitive-green-30);
+  --syntax-number: var(--leo-color-primitive-orange-35);
+  --syntax-function: var(--leo-color-primitive-blue-40);
+  --syntax-type: var(--leo-color-primitive-teal-30);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --syntax-keyword: var(--leo-color-primitive-purple-80);
+    --syntax-string: var(--leo-color-primitive-green-70);
+    --syntax-number: var(--leo-color-primitive-orange-70);
+    --syntax-function: var(--leo-color-primitive-blue-80);
+    --syntax-type: var(--leo-color-primitive-teal-70);
+  }
+}
+:root[data-theme='dark'] {
+  --syntax-keyword: var(--leo-color-primitive-purple-80);
+  --syntax-string: var(--leo-color-primitive-green-70);
+  --syntax-number: var(--leo-color-primitive-orange-70);
+  --syntax-function: var(--leo-color-primitive-blue-80);
+  --syntax-type: var(--leo-color-primitive-teal-70);
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-meta .hljs-keyword,
+.hljs-doctag,
+.hljs-section { color: var(--syntax-keyword); }
+
+.hljs-string,
+.hljs-regexp,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-selector-attr,
+.hljs-symbol,
+.hljs-char.escape_ { color: var(--syntax-string); }
+
+.hljs-number,
+.hljs-literal,
+.hljs-variable.constant_,
+.hljs-bullet,
+.hljs-link { color: var(--syntax-number); }
+
+.hljs-comment,
+.hljs-quote,
+.hljs-meta { color: var(--ink-tertiary); font-style: italic; }
+
+.hljs-title.function_,
+.hljs-title.function_.invoke__,
+.hljs-title,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-attr,
+.hljs-attribute { color: var(--syntax-function); }
+
+.hljs-type,
+.hljs-built_in,
+.hljs-title.class_,
+.hljs-title.class_.inherited__,
+.hljs-name,
+.hljs-tag { color: var(--syntax-type); }
+
+.hljs-punctuation,
+.hljs-operator,
+.hljs-subst,
+.hljs-params { color: var(--ink-secondary); }
+
+.hljs-addition { color: var(--added); background: var(--added-bg); }
+.hljs-deletion { color: var(--removed); background: var(--removed-bg); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 600; }
+
+@media (forced-colors: active) {
+  [class^='hljs-'] { color: CanvasText; background: none; }
+}

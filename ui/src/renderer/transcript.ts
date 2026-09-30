@@ -398,7 +398,7 @@ export function diffLines(changes: Change[]): { sign: string; text: string; kind
       case 'elided':
         return {
           sign: ' ',
-          text: `⋯ ${change.lines} unchanged line${change.lines === 1 ? '' : 's'}`,
+          text: `${change.lines} unchanged line${change.lines === 1 ? '' : 's'}`,
           kind: 'elided',
         }
     }
@@ -495,10 +495,71 @@ export function searchableText(entry: Entry): string {
   }
 }
 
-/** Elided spans retain their lengths, so both source and proposed line numbers remain exact. */
-export function numberedDiffLines(changes: Change[]): (ReturnType<typeof diffLines>[number] & { before: number | null; after: number | null })[] {
+/** A stretch of one diff line, and whether it is part of what that line changed. */
+export type DiffSpan = { text: string; changed: boolean }
+
+const WORD = /\s+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]/gu
+/** Past this many words a side the table costs more than the emphasis is worth. */
+const MAX_WORDS = 400
+
+/**
+ * What changed inside a line that was rewritten, word by word.
+ *
+ * The longest common run of words is kept plain and the rest is marked on each side. Null when
+ * the two have no word in common, because emphasising every word of a line says no more than
+ * the line's own tint already does.
+ */
+export function intraline(before: string, after: string): { removed: DiffSpan[]; added: DiffSpan[] } | null {
+  const a = before.match(WORD) ?? []
+  const b = after.match(WORD) ?? []
+  if (!a.length || !b.length || a.length > MAX_WORDS || b.length > MAX_WORDS) return null
+  const common = Array.from({ length: a.length + 1 }, () => new Uint16Array(b.length + 1))
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      common[i]![j] = a[i] === b[j] ? common[i + 1]![j + 1]! + 1 : Math.max(common[i + 1]![j]!, common[i]![j + 1]!)
+    }
+  }
+  const removed: DiffSpan[] = []
+  const added: DiffSpan[] = []
+  const push = (side: DiffSpan[], text: string, changed: boolean): void => {
+    const last = side[side.length - 1]
+    if (last && last.changed === changed) last.text += text
+    else side.push({ text, changed })
+  }
+  let i = 0, j = 0, shared = false
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      if (/\S/.test(a[i]!)) shared = true
+      push(removed, a[i++]!, false)
+      push(added, b[j++]!, false)
+    } else if (common[i + 1]![j]! >= common[i]![j + 1]!) push(removed, a[i++]!, true)
+    else push(added, b[j++]!, true)
+  }
+  while (i < a.length) push(removed, a[i++]!, true)
+  while (j < b.length) push(added, b[j++]!, true)
+  return shared ? { removed, added } : null
+}
+
+/** Lines added and removed, for a card's header; the elided context counts as neither. */
+export function diffStats(changes: Change[]): { added: number; removed: number } {
+  let added = 0, removed = 0
+  for (const change of changes) {
+    if (change.kind === 'added') added++
+    else if (change.kind === 'removed') removed++
+  }
+  return { added, removed }
+}
+
+/**
+ * Elided spans retain their lengths, so both source and proposed line numbers remain exact.
+ *
+ * A run of removed lines followed at once by a run of added ones is read as a rewrite, and the
+ * lines are paired in order and given `spans` marking the words that changed. Lines left over on
+ * either side are plain removals or additions and carry none.
+ */
+export function numberedDiffLines(changes: Change[]): (ReturnType<typeof diffLines>[number] & { before: number | null; after: number | null; spans?: DiffSpan[] })[] {
   let before = 1, after = 1
-  return diffLines(changes).map((line, index) => {
+  const lines: (ReturnType<typeof diffLines>[number] & { before: number | null; after: number | null; spans?: DiffSpan[] })[] = diffLines(changes).map((line, index) => {
     const change = changes[index]!
     if (change.kind === 'elided') {
       before += change.lines; after += change.lines
@@ -506,6 +567,20 @@ export function numberedDiffLines(changes: Change[]): (ReturnType<typeof diffLin
     }
     return { ...line, before: change.kind === 'added' ? null : before++, after: change.kind === 'removed' ? null : after++ }
   })
+  for (let start = 0; start < lines.length;) {
+    let middle = start
+    while (lines[middle]?.kind === 'removed') middle++
+    let end = middle
+    while (lines[end]?.kind === 'added') end++
+    for (let pair = 0; pair < Math.min(middle - start, end - middle); pair++) {
+      const old = lines[start + pair]!
+      const next = lines[middle + pair]!
+      const words = intraline(old.text, next.text)
+      if (words) { old.spans = words.removed; next.spans = words.added }
+    }
+    start = Math.max(end, start + 1)
+  }
+  return lines
 }
 
 

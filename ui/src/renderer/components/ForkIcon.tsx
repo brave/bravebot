@@ -11,13 +11,11 @@
  */
 import { Icon } from '../nala'
 
-export function ForkIcon({ size = 12 }: { size?: number }): React.JSX.Element {
+export function ForkIcon(): React.JSX.Element {
+  // Sized in CSS on the wrapper: a Leo host takes no inline style, and a row draws none.
   return (
-    <Icon
-      className="fork-icon"
-      name="fork-arrows"
-      style={{ '--leo-icon-size': `${size}px` } as React.CSSProperties}
-      aria-hidden="true"
-    />
+    <span className="fork-icon" aria-hidden="true">
+      <Icon name="fork-arrows" />
+    </span>
   )
 }

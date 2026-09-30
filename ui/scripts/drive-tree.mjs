@@ -85,7 +85,7 @@ const names = () =>
   page.locator('.tree-list[role="tree"] > li > .tree-row .tree-name').allInnerTexts()
 
 // --- the folder is on screen -----------------------------------------------------------
-const root = await page.locator('.tree-root').getAttribute('title')
+const root = await page.locator('.tree-root').getAttribute('data-tooltip')
 check(typeof root === 'string' && root.startsWith('/'), `the panel names the folder (${root})`)
 await page.waitForTimeout(600)
 const first = await rows.count()
@@ -179,12 +179,12 @@ if (sample.length < 5) {
   await page.locator('[data-test="tree-search-toggle"]').click()
   await page.locator('.tree-find input').fill(term)
   await page.waitForTimeout(500)
-  const after = await rows.count()
-  check(after > 0 && after <= before, `filtering on "${term}" narrows the list (${before} → ${after})`)
+  // A query searches the whole project by name, and answers with paths in place of the tree.
+  const found = (await page.locator('.file-search-results .search-result').allTextContents()).map((path) => path.trim())
+  check(found.length > 0, `searching for "${term}" finds the file it came from (${found.length})`)
   check(
-    (await names()).every((name) => name.toLowerCase().includes(term.toLowerCase())) ||
-      (await page.locator('.tree-list[role="tree"] > li[aria-expanded="true"]').count()) > 0,
-    'a row that does not match itself is only there to hold a match underneath it',
+    found.every((path) => path.toLowerCase().includes(term.toLowerCase())),
+    'and every path it lists contains the term',
   )
   check(
     await page.locator('.tree-note').isVisible(),
@@ -192,7 +192,8 @@ if (sample.length < 5) {
   )
   await page.locator('.tree-find input').press('Escape')
   await page.waitForTimeout(400)
-  check((await rows.count()) === before, 'Escape clears the filter')
+  const cleared = await rows.count()
+  check(cleared === before, `Escape clears the filter (${before} → ${cleared}, search ${await page.locator('.tree-find').count() ? 'still open' : 'closed'})`)
 }
 
 // --- the boundary ----------------------------------------------------------------------

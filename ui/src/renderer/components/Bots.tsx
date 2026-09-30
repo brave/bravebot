@@ -1,10 +1,11 @@
-import { SidebarTools } from './SidebarTools'
+import { SidebarRow, SidebarSearch } from './SidebarTools'
+import { IconButton } from './IconButton'
 import { BotMemory } from './BotMemory'
 import { Modal } from './Modal'
 import { botHistory } from '../../shared/bot-history'
 import { useExperience } from '../experience'
 import type { SessionSummary } from '../../shared/protocol'
-import { Alert, Button, Icon, Input, Label, TextArea } from '../nala'
+import { Alert, Button, Icon, Input, TextArea } from '../nala'
 /**
  * The other list in the left column: the bots somebody has defined.
  *
@@ -84,18 +85,16 @@ export function Bots({
 
   return (
     <>
-      <header className="sessions-head">
-        {/* The same control the session list's own opens with, so the two tabs begin the same
-            way. No split beside it: a bot's folder is asked for once, in the form. */}
-        <SidebarTools query={query} onQuery={setQuery} label="Search bots" action={<Button kind="plain" size="small" className="new" onClick={() => setEditing('new')}>
-          <Icon name="plus-add" slot="icon-before" />
-          New bot
-        </Button>} />
+      <header className="sidebar-head">
+        {/* The same row the session list opens with, so the two tabs begin the same way. No
+            split beside it: a bot's folder is asked for once, in the form. */}
+        <SidebarRow icon="plus-add" label="New bot" className="new" onClick={() => setEditing('new')} data-test="new-bot" />
+        <SidebarSearch query={query} onQuery={setQuery} label="Search bots" placeholder="Search bots" />
       </header>
 
       <div className="session-list">
         {inUse.length === 0 && editing !== 'new' && (
-          <p className="empty">
+          <p className="sidebar-empty">
             {query.trim() ? <>No bots match this search.</> : away.length === 0 ? (
               <>
                 No bots yet. A bot is a name, a purpose and a memory, working in one checkout — and
@@ -112,32 +111,44 @@ export function Bots({
         {inUse.map((bot) => <BotRow key={bot.slug} bot={bot} open={bot.slug === openSlug}
           doing={bot.slug === openSlug ? openDoing : bot.session === null ? 'waiting' : 'idle'}
           onOpen={() => setOverview(bot)} onEdit={() => setEditing(bot.slug)} />)}
-        {editing && <Modal title={editing === 'new' ? 'Create bot' : 'Edit bot'} onClose={() => setEditing(null)} className="bot-editor">
+        {editing && <Modal title={editing === 'new' ? 'Create bot' : 'Edit bot'} size="lg" onClose={() => setEditing(null)} className="bot-editor"
+          subtitle={editing === 'new' ? 'A name, a purpose and a memory, working in one checkout.' : undefined}>
           <BotForm bot={bots.find((bot) => bot.slug === editing)} onCancel={() => setEditing(null)}
             onSave={async (next) => { const saved = await onSave(next); if (saved) setEditing(null); return saved }}
             onArchive={editing === 'new' ? undefined : () => { onRetire(editing, true); setEditing(null) }} />
         </Modal>}
-        {overview && <Modal title={overview.name} onClose={() => setOverview(null)} className="bot-overview">
-          <div className="bot-overview-title"><BotAvatar seed={overview.avatar} size={56} doing="open" /><div><h2>{overview.name}</h2><p>{overview.directory}</p></div></div>
-          <h3>Purpose</h3><p>{overview.purpose}</p>
-          <p className="bot-note">This bot carries its purpose and saved memory into each conversation. Conversation history belongs to individual tasks.</p>
-          <div className="bot-overview-actions">
-            <Button kind="filled" size="small" onClick={() => { onNewConversation(overview); setOverview(null) }}>New conversation</Button>
+        {overview && <Modal title={overview.name} size="md" onClose={() => setOverview(null)} className="bot-overview"
+          actions={<>
+            <Button kind="plain-faint" size="small" className="modal-leading bot-overview-done" onClick={() => setOverview(null)}>Done</Button>
             <Button kind="outline" size="small" onClick={() => { setEditing(overview.slug); setOverview(null) }}>Edit bot and memory</Button>
+            <Button kind="filled" size="small" onClick={() => { onNewConversation(overview); setOverview(null) }}>New conversation</Button>
+          </>}>
+          <div className="bot-overview-card">
+            <BotAvatar seed={overview.avatar} size={56} doing="open" />
+            <div className="bot-overview-where">
+              <strong>{projectLabel(overview.directory)}</strong>
+              <code data-tooltip={overview.directory}>{overview.directory}</code>
+            </div>
           </div>
-          <h3>Conversation history ({history.length})</h3>
+          <h3>Purpose</h3>
+          <p className="bot-purpose">{overview.purpose}</p>
+          <p className="bot-note">This bot carries its purpose and saved memory into each conversation. Conversation history belongs to individual tasks.</p>
+          <div className="bot-history-head">
+            <h3>Conversation history <span className="num">· {history.length}</span></h3>
+            {history.length > 0 && <Input ref={historySearch} size="small" className="bot-history-search" type="search" aria-label="Search bot conversations" placeholder="Search conversations…" value={historyQuery}
+              onInput={({ value }) => setHistoryQuery(value)} onChange={({ value }) => setHistoryQuery(value)}>
+              <Icon name="search" slot="left-icon" />
+            </Input>}
+          </div>
           <p className="bot-note">All conversations for this bot, including archived conversations and drafts. Starting a new conversation keeps the earlier ones here.</p>
-          {history.length > 0 && <Input ref={historySearch} className="bot-history-search" type="search" aria-label="Search bot conversations" placeholder="Search conversations…" value={historyQuery}
-            onInput={({ value }) => setHistoryQuery(value)} onChange={({ value }) => setHistoryQuery(value)} />}
           <div className="bot-conversations" aria-label="Bot conversation history">
             {filteredHistory.map(({ id, session, archived }) => session ?
-              <Button key={id} kind="outline" size="small" onClick={() => { onConversation(overview, session); setOverview(null) }}>
+              <button type="button" key={id} className="bot-history-row" onClick={() => { onConversation(overview, session); setOverview(null) }}>
                 <strong>{session.title}</strong><span>{id.startsWith('draft:') ? 'Draft' : new Date(session.updated * 1000).toLocaleDateString()}{archived ? ' · Archived' : ''}</span>
-              </Button> : <Alert type="info" size="small" className="bot-history-unavailable" key={id}><span slot="title">Unavailable conversation</span><code>{id}</code><span>The saved record is not currently available in the session list.</span></Alert>)}
-            {history.length === 0 && <p>No conversations yet.</p>}
-            {history.length > 0 && filteredHistory.length === 0 && <p>No conversations match “{historyQuery}”.</p>}
+              </button> : <Alert type="info" size="small" className="bot-history-unavailable" key={id}><span slot="title">Unavailable conversation</span><code>{id}</code><span>The saved record is not currently available in the session list.</span></Alert>)}
+            {history.length === 0 && <p className="bot-history-empty"><Icon name="message-bubble" />No conversations yet.</p>}
+            {history.length > 0 && filteredHistory.length === 0 && <p className="bot-history-empty"><Icon name="search" />No conversations match “{historyQuery}”.</p>}
           </div>
-          <Button kind="outline" size="small" className="bot-overview-done" onClick={() => setOverview(null)}>Done</Button>
         </Modal>}
       </div>
 
@@ -154,6 +165,7 @@ export function Bots({
               closes looks the same in both tabs. */}
           <div className="session-group-head">
             <button
+              type="button"
               className="session-group-fold"
               aria-expanded={showing}
               // Closing the archive puts down whatever was picked up in it. A row left armed
@@ -165,7 +177,7 @@ export function Bots({
             >
               <Icon className={`chevron ${showing ? 'open' : ''}`} name="carat-right" />
               <span className="session-group-name">Archived</span>
-              <Label className="count" color="neutral">{away.length}</Label>
+              <span className="count num">{away.length}</span>
             </button>
           </div>
           {/* The rows scroll on their own once there are enough of them. A fold pinned to the
@@ -219,29 +231,18 @@ function BotRow({
   const where = projectLabel(bot.directory)
   return (
     <div className={`bot${open ? ' bot-open' : ''}`}>
-      <button className="bot-open-button" onClick={() => onOpen(bot)}>
-        <BotAvatar seed={bot.avatar} doing={doing} />
+      <button type="button" className="bot-open-button" aria-current={open ? 'true' : undefined} onClick={() => onOpen(bot)}>
+        <BotAvatar seed={bot.avatar} doing={doing} size={28} />
         <span className="bot-said">
           <span className="bot-name">{bot.name}</span>
-          {/* The whole path in the tooltip, because the column clips it — the one case the
-              tooltip rule here allows, which is text the layout took away. */}
-          <span className="bot-where" title={bot.directory}>
+          {/* The whole path in the tooltip, because the column clips it. */}
+          <span className="bot-where" data-tooltip={bot.directory}>
             {where}
             {bot.session === null && ' · not spoken to yet'}
           </span>
         </span>
       </button>
-      <Button
-        kind="plain-faint"
-        size="tiny"
-        fab
-        className="bot-edit"
-        aria-label={`Edit ${bot.name}`}
-        title={`Edit ${bot.name}`}
-        onClick={onEdit}
-      >
-        <Icon name="more-horizontal" slot="icon-before" />
-      </Button>
+      <IconButton icon="more-horizontal" size="tiny" className="bot-edit" label={`Edit ${bot.name}`} tooltip="Edit bot" onClick={onEdit} />
     </div>
   )
 }
@@ -299,7 +300,7 @@ function ArchivedRow({
         ) : (
           // The whole path in the tooltip, for the reason the row above gives: the column clips
           // it, and this is text the layout took away.
-          <span className="bot-where" title={bot.directory}>
+          <span className="bot-where" data-tooltip={bot.directory}>
             {where}
           </span>
         )}
@@ -313,7 +314,7 @@ function ArchivedRow({
             kind="outline"
             size="tiny"
             className="bot-delete bot-delete-armed"
-            title={`Delete ${bot.name} and its local memory history for good. Project files and conversations are kept.`}
+            data-tooltip={`Delete ${bot.name} and its local memory history for good. Project files and conversations are kept.`}
             onClick={onDelete}
           >
             Delete
@@ -325,7 +326,7 @@ function ArchivedRow({
             kind="outline"
             size="tiny"
             className="bot-restore"
-            title={`Bring ${bot.name} back, with its session, its memory and its face.`}
+            data-tooltip={`Bring ${bot.name} back, with its session, its memory and its face.`}
             onClick={onRestore}
           >
             Restore
@@ -334,7 +335,7 @@ function ArchivedRow({
             kind="plain-faint"
             size="tiny"
             className="bot-delete"
-            title={`Delete ${bot.name} for good. Local memory history is deleted. Project files and conversations are kept.`}
+            data-tooltip={`Delete ${bot.name} for good. Local memory history is deleted. Project files and conversations are kept.`}
             onClick={onAsk}
           >
             Delete
@@ -444,23 +445,14 @@ function BotForm({
         }
       }}
     >
-      <div className={bot ? undefined : "bot-form-identity"}>
-        {!bot && (
-          <div className="bot-form-avatar">
-            <BotAvatar seed={avatar} size={76} doing="waiting" />
-            <Button
-              kind="plain-faint"
-              size="tiny"
-              fab
-              className="bot-avatar-refresh"
-              aria-label="Refresh avatar"
-              title="Try a new avatar appearance"
-              onClick={() => setAvatar(newAvatarSeed(crypto.randomUUID()))}
-            >
-              <Icon name="refresh" slot="icon-before" style={{ '--leo-icon-size': '12px' } as React.CSSProperties} />
-            </Button>
-          </div>
-        )}
+      <div className="bot-form-identity">
+        <div className="bot-form-avatar">
+          <BotAvatar seed={bot?.avatar ?? avatar} size={76} doing="waiting" />
+          {!bot && (
+            <IconButton icon="refresh" label="Refresh avatar" tooltip="Try a new avatar appearance" kind="outline" size="tiny"
+              className="bot-avatar-refresh" onClick={() => setAvatar(newAvatarSeed(crypto.randomUUID()))} />
+          )}
+        </div>
 
         <div className="bot-field">
           <Input
@@ -495,11 +487,12 @@ function BotForm({
       <div className="bot-field">
         <span>Project folder</span>
         {bot ? (
-          <div><p className="bot-fixed" title={bot.directory}>{bot.directory}</p>
+          <div className="bot-fixed-group"><p className="bot-fixed" data-tooltip={bot.directory}>{bot.directory}</p>
           <p className="bot-note">The project stays fixed to keep this bot’s memory and conversations together.</p>
           <Button kind="outline" size="small" onClick={() => { void window.bravebot.chooseDirectory().then((folder) => { if (folder) void save({ name: `${name} copy`, purpose, model, directory: folder }) }) }}>Duplicate into another project</Button></div>
         ) : (
-          <Button kind="plain" size="medium" className="bot-choose" title={directory || undefined} onClick={() => void choose()}>
+          <Button kind="outline" size="medium" className="bot-choose" data-tooltip={directory || undefined} onClick={() => void choose()}>
+            <Icon name="folder-open" slot="icon-before" />
             <span className="bot-choose-label">{directory || 'Choose a folder…'}</span>
           </Button>
         )}
@@ -520,7 +513,7 @@ function BotForm({
       <div className="bot-actions">
         {onArchive && (
           <Button
-            kind="outline"
+            kind="plain-faint"
             size="medium"
             className="bot-archive-button"
             // The one thing worth saying about a bot leaving the list is what it does *not* do,
@@ -529,14 +522,14 @@ function BotForm({
             // with it the slug naming the memory file and the seed the face was drawn from, so
             // "its memory is left where it is" was true and no comfort at all. Now the sentence
             // is easy, because the thing it describes is.
-            title="Put this bot away. It keeps its session, its memory and its face, and can be brought back from the archive."
+            data-tooltip="Put this bot away. It keeps its session, its memory and its face, and can be brought back from the archive."
             onClick={onArchive}
           >
             Archive
           </Button>
         )}
         <span className="bot-spacer" />
-        <Button kind="outline" size="medium" onClick={onCancel}>
+        <Button kind="plain-faint" size="medium" onClick={onCancel}>
           Cancel
         </Button>
         <Button kind="filled" size="medium" type="submit" className="bot-save" isDisabled={!ready || saving} onClick={submitForm}>

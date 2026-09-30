@@ -33,6 +33,10 @@ export interface CommandActions {
   cancel: () => void
   toggle: (side: Side) => void
   resetColumns: () => void
+  /** Open the find bar over the transcript. */
+  find: () => void
+  /** Put the caret in the composer. */
+  focusComposer: () => void
   about: () => void
   doctor: () => void
   /** Open the session a right-click named. */
@@ -119,6 +123,10 @@ export function useCommandRouter(actions: CommandActions): void {
           return act.toggle('right')
         case 'view.reset-columns':
           return act.resetColumns()
+        case 'view.find':
+          return act.find()
+        case 'view.focus-composer':
+          return act.focusComposer()
         case 'view.theme':
           return act.theme()
         case 'app.about':

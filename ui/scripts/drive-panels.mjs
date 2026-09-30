@@ -118,8 +118,12 @@ if ((await page.locator('.tool-run').count()) === 0) {
   const rows = await run.locator('.tool').count()
   check(rows >= 2, `a run gathers more than one call (${rows})`)
   const label = (await runHead.innerText())?.trim() ?? ''
-  check(label.endsWith(`${rows} steps`), `the header counts what it is hiding (${label})`)
-  check(await isOpen(runFold), 'a run starts open')
+  check(label.includes(`${rows} steps`), `the header counts what it is hiding (${label})`)
+  // A saved conversation has no turn running, so every run in it is already put away.
+  check(!(await isOpen(runFold)), 'a finished run starts folded')
+  await runHead.click()
+  await page.waitForTimeout(400)
+  check(await isOpen(runFold), 'and opens from its header')
 
   const runOpen = await runHeight()
   await runHead.click()

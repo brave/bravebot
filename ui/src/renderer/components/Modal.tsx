@@ -26,21 +26,38 @@ const focusableControls = (dialog: HTMLElement): HTMLElement[] => {
   return found
 }
 
+/** The four widths a dialog comes in: 440, 560, 760 and 1080, each short of the window's edge. */
+export type ModalSize = 'sm' | 'md' | 'lg' | 'xl'
+
 /**
  * One focus boundary for every modal.
  *
  * Built on Leo's Dialog, which uses the native `<dialog>` modal mode for focus
  * trapping and inertness — the hand-written trap and `#root.inert` toggling are gone.
- * Props stay the same so callers do not have to move.
+ *
+ * Every dialog has the same head: the title, then at most one line saying what it is for. The
+ * primary action sits at the right-hand end of the footer; a secondary one that should stand
+ * apart from it (Cancel, Stop all) carries `modal-leading` and goes to the left.
  */
 export function Modal({
   title,
+  subtitle,
+  subtitleId,
+  headerAction,
+  size = 'md',
   onClose,
   children,
   actions,
   className = '',
 }: {
   title: string
+  /** One line under the title saying what the dialog is for. */
+  subtitle?: React.ReactNode
+  /** For a dialog whose description is referred to from elsewhere. */
+  subtitleId?: string
+  /** One icon control beside the title, for something about the whole dialog (Refresh). */
+  headerAction?: React.ReactNode
+  size?: ModalSize
   onClose?: () => void
   children: React.ReactNode
   /** Footer buttons, in Leo's actions slot: pinned under the body, which scrolls on its own. */
@@ -69,6 +86,7 @@ export function Modal({
       if (root.getAttribute('role') !== 'dialog') root.setAttribute('role', 'dialog')
       if (root.getAttribute('aria-modal') !== 'true') root.setAttribute('aria-modal', 'true')
       if (root.getAttribute('aria-label') !== title) root.setAttribute('aria-label', title)
+      if (subtitleId && root.getAttribute('aria-describedby') !== subtitleId) root.setAttribute('aria-describedby', subtitleId)
       const dialog = root.shadowRoot?.querySelector('dialog')
       if (!dialog) return
       // Leo's own close button is an icon with no name. Name it for what it closes.
@@ -115,7 +133,7 @@ export function Modal({
     observer.observe(shadow, { childList: true, subtree: true })
     observer.observe(root, { childList: true, subtree: true })
     return () => observer.disconnect()
-  }, [title])
+  }, [title, subtitleId])
 
   return createPortal(
     <Dialog
@@ -126,10 +144,11 @@ export function Modal({
       escapeCloses={Boolean(onClose)}
       backdropClickCloses={Boolean(onClose)}
       onClose={onClose}
-      className={`modal ${className}`.trim()}
+      className={`modal modal-${size} ${className}`.trim()}
       data-test="modal"
     >
-      <span slot="title">{title}</span>
+      <span slot="title" className="modal-title">{title}{headerAction && <span className="modal-header-action">{headerAction}</span>}</span>
+      {subtitle && <span slot="subtitle" className="modal-subtitle" id={subtitleId}>{subtitle}</span>}
       {children}
       {actions && <div slot="actions" className="modal-actions">{actions}</div>}
     </Dialog>,

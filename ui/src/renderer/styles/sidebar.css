@@ -1,0 +1,360 @@
+/* ------------------------------------------------------------------ sidebar
+
+   The left column, on the app ground: a titlebar holding the list switch, a head with the create
+   row and search, the list, and one row at the foot. */
+
+.sessions {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+/* The recents menu is anchored inside this clip, and it has to paint past the column. */
+.sessions.recents-open { overflow: visible; }
+
+/* The column's titlebar. Traffic-light clearance on the left, the strip drags the window, and
+   everything in it that is a control opts out. The same height as the conversation's head, and
+   inset by the same ground, so the two line up across the window. */
+.sidebar-titlebar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: var(--titlebar);
+  padding: 0 var(--leo-spacing-l) 0 var(--lights);
+  -webkit-app-region: drag;
+}
+.sidebar-tabs {
+  flex: 1;
+  min-width: 0;
+  -webkit-app-region: no-drag;
+  --leo-segmented-control-width: 100%;
+}
+.sidebar-tabs leo-segmentedcontrolitem { flex: 1 1 0; min-width: 0; }
+
+/* Each body owns the rest of the column, and the one not chosen is hidden rather than unmounted —
+   a filter somebody typed and a form half filled in both survive a look at the other tab. The
+   `!important` is load-bearing: `hidden` is a presentation hint and `display` would beat it. */
+.sidebar-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sidebar-body[hidden] { display: none !important; }
+
+.sidebar-head {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-s);
+  padding: var(--leo-spacing-m) var(--leo-spacing-m) var(--leo-spacing-m);
+}
+
+/* A full-width row: icon, label, and the shortcut in caption ink at the end. The same shape as a
+   list row, so the create action reads as the first thing in the list rather than a button
+   floating over it. */
+.sidebar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  width: 100%;
+  min-width: 0;
+  height: var(--hit);
+  padding: 0 var(--leo-spacing-m);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--ink-primary);
+  font: var(--type-body);
+  text-align: left;
+  --leo-icon-size: var(--icon-control);
+  --leo-icon-color: var(--ink-secondary);
+  transition: background-color var(--motion-fast);
+}
+.sidebar-row:hover { background: var(--surface-hover); }
+.sidebar-row:active { background: var(--surface-selected); }
+.sidebar-row-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-row-hint {
+  flex: none;
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+}
+
+.new-split { display: flex; align-items: center; gap: var(--leo-spacing-xs); }
+.new-split .sidebar-row { flex: 1; }
+
+.sidebar-search-row { display: flex; align-items: center; gap: var(--leo-spacing-xs); }
+.sidebar-search {
+  flex: 1;
+  min-width: 0;
+  --leo-control-radius: var(--radius-control);
+  --leo-control-padding: var(--leo-spacing-s) var(--leo-spacing-m);
+  --leo-control-icon-color: var(--ink-tertiary);
+}
+
+/* ------------------------------------------------------------------ list */
+
+.session-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 var(--leo-spacing-m) var(--leo-spacing-m);
+}
+
+.sidebar-empty {
+  margin: var(--leo-spacing-m) 0;
+  padding: 0 var(--leo-spacing-m);
+  font: var(--type-meta);
+  color: var(--ink-tertiary);
+}
+.sidebar-empty code { font: var(--type-code); }
+
+/* The row. One button for the whole of it, with the more-actions control laid over its right
+   edge; the time underneath fades out when that control appears. */
+.session-row,
+.bot {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-control);
+  transition: background-color var(--motion-fast);
+}
+.session-row:hover,
+.bot:hover { background: var(--surface-hover); }
+.session-row.current,
+.bot-open { background: var(--surface-selected); }
+
+.session,
+.bot-open-button {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  min-height: var(--session-row-h);
+  padding: 0 var(--leo-spacing-m);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--ink-primary);
+  font: inherit;
+  text-align: left;
+}
+.session:focus-visible,
+.bot-open-button:focus-visible,
+.session-group-fold:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+
+.session-status {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--icon-control);
+  height: var(--icon-control);
+  --leo-icon-size: var(--icon-control);
+}
+.session-spinner {
+  --leo-progressring-size: 12px;
+  --leo-progressring-stroke-width: 2px;
+}
+/* Leo's dot is a radius-2 circle in a 24 box; at 48 it is the 8px mark a status wants. The box
+   overflows the slot, but it is transparent and takes no pointer, and the margins pull it back
+   onto the slot's centre, since an overflowing grid item is otherwise laid from the start. */
+.status-dot {
+  --leo-icon-size: var(--leo-spacing-5xl);
+  margin: calc((var(--icon-control) - var(--leo-spacing-5xl)) / 2);
+  pointer-events: none;
+}
+.status-dot.warning { --leo-icon-color: var(--leo-color-systemfeedback-warning-icon); }
+.status-dot.error { --leo-icon-color: var(--leo-color-systemfeedback-error-icon); }
+.bot-face { display: block; border-radius: 50%; overflow: hidden; background: var(--hover-wash); }
+
+.session-text,
+.bot-said { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+
+.session-title {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-xs);
+  min-width: 0;
+  font: var(--type-body);
+  color: var(--ink-primary);
+}
+.session-name,
+.bot-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bot-name { font: var(--type-body); }
+.session-row.current .session-title,
+.bot-open .bot-name { font: var(--type-body-strong); }
+
+.session-pin,
+.fork-mark { flex: none; display: inline-flex; --leo-icon-size: var(--icon-meta); --leo-icon-color: var(--ink-tertiary); }
+.fork-icon { display: inline-flex; --leo-icon-size: var(--icon-meta); }
+
+.session-where,
+.bot-where {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+}
+/* A single-line row in compact density: the meta line goes, the row still says its title. */
+.app.compact .session-where { display: none; }
+
+.session-time {
+  flex: none;
+  align-self: flex-start;
+  margin-top: var(--leo-spacing-m);
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+  transition: opacity var(--motion-fast);
+}
+.app.compact .session-time { align-self: center; margin-top: 0; }
+
+.session-more-menu {
+  position: absolute;
+  top: 50%;
+  right: var(--leo-spacing-s);
+  transform: translateY(-50%);
+  opacity: 0;
+  transition: opacity var(--motion-fast);
+}
+/* Keyboard focus only: a row that was clicked keeps focus, and should not keep its menu showing. */
+.session-row:hover .session-more-menu,
+.session-row:has(.session:focus-visible) .session-more-menu,
+.session-more-menu:focus-within,
+.session-row.menu-open .session-more-menu { opacity: 1; }
+/* The menu's wrapper is faded and transformed, so its popup paints within this row; the row has to
+   rise over the rows after it, and over a sticky group heading, for the popup to be seen. */
+.session-row.menu-open { z-index: 2; }
+.session-row:hover .session-time,
+.session-row:has(.session:focus-visible) .session-time,
+.session-row:has(.session-more-menu:focus-within) .session-time,
+.session-row.menu-open .session-time { opacity: 0; }
+
+/* ------------------------------------------------------------------ groups
+
+   Headings in caption ink rather than the accent: they name a checkout, not a pressed state, and
+   a dozen of them in colour would drown the one row that is selected. Sticky, because the name
+   of the checkout is worth keeping on screen while its sessions scroll past. */
+.session-group-section { display: flex; flex-direction: column; gap: 1px; }
+.session-group-section + .session-group-section { margin-top: var(--leo-spacing-m); }
+
+.session-group-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  background: var(--surface-app);
+  border-radius: var(--radius-control);
+}
+.session-group-fold {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-s);
+  height: var(--hit);
+  padding: 0 var(--leo-spacing-m) 0 var(--leo-spacing-s);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  font: var(--type-caption-strong);
+  color: var(--ink-tertiary);
+  text-align: left;
+  --leo-icon-size: var(--icon-meta);
+  --leo-icon-color: var(--ink-tertiary);
+}
+.session-group-head:hover .session-group-fold { color: var(--ink-secondary); }
+.session-group-fold .chevron { flex: none; transition: transform var(--motion-panel); }
+.session-group-fold .chevron.open { transform: rotate(90deg); }
+.session-group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-group-fold .count { margin-left: auto; flex: none; font: var(--type-caption); }
+/* Starting a session in the checkout the heading names: shown with the heading's hover, and
+   whenever it is focused, so the keyboard still finds it. */
+.session-group-new { flex: none; opacity: 0; transition: opacity var(--motion-fast); }
+.session-group-head:hover .session-group-new,
+.session-group-new:focus-within { opacity: 1; }
+.session-group-head:hover .count { opacity: 0; }
+
+.session-archive { margin-top: var(--leo-spacing-l); }
+
+/* ------------------------------------------------------------------ bots */
+
+.bot-open-button { gap: var(--leo-spacing-m); }
+.bot-edit {
+  position: absolute;
+  top: 50%;
+  right: var(--leo-spacing-s);
+  transform: translateY(-50%);
+  opacity: 0;
+  transition: opacity var(--motion-fast);
+}
+.bot:hover .bot-edit,
+.bot:has(.bot-open-button:focus-visible) .bot-edit,
+.bot-edit:focus-within { opacity: 1; }
+
+/* The archive: the foot of the tab, outside the scrolling list, so it is in the same place with
+   three bots and with thirty. It never scrolls, so its heading is not sticky. */
+.bot-archive {
+  flex: none;
+  padding: var(--leo-spacing-s) var(--leo-spacing-m);
+  border-top: 1px solid var(--border-hairline);
+}
+.bot-archive .session-group-head { position: static; background: none; }
+.bot-archive-rows { max-height: 40vh; overflow-y: auto; }
+
+/* A row with no face — an archive is exactly the list that can grow to forty rows nobody is
+   looking at, and a WebGL context apiece would cost the bots in use theirs. */
+.bot-archived {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-s);
+  min-height: var(--hit);
+  padding: var(--leo-spacing-s) var(--leo-spacing-m);
+  border-radius: var(--radius-control);
+  color: var(--ink-secondary);
+}
+.bot-archived:hover { background: var(--surface-hover); }
+.bot-archived .bot-said { flex: 1; }
+.bot-archived .bot-name { font: var(--type-meta); }
+/* The one act in this column that cannot be taken back carries its colour without being hovered. */
+.bot-archived .bot-delete { --leo-button-color: var(--status-error-ink); }
+.bot-archived .bot-delete-armed { font-weight: 600; }
+.bot-asking { background: var(--status-error-bg); }
+.bot-asking .bot-name { color: var(--ink-primary); }
+.bot-warning {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font: var(--type-caption);
+  color: var(--status-error-ink);
+}
+
+/* ------------------------------------------------------------------ foot */
+
+.sidebar-foot {
+  flex: none;
+  padding: var(--leo-spacing-s) var(--leo-spacing-m) var(--leo-spacing-m);
+}
+
+/* ------------------------------------------------------------------ menus opened from here */
+
+.recent-menu leo-menu-item { width: min(380px, calc(100vw - 24px)); box-sizing: border-box; overflow: hidden; }
+.recent-row { align-items: flex-start; }
+.recent-text { display: flex; flex-direction: column; min-width: 0; }
+.recent-name { font: var(--type-body); }
+.recent-path {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--type-code);
+  color: var(--ink-tertiary);
+}
+.recent-menu leo-menu-item[aria-disabled='true'] { color: var(--ink-disabled); cursor: default; }

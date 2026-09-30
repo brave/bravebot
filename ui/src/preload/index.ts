@@ -374,6 +374,13 @@ const api = {
     }
   },
 
+  /** Listen for the window gaining and losing focus. Returns an unsubscribe. */
+  onWindowActive(listener: (active: boolean) => void): () => void {
+    const handler = (_event: IpcRendererEvent, active: boolean) => listener(active === true)
+    ipcRenderer.on('bravebot:window:active', handler)
+    return () => ipcRenderer.off('bravebot:window:active', handler)
+  },
+
   /** Listen for everything the agent announces. Returns an unsubscribe. */
   onEvent(listener: (event: BridgeEvent) => void): () => void {
     const handler = (_event: IpcRendererEvent, message: BridgeEvent) => listener(message)

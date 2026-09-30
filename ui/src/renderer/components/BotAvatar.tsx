@@ -30,6 +30,7 @@
  */
 
 import { useEffect, useId, useRef } from 'react'
+import { Icon } from '../nala'
 import { available, show, tell, express, type Expression, type Doing } from '../avatar/stage'
 import { paintsOf, signature, traitsOf, headWidth, eyeDimensions, torsoDimensions, type Traits } from '../avatar/figure'
 
@@ -96,16 +97,24 @@ export function BotAvatar({ seed, size = 38, doing = 'idle', expression = 'neutr
       {hasStatus && (
         <span
           className={`bot-avatar-status bot-avatar-status-${doing}`}
-          style={{ width: Math.max(7, Math.round(size * 0.23)), height: Math.max(7, Math.round(size * 0.23)) }}
+          style={{ '--status-size': `${Math.max(10, Math.round(size * 0.26))}px` } as React.CSSProperties}
           aria-hidden="true"
         >
-          {doing === 'failed' ? (
-            <svg viewBox="0 0 12 12" focusable="false"><path d="M6 2v4M6 9v.1" /></svg>
-          ) : (
-            <svg viewBox="0 0 12 12" focusable="false"><path d="M6 2v4l2.5 1.5" /></svg>
-          )}
+          <Icon name={doing === 'failed' ? 'warning-circle-filled' : 'clock'} />
         </span>
       )}
+    </span>
+  )
+}
+
+/**
+ * A bot's face as a still picture, for places too small or too numerous to spend a WebGL
+ * context on: the mark beside a bot's conversation in the session list.
+ */
+export function BotFace({ seed, size = 16 }: { seed: string; size?: number }): React.JSX.Element {
+  return (
+    <span className="bot-face" style={{ width: size, height: size }} aria-hidden="true">
+      <FlatAvatar seed={seed} size={size} doing="idle" expression="neutral" />
     </span>
   )
 }
