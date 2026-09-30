@@ -3011,6 +3011,134 @@ fn the_sessions_own_directory_stays_reachable_where_reads_stay_in_the_workspace(
         .expect("the session's own directory is still the session's");
 }
 
+/// PERM-16: the key holds the file tools to the working directory, so the working directory may not
+/// move outward. A parent holds whatever was refused beside the old root, so the move would reach by
+/// relocation what the key refuses by name.
+///
+/// The failure this rejects is `change_root` not consulting the key, which is what shipped: the move
+/// succeeded and a file refused a moment earlier read from the new root.
+#[test]
+fn a_move_outward_is_refused_where_reads_stay_in_the_workspace() {
+    let scratch = Scratch::new("inside-cd-outward");
+    let tree = scratch.path.canonicalize().expect("canonical scratch");
+    let root = tree.join("project");
+    let beside = tree.join("beside");
+    std::fs::create_dir_all(&root).expect("create the root");
+    std::fs::create_dir_all(&beside).expect("create the directory beside it");
+    std::fs::write(beside.join("outside.txt"), "not this session's").expect("write the file");
+
+    let mut workspace = Workspace::new(&root)
+        .expect("workspace")
+        .with_reads_kept_inside(true);
+
+    // Refused by name first, so the move is the only other way to that reach.
+    workspace
+        .resolve_directory(beside.to_str().expect("utf-8 path"))
+        .expect_err("a directory beside the root must not resolve");
+
+    let said = workspace
+        .change_root(tree.to_str().expect("utf-8 path"))
+        .expect_err("the working directory must not move outward")
+        .to_string();
+    assert!(
+        said.contains("permissions.readsStayInWorkspace"),
+        "the refusal did not name the key that made it: {said}"
+    );
+
+    // The root did not move, so the file the parent holds is unreachable still. Read through the
+    // ordinary path rather than the containment helper, since that is how a turn would reach it.
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    let path = Labelled::trusted(beside.join("outside.txt").display().to_string());
+    workspace
+        .read(&mut policy, &path)
+        .expect_err("a refused move left the parent's file readable");
+
+    // Without the key the same move is allowed, so the refusal is the setting and not the fixture.
+    let mut ordinary = Workspace::new(&root).expect("workspace");
+    ordinary
+        .change_root(tree.to_str().expect("utf-8 path"))
+        .expect("a move outward is ordinary where no layer asked for the key");
+}
+
+/// PERM-16: a move further into the tree is not refused. The key holds the tools to the working
+/// directory, and a directory inside it was reachable already, so moving there opens nothing.
+///
+/// Refusing it would make the key refuse navigation it has no reason to, and the clause claims only
+/// that reach does not grow.
+#[test]
+fn a_move_inward_is_allowed_where_reads_stay_in_the_workspace() {
+    let scratch = Scratch::new("inside-cd-inward");
+    let root = scratch.path.canonicalize().expect("canonical scratch");
+    let within = root.join("within");
+    std::fs::create_dir_all(&within).expect("create a directory inside the root");
+
+    let mut workspace = Workspace::new(&root)
+        .expect("workspace")
+        .with_reads_kept_inside(true);
+
+    let moved = workspace
+        .change_root(within.to_str().expect("utf-8 path"))
+        .expect("a move inside the working directory is not refused");
+    assert_eq!(moved.root, within, "the move did not land where it named");
+    assert!(
+        workspace.reads_stay_inside(),
+        "the key was dropped by the move"
+    );
+}
+
+/// PERM-16: a name inside the root that reaches outside it is a move outward, so the key refuses it.
+///
+/// The failure this rejects is a guard written against the name `change_root` was given rather than
+/// the path it canonicalizes to. `project/doorway` is inside the root by every spelling test, so such
+/// a guard allows this move and the key's reach grows through a link a turn could have written.
+#[cfg(unix)]
+#[test]
+fn a_move_through_a_link_out_of_the_tree_is_refused_where_reads_stay_in_the_workspace() {
+    let scratch = Scratch::new("inside-cd-through-a-link");
+    let tree = scratch.path.canonicalize().expect("canonical scratch");
+    let root = tree.join("project");
+    let beside = tree.join("beside");
+    std::fs::create_dir_all(&root).expect("create the root");
+    std::fs::create_dir_all(&beside).expect("create the directory beside it");
+    std::fs::write(beside.join("outside.txt"), "not this session's").expect("write the file");
+    let doorway = root.join("doorway");
+    std::os::unix::fs::symlink(&beside, &doorway).expect("link out of the root");
+
+    let mut workspace = Workspace::new(&root)
+        .expect("workspace")
+        .with_reads_kept_inside(true);
+
+    let said = workspace
+        .change_root(doorway.to_str().expect("utf-8 path"))
+        .expect_err("a move through a link out of the tree must be refused")
+        .to_string();
+    assert!(
+        said.contains("permissions.readsStayInWorkspace"),
+        "the refusal did not name the key that made it: {said}"
+    );
+
+    // The root did not move, so what the link reaches is unreachable still.
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    let path = Labelled::trusted(doorway.join("outside.txt").display().to_string());
+    workspace
+        .read(&mut policy, &path)
+        .expect_err("a refused move left the linked file readable");
+}
+
 /// The point of the attachment read: a binary file, which every other read here refuses.
 #[test]
 fn an_attachment_is_read_as_a_data_uri_though_it_is_binary() {
