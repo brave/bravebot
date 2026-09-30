@@ -424,17 +424,24 @@ export async function launch(opts) {
     // one a session list that is present and invisible. Put back with the columns, for the same
     // reason they are: a scene begins where a first-time viewer would find the window.
     const sessionsTab = page.locator('.sidebar-tabs [role="option"]').first()
-    if ((await sessionsTab.count()) && (await sessionsTab.getAttribute('aria-pressed')) !== 'true') {
+    const selected = async (tab) => {
+      const value = await tab.getAttribute('aria-selected')
+      return value !== null && value !== 'false'
+    }
+    if ((await sessionsTab.count()) && !(await selected(sessionsTab))) {
       await sessionsTab.click()
       await page.waitForTimeout(250)
     }
 
-    const group = page.locator('.session-group')
-    if ((await group.getAttribute('aria-pressed')) === 'true') {
-      await group.click()
-      await page.waitForTimeout(250)
-    }
-    const find = page.locator('.sidebar-search')
+    // Grouping is a checkable item in View options.
+    const options = page.locator('[data-test="view-options"]')
+    const grouping = page.getByRole('menuitemcheckbox', { name: 'Group by project' })
+    await options.click()
+    const grouped = (await grouping.getAttribute('aria-checked')) === 'true'
+    if (grouped) await grouping.click()
+    else await page.keyboard.press('Escape')
+    await page.waitForTimeout(250)
+    const find = page.locator('.sidebar-search input')
     if (await find.isVisible().catch(() => false)) await find.fill('')
     await page.waitForTimeout(200)
   }

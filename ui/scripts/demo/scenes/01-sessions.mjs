@@ -45,8 +45,12 @@ export default {
     await s.say('Escape', 'Clears it, and the whole list is back.', 1.4)
     await s.beat(0.6)
 
-    await s.say('Group by checkout', 'The toggle beside the box gathers sessions by project.')
-    await s.click('.session-group')
+    const groupByProject = async () => {
+      await s.click('[data-test="view-options"]')
+      await s.click(page.getByRole('menuitemcheckbox', { name: 'Group by project' }))
+    }
+    await s.say('Group by checkout', 'View options beside the box can gather sessions by project.')
+    await groupByProject()
     await s.beat(0.8)
     const heads = page.locator('.session-group-head')
     await s.say('Group by checkout', `${await heads.count()} checkouts, each with its count.`, 1.6)
@@ -87,6 +91,6 @@ export default {
     }
 
     await s.say('Group by checkout', 'Back to a flat list.')
-    await s.click('.session-group')
+    await groupByProject()
   },
 }
