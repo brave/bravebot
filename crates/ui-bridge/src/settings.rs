@@ -188,7 +188,10 @@ mod tests {
         );
 
         let (_, settings) = vetting_layers(Some(r#"{"model":"home/model"}"#), None);
-        assert!(ignored(&settings).is_empty(), "the person's own file was reported");
+        assert!(
+            ignored(&settings).is_empty(),
+            "the person's own file was reported"
+        );
     }
 
     fn vetting_layers(
