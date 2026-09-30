@@ -320,6 +320,10 @@ pub struct BedrockClient<'a> {
     /// What that model was known to refuse before this request, which a probe that settled nothing
     /// puts back.
     recalled: Refusals,
+    /// How long to wait before the first retry. Doubled for each retry after that.
+    ///
+    /// [`BACKOFF`] unless overridden by [`Self::with_backoff`].
+    backoff: Duration,
 }
 
 impl<'a> BedrockClient<'a> {
@@ -362,7 +366,16 @@ impl<'a> BedrockClient<'a> {
             thinking_shown: true,
             learned_for: String::new(),
             recalled: Refusals::default(),
+            backoff: BACKOFF,
         }
+    }
+
+    /// Wait this long before the first retry instead of [`BACKOFF`]. Later retries still double it.
+    ///
+    /// Used by tests, which would otherwise spend real seconds on every retry they exercise.
+    pub fn with_backoff(mut self, backoff: Duration) -> Self {
+        self.backoff = backoff;
+        self
     }
 
     /// Stop reading a streamed reply as soon as this says to.
@@ -400,7 +413,7 @@ impl<'a> BedrockClient<'a> {
                     probed = true;
                 }
                 Err(error) if worth_another_attempt(attempt, &error) => {
-                    if !self.wait(backoff(attempt)) {
+                    if !self.wait(backoff(self.backoff, attempt)) {
                         return Err(BedrockError::Cancelled);
                     }
                     attempt += 1;
@@ -748,7 +761,7 @@ impl<'a> BedrockClient<'a> {
                         counted_by_server: false,
                         attempt,
                     });
-                    if !self.wait(backoff(attempt - 1)) {
+                    if !self.wait(backoff(self.backoff, attempt - 1)) {
                         return Err(BedrockError::Cancelled);
                     }
                 }
@@ -1305,8 +1318,8 @@ fn worth_another_attempt(attempt: u32, error: &BedrockError) -> bool {
     }
 }
 
-fn backoff(failures: u32) -> Duration {
-    BACKOFF * 2u32.pow(failures - 1)
+fn backoff(base: Duration, failures: u32) -> Duration {
+    base * 2u32.pow(failures - 1)
 }
 
 /// Validate reported counts independently of assistant content.
@@ -1963,8 +1976,8 @@ mod tests {
     /// needs a moment.
     #[test]
     fn each_backoff_is_longer_than_the_last() {
-        assert!(backoff(1) < backoff(2));
-        assert!(backoff(2) < backoff(3));
+        assert!(backoff(BACKOFF, 1) < backoff(BACKOFF, 2));
+        assert!(backoff(BACKOFF, 2) < backoff(BACKOFF, 3));
     }
     /// Use real loopback HTTP; no AWS credentials or account is involved.
     fn refused_requests(statuses: Vec<u16>) -> (Request, std::sync::mpsc::Receiver<Vec<u8>>) {
@@ -3989,7 +4002,9 @@ mod tests {
                 let config = config();
                 let egress = Egress::new();
                 let cancel = Cancel::new();
-                let mut client = BedrockClient::new(&config, &egress).with_cancel(cancel.clone());
+                let mut client = BedrockClient::new(&config, &egress)
+                    .with_backoff(Duration::from_millis(1))
+                    .with_cancel(cancel.clone());
                 client.test_request = Some(http);
                 let mut sink = RecordingSink::new();
                 let mut routing = Routing::new();
