@@ -66,7 +66,9 @@ run whose own context has met untrusted bytes composes tasks that are a function
 Delegating from one is refused outright rather than narrowed.
 
 Private content is refused too, on either the task or the kind: the user's data may not become
-another planner's prompt.
+another planner's prompt. That refusal reads the task's own label, and a task the planner writes is
+read as routing, as a path is. So a task written after the planner was shown private content is not
+refused. The delegate starts out holding what its parent held instead ([DELEGATE-8](#DELEGATE-8)).
 
 **Why.** This is the clause the rest rests on. Without it, delegation is a way for untrusted
 content to reach a planner's context by the long way round, and every other rule here would be
@@ -311,7 +313,13 @@ handed a reference to it.
 Nothing is relabelled, and nothing is trusted on a delegate's say-so. The label is the one its
 own context earned.
 
+Confidentiality goes both ways ([LABEL-8](labels.md#LABEL-8)). A delegate starts out holding
+whatever private content its parent's context held, so what it writes is private from its first
+round. A parent shown a private report holds it from then on.
+
 `verified-by: bravebot_agent::turn::a_delegates_report_reaches_the_planner_that_asked_for_it`
+`verified-by: bravebot_agent::turn::a_planner_given_a_private_report_from_a_delegate_holds_it`
+`verified-by: bravebot_core::policy::a_delegate_starts_out_holding_what_its_parent_held`
 `verified-by: bravebot_agent::turn::what_a_delegate_reported_reaches_the_person_watching`
 
 <a id="DELEGATE-9"></a>

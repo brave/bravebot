@@ -65,8 +65,16 @@ The gate is here anyway, because what makes that closure safe to rely on is that
 if it ever stops holding. If a change ever lets untrusted bytes into the planner's context, this is
 what catches it.
 
+Only integrity decides. A planner that was shown private content writes private questions
+([LABEL-8](../labels.md#LABEL-8)), and they are still asked: they go to the screen of the person
+whose data it is and nowhere else, which is where a private slot is shown when it is put to them
+for vetting.
+
 `verified-by: bravebot_core::policy::a_series_from_an_untrusted_context_cannot_be_put_to_the_user`
 `verified-by: bravebot_core::policy::answers_to_an_untrusted_series_are_refused`
+`verified-by: bravebot_core::policy::untrusted_questions_are_refused_whatever_their_confidentiality`
+`verified-by: bravebot_core::policy::private_questions_are_asked_and_the_reply_stays_private`
+`verified-by: bravebot_agent::mcp::writing_a_file_and_asking_a_question_still_work_after_a_vet`
 
 <a id="ASK-4"></a>
 ### ASK-4: a quarantined read does not stop the planner asking
@@ -88,9 +96,11 @@ Never move this back to the observation.
 
 The bytes came from the user's keyboard, the same source as the task itself. That is a first label
 from provenance, not an upgrade. It is still refused when the question being answered was not
-itself trustworthy (ASK-3).
+itself trustworthy (ASK-3). It is as private as the questions it answers, since the reply repeats
+them.
 
 `verified-by: bravebot_agent::turn::every_answer_in_a_series_reaches_the_planner`
+`verified-by: bravebot_core::policy::private_questions_are_asked_and_the_reply_stays_private`
 
 <a id="ASK-6"></a>
 ### ASK-6: skipping answers a question, and questions are put one at a time

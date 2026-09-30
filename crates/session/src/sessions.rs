@@ -3236,6 +3236,7 @@ mod tests {
                 archive: Vec::new(),
                 measured: 0,
                 asked_to_write: false,
+                holds: "public".to_string(),
             },
             manifest: None,
             rewind: Vec::new(),

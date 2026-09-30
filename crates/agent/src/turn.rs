@@ -1720,11 +1720,13 @@ pub fn compact<S: Sink, R: Reporter>(
     routing.insert_trusted("task", "summarise the conversation so far");
 
     // The integrity is inherited for the same reason a turn inherits it: a fresh policy is not a
-    // fresh context, and a summary is a function of everything the exchange has held.
+    // fresh context, and a summary is a function of everything the exchange has held. So is what
+    // the exchange held: a summary of the person's mail is as private as the mail.
     let capabilities = CapabilitySet::from_iter([Capability::WebFetch]);
     let mut policy = Policy::begin(routing, ReleasePlan::new(), capabilities, sink)?
         .with_trust(trust)
-        .resuming(conversation.context());
+        .resuming(conversation.context())
+        .holding(conversation.holds());
 
     reporter.phase(Phase::Compacting);
 
@@ -1962,7 +1964,7 @@ fn admit_context_file<S: Sink>(
 ) -> Result<(), TurnError> {
     // Recorded here rather than at the end of the turn: a turn that fails after this still read
     // it, and the conversation the next turn resumes has to know.
-    conversation.observed(policy.context_integrity());
+    conversation.observed(policy.context_label());
 
     // The kernel decides whether the model may see this, from the label alone. A file from a
     // trusted path is shown; anything else is quarantined and the model gets only a reference.
@@ -2060,7 +2062,7 @@ fn record_answer<S: Sink>(
             format!("(you answered. {})", reference.describe())
         }
     }));
-    conversation.observed(policy.context_integrity());
+    conversation.observed(policy.context_label());
     Ok(answer)
 }
 
@@ -2235,13 +2237,16 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 // reference, they get the preview every quarantined result is drawn with, which
                 // is the same arrangement as a read the planner may not see.
                 let (body, reported) = match &presented {
-                    Presentation::Visible(text) => (
-                        format!(
-                            "{TOOL_BUDGET_SPENT} The {kind} delegate {id} has finished. It \
-                             reported:\n\n{text}"
-                        ),
-                        crate::report::Reported::Said(text.clone()),
-                    ),
+                    Presentation::Visible(text) => {
+                        policy.heard_from_delegate(delegated.report.label());
+                        (
+                            format!(
+                                "{TOOL_BUDGET_SPENT} The {kind} delegate {id} has finished. It \
+                                 reported:\n\n{text}"
+                            ),
+                            crate::report::Reported::Said(text.clone()),
+                        )
+                    }
                     Presentation::Quarantined(reference) => {
                         let shown = preview_for(policy, "delegate", &delegated.report);
                         (
@@ -2278,7 +2283,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
 
         reporter.delegate_finished(id, note, failed, reported);
         conversation.push(Message::user(body));
-        conversation.observed(policy.context_integrity());
+        conversation.observed(policy.context_label());
         collected += 1;
     }
     Ok(collected)
@@ -2425,7 +2430,7 @@ fn collect_jobs<S: Sink, R: Reporter>(
         };
 
         conversation.push(Message::user(body));
-        conversation.observed(policy.context_integrity());
+        conversation.observed(policy.context_label());
     }
     Ok(())
 }
@@ -2668,7 +2673,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         .with_asked(task.asked_about.clone())
         .with_exposed(task.exposed.clone())
         .with_permissions(task.permissions.clone())
-        .resuming(conversation.context());
+        .resuming(conversation.context())
+        .holding(conversation.holds());
 
     if let Some(authority) = &task.file_authority {
         policy = policy.with_file_authority(authority.clone());
@@ -2980,7 +2986,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // message itself.
         if let Some(text) = &task.piped {
             let piped = policy.label_piped_input(text.clone());
-            conversation.observed(policy.context_integrity());
+            conversation.observed(policy.context_label());
 
             let slot = conversation.next_reference();
             let presented = policy
@@ -3029,7 +3035,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     &Labelled::trusted(path.clone()),
                     &media,
                 )?;
-                conversation.observed(policy.context_integrity());
+                conversation.observed(policy.context_label());
 
                 let slot = conversation.next_reference();
                 let presented = policy
@@ -3909,7 +3915,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         }
                         // As with a context file: what the turn has seen belongs to the conversation the
                         // moment it sees it, not once the turn happens to end well.
-                        conversation.observed(policy.context_integrity());
+                        conversation.observed(policy.context_label());
 
                         // The same gate as file context. A tool result the kernel judges untrusted is
                         // quarantined and the planner is told its shape; only trusted results are shown.
@@ -4673,7 +4679,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 format!("(you answered. {})", reference.describe())
             }
         }));
-        conversation.observed(policy.context_integrity());
+        conversation.observed(policy.context_label());
         // Here and nowhere earlier: a turn that was stopped or failed has not answered, and the next
         // prompt is usually the same task carried on rather than a new one.
         conversation.turn_answered();

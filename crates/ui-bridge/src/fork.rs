@@ -123,6 +123,8 @@ pub fn cut(snapshot: &Snapshot, said: &[Said], ordinal: usize) -> Option<Cut> {
             // child ends earlier than they did. False costs at most one needless line to the
             // planner, where true could withhold one a turn needed.
             asked_to_write: false,
+            // Carried verbatim, like the integrity and for the same reason on the other axis.
+            holds: snapshot.holds.clone(),
         },
         prompt: wanted,
     })
@@ -150,6 +152,7 @@ mod tests {
             archive: Vec::new(),
             measured: 4096,
             asked_to_write: true,
+            holds: "public".into(),
         }
     }
 
@@ -370,6 +373,15 @@ mod tests {
         let cut = cut(&before, &drawn(&before), 1).expect("a second prompt");
 
         assert_eq!(cut.before.context, "untrusted");
+    }
+
+    #[test]
+    fn a_conversation_whose_planner_was_shown_private_content_forks_private() {
+        let mut before = snapshot(vec![Message::user("first"), Message::user("second")]);
+        before.holds = "private".into();
+        let cut = cut(&before, &drawn(&before), 1).expect("a second prompt");
+
+        assert_eq!(cut.before.holds, "private");
     }
 
     #[test]

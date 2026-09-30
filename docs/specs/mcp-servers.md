@@ -660,9 +660,11 @@ question and names one tool in one project, where an `allow` rule is a line of a
 every server. A delegate's call is put to the person as the turn's own is, after the same rules and
 standing answers ([DELEGATE-10](delegation.md#DELEGATE-10)).
 
-The private-data arm is written and not reached. The policy asks about a call whose arguments are
-labelled private whatever a rule or a standing answer says. The planner's arguments are labelled
-public today, as every tool call's are, so no call is labelled private.
+The private-data arm is reached once the planner has been shown private content let out of
+quarantine, such as a server's answer a person vetted: its arguments are labelled private from then
+on ([LABEL-8](labels.md#LABEL-8)), so every later call asks whatever a rule or a standing answer
+says, and a one-shot run refuses it. A resumed session keeps this. A workspace file the planner
+reads does not reach it.
 
 `verified-by: bravebot_agent::mcp::a_vouched_list_offers_its_tool_and_a_call_answers_quarantined`
 `verified-by: bravebot_agent::mcp::a_refused_call_reaches_no_server`
@@ -670,6 +672,8 @@ public today, as every tool call's are, so no call is labelled private.
 `verified-by: bravebot_agent::mcp::answer_two_follows_the_session_to_another_project`
 `verified-by: bravebot_agent::mcp::a_rule_decides_a_call_before_the_prompt`
 `verified-by: bravebot_agent::mcp::a_session_that_writes_nothing_records_neither_answer`
+`verified-by: bravebot_agent::mcp::a_call_after_a_servers_answer_was_vetted_asks_though_a_rule_allows_it`
+`verified-by: bravebot_agent::mcp::reading_workspace_files_leaves_a_call_a_rule_allows_unasked`
 `verified-by: bravebot_agent::mcp::a_record_that_cannot_be_read_is_not_written_over`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_servers_tool_is_put_to_the_person`
 `verified-by: bravebot_core::policy::a_deny_rule_refuses_an_mcp_call_before_anybody_is_asked`

@@ -75,9 +75,14 @@ user's data is that data.
 Carrying bytes decides nothing, so untrusted content is ordinary. Private content is different:
 releasing it hands the user's data somewhere this policy no longer governs. Writing back into the
 workspace is the one move that lowers confidentiality without releasing anything, because the
-destination is inside the boundary the bytes came from.
+destination is inside the boundary the bytes came from. The same holds for what the planner writes
+with `write_file` or `edit_file` once it has been shown private content
+([LABEL-8](labels.md#LABEL-8)): the text is released public at its own integrity, so the write is
+decided as it was before.
 
 `verified-by: bravebot_core::policy::a_write_back_into_the_workspace_lowers_only_confidentiality`
+`verified-by: bravebot_core::policy::what_the_planner_writes_into_the_workspace_is_released_public_at_its_own_integrity`
+`verified-by: bravebot_agent::mcp::writing_a_file_and_asking_a_question_still_work_after_a_vet`
 `verified-by: bravebot_core::policy::private_input_asks_even_for_a_vouched_line`
 
 ## The one relaxation

@@ -18,12 +18,14 @@
 //! - the **reference counter**, so two turns cannot both hand out `ref:0` and leave the planner
 //!   with one name for two things.
 //! - the **integrity** the conversation has met, so a later turn cannot label output better than
-//!   an earlier turn would have. See [`bravebot_core::policy::Policy::resuming`].
+//!   an earlier turn would have. See [`bravebot_core::policy::Policy::resuming`]. With it goes
+//!   whether the planner was shown private content, for the same reason on the other axis
+//!   ([`bravebot_core::policy::Policy::holding`]).
 
 use bravebot_aichat::protocol::{Message, Role};
 #[cfg(test)]
 use bravebot_aichat::protocol::{ToolCallRequest, ToolCallRequestFunction};
-use bravebot_core::label::Integrity;
+use bravebot_core::label::{Confidentiality, Integrity, Label};
 use bravebot_core::slot::{SlotId, SlotStore};
 use serde::{Deserialize, Serialize};
 
@@ -128,6 +130,8 @@ pub struct Conversation {
     references: usize,
     /// What everything this conversation has been shown amounts to.
     context: Integrity,
+    /// Whether the planner was shown private content in it. Only ever rises.
+    holds: Confidentiality,
     /// What compaction took out of the request, oldest first.
     ///
     /// What compaction shortens is the request, not the record. These messages are no longer
@@ -171,6 +175,7 @@ impl Conversation {
             quarantine: SlotStore::new(),
             references: 0,
             context: Integrity::Trusted,
+            holds: Confidentiality::Public,
             archive: Vec::new(),
             measured: 0,
             asked_to_write: false,
@@ -230,6 +235,11 @@ impl Conversation {
     /// What the conversation has met, for the turn resuming it.
     pub fn context(&self) -> Integrity {
         self.context
+    }
+
+    /// What the conversation's planner was shown, for the turn resuming it.
+    pub fn holds(&self) -> Confidentiality {
+        self.holds
     }
 
     /// Add a message the kernel has already ruled the planner may hold.
@@ -452,10 +462,13 @@ impl Conversation {
     /// Recorded as it happens rather than once the turn is over, because a turn that fails
     /// partway still read what it read, and the next turn has to inherit that.
     ///
-    /// One way: [`Integrity::meet`] cannot raise it, so nothing recorded here restores integrity
-    /// the conversation has already lost.
-    pub fn observed(&mut self, integrity: Integrity) {
-        self.context = self.context.meet(integrity);
+    /// One way on both axes: [`Integrity::meet`] cannot raise integrity and
+    /// [`Confidentiality::join`] cannot lower confidentiality, so nothing recorded here restores
+    /// integrity the conversation has lost or makes a planner that was shown private content
+    /// public again.
+    pub fn observed(&mut self, context: Label) {
+        self.context = self.context.meet(context.integrity);
+        self.holds = self.holds.join(context.confidentiality);
     }
 }
 
@@ -502,7 +515,9 @@ pub enum Said {
 /// The **messages** are safe to write anywhere: every one of them has already been past the
 /// present gate, so a stored conversation holds no untrusted bytes. The **integrity** goes with
 /// them because it is what a resumed turn must inherit, and dropping it would let a resumed
-/// session call trusted what the original would not have.
+/// session call trusted what the original would not have. Whether the planner was shown private
+/// content goes with them for the same reason: dropping it would let a resumed session call
+/// public what the original would have called private.
 ///
 /// The **quarantine** is not stored. Untrusted content would then be sitting in a file, to be
 /// read back and relabelled from what that file says, and a label that survives a round trip
@@ -546,11 +561,26 @@ pub struct Snapshot {
     /// needless line to the planner.
     #[serde(default)]
     pub asked_to_write: bool,
+    /// Whether the planner had been shown private content: `public`, or anything else.
+    ///
+    /// A word for the reason `context` is one, and read the same way: anything but `public` is
+    /// private. A file written before this was recorded has no word and reads as private, since
+    /// nothing says what that session's planner was shown.
+    #[serde(default = "unrecorded")]
+    pub holds: String,
 }
 
 /// The word for an integrity, as it is written down.
 const TRUSTED: &str = "trusted";
 const UNTRUSTED: &str = "untrusted";
+
+/// The word for what a planner was shown, as it is written down.
+const PUBLIC: &str = "public";
+const PRIVATE: &str = "private";
+
+fn unrecorded() -> String {
+    PRIVATE.to_string()
+}
 
 impl Conversation {
     /// The conversation as it can be written down.
@@ -581,6 +611,10 @@ impl Conversation {
             archive: self.archive.clone(),
             measured: self.measured,
             asked_to_write: self.asked_to_write,
+            holds: match self.holds {
+                Confidentiality::Public => PUBLIC.to_string(),
+                Confidentiality::Private => PRIVATE.to_string(),
+            },
         }
     }
 
@@ -609,6 +643,11 @@ impl Conversation {
                 Integrity::Trusted
             } else {
                 Integrity::Untrusted
+            },
+            holds: if snapshot.holds == PUBLIC {
+                Confidentiality::Public
+            } else {
+                Confidentiality::Private
             },
             archive: snapshot.archive,
             measured: snapshot.measured,
@@ -805,7 +844,6 @@ fn dead_references(references: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bravebot_core::label::Label;
 
     #[test]
     fn a_new_conversation_has_nothing_in_it_and_has_seen_nothing() {
@@ -1721,7 +1759,7 @@ mod tests {
     #[test]
     fn compaction_does_not_restore_integrity_the_conversation_had_lost() {
         let mut conversation = four_exchanges();
-        conversation.observed(Integrity::Untrusted);
+        conversation.observed(Label::untrusted_public());
 
         let boundary = conversation
             .compaction_boundary()
@@ -1731,12 +1769,27 @@ mod tests {
         assert_eq!(conversation.context(), Integrity::Untrusted);
     }
 
+    /// The same for what the planner was shown: a summary of the person's mail is as private as
+    /// the mail.
+    #[test]
+    fn compaction_does_not_make_a_private_conversation_public() {
+        let mut conversation = four_exchanges();
+        conversation.observed(Label::trusted_private());
+
+        let boundary = conversation
+            .compaction_boundary()
+            .expect("something to compact");
+        conversation.compacted(boundary, "they asked about the first thing");
+
+        assert_eq!(conversation.holds(), Confidentiality::Private);
+    }
+
     /// Integrity is the one thing here that must never come back better than it went in, and a
     /// file is the easiest place to make that mistake.
     #[test]
     fn an_untrusted_conversation_does_not_come_back_trusted() {
         let mut conversation = Conversation::new();
-        conversation.observed(Integrity::Untrusted);
+        conversation.observed(Label::untrusted_public());
 
         let snapshot = conversation.snapshot();
         assert_eq!(snapshot.context, "untrusted");
@@ -1758,6 +1811,7 @@ mod tests {
                 archive: Vec::new(),
                 measured: 0,
                 asked_to_write: false,
+                holds: PUBLIC.to_string(),
             });
             assert_eq!(
                 restored.context(),
@@ -1770,14 +1824,86 @@ mod tests {
     #[test]
     fn what_the_conversation_has_met_only_ever_falls() {
         let mut conversation = Conversation::new();
-        conversation.observed(Integrity::Untrusted);
+        conversation.observed(Label::untrusted_public());
         assert_eq!(conversation.context(), Integrity::Untrusted);
 
-        conversation.observed(Integrity::Trusted);
+        conversation.observed(Label::trusted_public());
         assert_eq!(
             conversation.context(),
             Integrity::Untrusted,
             "a later trusted turn does not un-see what an earlier one read"
+        );
+    }
+    /// The other axis, and the same mistake: a planner that was shown the person's mail comes back
+    /// from a file still holding it, so a resumed session's calls to a server still ask (PERM-9).
+    #[test]
+    fn a_private_conversation_does_not_come_back_public() {
+        let mut conversation = Conversation::new();
+        conversation.observed(Label::trusted_private());
+
+        let snapshot = conversation.snapshot();
+        assert_eq!(snapshot.holds, "private");
+        assert_eq!(
+            Conversation::restored(snapshot).holds(),
+            Confidentiality::Private
+        );
+    }
+
+    /// And a conversation shown nothing private comes back public, or every resumed session would
+    /// ask before every call to a server.
+    #[test]
+    fn a_public_conversation_comes_back_public() {
+        let snapshot = four_exchanges().snapshot();
+        assert_eq!(snapshot.holds, "public");
+        assert_eq!(
+            Conversation::restored(snapshot).holds(),
+            Confidentiality::Public
+        );
+    }
+
+    /// Read the way the integrity word is: anything but the one word is the safe answer.
+    #[test]
+    fn an_unreadable_holds_word_is_read_as_private() {
+        for word in ["", "PUBLIC", "pub", "yes", "public-ish"] {
+            let restored = Conversation::restored(Snapshot {
+                messages: Vec::new(),
+                context: TRUSTED.to_string(),
+                references: 0,
+                archive: Vec::new(),
+                measured: 0,
+                asked_to_write: false,
+                holds: word.to_string(),
+            });
+            assert_eq!(
+                restored.holds(),
+                Confidentiality::Private,
+                "{word:?} was read as public"
+            );
+        }
+    }
+
+    /// A file from before the word was written says nothing about what its planner was shown, so
+    /// it reads as private. It still reads.
+    #[test]
+    fn a_session_file_written_before_holds_was_recorded_reads_as_private() {
+        let stored = r#"{"messages":[{"role":"user","content":"what is 2 + 2?"}],
+                         "context":"trusted","references":0}"#;
+        let snapshot: Snapshot = serde_json::from_str(stored).expect("an older session file");
+        let restored = Conversation::restored(snapshot);
+
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored.holds(), Confidentiality::Private);
+    }
+
+    #[test]
+    fn what_the_planner_was_shown_only_ever_rises() {
+        let mut conversation = Conversation::new();
+        conversation.observed(Label::trusted_private());
+        conversation.observed(Label::trusted_public());
+        assert_eq!(
+            conversation.holds(),
+            Confidentiality::Private,
+            "a later turn shown nothing private does not un-see what an earlier one was shown"
         );
     }
 }

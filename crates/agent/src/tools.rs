@@ -30,7 +30,7 @@ use crate::report::{Activity, Reporter};
 use bravebot_aichat::protocol::{Tool, ToolCall, Usage};
 use bravebot_core::ask::{self, Choice, Question, Series};
 use bravebot_core::credentials::Scanned;
-use bravebot_core::event::{Role, Sink};
+use bravebot_core::event::Sink;
 use bravebot_core::label::Label;
 use bravebot_core::policy::{Destination, Policy};
 use bravebot_core::slot::{SlotId, SlotStore};
@@ -3865,7 +3865,7 @@ fn write_file<S: Sink, C: Confirmer>(
         // The body is the model's words. Its integrity is that of the context the model was
         // working from, which the kernel tracked: nothing here upgrades anything.
         (Some(contents), None) => match policy.adopt_model_output("write_file", contents) {
-            Ok(body) => body,
+            Ok(body) => policy.declassify_written_into_workspace("write_file", &shown_path, body),
             Err(denial) => return Produced::problem(format!("refused: {denial}")),
         },
         // Quarantined content, going where the planner said without the planner or the driver
@@ -4151,6 +4151,7 @@ fn edit_file<S: Sink, C: Confirmer>(
     // The result is the model's edit applied to trusted text, so its integrity is that of the
     // context the model was working from.
     let body = policy.label_model_output("edit_file", replaced.contents);
+    let body = policy.declassify_written_into_workspace("edit_file", &shown_path, body);
     let body_label = body.label();
 
     // The same scan a whole-file write goes through, for the same reason and at the same moment:
@@ -6987,7 +6988,7 @@ fn ask_user<S: Sink, C: Confirmer>(
     // One string standing for every question, so the gate checks everything the person will be
     // shown rather than the first question or the sentences alone.
     let canonical = policy.render_in_place("ask_user", &series, |s| ask::canonical_series(&s));
-    if let Err(denial) = policy.before_action("ask_user", "questions", Role::Routing, &canonical) {
+    if let Err(denial) = policy.before_asking("ask_user", &canonical) {
         return Produced::problem(format!(
             "refused: {denial}. Questions can only be put to the user before anything untrusted \
              has reached your context. Continue without an answer, or say in your reply what you \
