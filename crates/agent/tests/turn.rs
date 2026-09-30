@@ -9193,6 +9193,52 @@ fn a_write_that_names_two_bodies_or_none_is_refused() {
     }
 }
 
+/// A write that fills the fields it is not using with blanks is the write it would have been
+/// without them.
+///
+/// Planners given a schema of optional strings sometimes send all of them, the unused ones as
+/// `""`. Counted as given, `path_ref: ""` beside a real path was refused as "not both", and the
+/// planner, unable to see which half the tool objected to, sent the identical call four times in
+/// a row and never saved the file.
+#[test]
+fn a_write_with_blank_references_beside_its_path_and_contents_goes_through() {
+    let scratch = Scratch::new("write-blank-references");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "write_file",
+            r#"{"path":"summary.html","path_ref":"","contents":"<p>ok</p>","contents_ref":""}"#,
+        ),
+        reply_with("saved"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("save the summary"),
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        !bodies.iter().any(|body| body.contains("not both")),
+        "blank references were counted as given: {bodies:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("summary.html")).unwrap(),
+        "<p>ok</p>",
+        "the write did not land"
+    );
+}
+
 /// A turn that changed files and ran nothing is asked about it, once, and the person is told.
 ///
 /// The turn this is for edited eighteen files, ran no command at all, and was stopped with none of
