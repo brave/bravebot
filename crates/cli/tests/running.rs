@@ -3967,3 +3967,166 @@ fn a_run_under_a_definition_is_checked_for_a_service_that_serves_the_definitions
         "the run went somewhere other than the gateway its definition names: {stderr}"
     );
 }
+
+/// A configuration a run gets past, so a refusal in this file is the one under test rather than the
+/// machine the tests run on having no credentials baked in.
+const CONFIGURED: &[(&str, &str)] = &[
+    ("SERVICES_KEY_AICHAT", "a-services-key"),
+    ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+    ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+];
+
+/// MODE-5 and PERM-17: `--dangerously-skip-permissions` is refused, with the file that made the mode
+/// unreachable named, rather than ignored. Every layer may ask, so the person's own file and a
+/// checkout's are both tried here.
+///
+/// Running the binary because the flag is taken off the command line before anything dispatches on
+/// it, and refusing it is a property of that process: `main` returns an `ExitCode` nothing in the
+/// same process reads back, and a session that started in bypass would have to be driven to find
+/// out. The failure this rejects is the key read and the flag honoured anyway, which is the one
+/// outcome that looks exactly like the key working from inside the config crate.
+#[test]
+fn the_skip_permissions_flag_is_refused_where_a_layer_made_bypass_unreachable() {
+    let unreachable = r#"{"permissions": {"bypassUnreachable": true}}"#;
+
+    let home = Scratch::new("cli-running-bypass-home").with_settings(unreachable);
+    let named = home.path.join(".bravebot").join("settings.json");
+    let output = bravebot(
+        &home.path,
+        CONFIGURED,
+        &["--dangerously-skip-permissions", "-p", "say something"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the flag was not refused: {stdout}{stderr}"
+    );
+    assert!(
+        stderr.contains("permissions.bypassUnreachable"),
+        "the refusal did not name the key: {stderr}"
+    );
+    assert!(
+        stderr.contains(&named.display().to_string()),
+        "the refusal did not name the file that asked: {stderr}"
+    );
+
+    // A checkout's file, which `vetting.auto` would not be read from: this key only refuses, so
+    // whoever wrote the checkout takes nothing from whoever cloned it (PERM-18).
+    let checkout = Scratch::new("cli-running-bypass-project");
+    let cwd = checkout.path.join("checkout");
+    std::fs::create_dir_all(cwd.join(".bravebot")).expect("create the project directory");
+    std::fs::write(cwd.join(".bravebot/settings.json"), unreachable).expect("write the layer");
+    let output = bravebot_started_in(
+        &checkout.path,
+        &cwd,
+        CONFIGURED,
+        &["--dangerously-skip-permissions", "-p", "say something"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a checkout could not ask for it: {stdout}{stderr}"
+    );
+    assert!(
+        stderr.contains(&cwd.join(".bravebot/settings.json").display().to_string()),
+        "the refusal did not name the checkout's file: {stderr}"
+    );
+
+    // And the control: the same invocation where no layer asked gets past this and fails at the
+    // backend instead, so the refusal above is the key rather than the flag being broken.
+    let quiet = Scratch::new("cli-running-bypass-unasked");
+    let output = bravebot(
+        &quiet.path,
+        CONFIGURED,
+        &["--dangerously-skip-permissions", "-p", "say something"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert!(
+        !stderr.contains("permissions.bypassUnreachable"),
+        "the flag was refused where nothing asked for it: {stdout}{stderr}"
+    );
+}
+
+/// PERM-16 through the process that assembles a session: a layer asking for the file tools to stay
+/// inside the workspace refuses `--add-dir`, with the key named, and the run stops rather than
+/// starting with a directory the key was asked to keep shut.
+///
+/// Running the binary for the reason the test above does: the settings are read in `main`, the
+/// workspace is built there, and whether what the file said reached it is a property of that wiring
+/// rather than of either crate alone.
+#[test]
+fn add_dir_is_refused_where_a_layer_keeps_reads_in_the_workspace() {
+    let scratch = Scratch::new("cli-running-reads-inside");
+    let cwd = scratch.path.join("checkout");
+    let elsewhere = scratch.path.join("shared");
+    std::fs::create_dir_all(cwd.join(".bravebot")).expect("create the project directory");
+    std::fs::create_dir_all(&elsewhere).expect("create the directory to be refused");
+    std::fs::write(
+        cwd.join(".bravebot/settings.json"),
+        r#"{"permissions": {"readsStayInWorkspace": true}}"#,
+    )
+    .expect("write the layer");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        CONFIGURED,
+        &[
+            "--add-dir",
+            elsewhere.to_str().expect("utf-8 path"),
+            "-p",
+            "say something",
+        ],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the directory was opened: {stdout}{stderr}"
+    );
+    assert!(
+        stderr.contains("permissions.readsStayInWorkspace"),
+        "the refusal did not name the key: {stderr}"
+    );
+}
+
+/// PERM-16 and PERM-17: a key spelled as something other than a boolean is read as absence, and
+/// `doctor` names it so that somebody who quoted `"true"` is told the session refuses nothing.
+///
+/// The failure this rejects is a mistyped value dropped in silence, which reads to whoever wrote it
+/// as a session that is confined and is not: PERM-11's reasoning about a rule, applied to a key.
+#[test]
+fn doctor_names_a_refusing_key_that_is_not_a_boolean() {
+    let scratch = Scratch::new("cli-running-narrowing-unreadable").with_settings(
+        r#"{"permissions": {"readsStayInWorkspace": "true", "bypassUnreachable": 1}}"#,
+    );
+
+    let output = bravebot(&scratch.path, CONFIGURED, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "doctor did not run: {stderr}");
+    // The sentence that says the value was not obeyed, not merely the key: `doctor` lists the names a
+    // file set as well, so a build that read `"true"` as the restriction would print the key on that
+    // line and pass an assertion about the key alone.
+    for key in [
+        "permissions.readsStayInWorkspace",
+        "permissions.bypassUnreachable",
+    ] {
+        assert!(
+            stdout.contains(&format!("{key} in ")),
+            "{key} was dropped without being named: {stdout}"
+        );
+    }
+    assert_eq!(
+        stdout.matches("is not a boolean").count(),
+        2,
+        "both mistyped keys have to be reported as not obeyed: {stdout}"
+    );
+    assert!(
+        stdout.contains(&scratch.settings().display().to_string()),
+        "the file holding them was not named: {stdout}"
+    );
+}

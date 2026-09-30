@@ -16791,6 +16791,86 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// PERM-16: where a layer asked for the file tools to stay inside the workspace, a name in
+    /// `additionalDirectories` is refused rather than put to anybody, and the refusal names the key.
+    /// That is PERM-13's existing treatment of a name that cannot be opened whatever the answer, and
+    /// the whole point of the key is that no answer opens one.
+    ///
+    /// The failure this rejects is a question asked anyway and refused after it is answered, which is
+    /// the box that trains answering without reading: the person is shown a decision they do not
+    /// have.
+    #[test]
+    fn a_named_directory_is_refused_rather_than_asked_about_where_reads_stay_in_the_workspace() {
+        let root = crate::testutil::scratch_dir("bravebot-named-confined-test");
+        let project = root.join("project");
+        let outside = root.join("shared");
+        std::fs::create_dir_all(&project).expect("scratch");
+        std::fs::create_dir_all(&outside).expect("scratch");
+
+        let workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_reads_kept_inside(true);
+        let mut session = Session::new("none");
+
+        let asked = named_to_open(&mut session, &workspace, &[outside.display().to_string()]);
+
+        assert!(
+            asked.is_empty(),
+            "a directory the settings keep shut was put to the person"
+        );
+        assert!(
+            session.transcript[0]
+                .text
+                .contains("permissions.readsStayInWorkspace"),
+            "the refusal did not name the key that made it: {}",
+            session.transcript[0].text
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// PERM-16 at the other door onto the same reach: `/add-dir` is refused with the key named, and
+    /// nothing is vouched for, where a settings layer asked for the tools to stay inside.
+    #[test]
+    fn add_dir_is_refused_where_reads_stay_in_the_workspace() {
+        let root = crate::testutil::scratch_dir("bravebot-add-dir-confined-test");
+        let project = root.join("project");
+        let outside = root.join("shared");
+        std::fs::create_dir_all(&project).expect("scratch");
+        std::fs::create_dir_all(&outside).expect("scratch");
+
+        let mut workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_reads_kept_inside(true);
+        let mut trust = TrustStore::new(workspace.root());
+        let mut session = Session::new("none");
+
+        add_directory(
+            &mut session,
+            &mut workspace,
+            &mut trust,
+            &outside.display().to_string(),
+        );
+
+        assert!(
+            workspace.added_directories().is_empty(),
+            "a directory the settings keep shut was opened"
+        );
+        assert!(
+            trust.is_empty(),
+            "a directory that was not opened was vouched for"
+        );
+        assert!(
+            session.transcript[0]
+                .text
+                .contains("permissions.readsStayInWorkspace"),
+            "the refusal did not name the key that made it: {}",
+            session.transcript[0].text
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// The person who was asked about the working directory is asked about each directory a file
     /// named too, because a name in a file is a request for reach and trust rather than a grant of
     /// either, and the file is the easiest thing in a checkout to write to.

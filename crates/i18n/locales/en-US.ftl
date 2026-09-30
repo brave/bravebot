@@ -132,6 +132,12 @@ cli-agent-no-such-definition-unread =
 # names no way to address another definition. The model is the one the definition names.
 cli-plain-working-under = every prompt is addressed to { $definition }
 cli-plain-working-under-model = every prompt is addressed to { $definition }, which asks for { $model }
+# The flag that asks to be asked about nothing, where a settings layer made that mode unreachable.
+# The file is named because the flag is documented and works everywhere else, so a refusal without
+# it sends somebody looking for a fault in the program.
+cli-bypass-unreachable =
+    --dangerously-skip-permissions is refused: permissions.bypassUnreachable in { $path } makes
+    that mode unreachable here. Remove it there, or run without the flag.
 cli-mode-needs-a-name = --mode requires one of { $names }
 cli-model-needs-a-name = --model requires the name of a model
 cli-effort-needs-a-level = --effort requires one of { $levels }
@@ -349,6 +355,10 @@ doctor-settings-provider-ignored =
     provider in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-model-ignored =
     model in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+# A key that only ever refuses, spelled as something other than a boolean. It is read as absence, so
+# the session is as permissive as one that named nothing, and nothing else would say so.
+doctor-settings-narrowing-ignored =
+    { $key } in { $path } is not a boolean, so it is read as absent and refuses nothing
 # An allow rule a layer that may not grant one wrote. Named one at a time and with its file, for
 # the reason the vetting line gives: a rule that looks like configuration and does nothing is the
 # one worth saying out loud.

@@ -74,6 +74,12 @@
 //!   the person's traffic through a backend they never chose. It is read from the home layer
 //!   alone, for the same reason.
 //!
+//! Two more names in that block are read from every layer and merged unlike anything else here.
+//! `permissions.readsStayInWorkspace` and `permissions.bypassUnreachable` only ever refuse, so a
+//! checkout asking for one takes nothing from whoever cloned it, and the merge takes the strictest
+//! value any layer named rather than the value of the strongest layer: there is no raisable
+//! counterpart for a file above to lift one with. See [`Narrowing`] and `docs/specs/permissions.md`.
+//!
 //! They do not become the process environment. Values are consulted where a variable would be
 //! consulted, and handed to a subprocess only where that subprocess is the thing they configure.
 //! Installing them globally would put every name in the block in front of every command `run`
@@ -107,6 +113,12 @@ const VETTING_BLOCK: &str = "vetting";
 /// Named as a constant for the same reason [`VETTING_BLOCK`] is: the per-layer look that decides
 /// whether the file saying it was entitled to, and the parse of one root, both spell it here.
 const PROVIDER_BLOCK: &str = "provider";
+
+/// The block holding the rules and the two keys that refuse without naming what they refuse.
+///
+/// Named as a constant for the reason [`VETTING_BLOCK`] is: the rule lists and [`narrowing_stated`]
+/// both look inside it, and a second spelling would be a key read out of a block nothing writes.
+const PERMISSIONS_BLOCK: &str = "permissions";
 
 /// The most of it worth reading.
 ///
@@ -201,6 +213,25 @@ pub struct Settings {
     /// the one worth saying out loud. Somebody who wrote it into a checkout has to be told it was
     /// ignored, not left to wonder why the prompt still appears.
     vetting_ignored: Vec<PathBuf>,
+    /// The strictest thing any layer said about the two `permissions` keys that only refuse.
+    ///
+    /// Settled by [`Settings::layered`] rather than read off the merged root, because the merge
+    /// takes the stronger layer's value a name at a time and these take the strictest value any
+    /// layer named (PERM-18): a checkout asking for the restriction would otherwise be undone by a
+    /// person's own file that had answered `false`, or by one read later that said nothing.
+    narrowing: Narrowing,
+    /// The layers that asked for one of those restrictions, with the key, weakest first.
+    ///
+    /// Kept because every refusal made under one of these keys has to name the reason, and the file
+    /// that asked for it is the whole of what somebody can act on: a session refusing a path with
+    /// no file named is a person searching four layers for a line they did not write.
+    narrowed_by: Vec<(PathBuf, &'static str)>,
+    /// The layers that named one of those keys as something other than a boolean, with the key.
+    ///
+    /// Kept for the reason `vetting_ignored` is kept: a key that looks like confinement and does
+    /// nothing is the one worth saying out loud, and somebody who quoted `"true"` has to be told it
+    /// was read as absence rather than left to believe the tools are confined.
+    narrowing_unreadable: Vec<(PathBuf, &'static str)>,
     /// The `allow` entries a layer not entitled to grant one wrote, with the file each came from.
     ///
     /// Kept for the reason `vetting_ignored` is kept, and it matters more: an `allow` entry is the
@@ -441,6 +472,12 @@ impl Settings {
         // file a name came from and this is the one name where that decides whether it is obeyed.
         let mut vetting = None;
         let mut vetting_ignored = Vec::new();
+        // Settled per layer as well, and for the opposite reason: every layer may ask for one of
+        // these, and what is wanted is the strictest thing any of them said rather than what the
+        // last one to speak said. The merged root can only give the second (PERM-18).
+        let mut narrowing = Narrowing::default();
+        let mut narrowed_by: Vec<(PathBuf, &'static str)> = Vec::new();
+        let mut narrowing_unreadable: Vec<(PathBuf, &'static str)> = Vec::new();
         // Settled per layer for the same reason, and for a stronger one: the merge unions every
         // list, so an `allow` entry a checkout wrote would otherwise be indistinguishable from one
         // the person wrote in their own file. See [`Settings::allow_ignored`].
@@ -493,6 +530,19 @@ impl Settings {
                     false => vetting_ignored.push(path.clone()),
                 }
             }
+            // Every layer, the person's own and a checkout's alike (PERM-18). Neither key can be
+            // lifted by a layer above, so which file asked decides only what a refusal names.
+            let (stated, unreadable) = narrowing_stated(&root);
+            narrowing = narrowing.strictest(stated);
+            if stated.reads_stay_in_workspace == Some(true) {
+                narrowed_by.push((path.clone(), Narrowing::READS_STAY_IN_WORKSPACE));
+            }
+            if stated.bypass_unreachable == Some(true) {
+                narrowed_by.push((path.clone(), Narrowing::BYPASS_UNREACHABLE));
+            }
+            for key in unreadable {
+                narrowing_unreadable.push((path.clone(), key));
+            }
             if root.contains_key("model") {
                 model_above_home = !own;
             }
@@ -542,6 +592,11 @@ impl Settings {
         // cannot reach this even where the home layer said nothing.
         settings.vetting = vetting;
         settings.vetting_ignored = vetting_ignored;
+        // Overwritten for the reason above it: the merged root holds whichever layer spoke last
+        // about either key, and what is in force is the strictest thing any of them said.
+        settings.narrowing = narrowing;
+        settings.narrowed_by = narrowed_by;
+        settings.narrowing_unreadable = narrowing_unreadable;
         // Overwritten for the same reason, and the merged block is what it replaces: `deny` and
         // `ask` keep every layer's entries because both only ever narrow, and this one is put back
         // to the entries a layer entitled to grant wrote.
@@ -617,6 +672,12 @@ impl Settings {
             // from and so the only one entitled to answer.
             vetting: auto_vetting(root),
             vetting_ignored: Vec::new(),
+            // Read here so one root's worth can be parsed on its own, which is what the managed
+            // layer is, and overwritten by [`Settings::layered`] for the four layers it reads: the
+            // strictest answer is a fact about the set of them rather than about one root.
+            narrowing: narrowing_stated(root).0,
+            narrowed_by: Vec::new(),
+            narrowing_unreadable: Vec::new(),
             // Empty here, and filled by [`Settings::layered`] for the same reason: one root does
             // not say which file it was read out of, and that is the whole of what decides whether
             // an `allow` entry in it grants anything.
@@ -705,6 +766,41 @@ impl Settings {
     /// The files that named `vetting.auto` and were not obeyed, weakest first, for `doctor`.
     pub fn vetting_ignored(&self) -> impl Iterator<Item = &Path> {
         self.vetting_ignored.iter().map(PathBuf::as_path)
+    }
+
+    /// The strictest thing any layer in force said about the two keys that only refuse.
+    ///
+    /// Every layer may say it, unlike `vetting.auto`, and no layer can lift what another asked for
+    /// (PERM-18). A caller that also reads the managed layer takes
+    /// [`Narrowing::strictest`] of the two, that file being another layer and the strongest.
+    pub fn narrowing(&self) -> Narrowing {
+        self.narrowing
+    }
+
+    /// The weakest layer that asked for `key`, where any layer asked for it.
+    ///
+    /// The file rather than the answer, because the answer is [`Settings::narrowing`] and this is
+    /// what a refusal has to name: the point of a standing refusal is that nothing a session does
+    /// explains it, so the line that asked for it is the only thing a person can act on. The
+    /// weakest of them, since that is the file that established the restriction; a layer above
+    /// restating it adds nothing to take away.
+    pub fn narrowed_by(&self, key: &str) -> Option<&Path> {
+        self.narrowed_by
+            .iter()
+            .find(|(_, named)| *named == key)
+            .map(|(path, _)| path.as_path())
+    }
+
+    /// The layers that named one of those keys as something other than a boolean, with the key.
+    ///
+    /// For `doctor` and for the session that read the file. A value that is not a boolean is
+    /// absence ([`Narrowing`]), and a refusal somebody believes is in force and is not is the one
+    /// failure here worth interrupting them over, which is PERM-11's reasoning about a rule applied
+    /// to a key.
+    pub fn narrowing_unreadable(&self) -> impl Iterator<Item = (&Path, &str)> {
+        self.narrowing_unreadable
+            .iter()
+            .map(|(path, key)| (path.as_path(), *key))
     }
 
     /// The `allow` entries that were dropped, and the file each was written in, weakest first.
@@ -801,6 +897,11 @@ impl Settings {
             && self.effort.is_none()
             && self.editor_mode.is_none()
             && self.vetting.is_none()
+            && self.narrowing.is_empty()
+            // A key named as something other than a boolean said something too, and `doctor` names
+            // the file that holds it, so reading it as no settings at all would contradict the line
+            // under it.
+            && self.narrowing_unreadable.is_empty()
             && self.keybindings.is_empty()
             && self.attribution.is_empty()
             && self.search.is_empty()
@@ -891,6 +992,7 @@ impl Settings {
             .chain(self.effort.is_some().then_some("effort"))
             .chain(self.editor_mode.is_some().then_some("editorMode"))
             .chain(self.vetting.is_some().then_some("vetting.auto"))
+            .chain(self.narrowing.named())
             .chain((!self.keybindings.is_empty()).then_some("keybindings"))
             .chain(
                 self.attribution
@@ -1106,6 +1208,133 @@ fn auto_vetting(root: &serde_json::Map<String, serde_json::Value>) -> Option<boo
         },
         _ => None,
     }
+}
+
+/// The `permissions` keys that only ever refuse, as one layer stated them.
+///
+/// Each is absence until a file says otherwise, the way `vetting.auto` is: a file naming neither
+/// behaves exactly as one did before the keys existed (PERM-12). `true` is the restrictive answer,
+/// and anything that is not a boolean is absence, which is the reading
+/// [`auto_vetting`] gives its own key and for the same reason: a file that meant to ask for a
+/// refusal and mistyped the value leaves the session as permissive as it was, and says so, rather
+/// than confining it on the strength of a `"true"` somebody quoted.
+///
+/// Values rather than files, because a single root is where these are read from. Which file said
+/// what is [`Settings::narrowed_by`], and it is a question only [`Settings::layered`] can answer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Narrowing {
+    /// Whether the file tools refuse a path outside the workspace whatever else is written
+    /// (PERM-16).
+    pub reads_stay_in_workspace: Option<bool>,
+    /// Whether the mode that asks about nothing is unreachable on this machine (PERM-17,
+    /// MODE-5).
+    pub bypass_unreachable: Option<bool>,
+}
+
+impl Narrowing {
+    /// The key that keeps the file tools inside the workspace, as a `permissions` block spells it.
+    pub const READS_STAY_IN_WORKSPACE: &'static str = "readsStayInWorkspace";
+
+    /// The key that makes the bypass mode unreachable, as a `permissions` block spells it.
+    pub const BYPASS_UNREACHABLE: &'static str = "bypassUnreachable";
+
+    /// The strictest of what two files said, key by key.
+    ///
+    /// Not the stronger file's answer. Both keys only ever refuse, so there is no raisable
+    /// counterpart for a stronger layer to lift one with, and the merge every other name here gets
+    /// would let a file read later take away a refusal a file read earlier asked for. A weaker
+    /// layer asking for the restriction gets it (PERM-18).
+    #[must_use]
+    pub fn strictest(self, other: Self) -> Self {
+        Self {
+            reads_stay_in_workspace: strictest(
+                self.reads_stay_in_workspace,
+                other.reads_stay_in_workspace,
+            ),
+            bypass_unreachable: strictest(self.bypass_unreachable, other.bypass_unreachable),
+        }
+    }
+
+    /// Whether the file tools are to stay inside the workspace.
+    pub fn keeps_reads_in_the_workspace(self) -> bool {
+        self.reads_stay_in_workspace == Some(true)
+    }
+
+    /// Whether the bypass mode is to be unreachable.
+    pub fn makes_bypass_unreachable(self) -> bool {
+        self.bypass_unreachable == Some(true)
+    }
+
+    /// Whether either key was named at all.
+    pub fn is_empty(self) -> bool {
+        self.reads_stay_in_workspace.is_none() && self.bypass_unreachable.is_none()
+    }
+
+    /// The keys a file named, as a report names them, whichever way it answered.
+    ///
+    /// `false` is among them: a file that named a key said something, and a report that left it out
+    /// would say the file set nothing one line above the path of the file that holds it.
+    ///
+    /// The lifetime is the caller's rather than `'static`, because these are chained onto a report's
+    /// own borrowed names and a rigid `'static` there would be the one item type the rest of the
+    /// chain could not be.
+    pub fn named<'a>(self) -> impl Iterator<Item = &'a str> {
+        self.reads_stay_in_workspace
+            .is_some()
+            .then_some("permissions.readsStayInWorkspace")
+            .into_iter()
+            .chain(
+                self.bypass_unreachable
+                    .is_some()
+                    .then_some("permissions.bypassUnreachable"),
+            )
+    }
+}
+
+/// The stricter of two answers about a key that can only refuse.
+///
+/// `None` is nobody having named it, which is the weakest of the three: absence cannot beat a file
+/// that said `false`, because a file that said `false` still named the key and a report has to say
+/// so.
+fn strictest(one: Option<bool>, other: Option<bool>) -> Option<bool> {
+    match (one, other) {
+        (Some(true), _) | (_, Some(true)) => Some(true),
+        (Some(false), _) | (_, Some(false)) => Some(false),
+        (None, None) => None,
+    }
+}
+
+/// The two refusing keys of one layer's `permissions` block, with every key it spelled as something
+/// other than a boolean named beside them.
+///
+/// The unreadable ones are carried out rather than dropped, on PERM-11's reasoning applied to a key
+/// rather than a rule: a mistyped `readsStayInWorkspace` reads to whoever wrote it as confinement
+/// that is in force, and one dropped in silence is the failure worth interrupting somebody over.
+/// The caller pairs each with the file it was written in, which is the half a root cannot say.
+pub(crate) fn narrowing_stated(
+    root: &serde_json::Map<String, serde_json::Value>,
+) -> (Narrowing, Vec<&'static str>) {
+    let Some(serde_json::Value::Object(block)) = root.get(PERMISSIONS_BLOCK) else {
+        return (Narrowing::default(), Vec::new());
+    };
+    let mut unreadable = Vec::new();
+    let mut stated = |key: &'static str| match block.get(key) {
+        Some(serde_json::Value::Bool(asked)) => Some(*asked),
+        Some(_) => {
+            unreadable.push(key);
+            None
+        }
+        None => None,
+    };
+    let reads_stay_in_workspace = stated(Narrowing::READS_STAY_IN_WORKSPACE);
+    let bypass_unreachable = stated(Narrowing::BYPASS_UNREACHABLE);
+    (
+        Narrowing {
+            reads_stay_in_workspace,
+            bypass_unreachable,
+        },
+        unreadable,
+    )
 }
 
 /// Whether a rule that *grants* may be read from this layer.
@@ -1482,8 +1711,12 @@ fn run_deadlines(root: &serde_json::Map<String, serde_json::Value>) -> RunDeadli
 /// `defaultMode` is read by nothing yet. A file setting it is not an error and not a warning here:
 /// [`Settings::parse`] reads what the file says and reports it, and which modes exist is a
 /// question for whoever consults them.
+///
+/// The two keys of the block that refuse without naming what they refuse are read by
+/// [`narrowing_stated`] instead, and are not rules: neither names a family, a path or a host, so
+/// neither is a line this hands to the rule language. See [`Narrowing`].
 fn permission_lists(root: &serde_json::Map<String, serde_json::Value>) -> PermissionLists {
-    let Some(serde_json::Value::Object(block)) = root.get("permissions") else {
+    let Some(serde_json::Value::Object(block)) = root.get(PERMISSIONS_BLOCK) else {
         return PermissionLists::default();
     };
     let mut unreadable = Vec::new();
@@ -3155,6 +3388,200 @@ mod tests {
             Settings::parse(r#"{"vetting": {"auto": false}}"#).auto_vetting(),
             Some(false)
         );
+    }
+
+    /// PERM-12 for the two keys that refuse without naming what they refuse: a file naming neither
+    /// behaves exactly as one did before they existed. The failure this rejects is a default of
+    /// `true`, which would confine every session on every machine that never asked.
+    #[test]
+    fn a_file_naming_neither_refusing_key_refuses_nothing() {
+        for settings in [
+            Layers::new("narrowing-absent").read(),
+            Layers::new("narrowing-other-keys")
+                .global(r#"{"permissions": {"deny": ["Read(./.env)"]}}"#)
+                .read(),
+        ] {
+            let narrowing = settings.narrowing();
+            assert!(narrowing.is_empty(), "a key nobody named was read as named");
+            assert!(!narrowing.keeps_reads_in_the_workspace());
+            assert!(!narrowing.makes_bypass_unreachable());
+            assert_eq!(settings.narrowed_by(Narrowing::BYPASS_UNREACHABLE), None);
+            assert_eq!(settings.narrowing_unreadable().count(), 0);
+            assert_eq!(settings.names().collect::<Vec<_>>(), Vec::<&str>::new());
+        }
+        assert!(Layers::new("narrowing-nothing").read().is_empty());
+    }
+
+    /// PERM-18: every layer may ask for either restriction, unlike `vetting.auto`, because neither
+    /// can take anything from the person running the session. The file that asked is recorded so a
+    /// refusal can name it.
+    #[test]
+    fn any_layer_may_ask_for_either_refusal() {
+        let asked = r#"{"permissions": {"readsStayInWorkspace": true, "bypassUnreachable": true}}"#;
+        for (name, layer) in [
+            ("home", Layers::global as fn(Layers, &str) -> Layers),
+            ("project", Layers::project),
+            ("local", Layers::local),
+            ("named", Layers::named),
+        ] {
+            let layers = layer(Layers::new(&format!("narrowing-{name}")), asked);
+            let settings = layers.read();
+            let narrowing = settings.narrowing();
+            assert!(
+                narrowing.keeps_reads_in_the_workspace(),
+                "the {name} layer's readsStayInWorkspace was not obeyed"
+            );
+            assert!(
+                narrowing.makes_bypass_unreachable(),
+                "the {name} layer's bypassUnreachable was not obeyed"
+            );
+            let written = settings
+                .layers()
+                .last()
+                .expect("the layer that was read")
+                .to_path_buf();
+            assert_eq!(
+                settings.narrowed_by(Narrowing::READS_STAY_IN_WORKSPACE),
+                Some(written.as_path()),
+                "{name}: the file that asked was not recorded"
+            );
+            assert_eq!(
+                settings.narrowed_by(Narrowing::BYPASS_UNREACHABLE),
+                Some(written.as_path())
+            );
+            assert_eq!(settings.narrowing_unreadable().count(), 0);
+            assert_eq!(
+                settings.names().collect::<Vec<_>>(),
+                vec![
+                    "permissions.readsStayInWorkspace",
+                    "permissions.bypassUnreachable"
+                ]
+            );
+        }
+    }
+
+    /// PERM-18: the strictest value any layer named, not the value of the strongest layer. The
+    /// failure this rejects is the merge every other name here gets, which would let the layer read
+    /// last take away a refusal a weaker file asked for.
+    #[test]
+    fn a_stronger_layer_cannot_lift_what_a_weaker_one_asked_for() {
+        let asked = r#"{"permissions": {"readsStayInWorkspace": true, "bypassUnreachable": true}}"#;
+        let lifted =
+            r#"{"permissions": {"readsStayInWorkspace": false, "bypassUnreachable": false}}"#;
+        for (name, settings) in [
+            (
+                "a checkout asking and the person's own file saying no",
+                Layers::new("narrowing-project-asks")
+                    .global(lifted)
+                    .project(asked)
+                    .read(),
+            ),
+            (
+                "the person's own file asking and a checkout saying no",
+                Layers::new("narrowing-home-asks")
+                    .global(asked)
+                    .project(lifted)
+                    .read(),
+            ),
+            (
+                "a checkout asking and the file a command line named saying no",
+                Layers::new("narrowing-named-lifts")
+                    .project(asked)
+                    .named(lifted)
+                    .read(),
+            ),
+            (
+                "the local layer asking and nothing above it saying anything",
+                Layers::new("narrowing-local-asks")
+                    .global(r#"{"permissions": {"deny": ["Read(./.env)"]}}"#)
+                    .local(asked)
+                    .read(),
+            ),
+        ] {
+            let narrowing = settings.narrowing();
+            assert!(
+                narrowing.keeps_reads_in_the_workspace(),
+                "{name}: readsStayInWorkspace was lifted"
+            );
+            assert!(
+                narrowing.makes_bypass_unreachable(),
+                "{name}: bypassUnreachable was lifted"
+            );
+        }
+    }
+
+    /// Both keys are read together and neither answers for the other: a file asking for one is a
+    /// file that said nothing about the second, and a session that confined both would be refusing
+    /// on a line nobody wrote.
+    #[test]
+    fn each_refusing_key_is_read_on_its_own() {
+        let reads = Layers::new("narrowing-reads-only")
+            .global(r#"{"permissions": {"readsStayInWorkspace": true}}"#)
+            .read();
+        assert!(reads.narrowing().keeps_reads_in_the_workspace());
+        assert!(!reads.narrowing().makes_bypass_unreachable());
+        assert_eq!(reads.narrowed_by(Narrowing::BYPASS_UNREACHABLE), None);
+
+        let bypass = Layers::new("narrowing-bypass-only")
+            .global(r#"{"permissions": {"bypassUnreachable": true}}"#)
+            .read();
+        assert!(bypass.narrowing().makes_bypass_unreachable());
+        assert!(!bypass.narrowing().keeps_reads_in_the_workspace());
+        assert_eq!(bypass.narrowed_by(Narrowing::READS_STAY_IN_WORKSPACE), None);
+    }
+
+    /// PERM-16 and PERM-17: a value that is not a boolean is absence, and the file is named so that
+    /// somebody who quoted `"true"` is told the session is as permissive as one naming nothing. The
+    /// failure this rejects is reading any value as the restriction, which would confine a session
+    /// on a line its author mistyped and leave the mistake invisible.
+    #[test]
+    fn a_refusing_key_that_is_not_a_boolean_is_absence_and_is_named() {
+        for spelled in [r#""true""#, "1", "null", "[true]", "{}"] {
+            let layers = Layers::new("narrowing-unreadable").global(&format!(
+                r#"{{"permissions": {{"readsStayInWorkspace": {spelled}, "bypassUnreachable": {spelled}}}}}"#
+            ));
+            let home = layers.home.join(SETTINGS_FILE);
+            let settings = layers.read();
+            assert!(
+                settings.narrowing().is_empty(),
+                "{spelled} was read as an answer"
+            );
+            assert_eq!(
+                settings
+                    .narrowing_unreadable()
+                    .map(|(path, key)| (path.to_path_buf(), key))
+                    .collect::<Vec<_>>(),
+                vec![
+                    (home.clone(), Narrowing::READS_STAY_IN_WORKSPACE),
+                    (home, Narrowing::BYPASS_UNREACHABLE)
+                ],
+                "{spelled} was dropped without being named"
+            );
+            assert!(
+                !settings.is_empty(),
+                "{spelled}: a file `doctor` names was reported as no settings at all"
+            );
+        }
+    }
+
+    /// A layer that says `false` still named the key, so a report says so, and it does not beat a
+    /// layer that asked for the restriction ([`strictest`]). Absence is the weaker of the two.
+    #[test]
+    fn saying_no_to_a_refusing_key_is_an_answer_rather_than_absence() {
+        let settings = Layers::new("narrowing-false")
+            .global(r#"{"permissions": {"readsStayInWorkspace": false}}"#)
+            .read();
+        assert_eq!(settings.narrowing().reads_stay_in_workspace, Some(false));
+        assert!(!settings.narrowing().keeps_reads_in_the_workspace());
+        assert_eq!(
+            settings.narrowed_by(Narrowing::READS_STAY_IN_WORKSPACE),
+            None
+        );
+        assert_eq!(
+            settings.names().collect::<Vec<_>>(),
+            vec!["permissions.readsStayInWorkspace"]
+        );
+        assert!(!settings.is_empty());
     }
 
     /// SERVERS-1: no settings layer declares a server, the person's own included, and every one

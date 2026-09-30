@@ -5,7 +5,7 @@
 //! file, and a cap that is not passed on is a cap nobody in the graphical front end ever gets.
 
 use bravebot_agent::workspace::{MAX_SEARCH_FILES, Workspace};
-use bravebot_config::Settings;
+use bravebot_config::{Managed, Settings};
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::RecordingSink;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
@@ -85,7 +85,8 @@ fn a_turn_searches_under_the_file_cap_the_project_settings_name() {
     }
 
     let settings = settings_of(root);
-    let workspace = turn_workspace(root.to_path_buf(), &settings).expect("a workspace");
+    let workspace =
+        turn_workspace(root.to_path_buf(), &settings, &Managed::default()).expect("a workspace");
 
     assert!(
         search_was_partial(&workspace),
@@ -114,7 +115,8 @@ fn a_turn_searches_under_the_time_cap_the_project_settings_name() {
     .expect("a settings file");
 
     let settings = settings_of(root);
-    let workspace = turn_workspace(root.to_path_buf(), &settings).expect("a workspace");
+    let workspace =
+        turn_workspace(root.to_path_buf(), &settings, &Managed::default()).expect("a workspace");
 
     assert_eq!(
         workspace.search_caps(),
@@ -134,7 +136,8 @@ fn caps_nobody_named_leave_a_turn_on_the_built_in_ones() {
     let root = held.path();
 
     let settings = settings_of(root);
-    let configured = turn_workspace(root.to_path_buf(), &settings).expect("a workspace");
+    let configured =
+        turn_workspace(root.to_path_buf(), &settings, &Managed::default()).expect("a workspace");
     let built_in = Workspace::new(root).expect("a workspace");
 
     assert_eq!(configured.search_caps(), built_in.search_caps());
@@ -151,7 +154,8 @@ fn a_turn_runs_on_the_project_it_was_given() {
     let root: PathBuf = held.path().to_path_buf();
 
     let settings = settings_of(&root);
-    let workspace = turn_workspace(root.clone(), &settings).expect("a workspace");
+    let workspace =
+        turn_workspace(root.clone(), &settings, &Managed::default()).expect("a workspace");
 
     assert_eq!(
         workspace.root(),
@@ -448,4 +452,40 @@ mod through_a_turn {
             "the project asked for four files and the search walked the whole tree"
         );
     }
+}
+
+/// PERM-16 for this front end, which is the same wiring question the caps are: a project layer
+/// asking for the file tools to stay inside the workspace reaches the workspace a turn is given, or
+/// it reaches nothing here at all. The bridge opens a resumed session's directories again on every
+/// turn, so a restriction that did not arrive would be one this surface silently did without.
+///
+/// The failure this rejects is a front end that reads the caps out of the settings and leaves this
+/// key behind, which no test of the agent crate can see.
+#[test]
+fn a_turn_is_held_inside_the_project_where_its_settings_ask_for_it() {
+    let held = project("reads-inside");
+    let root = held.path();
+    std::fs::create_dir_all(root.join(".bravebot")).expect("a settings directory");
+    std::fs::write(
+        root.join(".bravebot/settings.json"),
+        r#"{"permissions": {"readsStayInWorkspace": true}}"#,
+    )
+    .expect("a settings file");
+
+    let settings = settings_of(root);
+    let workspace =
+        turn_workspace(root.to_path_buf(), &settings, &Managed::default()).expect("a workspace");
+    assert!(
+        workspace.reads_stay_inside(),
+        "the key the project layer wrote did not reach the workspace a turn runs on"
+    );
+
+    let unasked = project("reads-unasked");
+    let alone = settings_of(unasked.path());
+    assert!(
+        !turn_workspace(unasked.path().to_path_buf(), &alone, &Managed::default())
+            .expect("a workspace")
+            .reads_stay_inside(),
+        "a project that asked for nothing was confined anyway"
+    );
 }

@@ -674,7 +674,9 @@ knows it may ask for, and a delegate runs under whatever the session that starte
     "deny": ["Read(.env)", "Edit(src/**)", "Bash(curl *)"],
     "ask": ["Bash(git push *)"],
     "allow": ["Bash(cargo test)", "Bash(ls *)", "WebFetch(domain:docs.rs)"],
-    "additionalDirectories": ["../shared-lib"]
+    "additionalDirectories": ["../shared-lib"],
+    "readsStayInWorkspace": true,
+    "bypassUnreachable": true
   }
 }
 ```
@@ -683,6 +685,10 @@ The same three lists Claude Code keeps, with the same spellings, so a block copi
 `~/.claude/settings.json` works unedited. What a rule is allowed to decide, and the reason it may
 never trust a command's output, is on
 [Approvals and permissions](../security/permissions.md#rules-you-write-down-in-advance).
+
+The last two keys are not rules. Every rule names the thing it refuses, so a path nobody wrote down is
+a path no rule covers; these two state a standing refusal instead, and are described under
+[two refusals you do not have to enumerate](#two-refusals-you-do-not-have-to-enumerate) below.
 
 `deny` and `ask` work from any of the files. `allow` works from `~/.bravebot/settings.json` and from
 a `--settings` file outside your project; a project's own entries are proposed to you in a box when
@@ -793,6 +799,32 @@ the file was read, and the rest of the file still applies.
 The rules are read **once per session**, so a file you edit while a session is open describes the next
 one. A session with no `permissions` block behaves exactly as one did before the block existed: every
 gate asks what it asked before, and nothing is refused for being unmentioned.
+
+#### Two refusals you do not have to enumerate
+
+| Key | What `true` does |
+|---|---|
+| `readsStayInWorkspace` | the file tools refuse every path outside the working directory, in every mode, whatever a rule, a mode, or an answer you give during the session would otherwise open. `/add-dir` and `--add-dir` are refused, and a name in `additionalDirectories` is refused rather than put to you |
+| `bypassUnreachable` | the mode that asks about nothing is out of reach, and `--dangerously-skip-permissions` is refused with the key and the file named rather than ignored |
+
+Both are **off until a file turns one on**, exactly as [`vetting`](#vetting) is: a file naming neither
+behaves exactly as one did before the keys existed. `true` is the restrictive answer, and anything that
+is not a boolean is absence, so `"true"` as a string, a `1` or a `null` refuses nothing and is reported
+by `doctor` rather than obeyed.
+
+**Both are read from every file, and the strictest answer wins.** Your own file, a checkout's, the
+machine-local one, a `--settings` file and [the one an administrator pinned](#pinned-by-an-administrator)
+may each ask for either, and a file that asks gets it: the usual rule that the closest file wins does
+not apply, because neither key can grant anything, so there is nothing for a file read later to lift.
+Writing `false` therefore does not switch off what another file asked for. This is why they are not
+restricted to `~/.bravebot/settings.json` the way `vetting.auto` is: a checkout asking for one takes
+nothing away from you.
+
+`readsStayInWorkspace` governs the file tools, as the path rules do. It does not confine a program
+`run` starts, and `/cd` still moves the working directory: the tools stay inside whatever the working
+directory is, so nothing is open beside it at any moment. It is read when the session opens, so a
+session already confined stays confined wherever it moves, and one that moves into a checkout asking
+for it is confined from the next session there.
 
 ### `attribution`
 
@@ -906,15 +938,25 @@ to say so.
 **Only these names may be pinned**, being the ones that decide where a request goes:
 `BRAVE_AI_CHAT_ENDPOINT`, `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`,
 `AWS_PROFILE`, the three `ANTHROPIC_DEFAULT_*_MODEL` tiers, and the `provider` block. Every other name
-in the file decides nothing, the signing key and key id included, save the server lists: `"mcp": {
-"allow": [...], "deny": [...] }` name the [MCP servers](mcp-servers.md#refused-by-an-administrator)
+in the file decides nothing, the signing key and key id included, save the server lists and the two
+refusals: `"mcp": { "allow": [...], "deny": [...] }` name the
+[MCP servers](mcp-servers.md#refused-by-an-administrator)
 a session on the machine may start and may not, by host or by command. The file can keep a server
 from starting and never add one. A name it does not pin resolves exactly as it would with no such
 file.
 
+`"permissions": { "readsStayInWorkspace": true, "bypassUnreachable": true }` are read here on the same
+reasoning: each can only take capability away, never add any, so keeping the file tools inside the
+working directory or putting the mode that asks about nothing out of reach is something two parties can
+have a legitimate say in. Neither is pinned in the sense the variables are. A name in the list above is
+answered by this file and nothing else is consulted for it; these two take the strictest answer any
+file gave, so somebody may ask for either where this file did not, and no file of theirs can lift it
+where it did. The rules themselves are not read here: a rule names a path, a program or a host, which
+is deciding what a session may work on rather than whether it may leave the tree at all.
+
 A layer that can pin a preference is a layer somebody uses to pin one. What two parties have a
-legitimate say in is where a request goes and whose account pays for it; which theme is on and which
-keys do what are neither.
+legitimate say in is where a request goes, whose account pays for it, and what a session on the machine
+may reach; which theme is on and which keys do what are neither.
 
 **No credential is read from this file.** A gateway entry's `apiKey` is dropped and the entry's host,
 models and variable names are honoured without it. Everyone on the machine can read this file, so a

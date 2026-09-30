@@ -120,6 +120,23 @@ fn main() -> ExitCode {
     {
         return stopped_before_the_turn(as_json, Ending::Argument, refused);
     }
+
+    // After the flag above and after the layer named beside it, because a file `--settings` names is
+    // one of the layers that may say this. MODE-5: the flag opens the bypass mode unless a layer in
+    // force made it unreachable, and then the flag is refused with the file named rather than
+    // ignored. Refused rather than downgraded to asking: a run that was told to stop asking and
+    // carried on with a notice is a run whose author believes it is unattended.
+    if skip_permissions
+        && let Some(path) =
+            bypass_made_unreachable(&bravebot_config::Settings::load(), &Managed::load())
+    {
+        return stopped_before_the_turn(
+            as_json,
+            Ending::Argument,
+            t!(cli_bypass_unreachable, path = path.display().to_string()),
+        );
+    }
+
     args.extend(foreign);
 
     match args.first().map(String::as_str) {
@@ -250,6 +267,32 @@ fn take_skip_permissions(args: &mut Vec<String>) -> bool {
     let asked = args.len();
     args.retain(|arg| arg != "--dangerously-skip-permissions");
     args.len() != asked
+}
+
+/// The file that made the bypass mode unreachable, where a layer in force asked for it (PERM-17).
+///
+/// The strictest thing any layer said, the managed file among them: both keys only refuse, so there
+/// is nothing for the strongest layer to lift and no ordering to resolve (PERM-18). The file is what
+/// comes back rather than a boolean, because a flag refused without naming where the refusal was
+/// written is a person reading the help for a flag that is documented and does not work.
+fn bypass_made_unreachable(
+    settings: &bravebot_config::Settings,
+    managed: &Managed,
+) -> Option<PathBuf> {
+    if !settings
+        .narrowing()
+        .strictest(managed.narrowing())
+        .makes_bypass_unreachable()
+    {
+        return None;
+    }
+    // The settings layers first, weakest of them first, and the managed file where none of them
+    // said it: what is wanted is the file somebody can open, and a person told about their own
+    // checkout's line has somewhere to go that a person told about `/etc` does not.
+    settings
+        .narrowed_by(bravebot_config::Narrowing::BYPASS_UNREACHABLE)
+        .map(Path::to_path_buf)
+        .or_else(|| managed.path().map(Path::to_path_buf))
 }
 
 /// Take `--settings <path>` out of the arguments, answering with the file it named.
@@ -683,7 +726,7 @@ fn run_task(args: &[String], skip_permissions: bool, agent: Option<String>) -> E
 
     let settings = bravebot_config::Settings::load();
 
-    let mut workspace = match current_workspace(&settings) {
+    let mut workspace = match current_workspace(&settings, &Managed::load()) {
         Ok(w) => w,
         Err(err) => {
             return stopped_before_the_turn(
@@ -1774,7 +1817,7 @@ fn interactive(start: bravebot_tui::app::Start, skip_permissions: bool) -> ExitC
     }
 
     let settings = bravebot_config::Settings::load();
-    let workspace = match current_workspace(&settings) {
+    let workspace = match current_workspace(&settings, &Managed::load()) {
         Ok(w) => w,
         Err(err) => return fail(Ending::Failed, t!(cli_workspace_problem, problem = err)),
     };
@@ -1899,12 +1942,24 @@ fn scratch_for_this_run(workspace: &mut Workspace) -> Option<bravebot_agent::Ses
 /// The search caps come in from the settings here rather than being read inside the workspace,
 /// because a workspace is built by every test in the tree and one that read the settings would
 /// answer differently on a machine whose owner had configured them.
-fn current_workspace(settings: &bravebot_config::Settings) -> Result<Workspace, String> {
+///
+/// Whether the file tools are held to that directory comes in the same way and from the same place
+/// (PERM-16). The managed file is read beside the settings layers, being another layer and one that
+/// may ask for this: the strictest thing any of them said is what holds (PERM-18).
+fn current_workspace(
+    settings: &bravebot_config::Settings,
+    managed: &Managed,
+) -> Result<Workspace, String> {
     let caps = settings.search();
+    let inside = settings
+        .narrowing()
+        .strictest(managed.narrowing())
+        .keeps_reads_in_the_workspace();
     std::env::current_dir()
         .map_err(|e| e.to_string())
         .and_then(|dir| Workspace::new(dir).map_err(|e| e.to_string()))
         .map(|workspace| workspace.with_search_caps(caps.files, caps.time))
+        .map(|workspace| workspace.with_reads_kept_inside(inside))
 }
 
 /// Import a Leo Premium subscription from a local Brave install.
@@ -2230,6 +2285,32 @@ fn doctor() -> ExitCode {
                 );
             }
 
+            // The same, for a key that only refuses and was spelled as something other than a
+            // boolean: it is read as absence (PERM-16, PERM-17), so somebody who quoted `"true"`
+            // has a session as permissive as one that named nothing, and nothing else would say so.
+            // The managed file among them, since an administrator who mistyped a pin is the person
+            // least likely to be told by the machine it binds.
+            for (path, key) in settings.narrowing_unreadable() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_narrowing_ignored,
+                        key = format!("permissions.{key}"),
+                        path = path.display().to_string()
+                    ),
+                );
+            }
+            for key in managed.narrowing_unreadable() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_narrowing_ignored,
+                        key = format!("permissions.{key}"),
+                        path = bravebot_config::managed_file().display().to_string()
+                    ),
+                );
+            }
+
             // The same, for the other name a checkout cannot answer on its own: an `allow` entry
             // stops a prompt, so one read out of a file that arrived with a clone would run a
             // program nobody was asked about. A rule this workspace's own record says the person
@@ -2468,7 +2549,7 @@ fn doctor() -> ExitCode {
 
     // Outside the configuration block as well: which skills a session here loads is read off two
     // directories and a trust map, and a key nothing reads is wrong whatever the configuration says.
-    if let Ok(workspace) = current_workspace(&settings) {
+    if let Ok(workspace) = current_workspace(&settings, &managed) {
         let lines = skill_keys_unread(
             &workspace,
             bravebot_agent::home::directory().as_deref(),
@@ -4651,6 +4732,101 @@ mod tests {
         drop(one_shot);
 
         assert!(shown.is_empty(), "something was asked about: {shown:?}");
+    }
+
+    /// A home directory and a checkout, each with the settings file a test writes into it.
+    ///
+    /// `Settings::layered` takes both rather than reading the process's own, so the layers under test
+    /// are the ones this wrote and not whatever the machine running the tests has configured.
+    fn layers(
+        scratch: &Scratch,
+        home: Option<&str>,
+        project: Option<&str>,
+    ) -> bravebot_config::Settings {
+        let state = scratch.directory("home");
+        let cwd = scratch.directory("cwd");
+        if let Some(text) = home {
+            std::fs::write(state.join("settings.json"), text).expect("a home layer");
+        }
+        if let Some(text) = project {
+            std::fs::create_dir_all(cwd.join(".bravebot")).expect("a project directory");
+            std::fs::write(cwd.join(".bravebot/settings.json"), text).expect("a project layer");
+        }
+        bravebot_config::Settings::layered(Some(state), Some(&cwd), None)
+    }
+
+    /// The managed file a test writes, for the layer an administrator owns.
+    fn pinned(scratch: &Scratch, text: &str) -> (Managed, PathBuf) {
+        let path = scratch.directory("managed").join("managed.json");
+        std::fs::write(&path, text).expect("a managed file");
+        (Managed::at(&path), path)
+    }
+
+    /// MODE-5 and PERM-17: the flag opens the bypass mode unless a layer in force made it
+    /// unreachable, and then it is refused with the file that asked for it named. Every layer may
+    /// ask, the managed one among them, and no layer lifts what another asked for (PERM-18).
+    ///
+    /// The failure this rejects is reading the key from the person's own file alone, which is where
+    /// `vetting.auto` is read from: a machine an administrator pinned, and a checkout a team wants
+    /// confined, would both be honoured nowhere.
+    #[test]
+    fn the_bypass_flag_is_refused_where_a_layer_made_the_mode_unreachable() {
+        let asked = r#"{"permissions": {"bypassUnreachable": true}}"#;
+        let lifted = r#"{"permissions": {"bypassUnreachable": false}}"#;
+
+        let home = Scratch::new("cli-bypass-home");
+        let settings = layers(&home, Some(asked), None);
+        assert_eq!(
+            bypass_made_unreachable(&settings, &Managed::default()).as_deref(),
+            Some(home.path.join("home/settings.json").as_path()),
+            "the person's own file could not ask for it"
+        );
+
+        let checkout = Scratch::new("cli-bypass-project");
+        let settings = layers(&checkout, None, Some(asked));
+        assert_eq!(
+            bypass_made_unreachable(&settings, &Managed::default()).as_deref(),
+            Some(checkout.path.join("cwd/.bravebot/settings.json").as_path()),
+            "a checkout could not ask for it"
+        );
+
+        let machine = Scratch::new("cli-bypass-managed");
+        let (managed, file) = pinned(&machine, asked);
+        let settings = layers(&machine, None, None);
+        assert_eq!(
+            bypass_made_unreachable(&settings, &managed).as_deref(),
+            Some(file.as_path()),
+            "an administrator could not pin it"
+        );
+
+        // The strictest value any layer named: a file saying no does not lift a pin, and the refusal
+        // names the file that did ask rather than the one that declined.
+        let contested = Scratch::new("cli-bypass-contested");
+        let (managed, file) = pinned(&contested, asked);
+        let settings = layers(&contested, Some(lifted), None);
+        assert_eq!(
+            bypass_made_unreachable(&settings, &managed).as_deref(),
+            Some(file.as_path()),
+            "a settings file lifted a pin"
+        );
+
+        // And the state every run is in unless somebody wrote the key.
+        let quiet = Scratch::new("cli-bypass-unasked");
+        for settings in [
+            layers(&quiet, None, None),
+            layers(&quiet, Some(lifted), Some(lifted)),
+            layers(
+                &quiet,
+                Some(r#"{"permissions": {"deny": ["Read(./.env)"]}}"#),
+                None,
+            ),
+        ] {
+            assert_eq!(
+                bypass_made_unreachable(&settings, &Managed::default()),
+                None,
+                "the flag was refused where no layer asked for it"
+            );
+        }
     }
 
     /// Absent is the state every run is in unless somebody typed the flag, and it is the only state
