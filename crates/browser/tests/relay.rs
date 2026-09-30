@@ -120,6 +120,17 @@ impl Extension {
         framing::write_message(to_host, &serde_json::to_vec(&message).unwrap()).unwrap();
     }
 
+    /// A reply larger than the host may send the extension, which the extension may send the host.
+    fn reply_large(&mut self, message: Value) {
+        let bytes = serde_json::to_vec(&message).unwrap();
+        let to_host = self.to_host.as_mut().unwrap();
+        to_host
+            .write_all(&u32::try_from(bytes.len()).unwrap().to_ne_bytes())
+            .unwrap();
+        to_host.write_all(&bytes).unwrap();
+        to_host.flush().unwrap();
+    }
+
     /// Closes the extension's port, as Brave does when the extension disconnects, and waits for the
     /// host to exit.
     fn disconnect(&mut self) {
@@ -485,6 +496,109 @@ fn each_reply_reaches_the_session_that_asked() {
     let second_reply = second.receive().unwrap();
     assert_eq!(first_reply, json!({"id": 1, "result": "for the first"}));
     assert_eq!(second_reply, json!({"id": 1, "result": "for the second"}));
+}
+
+/// Replies go out on one thread, in the order the extension answers them. A peer that stops reading
+/// is dropped once it has not taken its reply for long enough, and the next reply reaches the
+/// session that asked for it rather than waiting behind the stopped one for ever.
+#[test]
+fn a_peer_that_stops_reading_holds_up_no_other_session() {
+    use bravebot_browser::host::REPLY_WRITE_TIMEOUT;
+
+    let directory = installed_for(OURS);
+    let mut extension = Extension::connect(directory.path(), OURS);
+    let key = secret(directory.path());
+
+    let mut stopped = Peer::connect(directory.path(), &key);
+    stopped.send(&json!({"id": 1, "method": "read_page", "params": {}}));
+    let to_stopped = extension.request();
+    let mut reading = Peer::connect(directory.path(), &key);
+    reading.send(&json!({"id": 1, "method": "list_tabs", "params": {}}));
+    let to_reading = extension.request();
+
+    let page = "x".repeat(4 * 1024 * 1024);
+    let started = Instant::now();
+    extension.reply_large(json!({"id": to_stopped["id"], "result": page}));
+    extension.reply(json!({"id": to_reading["id"], "result": "for the reading one"}));
+
+    reading
+        .writer
+        .set_read_timeout(Some(REPLY_WRITE_TIMEOUT + WAIT))
+        .unwrap();
+    assert_eq!(
+        reading.receive(),
+        Some(json!({"id": 1, "result": "for the reading one"}))
+    );
+    // Within one bound of the stopped reply, and not one per write it took to fill the socket.
+    assert!(
+        started.elapsed() < REPLY_WRITE_TIMEOUT + Duration::from_secs(3),
+        "the reply waited {:?} behind the stopped peer",
+        started.elapsed()
+    );
+
+    // A socket the host has shut down can refuse a new timeout, which is the answer already.
+    let _ = stopped.writer.set_read_timeout(Some(WAIT));
+    let mut taken = Vec::new();
+    let ended = std::io::Read::read_to_end(&mut stopped.reader, &mut taken);
+    let dropped = match &ended {
+        Ok(_) => true,
+        Err(error) => error.kind() == std::io::ErrorKind::ConnectionReset,
+    };
+    assert!(
+        dropped && taken.len() < page.len(),
+        "the stopped peer was not dropped: {ended:?} after {} bytes",
+        taken.len()
+    );
+}
+
+/// A peer can also hold its connection by sending lines it never reads the answers to: each one
+/// that is not a request gets an error back, and once those fill the socket every one waits out its
+/// time. The first that does not go closes the connection, so the peer holds the host for at most
+/// one bound rather than one per line it sends.
+#[test]
+fn a_peer_that_sends_lines_and_does_not_read_is_closed() {
+    use bravebot_browser::host::REPLY_WRITE_TIMEOUT;
+
+    let directory = installed_for(OURS);
+    let _extension = Extension::connect(directory.path(), OURS);
+    let peer = Peer::connect(directory.path(), &secret(directory.path()));
+    let mut writer = peer.writer.try_clone().unwrap();
+    writer
+        .set_write_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+
+    let started = Instant::now();
+    let (closed, until) = mpsc::channel();
+    std::thread::spawn(move || {
+        let limit = REPLY_WRITE_TIMEOUT * 4;
+        while started.elapsed() < limit {
+            match writer.write_all(b"not json\n") {
+                Ok(()) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) => {}
+                Err(_) => {
+                    let _ = closed.send(Some(started.elapsed()));
+                    return;
+                }
+            }
+        }
+        let _ = closed.send(None);
+    });
+
+    let after = until
+        .recv_timeout(REPLY_WRITE_TIMEOUT * 4 + WAIT)
+        .expect("the writing thread finished");
+    let Some(after) = after else {
+        panic!("a peer that did not read its errors was kept open");
+    };
+    assert!(
+        after < REPLY_WRITE_TIMEOUT + WAIT,
+        "a peer that did not read its errors was closed only after {after:?}"
+    );
+    drop(peer);
 }
 
 /// Brave closes the port on a message over 1 MB, which would drop every session. The host refuses

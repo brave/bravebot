@@ -181,12 +181,19 @@ hold the turn on something only a person can fix.
 
 Several BraveBot sessions may be connected to one native host at once. The host gives each request
 an id unique across its connections before sending it to the extension, and hands each reply back
-only on the connection the request came in on, with the id that connection used.
+only on the connection the request came in on, with the id that connection used. A connection that
+does not take a line the host writes it within 5 seconds, a reply or an error, is closed, and the
+replies after it go on to theirs.
 
 **Why.** There is one extension and one native messaging port. Two sessions each numbering requests
-from 1 would otherwise receive each other's replies.
+from 1 would otherwise receive each other's replies. The host hands replies over on one thread in
+the order the extension answers, so a connection that stopped reading would otherwise hold every
+later reply to every other session.
 
 `verified-by: bravebot_browser::relay::each_reply_reaches_the_session_that_asked`
+`verified-by: bravebot_browser::relay::a_peer_that_stops_reading_holds_up_no_other_session`
+`verified-by: bravebot_browser::relay::a_peer_that_sends_lines_and_does_not_read_is_closed`
+`verified-by: bravebot_browser::host::a_peer_has_five_seconds_to_take_a_line`
 
 <a id="BROWSER-8"></a>
 ### BROWSER-8: no message to the extension exceeds the platform limit
