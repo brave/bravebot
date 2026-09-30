@@ -6,23 +6,3 @@
 # translation is useful from its first line, and what it still lacks is visible in a diff.
 # No count is kept here. Two branches that each translate a message both edit the count, so it
 # conflicts where the lists themselves merge cleanly, and a count nothing reads is wrong quietly.
-
-fr:cli-bypass-unreachable
-fr:doctor-settings-narrowing-ignored
-fr:doctor-skill-key-unread
-fr:doctor-skill-keys-unread
-fr:session-rewind-cause-backup
-fr:session-rewind-cause-command
-fr:session-rewind-cause-desktop
-fr:session-rewind-cause-hook
-fr:session-rewind-cause-scratch
-fr:session-rewind-cause-server
-fr:session-rewind-cause-unknown
-fr:session-rewind-uncovered
-fr:skill-asks-a-model
-fr:skill-asks-an-effort
-fr:skill-effort-not-a-level
-fr:skill-model-kept-for-definition
-fr:skill-model-needs-sign-in
-fr:skill-model-substituted
-fr:status-undecided
