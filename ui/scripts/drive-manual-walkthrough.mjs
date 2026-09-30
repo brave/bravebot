@@ -172,7 +172,7 @@ try {
   await page.getByText('Choose a model from your configured service', { exact: true }).waitFor()
   assert.equal(requests.length, 0, 'wrong backend must not receive the gateway token')
   await page.getByRole('button', { name: /^Choose model:/ }).click()
-  await page.getByRole('option').filter({ hasText: 'local ·' }).click()
+  await page.locator('leo-option[value="local/test"]').click()
   // Set the default for later fresh-session scenarios; the active session is fixed by the UI selection.
   writeFixtureSettings('local/test')
   steps.push(() => content('manual check ready'))

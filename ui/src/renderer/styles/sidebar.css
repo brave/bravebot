@@ -23,6 +23,7 @@
   box-sizing: border-box;
   height: var(--titlebar);
   padding: 0 var(--leo-spacing-l) 0 max(var(--leo-spacing-l), var(--lights));
+  container-type: inline-size;
   -webkit-app-region: drag;
 }
 .sidebar-tabs {
@@ -31,9 +32,22 @@
   -webkit-app-region: no-drag;
   --leo-segmented-control-width: 100%;
 }
-/* Set off from the traffic lights, which only macOS draws over the content. */
-:root:not([data-platform='other']) .sidebar-tabs { margin-left: var(--leo-spacing-m); }
-.sidebar-tabs leo-segmentedcontrolitem { flex: 1 1 0; min-width: 0; }
+/* Leo sizes the switch to its widest label and will not shrink below that, so equal segments need
+   more room than the narrowest column leaves beside the traffic lights. Wide enough, the segments
+   are equal and the switch is set off from the lights, which only macOS draws over the content.
+   Narrower, each segment takes its own label's width and the switch gives up its margin and the
+   padding inside its segments. */
+.sidebar-tabs leo-segmentedcontrolitem { flex: 1 1 0; min-width: max-content; }
+@container (min-width: 10.25rem) {
+  :root:not([data-platform='other']) .sidebar-tabs { margin-left: var(--leo-spacing-m); }
+}
+@container (max-width: 10.25rem) {
+  .sidebar-tabs { margin-right: calc(-1 * var(--leo-spacing-m)); }
+  .sidebar-tabs leo-segmentedcontrolitem {
+    flex: 0 1 auto;
+    --leo-segmented-control-item-padding: var(--leo-spacing-xs);
+  }
+}
 
 /* Each body owns the rest of the column, and the one not chosen is hidden rather than unmounted —
    a filter somebody typed and a form half filled in both survive a look at the other tab. The
