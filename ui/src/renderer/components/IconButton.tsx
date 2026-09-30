@@ -16,8 +16,8 @@ export const IconButton = forwardRef<HTMLElement, {
   label: string
   /** The accelerator, as it is written on the menu: "⌘F". */
   shortcut?: string
-  /** Whether the tooltip should say something other than the accessible name. */
-  tooltip?: string
+  /** What the tooltip says when that is not the accessible name, or `false` for none. */
+  tooltip?: string | false
   /** Said after the name by a screen reader, for state the icon alone carries (a badge). */
   description?: string
   kind?: Kind
@@ -55,7 +55,7 @@ export const IconButton = forwardRef<HTMLElement, {
       aria-controls={controls}
       aria-haspopup={hasPopup}
       aria-keyshortcuts={shortcut ? keyshortcuts(shortcut) : undefined}
-      data-tooltip={tooltip ?? label}
+      data-tooltip={tooltip === false ? undefined : (tooltip ?? label)}
       data-tooltip-shortcut={shortcut}
       data-tooltip-placement={placement}
       data-test={dataTest}

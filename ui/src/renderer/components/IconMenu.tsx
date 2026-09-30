@@ -14,7 +14,7 @@ import { IconButton } from './IconButton'
 export function IconMenu({ icon, label, tooltip, shortcut, disabled, className, triggerClassName, size = 'small', placement = 'bottom-end', onOpen, children, 'data-test': dataTest }: {
   icon: IconName
   label: string
-  tooltip?: string
+  tooltip?: string | false
   shortcut?: string
   disabled?: boolean
   className?: string

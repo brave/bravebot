@@ -484,7 +484,7 @@ export function Transcript({
           <IconButton icon="search" label="Find" tooltip="Find in conversation" shortcut="⌘F" pressed={searching}
             className="find-open" onClick={() => setSearching((value) => !value)} />
           <ExportMenu canExport={canExport} includeTools={includeTools} onToggleTools={onToggleTools} onExport={onExport} />
-          <IconMenu icon="more-horizontal" label="More" tooltip="More actions" className="conversation-more" data-test="conversation-more">
+          <IconMenu icon="more-horizontal" label="More" tooltip={false} className="conversation-more" data-test="conversation-more">
             <leo-menu-item onClick={() => afterMenu(() => setPermissions(true))}>
               <span className="menu-icon-row"><Icon name="shield-done" />Permissions…</span>
             </leo-menu-item>

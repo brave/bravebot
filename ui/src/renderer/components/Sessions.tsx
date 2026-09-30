@@ -344,7 +344,7 @@ const Session = memo(function Session({
             : info?.bot ? <BotFace seed={info.bot.avatar} size={16} /> : null}
       </span>
       <span className="session-text">
-        <span className="session-title" data-tooltip={session.title}>
+        <span className="session-title">
           {preferences?.pinned && <span className="session-pin" role="img" aria-label="Pinned"><Icon name="pin" /></span>}
           {forked && <span className="fork-mark"><ForkIcon /></span>}
           <span className="session-name">{session.title}</span>
@@ -368,7 +368,7 @@ const Session = memo(function Session({
         if (!isOpen) shutReason.current = 'explicit'
       }}>
       <IconButton ref={anchor} slot="anchor-content" icon="more-horizontal" size="tiny" className="session-more"
-        label={`Actions for ${session.title}`} tooltip="More actions" hasPopup="menu" expanded={menu} />
+        label={`Actions for ${session.title}`} tooltip={false} hasPopup="menu" expanded={menu} />
       <leo-menu-item onClick={() => choose('pin')}>
         <span className="menu-icon-row"><Icon name="pin" />{preferences?.pinned ? 'Unpin conversation' : 'Pin conversation'}</span>
       </leo-menu-item>
