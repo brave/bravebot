@@ -29,7 +29,12 @@ fn members(source: &str, object: &str) -> Vec<String> {
         .find(&opening)
         .unwrap_or_else(|| panic!("tools.js has no `{opening}`"));
     let body = &source[start..];
-    let end = body.find("\n});").or_else(|| body.find("\n};")).unwrap();
+    // The nearer of the two ways an object ends, since a later `});` belongs to other code.
+    let end = ["\n});", "\n};"]
+        .iter()
+        .filter_map(|ending| body.find(ending))
+        .min()
+        .unwrap_or_else(|| panic!("`{opening}` has no end"));
     body[..end]
         .lines()
         .skip(1)
@@ -44,6 +49,16 @@ fn members(source: &str, object: &str) -> Vec<String> {
             (!name.is_empty() && (rest.starts_with(':') || rest.starts_with('('))).then_some(name)
         })
         .collect()
+}
+
+/// The names are read from where the object opens to where it ends, and a closing `});` further
+/// down belongs to other code: reading on to it would take that code's names for tools.
+#[test]
+fn an_objects_members_end_where_the_object_does() {
+    let source = "export const TOOLS = {\n  async first(chrome) {},\n};\n\nlistener(() => {\n  connect();\n});\n";
+    assert_eq!(members(source, "TOOLS"), ["first"]);
+    let frozen = "export const DEFAULTS = Object.freeze({\n  on: true,\n});\n\nconst other = {\n  off: false,\n};\n";
+    assert_eq!(members(frozen, "DEFAULTS"), ["on"]);
 }
 
 /// A browser derives an unpacked extension's id from the key in its manifest: the first 16 bytes
