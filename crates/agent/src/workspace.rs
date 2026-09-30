@@ -28,6 +28,9 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[path = "../../ui-files/src/names.rs"]
+mod names;
+
 /// Extensions carried as bytes, with the media type to name in the URI.
 ///
 /// Decided by extension rather than by looking at the file. Naming a type from the bytes would be
@@ -380,6 +383,34 @@ fn refuse_unkeyable(
 /// A link the operating system can resolve is resolved by it, under a limit of its own. Only the
 /// ones it will not resolve are followed here, and two of those in a row is already pathological.
 const MAX_LINKS_FOLLOWED: usize = 8;
+
+/// Refuse a name Windows would read as something other than the one file it spells, on a host
+/// that does: a stream, a device, a trailing dot or space, an 8.3 short name.
+///
+/// Asked about each name as typed, so the rules see the file the operation will open and not a
+/// spelling of it. A short name is accepted in a root, which is a directory a person chose. The
+/// host is a parameter so the refusal is exercised everywhere.
+fn refuse_misleading_names(
+    path: &Path,
+    named: &str,
+    root: bool,
+    windows: bool,
+) -> Result<(), WorkspaceError> {
+    if !windows {
+        return Ok(());
+    }
+    let misleading = path.components().any(|component| match component {
+        Component::Normal(name) => names::misleads(&name.to_string_lossy(), root),
+        _ => false,
+    });
+    match misleading {
+        true => Err(WorkspaceError::Invalid {
+            path: named.to_string(),
+            reason: "names something other than the file it spells on Windows",
+        }),
+        false => Ok(()),
+    }
+}
 
 /// Where an operation on `path` would land, with every symlink on the way already followed.
 ///
@@ -811,6 +842,8 @@ impl Workspace {
             }
         }
 
+        refuse_misleading_names(candidate, relative, false, cfg!(windows))?;
+
         let escapes = || WorkspaceError::Escapes {
             path: relative.to_string(),
         };
@@ -819,6 +852,25 @@ impl Workspace {
             return Err(escapes());
         }
         Ok(resolved)
+    }
+
+    /// The name `named` lands on, spelled as [`Workspace::relative_display`] spells it, where that
+    /// is not the name it was typed as.
+    ///
+    /// A permission rule is written about a file (PERM-7), and a name reaches the file it lands on
+    /// by more routes than its own spelling: a symbolic link, a case variant on a volume that
+    /// ignores case, an 8.3 short name. `None` where the name lands on itself, and where it lands
+    /// nowhere the workspace reaches, which the operation refuses on its own.
+    ///
+    /// Asked of the file system, not of any file's contents, and it is only ever used to ask the
+    /// rules a second question, so the answer can add a refusal or an approval and can never
+    /// remove one.
+    pub(crate) fn landing(&self, named: &str) -> Option<String> {
+        let landed = self.relative_display(&self.resolve(named).ok()?);
+        let typed = Path::new(named)
+            .components()
+            .filter(|component| !matches!(component, Component::CurDir));
+        (!Path::new(&landed).components().eq(typed)).then_some(landed)
     }
 
     /// Where an attachment's bytes are.
@@ -867,12 +919,20 @@ impl Workspace {
             });
         }
 
+        refuse_misleading_names(candidate, named, true, cfg!(windows))?;
+
         let escapes = || WorkspaceError::Escapes {
             path: named.to_string(),
         };
         let resolved = destination(candidate).ok_or_else(escapes)?;
         if !self.is_opened(&resolved) {
             return Err(escapes());
+        }
+        if let Some(below) = self
+            .landed_in(&resolved)
+            .and_then(|opened| written_below(candidate, opened))
+        {
+            refuse_misleading_names(&below, named, false, cfg!(windows))?;
         }
         Ok(resolved)
     }
@@ -3544,5 +3604,108 @@ mod tests {
             Some(Integrity::Untrusted),
             "what a write recorded was invisible to the read of the same file"
         );
+    }
+
+    /// Windows reads `.env::$DATA`, `.env.` and `NUL` as something other than the file they spell,
+    /// so a rule matched against the spelling would not be a rule about the file.
+    #[test]
+    fn names_windows_reads_as_something_else_are_refused_there_only() {
+        for named in [
+            ".env::$DATA",
+            ".env:stream",
+            ".env.",
+            ".env ",
+            "NUL",
+            "sub/nul.md",
+            "SECRET~1.TXT",
+        ] {
+            assert!(
+                matches!(
+                    refuse_misleading_names(Path::new(named), named, false, true),
+                    Err(WorkspaceError::Invalid { .. })
+                ),
+                "{named} was accepted"
+            );
+            assert!(
+                refuse_misleading_names(Path::new(named), named, false, false).is_ok(),
+                "{named} was refused on a host that reads it as written"
+            );
+        }
+        for named in [".env", "notes.md", "sub/config.toml"] {
+            assert!(
+                refuse_misleading_names(Path::new(named), named, false, true).is_ok(),
+                "{named} was refused"
+            );
+        }
+    }
+
+    /// The directory a person added may be reached by its short name, which names that one
+    /// directory; what is below it is judged like any other name.
+    #[test]
+    fn an_added_directory_may_be_named_by_a_short_name_but_not_a_stream_below_it() {
+        let inside = Path::new("/tmp/RUNNER~1/notes.md");
+        assert!(refuse_misleading_names(inside, "x", true, true).is_ok());
+        let stream = Path::new("/tmp/RUNNER~1/.env:stream");
+        assert!(refuse_misleading_names(stream, "x", true, true).is_err());
+    }
+
+    #[cfg(unix)]
+    fn tree(name: &str) -> (PathBuf, Workspace) {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_nanos())
+            .unwrap_or(0);
+        // The name carries the pid and a stamp, and `create_dir` refuses a name already taken.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let path = std::env::temp_dir().join(format!(
+            "bravebot-landing-{name}-{}-{stamp}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        std::fs::create_dir(path.join(".github")).unwrap();
+        std::fs::write(path.join(".env"), "SECRET_TOKEN=hunter2").unwrap();
+        std::fs::write(path.join("plain.txt"), "plain").unwrap();
+        std::os::unix::fs::symlink(".env", path.join("alias.txt")).unwrap();
+        std::os::unix::fs::symlink(".github", path.join("docs")).unwrap();
+        let workspace = Workspace::new(&path).expect("workspace");
+        (path, workspace)
+    }
+
+    /// A rule about `.env` is about the file, and `alias.txt` is a second name for it.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_lands_on_the_name_of_the_file_it_points_at() {
+        let (path, workspace) = tree("file");
+        assert_eq!(workspace.landing("alias.txt").as_deref(), Some(".env"));
+        assert_eq!(workspace.landing("./alias.txt").as_deref(), Some(".env"));
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    /// A file that does not exist yet lands under the directory its link points at.
+    #[cfg(unix)]
+    #[test]
+    fn a_new_file_below_a_linked_directory_lands_below_the_real_one() {
+        let (path, workspace) = tree("directory");
+        assert_eq!(
+            workspace.landing("docs/new.yml").as_deref(),
+            Some(".github/new.yml")
+        );
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    /// Nothing to ask a second time about a name that lands on itself, and nothing to say about
+    /// one the operation will refuse on its own.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_landing_on_itself_or_nowhere_has_no_second_name() {
+        let (path, workspace) = tree("itself");
+        assert_eq!(workspace.landing("plain.txt"), None);
+        assert_eq!(workspace.landing("./plain.txt"), None);
+        assert_eq!(workspace.landing("not-yet.txt"), None);
+        assert_eq!(workspace.landing("../plain.txt"), None);
+        assert_eq!(workspace.landing(".github//new.yml"), None);
+        assert_eq!(workspace.landing("./.github/./new.yml"), None);
+        assert_eq!(workspace.landing("."), None);
+        let _ = std::fs::remove_dir_all(path);
     }
 }

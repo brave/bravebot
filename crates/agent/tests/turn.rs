@@ -2488,6 +2488,192 @@ fn a_denied_file_is_not_written_even_where_writes_are_approved() {
     );
 }
 
+/// Run one planner call against a workspace whose `.env` a deny rule covers and whose `alias.txt`
+/// is a link to it, and return what the planner was sent. Rules are parsed without knowing whether
+/// the volume folds case, so only where the call lands can connect the two names.
+#[cfg(unix)]
+fn call_through_an_alias_of_a_denied_file(tag: &str, call: (&str, &str)) -> (Scratch, Vec<String>) {
+    let scratch = Scratch::new(tag);
+    std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=hunter2").unwrap();
+    std::os::unix::fs::symlink(".env", scratch.path.join("alias.txt")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(call.0, call.1),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("use the alias").with_permissions(rules(&["Read(./.env)"], &[], &[]));
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let bodies = received.try_iter().collect();
+    (scratch, bodies)
+}
+
+/// A rule is about the file, not about the name a call used for it. A link inside the workspace is
+/// another name for the file it points at, and the rule is asked about where the call lands as well
+/// as how it was spelled. The same holds for a name that differs in case or is an 8.3 short name
+/// on a volume that opens it as the file, which no Unix test can create on a volume that does not.
+#[cfg(unix)]
+#[test]
+fn a_denied_file_is_not_written_through_a_link_to_it() {
+    let (scratch, _) = call_through_an_alias_of_a_denied_file(
+        "permissions-write-denied-through-a-link",
+        (
+            "write_file",
+            r#"{"path":"alias.txt","contents":"replaced"}"#,
+        ),
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".env")).unwrap(),
+        "SECRET_TOKEN=hunter2",
+        "a write under another name replaced a file a deny rule covers"
+    );
+}
+
+/// The edit tool reaches a file by the same argument as the write tool and has to refuse alike.
+#[cfg(unix)]
+#[test]
+fn a_denied_file_is_not_edited_through_a_link_to_it() {
+    let (scratch, _) = call_through_an_alias_of_a_denied_file(
+        "permissions-edit-denied-through-a-link",
+        (
+            "edit_file",
+            r#"{"path":"alias.txt","old_text":"hunter2","new_text":"swordfish"}"#,
+        ),
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".env")).unwrap(),
+        "SECRET_TOKEN=hunter2",
+        "an edit under another name changed a file a deny rule covers"
+    );
+}
+
+/// A read is the other half of the rule: the planner must not be handed the contents of a denied
+/// file because it asked for them under a different name.
+#[cfg(unix)]
+#[test]
+fn a_denied_file_is_not_read_through_a_link_to_it() {
+    let (_scratch, bodies) = call_through_an_alias_of_a_denied_file(
+        "permissions-read-denied-through-a-link",
+        ("read_file", r#"{"path":"alias.txt"}"#),
+    );
+
+    assert!(!bodies.is_empty(), "the planner was never sent a request");
+    for body in bodies {
+        assert!(
+            !body.contains("hunter2"),
+            "a denied file reached the planner under another name: {body}"
+        );
+    }
+}
+
+/// An `ask` rule prompts for the file it names, and a link to that file is not a way to skip the
+/// prompt in a workspace the user trusted at startup.
+#[cfg(unix)]
+#[test]
+fn an_ask_rule_still_prompts_for_a_write_through_a_link_to_the_file() {
+    let scratch = Scratch::new("permissions-ask-through-a-link");
+    std::fs::write(scratch.path.join("notes.md"), "original").unwrap();
+    std::os::unix::fs::symlink("notes.md", scratch.path.join("alias.md")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("write_file", r#"{"path":"alias.md","contents":"replaced"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("write through the alias").with_permissions(rules(
+        &[],
+        &["Edit(./notes.md)"],
+        &[],
+    ));
+    let mut recording = RecordingConfirmer::rejecting();
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut recording,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        recording.seen.len(),
+        1,
+        "a write to a file an ask rule names went ahead without asking, under another name"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
+        "original",
+        "the write went ahead after the person said no"
+    );
+}
+
+/// The case the rule's own spelling misses on a volume that opens `.GITHUB` as `.github`, which is
+/// the default on macOS and on Windows. The rules here are parsed without the volume's answer, so
+/// nothing but where the call lands connects the two spellings. Skipped where the volume tells the
+/// two names apart, since there they are two files and the rule is right not to reach the second.
+#[test]
+fn a_denied_directory_is_not_written_under_another_case_of_its_name() {
+    let scratch = Scratch::new("permissions-write-denied-other-case");
+    std::fs::create_dir_all(scratch.path.join(".github/workflows")).unwrap();
+    std::fs::write(scratch.path.join(".github/workflows/ci.yml"), "original").unwrap();
+    if !scratch.path.join(".GITHUB").exists() {
+        return;
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            r#"{"path":".GITHUB/workflows/ci.yml","contents":"replaced"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task =
+        Task::new("replace the workflow").with_permissions(rules(&["Edit(.github/**)"], &[], &[]));
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".github/workflows/ci.yml")).unwrap(),
+        "original",
+        "a write under another case of the name replaced a file a deny rule covers"
+    );
+}
+
 /// A deny rule holds in the mode that asks about nothing at all. The flag stops the asking, and a
 /// deny rule is not an answer to a question: it refuses before there is anything to prompt about, so
 /// a rule somebody wrote to keep a file out of reach is not undone by a command-line flag.
