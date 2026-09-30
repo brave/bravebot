@@ -258,13 +258,41 @@ impl Bridge {
             auto_vetting,
         });
         self.ask_about_trust(&handle);
+        let rules = self.open_under_rules(&handle, None);
 
         let mut opened = self.recount(&handle, &directory, &record, auto_vetting);
+        opened["settingsRules"] = rules;
         if let Some(settled) = settled {
             opened["trust"] = settled;
         }
         merge(&mut opened, reported);
         Ok(opened)
+    }
+
+    /// Settle the permission rules the session opened as `handle` runs under, and return them
+    /// as a front end reads them.
+    ///
+    /// Read from the settings files once, here, and kept by the session (PERM-12). `inherited`
+    /// is a parent's rules, which a fork takes in place of reading the files again.
+    fn open_under_rules(
+        &self,
+        handle: &str,
+        inherited: Option<crate::rules::SettingsRules>,
+    ) -> Value {
+        let Some(open) = self.open.get(handle) else {
+            return Value::Null;
+        };
+        let rules = inherited.unwrap_or_else(|| {
+            crate::rules::SettingsRules::read(
+                &crate::settings::layers(Some(&open.project), self.settings.as_deref()),
+                &open.project,
+            )
+        });
+        let reported = rules.json();
+        if let Ok(mut state) = open.state.lock() {
+            state.rules = rules;
+        }
+        reported
     }
 
     /// Put the trust question to the window, where the session opened as `handle` is waiting on it.
@@ -402,9 +430,11 @@ impl Bridge {
         // Nothing is written until the first turn. An opened-and-abandoned window should
         // leave no trace, which is also how `bravebot` behaves.
         self.ask_about_trust(&handle);
+        let rules = self.open_under_rules(&handle, None);
 
         let mut made = json!({
             "session": handle,
+            "settingsRules": rules,
             "model": crate::settings::config(Some(&directory), self.settings.as_deref()).ok().map(|config| config.default_model),
             "directory": directory.display().to_string(),
             "branch": branch,
@@ -456,7 +486,7 @@ impl Bridge {
         // Everything needed is copied out under the lock and the lock is dropped before any of
         // it is used. A fork does no I/O and no thinking, but holding a session's state across
         // work is the habit that turns into a stall later.
-        let (snapshot, said, trust, programs, directories, todos, parent) = {
+        let (snapshot, said, trust, programs, directories, todos, parent, inherited) = {
             let state = open
                 .state
                 .lock()
@@ -474,6 +504,7 @@ impl Bridge {
                 state.directories.clone(),
                 state.todos.clone(),
                 parent.clone(),
+                state.rules.clone(),
             )
         };
 
@@ -543,6 +574,9 @@ impl Bridge {
             auto_vetting,
         });
         self.ask_about_trust(&child);
+        // The parent's, not read again, for the reason auto-vetting is: a fork carries on the
+        // session it was cut from.
+        let settings_rules = self.open_under_rules(&child, Some(inherited));
 
         let title = if parent_title.is_empty() {
             store::load(&project, &parent_id).map(|record| record.title)
@@ -563,6 +597,7 @@ impl Bridge {
             "todos": todos_json(&todos),
             "trust": { "known": known, "rules": if known { Value::from(rules) } else { Value::Null } },
             "autoVetting": auto_vetting,
+            "settingsRules": settings_rules,
             "serversNote": self.servers_note(&project),
             "parent": {
                 "id": parent_id,
@@ -1137,6 +1172,9 @@ impl Bridge {
             // Read now rather than when the session opened: the record belongs to every session
             // begun in the directory, and another may have kept or withdrawn the answer since.
             "remembered": remembered_json(&open.project),
+            // The rules this session opened under. They are read from settings files and
+            // cannot be revoked here: editing the file changes them for the next session.
+            "settingsRules": state.rules.json(),
         }))
     }
 
@@ -1528,7 +1566,9 @@ fn work(work: Work) {
         .with_attribution(attribution)
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
-        .with_auto_vetting(auto_vetting);
+        .with_auto_vetting(auto_vetting)
+        // The rules the session opened under, and not the files as they are now (PERM-12).
+        .with_permissions(state.rules.permissions.clone());
     if let Some(composed) = composed {
         task = task.composed_rather_than_typed(composed);
     }

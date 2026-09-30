@@ -26,6 +26,7 @@ import type {
   RunRequest,
   Said,
   ServerRequest,
+  SettingsRules,
   Shown,
   VouchRequest,
   VetRequest,
@@ -129,7 +130,17 @@ export type Entry = (
    *
    * No `remember`. An approval covers this plan only, and does not approve the plan's writes.
    */
-  | { kind: 'manifest'; id: string; request: ManifestRequest; decision: 'approve' | 'reject' | null }
+  | {
+      kind: 'manifest'
+      id: string
+      request: ManifestRequest
+      decision: 'approve' | 'reject' | null
+      /**
+       * The session's `deny` and `ask` rules, where it has any. The agent does not apply
+       * permission rules to a manifest run, so the card names the rules the plan is not held to.
+       */
+      unheld?: string[]
+    }
   /**
    * A file holding a credential, awaiting a decision about whether the model may read it, or
    * the record of one already made.
@@ -244,7 +255,14 @@ export const askedOutput = (request: OutputRequest): Entry => ({
 export const askedVet = (request: VetRequest): Entry => ({ kind: 'vet', id: nextId(), request, decision: null })
 export const askedFetch = (request: FetchRequest): Entry => ({ kind: 'fetch', id: nextId(), request, decision: null })
 export const askedServer = (request: ServerRequest): Entry => ({ kind: 'server', id: nextId(), request, decision: null })
-export const askedManifest = (request: ManifestRequest): Entry => ({ kind: 'manifest', id: nextId(), request, decision: null })
+export const askedManifest = (request: ManifestRequest, unheld: string[] = []): Entry => ({ kind: 'manifest', id: nextId(), request, decision: null, unheld })
+
+/** The rules that narrow what a session does, which a manifest run is not held to. */
+export const narrowing = (rules: SettingsRules | null | undefined): string[] => [...(rules?.deny ?? []), ...(rules?.ask ?? [])]
+
+/** Whether a settings file wrote something that is not in force, which the person is told. */
+export const notInForce = (rules: SettingsRules | null | undefined): boolean =>
+  !!rules && (rules.unreadable.length > 0 || rules.proposed.length > 0 || rules.directories.length > 0)
 export const askedExposure = (request: ExposureRequest): Entry => ({ kind: 'exposure', id: nextId(), request, decision: null })
 export const planAsked = (text: string): Entry => ({ kind: 'plan-task', id: nextId(), text })
 export const planReplied = (text: string, record: string | null): Entry => ({ kind: 'plan-reply', id: nextId(), text, record })

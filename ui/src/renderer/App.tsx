@@ -9,6 +9,7 @@ import type {
   KeptTrust,
   OpenedSession,
   RunRecord,
+  SettingsRules,
   Phase,
   SessionSummary,
   Shown,
@@ -110,6 +111,8 @@ interface Live {
   archived: number
   /** Whether the session opened with auto-vetting on, as the agent settled it then. */
   autoVetting: boolean
+  /** The permission rules this session opened under. Null where the bridge reported none. */
+  rules?: SettingsRules | null
   /**
    * The entry id of a prompt this window has sent and not yet been told the ordinal of.
    *
@@ -541,6 +544,7 @@ export function App(): React.JSX.Element {
         bot: bot ? { slug: bot.slug, grounded: false } : null,
         archived: opened.archived,
         autoVetting: opened.autoVetting,
+        rules: opened.settingsRules ?? null,
       })
       const notes = [opened.branchNote, opened.buildNote, opened.frontNote, opened.serversNote].filter(Boolean) as string[]
       setProblem(notes.length ? notes.join(' · ') : null)
@@ -565,6 +569,7 @@ export function App(): React.JSX.Element {
         branch: string | null
         model: string | null
         autoVetting: boolean
+        settingsRules?: SettingsRules | null
         serversNote: string | null
         remembered?: KeptTrust | null
         keeping?: string | null
@@ -600,6 +605,7 @@ export function App(): React.JSX.Element {
         bot: bot ? { slug: bot.slug, grounded: false } : null,
         archived: 0,
         autoVetting: made.autoVetting,
+        rules: made.settingsRules ?? null,
       })
       setProblem(made.serversNote)
     } catch (error) {
@@ -1167,6 +1173,7 @@ export function App(): React.JSX.Element {
         // in this build it asks for nothing at all.
         archived: 0,
         autoVetting: forked.autoVetting,
+        rules: forked.settingsRules ?? null,
         forkedFrom: {
             directory: forked.parent.directory,
             id: forked.parent.id,
@@ -1470,7 +1477,7 @@ export function apply(
       case 'server.request':
         return { ...old, entries: [...old.entries, t.askedServer(message.data)] }
       case 'manifest.request':
-        return { ...old, entries: [...old.entries, t.askedManifest(message.data)] }
+        return { ...old, entries: [...old.entries, t.askedManifest(message.data, t.narrowing(old.rules))] }
       case 'exposure.request':
         return { ...old, entries: [...old.entries, t.askedExposure(message.data)] }
       // A run is not a turn, so it adds no turn marker and no reply to the conversation.

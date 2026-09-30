@@ -43,6 +43,10 @@ advice, and write approvals show the processor's remark beside the diff.
   bridge, against a model service the script serves itself. An approval hands the model the
   file, a refusal keeps it back, and a new conversation asks again. The script checks that
   the value is nowhere in the window's markup at any point. No paid inference.
+- `npm run drive:rules`: permission rules from settings files, through the real app and
+  bridge, against a model service and a website the script serves itself. A host the person's
+  file allows is fetched with no card, a host a rule refuses is neither asked about nor
+  fetched, and the banner names what is not in force. No paid inference.
 - After building, `node scripts/drive-agent-rpc.mjs`: an actual automatic watch turn against
   a local fake gateway, real lifecycle hook subprocesses, context measurements and stop/close.
   Uses an isolated agent home; no paid inference or real credentials.
@@ -103,6 +107,7 @@ at, that a control keeps keyboard focus through an animation.
 | `npm run drive:language-server` | Starting a language server from the window, that it is kept for the conversation, and that it ends with the app |
 | `npm run drive:plan` | Starting a manifest run from the composer, approving and declining its plan, that the run stays out of the conversation, and that its record is read and cannot be typed into |
 | `npm run drive:exposure` | Answering a read that would expose a credential, and that the value is never drawn |
+| `npm run drive:rules` | Permission rules from settings files: what is refused, what is not asked, and what is reported as not in force |
 | `npm run drive:ask` | Answering a series of questions the planner asks, likewise live |
 | `npm run drive:menu` | The application menu: what it offers, what it greys, and what it refuses to offer |
 | `npm run drive:export` | Exporting a conversation to text, Markdown and PDF — with and without the tool calls, and what the file leaves out either way |

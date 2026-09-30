@@ -862,6 +862,18 @@ have made each of those three depend on nobody else having spoken.
   ([cli.md](cli.md)) asks nothing here, so a rule granted in the panel is a prompt again on either.
   Both fail closed, and putting the question on a surface is what would fix it rather than reading the
   record on one that cannot ask.
+- **The desktop application grants no rule a checkout proposes, and opens no directory a file
+  names.** It has neither the question [PERM-15](#PERM-15) puts nor the one
+  [PERM-10](#PERM-10) puts, so it reads no grant recorded at the terminal and opens nothing
+  `additionalDirectories` names. Both fail closed. Each rule and each directory passed over is
+  named as the session opens, with the file that wrote the rule, so a prompt the rule was written
+  to answer does not read as a second fault. `deny` and `ask` rules from every layer, and `allow`
+  rules from the person's own file, hold there as they do in the terminal.
+- **A manifest run reads no rule.** The runner builds its policy without the rules the session
+  holds, so a `deny` rule does not refuse a step of a plan and an `ask` rule puts no question
+  about one. What stands in a run is the plan question and the write question
+  ([manifest.md](manifest.md#MANIFEST-10)). The desktop application says so on the plan it puts
+  to the person, where the session holds a `deny` or an `ask` rule.
 - **Declining to trust the workspace still leads to the question.** The two are separate claims, so
   somebody who said the tree's content is not theirs is still offered its rules, and may grant them.
   That is the point of asking separately, and it is also the odd case: a person who has just said

@@ -607,13 +607,38 @@ shows the bundled agent build, model services, certificate/proxy details and adm
 pins, with setup instructions for gateways, AWS Bedrock and Brave. Secrets are not shown.
 Run settings selects a JSON model/connection override for this app run, lists loaded files
 in precedence order, and provides Clear override. Existing turns retain their configuration;
-future turns and model discovery use the selected override. Terminal-only preferences and
-settings-file permission grants do not replace the desktop's approval controls.
+future turns and model discovery use the selected override. Terminal-only preferences are not
+read. Permission rules in settings files are: see *Permission rules* below.
 
 Hooks are shared with the terminal client. Add a lifecycle event, a program and separate
 arguments, optionally limiting a tool-completion hook to a tool name. Save applies changes
 to future turns. Reload resolves external-edit conflicts; malformed or unsupported existing
 files are reported rather than silently rewritten. Hook failures appear in turn notices.
+
+### Permission rules
+
+The `permissions` block of the settings files governs a conversation, as it does in the
+terminal. The rules are read when a conversation opens and kept until it closes, so a file
+edited afterwards changes the next conversation.
+
+- A `deny` rule refuses before anything is asked. No card appears, and the agent is told a
+  rule refused.
+- An `ask` rule puts a card that would not otherwise have appeared.
+- An `allow` rule in your own `~/.bravebot/settings.json` answers a card for you, so none
+  appears. It does not make what a command prints trusted.
+- An `allow` rule in a project's settings file is not in force. Only your own file may write
+  one. The terminal asks whether to grant a project's rules. This app has no such question
+  yet, so it grants none and you are still asked.
+- A settings file chosen under **Agent settings** counts as your own where it is outside the
+  project, so an `allow` rule in it is in force. One inside the project is the project's
+  file, and its `allow` rule is not.
+- A directory named in `additionalDirectories` is not opened.
+- Rules are not applied to a plan run. A plan card names the `deny` and `ask` rules the
+  conversation holds, so you can check the steps against them.
+
+A banner above the transcript says what a settings file wrote that is not in force: an entry
+that is not a rule, a project's `allow` rule, or a named directory. **Permissions** lists
+the rules in force. They cannot be revoked there, since they are changed in their file.
 
 **Watches** in the conversation toolbar lists up to eight live file watches, with their
 remaining lifetime and Stop controls. Add a project file or ask the agent to watch one.

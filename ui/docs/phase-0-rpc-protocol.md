@@ -1204,4 +1204,13 @@ Still open:
   request and explicit decision, and its kind is distinct from every other reply's.
 - An approval covers the file for the session, as the agent keeps it. It is not written to the
   record, so a reopened or new session asks again.
+- `session.new`, `session.open`, `session.fork` and `permissions.list` carry `settingsRules`:
+  `{ deny, ask, allow, unreadable, proposed, directories }`. The first three are the rules in
+  force, as the files spelled them. `unreadable` holds `{ rule, said }` for each entry that is
+  not a rule, where `said` is the agent's sentence about why. `proposed` holds `{ rule, file }`
+  for each `allow` rule a checkout wrote, which is not in force. `directories` holds the names
+  in `additionalDirectories`, none of which is opened.
+- The rules are read when a session opens and kept for its turns. A fork takes its parent's.
+  A settings file edited while a session is open governs the next one.
+- A manifest run is passed the session's rules, and the agent's runner does not read them.
 

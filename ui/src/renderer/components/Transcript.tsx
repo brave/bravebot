@@ -2,7 +2,7 @@ import { Watches } from './Watches'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
 import { useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
-import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
+import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import type { Side } from '../columns'
 import type { Asked } from '../App'
@@ -44,6 +44,7 @@ interface Live {
   focus: number | null
   autoVetting?: boolean
   trustRemembered?: KeptTrust | null
+  rules?: SettingsRules | null
 }
 
 /**
@@ -408,6 +409,7 @@ export function Transcript({
       </div>}
       {live?.trustRemembered && <RememberedBanner kept={live.trustRemembered} />}
       {live?.autoVetting && <VettingBanner />}
+      {t.notInForce(live?.rules) && live?.rules && <RulesBanner rules={live.rules} />}
       {live?.forkedFrom && <ForkBanner from={live.forkedFrom} onOpen={onOpenParent} />}
     </header>
   )
@@ -954,6 +956,65 @@ function ForkBanner({
  * question that never appears, which nothing else on screen could show. Nothing is drawn when the
  * mode is off, since asking is the ordinary state.
  */
+/**
+ * What a settings file wrote that is not in force in this conversation.
+ *
+ * Drawn only where there is something to say. A rule that reads as protection and is not in
+ * force is worth telling the person about, and so is an allow rule that will not stop a question
+ * it was written to stop.
+ */
+export function RulesBanner({ rules }: { rules: SettingsRules }): React.JSX.Element {
+  const count = rules.unreadable.length + rules.proposed.length + rules.directories.length
+  return (
+    <details className="fork-banner rules-banner" role="note">
+      <summary>
+        <strong>
+          {count} permission {count === 1 ? 'setting is' : 'settings are'} not in force.
+        </strong>{' '}
+        Details
+      </summary>
+      {rules.unreadable.length > 0 && (
+        <>
+          <p>These entries could not be read as rules, so they decide nothing:</p>
+          <ul>
+            {rules.unreadable.map((entry, index) => (
+              <li key={index}>{entry.said}</li>
+            ))}
+          </ul>
+        </>
+      )}
+      {rules.proposed.length > 0 && (
+        <>
+          <p>
+            These allow rules were written by this project’s settings file. An allow rule
+            answers a question for you, so only your own settings file may write one. You will
+            still be asked:
+          </p>
+          <ul>
+            {rules.proposed.map((entry, index) => (
+              <li key={index}>
+                <code>{entry.rule}</code> from <code>{entry.file}</code>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {rules.directories.length > 0 && (
+        <>
+          <p>A settings file asked for these directories to be opened. This app opens none:</p>
+          <ul>
+            {rules.directories.map((directory, index) => (
+              <li key={index}>
+                <code>{directory}</code>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </details>
+  )
+}
+
 function VettingBanner(): React.JSX.Element {
   return (
     <p className="fork-banner vetting-banner" role="note">
@@ -1657,6 +1718,20 @@ function Card({
             the plan does not approve its writes: each write is still put to you when its step
             is reached. This answer covers this plan only.
           </p>
+
+          {!!entry.unheld?.length && (
+            <div className="warn">
+              Permission rules are not applied to a plan run. Check the steps against the
+              rules this conversation refuses or asks about:
+              <ul>
+                {entry.unheld.map((rule, index) => (
+                  <li key={index}>
+                    <code>{rule}</code>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           <YesOrNo
             kind="manifest"

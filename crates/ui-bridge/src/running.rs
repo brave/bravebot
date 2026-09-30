@@ -81,6 +81,12 @@ pub struct State {
     pub rewind: Vec<bravebot_session::sessions::RewindPoint>,
     /// The first thing the user asked, which is what a list calls the session.
     pub first_prompt: Option<String>,
+    /// The permission rules this session opened under (PERM-12). Empty until the session is
+    /// opened, and for a session no settings file wrote a rule for.
+    ///
+    /// Read once and kept, so a settings file edited while the session is open changes nothing
+    /// about it. Not saved: a reopened session reads the files again.
+    pub rules: crate::rules::SettingsRules,
     /// How many manifest runs this open session has started. Numbers the runs in events.
     ///
     /// Not saved: a run is written as its own record (MANIFEST-11), and the session's record
@@ -117,6 +123,7 @@ impl State {
             asides: Vec::new(),
             rewind: Vec::new(),
             first_prompt: None,
+            rules: Default::default(),
             runs: 0,
             servers: None,
         }
@@ -158,6 +165,7 @@ impl State {
             asides: bravebot_session::sessions::recall(project, record).asides,
             rewind: record.rewind_points(project),
             first_prompt: Some(record.title.clone()),
+            rules: Default::default(),
             runs: 0,
             servers: None,
         }
@@ -216,6 +224,7 @@ impl State {
             asides: Vec::new(),
             rewind: Vec::new(),
             first_prompt,
+            rules: Default::default(),
             runs: 0,
             servers: None,
         }
