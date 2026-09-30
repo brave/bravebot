@@ -1104,8 +1104,8 @@ server-title = démarrer un serveur de langage ?
 server-verb = Démarrer
 server-workspace = pour indexer { $workspace }
 server-build-tooling =
-    ceci lance les outils de compilation de son écosystème : le code de vos dépendances s'exécute
-    donc avec vos propres accès, comme le fait cargo test. il reste actif pendant cette session.
+    ceci exécute du code de votre projet et de ses dépendances avec vos propres accès, comme le
+    font sa compilation et ses tests. il reste actif pendant cette session.
 server-reads-only =
     il lit le projet et reste actif pendant cette session. rien n'est écrit dans votre projet.
 server-explained =

@@ -302,10 +302,15 @@ The table is fixed and there is nothing to configure. The binary has to be insta
 `PATH`.
 
 **A server runs with the access your own shell would give it, and is not confined.** The prompt says
-so in those words: it reads the whole tree and the dependency sources, and it runs the build tooling
-of its ecosystem. For Rust that means `build.rs` and proc macros out of `Cargo.lock` execute, which
-is code from your dependency tree running as you. Go's tooling builds to answer too. A Node or
-Python server reads and type-checks without running the project.
+so in those words: it reads the whole tree and the dependency sources, and starting it runs code
+from your project and its dependencies with your own access. For Rust that means `build.rs` and proc
+macros out of `Cargo.lock` execute, which is code from your dependency tree running as you. Go's
+tooling builds to answer too. The TypeScript server runs the TypeScript your project carries: it
+looks for `typescript/lib/tsserver.js` under `node_modules`, `.yarn/sdks`, `.pnpm/sdks` or
+`.vscode/pnpify` in the workspace and then in each directory above it, and runs the nearest one
+before its own copy. The Python server runs the `python3` on your `PATH`, which runs the `.pth` files
+of its environment as it starts: with your project's virtual environment active, those come from the
+project's dependencies.
 
 Confinement is not an option withheld here. A server indexes *by* running that build tooling, so a
 profile denying it a subprocess and somewhere to write gives you a server whose index never settles,

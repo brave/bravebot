@@ -90,8 +90,8 @@ const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
 
 /// Which server serves a language, and what it is called.
 ///
-/// A fixed table rather than configuration, for now: each entry is a binary this repository knows
-/// asks nothing of the network and can answer from a read-only tree.
+/// A fixed table rather than configuration, for now: each entry is a binary this repository knows,
+/// so the prompt can say what starting it runs ([`Language::runs_build_tooling`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Language {
     Rust,
@@ -128,15 +128,21 @@ impl Language {
         }
     }
 
-    /// Whether starting this server runs the ecosystem's build tooling, and so code out of the
-    /// dependency tree.
+    /// Whether starting this server runs code the project or its dependencies carry.
     ///
     /// Said to the person at the prompt rather than left inside "with your own access", because it is
-    /// the part of LSP-5 they could not have inferred from the word "start". True for Rust, where
-    /// `build.rs` and proc macros execute, and for Go, whose tooling builds to answer. A Node or
-    /// Python server reads and type-checks without running the project.
+    /// the part of LSP-5 they could not have inferred from the word "start". True for every server
+    /// here, written with no wildcard so a language added later has to answer it. Rust runs
+    /// `build.rs` and proc macros, and Go's tooling builds to answer. typescript-language-server,
+    /// given no `tsserver.path`, runs the `tsserver.js` in the nearest `typescript/lib` under
+    /// `node_modules`, `.yarn/sdks`, `.pnpm/sdks` or `.vscode/pnpify`, looking in the workspace and
+    /// then each directory above it, before its own copy. pyright runs the `python3` on `PATH`
+    /// without `-S`, so the `.pth` files of that interpreter's environment run when it starts, and
+    /// with the project's virtual environment active those come from the project's dependencies.
     pub fn runs_build_tooling(self) -> bool {
-        matches!(self, Self::Rust | Self::Go)
+        match self {
+            Self::Rust | Self::Go | Self::TypeScript | Self::Python => true,
+        }
     }
 
     pub fn as_str(self) -> &'static str {
@@ -1142,7 +1148,8 @@ pub struct Starting<'a> {
     /// The binary, resolved, so what is approved is what runs.
     pub resolved: &'a Path,
     pub workspace: &'a Path,
-    /// Whether starting it runs the ecosystem's build tooling, and so code from the dependency tree.
+    /// Whether starting it runs code the project or its dependencies carry, which is
+    /// [`Language::runs_build_tooling`].
     pub runs_build_tooling: bool,
 }
 
@@ -1578,13 +1585,64 @@ mod tests {
         );
     }
 
-    /// LSP-5: which servers run the ecosystem's build tooling, since that is what the prompt says.
+    /// LSP-5: which servers run code the project or its dependencies carry, since that is what the
+    /// prompt says.
     #[test]
     fn the_prompt_says_which_servers_run_build_tooling() {
         assert!(Language::Rust.runs_build_tooling());
         assert!(Language::Go.runs_build_tooling());
-        assert!(!Language::TypeScript.runs_build_tooling());
-        assert!(!Language::Python.runs_build_tooling());
+        assert!(Language::TypeScript.runs_build_tooling());
+        assert!(Language::Python.runs_build_tooling());
+    }
+
+    /// LSP-5: the person asked to start a TypeScript or Python server is told that it runs the
+    /// project's code: the `tsserver.js` the workspace carries, or the `.pth` files of the Python
+    /// environment on `PATH`.
+    #[test]
+    fn typescript_and_python_servers_are_put_to_a_person_as_running_the_projects_code() {
+        let mut servers = Servers::new(
+            root(),
+            None,
+            |program| Some(PathBuf::from("/usr/bin").join(program)),
+            false,
+            Vec::new(),
+        );
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "look up");
+        let mut policy = Policy::begin(
+            routing,
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([Capability::LanguageServer]),
+            &mut sink,
+        )
+        .expect("policy");
+
+        let mut told = Vec::new();
+        for path in ["/workspace/src/a.ts", "/workspace/src/a.py"] {
+            let answer = servers.ask(
+                &mut policy,
+                &Question {
+                    operation: Operation::Definition,
+                    path,
+                    line: 1,
+                    character: 1,
+                    query: None,
+                },
+                &mut |starting| {
+                    told.push((starting.language, starting.runs_build_tooling));
+                    false
+                },
+            );
+            assert!(
+                matches!(answer, Err(LspError::Refused { .. })),
+                "{answer:?}"
+            );
+        }
+        assert_eq!(
+            told,
+            [(Language::TypeScript, true), (Language::Python, true)]
+        );
     }
 
     /// LSP-6: a language with no server is that, and is not an empty answer.
