@@ -90,6 +90,27 @@ interface BotFailure {
 }
 
 let window: BrowserWindow | null = null
+
+/**
+ * Send to the window's page, or nothing where it has gone. Focus and blur events, bridge messages
+ * and a consolidation ending can all arrive while the page is closing, reloading or has crashed,
+ * and Electron logs "Render frame was disposed" for a message sent to a frame that is gone. There
+ * is nobody left to receive it. The frame is checked rather than the send wrapped, because
+ * Electron catches that failure itself and logs it before returning.
+ */
+function tell(channel: string, ...args: unknown[]): void {
+  const contents = window?.webContents
+  if (!contents || contents.isDestroyed()) return
+  let frame
+  try {
+    frame = contents.mainFrame
+  } catch {
+    return
+  }
+  if (frame.isDestroyed() || frame.detached) return
+  frame.send(channel, ...args)
+}
+
 let bridge: Bridge | null = null
 // Model discovery uses its own process so a slow listing never blocks live turn replies.
 let selectedSettings: string | null = null
@@ -211,7 +232,7 @@ async function sendBotTurn(
  * did not happen.
  */
 function ended(session: string, slug: string | null, delivered: boolean): void {
-  window?.webContents.send('bravebot:bots:consolidated', { session, slug, delivered })
+  tell('bravebot:bots:consolidated', { session, slug, delivered })
 }
 
 async function consolidate(session: string, slug: string): Promise<void> {
@@ -220,7 +241,7 @@ async function consolidate(session: string, slug: string): Promise<void> {
   // Set before the send rather than after it, because the answer can arrive before an `await`
   // resumes and a flag set late is a flag that was never set.
   consolidating.add(session)
-  window?.webContents.send('bravebot:bots:consolidating', { session, slug })
+  tell('bravebot:bots:consolidating', { session, slug })
   const answer = await sendBotTurn(
     session,
     held,
@@ -270,8 +291,8 @@ function createWindow(): void {
 
   window.once('ready-to-show', () => window?.show())
   // The renderer quiets its accents while the window is in the background, as native windows do.
-  window.on('focus', () => window?.webContents.send('bravebot:window:active', true))
-  window.on('blur', () => window?.webContents.send('bravebot:window:active', false))
+  window.on('focus', () => tell('bravebot:window:active', true))
+  window.on('blur', () => tell('bravebot:window:active', false))
 
   // Nothing in this app navigates anywhere. A link opens in the user's browser, and an
   // in-window navigation is refused outright rather than sandboxed.
@@ -339,7 +360,7 @@ function createWindow(): void {
     // same window in the order they are sent, and the wrong order here is visible: a consolidation
     // announced before the `turn.done` that provoked it draws its line above the reply it comes
     // after, which reads as though the app interrupted rather than followed.
-    window?.webContents.send('bravebot:event', message)
+    tell('bravebot:event', message)
     after?.()
   }, selectedSettings)
 
@@ -734,7 +755,7 @@ app.whenReady().then(() => {
     const appearance = parseAppearance(value)
     putTheme(appearance)
     applyNativeAppearance(appearance)
-    window?.webContents.send('bravebot:theme:changed', { chosen: appearance })
+    tell('bravebot:theme:changed', { chosen: appearance })
   })
 
   // Choosing a project is a native affair: the renderer cannot see the filesystem and
