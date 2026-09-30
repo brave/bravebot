@@ -1,3 +1,48 @@
+## [0.12.0](https://github.com/brave/bravebot/releases/tag/v0.12.0)
+
+ - Added `bravebot mcp enable` and `mcp disable`, and `-s` on `mcp add`, which put a server's request in the settings file for you, the project or this directory, so a server you add starts without editing JSON by hand. ([#939](https://github.com/brave/bravebot/issues/939))
+ - Added `-e NAME=value` to `mcp add`, so a server's install line written for Claude Code works here, including a bare `--` before the command. A stored value is kept where only you can read it, a key file the server names is readable by that server alone, and an `npx` installed by nvm now starts. ([#950](https://github.com/brave/bravebot/issues/950))
+ - Added a question when a remote MCP server replies that it has moved: you are shown the declared address and the new one, and a yes updates the declaration and asks about the server's tools again. ([#704](https://github.com/brave/bravebot/issues/704))
+ - Added, to `bravebot mcp list` and `doctor`, which file requested each server and whether a session started here will hold it. The desktop app now names the servers a project requests, since it starts none. ([#83](https://github.com/brave/bravebot/issues/83))
+ - Added `--agent <name>`, which addresses every turn of a session or a `-p` run to one delegate definition, `/loop` ticks and watch fires included. ([#975](https://github.com/brave/bravebot/issues/975))
+ - Added MCP servers and language servers to delegates: a worker may call the servers its parent may, a checker or worker may use `lsp`, and `mcpServers:` in a definition narrows which servers a worker holds. ([#910](https://github.com/brave/bravebot/issues/910), [#909](https://github.com/brave/bravebot/issues/909), [#725](https://github.com/brave/bravebot/issues/725))
+ - Added `memory: project` and `memory: local` to delegate definitions, which give the definition one notes file at `.bravebot/memory/<name>.md`. A run reads it only while it is trusted. ([#727](https://github.com/brave/bravebot/issues/727))
+ - Added `model:` and `effort:` to skill files, which switch the model and effort from the round after the skill loads and say so. `doctor` now names a key in a skill file that nothing reads. ([#946](https://github.com/brave/bravebot/issues/946))
+ - Added an offer at first start to use the models a running local Ollama serves, so a machine with Ollama needs nothing written by hand. ([#949](https://github.com/brave/bravebot/issues/949))
+ - Added a thumbnail of a pasted or dropped picture in the input box, and the picture itself in a vetting prompt, in terminals that draw Kitty, iTerm2 or Sixel pictures.
+ - Added vetting of pictures and PDFs: `vet_content` hands you a copy to open in your own viewer, and the model sees the file after your yes.
+ - Added `permissions.readsStayInWorkspace`, which refuses every path outside the working directory in every mode, and `permissions.bypassUnreachable`, which refuses `--dangerously-skip-permissions`. Either can be pinned in `managed.json`. ([#945](https://github.com/brave/bravebot/issues/945))
+ - Added `run.defaultSeconds` and `run.maxSeconds`, which set how long a command may run when a call names no deadline and the most a call may ask for, in place of the fixed 300 and 600 seconds. ([#872](https://github.com/brave/bravebot/issues/872))
+ - Added skills to the list that opens after a `/`, each tagged with where it was found, and taking one writes a prompt naming it.
+ - Added colour for a slash command or skill typed in full, and a dim hint of the argument it takes, from the command table or a skill's `argument-hint` key.
+ - Added a note beside each queued line saying where it is going: into this turn at its next round, a new turn after it, or your shell. ([#68](https://github.com/brave/bravebot/issues/68))
+ - Added a live count while the model writes a long call, and the call's name beside the indicator, such as "Preparing a call: Write". ([#924](https://github.com/brave/bravebot/issues/924))
+ - Added a request to write in smaller parts when a reply stops at the output limit, made once before the turn gives up.
+ - Added paging to `read_git` with `skip`, whole commit messages with `messages`, and `tags` and `search`. `read_output` pages a long result the model may read, so a long history no longer needs the command run again.
+ - Added `> /dev/null` in a command line, which no longer asks about a file write.
+ - Changed the `providers` block and the `model` key to be read from `~/.bravebot` only. A project or local settings file that names one is ignored, and `doctor` names the file.
+ - Changed a call to an MCP server's tool to ask once private content has been let out of quarantine, whatever a rule or an earlier answer says, and an MCP result to arrive marked private. ([#829](https://github.com/brave/bravebot/issues/829), [#978](https://github.com/brave/bravebot/issues/978))
+ - Changed accept-edits mode and an allow rule to stop approving a write that looks like it holds a secret: you are asked, and `a` answers for that file this session while `r` remembers it. ([#678](https://github.com/brave/bravebot/issues/678))
+ - Changed a call in the terminal to lead with the reason it was made, with the call itself beneath.
+ - Changed `bravebot --plain` to honour a directory you asked to remember, and to say so as it opens. ([#885](https://github.com/brave/bravebot/issues/885))
+ - Changed the language server start prompt to say that code from the project and its dependencies runs with your access for TypeScript and Python. ([#987](https://github.com/brave/bravebot/issues/987))
+ - Changed the minimum Rust version for building from source to 1.90.
+ - Fixed long replies on Bedrock ending as a request that did not get through. Tool arguments and thinking now arrive as the model writes them, a reply may take as long as its length needs, and the default output ceiling is 32,000 tokens rather than 8,192. ([#924](https://github.com/brave/bravebot/issues/924))
+ - Fixed local models failing a turn: Ollama's long silence while it writes a call is waited out, a stream that breaks midway is reported as a reply that stopped, and a command that printed nothing says so.
+ - Fixed `run` starting a virtualenv's `python` as the interpreter it links to, which lost the virtualenv's packages. ([#973](https://github.com/brave/bravebot/issues/973))
+ - Fixed a command line holding a non-breaking space or other unusual whitespace hanging the agent, and a line of many unclosed braces taking seconds to read.
+ - Fixed a deny rule or a distrusted path being missed when a file is opened under other capitalisation on a case-insensitive drive, and an allow rule reaching a differently capitalised file on a case-sensitive one.
+ - Fixed a domain deny rule missing a host written with a trailing dot, and a metadata address written as a number or in hex going unnamed at the credential prompt.
+ - Fixed permission rules for a Windows path that begins with a drive letter, which never matched. ([#992](https://github.com/brave/bravebot/issues/992))
+ - Fixed `Bash(ls *)` matching a program whose name holds a space, such as a script called `ls /x`. ([#989](https://github.com/brave/bravebot/issues/989))
+ - Fixed a project settings file holding `null` or a list in place of `permissions` or `run` switching off your own deny and ask rules. ([#990](https://github.com/brave/bravebot/issues/990))
+ - Fixed `head`, `tail`, `wc` and `grep` on macOS running without a prompt when a later word names a file, so `grep -r TODO src -n` now asks. ([#988](https://github.com/brave/bravebot/issues/988))
+ - Fixed a program on macOS reaching any unix socket whenever the sandbox allowed network access, which now needs a write grant. ([#980](https://github.com/brave/bravebot/issues/980))
+ - Fixed the rules question granting rules that had scrolled out of view, and answers to the credential question surviving `/cd`. ([#954](https://github.com/brave/bravebot/issues/954), [#955](https://github.com/brave/bravebot/issues/955))
+ - Fixed a `/model` pick that no service serves any longer, such as a replaced inference profile, refusing every start with `BB1003`. The configured model opens instead and the pick is named.
+ - Fixed scratch directories left by killed sessions piling up in the temporary directory. The next session removes them, except on Windows. ([#304](https://github.com/brave/bravebot/issues/304))
+ - Fixed the update notice naming a version that may be out of date. It now names the running version and the command to run.
+
 ## [0.11.0](https://github.com/brave/bravebot/releases/tag/v0.11.0)
 
  - Added MCP servers: declare one with `bravebot mcp add`, name it under `mcp.request` in a settings file, and once you approve the server and the tools it lists, the model can call them, with each call put to you first. A stdio server runs confined with only the variables it declared, and none starts on Windows or in the desktop app yet. ([#83](https://github.com/brave/bravebot/issues/83))
