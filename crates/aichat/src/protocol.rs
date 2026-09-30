@@ -181,8 +181,31 @@ fn function_kind() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolCallRequestFunction {
     pub name: String,
-    /// A JSON object, as a string, which is how the API carries it in both directions.
+    /// A JSON object, as a string, which is how the API carries it in both directions. A record
+    /// holding an empty string reads back as `{}`, so a resumed conversation sends what a new one
+    /// would.
+    #[serde(deserialize_with = "arguments_read_back")]
     pub arguments: String,
+}
+
+/// The arguments a call is sent back with: what the model gave where that is anything, and `{}`
+/// where it gave nothing.
+///
+/// A model calling a tool that takes no arguments may send an empty string, and an empty string is
+/// not JSON. A server rendering the conversation for the model can drop or garble a call carrying
+/// one, and a planner that cannot see the call it made makes it again.
+fn arguments_to_send(arguments: Option<&str>) -> String {
+    match arguments {
+        Some(raw) if !raw.trim().is_empty() => raw.to_string(),
+        _ => "{}".to_string(),
+    }
+}
+
+fn arguments_read_back<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    let raw = <String as Deserialize>::deserialize(deserializer)?;
+    Ok(arguments_to_send(Some(&raw)))
 }
 
 /// A tool the model may call, in OpenAI's function-tool shape.
@@ -523,11 +546,7 @@ impl ToolCall {
             kind: function_kind(),
             function: ToolCallRequestFunction {
                 name: self.function.name.clone(),
-                arguments: self
-                    .function
-                    .arguments
-                    .clone()
-                    .unwrap_or_else(|| "{}".to_string()),
+                arguments: arguments_to_send(self.function.arguments.as_deref()),
             },
         })
     }
@@ -1537,6 +1556,45 @@ mod tests {
             parsed.tool_calls()[0].arguments().unwrap(),
             serde_json::json!({})
         );
+    }
+
+    /// The model reads the conversation back with its own calls in it, and an empty string is not
+    /// JSON. A call made with its arguments empty, blank or absent goes back as `{}`, and one made
+    /// with arguments goes back with them as they were.
+    #[test]
+    fn a_call_is_sent_back_with_its_arguments_or_an_empty_object() {
+        let call = |arguments: Option<&str>| ToolCall {
+            id: Some("call_1".into()),
+            function: ToolCallFunction {
+                name: "list".into(),
+                arguments: arguments.map(str::to_string),
+            },
+        };
+        for missing in [None, Some(""), Some(" \n")] {
+            let sent = call(missing).as_request().expect("a call with an id");
+            assert_eq!(sent.function.arguments, "{}", "{missing:?}");
+        }
+        let given = r#"{"query":"rust"}"#;
+        let sent = call(Some(given)).as_request().expect("a call with an id");
+        assert_eq!(sent.function.arguments, given);
+    }
+
+    /// A stored conversation can hold a call whose arguments were recorded empty. It reads back as
+    /// `{}`, so a resumed session sends the model a call it can read.
+    #[test]
+    fn a_stored_call_with_empty_arguments_reads_back_as_an_empty_object() {
+        let stored = |arguments: &str| -> ToolCallRequest {
+            serde_json::from_value(serde_json::json!({
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "list", "arguments": arguments},
+            }))
+            .expect("a stored call")
+        };
+        assert_eq!(stored("").function.arguments, "{}");
+        assert_eq!(stored("  ").function.arguments, "{}");
+        let given = r#"{"query":"rust"}"#;
+        assert_eq!(stored(given).function.arguments, given);
     }
 
     #[test]

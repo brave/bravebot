@@ -492,6 +492,42 @@ fn methods(received: &mpsc::Receiver<String>) -> Vec<String> {
 
 const FORECAST: &str = "mcp__weather__get_forecast";
 
+/// A model may call a tool with its arguments as an empty string, which is not JSON. The next round
+/// sends that call back to the model as `{}`, so a server rendering the conversation for the model
+/// keeps the call, and the planner sees the one it already made rather than making it again.
+#[test]
+fn a_call_made_with_empty_arguments_goes_back_to_the_model_as_an_empty_object() {
+    let scratch = Scratch::new("empty-arguments");
+    let (url, _server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let (endpoint, chat) = serve_chat(vec![tool_request(FORECAST, ""), reply_with("done")]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast").with_mcp(Some(session.clone())),
+        &mut confirmer,
+    );
+
+    let sent = rounds(&chat);
+    let [_, second, ..] = sent.as_slice() else {
+        panic!("the turn made {} rounds", sent.len());
+    };
+    let request: Value = serde_json::from_str(second).expect("a request");
+    let replayed: Vec<&Value> = request["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .filter_map(|message| message["tool_calls"].as_array())
+        .flatten()
+        .collect();
+    let [call] = replayed.as_slice() else {
+        panic!("the next round sent back {replayed:?}");
+    };
+    assert_eq!(call["function"]["name"], FORECAST);
+    assert_eq!(call["function"]["arguments"], "{}");
+}
+
 /// The whole road: the list is put to the person as it is drawn, a yes offers its tool with its
 /// description behind the margin, the call is put to the person with the planner's arguments, the
 /// arguments reach the server, and what the server answers never reaches the planner.
