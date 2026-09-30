@@ -1231,7 +1231,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.at = Some(spec.id());
         self.named_out_delegating = spec.named_out_delegating();
         self.tree = spec.tree().clone();
-        self.hold(spec.holds());
+        self.hold(
+            spec.holds(),
+            "the context that wrote this delegate's task held private content",
+        );
         self
     }
 
@@ -1241,7 +1244,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// that was shown private content reports private words, and a planner reading them holds
     /// them too. A report the planner was given a reference to never entered its context.
     pub fn heard_from_delegate(&mut self, report: Label) {
-        self.hold(report.confidentiality);
+        self.hold(
+            report.confidentiality,
+            "the planner was given a delegate's private report",
+        );
     }
 
     /// Refuse an action a `deny` rule covers, before anything is opened or started.
@@ -1384,7 +1390,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// One way, through [`Policy::hold`]: passing [`Confidentiality::Public`] changes nothing.
     pub fn holding(mut self, held: Confidentiality) -> Self {
-        self.hold(held);
+        self.hold(
+            held,
+            "the context this run resumes already held private content",
+        );
         self
     }
 
@@ -1400,19 +1409,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Label::new(self.context, self.holds)
     }
 
-    /// Raise what the context holds to include `shown`.
+    /// Raise what the context holds to include `shown`, recording `how` it came to hold it.
     ///
     /// One way: [`Confidentiality::join`] cannot lower it, so nothing shown later makes a
     /// context public again.
-    fn hold(&mut self, shown: Confidentiality) {
+    fn hold(&mut self, shown: Confidentiality, how: &str) {
         let raised = self.holds.join(shown);
         if raised != self.holds {
             self.holds = raised;
             self.allow(
                 "context",
-                "private content left quarantine for the planner; what it writes is private from \
-                 here"
-                    .to_string(),
+                format!("{how}; what the planner writes is private from here"),
             );
         }
     }
@@ -4228,7 +4235,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
         // What the slot was, not the label handed back: a page fetched off the web is public,
         // and the planner having read one is no reason to ask before every call to a server.
-        self.hold(was.confidentiality);
+        self.hold(
+            was.confidentiality,
+            &format!("{slot} was private and was let out of quarantine for the planner"),
+        );
         Ok(Labelled::new(text, label))
     }
 
@@ -4281,7 +4291,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
         // Here rather than where the picture is attached, because only here is what the slot was
         // still known. The attachment goes into the planner's next request.
-        self.hold(was.confidentiality);
+        self.hold(
+            was.confidentiality,
+            &format!("{slot} was a private picture and was let out of quarantine for the planner"),
+        );
         Ok(crate::vetting::Attached {
             slot: slot.clone(),
             media,
@@ -4470,7 +4483,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 by.describe()
             ),
         );
-        self.hold(was.confidentiality);
+        self.hold(
+            was.confidentiality,
+            &format!("{slot} was private and was read to the planner"),
+        );
         Ok(Labelled::new(text, label))
     }
 
@@ -10856,6 +10872,50 @@ five
 
         assert_eq!(policy.context_confidentiality(), Confidentiality::Private);
         assert_eq!(policy.context_label(), Label::trusted_private());
+    }
+
+    /// The trail says how the context came to hold private content: a resumed run is not
+    /// recorded as letting anything out of quarantine, and a vet names the slot it let out.
+    #[test]
+    fn the_trail_says_how_the_context_came_to_hold_private_content() {
+        fn held(sink: &RecordingSink) -> Vec<String> {
+            sink.events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GatePassed {
+                        gate: "context",
+                        detail,
+                    } if detail.contains("private") => Some(detail.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        let mut sink = RecordingSink::new();
+        drop(open_policy(&mut sink).holding(Confidentiality::Private));
+        assert_eq!(
+            held(&sink),
+            [
+                "the context this run resumes already held private content; what the planner \
+              writes is private from here"
+            ]
+        );
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let (slots, slot) = fetched("the person's mail");
+        policy.issue_grant("vet_content", "ref", slot.as_str());
+        policy
+            .promote_vetted(&slot, &slots, crate::vetting::Endorsed::ByAPerson)
+            .expect("approved");
+        drop(policy);
+        assert_eq!(
+            held(&sink),
+            [format!(
+                "{slot} was private and was let out of quarantine for the planner; what the \
+                 planner writes is private from here"
+            )]
+        );
     }
 
     /// A delegate's report the planner read is words from the delegate's context, so a private

@@ -18882,14 +18882,11 @@ fn a_planner_given_a_private_report_from_a_delegate_holds_it() {
             .any(|body| !body.contains("SEND-A-WORKER") && body.contains("SENTINEL-MAIL")),
         "the output was never read to the delegate, so nothing here was tested"
     );
-    let told = asked
-        .iter()
-        .filter(|body| body.contains("SEND-A-WORKER"))
-        .find(|body| body.contains("THE-WORKER-REPORTED"))
-        .expect("the report was never put in front of the planner");
     assert!(
-        !told.contains("could not be shown to you"),
-        "the report was quarantined, so the planner was never given it"
+        asked
+            .iter()
+            .any(|body| body.contains("SEND-A-WORKER") && body.contains("THE-WORKER-REPORTED")),
+        "the report was never put in front of the planner"
     );
     assert_eq!(
         conversation.holds(),

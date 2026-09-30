@@ -359,9 +359,10 @@ distinguishes them. An assignment decides what a program loads before its argume
 `verified-by: bravebot_agent::mcp::reading_workspace_files_leaves_a_call_a_rule_allows_unasked`
 
 The planner's arguments to a server's tool are private once private content was let out of
-quarantine for it, by `vet_content`, `read_output` or a delegate's report, and they stay private for
-the rest of the session ([LABEL-8](labels.md#LABEL-8)). So the fourth prompt is reached by every
-call after such a release. A workspace file the planner was shown does not make them private,
+quarantine for it, by `vet_content`, `read_output` or a delegate's report, and they stay private
+from then on, a resumed session included, unless the turn that let it out is undone and takes it
+back out of the conversation ([LABEL-8](labels.md#LABEL-8)). So the fourth prompt is reached by
+every call after such a release. A workspace file the planner was shown does not make them private,
 since that is the project's own data. A command line or a url the planner writes is not labelled
 this way: those are read as the planner's routing, and the first prompt is about a program's
 input, not its command line.

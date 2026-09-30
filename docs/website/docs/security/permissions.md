@@ -450,7 +450,8 @@ for *every* project is still your own file, or a file passed on the command line
 **Four prompts no rule can answer.** A run that would put your private data into a program asks
 whatever the rules say, because a rule saying which commands may run is not consent to hand one your
 data. A call that would put your private data into an [MCP server's](../customize/mcp-servers.md#each-call)
-tool asks for the same reason, and a standing answer to that server does not cover it. A write whose
+tool asks for the same reason, and a standing answer to that server does not cover it. That is every
+call once something private was let out of quarantine for the model. A write whose
 destination is known only through a reference asks too: that prompt is the only
 moment such a path is shown to anybody, so nothing a pattern says can stand in for having looked. And a
 run carrying a variable set in front of one of its programs asks, because a rule is matched against the

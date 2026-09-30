@@ -663,8 +663,8 @@ standing answers ([DELEGATE-10](delegation.md#DELEGATE-10)).
 The private-data arm is reached once the planner has been shown private content let out of
 quarantine, such as a server's answer a person vetted: its arguments are labelled private from then
 on ([LABEL-8](labels.md#LABEL-8)), so every later call asks whatever a rule or a standing answer
-says, and a one-shot run refuses it. A resumed session keeps this. A workspace file the planner
-reads does not reach it.
+says, and a one-shot run refuses it. A resumed session keeps this, and undoing the turn that let
+the content out ends it. A workspace file the planner reads does not reach it.
 
 `verified-by: bravebot_agent::mcp::a_vouched_list_offers_its_tool_and_a_call_answers_quarantined`
 `verified-by: bravebot_agent::mcp::a_refused_call_reaches_no_server`

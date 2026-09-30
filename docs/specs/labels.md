@@ -440,12 +440,14 @@ wrote, and a delegate starts out holding what the context that wrote its task he
 from a resumed session keeps the labels it was given when it first arrived, and what resuming does
 to the integrity of the context is LABEL-9. What the context held is kept the same way: a resumed,
 forked or compacted session holds whatever the original held, and a session file that does not say
-reads as holding private content. The user's own message is not labelled at all, which is why the
+reads as holding private content. The trail says which of these made the context private, so a
+resumed run is not recorded as letting anything out of quarantine. The user's own message is not labelled at all, which is why the
 two carriers that join it take no label either.
 
 `verified-by: bravebot_core::policy::adopting_model_output_from_a_fallen_context_stays_untrusted`
 `verified-by: bravebot_core::policy::only_a_value_a_transport_labelled_can_be_adopted_as_model_output`
 `verified-by: bravebot_core::policy::a_delegate_starts_out_holding_what_its_parent_held`
+`verified-by: bravebot_core::policy::the_trail_says_how_the_context_came_to_hold_private_content`
 `verified-by: bravebot_agent::conversation::a_private_conversation_does_not_come_back_public`
 `verified-by: bravebot_agent::conversation::a_public_conversation_comes_back_public`
 `verified-by: bravebot_agent::conversation::an_unreadable_holds_word_is_read_as_private`
