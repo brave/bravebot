@@ -40,6 +40,8 @@ export interface Answer<T> {
 }
 
 const api = {
+  /** Which system the window is on; the layout leaves room for the traffic lights on macOS only. */
+  platform: process.platform,
   readExperience(): Promise<Experience> { return ipcRenderer.invoke('bravebot:experience:read') as Promise<Experience> },
   writeExperience(key: string, value: unknown): Promise<Experience> {
     return ipcRenderer.invoke('bravebot:experience:write', key, value) as Promise<Experience>
