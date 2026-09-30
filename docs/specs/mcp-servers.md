@@ -25,6 +25,7 @@ governs:
 documented-by:
   - docs/website/docs/customize/mcp-servers.md
   - docs/website/docs/customize/mcp/gmail.md
+  - docs/website/docs/customize/mcp/calendar.md
 ---
 
 ## Scope
@@ -208,6 +209,7 @@ was recorded, and leaves every other project's as it was. An incognito session w
 | `claude mcp add my-server -e API_KEY=xxx -- npx my-mcp-server` | the same line | The value is stored in `~/.bravebot/mcp.json` and shown as `API_KEY (stored)`, never as itself. |
 | `claude mcp add brave-search -e BRAVE_API_KEY_FILE=/path/to/key -- npx -y @brave/brave-search-mcp-server` | the same line | The value is stored in `~/.bravebot/mcp.json`. The key file it names is one the server may read, and the question shows it as `may read`. |
 | `claude mcp add gmail -e WORKSPACE_FEATURE_OVERRIDES=... -- node ~/google-workspace-mcp/dist/index.js` | `bravebot mcp add gmail -e GEMINI_CLI_WORKSPACE_FORCE_FILE_STORAGE=true -e WORKSPACE_FEATURE_OVERRIDES=... -e BROWSER=www-browser --dir ~/google-workspace-mcp -- node ~/google-workspace-mcp/dist/index.js` | Google's Workspace server. Claude Code runs it with the person's `HOME`. Here `HOME` is the server's own ([SERVERS-10](#SERVERS-10)), so the server keeps its token in a file in its own directory, and `--dir` makes that directory writable. The sign-in, `node dist/headless-login.js`, is run first and outside bravebot. What the server returns is private ([MCP-1](mcp.md#MCP-1)). |
+| `claude mcp add calendar -e WORKSPACE_FEATURE_OVERRIDES=... -- node ~/google-workspace-calendar-mcp/dist/index.js` | `bravebot mcp add calendar -e GEMINI_CLI_WORKSPACE_FORCE_FILE_STORAGE=true -e WORKSPACE_FEATURE_OVERRIDES=... -e BROWSER=www-browser --dir ~/google-workspace-calendar-mcp -- node ~/google-workspace-calendar-mcp/dist/index.js` | The same server as the Gmail row, with the Calendar read group left on and every other group off, in a directory of its own so each token has one. The sign-in, `node dist/headless-login.js`, is run first and outside bravebot. What the server returns is private ([MCP-1](mcp.md#MCP-1)). |
 | `claude mcp add weather -s user -- ...` | `bravebot mcp add weather -s user -- ...` | The declaration goes in `~/.bravebot/mcp.json` whatever the scope. The request goes in `~/.bravebot/settings.json`, so every session starts it. |
 | `claude mcp add weather -s project -- ...` | `bravebot mcp add weather -s project -- ...` | [SERVERS-1](#SERVERS-1). The checkout's `.bravebot/settings.json` gets the alias and not the argv. |
 | `claude mcp get weather` | `bravebot mcp get weather` | Also prints the digest, which is what an approval is against. |
