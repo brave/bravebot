@@ -714,8 +714,8 @@ about the first one's ([#843](https://github.com/brave/bravebot/issues/843)).
 ### PERM-16: `readsStayInWorkspace` holds the file tools to the workspace, whatever else is written
 
 `"permissions": { "readsStayInWorkspace": true }` refuses every path outside the working directory,
-in every mode, whatever a rule, a mode, or an answer given during the session would otherwise open.
-No directory may be opened beside the workspace: `/add-dir` and `--add-dir` are refused, a name in
+in every mode. No directory may be opened beside the workspace, whatever a rule, a mode, or an answer
+given during the session would otherwise open: `/add-dir` and `--add-dir` are refused, a name in
 `additionalDirectories` is refused rather than put to anybody, and a directory that was already open
 when the key was read is not reachable either, which is what a resume reopening the directories its
 own record holds arrives as ([PERM-10](#PERM-10)).
@@ -723,6 +723,10 @@ own record holds arrives as ([PERM-10](#PERM-10)).
 [CHECKOUT-7](checkouts.md#CHECKOUT-7), which nothing yet builds, makes a delegate's checkout its
 workspace, so for that delegate this key refuses every path outside the checkout, the working
 directory among them.
+
+The key holds the tools to the working directory and does not decide which directory that is. `/cd`
+replaces the workspace, so a move to a parent widens what the key allows and a path it refused by
+name becomes reachable ([#1010](https://github.com/brave/bravebot/issues/1010)).
 
 **Where the refusal is made.** In the workspace, at the two places the reach exists: the one function
 every door onto a directory by name resolves through, and the test of where a path lands that every
@@ -743,7 +747,8 @@ the key nor a file would send somebody looking for a fault in the program.
 was asked for it, no rule opened it, and a session whose own directory went unreachable would fail
 every read and write it makes there ([TRUST-16](trust-map.md#TRUST-16)). `/cd` is not refused either:
 it replaces the workspace and closes what it left ([TRUST-13](trust-map.md#TRUST-13)), so nothing is
-open beside the workspace at any moment, which is the whole of what this clause promises. A file a
+open beside the workspace at any moment. A move to a parent still widens what the tools reach, which
+[#1010](https://github.com/brave/bravebot/issues/1010) tracks. A file a
 person dropped on the window keeps the reach [dropping.md](dropping.md) gives it, for the reason
 stated there: the path is fixed into routing by a gesture before a turn starts, so it is not reach a
 rule, a mode or an answer opened.
@@ -879,8 +884,9 @@ have made each of those three depend on nobody else having spoken.
   expecting it to fence every subprocess would be believing something that is not true.
 - **`readsStayInWorkspace` is read when the session opens, so `/cd` does not read it again.** The two
   keys are read once per session with the rest of the block ([PERM-12](#PERM-12)), and `/cd` reads the
-  destination's rules again but not these. A session already confined stays confined wherever it
-  moves, which is the direction to be wrong in; a session that was not confined and moves into a
+  destination's rules again but not these. A session already confined keeps the key set wherever it
+  moves, and what the key confines it to moves with it, so a move to a parent widens the reach rather
+  than leaving it where it was; a session that was not confined and moves into a
   checkout asking for it is confined from the next session there rather than from that turn. Closing
   it would mean the restriction arriving partway through a session, and the file the session started
   under is the one its author read.
