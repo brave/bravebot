@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Modal } from './Modal'
 import type { AgentSettings as Report, Hook, HooksDocument, Limits, Refusal } from '../../shared/agent-settings'
 import { composeHooks } from '../../shared/agent-settings'
-import { Alert, Button, Collapse, Dropdown, Icon, Input, ProgressRing, TabItem, Tabs, type IconName } from '../nala'
+import { Alert, Button, Collapse, Dropdown, Icon, Input, ProgressRing, TabItem, Tabs } from '../nala'
 const fieldText = (event: { value?: unknown; target?: EventTarget | null }): string | null => {
   if (typeof event.value === 'string') return event.value
   const target = event.target
@@ -34,7 +34,6 @@ function LimitsInForce({ limits }: { limits: Limits }): React.JSX.Element {
 }
 
 const sections = ['Connection', 'Hooks', 'Run settings']
-const sectionIcons: Record<string, IconName> = { Connection: 'globe', Hooks: 'window-console', 'Run settings': 'settings' }
 
 export function AgentSettings({ session, onClose, onChanged }: { session?: string; onClose: () => void; onChanged: () => void }): React.JSX.Element {
   const [tab, setTab] = useState('Connection')
@@ -177,9 +176,9 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
     <Button size="small" kind="filled" isDisabled={!dirty || busy || !editable} onClick={() => void save()} data-test="hook-save">Save hooks</Button>
   </> : <Button size="small" kind="filled" isDisabled={busy} onClick={close} data-test="settings-done">Done</Button>
   return <Modal title="Agent settings" size="lg" subtitle="Configuration and automation for this app." onClose={busy ? undefined : close} className="agent-settings" actions={actions}>
-    <Tabs ref={tabsRoot} className="settings-tabs" size="small" value={tab} data-test="settings-tabs"
+    <Tabs ref={tabsRoot} className="settings-tabs" value={tab} data-test="settings-tabs"
       onChange={({ value }) => { if (value) { setTab(value); setProblem(''); setStatus('') } }}>
-      {sections.map((name) => <TabItem key={name} value={name}><Icon name={sectionIcons[name]!} slot="icon-before" />{name}{name === 'Hooks' && dirty ? ' •' : ''}</TabItem>)}
+      {sections.map((name) => <TabItem key={name} value={name}>{name}{name === 'Hooks' && dirty ? ' •' : ''}</TabItem>)}
     </Tabs>
     {problem && <div className="settings-error"><Alert type="error" role="alert" data-test="settings-error">{problem}</Alert>{tab !== 'Hooks' && <Button size="small" kind="outline" isDisabled={busy} onClick={() => void load()}>Retry diagnostics</Button>}</div>}
     {status && <Alert type="success" size="small" role="status">{status}</Alert>}
