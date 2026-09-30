@@ -2496,29 +2496,7 @@ fn call_through_an_alias_of_a_denied_file(tag: &str, call: (&str, &str)) -> (Scr
     let scratch = Scratch::new(tag);
     std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=hunter2").unwrap();
     std::os::unix::fs::symlink(".env", scratch.path.join("alias.txt")).unwrap();
-    let workspace = Workspace::new(&scratch.path).expect("workspace");
-
-    let (endpoint, received) = serve_sequence(vec![
-        tool_request_2(call.0, call.1),
-        reply_with("understood"),
-    ]);
-    let config = config_for(&endpoint);
-    let egress = bravebot_net::Egress::new();
-    let mut sink = RecordingSink::new();
-
-    let task = Task::new("use the alias").with_permissions(rules(&["Read(./.env)"], &[], &[]));
-    turn::run_with_trust(
-        &config,
-        &egress,
-        &workspace,
-        &task,
-        &mut bravebot_agent::confirm::ApproveWrites,
-        &mut sink,
-        trusting_the_workspace(),
-    )
-    .expect("turn runs");
-
-    let bodies = received.try_iter().collect();
+    let bodies = run_calls_under_deny_rules(&scratch, &["Read(./.env)"], &[call]);
     (scratch, bodies)
 }
 
@@ -3279,6 +3257,341 @@ fn a_deny_rule_holds_when_a_listing_walks_the_directory_above_the_file() {
     assert!(
         listed,
         "the listing named nothing at all, so it proves nothing about what it left out"
+    );
+}
+
+/// One turn in `scratch` under `deny`, with the workspace vouched for and every write approved, so
+/// that a rule is the only thing that can refuse a call. Returns the body of every request the
+/// planner was sent; each call's result is in the request after it.
+#[cfg(unix)]
+fn run_calls_under_deny_rules(
+    scratch: &Scratch,
+    deny: &[&str],
+    calls: &[(&str, &str)],
+) -> Vec<String> {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies: Vec<String> = calls
+        .iter()
+        .map(|(tool, arguments)| tool_request_2(tool, arguments))
+        .collect();
+    replies.push(reply_with("understood"));
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("work with the files").with_permissions(rules(deny, &[], &[]));
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+    received.try_iter().collect()
+}
+
+/// Runs `control` through `notes-link` and then `call` through `env-link` under `Edit(./.env)`,
+/// after reading `env-link`, and checks that the read and `control` went through and `call` was
+/// refused by the rule. `notes-link` points at `notes.md`, which no rule covers, so a refusal of
+/// `call` cannot be a call through a link that fails for a reason of its own. Approving every
+/// write leaves the rule as the only thing between the call and the file.
+#[cfg(unix)]
+fn call_through_a_link_under_an_edit_rule(
+    tag: &str,
+    control: (&str, &str),
+    call: (&str, &str),
+    control_leaves: &str,
+) {
+    let scratch = Scratch::new(tag);
+    std::fs::write(scratch.path.join(".env"), "TOKEN=kept").unwrap();
+    std::fs::write(scratch.path.join("notes.md"), "note: kept").unwrap();
+    std::os::unix::fs::symlink(".env", scratch.path.join("env-link")).unwrap();
+    std::os::unix::fs::symlink("notes.md", scratch.path.join("notes-link")).unwrap();
+
+    let bodies = run_calls_under_deny_rules(
+        &scratch,
+        &["Edit(./.env)"],
+        &[("read_file", r#"{"path":"env-link"}"#), control, call],
+    );
+
+    assert!(
+        bodies.iter().any(|b| b.contains("TOKEN=kept")),
+        "an Edit rule stopped a read through a link to the file it covers"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
+        control_leaves,
+        "{}: a call through a link to a file no rule covers did not land",
+        control.0
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".env")).unwrap(),
+        "TOKEN=kept",
+        "{}: a file an Edit rule covers was changed through a link to it",
+        call.0
+    );
+    assert!(
+        bodies
+            .last()
+            .is_some_and(|b| b.contains("deny rule in the user's settings covers env-link,")),
+        "{}: the planner was not told a rule refused the name it used",
+        call.0
+    );
+}
+
+/// An `Edit` rule keeps a file from being changed and leaves it readable, so the name a write lands
+/// on has to be put to the `Edit` rules as well as the `Read` ones. A `Read` rule refuses a write
+/// too, which is why a test using one cannot tell whether the `Edit` rules were asked.
+///
+/// Unix only, because making the second name is: a symlink needs a privilege on Windows that a test
+/// run cannot assume.
+#[test]
+#[cfg(unix)]
+fn a_file_an_edit_rule_denies_is_not_written_through_a_link_to_it() {
+    call_through_a_link_under_an_edit_rule(
+        "permissions-edit-rule-write-through-a-link",
+        (
+            "write_file",
+            r#"{"path":"notes-link","contents":"through the link"}"#,
+        ),
+        ("write_file", r#"{"path":"env-link","contents":"replaced"}"#),
+        "through the link",
+    );
+}
+
+/// The edit tool reaches a file by the same argument as the write tool and is refused alike.
+#[test]
+#[cfg(unix)]
+fn a_file_an_edit_rule_denies_is_not_edited_through_a_link_to_it() {
+    call_through_a_link_under_an_edit_rule(
+        "permissions-edit-rule-edit-through-a-link",
+        (
+            "edit_file",
+            r#"{"path":"notes-link","old_text":"kept","new_text":"replaced"}"#,
+        ),
+        (
+            "edit_file",
+            r#"{"path":"env-link","old_text":"kept","new_text":"replaced"}"#,
+        ),
+        "note: replaced",
+    );
+}
+
+/// A link can name a file that is not there yet, and a write through it creates that file. The
+/// rule is asked about the name the link gives, since there is nothing on disk yet for it to match.
+#[test]
+#[cfg(unix)]
+fn a_denied_file_is_not_created_through_a_link_to_it() {
+    let scratch = Scratch::new("permissions-denied-created-through-a-link");
+    std::os::unix::fs::symlink(".env", scratch.path.join("env-link")).unwrap();
+    std::os::unix::fs::symlink("notes.md", scratch.path.join("notes-link")).unwrap();
+
+    let bodies = run_calls_under_deny_rules(
+        &scratch,
+        &["Edit(./.env)"],
+        &[
+            // Written first, so the refusal below cannot be a write through a link to nothing that
+            // fails for a reason of its own.
+            (
+                "write_file",
+                r#"{"path":"notes-link","contents":"through the link"}"#,
+            ),
+            ("write_file", r#"{"path":"env-link","contents":"planted"}"#),
+        ],
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.md")).ok(),
+        Some("through the link".to_string()),
+        "a write through a link to a file not there yet did not create it"
+    );
+    assert!(
+        !scratch.path.join(".env").exists(),
+        "a file an Edit rule covers was created through a link to it"
+    );
+    assert!(
+        bodies
+            .last()
+            .is_some_and(|b| b.contains("deny rule in the user's settings covers env-link,")),
+        "the planner was not told a rule refused the name it used"
+    );
+}
+
+/// The rule may name a directory rather than the file. A link to that directory is a second name
+/// for every file in it, so a path that passes through the link lands under the rule even though
+/// the name it ends in is an ordinary file.
+#[test]
+#[cfg(unix)]
+fn a_link_to_a_directory_a_rule_covers_is_not_read_through() {
+    let scratch = Scratch::new("permissions-denied-through-a-directory-link-read");
+    std::fs::create_dir_all(scratch.path.join("secrets")).unwrap();
+    std::fs::write(scratch.path.join("secrets/key.pem"), "SECRET_TOKEN=hunter2").unwrap();
+    std::os::unix::fs::symlink("secrets", scratch.path.join("shortcut")).unwrap();
+
+    let bodies = run_calls_under_deny_rules(
+        &scratch,
+        &["Read(secrets/**)"],
+        &[("read_file", r#"{"path":"shortcut/key.pem"}"#)],
+    );
+
+    assert!(
+        !bodies.iter().any(|b| b.contains("hunter2")),
+        "a denied file was read through a link to its directory"
+    );
+    assert!(
+        bodies
+            .iter()
+            .any(|b| b.contains("deny rule in the user's settings covers shortcut/key.pem")),
+        "the planner was not told a rule refused the name it used"
+    );
+}
+
+/// The write half, for a file that does not exist yet. Nothing on disk has the new file's name, so
+/// only where its directory lands puts the write under the rule.
+#[test]
+#[cfg(unix)]
+fn a_link_to_a_directory_a_rule_covers_is_not_written_through() {
+    let scratch = Scratch::new("permissions-denied-through-a-directory-link-write");
+    std::fs::create_dir_all(scratch.path.join("secrets")).unwrap();
+    std::fs::create_dir_all(scratch.path.join("public")).unwrap();
+    std::os::unix::fs::symlink("secrets", scratch.path.join("shortcut")).unwrap();
+    std::os::unix::fs::symlink("public", scratch.path.join("open")).unwrap();
+
+    run_calls_under_deny_rules(
+        &scratch,
+        &["Edit(secrets/**)"],
+        &[
+            // Written first, so the refusal below cannot be a write through a link to a directory
+            // that fails for a reason of its own.
+            (
+                "write_file",
+                r#"{"path":"open/new.pem","contents":"through the link"}"#,
+            ),
+            (
+                "write_file",
+                r#"{"path":"shortcut/new.pem","contents":"through the link"}"#,
+            ),
+        ],
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("public/new.pem")).ok(),
+        Some("through the link".to_string()),
+        "a write through a link to a directory no rule covers did not land"
+    );
+    assert!(
+        !scratch.path.join("secrets/new.pem").exists(),
+        "a file was created in a directory an Edit rule covers through a link to it"
+    );
+}
+
+/// Enumerating and searching are reads of the tree. Naming a link to a covered directory as the
+/// place to look reaches the same tree, so neither names what is in it nor quotes a line of it.
+/// The rule names the directory itself, so the only thing that can refuse the walk of the link is
+/// a check on the landing name; the per-entry check does not fire for a directory it is not below.
+#[test]
+#[cfg(unix)]
+fn a_link_to_a_directory_a_rule_covers_is_not_listed_or_searched_through() {
+    let scratch = Scratch::new("permissions-denied-through-a-directory-link-walk");
+    std::fs::create_dir_all(scratch.path.join("secrets")).unwrap();
+    std::fs::write(scratch.path.join("secrets/key.pem"), "SECRET_TOKEN=hunter2").unwrap();
+    // The needle is in this file too, so a search of the workspace that ran quotes its line, and
+    // only a listing names the file without it.
+    std::fs::write(
+        scratch.path.join("notes.md"),
+        "SECRET_TOKEN is set elsewhere",
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("readme.txt"), "nothing to find").unwrap();
+    std::os::unix::fs::symlink("secrets", scratch.path.join("shortcut")).unwrap();
+
+    let bodies = run_calls_under_deny_rules(
+        &scratch,
+        &["Read(secrets)"],
+        &[
+            ("list_files", r#"{"directory":"shortcut"}"#),
+            (
+                "search",
+                r#"{"pattern":"SECRET_TOKEN","directory":"shortcut"}"#,
+            ),
+            ("list_files", r#"{"directory":"."}"#),
+            ("search", r#"{"pattern":"SECRET_TOKEN","directory":"."}"#),
+        ],
+    );
+
+    assert!(
+        bodies.iter().any(|b| b.contains("readme.txt")),
+        "the listing of the workspace named nothing, so it proves nothing"
+    );
+    assert!(
+        bodies.iter().any(|b| b.contains("is set elsewhere")),
+        "the search of the workspace quoted nothing, so it proves nothing"
+    );
+    let last = bodies.last().expect("the planner was sent a request");
+    assert_eq!(
+        last.matches("deny rule in the user's settings covers shortcut,")
+            .count(),
+        2,
+        "the listing and the search of the link were not both refused by the rule"
+    );
+    assert!(
+        !bodies.iter().any(|b| b.contains("key.pem")),
+        "a walk named a file in a covered directory reached through a link to it"
+    );
+    assert!(
+        !bodies.iter().any(|b| b.contains("hunter2")),
+        "a search quoted a line of a covered directory reached through a link to it"
+    );
+}
+
+/// A walk that meets a link on its way neither follows it nor reports it, whatever the link points
+/// at, so a link to a denied file is not a second entry a listing or a search can hand back.
+#[test]
+#[cfg(unix)]
+fn a_walk_does_not_report_a_link_to_a_denied_file() {
+    let scratch = Scratch::new("permissions-denied-link-under-a-walk");
+    std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=hunter2").unwrap();
+    std::fs::write(
+        scratch.path.join("notes.md"),
+        "SECRET_TOKEN is set elsewhere",
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("readme.txt"), "nothing to find").unwrap();
+    std::os::unix::fs::symlink(".env", scratch.path.join("env-link")).unwrap();
+    std::os::unix::fs::symlink("notes.md", scratch.path.join("notes-link")).unwrap();
+
+    let bodies = run_calls_under_deny_rules(
+        &scratch,
+        &["Read(./.env)"],
+        &[
+            ("list_files", r#"{"directory":"."}"#),
+            ("search", r#"{"pattern":"SECRET_TOKEN","directory":"."}"#),
+        ],
+    );
+
+    assert!(
+        bodies.iter().any(|b| b.contains("readme.txt")),
+        "the listing named nothing, so it proves nothing"
+    );
+    assert!(
+        bodies.iter().any(|b| b.contains("is set elsewhere")),
+        "the search quoted nothing, so it proves nothing"
+    );
+    assert!(
+        !bodies.iter().any(|b| b.contains("env-link")),
+        "a walk reported a link to a denied file"
+    );
+    assert!(
+        !bodies.iter().any(|b| b.contains("notes-link")),
+        "a walk reported a link to a file no rule covers"
+    );
+    assert!(
+        !bodies.iter().any(|b| b.contains("hunter2")),
+        "a walk read a denied file through a link to it"
     );
 }
 
