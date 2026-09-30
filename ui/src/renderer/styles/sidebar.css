@@ -12,7 +12,8 @@
 /* The recents menu is anchored inside this clip, and it has to paint past the column. */
 .sessions.recents-open { overflow: visible; }
 
-/* The column's titlebar. Traffic-light clearance on the left, the strip drags the window, and
+/* The column's titlebar. Traffic-light clearance on the left (macOS only: elsewhere the window has
+   its native frame, and the list switch takes the whole width), the strip drags the window, and
    everything in it that is a control opts out. The same height as the conversation's head, and
    inset by the same ground, so the two line up across the window. */
 .sidebar-titlebar {
@@ -21,7 +22,7 @@
   align-items: center;
   box-sizing: border-box;
   height: var(--titlebar);
-  padding: 0 var(--leo-spacing-l) 0 var(--lights);
+  padding: 0 var(--leo-spacing-l) 0 max(var(--leo-spacing-l), var(--lights));
   -webkit-app-region: drag;
 }
 .sidebar-tabs {

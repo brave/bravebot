@@ -118,6 +118,9 @@
 }
 
 /* A forced appearance must also flip native parts (scrollbars, form controls). */
+/* Only macOS draws its window controls over the content; elsewhere the frame is the system's. */
+:root:not([data-platform='mac']) { --lights: 0px; }
+
 :root[data-theme='light'] { color-scheme: light; }
 :root[data-theme='dark'] { color-scheme: dark; }
 

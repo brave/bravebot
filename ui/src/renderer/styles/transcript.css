@@ -25,7 +25,7 @@
   transition: padding-left var(--panel-motion);
 }
 /* With the session list folded away the lights are over this header, and it clears them. */
-.app.left-folded .transcript-head { padding-left: calc(var(--lights) - var(--card-gap)); }
+.app.left-folded .transcript-head { padding-left: max(var(--leo-spacing-l), calc(var(--lights) - var(--card-gap))); }
 
 /* Positioned against its own header, so it is right at every frame of a fold and every width
    of a drag. Everything that has to be pressed or hovered opts out with no-drag. */
