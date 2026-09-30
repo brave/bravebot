@@ -152,7 +152,7 @@
 
 .settings-tabs { display: block; margin-bottom: var(--leo-spacing-l); }
 .settings-body section { padding: var(--leo-spacing-l) 0; border-bottom: 1px solid var(--border-hairline); }
-.settings-body section:last-child { border-bottom: 0; }
+.settings-body section:last-child, .settings-body .settings-status { border-bottom: 0; }
 .settings-body h3 { margin: var(--leo-spacing-m) 0 var(--leo-spacing-s); }
 .settings-body p { font: var(--type-meta); }
 .settings-body dl {

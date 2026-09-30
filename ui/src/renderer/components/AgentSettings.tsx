@@ -185,7 +185,7 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
     {busy && <p role="status" className="settings-busy"><ProgressRing mode="indeterminate" /> Working…</p>}
     <div className="settings-body" data-test="settings-body">
       {tab === 'Connection' && report && <>
-        <section><h3>{report.configured ? 'Model service configured' : 'Choose a model service'}</h3>
+        <section className="settings-status"><h3>{report.configured ? 'Model service configured' : 'Choose a model service'}</h3>
           {report.problem && <p>{report.problem}</p>}
           <dl><dt>Agent build</dt><dd>{report.build}</dd><dt>Default model</dt><dd>{report.model ?? 'Not configured'}</dd></dl>
           {report.providers.map((p, i) => <p key={i}><strong>{p.name}</strong> · Credential {p.credential}</p>)}
