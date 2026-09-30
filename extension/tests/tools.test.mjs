@@ -103,6 +103,13 @@ const tabs = [
   },
 ];
 
+// The limits are the ones the spec states. The other tests size their input
+// from these constants, so they would pass at any value.
+test("a page is cut at 100,000 characters and a search at 100 results", () => {
+  assert.equal(PAGE_TEXT_LIMIT, 100_000);
+  assert.equal(MAX_RESULTS, 100);
+});
+
 // The host routes a reply by its id, so every reply carries the request's.
 test("a reply keeps its id, with a result or an error", async () => {
   const chrome = browser({ tabs });
