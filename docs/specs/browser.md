@@ -1,0 +1,261 @@
+---
+id: BROWSER
+title: Reaching the browser through an extension
+status: normative
+governs:
+  - crates/browser/Cargo.toml
+  - crates/browser/src/main.rs
+  - crates/browser/src/lib.rs
+  - crates/browser/src/framing.rs
+  - crates/browser/src/host.rs
+  - crates/browser/src/install.rs
+  - crates/browser/src/lines.rs
+  - crates/browser/src/paths.rs
+  - crates/browser/src/relay.rs
+  - crates/browser/src/server.rs
+  - crates/browser/src/tools.rs
+  - docs/design/browser-extension.md
+documented-by: none (gap: a "Connecting Brave" section of docs/website/docs/customize/mcp-servers.md, once the extension exists to connect)
+---
+
+## Scope
+
+How BraveBot reaches a Brave extension that reads pages and profile data for it: the processes
+between the two, who starts each, how they find and trust each other, and what is sent between
+them. The design and its reasons are [browser-extension.md](../design/browser-extension.md). What
+an MCP server may do once it runs is [mcp.md](mcp.md) and [mcp-servers.md](mcp-servers.md), and
+nothing here changes either: what the extension returns reaches a session as any server's result
+does.
+
+## What exists today
+
+The relay is built, on macOS and Linux. The extension is not, so nothing answers the host yet, and
+every tool call fails at the extension's end until it does. Windows runs neither half: it starts no
+stdio server, and `bravebot-browser` says the platform is not supported there.
+
+## The processes
+
+```
+BraveBot ──MCP──▶ bravebot-browser mcp ──socket──▶ bravebot-browser (native host) ◀──▶ extension
+                  (started by BraveBot,             (started by Brave,             native
+                   confined)                         not confined)                 messaging
+```
+
+One program, `bravebot-browser`, runs in both roles. BraveBot starts it as a stdio MCP server,
+declared with `bravebot mcp add` like any other. Brave starts it as a native messaging host when the
+extension connects, with the extension's origin as its first argument. The two copies talk over a
+Unix socket, one line of JSON at a time, and the first line a peer sends is the secret.
+
+## What the confinement allows
+
+A stdio server runs confined. How that confinement treats a Unix socket decides which side listens
+and where the socket is. Measured against the profile each platform's confinement writes for a
+stdio server with egress and a `--dir`:
+
+| From inside the confinement | macOS (Seatbelt) | Linux (Landlock ABI 8) |
+|---|---|---|
+| connect, socket in `--dir` | allowed | allowed |
+| connect, socket outside every grant | allowed | allowed |
+| connect, egress withheld | refused | not measured |
+| bind, in `--dir` | refused | allowed |
+| bind, outside every grant | refused | refused |
+
+On macOS a connect to a Unix socket is a network operation and a bind is refused outright. On Linux
+the right that governs connecting to a pathname socket is Landlock ABI 9, which the confinement
+handles where the kernel carries it, so on such a kernel a connect outside the write grants is
+refused. That row was not measured, because the kernel tried carries ABI 8.
+
+## Clauses
+
+<a id="BROWSER-1"></a>
+### BROWSER-1: the native host listens and the MCP server connects
+
+The copy Brave starts creates the socket and accepts on it. The copy BraveBot starts connects to it
+and never creates one, or anything else, in its directory.
+
+**Why.** A confined server cannot bind a Unix socket on macOS, in any directory. Connecting out is
+allowed on both platforms.
+
+`verified-by: bravebot_browser::relay::a_tool_call_reaches_the_extension_through_the_socket_the_host_listens_on`
+`verified-by: bravebot_browser::relay::the_mcp_server_never_creates_the_socket`
+
+<a id="BROWSER-2"></a>
+### BROWSER-2: the socket is in the directory the server's declaration names
+
+The socket and the secret are in one directory, `~/.bravebot-browser` unless
+`BRAVEBOT_BROWSER_DIR` names another, with no access for anyone but the account. The host makes the
+directory, or narrows an existing one to that, and refuses a link in its place. The MCP server is
+declared with that directory as its `--dir`, and finds the socket in the directory it starts in, so
+neither half is told a path:
+
+```
+bravebot mcp add brave -s user --dir ~/.bravebot-browser -- <path to>/bravebot-browser mcp
+```
+
+**Why.** On a Linux kernel carrying Landlock ABI 9, a confined process connects only to sockets
+under its write grants, and `--dir` is the one write grant a declaration adds. A socket anywhere
+else works on today's kernels and stops working on a newer one. The host is started by Brave with no
+argument of ours, and the server is confined with a home of its own, so the account's home and the
+starting directory are the two things each can find without being told.
+
+`verified-by: bravebot_browser::relay::the_socket_and_secret_are_in_a_directory_only_this_account_can_reach`
+`verified-by: bravebot_browser::paths::the_host_finds_the_directory_under_home_unless_one_is_named`
+`verified-by: bravebot_browser::paths::the_directory_is_made_or_narrowed_to_this_account_alone`
+`verified-by: bravebot_browser::paths::a_link_in_place_of_the_directory_is_refused`
+`verified-by: bravebot_browser::paths::a_private_file_is_readable_by_this_account_alone`
+
+<a id="BROWSER-3"></a>
+### BROWSER-3: the native host serves only a peer holding the secret in that directory
+
+The native host writes a new random secret into the socket's directory as it starts, readable by
+the account alone. A connection whose first line is not that secret is closed before anything it
+sent is forwarded.
+
+**Why.** The confinement does not keep other processes off the socket. Every stdio server BraveBot
+starts has egress, and on macOS egress is what reaches a Unix socket, so any of them can connect.
+Only a process granted the directory can read the secret, and only the declaration naming it is
+granted it.
+
+`verified-by: bravebot_browser::relay::a_peer_without_the_secret_is_closed_and_nothing_it_sent_is_forwarded`
+`verified-by: bravebot_browser::host::only_the_same_secret_matches`
+`verified-by: bravebot_browser::host::each_secret_is_new`
+
+<a id="BROWSER-4"></a>
+### BROWSER-4: the native host speaks only to our extension
+
+The host manifest's `allowed_origins` names one extension id. The host also checks the origin Brave
+passes it against the id `install` recorded in the directory, and exits without creating anything
+when it names any other extension or none was recorded.
+
+**Why.** `allowed_origins` is enforced by the browser. Checking the origin again in the host keeps
+a manifest someone edited from handing the relay to a different extension.
+
+`verified-by: bravebot_browser::relay::the_host_refuses_an_extension_it_was_not_installed_for`
+
+<a id="BROWSER-5"></a>
+### BROWSER-5: the socket exists while the extension is connected
+
+The native host runs from the extension's connect until its port closes, and removes the socket and
+the secret as it exits. While no extension is connected there is no socket.
+
+**Why.** Brave owns the host's lifetime and nothing else can start it. A socket left behind would
+point a connecting server at a relay that is not there.
+
+`verified-by: bravebot_browser::relay::the_socket_and_secret_go_when_the_extension_disconnects`
+
+<a id="BROWSER-6"></a>
+### BROWSER-6: a call with no extension connected fails at once
+
+A tool call made while the socket is absent or refuses the connection is a failure saying no
+extension is connected, and naming the two reasons: Brave is not running, or the extension is not
+installed in it. A call the extension disconnects during is a failure saying so. A call the
+extension does not answer within 30 seconds is a failure saying that. None of them is an empty
+result, and none waits for the extension to appear.
+
+**Why.** An empty result would read as "the page is empty" or "no history matches". Waiting would
+hold the turn on something only a person can fix.
+
+`verified-by: bravebot_browser::relay::a_call_with_no_extension_connected_fails_at_once_and_says_why`
+`verified-by: bravebot_browser::relay::a_call_to_a_stale_socket_fails_at_once_and_says_why`
+`verified-by: bravebot_browser::relay::a_call_the_extension_disconnects_during_fails_and_says_so`
+`verified-by: bravebot_browser::relay::a_call_the_extension_does_not_answer_times_out_and_says_so`
+`verified-by: bravebot_browser::relay::the_production_reply_timeout_is_thirty_seconds`
+
+<a id="BROWSER-7"></a>
+### BROWSER-7: each reply reaches the session that asked
+
+Several BraveBot sessions may be connected to one native host at once. The host gives each request
+an id unique across its connections before sending it to the extension, and hands each reply back
+only on the connection the request came in on, with the id that connection used.
+
+**Why.** There is one extension and one native messaging port. Two sessions each numbering requests
+from 1 would otherwise receive each other's replies.
+
+`verified-by: bravebot_browser::relay::each_reply_reaches_the_session_that_asked`
+
+<a id="BROWSER-8"></a>
+### BROWSER-8: no message to the extension exceeds the platform limit
+
+A message from the host to the extension is at most 1 MB, the limit native messaging sets, and a
+request that would exceed it is refused with an error under its own id and not sent. A message from
+the extension may be up to 64 MB, and a longer one ends the host.
+
+**Why.** Brave closes the port on a message over 1 MB, which disconnects every session at once.
+
+`verified-by: bravebot_browser::relay::a_request_over_the_limit_is_refused_and_never_reaches_the_extension`
+`verified-by: bravebot_browser::relay::a_request_far_over_the_limit_keeps_its_id_and_the_next_request`
+`verified-by: bravebot_browser::framing::a_message_over_the_limit_to_the_extension_is_refused_and_nothing_is_written`
+`verified-by: bravebot_browser::framing::a_length_over_the_limit_from_the_extension_is_an_error`
+`verified-by: bravebot_browser::framing::a_written_message_reads_back_as_itself`
+`verified-by: bravebot_browser::framing::a_message_cut_short_is_an_error`
+`verified-by: bravebot_browser::lines::a_line_past_the_limit_is_too_long`
+
+<a id="BROWSER-9"></a>
+### BROWSER-9: installing writes one manifest in the locations Brave reads
+
+`bravebot-browser install <extension id>` writes one host manifest named `com.brave.bravebot`,
+naming this program by its absolute path and that extension alone, into the per-user location
+Brave's stable channel reads:
+
+| Platform | Where |
+|---|---|
+| macOS | `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/` |
+| Linux | `$XDG_CONFIG_HOME/BraveSoftware/Brave-Browser/NativeMessagingHosts/`, `~/.config` where unset |
+
+It records the id in the socket's directory for the host to check, writes nothing else, changes no
+other host's manifest, and writes nothing at all for an id that is not 32 letters from `a` to `p`.
+
+**Why.** On macOS Brave reads Chrome's location rather than its own, so a manifest in a Brave
+directory there is never read. Chrome reads the same file, and `allowed_origins` is what keeps
+Chrome from starting the host for anything but our extension. On Linux the location is under
+Brave's own profile directory, and a channel other than stable has its own.
+
+`verified-by: bravebot_browser::relay::installing_writes_one_manifest_for_our_extension_alone`
+`verified-by: bravebot_browser::relay::installing_refuses_what_is_not_an_extension_id`
+`verified-by: bravebot_browser::install::the_manifest_goes_where_brave_reads_it`
+`verified-by: bravebot_browser::install::an_extension_id_is_32_letters_from_a_to_p`
+
+<a id="BROWSER-10"></a>
+### BROWSER-10: the tool list is fixed, and a tool not on it is refused
+
+The MCP server offers the same list whether or not the extension is connected: `list_tabs`,
+`read_page`, `search_history` and `search_bookmarks`. Each calls the extension method of the same
+name with the tool's arguments. A call naming any other tool is refused by the server and nothing
+is sent to the extension. `read_page` names the page by its URL.
+
+**Why.** A person vouches for a server's tool list once and BraveBot records a digest of it. A list
+that changed with whether the extension was connected would be put to them again each time it did.
+A name off the list reaching the extension would be a tool nobody vouched for. The question before
+each call shows its arguments, and a URL is one a person can judge there where a tab id is not.
+
+`verified-by: bravebot_browser::relay::the_tool_list_is_the_same_whether_or_not_the_extension_is_connected`
+`verified-by: bravebot_browser::relay::a_tools_arguments_are_the_extension_methods_parameters`
+`verified-by: bravebot_browser::relay::a_tool_that_is_not_on_the_list_is_refused_without_asking_the_extension`
+`verified-by: bravebot_browser::tools::a_tool_is_found_by_its_exact_name`
+`verified-by: bravebot_browser::tools::every_tool_takes_an_object`
+`verified-by: bravebot_browser::tools::a_page_is_asked_for_by_its_url`
+
+<a id="BROWSER-11"></a>
+### BROWSER-11: a socket that exists is one that accepts
+
+The host binds the socket under a name of its own and renames it into place only once it listens.
+A server that finds the socket can connect to it.
+
+**Why.** A socket file exists from its bind, before its listen. A server connecting between the two
+is refused, and would report that no extension is connected while one is.
+
+`verified-by: bravebot_browser::host::the_socket_is_published_only_after_it_accepts`
+
+## Known costs
+
+- The secret in [BROWSER-3](#BROWSER-3) is only as private as the directory. Any process of the
+  person's that can read it can use the relay, which is the same account boundary a keychain gives.
+- One Brave profile at a time. A second profile with the extension installed starts a second host,
+  which finds the first one's socket accepting and exits.
+- A confined server can connect to the socket only while it has egress. A declaration that withholds
+  egress, where a future version allows one to, cannot reach the relay on macOS.
+- Linux with Landlock ABI 9 was reasoned about and not measured.
+- Moving `bravebot-browser` after installing leaves the manifest naming the old path, and Brave
+  cannot start the host until it is installed again.
+- Windows starts no stdio server today, so the MCP half cannot run there at all, and whether a named
+  pipe or a Unix socket is the right transport is open.
