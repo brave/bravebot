@@ -504,6 +504,7 @@ export interface EventMap {
   'watch.fired': { number: number; path: string }
   'watch.ended': { number: number; reason: string; message?: string }
   phase: { phase: Phase }
+  composing: { call: string | null }
   narration: { text: string }
   'tool.started': Activity
   'tool.finished': Activity

@@ -47,6 +47,20 @@ pub fn validate(path: &Path) -> Result<(), Failure> {
     })
 }
 
+/// The keys a file above the person's own home directory named and the agent did not obey, with
+/// the file each came from.
+fn ignored(settings: &Settings) -> Vec<Value> {
+    let named = |key: &'static str, paths: Vec<&Path>| -> Vec<Value> {
+        paths
+            .into_iter()
+            .map(|path| json!({ "name": key, "path": path }))
+            .collect()
+    };
+    let mut ignored = named("model", settings.model_ignored().collect());
+    ignored.extend(named("provider", settings.providers_ignored().collect()));
+    ignored
+}
+
 pub fn report(project: Option<&Path>, selected: Option<&Path>) -> Value {
     let settings = layers(project, selected);
     let managed = Managed::load();
@@ -72,6 +86,7 @@ pub fn report(project: Option<&Path>, selected: Option<&Path>) -> Value {
         "brave": configured.as_ref().is_ok_and(|c| c.serves_aichat()), "providers": providers,
         "selected": selected, "layers": settings.layers().collect::<Vec<_>>(),
         "overrides": settings.overridden().map(|(name, path)| json!({"name": name, "path": path})).collect::<Vec<_>>(),
+        "ignored": ignored(&settings),
         "managed": { "path": managed.path(), "keys": managed.pinned().collect::<Vec<_>>() },
         "network": { "roots": transport.roots().paths(),
             "problem": (!transport.trust_problems().is_empty()).then(|| transport.trust_problems().iter().map(ToString::to_string).collect::<Vec<_>>().join("\n")),
@@ -110,6 +125,30 @@ mod tests {
             validate(&file).is_err(),
             "do not accept a file the agent silently ignores"
         );
+    }
+
+    #[test]
+    fn a_project_files_model_and_provider_are_reported_as_ignored() {
+        let (directory, settings) = vetting_layers(
+            Some(r#"{"model":"home/model"}"#),
+            Some(r#"{"model":"project/model","provider":{}}"#),
+        );
+        let project = directory.path().join("project/.bravebot/settings.json");
+        assert_eq!(
+            ignored(&settings),
+            vec![
+                json!({ "name": "model", "path": project }),
+                json!({ "name": "provider", "path": project }),
+            ]
+        );
+        assert_eq!(
+            settings.model(),
+            Some("home/model"),
+            "the home file's model was not the one obeyed"
+        );
+
+        let (_, settings) = vetting_layers(Some(r#"{"model":"home/model"}"#), None);
+        assert!(ignored(&settings).is_empty(), "the person's own file was reported");
     }
 
     fn vetting_layers(

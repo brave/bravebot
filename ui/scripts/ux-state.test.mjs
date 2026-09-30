@@ -345,12 +345,36 @@ function liveSession() {
   const { apply } = load('src/renderer/App.tsx')
   const { workingWord } = load('src/renderer/components/Transcript.tsx')
   const session = {
-    live: { handle: 's-1', summary: { title: '', project: '', branch: null, directory: '/', id: 'a' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, checking: null, tokens: 0, running: false, archived: 0, awaitingOrdinal: null, bot: null },
+    live: { handle: 's-1', summary: { title: '', project: '', branch: null, directory: '/', id: 'a' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, checking: null, composing: null, tokens: 0, running: false, archived: 0, awaitingOrdinal: null, bot: null },
   }
   session.send = (event, data) => apply({ event, data }, (update) => { session.live = update(session.live) }, () => {}, () => {})
-  session.word = () => workingWord(session.live.phase, session.live.checking)
+  session.word = () => workingWord(session.live.phase, session.live.checking, session.live.composing)
   return session
 }
+
+// A long call can take minutes to write, and the round's phase is the same for all of it, so the
+// call's name is the only thing that says what the wait is for. It goes when anything else takes over.
+test('the call being written names the wait, and every event that ends it clears it', () => {
+  const session = liveSession()
+  session.send('turn.started', { turn: 1 })
+  session.send('phase', { phase: 'thinking' })
+  session.send('composing', { call: 'Write' })
+  assert.equal(session.word(), 'Preparing a call: Write')
+  session.send('check.started', { lines: 2 })
+  assert.equal(session.word(), 'Checking 2 lines', 'a running check lost the word to the call')
+  session.send('check.finished', {})
+  assert.equal(session.word(), 'Preparing a call: Write')
+  session.send('composing', { call: null })
+  assert.equal(session.word(), 'Thinking', 'an attempt thrown away left its call drawn')
+  for (const [ender, data] of [['phase', { phase: 'planning' }], ['narration', { text: 'Reading it.' }], ['tool.started', { verb: 'Write', target: 'a.txt', why: null, note: null, failed: false, untrusted: false, changes: [], waitedSeconds: null }]]) {
+    session.send('composing', { call: 'Write' })
+    session.send(ender, data)
+    assert.equal(session.live.composing, null, `${ender} left the call being written drawn`)
+  }
+  session.send('composing', { call: 'Read' })
+  session.send('turn.error', { kind: 'failed', message: 'x', category: 'other', attempts: 1, status: null, turn: 1, prompt: 'p', contextTokens: 0, id: null })
+  assert.equal(session.live.composing, null)
+})
 
 // A check is a whole model call inside a tool call whose row is already drawn, and the round's phase
 // does not change while it runs. Where screening is on and the verdict is safe no prompt is drawn

@@ -10,6 +10,8 @@ export interface AgentSettings {
   build: string; configured: boolean; problem: string | null; model: string | null
   brave: boolean; bedrock: boolean; providers: { name: string; credential: string }[]
   selected: string | null; layers: string[]; overrides: { name: string; path: string }[]
+  /** Keys a project file named that the agent reads from the home directory only. */
+  ignored?: { name: string; path: string }[]
   managed: { path: string | null; keys: string[] }
   network: { roots: string[]; problem: string | null; trustsNothing: boolean; proxy: string | null; authenticated: boolean; unusableProxy: string | null; noProxy: string | null }
 }

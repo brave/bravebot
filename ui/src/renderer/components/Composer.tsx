@@ -108,6 +108,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
           <div className="composer-tray queued-messages" role="group" aria-label="Queued messages">
             <div className="tray-head">
               <span className="tray-title">{queuePaused ? 'Queue paused' : 'Queued'} <span className="num">· {queued.length}</span></span>
+              <span className="tray-note">{queuePaused ? 'Held until you resume' : 'Each starts a new turn after this one'}</span>
               {queuePaused && (
                 <Button kind="plain" size="tiny" className="tray-action" aria-label="Resume queue"
                   isDisabled={running || backendReady === false} onClick={onResumeQueued}>Resume</Button>

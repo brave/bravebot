@@ -232,6 +232,7 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
         <p>Files merge in this order: home → project → project-local → selected override. Environment and built-in values can take precedence; administrator-pinned destinations always win.</p>
         <h4>Loaded files, in order</h4>{report.layers.length ? <ol>{report.layers.map(path => <li key={path} className="settings-path">{path}</li>)}</ol> : <p>No settings files loaded.</p>}
         {report.overrides.map(item => <p key={item.name}><code>{item.name}</code> overridden by <span className="settings-path">{item.path}</span></p>)}
+        {(report.ignored ?? []).map(item => <p key={`${item.name}:${item.path}`}><code>{item.name}</code> in <span className="settings-path">{item.path}</span> is ignored. Only your home settings file or a file you choose above can set it.</p>)}
         {report.managed.keys.length > 0 && <p>Managed values: {report.managed.keys.join(', ')}. This override cannot change them.</p>}
       </>}
     </div>

@@ -38,6 +38,7 @@ interface Live {
   quarantine: Shown[]
   phase: Phase | null
   checking: Checking | null
+  composing: string | null
   contextTokens?: number
   archived?: number
   tokens: number
@@ -605,7 +606,7 @@ export function Transcript({
           <WorkingRow
             key={live.handle}
             bot={bot}
-            word={workingWord(live.phase, live.checking)}
+            word={workingWord(live.phase, live.checking, live.composing)}
             tokens={live.tokens}
             turn={Object.values(live.turns).filter((turn) => turn.status === 'running').at(-1)?.turn ?? null}
             onAudit={onAudit}
@@ -766,11 +767,13 @@ function waitedWord(waited: number | null): string {
 
 /**
  * What the session is waiting on. A running check wins over the phase, which a check does not
- * change, and one function serves both places the word is drawn so they cannot disagree.
+ * change, and one function serves both places the word is drawn so they cannot disagree. A call
+ * being written follows the check: the phase is the same for the whole wait, which can be minutes.
  */
-export function workingWord(phase: Phase | null, checking: Checking | null): string {
+export function workingWord(phase: Phase | null, checking: Checking | null, composing: string | null = null): string {
   if (checking !== null && 'file' in checking) return checking.file === 'pdf' ? 'Checking a PDF' : 'Checking a picture'
   if (checking !== null) return `Checking ${checking.lines} ${checking.lines === 1 ? 'line' : 'lines'}`
+  if (composing !== null) return `Preparing a call: ${composing}`
   return phase ? phaseWord(phase) : 'Working'
 }
 
@@ -1415,10 +1418,12 @@ function Card({
       // reason: a call the agent could not even name reads as "Tool", and giving that
       // the prominence of a real line would be worse than the gap.
       return (
-        <div className="tool replayed">
+        <div className={`tool replayed ${entry.why ? 'has-why' : ''}`}>
           <span className="tool-status" aria-hidden="true"><Icon name="check-normal" /></span>
-          <span className="verb">{entry.text}</span>
-          {entry.why && <span className="why">{entry.why}</span>}
+          <span className="tool-body">
+            {entry.why && <span className="why" data-tooltip={entry.why.length > WHY_WIDTH ? entry.why : undefined}>{entry.why}</span>}
+            <span className="call"><span className="verb">{entry.text}</span></span>
+          </span>
         </div>
       )
 
@@ -1426,13 +1431,17 @@ function Card({
       const { activity, landing } = entry
       const running = activity.note === null
       return (
-        <div className={`tool ${activity.failed ? 'failed' : ''} ${running ? 'running' : ''}`}>
+        <div className={`tool ${activity.failed ? 'failed' : ''} ${running ? 'running' : ''} ${activity.why ? 'has-why' : ''}`}>
           <span className="tool-status" role="img" aria-label={running ? 'Running' : activity.failed ? 'Failed' : 'Done'}>
             {running ? <ProgressRing className="tool-ring" /> : <Icon name={activity.failed ? 'close' : 'check-normal'} />}
           </span>
-          <span className="verb">{activity.verb}</span>
-          {activity.target && <span className="target" data-tooltip={activity.target.length > TARGET_WIDTH ? activity.target : undefined}>{middleTruncate(activity.target, TARGET_WIDTH)}</span>}
-          {activity.why && <span className="why">{activity.why}</span>}
+          <span className="tool-body">
+            {activity.why && <span className="why" data-tooltip={activity.why.length > WHY_WIDTH ? activity.why : undefined}>{activity.why}</span>}
+            <span className="call">
+              <span className="verb">{activity.verb}</span>
+              {activity.target && <span className="target" data-tooltip={activity.target.length > TARGET_WIDTH ? activity.target : undefined}>{middleTruncate(activity.target, TARGET_WIDTH)}</span>}
+            </span>
+          </span>
           {!running && (
             <span className="note">
               {activity.note}
@@ -1841,6 +1850,7 @@ const INTENT_WORD: Record<import('../../shared/protocol').Intent, string> = { cr
 
 /** How much of a tool's target a line shows before it cuts from the middle. */
 const TARGET_WIDTH = 72
+const WHY_WIDTH = 80
 
 /**
  * The head every decision card shares: what kind of question it is, what it is about, how big it

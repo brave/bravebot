@@ -66,6 +66,8 @@ interface Live {
   phase: Phase | null
   /** What a running confined check was given. Beside the phase, which a check does not change. */
   checking: Checking | null
+  /** The word of the tool call the model is writing, while it is; the call itself is not yet drawn. */
+  composing: string | null
   tokens: number
   contextTokens?: number
   running: boolean
@@ -454,6 +456,7 @@ export function App(): React.JSX.Element {
         phase: null,
         checking: null,
         tokens: 0,
+        composing: null,
         running: false,
         // A record with no stored map was written before maps were kept. Nothing
         // recorded is not the same as nothing trusted, so it is asked about again.
@@ -523,6 +526,7 @@ export function App(): React.JSX.Element {
         phase: null,
         checking: null,
         tokens: 0,
+        composing: null,
         running: false,
         contextTokens: 0,
         askingTrust: made.remembered ? null : chosen,
@@ -1072,6 +1076,7 @@ export function App(): React.JSX.Element {
           phase: null,
           checking: null,
           tokens: 0,
+          composing: null,
           running: false,
           contextTokens: forked.contextTokens,
           askingTrust: forked.trust.known ? null : forked.directory,
@@ -1349,12 +1354,15 @@ export function apply(
       case 'watch.ended':
         return { ...old, entries: [...old.entries, t.narrated(`Watch ${message.data.number} ended: ${message.data.reason}${message.data.message ? `. ${message.data.message}` : ''}`)] }
       case 'turn.started':
-        return { ...old, running: true, phase: null, checking: null, tokens: 0,
+        return { ...old, running: true, phase: null, checking: null, composing: null, tokens: 0,
           entries: t.beginTurn(old.entries, message.data.turn) }
       case 'audit':
         return old
+      // A phase opens a round, so a call written in the last one is over.
       case 'phase':
-        return { ...old, phase: message.data.phase }
+        return { ...old, phase: message.data.phase, composing: null }
+      case 'composing':
+        return { ...old, composing: message.data.call }
       // The phase is left alone: it is what the word goes back to once the check is over.
       case 'check.started':
         return { ...old, checking: message.data }
@@ -1363,9 +1371,9 @@ export function apply(
       case 'tokens':
         return { ...old, tokens: message.data.written }
       case 'narration':
-        return { ...old, entries: [...old.entries, t.narrated(message.data.text)] }
+        return { ...old, composing: null, entries: [...old.entries, t.narrated(message.data.text)] }
       case 'tool.started':
-        return { ...old, entries: [...old.entries, t.started(message.data)] }
+        return { ...old, composing: null, entries: [...old.entries, t.started(message.data)] }
       case 'tool.finished':
         return { ...old, entries: t.finish(old.entries, message.data) }
       case 'landed':
@@ -1409,6 +1417,7 @@ export function apply(
           phase: null,
           // A consolidating turn stays running, so a check whose end was never heard would stay drawn.
           checking: null,
+          composing: null,
           entries: [...t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt), t.replied(message.data.reply, message.data.turn)],
           awaitingOrdinal: null,
           archived: message.data.archived,
@@ -1425,6 +1434,7 @@ export function apply(
           running: false,
           phase: null,
           checking: null,
+          composing: null,
           entries: [...t.interruptPending(t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt)), { ...t.errored(`${kind}: ${detail}`), category: kind === 'cancelled' ? 'cancelled' : message.data.category, attempts: message.data.attempts, status: message.data.status, cutOff: message.data.cutOff, turn: message.data.turn }],
           awaitingOrdinal: null,
           queuePaused: true,

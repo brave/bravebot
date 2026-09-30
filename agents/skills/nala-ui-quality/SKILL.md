@@ -6,8 +6,8 @@ description: The quality bar and methodology for any new or changed surface in t
 # Nala UI quality bar
 
 Every new or changed UI surface in `ui/` passes through this bar before it is called done. It
-distils the Nala UI redesign (originally `.cursor/plans/nala_ui_redesign_cc5f8e57.plan.md`) into
-rules that outlive that plan. The target is Codex/Claude-level polish: quiet, precise, fast.
+distils the Nala UI redesign into
+rules that outlive that plan. The target is Codex/Grok/Claude-level polish: quiet, precise, fast.
 
 Keep the work proportional. A one-line copy fix needs the microcopy rules and the gates, not a
 gallery review. A new surface needs all of it.

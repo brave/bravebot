@@ -31,6 +31,8 @@
   -webkit-app-region: no-drag;
   --leo-segmented-control-width: 100%;
 }
+/* Set off from the traffic lights, which only macOS draws over the content. */
+:root:not([data-platform='other']) .sidebar-tabs { margin-left: var(--leo-spacing-m); }
 .sidebar-tabs leo-segmentedcontrolitem { flex: 1 1 0; min-width: 0; }
 
 /* Each body owns the rest of the column, and the one not chosen is hidden rather than unmounted —
