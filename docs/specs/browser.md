@@ -117,14 +117,21 @@ starting directory are the two things each can find without being told.
 
 The native host writes a new random secret into the socket's directory as it starts, readable by
 the account alone. A connection whose first line is not that secret is closed before anything it
-sent is forwarded.
+sent is forwarded. A connection that has not presented it within 2 seconds of being accepted is
+closed, however it spends them, and at most 32 connections wait to present it at once: one past that
+is closed as soon as it is accepted.
 
 **Why.** The confinement does not keep other processes off the socket. Every stdio server BraveBot
 starts has egress, and on macOS egress is what reaches a Unix socket, so any of them can connect.
 Only a process granted the directory can read the secret, and only the declaration naming it is
-granted it.
+granted it. Any of them can also open connections and never present the secret, and a host that
+waited on each without end would give every one a thread until it had none left for a session.
 
 `verified-by: bravebot_browser::relay::a_peer_without_the_secret_is_closed_and_nothing_it_sent_is_forwarded`
+`verified-by: bravebot_browser::relay::a_connection_that_does_not_present_the_secret_in_time_is_closed`
+`verified-by: bravebot_browser::relay::a_connection_trickling_bytes_without_the_secret_is_closed_in_time`
+`verified-by: bravebot_browser::relay::connections_waiting_for_the_secret_are_held_to_a_number`
+`verified-by: bravebot_browser::host::a_connection_has_two_seconds_and_thirty_two_places_to_present_the_secret`
 `verified-by: bravebot_browser::host::only_the_same_secret_matches`
 `verified-by: bravebot_browser::host::each_secret_is_new`
 

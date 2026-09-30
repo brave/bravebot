@@ -15,11 +15,20 @@ use std::collections::HashMap;
 use std::io::{self, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 /// The longest first line a peer may send, which holds the secret and nothing else.
 const SECRET_LINE_LIMIT: usize = 128;
+
+/// How long a connection has to present the secret before it is closed. The MCP server sends it
+/// as it connects, so a connection that has not by now is not one it made.
+pub const SECRET_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How many connections may wait to present the secret at once. One past that is closed as soon
+/// as it is accepted, so connections that never present it cannot use up the host's threads.
+pub const WAITING_LIMIT: usize = 32;
 
 /// The longest request line a peer may send. A request is forwarded only if it still fits in one
 /// message to the extension once its id is replaced, which is checked after it is read. This is
@@ -71,14 +80,19 @@ pub fn run(directory: &Path, origin: &str) -> io::Result<()> {
         next_peer: AtomicU64::new(1),
         pending: Mutex::new(HashMap::new()),
         peers: Mutex::new(HashMap::new()),
+        waiting: Arc::new(AtomicUsize::new(0)),
     });
 
     let accepting = Arc::clone(&relay);
     std::thread::spawn(move || {
         for stream in listener.incoming() {
+            let accepted = Instant::now();
             let Ok(stream) = stream else { continue };
+            let Some(waiting) = Waiting::claim(&accepting.waiting) else {
+                continue;
+            };
             let relay = Arc::clone(&accepting);
-            std::thread::spawn(move || relay.serve(stream));
+            std::thread::spawn(move || relay.serve(stream, waiting, accepted + SECRET_TIMEOUT));
         }
     });
 
@@ -127,6 +141,42 @@ fn new_secret() -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// The line a peer sends first, read by `deadline` and at most [`SECRET_LINE_LIMIT`] bytes long,
+/// or `None` where it is not.
+///
+/// The deadline is the connection's rather than each read's. A read timeout alone restarts with
+/// every byte, so a connection sending one byte at a time would be waited on for ever.
+fn secret_line(reader: &mut BufReader<UnixStream>, deadline: Instant) -> Option<Vec<u8>> {
+    use std::io::BufRead;
+
+    let mut line = Vec::new();
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return None;
+        }
+        reader.get_ref().set_read_timeout(Some(left)).ok()?;
+        let available = match reader.fill_buf() {
+            Ok(available) => available,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => return None,
+        };
+        if available.is_empty() {
+            return None;
+        }
+        let newline = available.iter().position(|&byte| byte == b'\n');
+        let taken = newline.unwrap_or(available.len());
+        if line.len() + taken > SECRET_LINE_LIMIT {
+            return None;
+        }
+        line.extend_from_slice(&available[..taken]);
+        reader.consume(newline.map_or(taken, |at| at + 1));
+        if newline.is_some() {
+            return Some(line);
+        }
+    }
+}
+
 /// Whether two byte strings are equal, in time that depends on their length alone.
 fn same(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
@@ -158,6 +208,25 @@ struct Pending {
     id: Value,
 }
 
+/// One of the [`WAITING_LIMIT`] places for a connection that has not presented the secret yet,
+/// given back when it is dropped.
+struct Waiting(Arc<AtomicUsize>);
+
+impl Waiting {
+    /// A place, or `None` where every one is taken.
+    fn claim(count: &Arc<AtomicUsize>) -> Option<Self> {
+        let before = count.fetch_add(1, Ordering::AcqRel);
+        let claimed = Self(Arc::clone(count));
+        (before < WAITING_LIMIT).then_some(claimed)
+    }
+}
+
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// What every thread of the host shares.
 struct Relay {
     secret: String,
@@ -166,6 +235,7 @@ struct Relay {
     next_peer: AtomicU64,
     pending: Mutex<HashMap<u64, Pending>>,
     peers: Mutex<HashMap<u64, Arc<Mutex<UnixStream>>>>,
+    waiting: Arc<AtomicUsize>,
 }
 
 impl Relay {
@@ -192,16 +262,20 @@ impl Relay {
     }
 
     /// Serves one peer: the secret first, then its requests, until it closes.
-    fn serve(&self, stream: UnixStream) {
+    fn serve(&self, stream: UnixStream, waiting: Waiting, deadline: Instant) {
         let Ok(writer) = stream.try_clone() else {
             return;
         };
         let writer = Arc::new(Mutex::new(writer));
         let mut reader = BufReader::new(stream);
 
-        match lines::read_line(&mut reader, SECRET_LINE_LIMIT) {
-            Ok(Line::Read(line)) if same(&line, self.secret.as_bytes()) => {}
+        match secret_line(&mut reader, deadline) {
+            Some(line) if same(&line, self.secret.as_bytes()) => {}
             _ => return,
+        }
+        drop(waiting);
+        if reader.get_ref().set_read_timeout(None).is_err() {
+            return;
         }
 
         let peer = self.next_peer.fetch_add(1, Ordering::Relaxed);
@@ -418,6 +492,14 @@ mod tests {
         assert_eq!(read(br#"{"nested":{"id":99},"id":"ours"}"#), "ours");
         assert_eq!(read(br#"{"padding":0,"\u0069d":7}"#), 7);
         assert_eq!(read(br#"{"identity":1}"#), Value::Null);
+    }
+
+    /// The bounds on a connection that has not presented the secret are the ones the spec states,
+    /// since every test timing one is written against these constants and would pass at any value.
+    #[test]
+    fn a_connection_has_two_seconds_and_thirty_two_places_to_present_the_secret() {
+        assert_eq!(SECRET_TIMEOUT, Duration::from_secs(2));
+        assert_eq!(WAITING_LIMIT, 32);
     }
 
     /// The public socket name stays absent until a listener is already accepting under its staged

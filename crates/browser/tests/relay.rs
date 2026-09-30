@@ -6,9 +6,10 @@
 #![forbid(unsafe_code)]
 
 use bravebot_browser::framing;
+use bravebot_browser::host::{SECRET_TIMEOUT, WAITING_LIMIT};
 use bravebot_browser::relay::REPLY_TIMEOUT;
 use serde_json::{Value, json};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -170,6 +171,23 @@ fn secret(directory: &Path) -> String {
     std::fs::read_to_string(directory.join("secret")).unwrap()
 }
 
+/// A connection that sends nothing, as one made without the secret would.
+fn idle(directory: &Path) -> UnixStream {
+    UnixStream::connect(directory.join("socket")).unwrap()
+}
+
+/// Whether the host has closed `stream`, waiting at most `within` to find out.
+fn closed_within(stream: &mut UnixStream, within: Duration) -> bool {
+    stream.set_read_timeout(Some(within)).unwrap();
+    let mut byte = [0u8; 1];
+    match stream.read(&mut byte) {
+        Ok(0) => true,
+        Ok(_) => panic!("the host wrote to a connection that sent nothing"),
+        Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => true,
+        Err(_) => false,
+    }
+}
+
 /// The MCP server as BraveBot starts it, in `directory`, answering each line of `requests`.
 ///
 /// Longer than the server's own reply timeout, so a call it gives up on is still a reply here, and
@@ -268,6 +286,77 @@ fn the_socket_and_secret_are_in_a_directory_only_this_account_can_reach() {
     assert_eq!(mode(directory.path()), 0o700);
     assert_eq!(mode(&directory.path().join("secret")), 0o600);
     assert!(directory.path().join("socket").exists());
+}
+
+/// A connection that never presents the secret is closed once the host has waited long enough for
+/// it, so one left open costs the host nothing for long, and the host goes on serving.
+#[test]
+fn a_connection_that_does_not_present_the_secret_in_time_is_closed() {
+    let directory = installed_for(OURS);
+    let extension = Extension::connect(directory.path(), OURS);
+
+    let mut silent = idle(directory.path());
+    let started = Instant::now();
+    assert!(
+        closed_within(&mut silent, SECRET_TIMEOUT + WAIT),
+        "a connection that sent nothing was kept open"
+    );
+    assert!(started.elapsed() >= SECRET_TIMEOUT / 2);
+
+    let mut peer = Peer::connect(directory.path(), &secret(directory.path()));
+    peer.send(&json!({"id": 1, "method": "list_tabs", "params": {}}));
+    assert_eq!(extension.request()["method"], "list_tabs");
+}
+
+/// The 2 seconds run from the connection's accept, not from the last byte it sent: a connection
+/// sending the host one byte at a time and never a line is closed as one sending nothing is.
+#[test]
+fn a_connection_trickling_bytes_without_the_secret_is_closed_in_time() {
+    let directory = installed_for(OURS);
+    let _extension = Extension::connect(directory.path(), OURS);
+
+    let mut trickling = idle(directory.path());
+    let mut writer = trickling.try_clone().unwrap();
+    let started = Instant::now();
+    let pacer = std::thread::spawn(move || {
+        // Well inside the line's own length, so the length is not what closes it.
+        while started.elapsed() < SECRET_TIMEOUT * 4 {
+            if writer.write_all(b"x").is_err() {
+                break;
+            }
+            std::thread::sleep(SECRET_TIMEOUT / 4);
+        }
+    });
+    assert!(
+        closed_within(&mut trickling, SECRET_TIMEOUT * 4 + WAIT),
+        "a connection trickling bytes was kept open"
+    );
+    assert!(
+        started.elapsed() < SECRET_TIMEOUT + Duration::from_millis(1500),
+        "a connection trickling bytes was closed only after {:?}",
+        started.elapsed()
+    );
+    pacer.join().unwrap();
+}
+
+/// Connections that have not presented the secret are held to a number. One past it is closed as
+/// soon as it is accepted, while the ones before it are still being waited for, so connections
+/// nobody authenticates cannot use up the host's threads.
+#[test]
+fn connections_waiting_for_the_secret_are_held_to_a_number() {
+    let directory = installed_for(OURS);
+    let _extension = Extension::connect(directory.path(), OURS);
+
+    let mut waiting: Vec<UnixStream> = (0..WAITING_LIMIT).map(|_| idle(directory.path())).collect();
+    let mut one_too_many = idle(directory.path());
+    assert!(
+        closed_within(&mut one_too_many, SECRET_TIMEOUT / 2),
+        "a connection past the limit was kept open"
+    );
+    assert!(
+        !closed_within(&mut waiting[0], Duration::from_millis(50)),
+        "a connection within the limit was closed before its time"
+    );
 }
 
 /// Any process with egress can connect to the socket, so a peer without the secret is closed and
