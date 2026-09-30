@@ -462,13 +462,14 @@ organization's settings refuse. A no changes nothing: the call is refused, or th
 started. A one-shot run, a session with nobody at the terminal, and
 `--dangerously-skip-permissions` refuse the redirect without asking.
 
-## Connecting Gmail and Google Calendar
+## Connecting Gmail, Google Calendar and GitHub
 
 Reading Gmail through Google's Workspace server, with sign-in done once outside bravebot and the
 tools that send mail refused, has a page of its own: [Connecting Gmail](mcp/gmail.md). Reading
 Google Calendar through the same server, with the tools that change a calendar refused, is
-[Connecting Google Calendar](mcp/calendar.md). Further pages for particular servers will sit beside
-them if they read naturally.
+[Connecting Google Calendar](mcp/calendar.md). Reading GitHub issues and pull requests through
+GitHub's own server, with every tool that writes refused, is [Connecting GitHub](mcp/github.md).
+Further pages for particular servers will sit beside them if they read naturally.
 
 ## Seeing what a session started
 
