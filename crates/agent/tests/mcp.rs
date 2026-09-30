@@ -340,10 +340,14 @@ struct Answering {
     list: Decision,
     call: CallDecision,
     moved: Decision,
+    vetted: Decision,
+    writes: bool,
     lists: Vec<ToolListRequest>,
     calls: Vec<McpCallRequest>,
     moves: Vec<MoveRequest>,
     runs: Vec<bravebot_agent::RunRequest>,
+    vets: usize,
+    asked: usize,
     stop: Option<Cancel>,
 }
 
@@ -353,10 +357,14 @@ impl Answering {
             list,
             call,
             moved: Decision::Reject,
+            vetted: Decision::Reject,
+            writes: false,
             lists: Vec::new(),
             calls: Vec::new(),
             moves: Vec::new(),
             runs: Vec::new(),
+            vets: 0,
+            asked: 0,
             stop: None,
         }
     }
@@ -367,7 +375,10 @@ impl Confirmer for Answering {
         &mut self,
         request: &bravebot_agent::WriteRequest,
     ) -> bravebot_agent::WriteDecision {
-        Unattended.confirm_write(request)
+        match self.writes {
+            true => bravebot_agent::WriteDecision::approve(),
+            false => Unattended.confirm_write(request),
+        }
     }
 
     fn confirm_run(&mut self, request: &bravebot_agent::RunRequest) -> bravebot_agent::RunDecision {
@@ -382,8 +393,9 @@ impl Confirmer for Answering {
         Unattended.confirm_read_output(request)
     }
 
-    fn confirm_vetted_read(&mut self, request: &bravebot_agent::confirm::VetRequest) -> Decision {
-        Unattended.confirm_vetted_read(request)
+    fn confirm_vetted_read(&mut self, _request: &bravebot_agent::confirm::VetRequest) -> Decision {
+        self.vets += 1;
+        self.vetted
     }
 
     fn confirm_fetch(&mut self, request: &bravebot_agent::confirm::FetchRequest) -> Decision {
@@ -431,6 +443,7 @@ impl Confirmer for Answering {
         &mut self,
         _asking: &bravebot_core::ask::Asking,
     ) -> Vec<bravebot_core::ask::Answer> {
+        self.asked += 1;
         Vec::new()
     }
 
@@ -1268,6 +1281,235 @@ fn a_rule_decides_a_call_before_the_prompt() {
             assert!(sent[1].contains("refused"), "{}", sent[1]);
         }
     }
+}
+
+/// An allow rule for every tool of the weather server.
+fn allowing_the_weather() -> bravebot_core::permissions::Permissions {
+    let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+        &[],
+        &[],
+        &["Mcp(weather)".to_string()],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "the rule in this test did not parse");
+    permissions
+}
+
+/// One turn over `conversation`, with the whole project trusted, so a file the planner reads
+/// reaches it rather than a reference.
+fn trusted_turn<C: Confirmer + Send>(
+    endpoint: &str,
+    project: &Path,
+    task: Task,
+    conversation: &mut bravebot_agent::Conversation,
+    confirmer: &mut C,
+) {
+    let workspace = Workspace::new(project).expect("workspace");
+    let mut trust = TrustStore::new(bravebot_agent::workspace::key_of(workspace.root()));
+    trust.trust(".");
+    turn::resume(
+        &config_for(endpoint),
+        &Egress::new(),
+        &workspace,
+        &task,
+        conversation,
+        confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+}
+
+/// PERM-9's fourth prompt, reached from a turn. A server's answer is private, and once a person
+/// has let the planner read it, what the planner writes is private too: the next call to a tool
+/// an allow rule covers is put to the person, and so is one in the next turn of the same
+/// conversation. The first call, made before anything private was read, is the control. Reading
+/// a workspace file afterwards still works.
+#[test]
+fn a_call_after_a_servers_answer_was_vetted_asks_though_a_rule_allows_it() {
+    let scratch = Scratch::new("vetted-private");
+    std::fs::write(scratch.project().join("notes.txt"), "the notes on file").expect("write");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        tool_request(
+            "vet_content",
+            r#"{"ref":"ref:1","expects":"the forecast for Paris"}"#,
+        ),
+        tool_request(FORECAST, r#"{"city":"Lyon"}"#),
+        tool_request("read_file", r#"{"path":"notes.txt"}"#),
+        reply_with("done"),
+        tool_request(FORECAST, r#"{"city":"Nice"}"#),
+        reply_with("done again"),
+    ]);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.vetted = Decision::Approve;
+    trusted_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast")
+            .with_mcp(Some(session.clone()))
+            .with_permissions(allowing_the_weather()),
+        &mut conversation,
+        &mut confirmer,
+    );
+
+    assert_eq!(
+        confirmer.vets, 1,
+        "the server's answer was not put to the person"
+    );
+    let [call] = confirmer.calls.as_slice() else {
+        panic!(
+            "the calls put to the person were {:?}",
+            confirmer
+                .calls
+                .iter()
+                .map(|c| &c.arguments)
+                .collect::<Vec<_>>()
+        );
+    };
+    assert_eq!(
+        call.arguments,
+        [("city".to_string(), "\"Lyon\"".to_string())],
+        "the call after the vet was not the one asked about"
+    );
+    let sent = rounds(&chat);
+    assert!(
+        sent[2].contains(PAYLOAD),
+        "the vetted answer did not reach the planner: {}",
+        sent[2]
+    );
+    assert!(
+        sent[4].contains("the notes on file"),
+        "a file read after the vet did not reach the planner: {}",
+        sent[4]
+    );
+
+    let mut next = Answering::new(Decision::Approve, CallDecision::approve());
+    trusted_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("and for Nice")
+            .with_mcp(Some(session))
+            .with_permissions(allowing_the_weather()),
+        &mut conversation,
+        &mut next,
+    );
+    assert_eq!(
+        next.calls.len(),
+        1,
+        "the next turn of the conversation called the server unasked"
+    );
+    let called: Vec<String> = methods(&server);
+    assert_eq!(called.len(), 3, "the server was sent {called:?}");
+}
+
+/// The workspace is private as a matter of course, and reading it does not make the planner's
+/// arguments private: two files read one after the other both reach the planner, and a call an
+/// allow rule covers is still made with nobody asked.
+#[test]
+fn reading_workspace_files_leaves_a_call_a_rule_allows_unasked() {
+    let scratch = Scratch::new("workspace-reads");
+    std::fs::write(scratch.project().join("a.txt"), "the first file").expect("write");
+    std::fs::write(scratch.project().join("b.txt"), "the second file").expect("write");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request("read_file", r#"{"path":"a.txt"}"#),
+        tool_request("read_file", r#"{"path":"b.txt"}"#),
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::reject());
+    trusted_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast")
+            .with_mcp(Some(session))
+            .with_permissions(allowing_the_weather()),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+    );
+
+    let sent = rounds(&chat);
+    assert!(sent[1].contains("the first file"), "{}", sent[1]);
+    assert!(sent[2].contains("the second file"), "{}", sent[2]);
+    assert!(
+        confirmer.calls.is_empty(),
+        "reading the workspace put a call a rule allows to the person"
+    );
+    assert_eq!(methods(&server), ["tools/call"]);
+}
+
+/// What the planner writes after a vet is private, and the two places it goes that stay on this
+/// machine still take it: a file in the workspace (ROUTE-3), and a question on the person's own
+/// screen (ASK-3).
+#[test]
+fn writing_a_file_and_asking_a_question_still_work_after_a_vet() {
+    let scratch = Scratch::new("vetted-then-write");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        tool_request(
+            "vet_content",
+            r#"{"ref":"ref:1","expects":"the forecast for Paris"}"#,
+        ),
+        tool_request(
+            "write_file",
+            r#"{"path":"forecast.md","contents":"written after the vet"}"#,
+        ),
+        tool_request(
+            "edit_file",
+            r#"{"path":"forecast.md","old_text":"written","new_text":"edited"}"#,
+        ),
+        tool_request(
+            "ask_user",
+            r#"{"questions":[{"header":"Units","question":"Celsius or Fahrenheit?","options":[{"label":"Celsius"},{"label":"Fahrenheit"}]}]}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.vetted = Decision::Approve;
+    confirmer.writes = true;
+    trusted_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast")
+            .with_mcp(Some(session))
+            .with_permissions(allowing_the_weather()),
+        &mut conversation,
+        &mut confirmer,
+    );
+
+    assert_eq!(
+        conversation.holds(),
+        bravebot_core::label::Confidentiality::Private,
+        "the vet did not make the conversation private, so nothing here was tested"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.project().join("forecast.md"))
+            .ok()
+            .as_deref(),
+        Some("edited after the vet"),
+        "a file the planner wrote and edited after the vet was not written: {:?}",
+        rounds(&chat)
+    );
+    assert_eq!(confirmer.asked, 1, "the question was not put to the person");
 }
 
 /// A turn the person addressed to one of their definitions holds what the session and the kind both

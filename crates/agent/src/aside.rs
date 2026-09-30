@@ -374,7 +374,7 @@ mod tests {
             Integrity::Trusted
         );
 
-        conversation.observed(Integrity::Untrusted);
+        conversation.observed(bravebot_core::label::Label::untrusted_public());
         assert_eq!(
             Question::about(&conversation, "why?", Vec::new()).context(),
             Integrity::Untrusted

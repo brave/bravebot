@@ -19,7 +19,7 @@ guards:
       - crates/agent/tests/workspace.rs: 32
       - crates/aichat/src/lib.rs: 5
       - crates/bedrock/src/lib.rs: 6
-      - crates/core/src/policy.rs: 103
+      - crates/core/src/policy.rs: 106
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 7
       - crates/mcp/src/http.rs: 2
@@ -41,7 +41,7 @@ guards:
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 2
       - crates/cli/src/servers.rs: 1
-      - crates/core/src/policy.rs: 60
+      - crates/core/src/policy.rs: 61
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 2
       - crates/mcp/tests/stdio.rs: 4
@@ -68,7 +68,7 @@ guards:
       - crates/core/src/value.rs: 4
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 57
+      - crates/core/src/policy.rs: 58
   - symbol: SlotStore::path_of
     sites:
       - crates/core/src/policy.rs: 5
@@ -116,7 +116,7 @@ guards:
       - crates/agent/src/tools.rs: 25
       - crates/agent/src/turn.rs: 1
       - crates/cli/src/servers.rs: 1
-      - crates/core/src/policy.rs: 6
+      - crates/core/src/policy.rs: 7
   - symbol: Policy::render_pair_in_place
     sites:
       - crates/agent/src/tools.rs: 1
@@ -128,7 +128,7 @@ guards:
     sites:
       - crates/agent/src/mcp.rs: 1
       - crates/agent/src/tools.rs: 5
-      - crates/core/src/policy.rs: 16
+      - crates/core/src/policy.rs: 21
   - symbol: Policy::adopt_model_output
     sites:
       - crates/agent/src/aside.rs: 1
@@ -419,9 +419,9 @@ and the content has no say in it.
 | a line the user ran themselves | trusted and private, because nobody steers a keystroke | `verified-by: bravebot_core::policy::what_a_command_the_user_typed_printed_is_trusted_and_private` |
 | input piped into the process | untrusted and private, because a pipe has no path anyone could vouch for | `verified-by: bravebot_core::policy::piped_input_is_labelled_untrusted_and_private` |
 | the user's own configuration, and a skill kept beside it | trusted and public, because putting a file there is the grant | `verified-by: bravebot_core::policy::configuration_the_user_placed_is_trusted_from_where_it_came_from` |
-| what the planner wrote | public, at the integrity of the context it was written in | `verified-by: bravebot_core::policy::model_output_from_a_clean_context_is_trusted` |
+| what the planner wrote | the integrity of the context it was written in, and private once private content was let out of quarantine for the planner: a slot `vet_content` let through, output `read_output` read to it, a delegate's report it was given, or a context it resumed that already held one. A workspace file it was shown does not count, because that is the project's own data and counting it would make every call after the first read ask | `verified-by: bravebot_core::policy::model_output_from_a_clean_context_is_trusted` `verified-by: bravebot_core::policy::a_vetted_private_slot_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::a_vetted_public_slot_leaves_what_the_planner_writes_public` `verified-by: bravebot_core::policy::a_vetted_private_picture_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::output_read_aloud_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::a_private_report_from_a_delegate_is_held` `verified-by: bravebot_core::policy::a_resumed_context_keeps_what_it_held_and_cannot_be_made_public` |
 | a reply taken out of a transport's envelope | the context's, never the network's | `verified-by: bravebot_core::policy::adopting_model_output_takes_the_context_s_label_not_the_transport_s` |
-| an answer a person typed to a question | trusted and public, because a person wrote it | `verified-by: bravebot_core::policy::a_typed_answer_is_trusted_because_a_person_wrote_it` |
+| an answer a person typed to a question | trusted, because a person wrote it, and as private as the questions it answers, since the reply repeats them | `verified-by: bravebot_core::policy::a_typed_answer_is_trusted_because_a_person_wrote_it` `verified-by: bravebot_core::policy::private_questions_are_asked_and_the_reply_stays_private` |
 | what a processor produced | taint over the inputs it was given | `verified-by: bravebot_core::policy::an_output_is_labelled_by_taint_over_the_inputs` |
 | one slot's bytes a person read on their screen and vouched for | trusted and private, because a person read them and said so, and the slot itself keeps what it had | `verified-by: bravebot_core::policy::output_a_person_vouched_for_comes_back_trusted` `verified-by: bravebot_core::policy::vetted_content_a_person_vouched_for_comes_back_trusted` |
 | a server's tool list a person vouched for, or the mode that answers for them | trusted and public, because a person read the whole list as it is drawn and said yes, and a digest records which list that was | `verified-by: bravebot_core::policy::a_tool_list_reaches_the_planner_only_through_an_endorsement` `verified-by: bravebot_core::policy::a_recorded_tool_list_is_promoted_only_where_it_is_the_one_vouched_for` |
@@ -436,12 +436,25 @@ starts from. Which paths a person vouched for is in [trust-map.md](trust-map.md)
 
 Three carriers a reader may go looking for are absent, none of which takes a first label. A
 delegate's reply is model output, labelled in the delegate's own run by the row for what the planner
-wrote. Content restored from a resumed session keeps the labels it was given when it first arrived,
-and what resuming does to the integrity of the context is LABEL-9. The user's own message is not
-labelled at all, which is why the two carriers that join it take no label either.
+wrote, and a delegate starts out holding what the context that wrote its task held. Content restored
+from a resumed session keeps the labels it was given when it first arrived, and what resuming does
+to the integrity of the context is LABEL-9. What the context held is kept the same way: a resumed,
+forked or compacted session holds whatever the original held, and a session file that does not say
+reads as holding private content. The trail says which of these made the context private, so a
+resumed run is not recorded as letting anything out of quarantine. The user's own message is not labelled at all, which is why the
+two carriers that join it take no label either.
 
 `verified-by: bravebot_core::policy::adopting_model_output_from_a_fallen_context_stays_untrusted`
 `verified-by: bravebot_core::policy::only_a_value_a_transport_labelled_can_be_adopted_as_model_output`
+`verified-by: bravebot_core::policy::a_delegate_starts_out_holding_what_its_parent_held`
+`verified-by: bravebot_core::policy::the_trail_says_how_the_context_came_to_hold_private_content`
+`verified-by: bravebot_agent::conversation::a_private_conversation_does_not_come_back_public`
+`verified-by: bravebot_agent::conversation::a_public_conversation_comes_back_public`
+`verified-by: bravebot_agent::conversation::an_unreadable_holds_word_is_read_as_private`
+`verified-by: bravebot_agent::conversation::a_session_file_written_before_holds_was_recorded_reads_as_private`
+`verified-by: bravebot_agent::conversation::what_the_planner_was_shown_only_ever_rises`
+`verified-by: bravebot_agent::conversation::compaction_does_not_make_a_private_conversation_public`
+`verified-by: bravebot_ui_bridge::fork::a_conversation_whose_planner_was_shown_private_content_forks_private`
 
 <a id="LABEL-9"></a>
 ### LABEL-9: context integrity falls when the planner is shown something, never when a turn reads it

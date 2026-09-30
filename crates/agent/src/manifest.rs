@@ -70,7 +70,7 @@ use bravebot_config::Config;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::Sink;
-use bravebot_core::label::{Confidentiality, Label};
+use bravebot_core::label::Label;
 use bravebot_core::manifest::{self, Arg, Draft, DraftStep, Manifest, Step, Tier};
 use bravebot_core::policy::{Destination, Policy, ReleasePlan, Routing};
 use bravebot_core::slot::{SlotId, SlotStore};
@@ -870,7 +870,7 @@ fn plan<S: Sink, R: Reporter>(
     attempt.proposed = Some(proposal_wire.clone());
     let proposal_text = without_leading_reasoning(&proposal_wire).to_string();
 
-    let label = Label::new(policy.context_integrity(), Confidentiality::Public);
+    let label = policy.context_label();
     let draft = parse(&proposal_text).map_err(|e| TurnError::Precommit(e.to_string()))?;
     let concrete = map_to_concrete(draft).map_err(|e| TurnError::Precommit(e.to_string()))?;
 

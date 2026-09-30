@@ -18570,7 +18570,7 @@ fn an_answer_over_an_untrusted_exchange_is_shown_and_not_written_down() {
     let mut sink = RecordingSink::new();
 
     let mut conversation = an_exchange_to_ask_beside();
-    conversation.observed(bravebot_core::label::Integrity::Untrusted);
+    conversation.observed(bravebot_core::label::Label::untrusted_public());
 
     let answered = turn::aside(
         &config,
@@ -18823,6 +18823,76 @@ fn a_delegates_report_reaches_the_planner_that_asked_for_it() {
         "a report from a clean context was quarantined from the planner"
     );
     assert_eq!(outcome.reply_for_display(), "relayed");
+}
+
+/// A delegate that was read a program's output writes private words, and a planner given those
+/// words holds them too, so the conversation records it and the next call to a server asks
+/// (`labels.md` LABEL-8).
+#[test]
+fn a_planner_given_a_private_report_from_a_delegate_holds_it() {
+    let scratch = Scratch::new("delegate-report-holds");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-MAIL\n").unwrap();
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "SEND-A-WORKER",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"worker","task":"READ-THE-MAIL"}"#),
+                reply_with("waiting on the worker"),
+                reply_with("relayed"),
+            ],
+        ),
+        (
+            "READ-THE-MAIL",
+            vec![
+                tool_request("run", r#"{"command":"cat where.txt"}"#),
+                tool_request("read_output", r#"{"ref":"ref:1"}"#),
+                reply_with("THE-WORKER-REPORTED"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut confirmer = ReadsWhatItRan::new(true);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("SEND-A-WORKER"),
+        &mut conversation,
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let asked = every_request(&received);
+    assert!(
+        asked
+            .iter()
+            .any(|body| !body.contains("SEND-A-WORKER") && body.contains("SENTINEL-MAIL")),
+        "the output was never read to the delegate, so nothing here was tested"
+    );
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("SEND-A-WORKER") && body.contains("THE-WORKER-REPORTED")),
+        "the report was never put in front of the planner"
+    );
+    assert_eq!(
+        conversation.holds(),
+        bravebot_core::label::Confidentiality::Private,
+        "the planner was given a private report and its conversation stayed public"
+    );
 }
 
 /// A delegate's rounds are the spawning turn's spend, and the cache figure travels with them. A turn

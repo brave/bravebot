@@ -27,6 +27,7 @@
 //! What a delegate saves is context, never approval.
 
 use crate::capability::{Capability, CapabilitySet, ServerAlias};
+use crate::label::Confidentiality;
 
 /// A kind of delegate: what it may hold, and how long it may go on.
 ///
@@ -916,6 +917,9 @@ pub struct DelegateSpec {
     rounds: usize,
     /// The tree it belongs to, which is the one the delegates it spawns draw on.
     tree: Tree,
+    /// What the context of the run that wrote its task held, which its own context starts
+    /// holding: a task written by a planner shown private content may carry it.
+    holds: Confidentiality,
 }
 
 impl DelegateSpec {
@@ -950,7 +954,17 @@ impl DelegateSpec {
             capabilities,
             rounds,
             tree,
+            holds: Confidentiality::Public,
         }
+    }
+
+    pub(crate) fn holding(mut self, held: Confidentiality) -> Self {
+        self.holds = held;
+        self
+    }
+
+    pub(crate) fn holds(&self) -> Confidentiality {
+        self.holds
     }
 
     /// Whether it may spawn a delegate of its own: it sits above [`MAX_DEPTH`], and a definition

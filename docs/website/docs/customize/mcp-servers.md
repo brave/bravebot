@@ -328,6 +328,13 @@ to you whatever you [vouched for](../security/permissions.md#vouching-for-a-comm
 file is. The words a server describes its tools with stay public, since it hands the same list to
 whoever connects.
 
+Once you let something private out of quarantine for the model, such as a server's answer after a
+[check](../security/vetting.md), what the model writes from then on is private too, since it may
+repeat it. Every later call to a server is then put to you with its arguments, whatever answer 2 or
+a rule says, and a resumed session keeps asking. Undoing the turn that let it out stops it. A file
+the model reads in your project does not start it. A session saved by an earlier version is read as
+having let something private out, so every call in it asks.
+
 ### When a call fails
 
 A tool that ran and reported its own failure is handled like any other result: you see what the
@@ -376,8 +383,9 @@ weather:get_alerts and do not look for another route to what it does: say in you
 needed from it.
 ```
 
-An `ask` rule asks whatever answer 2 said, and an `allow` rule answers yes for you. A rule matches
-the server and the tool and never the arguments.
+An `ask` rule asks whatever answer 2 said, and an `allow` rule answers yes for you, except after
+something private was [let out of quarantine](#each-call). A rule matches the server and the tool
+and never the arguments.
 
 ### In `--plain`
 
@@ -396,7 +404,8 @@ note: weather offers no tool in this session: its list was not approved
 
 A call that would be put to you is refused, and an `allow` rule decides nothing there, as it decides
 nothing for any tool in a one-shot run. A tool you answered 2 for in this project is still called,
-since that answer was given at the question and names one tool in one project.
+since that answer was given at the question and names one tool in one project, unless something
+private was [let out of quarantine](#each-call) earlier in the session, when the call is refused.
 
 `--dangerously-skip-permissions` answers both questions yes without drawing them, makes no check of
 the list, and records nothing: a later run without it asks each question again.
@@ -611,10 +620,9 @@ profile directory there is no `~/.bravebot` at all: nothing is declared there, a
 - **An approval does not travel.** It lives in your own directory, so a second machine asks again.
   The same is true of a list you said yes to and a tool you stopped the asking for.
 - **`--plain` cannot stop asking for a tool.** Its call question has room for one answer.
-- **What the model has read can leave in what it writes.** A result reaches the model only once a
-  [check](../security/vetting.md) and you let it out of quarantine, and what the model then writes
-  is not held back as private: an argument of a later call may carry it. Each call is put to you
-  with its arguments, and a fetch is put to you with its URL unless an `allow` rule covers the host.
+- **What the model has read can leave in a URL or a command.** Once you let a result out of
+  quarantine, every call to a server is put to you, but a fetch to a host an `allow` rule covers is
+  not, and nor is a command a rule allows: a URL and a command line are not held back as private.
 - **A server that holds nothing of yours still asks.** Every result is private, so a search
   server's answer fed to a command is put to you as a mailbox's would be.
 - **A one-shot run still checks a list it then refuses.** The check is a model call nobody reads

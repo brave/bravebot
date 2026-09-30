@@ -21,7 +21,7 @@ use crate::ask::{self, Answer};
 use crate::capability::{Capability, CapabilitySet, ServerAlias};
 use crate::credentials::Scanned;
 use crate::event::{Event, Principle, Role, Sink};
-use crate::label::{Integrity, Label};
+use crate::label::{Confidentiality, Integrity, Label};
 use crate::slot::SlotId;
 use crate::trust::TrustStore;
 use crate::value::Labelled;
@@ -353,6 +353,15 @@ pub struct Policy<'sink, S: Sink> {
     /// context contains, which is the only thing that can say whether text the model produced
     /// is derived from trusted input. See [`Policy::label_model_output`].
     context: Integrity,
+    /// Whether the planner's context holds private content that was let out of quarantine.
+    ///
+    /// Starts public and only ever rises, like [`Policy::context`] only ever falls. What raises it
+    /// is private bytes a person or a check let through to the planner: `vet_content`,
+    /// `read_output`, and a delegate that was given or reported such bytes. A workspace file or a
+    /// vouched program's output the planner is shown does not, though both are private: that is
+    /// the project's own data, and counting it would make the context private at the first read
+    /// and every call to a server ask from then on.
+    holds: Confidentiality,
 }
 
 /// Everything a person has vouched for, taken together.
@@ -377,6 +386,7 @@ impl<S: Sink> fmt::Debug for Policy<'_, S> {
             .field("pending_grants", &self.grants.len())
             .field("denials", &self.denials)
             .field("context", &self.context)
+            .field("holds", &self.holds)
             .finish_non_exhaustive()
     }
 }
@@ -449,6 +459,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             calling_server: None,
             server_hop: None,
             context: Integrity::Trusted,
+            holds: Confidentiality::Public,
         })
     }
 
@@ -785,9 +796,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// answer removes the default prompt and does not overrule a rule somebody wrote (SERVERS-7).
     ///
     /// The arguments' label and nothing of their bytes. They are the planner's words, which
-    /// [`Policy::label_model_output`] labels at the context's integrity and public, since the
-    /// kernel tracks no confidentiality for a planner's context; so today the first question asks
-    /// nothing, and it is what a route carrying a slot's bytes into a call would meet.
+    /// [`Policy::label_model_output`] labels at [`Policy::context_label`]: private once the
+    /// planner has been shown private content, so after a vetted private result every call asks.
     pub fn mcp_call_needs_approval(
         &mut self,
         alias: &str,
@@ -1215,12 +1225,29 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// drawing on the tree it was spawned into rather than starting one.
     ///
     /// A spec only [`Policy::before_delegate`] builds, so where a run sits and which tree it
-    /// counts against are both the kernel's word.
+    /// counts against are both the kernel's word. It also starts holding what the context that
+    /// wrote its task held, since the task may repeat it.
     pub fn within(mut self, spec: &crate::delegate::DelegateSpec) -> Self {
         self.at = Some(spec.id());
         self.named_out_delegating = spec.named_out_delegating();
         self.tree = spec.tree().clone();
+        self.hold(
+            spec.holds(),
+            "the context that wrote this delegate's task held private content",
+        );
         self
+    }
+
+    /// Hold what a delegate's report held, once the planner has been given its words.
+    ///
+    /// The report is labelled in the delegate from that delegate's own context, so a delegate
+    /// that was shown private content reports private words, and a planner reading them holds
+    /// them too. A report the planner was given a reference to never entered its context.
+    pub fn heard_from_delegate(&mut self, report: Label) {
+        self.hold(
+            report.confidentiality,
+            "the planner was given a delegate's private report",
+        );
     }
 
     /// Refuse an action a `deny` rule covers, before anything is opened or started.
@@ -1356,6 +1383,45 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// bytes is not the same as meeting them.
     pub fn context_integrity(&self) -> Integrity {
         self.context
+    }
+
+    /// Begin holding what an earlier turn's context held, for the reason [`Policy::resuming`]
+    /// begins with what it met.
+    ///
+    /// One way, through [`Policy::hold`]: passing [`Confidentiality::Public`] changes nothing.
+    pub fn holding(mut self, held: Confidentiality) -> Self {
+        self.hold(
+            held,
+            "the context this run resumes already held private content",
+        );
+        self
+    }
+
+    /// Whether the planner's context holds private content let out of quarantine. Only
+    /// [`Policy::promote_vetted`], [`Policy::promote_vetted_picture`], [`Policy::read_output`]
+    /// and a delegate raise it.
+    pub fn context_confidentiality(&self) -> Confidentiality {
+        self.holds
+    }
+
+    /// Both axes of the context together, for a conversation recording what this run met.
+    pub fn context_label(&self) -> Label {
+        Label::new(self.context, self.holds)
+    }
+
+    /// Raise what the context holds to include `shown`, recording `how` it came to hold it.
+    ///
+    /// One way: [`Confidentiality::join`] cannot lower it, so nothing shown later makes a
+    /// context public again.
+    fn hold(&mut self, shown: Confidentiality, how: &str) {
+        let raised = self.holds.join(shown);
+        if raised != self.holds {
+            self.holds = raised;
+            self.allow(
+                "context",
+                format!("{how}; what the planner writes is private from here"),
+            );
+        }
     }
 
     /// Lower the recorded context integrity to include `observed`.
@@ -1514,7 +1580,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Ok(label)
     }
 
-    /// Label text the model produced, at the integrity of the context it came from.
+    /// Label text the model produced, at the label of the context it came from.
     ///
     /// **This is not a relabel and never upgrades anything.** The model's output is a function
     /// of its context and nothing else, so the context's integrity *is* this value's integrity;
@@ -1525,12 +1591,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The guarantee it rests on is the one in CLAUDE.md: untrusted content never enters the
     /// planner's context. If it did, [`Policy::absorb`] has already dropped the context to
     /// untrusted, and everything produced afterwards is untrusted too.
+    ///
+    /// Confidentiality is what [`Policy::context_confidentiality`] says: private once private
+    /// content has been let out of quarantine for the planner, so a planner that was shown the
+    /// person's mail writes private arguments to a server's tool, and public otherwise.
+    ///
     /// Not restricted to text. A tool call arrives as JSON and may decode into a list or a
     /// record before anything labels it; requiring a `String` here would mean labelling the
     /// serialised form and decoding it again later, which is more handling of model output, not
     /// less.
     pub fn label_model_output<T>(&mut self, tool: &str, value: T) -> Labelled<T> {
-        let label = Label::new(self.context, crate::label::Confidentiality::Public);
+        let label = self.context_label();
         self.allow(
             "provenance",
             format!("{tool}: model output labelled {label} from its context"),
@@ -1580,16 +1651,20 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// The one place a value's first label comes from a human rather than from a capability or
     /// from the context. Bytes a person typed came from the keyboard of the user who owns the
-    /// session, the same source as the task in [`Routing`], so `(T,pub)` is the first label they
+    /// session, the same source as the task in [`Routing`], so trusted is the first integrity they
     /// have ever carried rather than an upgrade of an earlier one. There is no capability for
     /// this, and there must not be: `Capability::output_label` may never yield `(T,pub)`, and a
     /// person answering a question is not an observation of the world.
     ///
-    /// **Refuses unless the series itself was `(T,pub)`.** A person cannot vouch for a question
+    /// **Refuses unless the series itself was trusted.** A person cannot vouch for a question
     /// an attacker may have written, so a selection among untrusted strings stays untrusted, and
     /// the honest answer is to refuse rather than to launder it through a keypress. The refusal
     /// covers the series whole, matching the one gate [`crate::ask::canonical_series`] is checked
     /// by: a series with one untrusted question is not a series with some good answers in it.
+    ///
+    /// The reply keeps the series's confidentiality. It repeats the questions, and a question the
+    /// planner wrote while holding private content is private, so the text is `(T,priv)` then and
+    /// `(T,pub)` otherwise.
     ///
     /// Lining the answers up against the questions happens here, inside the kernel, so no driver
     /// decides which answer belongs to which question. It is total, so a confirmer that returns
@@ -1604,7 +1679,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         answers: &[Answer],
     ) -> Gated<Labelled<String>> {
         let label = series.label();
-        if label != Label::trusted_public() {
+        if !label.is_trusted() {
             return Err(self.deny(
                 "answer",
                 Principle::IntegrityGate,
@@ -1619,12 +1694,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let asked = series.clone().declassify(&proof);
         let text = ask::describe_series(&asked, answers);
 
+        let replied = Label::new(Integrity::Trusted, label.confidentiality);
         self.allow(
             "answer",
-            format!("{tool}: the user replied, recorded (T,pub)"),
+            format!("{tool}: the user replied, recorded {replied}"),
         );
         self.absorb(Integrity::Trusted);
-        Ok(Labelled::new(text, Label::trusted_public()))
+        Ok(Labelled::new(text, replied))
     }
 
     /// Label input piped into the process on stdin.
@@ -3044,7 +3120,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             held,
             rounds,
             self.tree.clone(),
-        );
+        )
+        .holding(self.holds);
 
         let beneath = if spec.may_delegate() {
             "and a place in this turn's tree of delegates"
@@ -4106,7 +4183,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// The result is `(T,priv)`. Trusted, so the planner may read it; private, because the bytes
     /// may have come out of the workspace and nothing about being vetted makes them public, so
-    /// vetting unlocks no egress.
+    /// vetting unlocks no egress. A private slot also raises what the context holds, so what the
+    /// planner writes from here is private ([`Policy::context_label`]).
     ///
     /// **What authorises the promotion is the endorsement, never the verdict.** `by` says who
     /// minted it and reaches the trail and nothing else: the label, the single use and what
@@ -4155,15 +4233,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 by.describe()
             ),
         );
+        // What the slot was, not the label handed back: a page fetched off the web is public,
+        // and the planner having read one is no reason to ask before every call to a server.
+        self.hold(
+            was.confidentiality,
+            &format!("{slot} was private and was let out of quarantine for the planner"),
+        );
         Ok(Labelled::new(text, label))
     }
 
     /// [`Policy::promote_vetted`], for a slot that holds a picture or a PDF.
     ///
-    /// The same endorsement, spent the same way, at the same label: one slot, once, `(T,priv)`, and
-    /// no trust rule. What differs is what comes back. Not text, but an
-    /// [`crate::vetting::Attached`] that nothing can read as text and that only
-    /// [`Policy::attach_vetted_picture`] opens, for a part of its own in the planner's next
+    /// The same endorsement, spent the same way, at the same label: one slot, once, `(T,priv)`, no
+    /// trust rule, and a private slot raising what the context holds. What differs is what comes
+    /// back. Not text, but an [`crate::vetting::Attached`] that nothing can read as text and that
+    /// only [`Policy::attach_vetted_picture`] opens, for a part of its own in the planner's next
     /// request.
     ///
     /// Every one of the three endorsements mints one, a run bypassing permissions with no screening
@@ -4204,6 +4288,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                  unchanged and no path was vouched for",
                 by.describe()
             ),
+        );
+        // Here rather than where the picture is attached, because only here is what the slot was
+        // still known. The attachment goes into the planner's next request.
+        self.hold(
+            was.confidentiality,
+            &format!("{slot} was a private picture and was let out of quarantine for the planner"),
         );
         Ok(crate::vetting::Attached {
             slot: slot.clone(),
@@ -4346,6 +4436,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// The result is `(T,priv)`. Trusted, so the planner may read it; private, because the bytes
     /// may have come out of the workspace and nothing about being read aloud makes them public.
+    /// A private slot raises what the context holds, as [`Policy::promote_vetted`] does.
     ///
     /// Three things must hold, and each refuses rather than degrading:
     ///
@@ -4391,6 +4482,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 "{slot} was {was}; {}, so the planner is given {label}",
                 by.describe()
             ),
+        );
+        self.hold(
+            was.confidentiality,
+            &format!("{slot} was private and was read to the planner"),
         );
         Ok(Labelled::new(text, label))
     }
@@ -4475,6 +4570,35 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             format!("{slot} released into {path}, which is inside the workspace"),
         );
         let proof = Declassification::authorise("written back inside the workspace it came from");
+        Labelled::new(value.declassify(&proof), to)
+    }
+
+    /// [`Policy::declassify_into_workspace`], for what the planner wrote rather than a slot.
+    ///
+    /// A planner shown private content writes private text ([`Policy::label_model_output`]), and a
+    /// file it writes is that text going into the workspace, the one move that lowers
+    /// confidentiality. Integrity is untouched, so the write is decided exactly as it was before
+    /// the planner was shown anything. A public value comes back as it went in and records
+    /// nothing.
+    pub fn declassify_written_into_workspace(
+        &mut self,
+        tool: &str,
+        path: &str,
+        value: Labelled<String>,
+    ) -> Labelled<String> {
+        let from = value.label();
+        if from.is_public() {
+            return value;
+        }
+        let to = Label::new(from.integrity, Confidentiality::Public);
+        self.allow(
+            "declassify",
+            format!(
+                "{tool}: what the planner wrote, {from}, released into {path}, which is inside \
+                 the workspace, as {to}"
+            ),
+        );
+        let proof = Declassification::authorise("the planner's words written into the workspace");
         Labelled::new(value.declassify(&proof), to)
     }
 
@@ -5659,6 +5783,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// argument every time. The gate is the invariant written down where a change that ever
     /// let untrusted bytes into the planner's context has to get past it: every tool argument
     /// stops being readable at that moment rather than quietly continuing to decide things.
+    ///
+    /// What the context holds ([`Policy::context_confidentiality`]) is not asked. A planner shown
+    /// private content still names paths and commands, and refusing every argument after a vet
+    /// would end the turn. The arguments that hand the planner's words to a server are labelled
+    /// from the context instead, and [`Policy::mcp_call_needs_approval`] asks about them.
     pub fn read_planner_argument(
         &mut self,
         tool: &str,
@@ -5911,6 +6040,36 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 ),
             };
             return Err(self.deny("action", principle, message));
+        }
+        Ok(())
+    }
+
+    /// The gate a series of questions for the person passes before it is drawn.
+    ///
+    /// Routing, since the questions decide what the person is asked, so an untrusted series is
+    /// refused as [`Policy::before_action`] refuses one. Private is allowed. The questions go to
+    /// the screen of the person whose data it is and nowhere else, which is where a private slot
+    /// is shown when it is put to them for vetting, so a planner that was shown their mail may
+    /// still ask them about it. The reply stays private: [`Policy::record_answers`].
+    pub fn before_asking(&mut self, tool: &str, series: &Labelled<String>) -> Gated<()> {
+        let label = series.label();
+        let allowed = label.is_trusted();
+        self.sink.emit(Event::ActionField {
+            tool: tool.to_string(),
+            field: "questions".to_string(),
+            role: Role::Routing,
+            label,
+            allowed,
+        });
+        if !allowed {
+            return Err(self.deny(
+                "action",
+                Principle::IntegrityGate,
+                format!(
+                    "injection blocked: the questions '{tool}' would ask must be trusted but are \
+                     {label}"
+                ),
+            ));
         }
         Ok(())
     }
@@ -10635,6 +10794,166 @@ five
         );
     }
 
+    /// LABEL-8: what the planner writes is labelled from what its context holds. Public until
+    /// private content is let out of quarantine for it, and private from then on.
+    #[test]
+    fn a_vetted_private_slot_makes_what_the_planner_writes_private() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        assert_eq!(
+            policy.label_model_output("mcp_call", ()).label(),
+            Label::trusted_public()
+        );
+
+        let (slots, slot) = fetched("the person's mail");
+        policy.issue_grant("vet_content", "ref", slot.as_str());
+        policy
+            .promote_vetted(&slot, &slots, crate::vetting::Endorsed::ByAPerson)
+            .expect("approved");
+
+        assert_eq!(
+            policy.label_model_output("mcp_call", ()).label(),
+            Label::trusted_private(),
+            "the planner was shown private content and still wrote public arguments"
+        );
+    }
+
+    /// What the slot was decides, not the `(T,priv)` the planner is handed: a public page read
+    /// through a vet is no reason to ask before every call to a server.
+    #[test]
+    fn a_vetted_public_slot_leaves_what_the_planner_writes_public() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+        let slot = SlotId::new("ref:1");
+        slots
+            .writer_for(slot.clone(), Label::untrusted_public())
+            .unwrap()
+            .write("a page off the web")
+            .unwrap();
+        policy.issue_grant("vet_content", "ref", slot.as_str());
+        policy
+            .promote_vetted(&slot, &slots, crate::vetting::Endorsed::ByAPerson)
+            .expect("approved");
+
+        assert_eq!(
+            policy.label_model_output("mcp_call", ()).label(),
+            Label::trusted_public()
+        );
+    }
+
+    /// A picture is promoted by its own gate, and a private one raises what the context holds
+    /// there, since the attachment no longer knows what its slot was.
+    #[test]
+    fn a_vetted_private_picture_makes_what_the_planner_writes_private() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let (slots, slot) = a_picture("image/png");
+        policy.issue_grant("vet_content", "ref", slot.as_str());
+        policy
+            .promote_vetted_picture(&slot, &slots, crate::vetting::Endorsed::ByAPerson)
+            .expect("approved");
+
+        assert_eq!(
+            policy.context_confidentiality(),
+            Confidentiality::Private,
+            "a private picture reached the planner and its context stayed public"
+        );
+    }
+
+    /// What a context held carries into the next turn, and nothing resumed lowers it: holding
+    /// public after private is still private.
+    #[test]
+    fn a_resumed_context_keeps_what_it_held_and_cannot_be_made_public() {
+        let mut sink = RecordingSink::new();
+        let policy = open_policy(&mut sink)
+            .holding(Confidentiality::Private)
+            .holding(Confidentiality::Public);
+
+        assert_eq!(policy.context_confidentiality(), Confidentiality::Private);
+        assert_eq!(policy.context_label(), Label::trusted_private());
+    }
+
+    /// The trail says how the context came to hold private content: a resumed run is not
+    /// recorded as letting anything out of quarantine, and a vet names the slot it let out.
+    #[test]
+    fn the_trail_says_how_the_context_came_to_hold_private_content() {
+        fn held(sink: &RecordingSink) -> Vec<String> {
+            sink.events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GatePassed {
+                        gate: "context",
+                        detail,
+                    } if detail.contains("private") => Some(detail.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        let mut sink = RecordingSink::new();
+        drop(open_policy(&mut sink).holding(Confidentiality::Private));
+        assert_eq!(
+            held(&sink),
+            [
+                "the context this run resumes already held private content; what the planner \
+              writes is private from here"
+            ]
+        );
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let (slots, slot) = fetched("the person's mail");
+        policy.issue_grant("vet_content", "ref", slot.as_str());
+        policy
+            .promote_vetted(&slot, &slots, crate::vetting::Endorsed::ByAPerson)
+            .expect("approved");
+        drop(policy);
+        assert_eq!(
+            held(&sink),
+            [format!(
+                "{slot} was private and was let out of quarantine for the planner; what the \
+                 planner writes is private from here"
+            )]
+        );
+    }
+
+    /// A delegate's report the planner read is words from the delegate's context, so a private
+    /// one is held and a public one changes nothing.
+    #[test]
+    fn a_private_report_from_a_delegate_is_held() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        policy.heard_from_delegate(Label::trusted_public());
+        assert_eq!(policy.context_confidentiality(), Confidentiality::Public);
+
+        policy.heard_from_delegate(Label::trusted_private());
+        assert_eq!(policy.context_confidentiality(), Confidentiality::Private);
+    }
+
+    /// ROUTE-3 for the planner's own words: a private file body is released into the workspace
+    /// as public, at the integrity it had, and a public one comes back as it went in.
+    #[test]
+    fn what_the_planner_writes_into_the_workspace_is_released_public_at_its_own_integrity() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+
+        for (from, to) in [
+            (Label::trusted_private(), Label::trusted_public()),
+            (Label::untrusted_private(), Label::untrusted_public()),
+            (Label::trusted_public(), Label::trusted_public()),
+        ] {
+            let body = Labelled::new("the new contents".to_string(), from);
+            let written = policy.declassify_written_into_workspace("write_file", "notes.md", body);
+            assert_eq!(
+                written.label(),
+                to,
+                "{from} was released as {}",
+                written.label()
+            );
+        }
+    }
+
     /// The slot itself is untouched. Nothing is relabelled: the quarantined value keeps the label
     /// it was written at, and what the planner gets is a separate value.
     #[test]
@@ -10942,6 +11261,24 @@ five
             given.label(),
             Label::trusted_public(),
             "output a person read became routing-safe on its own"
+        );
+    }
+
+    /// Output read aloud is private content let out of quarantine, so what the planner writes
+    /// after it is private.
+    #[test]
+    fn output_read_aloud_makes_what_the_planner_writes_private() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let (slots, slot) = printed("Darwin\n");
+        policy.issue_grant("read_output", "ref", slot.as_str());
+        policy
+            .read_output(&slot, &slots, Endorsed::ByAPerson)
+            .expect("approved");
+
+        assert_eq!(
+            policy.label_model_output("mcp_call", ()).label(),
+            Label::trusted_private()
         );
     }
 
@@ -13421,6 +13758,21 @@ five
             assert!(!policy.finish());
         }
 
+        /// A task written by a planner holding private content may repeat it, so the delegate
+        /// starts out holding it too, and what the delegate writes is private.
+        #[test]
+        fn a_delegate_starts_out_holding_what_its_parent_held() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink).holding(Confidentiality::Private);
+            let spec = policy
+                .before_delegate(&argument("reader"), &argument("summarise it"))
+                .expect("a clean context may delegate");
+
+            let mut inner = RecordingSink::new();
+            let delegate = open_policy(&mut inner).within(&spec);
+            assert_eq!(delegate.context_confidentiality(), Confidentiality::Private);
+        }
+
         /// The kind is the field that decides what the run holds, so it selects from the driver's
         /// list or it selects nothing. A name naming a capability, a path, or a kind somebody
         /// wished existed reaches no capability set.
@@ -14691,6 +15043,40 @@ five
                 )
                 .expect("a trusted series may be answered");
             assert_eq!(answer.label(), Label::trusted_public());
+        }
+
+        /// A planner shown private content writes private questions. They go to the person's own
+        /// screen, so they are asked, and the reply repeats them, so it is private and trusted.
+        #[test]
+        fn private_questions_are_asked_and_the_reply_stays_private() {
+            let mut sink = RecordingSink::new();
+            let mut policy = policy_trusting(&mut sink, &["."]).holding(Confidentiality::Private);
+            let series = policy.label_model_output("ask_user", a_series());
+            let canonical =
+                policy.render_in_place("ask_user", &series, |s| crate::ask::canonical_series(&s));
+            policy
+                .before_asking("ask_user", &canonical)
+                .expect("private questions go to the person's own screen");
+
+            let answer = policy
+                .record_answers("ask_user", &series, &[Answer::Chosen(vec![0])])
+                .expect("a trusted series may be answered");
+            assert_eq!(answer.label(), Label::trusted_private());
+        }
+
+        /// The question gate is the integrity one alone, and it refuses questions written from an
+        /// untrusted context whatever their confidentiality.
+        #[test]
+        fn untrusted_questions_are_refused_whatever_their_confidentiality() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            for label in [Label::untrusted_public(), Label::untrusted_private()] {
+                let written = Labelled::new("Which cache layer?".to_string(), label);
+                let denial = policy
+                    .before_asking("ask_user", &written)
+                    .expect_err("questions an attacker may have written are not asked");
+                assert_eq!(denial.principle, Principle::IntegrityGate);
+            }
         }
 
         /// Answering must not be a way back up the lattice. If it were, a turn resuming a
