@@ -238,6 +238,8 @@ pinned key fixes:
 
 It records the id in the socket's directory for the host to check, writes nothing else, changes no
 other host's manifest, and writes nothing at all for an id that is not 32 letters from `a` to `p`.
+A word it does not take, such as `--manifest-dir` with no directory after it, is answered with its
+usage, and nothing is written.
 
 **Why.** On macOS Brave reads Chrome's location rather than its own, so a manifest in a Brave
 directory there is never read. Chrome reads the same file, and `allowed_origins` is what keeps
@@ -247,6 +249,7 @@ Brave's own profile directory, and a channel other than stable has its own.
 `verified-by: bravebot_browser::relay::installing_writes_one_manifest_for_our_extension_alone`
 `verified-by: bravebot_browser::relay::installing_with_no_id_records_the_extension_in_this_repository`
 `verified-by: bravebot_browser::relay::installing_refuses_what_is_not_an_extension_id`
+`verified-by: bravebot_browser::relay::installing_with_a_flag_missing_its_value_prints_the_usage`
 `verified-by: bravebot_browser::install::the_manifest_goes_where_brave_reads_it`
 `verified-by: bravebot_browser::install::an_extension_id_is_32_letters_from_a_to_p`
 

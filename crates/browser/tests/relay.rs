@@ -810,6 +810,23 @@ fn installing_refuses_what_is_not_an_extension_id() {
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
 }
 
+/// A flag with its value missing is a mistake in the command line, not an extension id, so it is
+/// answered with the usage rather than with a complaint about the id, and nothing is written.
+#[test]
+fn installing_with_a_flag_missing_its_value_prints_the_usage() {
+    let directory = tempfile::tempdir().unwrap();
+    let refused = Command::new(PROGRAM)
+        .args(["install", "--manifest-dir"])
+        .env("BRAVEBOT_BROWSER_DIR", directory.path())
+        .output()
+        .unwrap();
+    assert_eq!(refused.status.code(), Some(2));
+    let said = String::from_utf8_lossy(&refused.stderr);
+    assert!(said.contains("usage: bravebot-browser install"), "{said}");
+    assert!(!said.contains("is not an extension id"), "{said}");
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+}
+
 /// JSON that is not a request object is answered with an error under no id, as JSON-RPC asks, so a
 /// client is never left waiting on a line the server read. A notification is still answered with
 /// nothing: only the two lines that are not requests get replies.
