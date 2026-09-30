@@ -373,7 +373,7 @@ const Session = memo(function Session({
         <span className="menu-icon-row"><Icon name="pin" />{preferences?.pinned ? 'Unpin conversation' : 'Pin conversation'}</span>
       </leo-menu-item>
       <leo-menu-item onClick={() => choose('archive')}>
-        <span className="menu-icon-row"><Icon name="folder-archive" />{preferences?.archived ? 'Restore conversation' : 'Archive conversation'}</span>
+        <span className="menu-icon-row"><Icon name="inbox" />{preferences?.archived ? 'Restore conversation' : 'Archive conversation'}</span>
       </leo-menu-item>
     </ButtonMenu>
   </div>
