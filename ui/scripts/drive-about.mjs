@@ -49,7 +49,7 @@ for (const fallback of [false, true]) {
     await page.waitForTimeout(90)
     assert.notEqual(await picture(), curious, 'click closes one eye')
     // A second click must not toggle it open or extend the cycle indefinitely.
-    await mascot.evaluate(el => el.click())
+    await mascot.click()
     assert.notEqual(await picture(), curious, 'a repeated click lets the wink finish')
     await page.waitForTimeout(350)
     assert.equal(await picture(), curious, 'the eye reopens automatically')
@@ -72,6 +72,11 @@ for (const fallback of [false, true]) {
     // Closing mid-wink must safely release the timer and avatar.
     await mascot.click()
     await page.keyboard.press('Escape')
+    await dialog.waitFor({ state: 'detached' })
+    // A click on the backdrop closes it too; a keyboard click (no coordinates) above did not.
+    await app.evaluate(({ Menu }) => { Menu.getApplicationMenu().getMenuItemById('app.about').click() })
+    await dialog.waitFor()
+    await page.mouse.click(4, 4)
     await dialog.waitFor({ state: 'detached' })
     await page.waitForTimeout(400)
     assert.deepEqual(errors, [])

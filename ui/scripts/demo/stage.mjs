@@ -434,7 +434,7 @@ export async function launch(opts) {
       await group.click()
       await page.waitForTimeout(250)
     }
-    const find = page.locator('.session-find')
+    const find = page.locator('.sidebar-search')
     if (await find.isVisible().catch(() => false)) await find.fill('')
     await page.waitForTimeout(200)
   }

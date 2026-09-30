@@ -1,6 +1,6 @@
 // Exercise the real composer with deterministic model/session replies; no paid inference.
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
@@ -12,14 +12,15 @@ try {
   page.setDefaultTimeout(15000)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
-  await app.evaluate(({ ipcMain, BrowserWindow }) => {
+  mkdirSync('/tmp/bravebot-model-picker-project', { recursive: true })
+  await app.evaluate(({ ipcMain, BrowserWindow, dialog }) => {
     const defaultModel = 'openrouter/anthropic/claude-haiku-4.5'
     const directory = '/tmp/bravebot-model-picker-project'
     const rows = ['A', 'B'].map((id) => ({ id, directory, title: `Conversation ${id}`,
       project: 'model-picker-project', branch: null, updated: 1, bytes: 1 }))
     globalThis.modelTest = { sent: [], fail: false, loading: false }
-    ipcMain.removeHandler('bravebot:choose-directory')
-    ipcMain.handle('bravebot:choose-directory', () => directory)
+    // The native picker is what grants a folder to a new bot, so answer the dialog rather than the channel.
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] })
     ipcMain.removeHandler('bravebot:request')
     ipcMain.handle('bravebot:request', async (_, method, params) => {
       if (method === 'models.list') {
@@ -71,7 +72,7 @@ try {
   await sonnet.hover()
   assert.equal(await page.locator('.model-popover').isVisible(), true, 'hovering a model keeps the menu open')
   assert.equal(await sonnet.isVisible(), true)
-  assert.deepEqual(await sonnet.locator('.model-capability').allTextContents(), ['Text', 'Tools'])
+  assert.deepEqual(await sonnet.locator('.model-capability').evaluateAll((badges) => badges.map((badge) => badge.getAttribute('aria-label'))), ['Text', 'Tools'])
   assert.equal(await page.getByRole('option', { name: /Brave model/ }).locator('.model-capability').count(), 0)
   const search = page.getByRole('combobox', { name: 'Search models' })
   const models = page.locator('.model-menu')
@@ -201,4 +202,5 @@ try {
 } finally {
   await app.close()
   rmSync(profile, { recursive: true, force: true })
+  rmSync('/tmp/bravebot-model-picker-project', { recursive: true, force: true })
 }

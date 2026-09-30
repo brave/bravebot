@@ -1,8 +1,11 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ModelCatalogue, ModelOption } from '../../shared/protocol'
 import { setExperience, useExperience } from '../experience'
 import { rememberCatalogue } from '../context-window'
-import { Alert, Button, ButtonMenu, Hr, Icon, Input, Label, ProgressRing } from '../nala'
+import { Alert, Button, ButtonMenu, Hr, Icon, Input, Label, ProgressRing, type IconName } from '../nala'
+
+/** The two capabilities this app uses; the rest are in the catalogue but not shown. */
+const CAPABILITY_ICONS: Record<string, IconName> = { text: 'message-bubble-text', tools: 'wrench' }
 
 const CAPABILITIES: Record<string, [string, string]> = {
   text: ['Text', 'Generates text'],
@@ -79,7 +82,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
       rows.unshift({ id: model, name: model, provider: 'Current selection', premium: false, contextWindow: null })
     }
     const words = query.toLowerCase().trim().split(/\s+/)
-    return rows.filter((row) => {
+    const sorted = rows.filter((row) => {
       const capabilities = (row.capabilities ?? []).map((key) =>
         `${key} ${CAPABILITIES[key]?.join(' ') ?? ''}`).join(' ')
       const searchable = `${row.name} ${row.id} ${row.provider} ${capabilities}`.toLowerCase()
@@ -88,6 +91,11 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
       const rank = (row: ModelOption) => row.id === model ? -2 : preferences.recentModels.includes(row.id) ? preferences.recentModels.indexOf(row.id) : 100
       return rank(a) - rank(b)
     })
+    // Rows sit under their provider. Providers keep the order of their best-ranked row, so the
+    // current and recent models stay at the top; the keyboard walks this same flat order.
+    const providers: string[] = []
+    for (const row of sorted) if (!providers.includes(row.provider)) providers.push(row.provider)
+    return providers.flatMap((provider) => sorted.filter((row) => row.provider === provider))
   }, [catalogue, model, query, preferences.recentModels])
 
   useEffect(() => {
@@ -212,7 +220,9 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
         {!loading && options.length === 0 && <p className="model-status">{query ? 'No models match your search.' : 'No models available. Check your backend settings.'}</p>}
       </div>
       <leo-menu-section id={`${id}-list`} aria-label="Models" ref={list}>
-        {options.map((row, index) => <leo-option key={row.id} id={`${id}-option-${index}`} value={row.id}
+        {options.map((row, index) => <Fragment key={row.id}>
+          {(index === 0 || options[index - 1]?.provider !== row.provider) && <div className="model-group" role="presentation">{row.provider}</div>}
+          <leo-option id={`${id}-option-${index}`} value={row.id}
           role="option" data-index={index} data-current={row.id === model ? 'true' : undefined}
           className={index === active ? 'active' : undefined}
           onMouseDown={(event) => event.preventDefault()}
@@ -221,23 +231,23 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
           <span className="model-check" aria-hidden="true">{row.id === model ? <Icon name="check-normal" /> : null}</span>
           <span className="model-description">
             <span className="model-name">{row.name}</span>
-            <span className="model-detail">{row.provider}{row.premium ? ' · Premium' : ''}{row.contextWindow ? ` · ${row.contextWindow.toLocaleString()} context tokens` : ''}{preferences.recentModels.includes(row.id) ? ' · Recent' : ''}</span>
-            {!!row.capabilities?.length && <span className="model-capabilities" aria-label="Provider-reported capabilities">
-              {row.capabilities.filter((key) => ['text', 'tools'].includes(key)).map((key) => {
-                const badge = CAPABILITIES[key]
-                return badge ? <Label className="model-capability" key={key} mode="outline" color="neutral">
-                  <span title={`${badge[1]} · Supported by this app and reported by the provider`}>{badge[0]}</span>
-                </Label> : null
-              })}
-            </span>}
+            <span className="model-detail">{[row.premium ? 'Premium' : null, row.contextWindow ? `${row.contextWindow.toLocaleString()} context tokens` : null, preferences.recentModels.includes(row.id) ? 'Recent' : null].filter(Boolean).join(' · ')}</span>
           </span>
+          {!!row.capabilities?.length && <span className="model-capabilities" aria-label="Provider-reported capabilities">
+            {row.capabilities.map((key) => {
+              const badge = CAPABILITIES[key]
+              const icon = CAPABILITY_ICONS[key]
+              if (!badge || !icon) return null
+              return <span className="model-capability" key={key} role="img" aria-label={badge[0]} data-tooltip={`${badge[1]} · Supported by this app and reported by the provider`}>
+                <Icon name={icon} />
+              </span>
+            })}
+          </span>}
           {row.id === catalogue?.defaultModel && <Label className="model-default" mode="outline" color="neutral">Default</Label>}
-        </leo-option>)}
+        </leo-option></Fragment>)}
       </leo-menu-section>
       <Hr />
-      <p className="model-footnote">{scope === 'bot' ? 'Saved with this bot. Applies to its next message.' : 'Applies to the next message in this conversation.'}</p>
-      <Hr />
-      <p className="model-footnote">Brave Bot uses text and tools. Other provider capabilities, such as image or audio generation, are not available here. Pricing is not supplied by this catalogue.</p>
+      <p className="model-footnote">{scope === 'bot' ? 'Saved with this bot. Applies to its next message.' : 'Applies to the next message in this conversation.'} Brave Bot uses text and tools; pricing is not supplied by this catalogue.</p>
     </ButtonMenu>
   </div>
 }

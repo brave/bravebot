@@ -114,11 +114,18 @@ putKey('view', undefined)
  */
 const makeBot = (page, name, purpose) =>
   page.evaluate(
-    ([name, purpose, directory]) => window.bravebot.writeBot({ name, purpose, directory }),
+    async ([name, purpose, directory]) => {
+      // A new bot is only pinned to a folder the native picker handed over, so ask for it first.
+      await window.bravebot.chooseDirectory()
+      return window.bravebot.writeBot({ name, purpose, directory })
+    },
     [name, purpose, checkout],
   )
 
 const app = await launch()
+await app.evaluate(({ dialog }, directory) => {
+  dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] })
+}, checkout)
 const page = await app.firstWindow()
 await page.waitForLoadState('domcontentloaded')
 page.on('pageerror', (error) => console.log('PAGE ERROR:', error.message))
@@ -154,7 +161,7 @@ await page.screenshot({ path: '/tmp/bravebot-ui/20-bots-empty.png' })
 // survive a look at the other tab.
 check(
   (await page.locator('#sessions-column .sidebar-body').first().isHidden()) &&
-    (await page.locator('.session-find').count()) === 1,
+    (await page.locator('.sidebar-search').count()) >= 1,
   'the list not on screen is hidden rather than thrown away',
 )
 
@@ -206,7 +213,7 @@ await mine.locator('.bot-edit').click()
 await page.waitForTimeout(300)
 check((await page.locator('.bot-form').count()) === 1, 'the edit control opens the form')
 check(
-  (await page.locator('.bot-memory').count()) === 1,
+  (await page.locator('[data-test="bot-memory"]').count()) === 1,
   'and the form shows what the bot has remembered',
 )
 await page.screenshot({ path: '/tmp/bravebot-ui/23-bots-form.png' })
@@ -214,7 +221,7 @@ await page.locator('.bot-form').getByRole('textbox', { name: 'Name', exact: true
 await page.locator('.bot-save').click()
 await page.waitForTimeout(600)
 
-const renamed = rowFor('Release Notes \\(weekly\\)')
+const renamed = rowFor('Release Notes (weekly)')
 check((await renamed.count()) === 1, 'a renamed bot is called what it was renamed to')
 check((await faceOf(renamed)) === first, 'and keeps the face it had — the point of storing the seed')
 

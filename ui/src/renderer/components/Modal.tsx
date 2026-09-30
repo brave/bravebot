@@ -26,6 +26,18 @@ const focusableControls = (dialog: HTMLElement): HTMLElement[] => {
   return found
 }
 
+/**
+ * Where focus goes back to when a dialog closes: whatever opened it. When that was a menu item,
+ * the menu is gone by then, so it is the control the menu hangs from.
+ */
+function returnTarget(): HTMLElement | null {
+  const active = document.activeElement
+  if (!(active instanceof HTMLElement)) return null
+  const menu = active.closest('leo-buttonmenu')
+  const anchor = menu?.querySelector<HTMLElement>('[slot="anchor-content"]')
+  return anchor && active.closest('leo-menu-item, [role="menuitem"]') ? anchor : active
+}
+
 /** The four widths a dialog comes in: 440, 560, 760 and 1080, each short of the window's edge. */
 export type ModalSize = 'sm' | 'md' | 'lg' | 'xl'
 
@@ -64,11 +76,27 @@ export function Modal({
   actions?: React.ReactNode
   className?: string
 }): React.JSX.Element {
-  const previousFocus = useRef<HTMLElement | null>(
-    document.activeElement instanceof HTMLElement ? document.activeElement : null,
-  )
+  const previousFocus = useRef<HTMLElement | null>(returnTarget())
 
   const host = useRef<HTMLElement>(null)
+
+  // Leo closes on any click whose coordinates fall outside the dialog, and a click made from the
+  // keyboard (Space or Enter on a button) carries none, so it would close the dialog it is in.
+  // The backdrop is the dialog element itself as the target, so that is what closes it here.
+  const close = useRef(onClose)
+  close.current = onClose
+  useEffect(() => {
+    const root = host.current
+    if (!root) return
+    const outside = (event: MouseEvent) => {
+      const dialog = root.shadowRoot?.querySelector('dialog')
+      if (!close.current || !dialog || event.composedPath()[0] !== dialog) return
+      const box = dialog.getBoundingClientRect()
+      if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) close.current()
+    }
+    root.addEventListener('click', outside)
+    return () => root.removeEventListener('click', outside)
+  }, [])
 
   useEffect(() => () => {
     const previous = previousFocus.current
@@ -142,7 +170,7 @@ export function Modal({
       modal
       showClose={Boolean(onClose)}
       escapeCloses={Boolean(onClose)}
-      backdropClickCloses={Boolean(onClose)}
+      backdropClickCloses={false}
       onClose={onClose}
       className={`modal modal-${size} ${className}`.trim()}
       data-test="modal"

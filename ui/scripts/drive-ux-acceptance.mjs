@@ -20,12 +20,13 @@ const originalClipboard = await app.evaluate(({clipboard})=>clipboard.readText()
 try {
   page = await app.firstWindow(); await page.setViewportSize({ width: 1350, height: 900 }); page.setDefaultTimeout(7000)
   const errors=[]; page.on('pageerror',e=>{errors.push(e.message);console.error('RENDERER',e.message)})
-  await app.evaluate(({ipcMain,BrowserWindow}, {directory,idA,idB})=>{
+  await app.evaluate(({ipcMain,BrowserWindow,dialog}, {directory,idA,idB})=>{
     const rows=[{id:idA,title:'Review the sample project'},{id:idB,title:'Plan the next iteration'}].map(r=>({...r,directory,project:'sample-project',branch:'main',updated:Date.now(),bytes:20}))
     const emit=(event,data,session='s-'+idA)=>BrowserWindow.getAllWindows()[0].webContents.send('bravebot:event',{event,data,session})
     globalThis.ux={emit,sent:[],configured:true,choose:directory,grants:{paths:[{path:'',integrity:'trusted'},{path:'private',integrity:'untrusted'}],commands:[{program:'/usr/bin/git',args:['status'],display:'git status'}]}}
     const replace=(name,fn)=>{ipcMain.removeHandler(name);ipcMain.handle(name,fn)}
-    replace('bravebot:choose-directory',()=>globalThis.ux.choose)
+    // The native picker is what grants a folder to a new bot, so it is the picker that is answered.
+    dialog.showOpenDialog=async()=>({canceled:false,filePaths:[globalThis.ux.choose]})
     replace('bravebot:request',async(_,method,p={})=>{
       const ux=globalThis.ux
       if(method==='agent.info') return {ok:{configured:ux.configured,build:'acceptance fixture',version:'1'}}
@@ -65,7 +66,7 @@ try {
   await page.getByRole('button',{name:'More',exact:true}).click();await page.getByRole('menuitem',{name:'Permissions…',exact:true}).click();await page.getByRole('button',{name:'Revoke',exact:true}).first().waitFor();await snap('05-permissions')
   await page.getByRole('button',{name:'Revoke',exact:true}).first().click();await page.getByText('No trusted path grants.',{exact:true}).waitFor()
   await page.getByRole('button',{name:'Revoke',exact:true}).click();await page.getByText('No remembered command grants.',{exact:true}).waitFor();await snap('06-revoked')
-  await page.getByRole('button',{name:'Done',exact:true}).focus();await page.keyboard.press('Tab');assert.equal(await page.getByRole('button',{name:'Refresh',exact:true}).evaluate(e=>e===document.activeElement),true)
+  await page.getByRole('button',{name:'Done',exact:true}).focus();await page.keyboard.press('Tab');assert.equal(await page.getByRole('button',{name:'Close Conversation permissions'}).evaluate(e=>e===document.activeElement||e.getRootNode().host===document.activeElement),true,'Tab past the last control wraps to the first (Close)')
   await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'detached'});assert.equal(await page.getByRole('button',{name:'More',exact:true}).evaluate(e=>e===document.activeElement||e.getRootNode().host===document.activeElement),true,'closing Permissions returns focus to the menu that opened it')
   await page.getByRole('button',{name:'Find',exact:true}).click();await page.getByRole('searchbox',{name:'Find in conversation'}).fill('example');await snap('07-search');await page.getByRole('button',{name:'Close search'}).click()
   await page.getByRole('button',{name:'Copy code',exact:true}).click();await page.getByRole('button',{name:'Copied',exact:true}).waitFor();assert.match(await app.evaluate(({clipboard})=>clipboard.readText()),/console.log\(message\)/);await page.getByRole('button',{name:'Wrap',exact:true}).click();await snap('08-code-wrap')
@@ -143,7 +144,8 @@ try {
   await page.evaluate(() => window.bravebot.removeBot('review-bot'));
   const memoryFiles = ['memory-history.json', 'ground.md'].map(name => existsSync(join(profile, 'bots', 'review-bot', name)));
   assert.deepEqual(memoryFiles, [false, false]);
-  const replacementBot = await page.evaluate(async directory => window.bravebot.writeBot({name:'Review Bot',purpose:'New identity',directory}), directory);
+  await app.evaluate((_, directory) => { globalThis.ux.choose = directory }, directory);
+  const replacementBot = await page.evaluate(async directory => { await window.bravebot.chooseDirectory(); return window.bravebot.writeBot({name:'Review Bot',purpose:'New identity',directory}) }, directory);
   assert.equal(replacementBot.slug, 'review-bot');
   assert.deepEqual(await page.evaluate(() => window.bravebot.readMemoryHistory('review-bot')), []);
   assert.deepEqual(errors,[])

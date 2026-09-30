@@ -222,7 +222,7 @@ const link = root ? join(root, 'bravebot-tree-probe-link') : null
 try {
   if (link) {
     symlinkSync('/etc', link)
-    await page.locator('.tree-tool.dotfiles').click()
+    await page.getByRole('button', { name: 'Read the folder again' }).click()
     await page.waitForTimeout(900)
     const probe = page
       .locator('.tree-list[role="tree"] > li')

@@ -73,8 +73,12 @@
 .model-check leo-icon { --leo-icon-size: 16px; }
 .model-description { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
 .model-name { font: var(--leo-font-small-regular); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.model-detail { font: var(--leo-font-x-small-regular); color: var(--leo-color-text-tertiary); }
-.model-capabilities { display: flex; flex-wrap: wrap; gap: var(--leo-spacing-xs); margin-top: 3px; }
+.model-detail { font: var(--type-caption); color: var(--ink-tertiary); }
+.model-detail:empty { display: none; }
+/* Provider heading: a caption above its models, not a selectable row. */
+.model-group { margin: 0 var(--leo-spacing-s); padding: var(--leo-spacing-m) var(--leo-spacing-l) var(--leo-spacing-xs); font: var(--type-caption-strong); color: var(--ink-tertiary); }
+.model-capabilities { display: flex; flex: none; gap: var(--leo-spacing-s); color: var(--ink-tertiary); --leo-icon-size: var(--icon-meta); }
+.model-capability { display: inline-flex; }
 .model-menu .model-capability,
 .model-menu .model-default { flex: none; }
 .model-status { font: var(--leo-font-x-small-regular); color: var(--leo-color-text-tertiary); margin: 0; padding: var(--leo-spacing-s) var(--leo-spacing-xl); }
