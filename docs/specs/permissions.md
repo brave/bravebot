@@ -152,9 +152,10 @@ the rules miss it the other way round: `Read(//D:/added/**)` refuses nothing, an
 
 Whether two spellings that differ only in case are one file is a fact about the volume the workspace
 is on (the trust map asks it the same way, [trust-map.md](trust-map.md)), so the caller asks the volume and hands the answer to
-the rules, which ask nothing. Where the volume folds case, both the pattern and the path are
-lowercased segment by segment before they are matched, so `Read(.env)` covers `.ENV`, which opens the
-same file. A rule in any list is read this way, allow included: there the two spellings name one file,
+the rules, which ask nothing. Where the volume folds case, both the pattern and the path have their
+letter case folded segment by segment before they are matched, so `Read(.env)` covers `.ENV`, which
+opens the same file. Each letter is taken to upper case and then to lower case, so `ſrc` meets the
+`src` APFS opens it as, though `ſ` is its own lower case. A rule in any list is read this way, allow included: there the two spellings name one file,
 so an allow rule covers the same file the deny rule would. Where the volume keeps the spellings apart,
 or the caller could not tell, the match is byte-exact and a rule about `Docs` decides nothing about
 `docs`, in either polarity: the answer only widens what a rule reaches, so an unknown answer is read
