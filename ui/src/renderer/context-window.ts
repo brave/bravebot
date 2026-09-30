@@ -27,6 +27,7 @@ function catalogueFor(session: string): Promise<ModelCatalogue | null> {
     pending = window.bravebot.request<ModelCatalogue>('models.list', { session })
       .then((answer) => { const catalogue = answer.ok ?? null; rememberCatalogue(session, catalogue); return catalogue })
       .catch(() => null)
+      .finally(() => { asking.delete(session) })
     asking.set(session, pending)
   }
   return pending
