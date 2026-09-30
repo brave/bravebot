@@ -94,8 +94,8 @@ fn limits(settings: &Settings, managed: &Managed) -> Value {
 fn managed_named(managed: &Managed, key: &str) -> bool {
     let narrowing = managed.narrowing();
     match key {
-        Narrowing::READS_STAY_IN_WORKSPACE => narrowing.reads_stay_in_workspace.is_some(),
-        Narrowing::BYPASS_UNREACHABLE => narrowing.bypass_unreachable.is_some(),
+        Narrowing::READS_STAY_IN_WORKSPACE => narrowing.reads_stay_in_workspace == Some(true),
+        Narrowing::BYPASS_UNREACHABLE => narrowing.bypass_unreachable == Some(true),
         _ => false,
     }
 }
@@ -257,6 +257,27 @@ mod tests {
             "an unnamed limit was reported as a figure"
         );
         assert_eq!(report["readsStayInWorkspace"]["value"], json!(null));
+    }
+
+    #[test]
+    fn a_managed_false_does_not_take_credit_for_a_refusal_another_file_asked_for() {
+        let (directory, settings) = vetting_layers(
+            None,
+            Some(r#"{"permissions": {"readsStayInWorkspace": true}}"#),
+        );
+        let managed_path = directory.path().join("home/managed.json");
+        std::fs::write(
+            &managed_path,
+            r#"{"permissions": {"readsStayInWorkspace": false}}"#,
+        )
+        .unwrap();
+        let managed = Managed::at(&managed_path);
+        let project = directory.path().join("project/.bravebot/settings.json");
+        assert_eq!(
+            limits(&settings, &managed)["readsStayInWorkspace"],
+            json!({ "value": true, "path": project, "managed": false }),
+            "the administrator was named for a refusal their file did not ask for"
+        );
     }
 
     #[test]
