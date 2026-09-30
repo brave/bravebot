@@ -2953,7 +2953,14 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     arguments: &Value,
 ) -> Produced {
     let workspace = tools.workspace;
-    let found = match path_argument(policy, "read_file", Purpose::Read, tools.slots, arguments) {
+    let found = match path_argument(
+        policy,
+        tools.workspace,
+        "read_file",
+        Purpose::Read,
+        tools.slots,
+        arguments,
+    ) {
         Ok(found) => found,
         Err(refusal) => return Produced::problem(refusal),
     };
@@ -3369,6 +3376,7 @@ pub(crate) fn materialise<S: Sink>(
 /// and how it was arrived at, which is what decides whether an approval can be skipped.
 fn path_argument<S: Sink>(
     policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
     tool: &'static str,
     purpose: Purpose,
     slots: &SlotStore,
@@ -3388,7 +3396,7 @@ fn path_argument<S: Sink>(
             let shown = policy
                 .read_planner_argument(tool, "path", &path)
                 .map_err(|denial| format!("refused: {denial}"))?;
-            refuse_denied_path(policy, purpose, &shown)?;
+            refuse_denied_path(policy, workspace, purpose, &shown)?;
             Ok(PathArgument {
                 path,
                 destination: Destination::Named,
@@ -3437,7 +3445,7 @@ fn path_argument<S: Sink>(
             // reference is the same file as one the planner typed, so the rule that would have
             // refused the second refuses the first. The path itself stays out of the refusal:
             // what goes back to the planner names the reference, as it does everywhere else.
-            refuse_denied_path(policy, purpose, &resolved)
+            refuse_denied_path(policy, workspace, purpose, &resolved)
                 .map_err(|_| denied_by_rule(&slot.to_string()))?;
             Ok(PathArgument {
                 path,
@@ -3454,16 +3462,42 @@ fn path_argument<S: Sink>(
 /// Both what the call will do and what it may see are asked about: a read consults the `Read`
 /// rules, and an effect consults `Edit` and `Read` both, because a file nothing may read is not
 /// protected if it can be overwritten.
+///
+/// The rules are asked about the name as given and again about the name it lands on, since a rule
+/// covers the file and a link, a case variant or a short name reaches the same file under another
+/// spelling (PERM-7). The refusal names the path as given: the landed name can come from a
+/// directory nobody vouched for.
 fn refuse_denied_path<S: Sink>(
     policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
     purpose: Purpose,
     path: &str,
 ) -> Result<(), String> {
-    let refused = match purpose {
-        Purpose::Read => policy.before_read(path),
-        Purpose::Effect => policy.before_write(path),
+    let ask = |policy: &mut Policy<'_, S>, name: &str| match purpose {
+        Purpose::Read => policy.before_read(name),
+        Purpose::Effect => policy.before_write(name),
     };
-    refused.map_err(|_| denied_by_rule(path))
+    ask(policy, path).map_err(|_| denied_by_rule(path))?;
+    match workspace.landing(path) {
+        Some(landed) => ask(policy, &landed).map_err(|_| denied_by_rule(path)),
+        None => Ok(()),
+    }
+}
+
+/// Whether a write to `path` is to be put to a person, asked about the name as given and about
+/// the name it lands on. A rule that asks, or a table that does, about either one is enough: the
+/// second name can add a question and never removes one (PERM-7).
+pub(crate) fn write_needs_approval<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    path: &str,
+    contents: Label,
+    destination: Destination,
+) -> bool {
+    policy.write_needs_approval(path, contents, destination)
+        || workspace.landing(path).is_some_and(|landed| {
+            policy.write_needs_approval(&landed, contents, Destination::Named)
+        })
 }
 
 /// What the planner is told when a rule refused. Says the rule is the reason and that retrying is
@@ -3614,7 +3648,7 @@ fn list_files<S: Sink>(
         Ok(directory) => directory,
         Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
-    if let Err(refusal) = refuse_denied_path(policy, Purpose::Read, &proposed_dir) {
+    if let Err(refusal) = refuse_denied_path(policy, workspace, Purpose::Read, &proposed_dir) {
         return Produced::problem(refusal);
     }
 
@@ -3815,6 +3849,7 @@ fn write_file<S: Sink, C: Confirmer>(
     let workspace = tools.workspace;
     let found = match path_argument(
         policy,
+        workspace,
         "write_file",
         Purpose::Effect,
         tools.slots,
@@ -3968,7 +4003,7 @@ fn write_file<S: Sink, C: Confirmer>(
     // same comparison and so is made once.
     let reviewed = review_a_write(policy, "write_file", intent, &replaced, &body, replaced_age);
 
-    if policy.write_needs_approval(&proposed_path, body_label, destination)
+    if write_needs_approval(policy, workspace, &proposed_path, body_label, destination)
         || !to_approve.is_empty()
     {
         // Released for display only, and inside the branch because there is no screen on the
@@ -4074,7 +4109,14 @@ fn edit_file<S: Sink, C: Confirmer>(
     confirmer: &mut C,
     arguments: &Value,
 ) -> Produced {
-    let found = match path_argument(policy, "edit_file", Purpose::Effect, slots, arguments) {
+    let found = match path_argument(
+        policy,
+        workspace,
+        "edit_file",
+        Purpose::Effect,
+        slots,
+        arguments,
+    ) {
         Ok(found) => found,
         Err(refusal) => return Produced::problem(refusal),
     };
@@ -4182,7 +4224,7 @@ fn edit_file<S: Sink, C: Confirmer>(
     // the copy released to locate the passage in.
     let reviewed = review_a_write(policy, "edit_file", Intent::Edit, &source, &body, None);
 
-    if policy.write_needs_approval(&proposed_path, body_label, destination)
+    if write_needs_approval(policy, workspace, &proposed_path, body_label, destination)
         || !to_approve.is_empty()
     {
         // Released for display only, and inside the branch for the reason a whole-file write
@@ -4513,7 +4555,14 @@ fn watch_file<S: Sink>(
              instead.",
         );
     }
-    let found = match path_argument(policy, "watch_file", Purpose::Read, slots, arguments) {
+    let found = match path_argument(
+        policy,
+        workspace,
+        "watch_file",
+        Purpose::Read,
+        slots,
+        arguments,
+    ) {
         Ok(found) => found,
         Err(refusal) => return Produced::problem(refusal),
     };
@@ -5602,7 +5651,8 @@ fn run<S: Sink, C: Confirmer>(
             // An effect, not a read. A program's relative writes land in the directory it runs in,
             // so a tree an `Edit` rule protects is not protected by a check that consults only the
             // `Read` rules: `npm install` in `vendor` writes throughout it without naming a file.
-            if let Err(refusal) = refuse_denied_path(policy, Purpose::Effect, &dir) {
+            if let Err(refusal) = refuse_denied_path(policy, tools.workspace, Purpose::Effect, &dir)
+            {
                 return Produced::problem(refusal);
             }
             let resolved = match tools.workspace.resolve(&dir) {
@@ -7162,7 +7212,7 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
         };
         // A deny rule covering the file covers asking a server about it too: the answer quotes
         // where things are in it, so this is a read.
-        if let Err(refusal) = refuse_denied_path(policy, Purpose::Read, &named) {
+        if let Err(refusal) = refuse_denied_path(policy, tools.workspace, Purpose::Read, &named) {
             return Produced::problem(refusal);
         }
         named
@@ -7296,7 +7346,7 @@ fn search<S: Sink>(
         Ok(directory) => directory,
         Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
-    if let Err(refusal) = refuse_denied_path(policy, Purpose::Read, &proposed_where) {
+    if let Err(refusal) = refuse_denied_path(policy, workspace, Purpose::Read, &proposed_where) {
         return Produced::problem(refusal);
     }
 
@@ -7614,7 +7664,7 @@ fn read_git<S: Sink, C: Confirmer>(
         }
     }
     for named in &named_paths {
-        if let Err(refusal) = refuse_denied_path(policy, Purpose::Read, named) {
+        if let Err(refusal) = refuse_denied_path(policy, tools.workspace, Purpose::Read, named) {
             return Produced::problem(refusal);
         }
     }
@@ -11066,8 +11116,11 @@ mod tests {
                 .expect("the file is reserved");
 
             let mut policy = policy.resuming(Integrity::Untrusted);
+            let scratch = Scratch::new("fallen-reference");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
             let Err(refusal) = path_argument(
                 &mut policy,
+                &workspace,
                 "write_file",
                 Purpose::Effect,
                 &slots,

@@ -279,6 +279,15 @@ processor is handed no denied file either. The planner is told the rule refused 
 not the answer, and where the path arrived through a reference the refusal names the reference rather
 than the path, as everything else that goes back to the planner does.
 
+The file a name lands on is judged as well as the name. A call is checked against the rules under
+the name it gave and again under the name it reaches once every symbolic link on the way is followed
+and the volume has given the stored spelling, so a link to a denied file is refused, a case variant
+of a denied directory is refused whether or not the volume's case handling could be probed, and an
+`ask` rule still asks for a write that comes through a link. The second name can add a refusal or a
+question and never removes one. On Windows a name that reads as something other than the file it
+spells (a stream, a device, a trailing dot or space, an 8.3 short name) is refused outright, since
+the rules cannot be matched against a spelling that is not the file's.
+
 Nor is it about the directory a call happened to name, so it holds whichever way a walk arrives at
 the file. A listing or a search consults the rules for every entry its walk reaches as well as for
 the directory it was asked for, and an entry a rule covers is left out before the file is opened or
@@ -312,6 +321,12 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_and_its_contents_do_not_reach_the_planner`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_written_even_where_writes_are_approved`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_by_a_processor_either`
+`verified-by: bravebot_agent::turn::a_denied_file_is_not_written_through_a_link_to_it`
+`verified-by: bravebot_agent::turn::a_denied_file_is_not_edited_through_a_link_to_it`
+`verified-by: bravebot_agent::turn::a_denied_file_is_not_read_through_a_link_to_it`
+`verified-by: bravebot_agent::turn::an_ask_rule_still_prompts_for_a_write_through_a_link_to_the_file`
+`verified-by: bravebot_agent::turn::a_denied_directory_is_not_written_under_another_case_of_its_name`
+`verified-by: bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only`
 `verified-by: bravebot_agent::turn::a_denied_host_is_refused_without_asking`
 `verified-by: bravebot_agent::turn::a_deny_rule_holds_against_a_trusted_workspace`
 `verified-by: bravebot_agent::turn::a_deny_rule_holds_where_every_permission_check_is_bypassed`

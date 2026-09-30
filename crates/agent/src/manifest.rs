@@ -1673,7 +1673,8 @@ fn write<S: Sink, C: Confirmer>(
     let reviewed =
         crate::tools::review_a_write(policy, "write_file", intent, &replaced, &body, replaced_age);
 
-    if policy.write_needs_approval(&path, body_label, Destination::Named) || !to_approve.is_empty()
+    if crate::tools::write_needs_approval(policy, workspace, &path, body_label, Destination::Named)
+        || !to_approve.is_empty()
     {
         // Released for display only, and inside the branch because there is no screen on the
         // other one, exactly as a turn's write does it.
