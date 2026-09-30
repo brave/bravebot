@@ -1119,7 +1119,13 @@ Still open:
   session-scoped. Watch prompts do not enter typed-prompt recall or title a conversation.
 - `settings.inspect` optionally takes a session and reports the linked agent's effective
   service configuration, file layers, managed keys, the `model` and `provider` keys a project file
-  named and the agent ignored (`ignored`), and network transport, without credentials.
+  named and the agent ignored (`ignored`), the limits in force (`limits`), and network transport,
+  without credentials. `limits` holds `readsStayInWorkspace` and `bypassUnreachable`, each
+  `{ value, path, managed }` (`value` is null where no file named the key, `path` the weakest file
+  that did, `managed` true where the administrator's file did), `unreadable` (keys a file spelled as
+  something other than a boolean), and `run.{defaultSeconds, maxSeconds, maxOutput}`, each null
+  where nothing set it so the agent's built-in figure applies. The window displays these and
+  writes none of them.
   `settings.select` is main-process-only and selects/clears a validated file for future turns.
   The native `bravebot:settings:select` picker grants the path; renderer requests cannot set it.
   Model discovery uses the same override and the session's registered project directory.

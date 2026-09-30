@@ -146,15 +146,17 @@ export function Sessions({
         <SidebarSearch query={query} onQuery={setQuery} label="Filter sessions" placeholder="Search sessions">
           <IconMenu icon="filter" label="View options" className="view-options" data-test="view-options">
             <leo-menu-item data-role="menuitemcheckbox" aria-checked={grouped ? 'true' : 'false'} onClick={() => onGroup(!grouped)}>
-              <span className="menu-check-row">
-                <span className="menu-check" aria-hidden="true">{grouped && <Icon name="check-normal" />}</span>
+              <span className="menu-icon-row">
+                <Icon name="tabs-vertical-tree" />
                 Group by project
+                <span className="menu-check" aria-hidden="true">{grouped && <Icon name="check-normal" />}</span>
               </span>
             </leo-menu-item>
             <leo-menu-item data-role="menuitemcheckbox" aria-checked={showArchived ? 'true' : 'false'} onClick={() => setShowArchived(!showArchived)}>
-              <span className="menu-check-row">
-                <span className="menu-check" aria-hidden="true">{showArchived && <Icon name="check-normal" />}</span>
+              <span className="menu-icon-row">
+                <Icon name="inbox" />
                 Show archived
+                <span className="menu-check" aria-hidden="true">{showArchived && <Icon name="check-normal" />}</span>
               </span>
             </leo-menu-item>
           </IconMenu>

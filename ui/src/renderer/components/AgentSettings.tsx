@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Modal } from './Modal'
-import type { AgentSettings as Report, Hook, HooksDocument } from '../../shared/agent-settings'
+import type { AgentSettings as Report, Hook, HooksDocument, Limits, Refusal } from '../../shared/agent-settings'
 import { composeHooks } from '../../shared/agent-settings'
 import { Alert, Button, Collapse, Dropdown, Icon, Input, ProgressRing, TabItem, Tabs, type IconName } from '../nala'
 const fieldText = (event: { value?: unknown; target?: EventTarget | null }): string | null => {
@@ -8,6 +8,29 @@ const fieldText = (event: { value?: unknown; target?: EventTarget | null }): str
   const target = event.target
   if (target && typeof target === 'object' && 'value' in target && typeof target.value === 'string') return target.value
   return null
+}
+
+const refusalText = (refusal: Refusal, on: string, off: string): string => {
+  if (refusal.value !== true) return off
+  return refusal.managed ? `${on} (set by your administrator)` : refusal.path ? `${on} (asked for by ${refusal.path})` : on
+}
+const grouped = new Intl.NumberFormat('en-US')
+const runLimit = (value: number | null, unit: string): string => value === null ? 'Built-in' : `${grouped.format(value)} ${unit}`
+
+function LimitsInForce({ limits }: { limits: Limits }): React.JSX.Element {
+  return <>
+    <h4>Limits in force</h4>
+    <dl data-test="settings-limits">
+      <dt>File tools</dt><dd>{refusalText(limits.readsStayInWorkspace, 'Refuse every path outside the working directory', 'May read outside the working directory when a rule or a question allows it')}</dd>
+      <dt>Bypass mode</dt><dd>{refusalText(limits.bypassUnreachable, 'Unreachable', 'Reachable')}</dd>
+      <dt>Command time limit</dt><dd>{runLimit(limits.run.defaultSeconds, 'seconds')}</dd>
+      <dt>Longest a call may ask for</dt><dd>{runLimit(limits.run.maxSeconds, 'seconds')}</dd>
+      <dt>Command output shown to the model</dt><dd>{runLimit(limits.run.maxOutput, 'bytes')}</dd>
+    </dl>
+    {limits.unreadable.map(item => <Alert key={`${item.name}:${item.path}`} type="warning" role="alert">
+      <code>permissions.{item.name}</code> in <span className="settings-path">{item.path}</span> is not true or false, so it has no effect.
+    </Alert>)}
+  </>
 }
 
 const sections = ['Connection', 'Hooks', 'Run settings']
@@ -233,6 +256,7 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
         <h4>Loaded files, in order</h4>{report.layers.length ? <ol>{report.layers.map(path => <li key={path} className="settings-path">{path}</li>)}</ol> : <p>No settings files loaded.</p>}
         {report.overrides.map(item => <p key={item.name}><code>{item.name}</code> overridden by <span className="settings-path">{item.path}</span></p>)}
         {(report.ignored ?? []).map(item => <p key={`${item.name}:${item.path}`}><code>{item.name}</code> in <span className="settings-path">{item.path}</span> is ignored. Only your home settings file or a file you choose above can set it.</p>)}
+        {report.limits && <LimitsInForce limits={report.limits} />}
         {report.managed.keys.length > 0 && <p>Managed values: {report.managed.keys.join(', ')}. This override cannot change them.</p>}
       </>}
     </div>

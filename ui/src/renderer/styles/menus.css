@@ -23,4 +23,5 @@
   height: var(--icon-control);
   --leo-icon-color: var(--ink-accent);
 }
+.menu-icon-row .menu-check { margin-inline-start: auto; }
 .menu-detail { color: var(--ink-tertiary); }
