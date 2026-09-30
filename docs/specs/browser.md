@@ -204,13 +204,17 @@ later reply to every other session.
 ### BROWSER-8: no message to the extension exceeds the platform limit
 
 A message from the host to the extension is at most 1 MB, the limit native messaging sets, and a
-request that would exceed it is refused with an error under its own id and not sent. A message from
-the extension may be up to 64 MB, and a longer one ends the host.
+request that would exceed it is refused with an error under its own id and not sent. An id that is
+itself 1 MB or longer is not kept, and the refusal carries none. A message from the extension may
+be up to 64 MB, and a longer one ends the host.
 
 **Why.** Brave closes the port on a message over 1 MB, which disconnects every session at once.
+Keeping an id of any length would mean holding as much of a request as a peer cares to send, where
+the rest of it is drained unread; JSON-RPC answers a request whose id it could not read with no id.
 
 `verified-by: bravebot_browser::relay::a_request_over_the_limit_is_refused_and_never_reaches_the_extension`
 `verified-by: bravebot_browser::relay::a_request_far_over_the_limit_keeps_its_id_and_the_next_request`
+`verified-by: bravebot_browser::relay::a_request_whose_id_is_too_long_to_keep_is_refused_under_no_id`
 `verified-by: bravebot_browser::relay::a_message_over_the_limit_from_the_extension_ends_the_host`
 `verified-by: bravebot_browser::framing::the_limits_are_one_megabyte_out_and_sixty_four_in`
 `verified-by: bravebot_browser::framing::a_message_over_the_limit_to_the_extension_is_refused_and_nothing_is_written`

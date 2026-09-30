@@ -353,6 +353,12 @@ impl Relay {
             );
         }
         let id = request.get("id").cloned().unwrap_or(Value::Null);
+        // An id as long as a message may be is kept on neither road, the line read whole or drained,
+        // so a peer cannot hold that much in the host until a reply comes.
+        let kept = serde_json::to_vec(&id).is_ok_and(|id| id.len() < framing::TO_EXTENSION_LIMIT);
+        if !kept {
+            return write_line(writer, &too_large(Value::Null));
+        }
         let sent = self.next_id.fetch_add(1, Ordering::Relaxed);
         request["id"] = json!(sent);
         let message = serde_json::to_vec(&request).unwrap_or_default();

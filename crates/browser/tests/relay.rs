@@ -704,6 +704,35 @@ fn a_request_far_over_the_limit_keeps_its_id_and_the_next_request() {
     assert_eq!(extension.request()["method"], "list_tabs");
 }
 
+/// An id as long as a message may be is not held: the request is refused under no id, as JSON-RPC
+/// answers a request whose id it could not read, whether its line fits and is read whole or is too
+/// long and is drained. Neither is sent, and the next request on the connection is read as its own.
+#[test]
+fn a_request_whose_id_is_too_long_to_keep_is_refused_under_no_id() {
+    let directory = installed_for(OURS);
+    let extension = Extension::connect(directory.path(), OURS);
+    let mut peer = Peer::connect(directory.path(), &secret(directory.path()));
+
+    let id = "x".repeat(framing::TO_EXTENSION_LIMIT);
+    let padding = "y".repeat(8192);
+    let read_whole = json!({"id": id, "method": "list_tabs", "params": {}});
+    let drained = json!({"id": id, "method": "list_tabs", "params": {"padding": padding}});
+    for request in [read_whole, drained] {
+        peer.send(&request);
+        let refused = peer.receive().unwrap();
+        assert_eq!(refused["id"], Value::Null);
+        assert!(
+            refused["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("limit")
+        );
+    }
+
+    peer.send(&json!({"id": 7, "method": "list_tabs", "params": {"after": true}}));
+    assert_eq!(extension.request()["params"], json!({"after": true}));
+}
+
 /// Installing writes one manifest naming this program and our extension alone, leaves any other
 /// host's manifest as it was, and records the extension the host checks origins against.
 #[test]
