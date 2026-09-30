@@ -6,8 +6,8 @@ import { FileGlyph } from './FileGlyph'
 import { IconButton } from './IconButton'
 import { ModelPicker } from './ModelPicker'
 
-/** Where the field stops growing and starts to scroll. */
-const FIELD_MAX = 210
+/** How many lines the field grows to before it starts to scroll. */
+const FIELD_MAX_ROWS = 6
 
 export interface ComposerProps {
   /** The field, for the transcript to focus: ⌘L, a sent message, an answered card. */
@@ -77,15 +77,20 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
     const fit = () => {
       const field = input.current?.shadowRoot?.querySelector('textarea')
       if (!field) { if (tries++ < 20) frame = requestAnimationFrame(fit); return }
+      // Leo starts the field at three rows and only changes that while somebody types, so an empty
+      // box would measure three lines tall. One row makes the measurement below the content's own.
+      if (field.rows !== 1) field.rows = 1
+      const lineHeight = parseFloat(getComputedStyle(field).lineHeight)
+      const fieldMax = Number.isFinite(lineHeight) ? lineHeight * FIELD_MAX_ROWS : field.scrollHeight
       const shorter = draft.length < drafted.current
       drafted.current = draft.length
       if (!shorter && field.scrollHeight <= field.clientHeight && field.style.height) return
       const from = field.offsetHeight
-      let to = Math.min(FIELD_MAX, field.scrollHeight)
+      let to = Math.min(fieldMax, field.scrollHeight)
       if (shorter || !field.style.height) {
         field.style.transition = 'none'
         field.style.height = 'auto'
-        to = Math.min(FIELD_MAX, field.scrollHeight)
+        to = Math.min(fieldMax, field.scrollHeight)
         field.style.height = `${from}px`
         void field.offsetHeight
       }
@@ -141,7 +146,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
               </span>
             </div>
           )}
-          <TextArea ref={input} mode="plain" minRows={1} maxRows={8} value={draft} aria-label="Message the agent"
+          <TextArea ref={input} mode="plain" minRows={1} maxRows={FIELD_MAX_ROWS} value={draft} aria-label="Message the agent"
             placeholder={pending ? 'Draft your next message while you review…' : 'How can I help you today?'}
             onInput={({ value }) => onDraft(value)}
             onKeyDown={({ innerEvent }) => {

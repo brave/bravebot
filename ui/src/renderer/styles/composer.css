@@ -13,6 +13,19 @@
   gap: var(--leo-spacing-l);
   padding-inline: max(var(--leo-spacing-2xl), calc((100% - var(--reading-width)) / 2));
   padding-bottom: var(--leo-spacing-xl);
+  isolation: isolate;
+}
+/* The transcript scrolls to the dock's top edge. Rather than cut the text off there, the dock's
+   ground is transparent at the top and reaches the panel colour a little way down, so the last
+   lines fade out behind the box. It reaches up over the transcript by the fade's own height and
+   takes no clicks. */
+.composer-dock::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: calc(-1 * var(--leo-spacing-3xl)) 0 0;
+  background: linear-gradient(to bottom, transparent, var(--surface-panel) var(--leo-spacing-3xl));
+  pointer-events: none;
 }
 
 .composer {
