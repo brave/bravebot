@@ -65,6 +65,11 @@ Before changing behaviour or adding, removing, or weakening test assertions, use
 [testing-preflight](agents/skills/testing-preflight/SKILL.md). Apply it before choosing the
 test approach, and use its evidence requirements when reporting the result.
 
+Before adding or changing anything in `ui/` that a person sees or interacts with (components,
+layout, styles, icons, copy, dialogs, menus, cards), use
+[nala-ui-quality](agents/skills/nala-ui-quality/SKILL.md). Its quality bar applies to every new
+UI surface and is checked against the final diff before the work is called done.
+
 [docs/development/](docs/development/README.md) is how this repository is worked on: what to run
 before a commit and before a push, what one commit contains, the specs the code is developed
 against, the security scan, configuration, releasing, and how an issue is titled and labelled.

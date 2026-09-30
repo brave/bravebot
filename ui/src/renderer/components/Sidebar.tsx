@@ -110,7 +110,7 @@ export const Sidebar = memo(function Sidebar({
       <div className="sidebar-titlebar">
         <SegmentedControl
           className="sidebar-tabs"
-          size="tiny"
+          size="small"
           value={tab}
           data-test="sidebar-tabs"
           onChange={({ value }) => { if (value === 'sessions' || value === 'bots') show(value) }}

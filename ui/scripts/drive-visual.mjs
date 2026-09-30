@@ -25,6 +25,7 @@ writeFileSync(join(profile, 'bravebot-ui.json'), JSON.stringify({
 
 const app = await electron.launch({ args: ['.', '--disable-renderer-backgrounding', '--disable-background-timer-throttling', `--user-data-dir=${profile}`], cwd: process.cwd(), timeout: 40000 })
 const failures = []
+const small = new Map()
 const errors = []
 try {
   const page = await app.firstWindow()
@@ -40,7 +41,7 @@ try {
       { id: '44444444-4444-4444-8444-444444444444', title: 'A deliberately long conversation title that has to ellipsise inside a narrow sidebar row', updated: now - 9 * 86400 },
     ].map((r) => ({ ...r, directory, project: 'sample-project', branch: 'main', bytes: 20 }))
     const emit = (event, data, session = 's-' + idA) => BrowserWindow.getAllWindows()[0].webContents.send('bravebot:event', { event, data, session })
-    globalThis.visual = { emit }
+    globalThis.visual = { emit, rows: null }
     const replace = (name, fn) => { ipcMain.removeHandler(name); ipcMain.handle(name, fn) }
     replace('bravebot:choose-directory', () => directory)
     const said = [
@@ -51,7 +52,7 @@ try {
     ]
     replace('bravebot:request', async (_, method, p = {}) => {
       if (method === 'agent.info') return { ok: { configured: true, build: '0.9.0 (abc1234)', version: '1' } }
-      if (method === 'session.list') return { ok: { sessions: rows } }
+      if (method === 'session.list') return { ok: { sessions: globalThis.visual.rows ?? rows } }
       if (method === 'models.list') return { ok: { defaultModel: 'sample/fast', warnings: [], models: [
         { id: 'sample/fast', name: 'Fast model', provider: 'Sample', premium: false, contextWindow: 200000, capabilities: ['text', 'tools'] },
         { id: 'sample/deep', name: 'Deep model', provider: 'Sample', premium: true, contextWindow: 1000000, capabilities: ['text', 'tools'] },
@@ -70,14 +71,40 @@ try {
       { name: 'src', kind: 'directory', hidden: false }, { name: 'tests', kind: 'directory', hidden: false },
       { name: '.env', kind: 'file', hidden: true }, { name: 'package.json', kind: 'file', hidden: false }, { name: 'README.md', kind: 'file', hidden: false },
     ] : [{ name: 'store.ts', kind: 'file', hidden: false }, { name: 'migrate.ts', kind: 'file', hidden: false }], truncated: false }))
+    replace('bravebot:files:choose-attachments', () => ['src/store.ts', 'src/migrate.ts', 'tests/store.test.ts', 'docs/a-deliberately-long-file-name-that-has-to-truncate.md', 'package.json'].map((path, i) => ({ id: 'att-' + i, path, bytes: 100 + i })))
     replace('bravebot:files:search', () => ({ paths: ['src/store.ts'], incomplete: false }))
     replace('bravebot:files:preview', (_, session, path) => ({ path, text: 'export const store = 1\n', truncated: false }))
   }, { directory, idA, idB, idC })
 
   const emit = (event, data, session = 's-' + idA) => app.evaluate((_, v) => globalThis.visual.emit(v.event, v.data, v.session), { event, data, session })
   const settle = () => page.waitForTimeout(450)
+  // Quality bar: no interactive target under 28px (Leo hosts and native controls, shadow-piercing).
+  const audit = async (name) => {
+    const found = await page.evaluate(() => {
+      const out = []
+      const seen = new Set()
+      const visit = (root) => {
+        for (const el of root.querySelectorAll('*')) {
+          if (el.shadowRoot) visit(el.shadowRoot)
+          const host = el.getRootNode() instanceof ShadowRoot ? null : el
+          if (!host || seen.has(host)) continue
+          const interactive = host.matches('button, a[href], [role="button"], [role="tab"], [role="menuitem"], [role="option"], leo-button, leo-checkbox, leo-radiobutton') && !host.matches('a, .local-file-link') && !host.closest('[inert], [hidden]')
+          if (!interactive) continue
+          seen.add(host)
+          const box = host.getBoundingClientRect()
+          const style = getComputedStyle(host)
+          if (!box.width || !box.height || style.visibility === 'hidden' || style.pointerEvents === 'none' || Number(style.opacity) === 0) continue
+          if (box.width < 28 || box.height < 28) out.push(`${host.tagName.toLowerCase()}${host.className && typeof host.className === 'string' ? '.' + host.className.trim().split(/\s+/).join('.') : ''} ${Math.round(box.width)}x${Math.round(box.height)} "${(host.getAttribute('aria-label') || host.textContent || '').trim().slice(0, 24)}"`)
+        }
+      }
+      visit(document)
+      return out
+    })
+    for (const item of found) small.set(item, [...(small.get(item) ?? []), name])
+  }
   const variants = async (name, { dark = true, compact = false } = {}) => {
     await settle()
+    await audit(name)
     await page.screenshot({ path: join(output, `${name}-light.png`) })
     if (dark) {
       await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'))
@@ -271,11 +298,54 @@ try {
     await page.emulateMedia({ forcedColors: 'none' })
     console.log('VISUAL', '22-forced-colors')
   })
+
+  await scene('23-queue-and-attachments', async () => {
+    await page.setViewportSize({ width: 900, height: 560 })
+    await open('Refactor the session store')
+    await emit('turn.started', { turn: 3 })
+    const composer = page.getByRole('textbox', { name: 'Message the agent' })
+    await page.getByRole('button', { name: 'Attach files' }).click()
+    await page.locator('.attachment-chips').waitFor()
+    for (const text of ['First queued follow-up', 'Second, a longer follow-up that runs on far enough to need truncating in the tray', 'Third', 'Fourth']) {
+      await composer.fill(text)
+      await composer.press('Enter')
+    }
+    await variants('23-queue-and-attachments')
+    await page.setViewportSize({ width: 1440, height: 900 })
+  })
+
+  await scene('24-stress-list', async () => {
+    const projects = ['bravebot', 'brave-core', 'leo', 'a-project-with-a-very-long-name-indeed', 'docs', 'infra']
+    await app.evaluate((_, { directory, idA }) => {
+      const now = Math.floor(Date.now() / 1000)
+      const deep = directory + '/' + Array.from({ length: 12 }, (_, i) => 'level' + i).join('/')
+      const many = Array.from({ length: 80 }, (_, i) => ({
+        id: i === 0 ? idA : `${String(i).padStart(8, '0')}-0000-4000-8000-000000000000`,
+        title: i === 1 ? 'x'.repeat(120) : `Conversation ${i}: ${['fix the flaky test', 'plan the release', 'review the diff'][i % 3]}`,
+        updated: now - i * 5400, directory: i === 2 ? deep : directory, project: ['bravebot', 'brave-core', 'leo', 'a-project-with-a-very-long-name-indeed', 'docs', 'infra'][i % 6], branch: i % 4 ? 'main' : 'feature/a-long-branch-name', bytes: 20,
+      }))
+      globalThis.visual.rows = many
+    }, { directory, idA })
+    await page.setViewportSize({ width: 900, height: 560 })
+    await page.reload()
+    await page.locator('.session').first().waitFor()
+    await variants('24-stress-list', { compact: true })
+    await page.locator('[data-test="view-options"]').click()
+    await page.getByRole('menuitemcheckbox', { name: /Group by project/ }).click()
+    await escape()
+    await variants('24-stress-grouped')
+    await page.setViewportSize({ width: 1440, height: 900 })
+  })
 } finally {
   await app.close()
 }
 
 console.log(`\nGallery: ${output}`)
+if (small.size) {
+  console.error(`${small.size} interactive target(s) under 28px:`)
+  for (const [item, where] of small) console.error(' -', item, '(' + [...new Set(where)].slice(0, 3).join(', ') + ')')
+  if (!process.env.VISUAL_ALLOW_SMALL) failures.push(`${small.size} hit target(s) under 28px`)
+}
 if (failures.length || errors.length) {
   console.error(`${failures.length} scene(s) failed, ${errors.length} renderer error(s)`)
   for (const failure of failures) console.error(' -', failure)

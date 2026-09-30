@@ -21,7 +21,7 @@ interface Shown {
   shortcut: string | null
   placement: 'top' | 'bottom' | 'left' | 'right'
   box: DOMRect
-  /** A modal dialog is in the top layer, above anything on the body, so its tooltips are drawn inside it. */
+  /** A modal dialog is in the top layer, above anything on the body, so its tooltips are drawn inside it, in the box it keeps for them. */
   host: Element
 }
 
@@ -57,7 +57,7 @@ export function TooltipLayer(): React.JSX.Element | null {
         shortcut: target.getAttribute('data-tooltip-shortcut'),
         placement: placement === 'bottom' || placement === 'left' || placement === 'right' ? placement : 'top',
         box: target.getBoundingClientRect(),
-        host: target.closest('leo-dialog') ?? document.body,
+        host: target.closest('leo-dialog')?.querySelector(':scope > .modal-tooltips') ?? document.body,
       }
     }
     const show = (target: Element, immediate: boolean) => {

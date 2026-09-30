@@ -178,6 +178,9 @@ export function Modal({
       <span slot="title" className="modal-title">{title}{headerAction && <span className="modal-header-action">{headerAction}</span>}</span>
       {subtitle && <span slot="subtitle" className="modal-subtitle" id={subtitleId}>{subtitle}</span>}
       {children}
+      {/* Where this dialog's tooltips are drawn. A tooltip added among the dialog's own children makes
+          Leo rebuild its slots and put focus back on the close button, so it goes in here. */}
+      <div className="modal-tooltips" />
       {actions && <div slot="actions" className="modal-actions">{actions}</div>}
     </Dialog>,
     document.body,

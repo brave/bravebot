@@ -161,8 +161,7 @@ leo-icon { flex: none; }
 }
 
 /* Leo draws a plain-faint fab as the bare glyph, with no padding and no hover. Give every icon
-   button the window's hit target around a 16px glyph (24px for tiny ones, which sit in dense
-   rows) and a wash under the pointer, so a row of them reads as separate controls. */
+   button the window's hit target around a 16px glyph and a wash under the pointer, so a row of them reads as separate controls. */
 .icon-button {
   display: inline-flex;
   border-radius: var(--radius-control);
@@ -177,7 +176,6 @@ leo-icon { flex: none; }
   --leo-button-color: var(--leo-color-icon-default);
   transition: background-color var(--motion-fast);
 }
-.icon-button.plain-faint.tiny { --leo-button-padding: var(--leo-spacing-s); }
 .icon-button.plain-faint:hover { background: var(--surface-hover); --leo-button-color: var(--ink-primary); }
 
 /* An icon button that is a toggle says it is on with a wash, not a colour change alone. */

@@ -199,6 +199,9 @@
   padding-block: var(--leo-spacing-2xl) var(--leo-spacing-3xl);
   padding-inline: max(var(--leo-spacing-2xl), calc((100% - var(--reading-width)) / 2));
   scroll-padding-block: var(--leo-spacing-2xl);
+  /* Its size comes from the column, never from its rows, so a key typed in the composer under it
+     does not lay out five hundred of them. */
+  contain: size layout style;
 }
 /* A card that clips its own overflow would otherwise be squeezed to its border once the
    conversation outgrows the column. */

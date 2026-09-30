@@ -65,18 +65,31 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
   // in a one-line box and scroll. Size the field Leo draws from its content instead, and move
   // between heights rather than jumping: measured at `auto` with the transition off, then set
   // back to where it was so the change to the new height is one the browser can animate.
+  //
+  // Measuring at `auto` and setting the height back is three layouts of the whole window, and
+  // the transcript is in it: on a long one that is most of a frame per key. So the height is only
+  // measured that way when it might have to shrink; while the text grows, or stays, the field's
+  // own scroll height says all there is to say.
+  const drafted = useRef(0)
   useLayoutEffect(() => {
     let frame = 0
     let tries = 0
     const fit = () => {
       const field = input.current?.shadowRoot?.querySelector('textarea')
       if (!field) { if (tries++ < 20) frame = requestAnimationFrame(fit); return }
+      const shorter = draft.length < drafted.current
+      drafted.current = draft.length
+      if (!shorter && field.scrollHeight <= field.clientHeight && field.style.height) return
       const from = field.offsetHeight
-      field.style.transition = 'none'
-      field.style.height = 'auto'
-      const to = Math.min(FIELD_MAX, field.scrollHeight)
-      field.style.height = `${from}px`
-      void field.offsetHeight
+      let to = Math.min(FIELD_MAX, field.scrollHeight)
+      if (shorter || !field.style.height) {
+        field.style.transition = 'none'
+        field.style.height = 'auto'
+        to = Math.min(FIELD_MAX, field.scrollHeight)
+        field.style.height = `${from}px`
+        void field.offsetHeight
+      }
+      if (to === from && field.style.height) return
       field.style.transition = 'height var(--motion-fast)'
       field.style.height = `${to}px`
     }

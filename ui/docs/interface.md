@@ -4,7 +4,7 @@ What the window shows and why it is shaped that way. The setup and build instruc
 are in [setup](setup.md) and [development](development.md); the protocol underneath is in
 [`phase-0-rpc-protocol.md`](phase-0-rpc-protocol.md).
 
-- [What it looks like](#what-it-looks-like)
+- [What it looks like](#what-it-looks-like), [the header](#the-conversation-header) and [where notices go](#where-notices-go)
 - [Turn notices, usage and audit](#turn-notices-usage-and-audit)
 - [Forking, and export](#forking)
 - [Bots](#bots)
@@ -41,9 +41,19 @@ Three columns, each side one resizable and foldable:
   not yet expanded. Text files can be previewed or opened in their default app.
   On narrow windows the inspector opens as a drawer.
 
-The two side columns fold from controls in the transcript header, and their widths
-and fold states survive a relaunch. Focus mode hides the sidebars; density can be
-comfortable or compact.
+The two side columns fold from controls at either end of the transcript header, and their
+widths and fold states survive a relaunch. With the session list folded, its toggle carries a
+count of the background sessions waiting on an answer or an approval, and opens the list. There
+is no separate focus mode: folding both columns is it. Density, comfortable or compact, is a
+preference rather than a per-conversation action, so it lives in [Appearance](#appearance) and
+not in the header.
+
+The sidebar sits flush on the window's ground. The transcript and the inspector share one raised
+card, inset by 8px from the window's edges, with a hairline border and rounded corners; the strip
+of ground above the card still drags the window. With the session list folded the card gains
+ground on its left too, so its corners never meet the edge. The three column heads are 44px tall
+so they line up across the window, and the sidebar's head leaves room for the inset traffic
+lights.
 
 Drafts and reading positions survive conversation switches and restarts. A running
 conversation can continue in the background. Drafting during a run does not send
@@ -51,11 +61,48 @@ anything: **Queue message** explicitly queues a follow-up. Stop or an error paus
 the queue; **Resume queue** is required to continue it. Automatic bot-memory
 maintenance reserves the session until it finishes.
 
-Conversation actions include pin, archive and restore. **Find** searches the current
-conversation. Code blocks offer copy and wrap controls; local file references can
-open previews. **New activity** returns to the latest entries when new events arrive
-while you are reading older ones. **Permissions** lists and revokes path and command
-grants after the current turn stops.
+Conversation actions include pin, archive and restore. Code blocks offer copy and wrap
+controls; local file references can open previews. **New activity** returns to the latest
+entries when new events arrive while you are reading older ones. The header pills show only
+what can be acted on (**Approval needed**, **Jump to latest**); whether a turn is running is
+said by the working row and the composer, not by a status line.
+
+### The conversation header
+
+Beside the fold toggle, the header names the conversation, the checkout it is in and its branch.
+A **Vetting on** chip appears while auto-vetting is on. Three controls sit at the right of the
+title, before the context panel's toggle:
+
+- **Find** (`⌘F`) opens the find bar over the transcript and searches the current
+  conversation. Enter steps to the next match, Shift+Enter to the previous, Esc closes it. The
+  button shows as pressed while the bar is open.
+- **Export** (a download icon) opens the export menu described under [Forking, and
+  export](#forking). It is disabled until somebody has said something in the session.
+- **More** (an ellipsis) holds the two dialogs that are seldom wanted mid-conversation:
+  **Permissions…** lists and revokes path and command grants after the current turn stops, and
+  **File watches…** opens the [watches](#agent-09-controls) list.
+
+Every icon-only control shows its name and, where it has one, its shortcut in a tooltip
+(`⌘F` for Find, `⌘↩` for Send, `⌘.` for Stop); the accessible name is set separately and is never
+the tooltip alone.
+
+### Where notices go
+
+What the window says about a session, as opposed to what the session said, does not stack up as
+banners above the header. It goes where it is needed:
+
+- **Fork, remembered trust and auto-vetting** are notes at the top of the transcript, each one
+  sentence and at most one link (**View original**, **Manage**). They are not entries, so they are
+  never exported. The vetting note is repeated for as long as the session is open by the header
+  chip.
+- **Backend not set up** docks onto the top edge of the composer as a tray of the composer's
+  width, with **Setup help**, **Check again** and **Diagnostics**, and again on the welcome
+  screen. Drafting stays possible; sending does not.
+- **Problems** are error toasts in the corner of the conversation card: *Something went wrong*,
+  the sentence saying what happened, and a dismiss button. They are announced with `role="alert"`.
+- **Confirmations** (an export saved, a copy made) are success toasts in the same corner. They
+  clear themselves after four seconds, name where a file went, and at most three show at once.
+  A failure is never a confirmation.
 
 The model control in the composer opens the conversation's model picker.
 Search by name, provider, or reported capability (for example, `text` or `tools`),
@@ -119,15 +166,15 @@ where the prompt falls among the prompts and what it said; the two are checked a
 other, and a fork that cannot be placed exactly is refused rather than made in roughly the
 right place. `docs/phase-0-rpc-protocol.md` §7.1 has the argument in full.
 
-A forked session says so in its header, with a link back to the session it came out of, which
-opens it at the prompt the cut was made in front of. The session list marks a fork beside its
-name. All three are the same mark — the control on a prompt, the banner, and the row — because
-they are the same idea. None of it can live in the agent's own record — that has no field for a
+A forked session says so in a note at the top of its transcript, with a **View original** link back
+to the session it came out of, which opens it at the prompt the cut was made in front of. The
+session list marks a fork beside its name. All three are the same mark — the control on a prompt,
+the note, and the row — because they are the same idea. None of it can live in the agent's own record — that has no field for a
 parent, and it is rewritten after every turn — so lineage is stored in the `forks`
 key beside `recents` in `bravebot-ui.json`. The main process writes it from the agent's answer rather than
 from anything the window asked for.
 
-An **Export** button sits in the conversation header, and File › Export offers the same three formats:
+The **Export** button in the conversation header, and File › Export, offer the same three formats:
 plain text, Markdown, or a PDF that keeps the window's own bubbles. What it writes by default
 is the *conversation* — what was asked and what came back — and never the diffs, approval
 cards or confined blobs. That is the same argument the per-entry Copy makes: those things are
@@ -381,29 +428,42 @@ reads that. See [packaging](development.md#packaging).
 ## Keys
 
 The menu is where these are written down, which is most of why it exists — before it there
-was no way to find out that ⌘↵ sent a prompt.
+was no way to find out that ⌘↵ sent a prompt. Every accelerator below is declared once in
+`src/shared/commands.ts`; the native menu (`src/main/menu.ts`) builds its items from that list,
+and an item is greyed when its `requires` tag is not met. (On Windows and Linux, `⌘` is `Ctrl`.)
 
-| Key | What |
-| --- | --- |
-| `⌘N` | New session |
-| `⇧⌘W` | Close the session — `⌘W` still closes the window |
-| `⌘↵` | Send |
-| `Enter` | Send from the message box |
-| `Shift+Enter` | Insert a new line in the message box |
-| `⌘.` | Cancel the running turn |
-| `⌥⌘←` / `⌥⌘→` | Fold the session list / the context panel |
-| right-click | A session row, or anything in the transcript |
-| `Esc` | In the appearance picker: put back what was there |
-| `Esc` | Cancel, from the composer — or clear the session filter, from the filter box |
+| Key | Menu item | What |
+| --- | --- | --- |
+| `⌘N` | File › New Session… | Open a project and start a session |
+| `⇧⌘W` | File › Close Session | Close the session — `⌘W` still closes the window |
+| `⌘F` | View › Find in Conversation | Open the find bar and focus its field; needs a session |
+| `⌘L` | View › Focus Composer | Move focus to the message box; needs a session |
+| `⌘↩` | Session › Send | Send the draft; greyed while a turn runs or the draft is empty |
+| `⌘.` | Session › Cancel Turn | Cancel the running turn; greyed when nothing is running |
+| `⌥⌘←` / `⌥⌘→` | View › Hide/Show Session List / Context Panel | Fold the session list / the context panel |
+| `Enter` | | In the message box: send, or queue the message while a turn is running |
+| `Shift+Enter` | | In the message box: insert a new line |
+| `Esc` | | See below |
+| right-click | | A session row, or anything in the transcript |
+
+The round button at the foot of the composer is **Send** (`⌘↩` in its tooltip) and, for as long as
+a reply is generating, **Stop** (`⌘.`). It is the only stop control; the working row has none.
 
 `Esc` is the one that is not in a menu. As an accelerator it would fire with no session open
 and would fight every other use of the key, so it stays where it was: a convenience local to
-whichever field has it, meaning the composer and the filter box above the session list.
+whichever surface has it, and each one gives way to the one above it:
 
-The filter box itself has no key of its own, nor does the toggle beside it that groups the
-sessions under the checkout each was started in. Both are always on screen under **New
-session**, so there is nothing to reveal, and a ⌘F that only ever moved focus one field would
-be a shortcut for something already in view.
+- In the composer, with a turn running: cancel it. If the find bar or a menu is open, `Esc`
+  closes that instead and the turn keeps running.
+- In the find bar: close it.
+- In an open menu, the model picker or a dialog: close it. In the appearance picker it also puts
+  back what was there.
+- In the audit inspector: close it and restore the previous context view.
+- In the filter box above the session list: clear the filter.
+
+The filter box has no key of its own, nor does the toggle beside it that groups the sessions
+under the checkout each was started in. Both are always on screen under **New session**, so
+there is nothing to reveal; `⌘F` belongs to the conversation.
 
 Clicking a group's name folds it away and brings it back, and the **+** beside its count
 starts a session in that checkout — the same thing **New session** does, minus the folder
@@ -481,6 +541,9 @@ src/renderer/               the React app
   commands.ts               what a chosen menu item does — and what it deliberately cannot
   columns.ts                widths, folds and the clamps on both
   transcript.ts             gathering a turn's tool calls into runs
+  styles.css styles/        the stylesheet modules and the token layer; see development.md
+  highlight.ts              the syntax-colour grammars, shared by replies and diffs
+  toasts.ts                 the store behind the confirmation toasts
   theme.ts                  putting System / Light / Dark on <html> data-theme
   export.tsx                the PDF entry point, using the components the window uses
   components/               AppearancePicker, Sidebar, Transcript, FileTree,
@@ -550,8 +613,10 @@ where they are and never read again.
 
 ### Appearance
 
-`View ▸ Appearance…` opens a picker with System, Light, and Dark. Previewing applies
-immediately; Use keeps the choice in `bravebot-ui.json`; Escape puts back what was there.
+`View ▸ Appearance…` opens a picker with System, Light, and Dark, and a **Density** control,
+Comfortable or Compact. Previewing applies immediately, for the theme and the density alike; Use
+keeps the theme in `bravebot-ui.json` and the density in `experience.json`; Escape puts back what
+was there. Compact tightens row heights and the gaps between turns and their parts.
 
 System follows the OS (`prefers-color-scheme`). Light and Dark set `data-theme` on
 `<html>` so Leo (Nala) tokens stay put. The PDF export window is pinned with
@@ -576,7 +641,7 @@ arguments, optionally limiting a tool-completion hook to a tool name. Save appli
 to future turns. Reload resolves external-edit conflicts; malformed or unsupported existing
 files are reported rather than silently rewritten. Hook failures appear in turn notices.
 
-**Watches** in the conversation toolbar lists up to eight live file watches, with their
+**File watches…**, in the header's **More** menu, lists up to eight live file watches, with their
 remaining lifetime and Stop controls. Add a project file or ask the agent to watch one.
 A change can start a model turn, so the dialog states that it may spend credits. Automatic
 turns have their own transcript marker and retain the ordinary approval rules. Watches run

@@ -20,6 +20,8 @@
     "drive": "npm run bridge && electron-vite build && node scripts/drive.mjs",
     "drive:markdown": "npm run bridge && electron-vite build && node scripts/drive-markdown.mjs",
     "drive:models": "npm run bridge && electron-vite build && node scripts/drive-models.mjs",
+    "drive:visual": "npm run bridge && electron-vite build && node scripts/drive-visual.mjs",
+    "drive:perf": "npm run bridge && electron-vite build && node scripts/drive-perf.mjs",
     "drive:turn-details": "npm run build && node scripts/drive-turn-details.mjs",
     "drive:resize": "npm run bridge && electron-vite build && node scripts/drive-resize.mjs",
     "drive:panels": "npm run bridge && electron-vite build && node scripts/drive-panels.mjs",

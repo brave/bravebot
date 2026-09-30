@@ -62,9 +62,186 @@ the session and bot rows; `Fold`, kept for group headers, the archive and tree f
 headers carry a second action or tree semantics that a `<summary>` cannot; and the ask
 card's choices, which can be clicked again to clear, as a radio button cannot.
 
-`npm run typecheck` runs `scripts/check-nala.mjs`, which fails on a hard-coded colour or font
-size in the two stylesheets and reports how many raw `box-shadow`s, inline icon sizes and
-pixel spacings remain.
+## Styling
+
+### The token layer
+
+`src/renderer/styles/tokens.css` is the semantic layer between Leo and the rest of the
+stylesheets. Every name in it aliases a `--leo-*` token, and a rule elsewhere reaches for the role
+that says what a value is *for* rather than for a Leo name:
+
+| Family | Roles |
+| --- | --- |
+| Surfaces | `--surface-app` (the window ground), `-panel`, `-raised`, `-sunken` (code, evidence), `-hover`, `-selected`, `-scrim` |
+| Borders | `--border-hairline`, `-subtle`, `-strong`, `-focus` |
+| Ink | `--ink-primary`, `-secondary`, `-tertiary`, `-disabled`, plus `--ink-link` and `--ink-accent`; no ad-hoc opacity for text |
+| Status | `--status-success`, `-warning`, `-error`, `-info` and their `-bg`; only ever from `--leo-color-systemfeedback-*` |
+| Type | `--type-heading`, `-title`, `-body`, `-meta`, `-caption` (and `-strong` forms), `-code`, `-code-body`: font shorthands |
+| Radius | `--radius-chip`, `-control`, `-card`, `-field`, `-pill` |
+| Elevation | `--shadow-raised`, `--shadow-floating`, `--shadow-focus` |
+| Layout | `--titlebar` (44px), `--lights`, `--card-gap`, `--row-h`, `--session-row-h`, `--reading-width`, `--hit` (28px), `--turn-gap`, `--part-gap` |
+| Icon sizes | `--icon-meta` 14, `--icon-control` 16, `--icon-hero` 20 (and `--icon-caption` 12) |
+| Motion | `--motion-fast` (hover and press), `--motion-panel` (folds; `FOLD_MS` in `columns.ts` must match `--leo-duration-m`) |
+
+Light and dark come from Leo's own `prefers-color-scheme` and `data-theme` rules, so a role needs
+no dark-mode override of its own; the syntax colours in `syntax.css` are the exception, and pick
+the light or dark primitive by the same two conditions. `.app.compact` redefines the row heights and
+gaps, and `prefers-reduced-motion` zeroes the motion tokens. The legacy names at the foot of
+`tokens.css` (`--bg`, `--ink-dim`, `--accent` and the rest) alias the roles until the last rule
+using them goes.
+
+### Stylesheet modules
+
+`src/renderer/styles.css` is only a list of `@import`s, in order, of the files under
+`src/renderer/styles/`. These are plain CSS files, not CSS Modules: class names stay global,
+because the drivers and `marking.test.mjs` query them (`.session`, `.bubble.user`, `.confirm`,
+`.quarantine`). Each file owns one part of the window and says so in its header comment.
+
+| File | Owns |
+| --- | --- |
+| `tokens.css` | the token layer above |
+| `base.css` | cursor and selection, numerals, scrollbars, the inactive window, reduced motion, forced colours, and the one tooltip |
+| `shell.css` | the grid, the inset card, the column heads and folding |
+| `sidebar.css` | the left column: its titlebar, the session and bot lists, and the foot |
+| `menus.css` | the inside of Leo menu items: leading icons and check columns |
+| `transcript.css` | the conversation header, the find bar, the toasts and the reading column |
+| `activity.css` | tool calls and runs, the working row and meta lines |
+| `cards.css` | decision cards, confined content and error cards |
+| `composer.css` | the message box and the trays docked to it |
+| `inspector.css` | the context column and one turn's audit |
+| `dialogs.css` | the dialog frame and each dialog's content |
+| `markdown.css` | rendered replies, scoped to `.bubble.assistant` |
+| `syntax.css` | the seven syntax colour roles |
+| `legacy.css` | what has not yet been moved into a module; it shrinks, and nothing is added to it |
+
+Put a new rule in the module whose part of the window it belongs to, and use a role from
+`tokens.css`. Markdown rules must never reproduce the app's own trust signals (the hatched
+confine border, the warn bar), or a reply could draw something the reader is meant to read as
+chrome.
+
+### IconButton
+
+Every icon-only control uses `components/IconButton.tsx`, not a bare `Button`. It takes an `icon`
+(a Leo icon name from `nala.ts`), a `label`, and a `kind` and `size`. The label is the accessible
+name and is required. The visible name is a tooltip drawn by `TooltipLayer` from the
+`data-tooltip` attribute, which `IconButton` sets from `tooltip` or, if that is absent, the label.
+A `shortcut` such as `"⌘F"` is written into the tooltip and into `aria-keyshortcuts` (`Meta+F`),
+so a shortcut is said once, in the platform's form. `pressed`, `expanded`, `controls` and
+`hasPopup` set the matching ARIA state; `description` adds a spoken suffix for state the icon
+alone carries.
+
+`TooltipLayer` is the only tooltip in the window: one Leo `Tooltip` laid over whichever
+`[data-tooltip]` element the pointer rests on or the keyboard reaches, with a 500ms first delay
+and no delay while moving along a toolbar. Use `data-tooltip` on anything else that needs one
+rather than a native `title`, which would draw a second box. A tooltip supplements the accessible
+name and never replaces it, and a disabled control shows none.
+
+Hit targets are at least 28px (`--hit`), even when the glyph is 14px.
+
+### Render isolation
+
+The transcript can hold hundreds of entries, so typing must not re-render them. `draft` lives in
+`App`, and this is what keeps a keystroke from reaching the list:
+
+- `Composer` is `memo`ised and given only stable callbacks. `Transcript` wraps the handlers it
+  passes down in `useEvent`, so their identity does not change when the draft does.
+- `EntryList`, `ToolRun` and `Row` in `Transcript.tsx` are `memo`ised, and `EntryList` derives
+  its runs from `entries` with `useMemo`.
+- A callback added to one of these must be stable (`useEvent`, `useCallback`, or a module
+  function). One that closes over the draft, or is rebuilt on every render, silently undoes the
+  isolation, and nothing but the perf driver will notice; see [testing](testing.md#performance-budgets).
+
+### The Nala checks
+
+`npm run typecheck` runs `scripts/check-nala.mjs` before `tsc`. It reads every `.css` file under
+`src/renderer/` and every `.ts` and `.tsx` file, and fails on:
+
+- a hard-coded colour (hex or `rgb()`/`rgba()`) or a `px` font size, including in the `font`
+  shorthand, in any stylesheet;
+- a `box-shadow` that is not `none`, a single `var(--…)`, or a focus ring of the form
+  `0 0 0 <n>px <var or transparent>` (optionally `inset`); use `--shadow-*` or `--leo-effect-*`;
+- a `var(--leo-…)` in the colour, font, spacing, radius, effect, duration, easing, typography,
+  gradient or elevation families that Leo does not define, which is a typo that silently paints
+  nothing (checked in stylesheets and in TypeScript);
+- the same selector declared twice in one stylesheet and at-rule context (`legacy.css` is exempt);
+- a raw `<svg` in the renderer other than in `BotAvatar.tsx`, which is artwork, not an icon;
+- a unicode glyph used as an icon (`↑ ↓ ✓ ▸ › ⋯ ↗`) in JSX text, or an arrow in CSS `content:`.
+  The `GLYPH_ALLOW` list at the top of the script exempts prose arrows in a sentence, one entry
+  each;
+- more raw `px` spacing (`padding`, `margin`, `gap`, `inset`, `top`, `left`, `right`, `bottom`),
+  or more size-only `--leo-typography-*-font-size` reads, than the two ratchets allow.
+
+The ratchets (`PX_SPACING_MAX` and `TYPOGRAPHY_SIZE_MAX`) are the counts as of the last module
+that landed. They may only go down: when you replace raw spacing with `--leo-spacing-*`, or a
+size-only read with a `--type-*` role, lower the constant in the same change. The last line the
+script prints shows both counts against their limits.
+
+### The quality bar
+
+A surface is finished when it holds in light and dark, comfortable and compact, at 1440×900 and
+at the minimum window size. In short:
+
+- **Grid.** Spacing comes from the Leo scale (4/8/12/16/24). Each column has one left text edge.
+  Icons come in three sizes, 14, 16 and 20, from one stroke family, and are centred on the text
+  line.
+- **Type.** No more than four sizes on a screen; three ink levels plus disabled;
+  `font-variant-numeric: tabular-nums` on every count, time, token figure, line number and diff
+  stat; `text-wrap: balance` on headings and `pretty` on paragraphs; sentence case.
+- **States.** Hover, pressed, focus-visible and disabled on everything interactive, with one
+  focus ring. Every list and panel has an empty, loading and error state.
+- **No layout shift.** Hover actions overlay rather than push, labels that change (Copy to
+  Copied, Send to Stop) keep their width, and the working row reserves its height.
+- **Truncation.** Text in a fixed-width row ends in an ellipsis and carries the full text in a
+  tooltip.
+- **Native feel.** Default cursor on chrome, pointer only for links; chrome is not selectable and
+  transcript text is; chrome dims with `data-window-inactive`; scrollbars are thin and overlay.
+- **Motion.** Everything that animates respects `prefers-reduced-motion`.
+- **Forced colours.** Under `@media (forced-colors: active)` the quarantine hatch, the untrusted
+  card border and the trust labels stay visible through a system-colour border and their text, so
+  a marking never depends on colour or a background image alone.
+- **Copy.** Menu items that open a dialog end in "…", buttons use verbs, tooltips carry no
+  trailing period, and button texts that tests or [security](security.md) pin stay word for word.
+- **Performance.** The [budgets](testing.md#performance-budgets), on a 500-entry transcript.
+
+The [visual gallery](testing.md#the-visual-gallery) is how this is checked by eye, and it fails
+the run on any interactive target under 28px.
+
+### Syntax colour
+
+Fenced code in a reply and the lines of a proposed diff are coloured by the same grammars, from
+`src/renderer/highlight.ts`. It uses [`lowlight`](https://github.com/wooorm/lowlight) (a
+`highlight.js` grammar set that produces a syntax tree rather than HTML), and `Markdown.tsx` hands
+the same `LANGUAGES`, `ALIASES` and `PLAIN_TEXT` to `rehype-highlight`, so the two never disagree
+about what a keyword looks like. The tree is walked into React spans with `hljs-*` class names and
+text children; nothing turns a string into markup, and highlighting must not change the text
+content.
+
+Only a subset of grammars is registered, because every registered grammar is bundled whether or
+not anybody writes in it:
+
+`bash`, `c`, `cpp`, `css`, `diff`, `go`, `ini`, `java`, `javascript`, `json`, `markdown`,
+`python`, `rust`, `shell`, `sql`, `swift`, `typescript`, `xml`, `yaml`.
+
+A fence is coloured only if it names one of these, or an alias: `ts` and `tsx` for
+`typescript`, `js` and `jsx` for `javascript`, `toml` for `ini`, `jsonc` and `json5` for `json`,
+`shell-script` for `bash`. Detection is off, so an untagged or unknown fence is left plain, and
+`text`, `txt`, `plain`, `plaintext`, `output` and `log` are plain on purpose. A diff picks its
+grammar from the file's extension through the `EXTENSIONS` table in the same file.
+
+To add a language:
+
+1. Import its grammar from `highlight.js/lib/languages/<name>` in `highlight.ts` and add it to
+   `LANGUAGES`, keeping the list alphabetical.
+2. Add any fence aliases to `ALIASES` (for example `ts` for `typescript`).
+3. Add the file extensions people will meet it under to `EXTENSIONS`, so diffs of those files are
+   coloured.
+4. Look at it in the [visual gallery](testing.md#the-visual-gallery), whose conversation scene
+   holds a `ts` fence; add a fence of the new language to that fixture's reply to see it in light
+   and dark.
+
+There is no per-language stylesheet. `syntax.css` defines seven roles (keyword, string, number,
+comment, function, type, punctuation) in Leo primitives, the same for every language, so a new
+grammar needs no colour work unless it emits an `hljs-*` class that no rule there covers.
 
 TypeScript uses strict checking, including `noUncheckedIndexedAccess`,
 `noUnusedLocals` and `noUnusedParameters`. There is no ESLint or Prettier gate.
