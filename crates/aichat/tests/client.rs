@@ -2355,7 +2355,9 @@ fn completed_retry_usage_survives_success_failure_and_backoff_cancellation() {
             )
             .unwrap();
             let cancel = bravebot_core::cancel::Cancel::new();
-            let mut client = AichatClient::new(&config, &egress).with_cancel(cancel.clone());
+            let mut client = AichatClient::new(&config, &egress)
+                .with_backoff(Duration::from_millis(1))
+                .with_cancel(cancel.clone());
             let request = ChatRequest::new("test-model", vec![Message::user("work")]);
             let result = client.complete_streaming(&mut policy, &request, |progress| {
                 if ending == "cancel" && progress.attempt == 3 {

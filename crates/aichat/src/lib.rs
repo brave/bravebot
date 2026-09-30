@@ -209,6 +209,10 @@ pub struct AichatClient<'a> {
     /// sent and it goes out to be judged. Leaving it out costs the level on a service that would
     /// have read it; sending it to a service that refuses the field costs every turn.
     effort: bool,
+    /// How long to wait before the first retry. Doubled for each retry after that.
+    ///
+    /// [`BACKOFF`] unless overridden by [`Self::with_backoff`].
+    backoff: Duration,
 }
 
 /// Where a request goes when a configured gateway serves the model, rather than Brave's endpoint.
@@ -265,6 +269,7 @@ impl<'a> AichatClient<'a> {
             gateway: None,
             breakpoints: true,
             effort: true,
+            backoff: BACKOFF,
         }
     }
 
@@ -309,6 +314,15 @@ impl<'a> AichatClient<'a> {
     /// stop. A caller that offers no way to say so is never stopped.
     pub fn with_cancel(mut self, cancel: Cancel) -> Self {
         self.cancel = Some(cancel);
+        self
+    }
+
+    /// Wait this long before the first retry instead of the default one-second wait. Later
+    /// retries still double it.
+    ///
+    /// Used by tests, which would otherwise spend real seconds on every retry they exercise.
+    pub fn with_backoff(mut self, backoff: Duration) -> Self {
+        self.backoff = backoff;
         self
     }
 
@@ -516,7 +530,7 @@ impl<'a> AichatClient<'a> {
                     probed = true;
                 }
                 Err(error) if worth_another_attempt(attempt, &error) => {
-                    if !self.wait(backoff(attempt)) {
+                    if !self.wait(backoff(self.backoff, attempt)) {
                         return Err(ChatError::Cancelled);
                     }
                     attempt += 1;
@@ -639,7 +653,7 @@ impl<'a> AichatClient<'a> {
                         counted_by_server: false,
                         attempt,
                     });
-                    if !self.wait(backoff(attempt - 1)) {
+                    if !self.wait(backoff(self.backoff, attempt - 1)) {
                         return Err(ChatError::Cancelled);
                     }
                 }
@@ -968,8 +982,8 @@ fn worth_another_attempt(attempt: u32, error: &ChatError) -> bool {
     }
 }
 
-fn backoff(failures: u32) -> Duration {
-    BACKOFF * 2u32.pow(failures - 1)
+fn backoff(base: Duration, failures: u32) -> Duration {
+    base * 2u32.pow(failures - 1)
 }
 
 /// Statuses a service uses to say the body is not one it will take.
