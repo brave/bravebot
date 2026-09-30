@@ -118,7 +118,7 @@
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: var(--leo-spacing-s);
   padding: 0 var(--leo-spacing-m) var(--leo-spacing-m);
 }
 
@@ -259,7 +259,7 @@
    Headings in caption ink rather than the accent: they name a checkout, not a pressed state, and
    a dozen of them in colour would drown the one row that is selected. Sticky, because the name
    of the checkout is worth keeping on screen while its sessions scroll past. */
-.session-group-section { display: flex; flex-direction: column; gap: 1px; }
+.session-group-section { display: flex; flex-direction: column; gap: var(--leo-spacing-s); }
 .session-group-section + .session-group-section { margin-top: var(--leo-spacing-m); }
 
 .session-group-head {
