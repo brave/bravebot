@@ -393,18 +393,26 @@ fn a_peer_without_the_secret_is_closed_and_nothing_it_sent_is_forwarded() {
 /// someone edited does not hand the relay to another extension, and it creates nothing first.
 #[test]
 fn the_host_refuses_an_extension_it_was_not_installed_for() {
+    let entries = |path: &Path| {
+        let mut names: Vec<String> = std::fs::read_dir(path)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    };
+
     let directory = installed_for(OURS);
     let mut other = Extension::start(directory.path(), OTHER);
     let status = exit_status(&mut other.host, "the host refuses the other extension");
     assert!(!status.success());
-    assert!(!directory.path().join("socket").exists());
-    assert!(!directory.path().join("secret").exists());
+    assert_eq!(entries(directory.path()), ["extension"]);
 
     let never_installed = tempfile::tempdir().unwrap();
     let mut any = Extension::start(never_installed.path(), OURS);
     let status = exit_status(&mut any.host, "the host refuses with nothing installed");
     assert!(!status.success());
-    assert!(!never_installed.path().join("socket").exists());
+    assert!(entries(never_installed.path()).is_empty());
 }
 
 /// One host serves a directory at a time. A host that cannot take the lock is refused before it
@@ -630,6 +638,24 @@ fn a_peer_that_sends_lines_and_does_not_read_is_closed() {
         "a peer that did not read its errors was closed only after {after:?}"
     );
     drop(peer);
+}
+
+/// A length over what the extension may send is a stream that has gone wrong, and nothing after it
+/// can be read as a message. The host ends, and takes its socket and secret with it, rather than
+/// reading on out of step.
+#[test]
+fn a_message_over_the_limit_from_the_extension_ends_the_host() {
+    let directory = installed_for(OURS);
+    let mut extension = Extension::connect(directory.path(), OURS);
+    let length = u32::try_from(framing::FROM_EXTENSION_LIMIT + 1).unwrap();
+    let to_host = extension.to_host.as_mut().unwrap();
+    to_host.write_all(&length.to_ne_bytes()).unwrap();
+    to_host.flush().unwrap();
+
+    let status = exit_status(&mut extension.host, "the host ends");
+    assert!(!status.success());
+    assert!(!directory.path().join("socket").exists());
+    assert!(!directory.path().join("secret").exists());
 }
 
 /// Brave closes the port on a message over 1 MB, which would drop every session. The host refuses

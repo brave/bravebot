@@ -211,6 +211,8 @@ the extension may be up to 64 MB, and a longer one ends the host.
 
 `verified-by: bravebot_browser::relay::a_request_over_the_limit_is_refused_and_never_reaches_the_extension`
 `verified-by: bravebot_browser::relay::a_request_far_over_the_limit_keeps_its_id_and_the_next_request`
+`verified-by: bravebot_browser::relay::a_message_over_the_limit_from_the_extension_ends_the_host`
+`verified-by: bravebot_browser::framing::the_limits_are_one_megabyte_out_and_sixty_four_in`
 `verified-by: bravebot_browser::framing::a_message_over_the_limit_to_the_extension_is_refused_and_nothing_is_written`
 `verified-by: bravebot_browser::framing::a_length_over_the_limit_from_the_extension_is_an_error`
 `verified-by: bravebot_browser::framing::a_written_message_reads_back_as_itself`
