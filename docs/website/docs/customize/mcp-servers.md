@@ -417,7 +417,10 @@ Windows today, it is not started. It gets:
   installs one;
 - the directory you gave with `--dir`, to read and write and start in, or the temporary directory
   if you gave none;
-- the network, and the machine's own system directories;
+- the network by IP address, and the machine's own system directories. A local socket, such as
+  the one the Docker daemon listens on, is reached only in a directory the server may write, so a
+  server that runs `docker` does not reach the daemon. On Linux that needs a kernel with Landlock
+  ABI version 9, and an older one leaves every socket reachable;
 - a look at any path, which says whether something is there and what kind of thing it is, and
   not what a file holds or what a directory lists.
 

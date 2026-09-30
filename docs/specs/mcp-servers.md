@@ -893,7 +893,11 @@ word, a missing path and a file the confinement reaches already record nothing.
 The process is confined under [MCP-3](mcp.md#MCP-3), and what it may reach is built for it:
 
 - The sandbox's base rows for this platform, which allow egress and children, with no home
-  directory given, so the git configuration in it is not among them either.
+  directory given, so the git configuration in it is not among them either. Egress is to IP
+  addresses, and a unix socket is reached only under a path the server may write
+  ([SANDBOX-3](sandboxing.md#SANDBOX-3)), the temporary directory among them. A server that runs
+  `docker` against the daemon's usual socket does not reach it, and one reaching a daemon on a
+  loopback address does, since that is IP.
 - Read access to each directory the named `PATH` searches and the one the program resolved into,
   with their links followed, since a runner is a script whose interpreter is found through `PATH`.
   A `bin` directory brings its parent, where an installation keeps what its programs load.
