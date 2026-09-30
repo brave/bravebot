@@ -8,7 +8,7 @@
 export function middleTruncate(path: string, max: number): string {
   if (path.length <= max) return path
   if (max < 5) return `${path.slice(0, Math.max(0, max - 1))}…`
-  const slash = path.lastIndexOf('/')
+  const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
   const name = slash >= 0 ? path.slice(slash) : path
   if (name.length + 4 >= max) {
     const keep = max - 1

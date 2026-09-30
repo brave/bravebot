@@ -34,4 +34,7 @@ test('a long path loses its middle, never its filename', () => {
   const long = middleTruncate('a-filename-that-is-longer-than-the-whole-budget.ts', 20)
   assert.equal(long.length, 20)
   assert.ok(long.endsWith('budget.ts'))
+  const windows = middleTruncate('C:\\long-folder\\another-folder\\important-report.ts', 30)
+  assert.equal(windows.length, 30)
+  assert.ok(windows.endsWith('\\important-report.ts'))
 })
