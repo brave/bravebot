@@ -15,6 +15,10 @@ use std::path::{Path, PathBuf};
 /// The host's name, which is also the manifest's file name without `.json`.
 pub const HOST_NAME: &str = "com.brave.bravebot";
 
+/// The id of the extension in `extension/`, which the `key` in its manifest fixes wherever it is
+/// loaded from. `install` records this one where it is given none.
+pub const EXTENSION_ID: &str = "fcjamhpiedeihbbbpndcjngkjaogfgep";
+
 /// Where Brave's stable channel reads a per-user host manifest on this platform.
 pub fn manifest_directory() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").filter(|home| !home.is_empty())?;

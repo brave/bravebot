@@ -14,8 +14,15 @@ governs:
   - crates/browser/src/relay.rs
   - crates/browser/src/server.rs
   - crates/browser/src/tools.rs
+  - crates/browser/tests/extension.rs
+  - extension/manifest.json
+  - extension/background.js
+  - extension/tools.js
+  - extension/options.js
+  - extension/tests/background.test.mjs
+  - extension/tests/tools.test.mjs
   - docs/design/browser-extension.md
-documented-by: none (gap: a "Connecting Brave" section of docs/website/docs/customize/mcp-servers.md, once the extension exists to connect)
+documented-by: none (gap: a "Connecting Brave" section of docs/website/docs/customize/mcp-servers.md, once bravebot-browser and the extension ship in a release)
 ---
 
 ## Scope
@@ -29,9 +36,10 @@ does.
 
 ## What exists today
 
-The relay is built, on macOS and Linux. The extension is not, so nothing answers the host yet, and
-every tool call fails at the extension's end until it does. Windows runs neither half: it starts no
-stdio server, and `bravebot-browser` says the platform is not supported there.
+The relay and the extension are built, on macOS and Linux. The extension is loaded unpacked from
+`extension/`, and neither ships in a release yet: `extension/README.md` is how to try the two. Windows
+runs neither half: it starts no stdio server, and `bravebot-browser` says the platform is not
+supported there.
 
 ## The processes
 
@@ -193,9 +201,10 @@ the extension may be up to 64 MB, and a longer one ends the host.
 <a id="BROWSER-9"></a>
 ### BROWSER-9: installing writes one manifest in the locations Brave reads
 
-`bravebot-browser install <extension id>` writes one host manifest named `com.brave.bravebot`,
+`bravebot-browser install [<extension id>]` writes one host manifest named `com.brave.bravebot`,
 naming this program by its absolute path and that extension alone, into the per-user location
-Brave's stable channel reads:
+Brave's stable channel reads. Given no id, it names the extension in `extension/`, whose id its
+pinned key fixes:
 
 | Platform | Where |
 |---|---|
@@ -211,6 +220,7 @@ Chrome from starting the host for anything but our extension. On Linux the locat
 Brave's own profile directory, and a channel other than stable has its own.
 
 `verified-by: bravebot_browser::relay::installing_writes_one_manifest_for_our_extension_alone`
+`verified-by: bravebot_browser::relay::installing_with_no_id_records_the_extension_in_this_repository`
 `verified-by: bravebot_browser::relay::installing_refuses_what_is_not_an_extension_id`
 `verified-by: bravebot_browser::install::the_manifest_goes_where_brave_reads_it`
 `verified-by: bravebot_browser::install::an_extension_id_is_32_letters_from_a_to_p`
@@ -246,6 +256,59 @@ is refused, and would report that no extension is connected while one is.
 
 `verified-by: bravebot_browser::host::the_socket_is_published_only_after_it_accepts`
 
+<a id="BROWSER-12"></a>
+### BROWSER-12: the extension answers each tool the server offers, under the host install names
+
+The extension asks Brave for the host by the name `install` gives its manifest, and answers exactly
+the methods the server's tools call, with one switch for each in its options. The `key` in its
+manifest fixes its id, and that id is the one `install` records given none.
+
+**Why.** The two halves are written in two languages and released together, and nothing at run time
+would say they disagreed: a tool the extension does not answer fails like a page that cannot be
+read, and an id the host was not installed for is refused like an extension it should not serve.
+
+`verified-by: bravebot_browser::extension::the_extension_answers_every_tool_the_server_offers_and_no_other`
+`verified-by: bravebot_browser::extension::the_extension_connects_to_the_host_install_names`
+`verified-by: bravebot_browser::extension::the_id_install_records_is_the_one_the_extensions_key_gives`
+
+<a id="BROWSER-13"></a>
+### BROWSER-13: a page is read from the tab at exactly its URL
+
+`read_page` reads the open tab whose URL is the one asked for, character for character, and no
+other. Where no tab is at that URL it fails without running anything in any tab. It returns at most
+100,000 characters of the page's text and says whether it cut the page short. A page the browser
+will not let an extension read, such as its own settings, is a failure saying so.
+
+**Why.** The URL is what the person saw in the question before the call. A tab whose URL only
+resembles it is a different page, which could be one they would have said no to.
+
+`verified-by: by-construction (extension/tests/tools.test.mjs asserts each of the four against a fake chrome object that records every call, including that a URL no tab is at reaches no script; make check-extension runs it, and check-ui-build depends on that target, so the Front end CI job runs it on every change the classifier gives the ui area, which a change under extension/ is)`
+
+<a id="BROWSER-14"></a>
+### BROWSER-14: the searches start off, and a tool that is off touches nothing
+
+History and bookmark search start off, and listing and reading open tabs start on, until a person
+changes them in the extension's options. A call to a tool that is off is refused before the
+browser is asked anything. A history search covers all of history, and a search returns at most 100
+results.
+
+**Why.** History and bookmarks reach everything a person has visited and saved, which is more than
+what they have open. The browser's history search covers the last day unless it is given a start
+time, which would answer a search of all of history with a day of it.
+
+`verified-by: by-construction (extension/tests/tools.test.mjs asserts the defaults, that a tool turned off reaches none of the browser's APIs, the start time and the bound on results; it runs where the test under BROWSER-13 runs)`
+
+<a id="BROWSER-15"></a>
+### BROWSER-15: the extension keeps its port open while Brave runs
+
+The extension opens the native messaging port as it starts and as Brave starts, and opens it again
+within a minute of losing it.
+
+**Why.** The port is what keeps the host, and so the socket, alive. An extension that opened it only
+when asked would leave no socket for a session to find.
+
+`verified-by: by-construction (extension/tests/background.test.mjs loads the real service worker against fake runtime, alarm and native-port events, and asserts it connects at load and on startup and reconnects on the one-minute alarm after a disconnect; make check-extension runs it, and check-ui-build depends on that target, so the Front end CI job runs it on every change the classifier gives the ui area, which a change under extension/ is)`
+
 ## Known costs
 
 - The secret in [BROWSER-3](#BROWSER-3) is only as private as the directory. Any process of the
@@ -259,3 +322,5 @@ is refused, and would report that no extension is connected while one is.
   cannot start the host until it is installed again.
 - Windows starts no stdio server today, so the MCP half cannot run there at all, and whether a named
   pipe or a Unix socket is the right transport is open.
+- The extension's id is fixed only while it is loaded unpacked. A copy from the Web Store or
+  bundled with Brave has an id of its own, and `install` has to be given it.

@@ -478,6 +478,30 @@ fn installing_writes_one_manifest_for_our_extension_alone() {
     );
 }
 
+/// Given no id, installing records the one the extension in this repository has, so a person
+/// loading it unpacked has nothing to copy.
+#[test]
+fn installing_with_no_id_records_the_extension_in_this_repository() {
+    let manifests = tempfile::tempdir().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let status = Command::new(PROGRAM)
+        .args(["install", "--manifest-dir"])
+        .arg(manifests.path())
+        .env("BRAVEBOT_BROWSER_DIR", directory.path())
+        .stdout(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let id = bravebot_browser::install::EXTENSION_ID;
+    let written = manifests.path().join("com.brave.bravebot.json");
+    let manifest: Value = serde_json::from_slice(&std::fs::read(&written).unwrap()).unwrap();
+    assert_eq!(manifest["allowed_origins"], json!([origin(id)]));
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("extension")).unwrap(),
+        id
+    );
+}
+
 /// An id that is not an extension's is refused before anything is written, so a mistyped one
 /// cannot leave a manifest naming nobody.
 #[test]

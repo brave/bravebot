@@ -99,6 +99,9 @@ def classify(path, desktop):
         return frozenset(found)
     if path in READ_BY_RUST:
         return frozenset({"rust"})
+    if path.startswith("extension/"):
+        # The job for the desktop UI runs the extension's tests, and a Rust test reads its files.
+        return frozenset({"rust", "ui"})
     for under, area in (("docs/website/", "docs"), ("ui/", "ui")):
         if path.startswith(under):
             lockfile = path[len(under):] in ("package.json", "package-lock.json")
@@ -269,6 +272,8 @@ CASES = (
     ("docs/website/package-lock.json", {"docs", "npm"}),
     ("ui/src/App.tsx", {"ui"}),
     ("ui/package.json", {"ui", "npm"}),
+    ("extension/tools.js", {"rust", "ui"}),
+    ("extension/tests/tools.test.mjs", {"rust", "ui"}),
     ("npm/scripts/postinstall.js", {"npm"}),
     ("package-lock.json", {"npm"}),
     ("agents/skills/rebase/SKILL.md", NOTHING),

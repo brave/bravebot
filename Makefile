@@ -70,6 +70,7 @@ help:
 	@echo "  make check-msrv            Build against the declared minimum toolchain ($(MSRV))"
 	@echo "  make check-windows         Lint the Windows target that ships, cross-compiled"
 	@echo "  make check-ui              Build the desktop UI, run the tests pinning what it marks, drive it"
+	@echo "  make check-extension       Test the Brave extension's tools against a fake browser"
 	@echo "  make check-all             All local checks, including Linux, UI and the security scan"
 	@echo "  make locales               What each translation has, and what it is missing"
 	@echo "  make check-linux           The same checks on Linux, current stable toolchain"
@@ -392,7 +393,14 @@ check-peer-advisories-selftest:
 check-ui: check-ui-build
 	$(MAKE) check-ui-walkthrough
 
-check-ui-build:
+# The Brave extension's tools against a fake browser. Node alone and nothing to install, and run by
+# check-ui-build so the job CI gives the desktop UI runs it as well: the two front ends in
+# JavaScript share the one job and its Node. `ls` first for the reason check-ui-build gives.
+.PHONY: check-extension
+check-extension:
+	ls extension/tests/*.test.mjs >/dev/null && node --test extension/tests/*.test.mjs
+
+check-ui-build: check-extension
 	npm --prefix ui ci
 	npm --prefix ui run typecheck
 	BRAVEBOT_BUILD_UNCONFIGURED=1 npm --prefix ui run build
