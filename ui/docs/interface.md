@@ -447,7 +447,8 @@ and an item is greyed when its `requires` tag is not met. (On Windows and Linux,
 | right-click | | A session row, or anything in the transcript |
 
 The round button at the foot of the composer is **Send** (`⌘↩` in its tooltip) and, for as long as
-a reply is generating, **Stop** (`⌘.`). It is the only stop control; the working row has none.
+a reply is generating, **Stop** (`⌘.`). The working row has no stop control of its own; `Esc` in
+the composer also stops the turn, as described below.
 
 `Esc` is the one that is not in a menu. As an accelerator it would fire with no session open
 and would fight every other use of the key, so it stays where it was: a convenience local to
@@ -573,7 +574,6 @@ docs/                       the protocol design, this document, testing and the 
 | --- | --- |
 | `layout` | The column widths and which side columns are folded |
 | `view` | Whether the session list is grouped by checkout, and which headings are shut |
-| `panels` | Which panels in the context column are turned **off** |
 | `recents` | The projects opened before, newest first |
 | `forks` | Which session came out of which |
 | `bots` | The bots defined here: name, purpose, avatar seed, checkout, model, conversation IDs and memory bookkeeping |
@@ -591,13 +591,13 @@ See [file access and retention](file-access-security.md) for retention and permi
 
 One file, but not one judgement: `src/shared/state.ts` decides nothing itself. It delegates each
 key whole to the validator that already owned that shape — `parseLayout`, `parseView`,
-`parsePanels`, `parseRecents`, `parseForks`, `parseBots` — so a hand-edited grouping flag still cannot cost
+`parseRecents`, `parseForks`, `parseBots`, so a hand-edited grouping flag still cannot cost
 somebody their column widths. Every write goes through `src/main/state.ts`, which replaces exactly
 one key and leaves the rest of the file as it found it, and what lands on disk is always the parsed
 state rather than the object a caller passed.
 
-The renderer reaches five of those keys, and only through a channel of its own per shape:
-`layout`, `view`, `panels`, `theme` and `bots`. `recents` and `forks` are written by the main process alone, from a
+The renderer reaches four of those keys, and only through a channel of its own per shape:
+`layout`, `view`, `theme` and `bots`. `recents` and `forks` are written by the main process alone, from a
 native picker and from what the *agent* answered — the window can read them and has no way to
 write a line into either.
 

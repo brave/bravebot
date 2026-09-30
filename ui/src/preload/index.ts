@@ -20,7 +20,6 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { BridgeEvent, BridgeFailure } from '../shared/protocol'
 import type { StoredLayout } from '../shared/layout'
 import type { StoredView } from '../shared/view'
-import type { StoredPanels } from '../shared/state'
 import type { CommandId, ContextCommandId, ContextRef, WindowState } from '../shared/commands'
 import type { ExportOutcome, ExportRequest } from '../shared/export'
 import type { Fork } from '../shared/forks'
@@ -81,22 +80,6 @@ const api = {
   /** Remember how the list was arranged. Best-effort; the caller does not wait or check. */
   writeView(view: StoredView): void {
     void ipcRenderer.invoke('bravebot:view:write', view)
-  },
-
-  /**
-   * Which panels the context column was showing last launch. Never null: a column nobody has
-   * arranged is one with every panel in it.
-   *
-   * Kept beside the layout and the view, in the one file the main process owns, and for the same
-   * measured reason each of those gives.
-   */
-  readPanels(): Promise<StoredPanels> {
-    return ipcRenderer.invoke('bravebot:panels:read') as Promise<StoredPanels>
-  },
-
-  /** Remember which panels are on. Best-effort; the caller does not wait or check. */
-  writePanels(panels: StoredPanels): void {
-    void ipcRenderer.invoke('bravebot:panels:write', panels)
   },
 
   /** The appearance in force. */

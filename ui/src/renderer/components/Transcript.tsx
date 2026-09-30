@@ -1606,9 +1606,11 @@ function Card({
               happens somewhere the agent stops governing them.
             </Alert>
           )}
+          {/* Outside the fold: "Trust command and output" is a standing grant, and what it covers
+              has to be readable at the moment it can be pressed, not only on hover or after a click. */}
+          {answerable && decision === null && <p className="permission-scope"><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and trusts their output for this conversation, including after reopening it. Revoke through Permissions.</p>}
           <Collapse className="card-details" title="Details" isOpen={undefined}>
             <p className="permission-scope">Run this command in the project folder shown above. “Run once” approves only this execution.</p>
-            {answerable && decision === null && <p className="permission-scope"><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and trusts their output for this conversation, including after reopening it. Revoke through Permissions.</p>}
           </Collapse>
         </DecisionCard>
       )

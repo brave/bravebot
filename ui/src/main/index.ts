@@ -17,8 +17,7 @@ import { parseView } from '../shared/view'
 import { parseContextRef, parseWindowState } from '../shared/commands'
 import { installMenu, popupContext, rebuildMenu, refreshMenu } from './menu'
 import { noteProject, recents } from './recents'
-import { putBots, putLayout, putPanels, putTheme, putView, readState } from './state'
-import { parsePanels } from '../shared/state'
+import { putBots, putLayout, putTheme, putView, readState } from './state'
 import { isProjectPath } from '../shared/recents'
 import { forks, noteFork } from './forks'
 import {
@@ -585,7 +584,7 @@ app.whenReady().then(() => {
   })
 
   // What the window remembers between launches: the column widths and folds, how the session
-  // list is arranged, and which panels the context column is showing.
+  // list is arranged.
   //
   // A file rather than `localStorage`, because the renderer is loaded from `file://` and
   // Chromium does not keep storage for that origin across launches — writes work for the
@@ -723,10 +722,6 @@ app.whenReady().then(() => {
       return sendBotTurn(session, held, prompt, grounded === true || nudge, nudge, true, model as string | null | undefined, attachments)
     },
   )
-
-  ipcMain.handle('bravebot:panels:read', () => readState().panels)
-
-  ipcMain.handle('bravebot:panels:write', (_event, value: unknown) => putPanels(parsePanels(value)))
 
   // Appearance: System / Light / Dark. The name is a key in the same file as the columns;
   // Electron's nativeTheme is told so scrollbars and vibrancy follow the page.

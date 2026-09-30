@@ -21,7 +21,7 @@
 import { app } from 'electron'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { parseState, type StoredPanels, type StoredState } from '../shared/state'
+import { parseState, type StoredState } from '../shared/state'
 import { parseLayout, type StoredLayout } from '../shared/layout'
 import { parseView, type StoredView } from '../shared/view'
 import { parseRecents } from '../shared/recents'
@@ -66,8 +66,6 @@ function inherited(): StoredState {
   return {
     layout: parseLayout(legacy('layout.json')),
     view: parseView(legacy('view.json')),
-    // Panels are new with this file, so there is nothing to inherit — every panel is on.
-    panels: { off: [] },
     // As is the appearance, and there was never a file for it: an app that has never chosen one
     // follows the system, which is every window before this feature existed.
     theme: SYSTEM,
@@ -106,11 +104,6 @@ export function putLayout(layout: StoredLayout): void {
 /** Remember how the session list is arranged. */
 export function putView(view: StoredView): void {
   update({ view })
-}
-
-/** Remember which panels the context column is showing. */
-export function putPanels(panels: StoredPanels): void {
-  update({ panels })
 }
 
 /** Remember which appearance the window follows. */

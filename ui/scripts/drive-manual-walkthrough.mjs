@@ -270,8 +270,7 @@ try {
     assert((await card.innerText()).includes('Plain release notes.'))
     await page.setViewportSize({ width: 560, height: 780 }); await fits(card)
     const action = card.getByRole('button', { name: accepted ? 'Let the planner read once' : 'Keep it out', exact: true })
-    // The actions are sticky, so a pointer click lands on the card behind the button.
-    await action.scrollIntoViewIfNeeded(); await action.evaluate(el => el.click())
+    await action.click()
     const terminal = await done(before)
     assert.deepEqual(terminal.data.trust.rules, [], 'one-time approval does not create standing trust')
     await page.setViewportSize({ width: 1350, height: 900 })

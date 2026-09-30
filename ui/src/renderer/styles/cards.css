@@ -256,7 +256,7 @@
 /* A tall card keeps its answers in reach while its evidence is scrolled through. */
 .confirm:has(.diff-review, pre.preview) > .confirm-actions {
   position: sticky;
-  bottom: calc(-1 * var(--leo-spacing-xl));
+  bottom: 0;
   z-index: 1;
   margin: 0 calc(-1 * var(--leo-spacing-xl)) calc(-1 * var(--leo-spacing-xl));
   padding: var(--leo-spacing-l) var(--leo-spacing-xl);
