@@ -6,6 +6,7 @@ governs:
   - crates/agent/src/backend.rs
   - crates/agent/src/outcome.rs
   - crates/agent/src/subscription.rs
+  - crates/cli/src/import.rs
   - crates/cli/src/main.rs
   - crates/cli/src/plain.rs
   - crates/bedrock/src/credentials.rs
@@ -2023,6 +2024,7 @@ which is one fewer model requested rather than a list that decides nothing.
 `verified-by: bravebot_config::lib::a_managed_layer_silent_on_models_refuses_none`
 `verified-by: bravebot_agent::backend::a_model_the_managed_layer_refuses_is_served_by_nothing`
 `verified-by: bravebot_agent::backend::a_pick_the_managed_layer_refuses_is_set_aside_with_the_file_that_refused_it`
+`verified-by: bravebot_cli::import::a_start_on_a_model_the_managed_layer_refuses_is_ended`
 `verified-by: bravebot_tui::app::the_picker_does_not_offer_a_model_this_machine_may_not_request`
 `verified-by: bravebot_tui::app::a_definition_naming_a_model_this_machine_may_not_request_is_refused`
 `verified-by: bravebot_tui::persist::a_pick_the_managed_layer_refuses_is_set_aside_and_names_the_file`

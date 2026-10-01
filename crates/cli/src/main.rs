@@ -1367,16 +1367,30 @@ fn nothing_serves(config: &Config, model: &str) -> Option<String> {
             a_service_is_configured,
             &import::looked(a_service_is_configured),
         )),
-        bravebot_agent::backend::Serving::Refused { file, why } => Some(
-            t!(
-                managed_model_refused,
-                model = model,
-                reason = bravebot_agent::backend::refusal_reason(&file, why)
-            )
-            .to_string(),
-        ),
+        bravebot_agent::backend::Serving::Refused { file, why } => {
+            Some(managed_refusal(model, &file, why))
+        }
         bravebot_agent::backend::Serving::Configured => None,
     }
+}
+
+/// What a start or a run says where the machine-level layer refuses `model` (BACKEND-48).
+///
+/// Here rather than at each site because four of them say it: a one-shot run, the report, the start
+/// that opens an interactive session, and that same start again once an import has written a model.
+/// The model is named as well as the file, since a tier word resolves to a name the person reading
+/// this wrote nowhere.
+pub(crate) fn managed_refusal(
+    model: &str,
+    file: &Path,
+    why: bravebot_config::ModelRefusal,
+) -> String {
+    t!(
+        managed_model_refused,
+        model = model,
+        reason = bravebot_agent::backend::refusal_reason(file, why)
+    )
+    .to_string()
 }
 
 /// The model a run asks for: the one the command line named, else the one a session would read.
@@ -2554,14 +2568,7 @@ fn doctor() -> ExitCode {
                 bravebot_agent::backend::Serving::Refused { file, why } => {
                     ending = ends_on(ending, Ending::Configuration);
                     println!();
-                    println!(
-                        "{}",
-                        t!(
-                            managed_model_refused,
-                            model = &model,
-                            reason = bravebot_agent::backend::refusal_reason(&file, why)
-                        )
-                    );
+                    println!("{}", managed_refusal(&model, &file, why));
                 }
                 bravebot_agent::backend::Serving::Configured => {}
             }
