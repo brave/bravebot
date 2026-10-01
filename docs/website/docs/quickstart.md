@@ -82,10 +82,9 @@ install, the script again for a script install. A build from source is told noth
 line would update one.
 
 Nothing about it waits. The notice comes from an answer an earlier launch wrote down, and the
-request that refreshes it, at most one a day whether or not it learned anything, runs behind the session
+request that refreshes it, at most one an hour whether or not it learned anything, runs behind the session
 and is for the next one. So a
-first run says nothing, and a release published this morning reaches somebody who last opened a
-session last night tomorrow.
+first run says nothing, and a release is announced on the launch after the one that first asks for it.
 
 Every way this can fail is silence: no network, a registry that will not answer, an answer of an
 unexpected shape. A registry that cannot be reached today does not withdraw a version it announced
