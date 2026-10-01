@@ -21,7 +21,7 @@ function browser({
   pages = {},
   history = [],
   bookmarks = [],
-  stored = {},
+  stored = tabsOn,
 } = {}) {
   const calls = [];
   return {
@@ -38,6 +38,14 @@ function browser({
       async query(filter) {
         calls.push(["tabs.query", filter]);
         return tabs;
+      },
+    },
+    runtime: {
+      // With a field of its own besides the three the tool passes on, as a
+      // later browser could add one.
+      async getPlatformInfo() {
+        calls.push(["runtime.getPlatformInfo"]);
+        return { os: "mac", arch: "arm64", nacl_arch: "arm64", added: "x" };
       },
     },
     scripting: {
@@ -89,6 +97,12 @@ function reached(chrome, api) {
   return chrome.calls.some(([name]) => name === api);
 }
 
+// The tab tools turned on, as a person turns them on in the options page. The
+// fake browser starts with them so, and a test of the defaults stores nothing.
+const tabsOn = {
+  [SETTINGS_KEY]: { list_tabs: true, read_page: true },
+};
+
 const allowEverything = {
   [SETTINGS_KEY]: { search_history: true, search_bookmarks: true },
 };
@@ -102,6 +116,13 @@ const tabs = [
     url: "https://brave.com/search",
   },
 ];
+
+// The limits are the ones the spec states. The other tests size their input
+// from these constants, so they would pass at any value.
+test("a page is cut at 100,000 characters and a search at 100 results", () => {
+  assert.equal(PAGE_TEXT_LIMIT, 100_000);
+  assert.equal(MAX_RESULTS, 100);
+});
 
 // The host routes a reply by its id, so every reply carries the request's.
 test("a reply keeps its id, with a result or an error", async () => {
@@ -133,6 +154,21 @@ test("inherited object names are not methods", async () => {
     const reply = await handle({ id: 1, method, params: {} }, browser());
     assert.equal(reply.error?.code, -32601, method);
   }
+});
+
+// The platform check is what a person runs to see the extension answer, so it
+// says what Brave runs on and nothing else: none of the browser's other fields,
+// and nothing from a tab, a page, history or bookmarks.
+test("get_platform_info says only what Brave runs on", async () => {
+  const chrome = browser({ tabs });
+  const reply = await handle({ id: 1, method: "get_platform_info" }, chrome);
+  assert.deepEqual(reply.result, {
+    os: "mac",
+    arch: "arm64",
+    nacl_arch: "arm64",
+  });
+  const reached = chrome.calls.map(([name]) => name);
+  assert.deepEqual(reached, ["storage.get", "runtime.getPlatformInfo"]);
 });
 
 test("list_tabs gives each tab's id, window, title and URL", async () => {
@@ -178,6 +214,40 @@ test("read_page reads the tab at exactly that URL and no other", async () => {
   );
   assert.match(missed.error.message, /no open tab is at https:\/\/brave\.com/);
   assert.ok(!reached(near, "scripting.executeScript"));
+});
+
+// A long page is cut on a whole character. A character outside the Basic
+// Multilingual Plane takes two code units, and cutting between them would send
+// half of one, which the host cannot parse.
+test("read_page never ends a cut page on half a character", async () => {
+  const text = "x".repeat(PAGE_TEXT_LIMIT - 1) + "\u{1F600}and the rest";
+  const chrome = browser({ tabs, pages: { 1: { title: "Wide", text } } });
+  const reply = await handle(
+    { id: 1, method: "read_page", params: { url: "https://brave.com/" } },
+    chrome,
+  );
+  assert.equal(reply.result.text, "x".repeat(PAGE_TEXT_LIMIT - 1));
+  assert.equal(reply.result.truncated, true);
+});
+
+// JSON carries an unpaired surrogate as an escape the host refuses to parse,
+// which would leave the call waiting for a reply that never comes. Every
+// string in an answer is well formed, whichever tool gave it.
+test("an answer holds no unpaired surrogate", async () => {
+  const broken = "a\ud800b";
+  const chrome = browser({
+    tabs: [{ id: 1, windowId: 10, title: broken, url: "https://brave.com/" }],
+    pages: { 1: { title: broken, text: `text ${broken}` } },
+  });
+  for (const [method, params] of [
+    ["list_tabs", {}],
+    ["read_page", { url: "https://brave.com/" }],
+  ]) {
+    const reply = await handle({ id: 1, method, params }, chrome);
+    const sent = JSON.stringify(reply);
+    assert.ok(!/\\ud[89ab]/i.test(sent), `${method}: ${sent}`);
+    assert.ok(sent.includes("a\ufffdb"), `${method}: ${sent}`);
+  }
 });
 
 test("read_page cuts a long page at the limit and says it did", async () => {
@@ -310,32 +380,50 @@ test("bookmarks leave folders out and keep the result bound", async () => {
   assert.ok(reply.result.every((bookmark) => "url" in bookmark));
 });
 
-// History and bookmarks reach a person's whole past, so they start off. A
+// Only the platform check starts on. Every other tool reaches what a person
+// has open, visited or saved, so each is refused until they turn it on, and a
 // tool that is off is refused before the browser is asked anything.
-test("searches start off, and an off tool touches nothing", async () => {
-  for (const [method, api] of [
-    ["search_history", "history.search"],
-    ["search_bookmarks", "bookmarks.search"],
+test("only the platform check starts on", async () => {
+  const nothingStored = browser({ tabs, stored: {} });
+  const check = await handle(
+    { id: 1, method: "get_platform_info" },
+    nothingStored,
+  );
+  assert.ok("result" in check);
+
+  for (const [method, params, api] of [
+    ["list_tabs", {}, "tabs.query"],
+    ["read_page", { url: tabs[0].url }, "scripting.executeScript"],
+    ["search_history", { query: "bank" }, "history.search"],
+    ["search_bookmarks", { query: "bank" }, "bookmarks.search"],
   ]) {
-    const off = browser();
-    const refused = await handle(
-      { id: 1, method, params: { query: "bank" } },
-      off,
-    );
+    const off = browser({ tabs, stored: {} });
+    const refused = await handle({ id: 1, method, params }, off);
     assert.match(refused.error.message, /turned off/, method);
     assert.ok(!reached(off, api), method);
+    assert.ok(!reached(off, "tabs.query"), method);
 
-    const on = browser({ stored: { [SETTINGS_KEY]: { [method]: true } } });
-    const answered = await handle(
-      { id: 1, method, params: { query: "bank" } },
-      on,
-    );
+    const on = browser({
+      tabs,
+      pages: { 1: { title: "Brave", text: "home" } },
+      stored: { [SETTINGS_KEY]: { [method]: true } },
+    });
+    const answered = await handle({ id: 1, method, params }, on);
     assert.ok("result" in answered, method);
     assert.ok(reached(on, api), method);
   }
 });
 
-test("open tabs work until a person turns them off", async () => {
+test("the platform check can be turned off too", async () => {
+  const chrome = browser({
+    stored: { [SETTINGS_KEY]: { get_platform_info: false } },
+  });
+  const off = await handle({ id: 1, method: "get_platform_info" }, chrome);
+  assert.match(off.error.message, /turned off/);
+  assert.ok(!reached(chrome, "runtime.getPlatformInfo"));
+});
+
+test("open tabs are refused once a person turns them off again", async () => {
   const on = await handle({ id: 1, method: "list_tabs" }, browser({ tabs }));
   assert.ok("result" in on);
 

@@ -20,12 +20,14 @@ export const DEFAULT_RESULTS = 20;
 // Where the settings are kept in chrome.storage.local.
 export const SETTINGS_KEY = "tools";
 
-// Which tools may run until a person changes it in the options page. The two
-// searches reach the whole of a person's past rather than what is open now, so
-// they start off.
+// Which tools may run until a person changes it in the options page. Only the
+// platform check starts on: it tells nothing about the person. Every other tool
+// reaches what they have open, visited or saved, so it reads nothing until they
+// turn it on.
 export const DEFAULT_SETTINGS = Object.freeze({
-  list_tabs: true,
-  read_page: true,
+  get_platform_info: true,
+  list_tabs: false,
+  read_page: false,
   search_history: false,
   search_bookmarks: false,
 });
@@ -65,6 +67,32 @@ function text(params, name) {
   return value;
 }
 
+// The first `limit` UTF-16 code units of `text`, one fewer where the last of
+// them would be the first half of a character.
+function cut(text, limit) {
+  const kept = text.slice(0, limit);
+  const last = kept.charCodeAt(kept.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? kept.slice(0, -1) : kept;
+}
+
+// `value` with every string in it well formed: an unpaired surrogate becomes
+// U+FFFD. JSON carries one as an escape the host cannot parse, so a reply
+// holding one would be refused and the call left waiting.
+function wellFormed(value) {
+  if (typeof value === "string") {
+    return value.toWellFormed();
+  }
+  if (Array.isArray(value)) {
+    return value.map(wellFormed);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, inner]) => [key, wellFormed(inner)]),
+    );
+  }
+  return value;
+}
+
 // How many results to return: what the call asked for, kept between 1 and
 // MAX_RESULTS.
 function count(params) {
@@ -76,6 +104,14 @@ function count(params) {
 }
 
 export const TOOLS = {
+  // What Brave runs on, which is enough to show the extension is installed and
+  // answering, and nothing about the person. Only these fields are passed on,
+  // whatever else the browser adds to its answer.
+  async get_platform_info(chrome) {
+    const { os, arch, nacl_arch } = await chrome.runtime.getPlatformInfo();
+    return { os, arch, nacl_arch };
+  },
+
   async list_tabs(chrome) {
     const tabs = await chrome.tabs.query({});
     return tabs.map((tab) => ({
@@ -126,7 +162,7 @@ export const TOOLS = {
     return {
       url,
       title: page.title,
-      text: truncated ? page.text.slice(0, PAGE_TEXT_LIMIT) : page.text,
+      text: truncated ? cut(page.text, PAGE_TEXT_LIMIT) : page.text,
       truncated,
     };
   },
@@ -182,7 +218,7 @@ export async function handle(message, chrome) {
     return {
       jsonrpc: "2.0",
       id,
-      result: await tool(chrome, message.params ?? {}),
+      result: wellFormed(await tool(chrome, message.params ?? {})),
     };
   } catch (error) {
     const code = error instanceof ToolError ? error.code : SERVER_ERROR;

@@ -9,17 +9,32 @@
 
 use crate::framing;
 use crate::lines::{self, Line};
-use crate::paths::{self, EXTENSION, SECRET, SOCKET};
+use crate::paths::{self, EXTENSION, LOCK, SECRET, SOCKET};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{self, BufReader, Read, Write};
+use std::os::fd::OwnedFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 /// The longest first line a peer may send, which holds the secret and nothing else.
 const SECRET_LINE_LIMIT: usize = 128;
+
+/// How long a connection has to present the secret before it is closed. The MCP server sends it
+/// as it connects, so a connection that has not by now is not one it made.
+pub const SECRET_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How many connections may wait to present the secret at once. One past that is closed as soon
+/// as it is accepted, so connections that never present it cannot use up the host's threads.
+pub const WAITING_LIMIT: usize = 32;
+
+/// How long a peer has to take a reply before its connection is closed. Replies are handed over
+/// on one thread in the order the extension answers, so a peer that stops reading would otherwise
+/// hold every later reply to every other session.
+pub const REPLY_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The longest request line a peer may send. A request is forwarded only if it still fits in one
 /// message to the extension once its id is replaced, which is checked after it is read. This is
@@ -43,13 +58,11 @@ const PARSE_ERROR: i64 = -32700;
 pub fn run(directory: &Path, origin: &str) -> io::Result<()> {
     check_origin(directory, origin)?;
     paths::prepare(directory)?;
+    // Declared before everything this host creates, so it is released after they are removed:
+    // a host that starts next finds the directory as this one left it.
+    let _held = hold_the_lock(directory)?;
 
     let socket = directory.join(SOCKET);
-    if UnixStream::connect(&socket).is_ok() {
-        return Err(io::Error::other(
-            "another Brave profile is already connected to the relay, and only one can be",
-        ));
-    }
     match std::fs::remove_file(&socket) {
         Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
         _ => {}
@@ -71,14 +84,19 @@ pub fn run(directory: &Path, origin: &str) -> io::Result<()> {
         next_peer: AtomicU64::new(1),
         pending: Mutex::new(HashMap::new()),
         peers: Mutex::new(HashMap::new()),
+        waiting: Arc::new(AtomicUsize::new(0)),
     });
 
     let accepting = Arc::clone(&relay);
     std::thread::spawn(move || {
         for stream in listener.incoming() {
+            let accepted = Instant::now();
             let Ok(stream) = stream else { continue };
+            let Some(waiting) = Waiting::claim(&accepting.waiting) else {
+                continue;
+            };
             let relay = Arc::clone(&accepting);
-            std::thread::spawn(move || relay.serve(stream));
+            std::thread::spawn(move || relay.serve(stream, waiting, accepted + SECRET_TIMEOUT));
         }
     });
 
@@ -96,6 +114,33 @@ fn bind_and_publish(
     after_bind(staged);
     std::fs::rename(staged, socket)?;
     Ok(listener)
+}
+
+/// The lock on the directory's [`LOCK`] file, held until what is returned is dropped.
+///
+/// A host that cannot take it is refused before it touches the socket or the secret, since another
+/// host holds it and serves them.
+fn hold_the_lock(directory: &Path) -> io::Result<OwnedFd> {
+    use rustix::fs::{FlockOperation, Mode, OFlags, flock, open};
+    use rustix::io::Errno;
+
+    let file = open(
+        directory.join(LOCK),
+        OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::from_raw_mode(0o600),
+    )?;
+    loop {
+        match flock(&file, FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => return Ok(file),
+            Err(Errno::INTR) => {}
+            Err(Errno::WOULDBLOCK) => {
+                return Err(io::Error::other(
+                    "another Brave profile is already connected to the relay, and only one can be",
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
 }
 
 /// Refuses an origin that is not the one extension `install` recorded.
@@ -125,6 +170,42 @@ fn new_secret() -> String {
     let mut bytes = [0u8; SECRET_BYTES];
     rand::rngs::OsRng.fill_bytes(&mut bytes);
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// The line a peer sends first, read by `deadline` and at most [`SECRET_LINE_LIMIT`] bytes long,
+/// or `None` where it is not.
+///
+/// The deadline is the connection's rather than each read's. A read timeout alone restarts with
+/// every byte, so a connection sending one byte at a time would be waited on for ever.
+fn secret_line(reader: &mut BufReader<UnixStream>, deadline: Instant) -> Option<Vec<u8>> {
+    use std::io::BufRead;
+
+    let mut line = Vec::new();
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return None;
+        }
+        reader.get_ref().set_read_timeout(Some(left)).ok()?;
+        let available = match reader.fill_buf() {
+            Ok(available) => available,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => return None,
+        };
+        if available.is_empty() {
+            return None;
+        }
+        let newline = available.iter().position(|&byte| byte == b'\n');
+        let taken = newline.unwrap_or(available.len());
+        if line.len() + taken > SECRET_LINE_LIMIT {
+            return None;
+        }
+        line.extend_from_slice(&available[..taken]);
+        reader.consume(newline.map_or(taken, |at| at + 1));
+        if newline.is_some() {
+            return Some(line);
+        }
+    }
 }
 
 /// Whether two byte strings are equal, in time that depends on their length alone.
@@ -158,6 +239,25 @@ struct Pending {
     id: Value,
 }
 
+/// One of the [`WAITING_LIMIT`] places for a connection that has not presented the secret yet,
+/// given back when it is dropped.
+struct Waiting(Arc<AtomicUsize>);
+
+impl Waiting {
+    /// A place, or `None` where every one is taken.
+    fn claim(count: &Arc<AtomicUsize>) -> Option<Self> {
+        let before = count.fetch_add(1, Ordering::AcqRel);
+        let claimed = Self(Arc::clone(count));
+        (before < WAITING_LIMIT).then_some(claimed)
+    }
+}
+
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// What every thread of the host shares.
 struct Relay {
     secret: String,
@@ -166,6 +266,7 @@ struct Relay {
     next_peer: AtomicU64,
     pending: Mutex<HashMap<u64, Pending>>,
     peers: Mutex<HashMap<u64, Arc<Mutex<UnixStream>>>>,
+    waiting: Arc<AtomicUsize>,
 }
 
 impl Relay {
@@ -184,24 +285,33 @@ impl Relay {
             };
             reply["id"] = pending.id;
             let peer = locked(&self.peers).get(&pending.peer).cloned();
-            if let Some(peer) = peer {
-                let _ = write_line(&peer, &reply);
+            if let Some(peer) = peer
+                && write_line(&peer, &reply).is_err()
+            {
+                // Part of the line may have gone, so nothing later on this connection could be
+                // read as a message. Its own thread ends on the shutdown and drops what it waits on.
+                locked(&self.peers).remove(&pending.peer);
+                let _ = locked(&peer).shutdown(std::net::Shutdown::Both);
             }
         }
         Ok(())
     }
 
     /// Serves one peer: the secret first, then its requests, until it closes.
-    fn serve(&self, stream: UnixStream) {
+    fn serve(&self, stream: UnixStream, waiting: Waiting, deadline: Instant) {
         let Ok(writer) = stream.try_clone() else {
             return;
         };
         let writer = Arc::new(Mutex::new(writer));
         let mut reader = BufReader::new(stream);
 
-        match lines::read_line(&mut reader, SECRET_LINE_LIMIT) {
-            Ok(Line::Read(line)) if same(&line, self.secret.as_bytes()) => {}
+        match secret_line(&mut reader, deadline) {
+            Some(line) if same(&line, self.secret.as_bytes()) => {}
             _ => return,
+        }
+        drop(waiting);
+        if reader.get_ref().set_read_timeout(None).is_err() {
+            return;
         }
 
         let peer = self.next_peer.fetch_add(1, Ordering::Relaxed);
@@ -209,42 +319,51 @@ impl Relay {
 
         loop {
             let mut request_id = RequestId::default();
-            match lines::read_line_observed(&mut reader, REQUEST_LINE_LIMIT, |bytes| {
+            let served = match lines::read_line_observed(&mut reader, REQUEST_LINE_LIMIT, |bytes| {
                 request_id.observe(bytes)
             }) {
                 Ok(Line::Read(line)) => self.forward(peer, &writer, &line),
-                Ok(Line::TooLong) => {
-                    let _ = write_line(&writer, &too_large(request_id.value()));
-                }
+                Ok(Line::TooLong) => write_line(&writer, &too_large(request_id.value())),
                 Ok(Line::End) | Err(_) => break,
+            };
+            // A line not taken in time may be half written, so nothing later on this connection
+            // could be read as a message, and a peer that does not read would otherwise hold its
+            // writer for every error it provoked, reply by reply.
+            if served.is_err() {
+                break;
             }
         }
 
         locked(&self.peers).remove(&peer);
         locked(&self.pending).retain(|_, pending| pending.peer != peer);
+        // Through the reading half, so a reply blocked on the writer fails at once.
+        let _ = reader.get_ref().shutdown(std::net::Shutdown::Both);
     }
 
     /// Sends one request to the extension under an id of the host's own, or answers it here where it
-    /// cannot be sent.
-    fn forward(&self, peer: u64, writer: &Mutex<UnixStream>, line: &[u8]) {
+    /// cannot be sent. An error is a line to the peer that could not be written.
+    fn forward(&self, peer: u64, writer: &Mutex<UnixStream>, line: &[u8]) -> io::Result<()> {
         let Ok(mut request) = serde_json::from_slice::<Value>(line) else {
-            let _ = write_line(writer, &error(Value::Null, PARSE_ERROR, "not JSON".into()));
-            return;
+            return write_line(writer, &error(Value::Null, PARSE_ERROR, "not JSON".into()));
         };
         if !request.is_object() {
-            let _ = write_line(
+            return write_line(
                 writer,
                 &error(Value::Null, PARSE_ERROR, "not a request".into()),
             );
-            return;
         }
         let id = request.get("id").cloned().unwrap_or(Value::Null);
+        // An id as long as a message may be is kept on neither road, the line read whole or drained,
+        // so a peer cannot hold that much in the host until a reply comes.
+        let kept = serde_json::to_vec(&id).is_ok_and(|id| id.len() < framing::TO_EXTENSION_LIMIT);
+        if !kept {
+            return write_line(writer, &too_large(Value::Null));
+        }
         let sent = self.next_id.fetch_add(1, Ordering::Relaxed);
         request["id"] = json!(sent);
         let message = serde_json::to_vec(&request).unwrap_or_default();
         if message.len() > framing::TO_EXTENSION_LIMIT {
-            let _ = write_line(writer, &too_large(id));
-            return;
+            return write_line(writer, &too_large(id));
         }
 
         locked(&self.pending).insert(
@@ -257,11 +376,12 @@ impl Relay {
         let written = framing::write_message(&mut *locked(&self.to_extension), &message);
         if written.is_err() {
             locked(&self.pending).remove(&sent);
-            let _ = write_line(
+            return write_line(
                 writer,
                 &error(id, SERVER_ERROR, "the extension is not connected".into()),
             );
         }
+        Ok(())
     }
 }
 
@@ -282,8 +402,17 @@ struct RequestId {
     waiting_for_colon: bool,
     capturing: bool,
     capture_started: bool,
+    /// Whitespace seen between the id's tokens and not yet kept. A run of it is kept as one space,
+    /// and only where another token follows, so padding is not counted as part of the id while
+    /// `1 2` still does not read as `12`.
+    space_held: bool,
     captured: Vec<u8>,
     complete: bool,
+}
+
+/// Whitespace JSON allows between tokens, which Rust's ASCII whitespace widens with form feed.
+fn json_whitespace(byte: u8) -> bool {
+    matches!(byte, b' ' | b'\t' | b'\n' | b'\r')
 }
 
 impl RequestId {
@@ -299,13 +428,16 @@ impl RequestId {
                 self.capturing = false;
             }
 
-            if self.capturing
-                && !self.complete
-                && (self.capture_started || !byte.is_ascii_whitespace())
-            {
-                self.capture_started = true;
-                if self.captured.len() < framing::TO_EXTENSION_LIMIT {
-                    self.captured.push(byte);
+            if self.capturing && !self.complete {
+                if !self.in_string && json_whitespace(byte) {
+                    self.space_held = self.capture_started;
+                } else {
+                    if self.space_held {
+                        self.keep(b' ');
+                        self.space_held = false;
+                    }
+                    self.capture_started = true;
+                    self.keep(byte);
                 }
             }
 
@@ -358,6 +490,12 @@ impl RequestId {
         }
     }
 
+    fn keep(&mut self, byte: u8) {
+        if self.captured.len() < framing::TO_EXTENSION_LIMIT {
+            self.captured.push(byte);
+        }
+    }
+
     fn key_is_id(&self) -> bool {
         let mut quoted = Vec::with_capacity(self.key.len() + 2);
         quoted.push(b'"');
@@ -391,12 +529,29 @@ fn too_large(id: Value) -> Value {
     )
 }
 
-/// Writes one message to a peer as a line.
+/// Writes one message to a peer as a line, within [`REPLY_WRITE_TIMEOUT`] of starting.
+///
+/// The bound is on the whole line rather than on each write, since a peer that takes a few bytes
+/// at a time would otherwise keep every write inside its own timeout and the line never finished.
 fn write_line(writer: &Mutex<UnixStream>, message: &Value) -> io::Result<()> {
     let mut line = serde_json::to_vec(message).map_err(io::Error::other)?;
     line.push(b'\n');
     let mut writer = locked(writer);
-    writer.write_all(&line)?;
+    let deadline = Instant::now() + REPLY_WRITE_TIMEOUT;
+    let mut rest = line.as_slice();
+    while !rest.is_empty() {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        writer.set_write_timeout(Some(left))?;
+        match writer.write(rest) {
+            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+            Ok(written) => rest = &rest[written..],
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
     writer.flush()
 }
 
@@ -418,6 +573,26 @@ mod tests {
         assert_eq!(read(br#"{"nested":{"id":99},"id":"ours"}"#), "ours");
         assert_eq!(read(br#"{"padding":0,"\u0069d":7}"#), 7);
         assert_eq!(read(br#"{"identity":1}"#), Value::Null);
+        assert_eq!(read(b"{\"id\": \t5 \r\n,\"method\":\"x\"}"), 5);
+        assert_eq!(read(br#"{"id":[1 ,  2]}"#), json!([1, 2]));
+        assert_eq!(read(br#"{"id":"a  b"}"#), "a  b");
+        assert_eq!(read(br#"{"id":1 2}"#), Value::Null);
+        assert_eq!(read(b"{\"id\":\x0c5}"), Value::Null);
+    }
+
+    /// The bounds on a connection that has not presented the secret are the ones the spec states,
+    /// since every test timing one is written against these constants and would pass at any value.
+    #[test]
+    fn a_connection_has_two_seconds_and_thirty_two_places_to_present_the_secret() {
+        assert_eq!(SECRET_TIMEOUT, Duration::from_secs(2));
+        assert_eq!(WAITING_LIMIT, 32);
+    }
+
+    /// The time a peer has to take a line is the one the spec states, since the test timing it is
+    /// written against this constant and would pass at any value.
+    #[test]
+    fn a_peer_has_five_seconds_to_take_a_line() {
+        assert_eq!(REPLY_WRITE_TIMEOUT, Duration::from_secs(5));
     }
 
     /// The public socket name stays absent until a listener is already accepting under its staged

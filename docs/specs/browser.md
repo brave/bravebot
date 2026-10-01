@@ -117,14 +117,21 @@ starting directory are the two things each can find without being told.
 
 The native host writes a new random secret into the socket's directory as it starts, readable by
 the account alone. A connection whose first line is not that secret is closed before anything it
-sent is forwarded.
+sent is forwarded. A connection that has not presented it within 2 seconds of being accepted is
+closed, however it spends them, and at most 32 connections wait to present it at once: one past that
+is closed as soon as it is accepted.
 
 **Why.** The confinement does not keep other processes off the socket. Every stdio server BraveBot
 starts has egress, and on macOS egress is what reaches a Unix socket, so any of them can connect.
 Only a process granted the directory can read the secret, and only the declaration naming it is
-granted it.
+granted it. Any of them can also open connections and never present the secret, and a host that
+waited on each without end would give every one a thread until it had none left for a session.
 
 `verified-by: bravebot_browser::relay::a_peer_without_the_secret_is_closed_and_nothing_it_sent_is_forwarded`
+`verified-by: bravebot_browser::relay::a_connection_that_does_not_present_the_secret_in_time_is_closed`
+`verified-by: bravebot_browser::relay::a_connection_trickling_bytes_without_the_secret_is_closed_in_time`
+`verified-by: bravebot_browser::relay::connections_waiting_for_the_secret_are_held_to_a_number`
+`verified-by: bravebot_browser::host::a_connection_has_two_seconds_and_thirty_two_places_to_present_the_secret`
 `verified-by: bravebot_browser::host::only_the_same_secret_matches`
 `verified-by: bravebot_browser::host::each_secret_is_new`
 
@@ -144,12 +151,17 @@ a manifest someone edited from handing the relay to a different extension.
 ### BROWSER-5: the socket exists while the extension is connected
 
 The native host runs from the extension's connect until its port closes, and removes the socket and
-the secret as it exits. While no extension is connected there is no socket.
+the secret as it exits. While no extension is connected there is no socket. One host serves the
+directory at a time: a host holds a lock on the directory's `lock` file for as long as it runs, and
+one that cannot take it exits before it touches the socket or the secret.
 
 **Why.** Brave owns the host's lifetime and nothing else can start it. A socket left behind would
-point a connecting server at a relay that is not there.
+point a connecting server at a relay that is not there. Two hosts starting together would each find
+no socket, each write its secret over the other's, and the first to exit would remove the files the
+other still serves.
 
 `verified-by: bravebot_browser::relay::the_socket_and_secret_go_when_the_extension_disconnects`
+`verified-by: bravebot_browser::relay::a_host_does_not_start_while_another_holds_the_lock`
 
 <a id="BROWSER-6"></a>
 ### BROWSER-6: a call with no extension connected fails at once
@@ -174,24 +186,38 @@ hold the turn on something only a person can fix.
 
 Several BraveBot sessions may be connected to one native host at once. The host gives each request
 an id unique across its connections before sending it to the extension, and hands each reply back
-only on the connection the request came in on, with the id that connection used.
+only on the connection the request came in on, with the id that connection used. A connection that
+does not take a line the host writes it within 5 seconds, a reply or an error, is closed, and the
+replies after it go on to theirs.
 
 **Why.** There is one extension and one native messaging port. Two sessions each numbering requests
-from 1 would otherwise receive each other's replies.
+from 1 would otherwise receive each other's replies. The host hands replies over on one thread in
+the order the extension answers, so a connection that stopped reading would otherwise hold every
+later reply to every other session.
 
 `verified-by: bravebot_browser::relay::each_reply_reaches_the_session_that_asked`
+`verified-by: bravebot_browser::relay::a_peer_that_stops_reading_holds_up_no_other_session`
+`verified-by: bravebot_browser::relay::a_peer_that_sends_lines_and_does_not_read_is_closed`
+`verified-by: bravebot_browser::host::a_peer_has_five_seconds_to_take_a_line`
 
 <a id="BROWSER-8"></a>
 ### BROWSER-8: no message to the extension exceeds the platform limit
 
 A message from the host to the extension is at most 1 MB, the limit native messaging sets, and a
-request that would exceed it is refused with an error under its own id and not sent. A message from
-the extension may be up to 64 MB, and a longer one ends the host.
+request that would exceed it is refused with an error under its own id and not sent. An id that is
+itself 1 MB or longer is not kept, and the refusal carries none. A message from the extension may
+be up to 64 MB, and a longer one ends the host.
 
 **Why.** Brave closes the port on a message over 1 MB, which disconnects every session at once.
+Keeping an id of any length would mean holding as much of a request as a peer cares to send, where
+the rest of it is drained unread; JSON-RPC answers a request whose id it could not read with no id.
 
 `verified-by: bravebot_browser::relay::a_request_over_the_limit_is_refused_and_never_reaches_the_extension`
 `verified-by: bravebot_browser::relay::a_request_far_over_the_limit_keeps_its_id_and_the_next_request`
+`verified-by: bravebot_browser::relay::a_request_whose_id_is_too_long_to_keep_is_refused_under_no_id`
+`verified-by: bravebot_browser::relay::a_request_padded_after_its_id_is_refused_under_that_id`
+`verified-by: bravebot_browser::relay::a_message_over_the_limit_from_the_extension_ends_the_host`
+`verified-by: bravebot_browser::framing::the_limits_are_one_megabyte_out_and_sixty_four_in`
 `verified-by: bravebot_browser::framing::a_message_over_the_limit_to_the_extension_is_refused_and_nothing_is_written`
 `verified-by: bravebot_browser::framing::a_length_over_the_limit_from_the_extension_is_an_error`
 `verified-by: bravebot_browser::framing::a_written_message_reads_back_as_itself`
@@ -213,6 +239,8 @@ pinned key fixes:
 
 It records the id in the socket's directory for the host to check, writes nothing else, changes no
 other host's manifest, and writes nothing at all for an id that is not 32 letters from `a` to `p`.
+A word it does not take, such as `--manifest-dir` with no directory after it, is answered with its
+usage, and nothing is written.
 
 **Why.** On macOS Brave reads Chrome's location rather than its own, so a manifest in a Brave
 directory there is never read. Chrome reads the same file, and `allowed_origins` is what keeps
@@ -222,16 +250,19 @@ Brave's own profile directory, and a channel other than stable has its own.
 `verified-by: bravebot_browser::relay::installing_writes_one_manifest_for_our_extension_alone`
 `verified-by: bravebot_browser::relay::installing_with_no_id_records_the_extension_in_this_repository`
 `verified-by: bravebot_browser::relay::installing_refuses_what_is_not_an_extension_id`
+`verified-by: bravebot_browser::relay::installing_with_a_flag_missing_its_value_prints_the_usage`
 `verified-by: bravebot_browser::install::the_manifest_goes_where_brave_reads_it`
 `verified-by: bravebot_browser::install::an_extension_id_is_32_letters_from_a_to_p`
 
 <a id="BROWSER-10"></a>
 ### BROWSER-10: the tool list is fixed, and a tool not on it is refused
 
-The MCP server offers the same list whether or not the extension is connected: `list_tabs`,
-`read_page`, `search_history` and `search_bookmarks`. Each calls the extension method of the same
-name with the tool's arguments. A call naming any other tool is refused by the server and nothing
-is sent to the extension. `read_page` names the page by its URL.
+The MCP server offers the same list whether or not the extension is connected:
+`get_platform_info`, `list_tabs`, `read_page`, `search_history` and `search_bookmarks`. Each calls
+the extension method of the same name with the tool's arguments. A call naming any other tool is
+refused by the server and nothing is sent to the extension. `read_page` names the page by its URL.
+`get_platform_info` returns the operating system and architecture Brave runs on, and nothing else,
+so a person can see the extension answer without it telling anything about them.
 
 **Why.** A person vouches for a server's tool list once and BraveBot records a digest of it. A list
 that changed with whether the extension was connected would be put to them again each time it did.
@@ -244,6 +275,7 @@ each call shows its arguments, and a URL is one a person can judge there where a
 `verified-by: bravebot_browser::tools::a_tool_is_found_by_its_exact_name`
 `verified-by: bravebot_browser::tools::every_tool_takes_an_object`
 `verified-by: bravebot_browser::tools::a_page_is_asked_for_by_its_url`
+`verified-by: by-construction (extension/tests/tools.test.mjs asserts that get_platform_info answers with the operating system and architecture alone, a field the browser adds besides them left out, and reaches no API but the platform's; it runs where the test under BROWSER-13 runs)`
 
 <a id="BROWSER-11"></a>
 ### BROWSER-11: a socket that exists is one that accepts
@@ -261,22 +293,27 @@ is refused, and would report that no extension is connected while one is.
 
 The extension asks Brave for the host by the name `install` gives its manifest, and answers exactly
 the methods the server's tools call, with one switch for each in its options. The `key` in its
-manifest fixes its id, and that id is the one `install` records given none.
+manifest fixes its id, and that id is the one `install` records given none. Every string in an answer
+is well formed: an unpaired surrogate is sent as U+FFFD.
 
 **Why.** The two halves are written in two languages and released together, and nothing at run time
 would say they disagreed: a tool the extension does not answer fails like a page that cannot be
 read, and an id the host was not installed for is refused like an extension it should not serve.
+JSON carries an unpaired surrogate as an escape the host refuses to parse, so an answer holding one
+would leave the call waiting out its timeout.
 
 `verified-by: bravebot_browser::extension::the_extension_answers_every_tool_the_server_offers_and_no_other`
 `verified-by: bravebot_browser::extension::the_extension_connects_to_the_host_install_names`
 `verified-by: bravebot_browser::extension::the_id_install_records_is_the_one_the_extensions_key_gives`
+`verified-by: by-construction (extension/tests/tools.test.mjs asserts that answers from list_tabs and read_page holding an unpaired surrogate reach JSON with no surrogate escape and with U+FFFD in its place; it runs where the test under BROWSER-13 runs)`
 
 <a id="BROWSER-13"></a>
 ### BROWSER-13: a page is read from the tab at exactly its URL
 
 `read_page` reads the open tab whose URL is the one asked for, character for character, and no
 other. Where no tab is at that URL it fails without running anything in any tab. It returns at most
-100,000 characters of the page's text and says whether it cut the page short. A page the browser
+100,000 characters of the page's text, never ending it on half a character, and says whether it
+cut the page short. A page the browser
 will not let an extension read, such as its own settings, is a failure saying so.
 
 **Why.** The URL is what the person saw in the question before the call. A tab whose URL only
@@ -285,16 +322,18 @@ resembles it is a different page, which could be one they would have said no to.
 `verified-by: by-construction (extension/tests/tools.test.mjs asserts each of the four against a fake chrome object that records every call, including that a URL no tab is at reaches no script; make check-extension runs it, and check-ui-build depends on that target, so the Front end CI job runs it on every change the classifier gives the ui area, which a change under extension/ is)`
 
 <a id="BROWSER-14"></a>
-### BROWSER-14: the searches start off, and a tool that is off touches nothing
+### BROWSER-14: only the platform check starts on, and a tool that is off touches nothing
 
-History and bookmark search start off, and listing and reading open tabs start on, until a person
-changes them in the extension's options. A call to a tool that is off is refused before the
-browser is asked anything. A history search covers all of history, and a search returns at most 100
-results.
+Only the platform check starts on. Listing and reading open tabs, and searching history and
+bookmarks, start off until a person turns them on in the extension's options. A call to a tool that
+is off is refused before the browser is asked anything. A history search covers all of history, and
+a search returns at most 100 results.
 
-**Why.** History and bookmarks reach everything a person has visited and saved, which is more than
-what they have open. The browser's history search covers the last day unless it is given a start
-time, which would answer a search of all of history with a day of it.
+**Why.** Every tool but the platform check reaches what a person has open, has visited or has
+saved, so none of them reads anything before the person has said it may. The platform check tells
+nothing about them, and is how they see the extension answer before turning anything on. The
+browser's history search covers the last day unless it is given a start time, which would answer a
+search of all of history with a day of it.
 
 `verified-by: by-construction (extension/tests/tools.test.mjs asserts the defaults, that a tool turned off reaches none of the browser's APIs, the start time and the bound on results; it runs where the test under BROWSER-13 runs)`
 
@@ -302,19 +341,22 @@ time, which would answer a search of all of history with a day of it.
 ### BROWSER-15: the extension keeps its port open while Brave runs
 
 The extension opens the native messaging port as it starts and as Brave starts, and opens it again
-within a minute of losing it.
+within a minute of losing it. A reply goes back on the port its request came in on, and never on a
+port opened since.
 
 **Why.** The port is what keeps the host, and so the socket, alive. An extension that opened it only
-when asked would leave no socket for a session to find.
+when asked would leave no socket for a session to find. A port opened since belongs to another host,
+which numbers its requests from 1 as well, so a reply reaching it could be taken for the answer to a
+request of its own and handed to a session that never asked for it.
 
-`verified-by: by-construction (extension/tests/background.test.mjs loads the real service worker against fake runtime, alarm and native-port events, and asserts it connects at load and on startup and reconnects on the one-minute alarm after a disconnect; make check-extension runs it, and check-ui-build depends on that target, so the Front end CI job runs it on every change the classifier gives the ui area, which a change under extension/ is)`
+`verified-by: by-construction (extension/tests/background.test.mjs loads the real service worker against fake runtime, alarm, storage, tab and native-port events; it asserts the worker connects at load and on startup and reconnects on the one-minute alarm after a disconnect, and that a request answered after its port closed and another opened reaches only its own port; make check-extension runs it, and check-ui-build depends on that target, so the Front end CI job runs it on every change the classifier gives the ui area, which a change under extension/ is)`
 
 ## Known costs
 
 - The secret in [BROWSER-3](#BROWSER-3) is only as private as the directory. Any process of the
   person's that can read it can use the relay, which is the same account boundary a keychain gives.
 - One Brave profile at a time. A second profile with the extension installed starts a second host,
-  which finds the first one's socket accepting and exits.
+  which finds the first one holding the lock and exits.
 - A confined server can connect to the socket only while it has egress. A declaration that withholds
   egress, where a future version allows one to, cannot reach the relay on macOS.
 - Linux with Landlock ABI 9 was reasoned about and not measured.

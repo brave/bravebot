@@ -23,6 +23,11 @@ pub const SECRET: &str = "secret";
 /// The one extension id the native host serves, written by `install`.
 pub const EXTENSION: &str = "extension";
 
+/// The file a native host holds a lock on for as long as it runs, so one host serves the directory
+/// at a time. Left in place when the host exits, since a lock file removed while another process
+/// opens it would let two hosts each hold a lock on a different file.
+pub const LOCK: &str = "lock";
+
 /// The directory the native host uses, or `None` where there is no home to put it under.
 pub fn host_directory() -> Option<PathBuf> {
     host_directory_for(
