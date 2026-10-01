@@ -676,9 +676,10 @@ edited afterwards changes the next conversation.
 - Rules are not applied to a plan run. A plan card names the `deny` and `ask` rules the
   conversation holds, so you can check the steps against them.
 
-A banner above the transcript says what a settings file wrote that is not in force: an entry
-that is not a rule, a project's `allow` rule, or a named directory. **Permissions…**, in the
-header's **More** menu, lists the rules in force. They cannot be revoked there, since they are changed in their file.
+A folded note at the top of the conversation says what a settings file wrote that is not in
+force: an entry that is not a rule, a project's `allow` rule, or a named directory.
+**Permissions…**, in the header's **More** menu, lists the rules in force. They cannot be
+revoked there, since they are changed in their file.
 
 **File watches…**, in the header's **More** menu, lists up to eight live file watches, with their
 remaining lifetime and Stop controls. Add a project file or ask the agent to watch one.
