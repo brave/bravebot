@@ -6483,9 +6483,9 @@ fn a_checkout_is_removed_unless_something_was_done_in_it() {
     );
 }
 
-/// CHECKOUT-13. A checkout's candidates are the paths inside it a file effect landed on: named
-/// where a planner typed the name, counted where only a reference gave it, and never a path
-/// outside the checkout.
+/// CHECKOUT-13. A checkout's candidates are the names a planner typed for files it wrote inside it,
+/// placed by their spelling, and a count of the writes it made through a reference. A name outside
+/// the checkout is not recorded, and a link is recorded by its own name and not its target's.
 #[test]
 fn a_checkout_records_the_paths_written_in_it() {
     use bravebot_agent::workspace::Candidates;
@@ -6498,26 +6498,55 @@ fn a_checkout_records_the_paths_written_in_it() {
     let info = made.checkout().unwrap();
     assert_eq!(info.candidates(), Candidates::default());
 
-    info.record_effect(&made.root().join("src/new.rs"), true);
-    info.record_effect(&made.root().join("README"), false);
-    info.record_effect(&made.root().join("vendor/theirs.js"), false);
-    info.record_effect(&made.root().join("vendor").join("theirs.js"), false);
-    info.record_effect(&made.root().join("README"), true);
-    info.record_effect(&workspace.root().join("README"), true);
-    info.record_effect(&state.path.join("elsewhere.txt"), true);
+    info.record_typed("src/new.rs");
+    assert!(
+        info.worked_in(),
+        "a write by a typed name did not keep the checkout"
+    );
+    info.record_typed("./README");
+    info.record_typed("README");
+    info.record_typed("notes/../README");
+    info.record_typed(&info.path().join("docs/whole.md").to_string_lossy());
+    info.record_through_a_reference();
+    info.record_through_a_reference();
 
     assert!(info.worked_in());
+    let named: std::collections::BTreeSet<String> = ["README", "docs/whole.md", "src/new.rs"]
+        .map(String::from)
+        .into();
     assert_eq!(
         info.candidates(),
         Candidates {
-            named: vec!["README".to_string(), "src/new.rs".to_string()],
-            referenced: 1,
+            named,
+            referenced: 2,
         }
     );
 
+    #[cfg(unix)]
+    {
+        let root = info.path();
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::fs::create_dir_all(root.join("vendor")).unwrap();
+        std::fs::write(root.join("vendor/HIDDEN.js"), "theirs").unwrap();
+        std::os::unix::fs::symlink("../vendor/HIDDEN.js", root.join("docs/link")).unwrap();
+        info.record_typed("docs/link");
+        let named = info.candidates().named;
+        assert!(
+            named.contains("docs/link"),
+            "the link was not recorded: {named:?}"
+        );
+        assert!(
+            !named.iter().any(|name| name.contains("HIDDEN")),
+            "the link's target was recorded: {named:?}"
+        );
+    }
+
     let idle = idle.checkout().unwrap();
-    idle.record_effect(&workspace.root().join("README"), true);
-    idle.record_effect(&made.root().join("README"), true);
+    idle.record_typed(&workspace.root().join("README").to_string_lossy());
+    idle.record_typed(&state.path.join("elsewhere.txt").to_string_lossy());
+    idle.record_typed(&info.path().join("README").to_string_lossy());
+    idle.record_typed("../README");
+    idle.record_typed(".");
     assert!(!idle.worked_in(), "a write outside the checkout kept it");
     assert_eq!(idle.candidates(), Candidates::default());
 }

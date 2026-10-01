@@ -22642,7 +22642,8 @@ fn a_checkout_nothing_was_done_in_is_removed_when_its_delegate_ends() {
 
 /// CHECKOUT-13, CHECKOUT-18. Beside the report the planner is told the paths written in a kept
 /// checkout: by name where the delegate typed it, in a write, an edit or a redirection, by count
-/// where it wrote through a reference, and that the checkout's status was not read.
+/// where it wrote through a reference, and that the checkout's status was not read. A redirection
+/// that left no file is not named.
 #[test]
 fn a_kept_checkout_is_named_with_the_paths_written_in_it() {
     let scratch = Scratch::new("checkout-candidates");
@@ -22683,6 +22684,7 @@ fn a_kept_checkout_is_named_with_the_paths_written_in_it() {
                     r#"{"path":"README","old_text":"committed","new_text":"edited"}"#,
                 ),
                 tool_request("run", r#"{"command":"echo printed > printed.txt"}"#),
+                tool_request("run", r#"{"command":"echo lost > absent/lost.txt"}"#),
                 reply_with("wrote four"),
             ],
         ),
@@ -22709,6 +22711,7 @@ fn a_kept_checkout_is_named_with_the_paths_written_in_it() {
 
     let made = checkouts_under(&home.path);
     assert_eq!(made.len(), 1, "the checkout was not kept");
+    assert!(!made[0].join("absent").exists());
     for (path, held) in [
         ("vendor/NAME-NOBODY-VOUCHED-FOR.js", "ours"),
         ("notes/out.txt", "written"),
@@ -22732,8 +22735,9 @@ fn a_kept_checkout_is_named_with_the_paths_written_in_it() {
     );
     assert!(
         told.iter().any(|body| body.contains(
-            "The driver recorded writes there to `README`, `notes/out.txt` and `printed.txt`, \
-             and to 1 file named only by a reference. Its status could not be read"
+            "The driver recorded writes there to `README`, `notes/out.txt` and `printed.txt`. It \
+             also recorded 1 write through a reference, and does not name the file a reference \
+             holds. The checkout's status could not be read"
         )),
         "the planner was not told the paths written in the checkout"
     );

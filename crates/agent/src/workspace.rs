@@ -327,17 +327,16 @@ pub struct CheckoutInfo {
     /// (CHECKOUT-15).
     worked_in: AtomicBool,
     listed: Arc<Mutex<Vec<PathBuf>>>,
-    /// Each path relative to the checkout that a file effect landed on, and whether the planner
-    /// typed its name (CHECKOUT-13).
-    effects: Mutex<std::collections::BTreeMap<String, bool>>,
+    written: Mutex<Candidates>,
 }
 
-/// The paths that could come back from a checkout, as the driver recorded them (CHECKOUT-13).
+/// The writes in a checkout, as the driver recorded them (CHECKOUT-13).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Candidates {
-    /// Those whose names the planner typed, relative to the checkout and sorted.
-    pub named: Vec<String>,
-    /// How many were written only through a reference, whose name no planner was shown.
+    /// The names a planner typed for files it wrote in the checkout, relative to it.
+    pub named: std::collections::BTreeSet<String>,
+    /// How many writes went through a reference. Only the planner's own count: where they landed
+    /// is a name out of a directory nobody vouched for (WRITE-4), and nothing here compares it.
     pub referenced: usize,
 }
 
@@ -385,15 +384,23 @@ impl CheckoutInfo {
         self.worked_in.load(Ordering::SeqCst)
     }
 
-    /// Record a file effect on `path`, where it lands inside the checkout (CHECKOUT-13).
+    /// Record a write to `typed`, the name a planner gave the file, where it names one inside the
+    /// checkout (CHECKOUT-13).
     ///
-    /// `typed` says the planner wrote the name itself. A name given through a reference came out
-    /// of a directory nobody vouched for (WRITE-4), so it is counted and never named.
-    pub fn record_effect(&self, path: &Path, typed: bool) {
-        let Some(landed) = destination(path) else {
-            return;
-        };
-        let Ok(inside) = landed.strip_prefix(&self.path) else {
+    /// Placed by its spelling alone. Following a link to where the file landed would record the
+    /// link's target, a name the planner never typed and the repository supplied.
+    pub fn record_typed(&self, typed: &str) {
+        let mut placed = self.path.clone();
+        for component in Path::new(typed).components() {
+            match component {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    placed.pop();
+                }
+                other => placed.push(other),
+            }
+        }
+        let Ok(inside) = placed.strip_prefix(&self.path) else {
             return;
         };
         let relative: Vec<String> = inside
@@ -404,24 +411,27 @@ impl CheckoutInfo {
             return;
         }
         self.mark_worked_in();
-        if let Ok(mut effects) = self.effects.lock() {
-            *effects.entry(relative.join("/")).or_default() |= typed;
-        }
+        self.written
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .named
+            .insert(relative.join("/"));
+    }
+
+    /// Record a write a planner made through a reference (CHECKOUT-13).
+    pub fn record_through_a_reference(&self) {
+        self.mark_worked_in();
+        self.written
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .referenced += 1;
     }
 
     pub fn candidates(&self) -> Candidates {
-        let Ok(effects) = self.effects.lock() else {
-            return Candidates::default();
-        };
-        let named: Vec<String> = effects
-            .iter()
-            .filter(|(_, typed)| **typed)
-            .map(|(path, _)| path.clone())
-            .collect();
-        Candidates {
-            referenced: effects.len() - named.len(),
-            named,
-        }
+        self.written
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// End the checkout: remove it unless the record shows something was done in it. Its rules go
@@ -3010,15 +3020,20 @@ impl Workspace {
             source: self.clone(),
             worked_in: AtomicBool::new(false),
             listed: self.checkouts.clone(),
-            effects: Mutex::default(),
+            written: Mutex::default(),
         }));
         Ok(delegate)
     }
 
-    /// Record a file effect on `path` in the checkout this workspace is, where it is one.
-    pub(crate) fn record_effect(&self, path: &Path, typed: bool) {
-        if let Some(checkout) = &self.checkout {
-            checkout.record_effect(path, typed);
+    /// Record a write in the checkout this workspace is, where it is one: by the name the planner
+    /// typed, or as one more write through a reference where it gave none.
+    pub(crate) fn record_write(&self, typed: Option<&str>) {
+        let Some(checkout) = &self.checkout else {
+            return;
+        };
+        match typed {
+            Some(typed) => checkout.record_typed(typed),
+            None => checkout.record_through_a_reference(),
         }
     }
 
