@@ -1,0 +1,684 @@
+//! A checkout for a delegate: HEAD's tree written as a detached linked worktree of the repository,
+//! by the driver and with no program started
+//! ([CHECKOUT-5](../../../../docs/specs/checkouts.md#CHECKOUT-5)).
+//!
+//! What is refused before anything is written is
+//! [CHECKOUT-4](../../../../docs/specs/checkouts.md#CHECKOUT-4). Whether the trust map lets the
+//! repository be opened at all is the workspace's to decide, as it is for a read.
+
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
+use gix_hash::{Kind as HashKind, ObjectId};
+use gix_object::bstr::ByteSlice;
+use gix_object::tree::EntryKind;
+use gix_object::{Kind, TreeRef};
+
+use super::status::{EXTENDED_SKIP_WORKTREE, FLAG_EXTENDED, Stat, boolean};
+use super::{Declined, Repository, TREE_DEPTH, join, parse_config, read_if_present};
+
+/// How much of a tree one checkout writes.
+#[derive(Debug, Clone, Copy)]
+pub struct Bound {
+    /// The most files one checkout writes, and the most directories.
+    pub files: usize,
+    pub bytes: u64,
+}
+
+impl Bound {
+    /// The bound every checkout is held to.
+    pub const FIXED: Bound = Bound {
+        files: 100_000,
+        bytes: 2 << 30,
+    };
+}
+
+/// A checkout that was made.
+#[derive(Debug)]
+pub struct Made {
+    /// The commit whose tree it holds.
+    pub commit: ObjectId,
+    /// Repository-relative paths a deny rule covers, which were not written.
+    pub left_out: Vec<String>,
+}
+
+/// Why no checkout was made.
+///
+/// Each sentence is worded here and carries only the name the caller passes, never text read out
+/// of the repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refused {
+    /// `read_git` would not open the repository.
+    Declined(Declined),
+    /// git would write a file other than as it is stored.
+    Converts(Conversion),
+    /// An attributes file a deny rule covers, so whether it has git convert a file is unknown.
+    AttributesWithheld,
+    /// An attributes file the map does not trust, whose contents are therefore not read.
+    AttributesUntrusted,
+    TooManyFiles,
+    TooManyBytes,
+    Name(Name),
+    /// The checkout's directory, or its entry under `worktrees/`, already exists.
+    Taken,
+    /// A file or directory could not be written.
+    Unwritable,
+}
+
+/// What would have git write a file other than as it is stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Conversion {
+    Filter,
+    Ident,
+    Encoding,
+    EolCrlf,
+    AutoCrlf,
+    CoreEol,
+    /// A `text` attribute where the line ending written is CRLF, as it is on Windows unless
+    /// `core.eol` is `lf`.
+    Text,
+}
+
+/// An entry name git would refuse to check out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Name {
+    Dot,
+    Separator,
+    DotGit,
+    /// Not UTF-8, so no permission rule can be held against it.
+    NotUtf8,
+    /// Two paths the file system takes for one.
+    Folded,
+    /// A name Windows cannot hold as written, checked on Windows alone.
+    Windows,
+}
+
+impl From<Declined> for Refused {
+    fn from(declined: Declined) -> Self {
+        Refused::Declined(declined)
+    }
+}
+
+impl Refused {
+    /// The sentence a delegate's caller reads, for a repository it called `named`.
+    pub fn describe(&self, named: &str) -> String {
+        let made = "No checkout was made";
+        match self {
+            Refused::Declined(declined) => format!(
+                "{made}, because read_git would not open the repository: {}",
+                declined.describe(named)
+            ),
+            Refused::Converts(conversion) => {
+                let what = match conversion {
+                    Conversion::Filter => "a filter attribute",
+                    Conversion::Ident => "the ident attribute",
+                    Conversion::Encoding => "a working-tree-encoding attribute",
+                    Conversion::EolCrlf => "the attribute eol=crlf",
+                    Conversion::AutoCrlf => "core.autocrlf",
+                    Conversion::CoreEol => "core.eol=crlf",
+                    Conversion::Text => "a text attribute, which writes CRLF here",
+                };
+                format!(
+                    "{made}: {named} sets {what}, so git would write a file other than as it is \
+                     stored."
+                )
+            }
+            Refused::AttributesWithheld => format!(
+                "{made}: a deny rule covers a .gitattributes file in {named}, so whether git \
+                 would convert a file is unknown."
+            ),
+            Refused::AttributesUntrusted => format!(
+                "{made}: the trust map does not trust a .gitattributes file in {named}, so what \
+                 it sets was not read."
+            ),
+            Refused::TooManyFiles => {
+                format!(
+                    "{made}: HEAD in {named} holds more files or directories than a checkout \
+                     writes."
+                )
+            }
+            Refused::TooManyBytes => {
+                format!("{made}: HEAD in {named} holds more bytes than a checkout writes.")
+            }
+            Refused::Name(name) => {
+                let what = match name {
+                    Name::Dot => "an entry named . or ..",
+                    Name::Separator => "an entry whose name holds a path separator",
+                    Name::DotGit => "an entry git takes for .git",
+                    Name::NotUtf8 => "a path that is not UTF-8",
+                    Name::Folded => "two paths this file system takes for one",
+                    Name::Windows => "an entry whose name Windows cannot hold as written",
+                };
+                format!("{made}: HEAD in {named} holds {what}, which git refuses to check out.")
+            }
+            Refused::Taken => {
+                format!("{made}: the checkout's directory or its entry in {named}/.git exists.")
+            }
+            Refused::Unwritable => format!("{made}: writing the checkout of {named} failed."),
+        }
+    }
+}
+
+/// The keys of `.git/config` that decide how a file is written. `config.worktree` is not read:
+/// it is the main worktree's, and a linked worktree has its own.
+struct Settings {
+    autocrlf: bool,
+    eol: Option<Vec<u8>>,
+    symlinks: bool,
+}
+
+impl Settings {
+    fn read(git_dir: &Path) -> Result<Settings, Refused> {
+        let mut settings = Settings {
+            // Git for Windows sets core.autocrlf in a system file this reader does not open.
+            autocrlf: cfg!(windows),
+            eol: None,
+            symlinks: cfg!(unix),
+        };
+        let bytes = read_if_present(&git_dir.join("config"))?.unwrap_or_default();
+        let entries = parse_config(&bytes).ok_or(Declined::Format)?;
+        for entry in entries {
+            if entry.subsection.is_some() {
+                continue;
+            }
+            let value = entry.value.as_deref();
+            let flag = || boolean(value).ok_or(Refused::Declined(Declined::Format));
+            match (entry.section.as_str(), entry.key.as_str()) {
+                ("core", "attributesfile") | ("attr", "tree") => {
+                    return Err(Declined::Elsewhere.into());
+                }
+                ("core", "autocrlf") => {
+                    settings.autocrlf =
+                        !value.is_some_and(|v| v.eq_ignore_ascii_case(b"input")) && flag()?;
+                }
+                ("core", "eol") => settings.eol = value.map(<[u8]>::to_ascii_lowercase),
+                ("core", "symlinks") => settings.symlinks = flag()?,
+                _ => {}
+            }
+        }
+        if settings.autocrlf {
+            return Err(Refused::Converts(Conversion::AutoCrlf));
+        }
+        if settings.eol.as_deref() == Some(b"crlf") {
+            return Err(Refused::Converts(Conversion::CoreEol));
+        }
+        Ok(settings)
+    }
+
+    /// Whether a `text` attribute has git write CRLF.
+    fn text_converts(&self) -> bool {
+        cfg!(windows) && self.eol.as_deref() != Some(b"lf")
+    }
+}
+
+/// The first conversion an attributes file sets on any line, whatever path the line matches.
+///
+/// Every line counts, including a macro's definition, so a pattern no file in the tree matches
+/// still refuses the checkout: telling which files a pattern matches is not needed to refuse.
+fn conversion(bytes: &[u8], text_converts: bool) -> Option<Conversion> {
+    let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
+    for line in bytes.split(|b| *b == b'\n') {
+        let line = line.trim_start();
+        if line.is_empty() || line[0] == b'#' {
+            continue;
+        }
+        let mut tokens = line
+            .split(|b| matches!(b, b' ' | b'\t' | b'\r'))
+            .filter(|t| !t.is_empty());
+        // A quoted pattern may hold a space, so on its line every token is read as an attribute.
+        if !line.starts_with(b"\"") {
+            tokens.next();
+        }
+        for token in tokens {
+            let (name, value) = match token.find_byte(b'=') {
+                Some(at) => (&token[..at], Some(&token[at + 1..])),
+                None => (token, None),
+            };
+            let found = match name {
+                b"filter" => Some(Conversion::Filter),
+                b"ident" => Some(Conversion::Ident),
+                b"working-tree-encoding" => Some(Conversion::Encoding),
+                b"eol" if value.is_some_and(|v| v.eq_ignore_ascii_case(b"crlf")) => {
+                    Some(Conversion::EolCrlf)
+                }
+                b"text" if text_converts => Some(Conversion::Text),
+                b"crlf" if text_converts && value != Some(b"input") => Some(Conversion::Text),
+                _ => None,
+            };
+            if found.is_some() {
+                return found;
+            }
+        }
+    }
+    None
+}
+
+/// Whether git's checks take `name` for `.git`: in any case, as NTFS reads `git~1` or a name
+/// ending in dots and spaces or holding a stream, and as HFS+ reads one holding a character it
+/// ignores.
+fn is_dot_git(name: &[u8]) -> bool {
+    let ntfs = |stem: &[u8]| {
+        name.len() >= stem.len()
+            && name[..stem.len()].eq_ignore_ascii_case(stem)
+            && name[stem.len()..]
+                .iter()
+                .take_while(|b| **b != b':')
+                .all(|b| matches!(b, b'.' | b' '))
+    };
+    ntfs(b".git") || ntfs(b"git~1") || opens_as(name, ".git")
+}
+
+/// Whether a file system that ignores case, or HFS+, which also ignores some characters, opens
+/// `name` as `file`.
+fn opens_as(name: &[u8], file: &str) -> bool {
+    let Ok(name) = std::str::from_utf8(name) else {
+        return false;
+    };
+    let kept: String = name
+        .chars()
+        .filter(|c| {
+            !matches!(
+                *c as u32,
+                0x200c..=0x200f | 0x202a..=0x202e | 0x206a..=0x206f | 0xfeff
+            )
+        })
+        .collect();
+    kept.eq_ignore_ascii_case(file)
+}
+
+/// Whether Windows holds `name` as written, as Git for Windows checks before writing one: no
+/// character it reserves, which takes in `:` and so a drive prefix, no dot or space at the end,
+/// and no device name.
+fn windows_holds(name: &[u8]) -> bool {
+    if name.iter().any(|b| *b < 0x20 || b"<>:\"|?*".contains(b)) {
+        return false;
+    }
+    if matches!(name.last(), Some(b'.' | b' ')) {
+        return false;
+    }
+    let stem = name.split(|b| *b == b'.').next().unwrap_or_default();
+    let stem = stem.trim_ascii_end();
+    let numbered = |device: &[u8]| {
+        stem.len() == 4 && stem[..3].eq_ignore_ascii_case(device) && matches!(stem[3], b'1'..=b'9')
+    };
+    let device = ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"]
+        .iter()
+        .any(|device| stem.eq_ignore_ascii_case(device.as_bytes()));
+    !(device || numbered(b"COM") || numbered(b"LPT"))
+}
+
+/// Why git would refuse to check out an entry named `name`, with Windows' rules where `windows`.
+pub(super) fn check_name(name: &[u8], windows: bool) -> Result<(), Name> {
+    if name.is_empty() || name == b"." || name == b".." {
+        return Err(Name::Dot);
+    }
+    if name.contains(&b'/') || name.contains(&0) || (windows && name.contains(&b'\\')) {
+        return Err(Name::Separator);
+    }
+    if is_dot_git(name) {
+        return Err(Name::DotGit);
+    }
+    if std::str::from_utf8(name).is_err() {
+        return Err(Name::NotUtf8);
+    }
+    if windows && !windows_holds(name) {
+        return Err(Name::Windows);
+    }
+    Ok(())
+}
+
+/// One entry of HEAD's tree that is not a tree.
+struct Planned {
+    path: String,
+    kind: EntryKind,
+    id: ObjectId,
+    left_out: bool,
+}
+
+/// Every non-tree entry of `tree`, with each refusal decided before anything is written.
+fn plan(
+    repo: &Repository,
+    tree: ObjectId,
+    withheld: &dyn Fn(&str) -> bool,
+    trusted: &dyn Fn(&str) -> bool,
+    settings: &Settings,
+    bound: Bound,
+) -> Result<Vec<Planned>, Refused> {
+    let mut planned = Vec::new();
+    let mut bytes: u64 = 0;
+    // Counted because a tree may name one subtree many times, and each is walked again.
+    let mut dirs = 0usize;
+    let mut pending = vec![(tree, String::new(), 0usize)];
+    while let Some((tree, prefix, depth)) = pending.pop() {
+        if depth > TREE_DEPTH {
+            return Err(Declined::Unreadable.into());
+        }
+        let data = repo.object(&tree, Kind::Tree)?;
+        let listed =
+            TreeRef::from_bytes(&data, HashKind::Sha1).map_err(|_| Declined::Unreadable)?;
+        let mut names = HashSet::new();
+        for entry in listed.entries {
+            let name: &[u8] = entry.filename;
+            check_name(name, cfg!(windows)).map_err(Refused::Name)?;
+            if !names.insert(name) {
+                return Err(Refused::Name(Name::Folded));
+            }
+            let path = join(&prefix, std::str::from_utf8(name).unwrap_or_default());
+            let kind = entry.mode.kind();
+            let id = entry.oid.to_owned();
+            if kind == EntryKind::Tree {
+                dirs += 1;
+                if dirs > bound.files {
+                    return Err(Refused::TooManyFiles);
+                }
+                pending.push((id, path, depth + 1));
+                continue;
+            }
+            if planned.len() >= bound.files {
+                return Err(Refused::TooManyFiles);
+            }
+            if kind != EntryKind::Commit {
+                let size = match repo.objects.header(&id)? {
+                    Some((Kind::Blob, size)) => size,
+                    _ => return Err(Declined::Unreadable.into()),
+                };
+                bytes = bytes.saturating_add(size);
+                if bytes > bound.bytes {
+                    return Err(Refused::TooManyBytes);
+                }
+            }
+            let left_out = withheld(&path);
+            if opens_as(name, ".gitattributes")
+                && kind != EntryKind::Link
+                && kind != EntryKind::Commit
+            {
+                if left_out {
+                    return Err(Refused::AttributesWithheld);
+                }
+                if !trusted(&path) {
+                    return Err(Refused::AttributesUntrusted);
+                }
+                let blob = repo.object(&id, Kind::Blob)?;
+                if let Some(found) = conversion(&blob, settings.text_converts()) {
+                    return Err(Refused::Converts(found));
+                }
+            }
+            planned.push(Planned {
+                path,
+                kind,
+                id,
+                left_out,
+            });
+        }
+    }
+    planned.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(planned)
+}
+
+/// Make a checkout of the repository at `git_dir` at `target`, a directory that must not exist
+/// yet, registered as `worktrees/<id>`. `withheld` says, for a repository-relative path, whether
+/// a deny rule covers it; such a path is not written. `trusted` says whether the map trusts it;
+/// a `.gitattributes` file it does not trust refuses the checkout without being read.
+///
+/// The repository is one [`super::survey`] has passed, as for [`Repository::open`]. Nothing is
+/// written until every refusal is decided, except that two paths the file system takes for one
+/// are found by writing them, and a checkout refused then is removed with its `worktrees/` entry.
+pub fn make(
+    git_dir: &Path,
+    target: &Path,
+    id: &str,
+    withheld: &dyn Fn(&str) -> bool,
+    trusted: &dyn Fn(&str) -> bool,
+    bound: Bound,
+) -> Result<Made, Refused> {
+    let repo = Repository::open(git_dir)?;
+    let settings = Settings::read(git_dir)?;
+    if let Some(bytes) = read_if_present(&git_dir.join("info").join("attributes"))?
+        && let Some(found) = conversion(&bytes, settings.text_converts())
+    {
+        return Err(Refused::Converts(found));
+    }
+    let commit = repo.head()?;
+    let tree = repo.info(&commit)?.tree;
+    let planned = plan(&repo, tree, withheld, trusted, &settings, bound)?;
+
+    let worktrees = git_dir.join("worktrees");
+    if std::fs::symlink_metadata(&worktrees).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        return Err(Declined::Linked.into());
+    }
+    let admin = worktrees.join(id);
+    create_dir(target).map_err(|e| taken_or(e, Refused::Taken))?;
+    let claimed = std::fs::create_dir_all(&worktrees)
+        .map_err(|_| Refused::Unwritable)
+        .and_then(|()| create_dir(&admin).map_err(|e| taken_or(e, Refused::Taken)));
+    if let Err(refused) = claimed {
+        let _ = std::fs::remove_dir_all(target);
+        return Err(refused);
+    }
+    let made = Writing {
+        repo: &repo,
+        target,
+        settings: &settings,
+        dirs: HashSet::new(),
+    };
+    if let Err(refused) = made.write(&planned, &admin, commit) {
+        let _ = std::fs::remove_dir_all(target);
+        let _ = std::fs::remove_dir_all(&admin);
+        return Err(refused);
+    }
+    Ok(Made {
+        commit,
+        left_out: planned
+            .into_iter()
+            .filter(|p| p.left_out)
+            .map(|p| p.path)
+            .collect(),
+    })
+}
+
+/// Remove a checkout [`make`] made: its directory and its `worktrees/<id>` entry, and nothing else.
+///
+/// A link is never followed. A `worktrees` directory that is one is left alone, as [`make`] would
+/// not have written through it, and so is an `id` that is not a plain name.
+pub fn remove(git_dir: &Path, target: &Path, id: &str) -> Result<(), Refused> {
+    let plain = !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric());
+    let worktrees = git_dir.join("worktrees");
+    if !plain
+        || std::fs::symlink_metadata(&worktrees).is_ok_and(|meta| meta.file_type().is_symlink())
+    {
+        return Err(Declined::Linked.into());
+    }
+    let gone = |path: &Path| match std::fs::remove_dir_all(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(Refused::Unwritable),
+        _ => Ok(()),
+    };
+    gone(target)?;
+    gone(&worktrees.join(id))
+}
+
+fn taken_or(error: std::io::Error, taken: Refused) -> Refused {
+    if error.kind() == std::io::ErrorKind::AlreadyExists {
+        taken
+    } else {
+        Refused::Unwritable
+    }
+}
+
+/// A directory created rather than adopted, readable by its owner alone.
+fn create_dir(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    let builder = {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = std::fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder
+    };
+    #[cfg(not(unix))]
+    let builder = std::fs::DirBuilder::new();
+    builder.create(path)
+}
+
+/// A file created rather than adopted, readable by its owner alone, and runnable by its owner
+/// where `executable`, since the owner's execute bit is the one git compares.
+fn create_file(path: &Path, executable: bool, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, if executable { 0o700 } else { 0o600 });
+    #[cfg(not(unix))]
+    let _ = executable;
+    options.open(path)?.write_all(bytes)
+}
+
+/// A link to `target`, which carries its own path's label, so whether one can be made does not
+/// rest on what it holds: a NUL, which no link holds, is written as `_`, and on Windows bytes that
+/// are not UTF-8 as U+FFFD.
+#[cfg(unix)]
+fn create_link(target: &[u8], path: &Path) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt as _;
+    let target: Vec<u8> = target
+        .iter()
+        .map(|b| if *b == 0 { b'_' } else { *b })
+        .collect();
+    std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(&target), path)
+}
+
+#[cfg(windows)]
+fn create_link(target: &[u8], path: &Path) -> std::io::Result<()> {
+    let target = String::from_utf8_lossy(target).replace('\0', "_");
+    std::os::windows::fs::symlink_file(target, path)
+}
+
+struct Writing<'a> {
+    repo: &'a Repository,
+    target: &'a Path,
+    settings: &'a Settings,
+    /// Directories this checkout created, as the tree spells them.
+    dirs: HashSet<String>,
+}
+
+/// One index entry: a path, the mode the tree gives it and the stat data of what was written.
+struct Row<'a> {
+    path: &'a str,
+    mode: u32,
+    id: ObjectId,
+    stat: Stat,
+    skip_worktree: bool,
+}
+
+impl Writing<'_> {
+    fn write(mut self, planned: &[Planned], admin: &Path, commit: ObjectId) -> Result<(), Refused> {
+        let folded = || Refused::Name(Name::Folded);
+        let mut rows = Vec::with_capacity(planned.len());
+        for entry in planned {
+            let mode = match entry.kind {
+                EntryKind::BlobExecutable => 0o100755,
+                EntryKind::Link => 0o120000,
+                EntryKind::Commit => 0o160000,
+                _ => 0o100644,
+            };
+            let mut row = Row {
+                path: &entry.path,
+                mode,
+                id: entry.id,
+                stat: Stat::default(),
+                skip_worktree: entry.left_out,
+            };
+            if entry.left_out {
+                rows.push(row);
+                continue;
+            }
+            self.parents(&entry.path)?;
+            let path = self.target.join(&entry.path);
+            match entry.kind {
+                EntryKind::Commit => create_dir(&path).map_err(|e| taken_or(e, folded()))?,
+                EntryKind::Link if self.settings.symlinks => {
+                    let blob = self.repo.object(&entry.id, Kind::Blob)?;
+                    create_link(&blob, &path).map_err(|e| taken_or(e, folded()))?;
+                }
+                kind => {
+                    let blob = self.repo.object(&entry.id, Kind::Blob)?;
+                    let executable = kind == EntryKind::BlobExecutable;
+                    create_file(&path, executable, &blob).map_err(|e| taken_or(e, folded()))?;
+                }
+            }
+            if entry.kind != EntryKind::Commit {
+                let meta = std::fs::symlink_metadata(&path).map_err(|_| Refused::Unwritable)?;
+                row.stat = Stat::of(&meta);
+            }
+            rows.push(row);
+        }
+
+        let unwritable = |_| Refused::Unwritable;
+        let checkout = absolute(self.target)?;
+        let entry = absolute(admin)?;
+        std::fs::write(admin.join("HEAD"), format!("{}\n", commit.to_hex())).map_err(unwritable)?;
+        std::fs::write(admin.join("commondir"), "../..\n").map_err(unwritable)?;
+        std::fs::write(admin.join("gitdir"), format!("{checkout}/.git\n")).map_err(unwritable)?;
+        std::fs::write(admin.join("index"), index(&rows)?).map_err(unwritable)?;
+        create_file(
+            &self.target.join(".git"),
+            false,
+            format!("gitdir: {entry}\n").as_bytes(),
+        )
+        .map_err(unwritable)
+    }
+
+    /// Create each directory above `path` not yet created, refusing one something already holds.
+    fn parents(&mut self, path: &str) -> Result<(), Refused> {
+        let mut at = 0;
+        while let Some(slash) = path[at..].find('/') {
+            let dir = &path[..at + slash];
+            if self.dirs.insert(dir.to_owned()) {
+                create_dir(&self.target.join(dir))
+                    .map_err(|e| taken_or(e, Refused::Name(Name::Folded)))?;
+            }
+            at += slash + 1;
+        }
+        Ok(())
+    }
+}
+
+/// A path written into git's files, which name each other by absolute path.
+fn absolute(path: &Path) -> Result<String, Refused> {
+    let path: PathBuf = std::path::absolute(path).map_err(|_| Refused::Unwritable)?;
+    let text = path.to_str().ok_or(Refused::Unwritable)?;
+    Ok(if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text.to_owned()
+    })
+}
+
+/// `.git/index` for `rows`: version 2, or 3 where an entry carries skip-worktree, which is an
+/// extended flag.
+fn index(rows: &[Row<'_>]) -> Result<Vec<u8>, Refused> {
+    let extended = rows.iter().any(|row| row.skip_worktree);
+    let mut out = b"DIRC".to_vec();
+    out.extend_from_slice(&(if extended { 3u32 } else { 2 }).to_be_bytes());
+    out.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+    for row in rows {
+        let start = out.len();
+        for word in row.stat.words(row.mode) {
+            out.extend_from_slice(&word.to_be_bytes());
+        }
+        out.extend_from_slice(row.id.as_bytes());
+        let mut flags = row.path.len().min(0xfff) as u16;
+        if row.skip_worktree {
+            flags |= FLAG_EXTENDED;
+        }
+        out.extend_from_slice(&flags.to_be_bytes());
+        if row.skip_worktree {
+            out.extend_from_slice(&EXTENDED_SKIP_WORKTREE.to_be_bytes());
+        }
+        out.extend_from_slice(row.path.as_bytes());
+        let padded = (out.len() - start + 8) & !7;
+        out.resize(start + padded, 0);
+    }
+    let mut hasher = gix_hash::hasher(HashKind::Sha1);
+    hasher.update(&out);
+    let sum = hasher.try_finalize().map_err(|_| Refused::Unwritable)?;
+    out.extend_from_slice(sum.as_bytes());
+    Ok(out)
+}

@@ -4,17 +4,19 @@ What a reviewer holds a pull request against. Every rule here is one a person ha
 decide.
 
 Nothing here restates a rule a tool already enforces or could: formatting, lints, clause numbering,
-the lockfiles, an em-dash, an attribution marker, a `declassify` outside the gates. Those belong in
-`make check`, `make check-spec`, `make check-npm`, `make check-deps` and the security scan, and a
-rule that can be written as one of those checks is a bug against this directory rather than an
-entry in it.
+the lockfiles, an em-dash, an attribution marker, a `declassify` outside the gates, a regex engine,
+an exception in `deny.toml` with no reason, a first-person correction in a commit message. Those
+belong in `make check`, `make check-spec`, `make check-npm`, `make check-deps`,
+`make check-narration` and the security scan, and a rule that can be written as one of those
+checks is a bug against this directory rather than an entry in it.
 
 | Read | For |
 |---|---|
 | [best-practices/specs.md](best-practices/specs.md) | prose a clause is allowed to be |
 | [best-practices/tests.md](best-practices/tests.md) | what a test is named, what it covers, and proving it fails first |
-| [best-practices/writing.md](best-practices/writing.md) | comments, and what is never written anywhere |
-| [best-practices/dependencies.md](best-practices/dependencies.md) | what a new crate has to be worth, and why a regex is not free |
+| [best-practices/writing.md](best-practices/writing.md) | what a comment is for |
+| [best-practices/dependencies.md](best-practices/dependencies.md) | what a new crate has to be worth |
+| [best-practices/ui.md](best-practices/ui.md) | what a change to the desktop UI is held to before it lands |
 
 The review pass over the rule this repository exists for is
 [development/reviewing-for-the-rule.md](development/reviewing-for-the-rule.md): the four

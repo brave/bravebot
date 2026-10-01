@@ -584,6 +584,17 @@ fn assess(
     prelude: Option<Prelude>,
 ) -> Result<(Plan, bool), Unstarted> {
     let plan = planned(declaration, environment).map_err(Unstarted::Unplanned)?;
+    if let Plan::Stdio {
+        directory: Some(directory),
+        ..
+    } = &plan
+        && let Some(repository) = repository_holding(directory)
+    {
+        return Err(Unstarted::Unplanned(in_a_repository(
+            directory,
+            &repository,
+        )));
+    }
     if let Some(reason) = refused(managed, &plan) {
         return Err(Unstarted::Refused(reason));
     }
@@ -594,6 +605,60 @@ fn assess(
     let covered = approvals.approves(&digest)
         || (projects.contains(project) && !approvals.changed(alias, &digest));
     Ok((plan, covered))
+}
+
+/// The repository git opens when it is run in `directory`, if it opens one: the nearest of it and the
+/// directories above it that holds a `.git`, or that is laid out as a repository itself.
+///
+/// A server may write its directory, and git runs commands a repository names, unconfined: in its
+/// configuration and hooks, and in files of its work tree a relative `core.hooksPath` points at.
+pub(crate) fn repository_holding(directory: &Path) -> Option<PathBuf> {
+    let directory = directory
+        .canonicalize()
+        .unwrap_or_else(|_| directory.to_path_buf());
+    directory
+        .ancestors()
+        .find(|level| {
+            level.join(".git").symlink_metadata().is_ok()
+                || (level.join("HEAD").is_file()
+                    && level.join("objects").is_dir()
+                    && level.join("refs").is_dir())
+        })
+        .map(Path::to_path_buf)
+}
+
+/// A new directory under the system temporary directory, which no repository holds, for a test to
+/// declare a server's directory in. The scratch directory under `target/` is inside this checkout.
+#[cfg(test)]
+pub(crate) fn outside_any_repository(name: &str) -> PathBuf {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or_default();
+    // Named for this process and moment, and made with create_dir so a name another run holds is
+    // refused rather than shared.
+    // nosemgrep: rust.lang.security.temp-dir.temp-dir
+    let path = std::env::temp_dir().join(format!("bravebot-{name}-{}-{stamp}", std::process::id()));
+    std::fs::create_dir(&path).expect("a directory of its own under the temporary directory");
+    let path = path
+        .canonicalize()
+        .expect("the directory just made resolves");
+    assert_eq!(
+        repository_holding(&path),
+        None,
+        "the temporary directory is inside a repository"
+    );
+    path
+}
+
+/// Why a server is given no directory inside `repository`.
+pub(crate) fn in_a_repository(directory: &Path, repository: &Path) -> String {
+    t!(
+        mcp_dir_in_a_repository,
+        path = shown(&directory.display().to_string()),
+        repository = shown(&repository.display().to_string())
+    )
+    .to_string()
 }
 
 /// What a session started in `project` holds for a server its settings request, before anybody
@@ -2073,6 +2138,99 @@ mod tests {
                 .to_string()
             ]
         );
+    }
+
+    /// SERVERS-10: a server may write its directory, and git runs, unconfined, the commands a
+    /// repository's configuration and hooks name. So a directory git would open a repository from
+    /// is refused before anybody is asked: one holding `.git`, one below a work tree whose `.git`
+    /// is a file, one inside a bare repository, and a `.git` itself. A directory in no repository
+    /// is not, so the refusals are of the repository and not of declaring a directory.
+    #[test]
+    fn a_declared_directory_holding_a_repository_is_refused() {
+        let root = outside_any_repository("cli-servers-repository");
+        let home = root.join("home");
+        let project = root.join("project");
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(project.join(".bravebot")).expect("project");
+        let bin = root.join("bin");
+        let program = installed(&bin, "weather-mcp");
+
+        let holding = root.join("holding");
+        std::fs::create_dir_all(holding.join(".git")).expect("a repository");
+        let linked = root.join("linked");
+        std::fs::create_dir_all(linked.join("src")).expect("a work tree");
+        std::fs::write(
+            linked.join(".git"),
+            "gitdir: /elsewhere/.git/worktrees/linked\n",
+        )
+        .expect("a linked work tree's .git");
+        let bare = root.join("bare.git");
+        for directory in ["objects", "refs", "hooks"] {
+            std::fs::create_dir_all(bare.join(directory)).expect("a bare repository");
+        }
+        std::fs::write(bare.join("HEAD"), "ref: refs/heads/main\n").expect("HEAD");
+        let plain = root.join("plain");
+        std::fs::create_dir_all(&plain).expect("a directory in no repository");
+
+        let declaring = |directory: &Path| {
+            Declaration::stdio(
+                words(&[program.to_str().unwrap()]),
+                Vec::new(),
+                Some(directory.display().to_string()),
+            )
+            .unwrap()
+        };
+        let assessed = |directory: &Path| {
+            assess(
+                "weather",
+                &declaring(directory),
+                &project,
+                &Approvals::default(),
+                &Projects::default(),
+                &Managed::default(),
+                &|_| None,
+                Prelude::current(),
+            )
+        };
+        for (directory, repository) in [
+            (holding.clone(), &holding),
+            (holding.join(".git"), &holding),
+            (linked.join("src"), &linked),
+            (bare.join("hooks"), &bare),
+        ] {
+            assert_eq!(
+                assessed(&directory).err(),
+                Some(Unstarted::Unplanned(in_a_repository(
+                    &directory, repository
+                ))),
+                "{}",
+                directory.display()
+            );
+        }
+        assert!(
+            !matches!(assessed(&plain), Err(Unstarted::Unplanned(_))),
+            "a directory in no repository was refused"
+        );
+
+        let mut declarations = Declarations::default();
+        declarations.insert("weather", &declaring(&holding));
+        std::fs::write(mcp::declarations_file(&home), declarations.to_text()).expect("mcp.json");
+        let settled = settled(&home, &project, Asking::Person, true, true, "1\n", &bin);
+        assert!(settled.plans.is_empty());
+        assert_eq!(settled.screen, "", "somebody was asked about it");
+        assert_eq!(
+            settled.notes,
+            vec![
+                t!(
+                    servers_not_reached,
+                    alias = "weather",
+                    reason = in_a_repository(&holding, &holding)
+                )
+                .to_string()
+            ]
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

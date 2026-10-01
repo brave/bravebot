@@ -382,7 +382,7 @@ The `checker` and `worker` kinds hold it ([DELEGATE-4](../delegation.md#DELEGATE
 of either kind, or a turn addressed to one, is offered `lsp` wherever the session holds it. A
 `reader` does not.
 
-[CHECKOUT-20](../checkouts.md#CHECKOUT-20), which nothing yet builds, offers no `lsp` to a checker
+[CHECKOUT-20](../checkouts.md#CHECKOUT-20) offers no `lsp` to a checker
 or a worker working in a checkout of its own, since the session's servers are rooted at the working
 directory.
 

@@ -1,0 +1,355 @@
+/* The right-hand column: what the session touched, the folder it works in, and one turn's audit.
+   One head, one row height and one empty state for every list in it, so the column reads as a
+   single inspector rather than as five panels that grew up separately. */
+
+.context { display: flex; flex-direction: column; overflow: hidden; }
+.context-content { flex: 1; min-height: 0; overflow-y: auto; }
+.context-content[hidden] { display: none; }
+.context-files .context-content { display: flex; flex-direction: column; overflow: hidden; }
+.context-files .context-content[hidden] { display: none; }
+
+/* ------------------------------------------------------------------ head */
+
+.context-head {
+  flex: none;
+  padding: 0 var(--leo-spacing-xl);
+  border-bottom: 1px solid var(--border-hairline);
+}
+.inspector-title {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  min-height: var(--titlebar);
+  font: var(--type-body-strong);
+  color: var(--ink-primary);
+}
+.inspector-title strong { flex: 1; min-width: 0; font-weight: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inspector-title .drawer-close { margin-right: calc(-1 * var(--leo-spacing-s)); }
+.inspector-tabs {
+  display: block;
+  margin-bottom: -1px;
+  --leo-tab-item-font: var(--type-meta-strong);
+}
+
+/* ---------------------------------------------------------------- panels */
+
+.panel { flex: none; border-bottom: 1px solid var(--border-hairline); }
+/* Turned off from the bar. `display: none` rather than a fold: this is not a movement somebody
+   should watch, and it takes the panel out of the tab order and the accessibility tree with it. */
+.panel.off { display: none; }
+.panel-collapse {
+  --leo-collapse-summary-padding: var(--leo-spacing-m) var(--leo-spacing-xl);
+  --leo-collapse-summary-color: var(--ink-secondary);
+  --leo-collapse-summary-color-hover: var(--ink-primary);
+}
+.panel-title {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  width: 100%;
+  font: var(--type-meta-strong);
+}
+.panel-title .count {
+  margin-left: auto;
+  min-width: var(--icon-hero);
+  padding: 0 var(--leo-spacing-s);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  color: var(--ink-tertiary);
+  font: var(--type-caption-strong);
+  text-align: center;
+}
+.panel-inner { padding: 0 var(--leo-spacing-m) var(--leo-spacing-m); }
+
+.panel-empty {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--leo-spacing-m);
+  margin: 0;
+  padding: 0 var(--leo-spacing-m) var(--leo-spacing-s);
+  color: var(--ink-tertiary);
+  font: var(--type-caption);
+  --leo-icon-size: var(--icon-meta);
+}
+.panel-empty leo-icon { flex: none; }
+
+/* ------------------------------------------------------------------ rows */
+
+.todos, .files, .confined-list { list-style: none; margin: 0; padding: 0; }
+
+.todos li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--leo-spacing-m);
+  padding: var(--leo-spacing-s) var(--leo-spacing-m);
+  color: var(--ink-secondary);
+  font: var(--type-meta);
+}
+.todos .marker {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--icon-meta);
+  height: calc(var(--icon-meta) + var(--leo-spacing-xs));
+  color: var(--ink-tertiary);
+  --leo-icon-size: var(--icon-meta);
+  --leo-progressring-size: var(--icon-caption);
+  --leo-progressring-stroke-width: var(--leo-spacing-xs);
+  --leo-progressring-color: var(--accent-text);
+}
+.todos li.done { color: var(--ink-tertiary); }
+.todos li.done .todo-text { text-decoration: line-through; }
+.todos li.done .marker { color: var(--status-success); }
+.todos li.active { color: var(--ink-primary); font: var(--type-meta-strong); }
+
+.file-row, .confined-row {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  min-height: var(--row-h);
+  padding: 0 var(--leo-spacing-m);
+  border-radius: var(--radius-control);
+}
+.file-row:hover { background: var(--surface-hover); }
+.file-row .tag { flex: none; margin-left: auto; --leo-label-font-text: var(--type-caption); }
+.row-icon { flex: none; color: var(--ink-tertiary); --leo-icon-size: var(--icon-meta); }
+
+.context-link {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  min-width: 0;
+  min-height: var(--row-h);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.context-link:focus-visible { outline: none; border-radius: var(--radius-control); box-shadow: var(--shadow-focus); }
+.file-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--type-code);
+}
+/* A line from the record, which has no outcome behind it. */
+.file-row.from-record .file-path { color: var(--ink-secondary); }
+
+.confined-row { align-items: flex-start; padding-block: var(--leo-spacing-s); }
+.confined-row .row-icon { margin-top: var(--leo-spacing-xs); color: var(--status-info); }
+.confined-text { display: flex; flex-direction: column; min-width: 0; }
+.confined-list .origin { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--type-code); color: var(--ink-primary); }
+.confined-list .detail { font: var(--type-caption); color: var(--ink-tertiary); }
+
+/* ------------------------------------------------------------- file tree */
+
+.files-panel.off { display: none; }
+.files-panel { flex: 1; min-height: 0; display: flex; padding: var(--leo-spacing-m) var(--leo-spacing-m) var(--leo-spacing-l); }
+.files-panel .tree { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+
+.tree-tools {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-xs);
+  padding: 0 0 var(--leo-spacing-s) var(--leo-spacing-m);
+}
+/* The last few folders, with the tooltip carrying the whole path. Clipping from the front with
+   `direction: rtl` would move a leading `/` to the other end — a path that reads wrong is worse
+   than one that is short. */
+.tree-root {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+}
+.tree-root .crumb { flex: none; }
+.tree-root .crumb:last-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ink-secondary); }
+.tree-root .crumb + .crumb::before { content: '/'; padding: 0 var(--leo-spacing-s); color: var(--ink-tertiary); }
+.tree-tools .tree-tool { flex: none; }
+
+.tree-search { display: flex; align-items: center; gap: var(--leo-spacing-s); flex: none; margin: 0 0 var(--leo-spacing-m) var(--leo-spacing-m); }
+.tree-search .tree-find { flex: 1; min-width: 0; }
+
+.tree-note, .tree-status {
+  margin: var(--leo-spacing-m) var(--leo-spacing-m) 0;
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+}
+.tree-status { display: flex; align-items: center; gap: var(--leo-spacing-m); }
+.tree-spinner { display: inline-flex; --leo-progressring-size: var(--icon-caption); }
+.tree-problem { flex: none; margin: 0 0 var(--leo-spacing-m); }
+
+.tree-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.tree-list { list-style: none; margin: 0; padding: 0; }
+
+/* The indent rides on `--depth`, set per row from React, so a deep row is still one flex box the
+   full width of the panel: nesting the padding instead would push the name off the right-hand edge
+   and ellipsise it against a box nobody can see. */
+.tree-row, .search-result {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-s);
+  width: 100%;
+  min-height: var(--hit);
+  padding: 0 var(--leo-spacing-m) 0 calc(var(--leo-spacing-m) + var(--depth, 0) * var(--leo-spacing-l));
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--ink-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.tree-row:hover, .search-result:hover { background: var(--surface-hover); }
+.tree-row:focus-visible, .search-result:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.tree-row:active, .search-result:active { background: var(--surface-selected); }
+
+/* The chevron's box is held even on a file, so names line up whether or not the row opens. */
+.tree-row .chevron {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--icon-caption);
+  color: var(--ink-tertiary);
+  transition: transform var(--motion-fast);
+  --leo-icon-size: var(--icon-caption);
+}
+.tree-row .chevron.open { transform: rotate(90deg); }
+
+/* A fixed box so every name in the folder starts at the same x. */
+.tree-glyph {
+  flex: none;
+  width: var(--icon-control);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-tertiary);
+  --leo-icon-size: var(--icon-control);
+}
+.tree-glyph.code { color: var(--accent-quiet); }
+.tree-glyph.data { color: var(--status-warning); }
+.tree-glyph.markup { color: var(--confine); }
+.tree-glyph.doc { color: var(--ink-secondary); }
+.tree-glyph.image { color: var(--status-success); }
+.tree-glyph.media { color: var(--status-error); }
+.tree-glyph.archive { color: var(--accent-text); }
+
+.tree-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--type-code);
+}
+.tree-name mark {
+  border-radius: var(--radius-chip);
+  background: var(--status-warning-bg);
+  color: inherit;
+  font-weight: 600;
+}
+
+/* Both of these are said in the panel rather than in a dialog: they are about one folder, and the
+   folder is on screen. */
+.tree-empty, .tree-more {
+  margin: 0;
+  padding: var(--leo-spacing-s) var(--leo-spacing-m);
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+}
+.tree-list .tree-empty { padding-left: calc(var(--leo-spacing-3xl) + var(--leo-spacing-l)); }
+
+/* ----------------------------------------------------------------- audit */
+
+.audit-inspector {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  padding: 0 var(--leo-spacing-xl) var(--leo-spacing-xl);
+  font: var(--type-meta);
+  color: var(--ink-primary);
+}
+.audit-inspector .inspector-title { margin: 0 calc(-1 * var(--leo-spacing-xl)) var(--leo-spacing-m); padding: 0 var(--leo-spacing-l); border-bottom: 1px solid var(--border-hairline); }
+.audit-status { color: var(--ink-secondary); }
+.audit-inspector p { margin: var(--leo-spacing-m) 0; }
+.audit-retention { color: var(--status-warning); }
+
+/* One event after another down a rail, the dot on it saying whether the policy let it through. */
+.audit-timeline {
+  position: relative;
+  list-style: none;
+  margin: var(--leo-spacing-l) 0;
+  padding: 0 0 0 var(--leo-spacing-2xl);
+}
+.audit-timeline::before {
+  content: '';
+  position: absolute;
+  top: var(--leo-spacing-m);
+  bottom: var(--leo-spacing-m);
+  left: var(--leo-spacing-s);
+  border-left: 1px solid var(--border-strong);
+}
+.audit-event { position: relative; padding-bottom: var(--leo-spacing-xl); font: var(--type-meta); }
+.audit-event:last-child { padding-bottom: 0; }
+.audit-dot {
+  position: absolute;
+  top: var(--leo-spacing-xs);
+  left: calc(var(--leo-spacing-xs) - var(--leo-spacing-2xl));
+  width: var(--leo-spacing-m);
+  height: var(--leo-spacing-m);
+  border-radius: var(--radius-pill);
+  background: var(--surface-panel);
+  border: 2px solid var(--ink-tertiary);
+}
+.audit-refusal .audit-dot { background: var(--status-error); border-color: var(--status-error); }
+.audit-sequence { font: var(--type-caption); color: var(--ink-tertiary); }
+.audit-refusal .audit-sequence { color: var(--status-error-ink); }
+.audit-event strong { display: block; margin-top: var(--leo-spacing-xs); font: var(--type-meta-strong); }
+.audit-labels {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--leo-spacing-xs) var(--leo-spacing-l);
+  margin: var(--leo-spacing-m) 0;
+  font: var(--type-meta);
+}
+.audit-labels dt { color: var(--ink-secondary); }
+.audit-labels dd { margin: 0; }
+.audit-evidence, .audit-all {
+  --leo-collapse-summary-padding: var(--leo-spacing-s) 0;
+  --leo-collapse-summary-color: var(--ink-secondary);
+  --leo-collapse-summary-color-hover: var(--ink-primary);
+  --leo-collapse-icon-size: var(--icon-meta);
+}
+.audit-collapse-title { font: var(--type-meta-strong); }
+.audit-event pre {
+  margin: var(--leo-spacing-s) 0 0;
+  padding: var(--leo-spacing-m);
+  border-radius: var(--radius-control);
+  background: var(--surface-sunken);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: var(--type-code);
+}
+.audit-all { display: block; margin: var(--leo-spacing-xl) 0; }
+
+@media (pointer: coarse) {
+  .audit-close { min-width: 44px; min-height: 44px; }
+}
+
+@media (forced-colors: active) {
+  .panel-title .count, .audit-dot { border: 1px solid CanvasText; }
+  .tree-name mark { background: Highlight; color: HighlightText; }
+}

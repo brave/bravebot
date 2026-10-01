@@ -6,12 +6,16 @@ governs:
   - crates/agent/src/agents.rs
   - crates/agent/src/delegate.rs
   - crates/agent/src/git.rs
+  - crates/agent/src/git/checkout.rs
   - crates/agent/src/scratch.rs
   - crates/agent/src/tools.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/turn.rs
   - crates/core/src/delegate.rs
+  - crates/core/src/file_authority.rs
+  - crates/core/src/policy.rs
   - crates/core/src/trust.rs
-documented-by: none (gap: a page on giving a delegate a checkout, owed once one can be made)
+documented-by: none (gap: a page on giving a delegate a checkout, owed until the design is built)
 ---
 
 ## Scope
@@ -25,8 +29,12 @@ the commit the repository has checked out (HEAD), which the driver makes for one
 specs use the word for the person's own clone of a project. Here that is always called the
 working directory, and a checkout is always one a delegate was given.
 
-Nothing in this file is built. It is a design, written to be agreed before the work starts, and
-every clause says so.
+Part of this file is built. It is a design, written to be agreed before the work starts, and each
+clause says how much of it is built. A spawn can ask for a checkout ([CHECKOUT-1](#CHECKOUT-1)),
+the driver makes it ([CHECKOUT-4](#CHECKOUT-4), [CHECKOUT-5](#CHECKOUT-5)), the delegate works in
+it ([CHECKOUT-7](#CHECKOUT-7)), and a checkout nothing was done in is removed
+([CHECKOUT-15](#CHECKOUT-15)). Bringing work back, a definition asking for a checkout, keeping
+checkouts across a resume and the commands that list them are not built.
 
 **A checkout is not a sandbox.** It moves where a delegate's file tools reach and where its
 programs start. A program it runs is as unconfined as any other ([sandboxing.md](sandboxing.md)),
@@ -49,7 +57,9 @@ failure the other one caused. A worker that stops part-way leaves its edits in t
 and a rewind puts back what the file tools wrote and nothing a formatter or code generator it ran
 wrote ([SESSION-19](sessions.md#SESSION-19)).
 
-A definition's `isolation:` key is not read ([MEMORY-7](definition-memory.md#MEMORY-7)).
+A spawn can ask for a checkout ([CHECKOUT-1](#CHECKOUT-1)). A definition's `isolation:` key is not
+read ([MEMORY-7](definition-memory.md#MEMORY-7)). Nothing brings a checkout's work back into the
+working directory, and a checkout a delegate wrote in stays where it is until a person removes it.
 
 ## Asking for one
 
@@ -64,9 +74,10 @@ person could approve it on its own: "this delegate's file tools work in a new ch
 
 Under `each`, every delegate the call starts is given a checkout of its own.
 
-Nothing builds this yet.
+Built.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory`
+`verified-by: bravebot_agent::turn::a_spawn_asking_for_a_checkout_it_may_not_have_starts_nothing`
 
 <a id="CHECKOUT-2"></a>
 ### CHECKOUT-2: a definition may ask for a checkout, and a later definition cannot take one away
@@ -98,7 +109,7 @@ separation. Loading it without one would put work its author meant to keep apart
 tree. Its checkout holds HEAD, where Claude Code's is branched, by default, from the default
 branch.
 
-Nothing builds this yet.
+Nothing builds this yet. Only a spawn can ask.
 
 `verified-by: none`
 
@@ -117,9 +128,12 @@ checkout starts reads that checkout, which is the tree the delegate that started
 linked worktree, which [GIT-8](tools/read-git.md#GIT-8) declines in the person's tree and which
 [CHECKOUT-12](#CHECKOUT-12) builds only for the driver's own record of one.
 
-Nothing builds this yet.
+Built. A delegate in a checkout runs with the checkout as its workspace, so the delegates it starts
+share it.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::a_spawn_asking_for_a_checkout_it_may_not_have_starts_nothing`
+`verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_is_refused_another`
+`verified-by: bravebot_agent::workspace::a_checkout_is_not_made_from_a_checkout`
 
 ## Making one
 
@@ -134,19 +148,33 @@ worktree is one of those.
 It is also refused where git would write a file differently from the stored blob: a `filter`,
 `ident` or `working-tree-encoding` attribute, `eol=crlf`, `core.autocrlf=true` or `core.eol=crlf`,
 and on Windows a `text` attribute unless `core.eol=lf`. These are read from the `.gitattributes`
-files in HEAD's tree, from `info/attributes` and from the repository's own configuration, and they
-decide only whether a checkout is refused. The global and system configuration are not read, as a
-status does not read them ([GIT-10](tools/read-git.md#GIT-10)), so on Windows, where Git for
-Windows sets `core.autocrlf` in the system file, a checkout is refused unless the repository's own
-configuration sets it to `false`.
+files in HEAD's tree, in whatever case each is named, as a file system that ignores case opens it,
+from `info/attributes` and from the repository's own `config`, and they decide only whether a
+checkout is refused. `config.worktree` is not read: it is the main worktree's, and git in a linked
+worktree reads that worktree's own. Every line of an attributes file counts, whichever paths
+its pattern matches. A `.gitattributes` file a deny rule covers, or one the map does not trust,
+refuses the checkout without being read. Its contents carry its path's label
+([GIT-3](tools/read-git.md#GIT-3)), so deciding from them where that label is not trusted would be
+the driver branching on untrusted content. Configuration naming an attributes file elsewhere
+through `core.attributesFile` or `attr.tree` refuses it too, as a status declines it. The global
+and system configuration are not read, as a status does not read them
+([GIT-10](tools/read-git.md#GIT-10)), so on Windows, where Git for Windows sets `core.autocrlf` in
+the system file, a checkout is refused unless the repository's own configuration sets it to
+`false`.
 
-It is refused where HEAD's tree holds more files or more bytes than a fixed bound the driver sets.
-The sizes are read from the object store's own headers, before any file is written.
+It is refused where HEAD's tree holds more than 100,000 files, more than 100,000 directories or
+more than 2 GiB, a bound the driver fixes. Directories count because a tree may name one subtree
+many times, and each name is walked. The sizes are read from the object store's own headers, before
+any file is written and before an attributes file is read.
 
 It is refused where the tree holds an entry named `.` or `..`, an entry whose name holds a
 separator, an entry git's own checks take for `.git` (in any case, as NTFS reads `git~1` or a name
-ending in a dot or a space, or as HFS+ reads one holding a character it ignores), or two paths the
-file system would take for one.
+ending in a dot or a space, or as HFS+ reads one holding a character it ignores), a path that is
+not UTF-8, which no permission rule can be held against, or two paths the file system would take
+for one, which takes in a tree naming one entry twice. On Windows it is also refused for a name
+Git for Windows refuses: one holding a control character or one of `<>:"|?*`, which takes in a
+drive prefix such as `C:x`, one ending in a dot or a space, or a device name such as `CON` or
+`LPT1`.
 
 Each refusal says which of these it was.
 
@@ -160,11 +188,26 @@ git would not have written. A repository using LFS therefore gets no checkout.
 
 **Why the entry names.** git refuses to check out a tree holding these. A nested `.git` would be a
 repository whose configuration the person's own git reads, and two paths folded to one name would
-leave one file written over another and two rules for one path ([CHECKOUT-8](#CHECKOUT-8)).
+leave one file written over another and two rules for one path ([CHECKOUT-8](#CHECKOUT-8)). On
+Windows a path joined onto a drive prefix replaces the checkout's own path.
 
-Nothing builds this yet.
+Built, and a spawn is refused where a checkout is.
 
-`verified-by: none`
+`verified-by: bravebot_agent::workspace::a_checkout_is_made_only_of_a_repository_read_git_would_open`
+`verified-by: bravebot_agent::git::an_attribute_or_setting_git_converts_by_refuses_the_checkout`
+`verified-by: bravebot_agent::git::an_attribute_git_writes_a_file_as_stored_by_is_accepted`
+`verified-by: bravebot_agent::git::an_attributes_file_a_deny_rule_covers_refuses_the_checkout`
+`verified-by: bravebot_agent::git::an_attributes_file_the_map_does_not_trust_refuses_the_checkout_unread`
+`verified-by: bravebot_agent::workspace::an_attributes_file_the_map_does_not_trust_refuses_a_checkout`
+`verified-by: bravebot_agent::git::a_tree_past_the_bound_refuses_the_checkout`
+`verified-by: bravebot_agent::git::a_name_git_refuses_to_check_out_refuses_the_checkout`
+`verified-by: bravebot_agent::git::two_paths_the_file_system_takes_for_one_refuse_the_checkout`
+`verified-by: bravebot_agent::git::a_tree_naming_an_entry_twice_refuses_the_checkout`
+`verified-by: bravebot_agent::git::a_name_windows_cannot_hold_is_refused_on_windows_alone`
+`verified-by: bravebot_agent::git::directories_count_against_the_file_bound`
+`verified-by: bravebot_agent::git::an_attributes_file_past_the_byte_bound_is_not_read`
+`verified-by: bravebot_agent::git::an_attributes_file_named_in_another_case_is_taken_for_one`
+`verified-by: bravebot_agent::git::a_setting_in_config_worktree_does_not_refuse_the_checkout`
 
 <a id="CHECKOUT-5"></a>
 ### CHECKOUT-5: a checkout is HEAD's tree written by the driver, and nothing is started to write it
@@ -172,7 +215,9 @@ Nothing builds this yet.
 No program is started to make a checkout: not git, and nothing a hook, `core.fsmonitor` or the
 configuration names. The driver writes HEAD's tree file by file. A file keeps mode `100644` or
 `100755`. A symbolic link is written as one where `core.symlinks` would have git write one, and as
-a file holding its target otherwise. A submodule's entry becomes an empty directory, as git leaves
+a file holding its target otherwise. A link's target carries its own path's label, so whether the
+link can be written does not rest on it: a NUL, which no link holds, is written as `_`, and on
+Windows bytes that are not UTF-8 as U+FFFD. A submodule's entry becomes an empty directory, as git leaves
 a submodule nobody initialised.
 
 A path a deny rule covers ([PERM-7](permissions.md#PERM-7), [GIT-4](tools/read-git.md#GIT-4)) is
@@ -186,6 +231,11 @@ in the checkout neither reports it removed nor commits its removal. Every byte o
 driver's own: two paths, a commit id, and the index of a tree the map trusts. No branch is made and
 no ref under `refs/` changes. A person's own git, and a line a person approved running git, work in
 the checkout as in any worktree, and `git worktree list` shows it.
+
+A checkout whose directory or `worktrees/<id>/` entry already exists is refused, and what is there
+is left as it was. A `worktrees` directory that is a link is refused before anything is written,
+as the entry would be written wherever the link points. Two paths the file system takes for one are
+found as the second is written, and a checkout refused while writing is removed with its entry.
 
 Each checkout takes a number of its own, `c1`, `c2` and on through the session, which a resume
 keeps. A delegate's number will not do: it is a path from the turn
@@ -202,9 +252,20 @@ never reads a ref under `worktrees/`, and the entry changes nothing a read of th
 opens. What a program in a checkout later commits is in the repository the two share, and
 [CHECKOUT-12](#CHECKOUT-12) labels it.
 
-Nothing builds this yet.
+Built. The writing returns the paths it left out, and the delegate is told them
+([CHECKOUT-7](#CHECKOUT-7)). The session numbers its checkouts from 1. A resume does not keep the
+numbers, since no session record holds a checkout yet ([CHECKOUT-15](#CHECKOUT-15)).
 
-`verified-by: none`
+`verified-by: bravebot_agent::git::a_checkout_writes_heads_tree_as_a_detached_linked_worktree`
+`verified-by: bravebot_agent::git::git_reads_the_checkout_as_a_clean_detached_worktree`
+`verified-by: bravebot_agent::git::a_path_a_deny_rule_covers_is_left_out_and_marked_skip_worktree`
+`verified-by: bravebot_agent::workspace::a_file_a_deny_rule_covers_is_left_out_of_a_checkout`
+`verified-by: bravebot_agent::git::a_checkout_starts_no_program_the_repository_names`
+`verified-by: bravebot_agent::git::a_checkout_where_one_exists_is_refused_and_leaves_it_alone`
+`verified-by: bravebot_agent::git::a_refusal_while_writing_removes_only_what_the_checkout_made`
+`verified-by: bravebot_agent::git::a_worktrees_link_declines_the_checkout`
+`verified-by: bravebot_agent::git::a_link_target_holding_a_nul_is_written_with_an_underscore`
+`verified-by: bravebot_agent::workspace::each_checkout_is_a_numbered_workspace_under_the_state_directory`
 
 <a id="CHECKOUT-6"></a>
 ### CHECKOUT-6: a checkout lives under the state directory, keyed by the workspace
@@ -234,9 +295,11 @@ distrust a path inside `.git` and close `read_git` for the whole repository
 search and `git status` of the person's has to skip, and build tools in it walking up the tree
 would find the person's own configuration.
 
-Nothing builds this yet.
+Built where the session has a state directory. A session that keeps no record, or has no state
+directory, is refused a checkout and told so: the system temporary directory variant is not built.
+No test asks from a session that has none.
 
-`verified-by: none`
+`verified-by: bravebot_agent::workspace::each_checkout_is_a_numbered_workspace_under_the_state_directory`
 
 ## Working in one
 
@@ -267,9 +330,13 @@ holds only what the driver wrote into it from a `.git` the map trusts in full, a
 carries the label the same path has in the working directory ([CHECKOUT-8](#CHECKOUT-8)), so the
 reach brings no file into the session that nobody has an answer about.
 
-Nothing builds this yet.
+Built. The overlap refusals are made before anything is created. The delegate is told the commit,
+that changes not committed are not in it, and the paths left out. The answer to the spawn names the
+commit.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory`
+`verified-by: bravebot_agent::workspace::each_checkout_is_a_numbered_workspace_under_the_state_directory`
+`verified-by: bravebot_agent::workspace::a_checkout_is_refused_where_it_would_overlap_a_tree_the_session_opened`
 
 <a id="CHECKOUT-8"></a>
 ### CHECKOUT-8: a file in a checkout is labelled as the same path in the working directory is
@@ -295,9 +362,17 @@ rule over `<path>` ([GIT-3](tools/read-git.md#GIT-3)), and when a checkout is ma
 `<path>` holds exactly those bytes. With all of `.git` trusted ([CHECKOUT-4](#CHECKOUT-4)), the
 meet of the two is the path's own rule.
 
-Nothing builds this yet.
+Built. The copy is of the live authority's rules under the working directory, so a write in a
+checkout is recorded under the checkout's path and comes back as any delegate's decision does.
+Removing a checkout withdraws its rules except those that distrust a path.
 
-`verified-by: none`
+`verified-by: bravebot_agent::workspace::a_checkout_is_labelled_as_the_working_directory_is`
+`verified-by: bravebot_agent::workspace::a_checkout_is_removed_unless_something_was_done_in_it`
+`verified-by: bravebot_core::trust::a_copied_subtree_answers_as_the_original_does`
+`verified-by: bravebot_core::trust::a_copy_of_an_undecided_root_is_not_answered_by_a_broader_rule`
+`verified-by: bravebot_core::trust::withdrawing_a_subtree_keeps_what_distrusts_a_path`
+`verified-by: bravebot_core::file_authority::a_rooted_handle_files_a_relative_name_under_its_root`
+`verified-by: bravebot_core::file_authority::copying_a_subtree_moves_no_revision`
 
 <a id="CHECKOUT-9"></a>
 ### CHECKOUT-9: permission rules hold in a checkout as in the working directory, and nothing in a checkout is read as configuration
@@ -312,7 +387,8 @@ person answered about a credential a read turned up
 Nothing in a checkout is read as a source: not its `.bravebot/settings.json`
 ([PERM-15](permissions.md#PERM-15)), not its `.bravebot/agents/`
 ([DELEGATE-20](delegation.md#DELEGATE-20)) and not its `AGENTS.md`. The delegate has the
-working directory's, as they were resolved before the turn.
+working directory's, as they were resolved before the turn. What it is told about where it works
+is the checkout.
 
 A delegate in a checkout keeps no definition memory ([MEMORY-2](definition-memory.md#MEMORY-2)),
 and the answer to the spawn says so.
@@ -325,9 +401,14 @@ writing there could change for the delegates it starts.
 reach. The checkout's copy is HEAD's, and what the delegate wrote to it would stay in the checkout
 until a person brought it back.
 
-Nothing builds this yet.
+Built, except the copy of an absolute specifier. A relative specifier is held against the checkout's
+root, since the delegate keeps the relative gate names. Nothing in a checkout is read as a source,
+and a delegate in one is given no definition memory. The answer to the spawn says so. An absolute
+specifier under the working directory is not copied, so a rule written that way does not reach the
+checkout.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_reads_the_working_directorys_instructions`
+`verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory`
 
 <a id="CHECKOUT-10"></a>
 ### CHECKOUT-10: a command vouched for in the working directory is asked about again in a checkout
@@ -341,7 +422,8 @@ about unless an entry made this session names the checkout.
 **Why.** `sh check.sh` vouched for at the root is a statement about the file the root holds, and
 the checkout's file at that path may differ.
 
-Nothing builds this yet.
+Built. A delegate in a checkout is given no remembered lines, and an entry made this session names
+the tree it was given in. No test runs a vouched command in a checkout.
 
 `verified-by: none`
 
@@ -355,7 +437,9 @@ same question. The session's own directory is held to the same rule
 Bringing the file back asks again ([CHECKOUT-14](#CHECKOUT-14)). Whether the first question can go
 is an open question below.
 
-Nothing builds this yet.
+Built. A path in a checkout carries the rule the same path has in the working directory
+([CHECKOUT-8](#CHECKOUT-8)), so it takes the gates that path takes. No test asks what a write asks
+in both places.
 
 `verified-by: none`
 
@@ -383,9 +467,12 @@ the working directory's rule alone, a file a write left untrusted in the checkou
 planner as trusted through that history. The meet is taken over the paths
 [GIT-3](tools/read-git.md#GIT-3) already labels an answer by, so it adds no decision of its own.
 
-Nothing builds this yet.
+Half built. An answer about history is labelled by the rule over each path in the checkouts as well
+as in the working directory, and a rule that distrusts a path outlives its checkout. `read_git` in a
+checkout declines: it is not routed through the driver's record of the entry.
 
-`verified-by: none`
+`verified-by: bravebot_agent::workspace::a_distrusted_path_in_a_checkout_labels_history_that_shows_it`
+`verified-by: bravebot_agent::workspace::read_git_declines_in_a_checkout`
 
 ## Bringing work back
 
@@ -461,9 +548,16 @@ of the delegate given it, and the paths the driver recorded a file effect on in 
 `/checkouts` lists the checkouts the session keeps, shows one's candidates against the working
 directory, and removes one. Removing one that has candidates asks first.
 
-Nothing builds this yet.
+Half built. A checkout the delegate given it and the delegates that one started did nothing in is
+removed as the delegate ends, with its `worktrees/<id>/` entry and its rules. Any other is kept,
+and the planner is told where. No session record holds it, nothing lists it, nothing removes it, and
+leaving the session names none, so a kept checkout stays until a person removes it and runs
+`git worktree prune`.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::a_checkout_nothing_was_done_in_is_removed_when_its_delegate_ends`
+`verified-by: bravebot_agent::workspace::a_checkout_is_removed_unless_something_was_done_in_it`
+`verified-by: bravebot_agent::git::removing_a_checkout_takes_its_directory_and_its_entry_alone`
+`verified-by: bravebot_agent::git::removing_a_checkout_leaves_everything_where_worktrees_is_a_link`
 
 <a id="CHECKOUT-16"></a>
 ### CHECKOUT-16: a resume brings kept checkouts back, a fork does not, and an opening session removes what no session lists
@@ -515,9 +609,12 @@ words where the delegate's checkout is, the commit it holds, and its candidate p
 removed. It is one more item the driver writes beside the report
 ([DELEGATE-9](delegation.md#DELEGATE-9)), and all of it is the driver's record.
 
-Nothing builds this yet.
+Half built. Beside the report the driver says where a kept checkout is and the commit it holds, or
+that it was removed. It names no candidate paths, since nothing finds them
+([CHECKOUT-13](#CHECKOUT-13)).
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory`
+`verified-by: bravebot_agent::turn::a_checkout_nothing_was_done_in_is_removed_when_its_delegate_ends`
 
 <a id="CHECKOUT-19"></a>
 ### CHECKOUT-19: the trail records each checkout made, applied from and removed
@@ -542,9 +639,10 @@ spawn says so.
 **Why not a server per checkout.** It costs a second index and a second approval
 ([LSP-5](tools/lsp.md#LSP-5)), and is left for a later change.
 
-Nothing builds this yet.
+Built. A delegate in a checkout is given no language servers, and the answer to the spawn says so.
+No test asks for `lsp` in a checkout.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory`
 
 <a id="CHECKOUT-21"></a>
 ### CHECKOUT-21: `/status` lists the session's checkouts
@@ -620,6 +718,8 @@ Nothing builds this yet.
 - **A file a program wrote is not found where a status is not answered.** The driver's record holds
   only what the file tools and redirections wrote ([CHECKOUT-13](#CHECKOUT-13)).
 - **No `lsp` in a checkout** ([CHECKOUT-20](#CHECKOUT-20)).
+- **Nothing brings a checkout's work back yet** ([CHECKOUT-14](#CHECKOUT-14)), and a kept checkout
+  stays until a person removes it ([CHECKOUT-15](#CHECKOUT-15)).
 - **In a session that keeps nothing, a checkout goes with the session**, with whatever was not
   brought back.
 - **A checker that ran a program keeps its checkout**, since it started a program there

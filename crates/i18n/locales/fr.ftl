@@ -528,6 +528,9 @@ mcp-dir-not-a-directory = { $path } n'est pas un répertoire
 mcp-dir-not-a-directory-unshown =
     le mot après --dir n'est pas un répertoire, et n'est pas répété car il peut être une valeur
 mcp-dir-not-text = { $path } ne peut pas être écrit dans mcp.json, qui contient du texte
+mcp-dir-in-a-repository =
+    { $path } est dans le dépôt git { $repository }, et un serveur peut écrire dans son répertoire,
+    où git trouve des commandes à exécuter : donnez-lui un répertoire hors de tout dépôt
 mcp-not-added = { $alias } n'a pas été déclaré : { $problem }
 mcp-not-declared = aucun serveur MCP n'est déclaré sous le nom { $alias }
 mcp-problem-alias =
@@ -568,7 +571,7 @@ mcp-declared = { $alias } déclaré dans { $path }
 mcp-variables = variables : { $names }
 mcp-variable-stored = { $name } (enregistrée)
 mcp-may-read = peut lire : { $path }
-mcp-directory = répertoire : { $path }
+mcp-directory = répertoire, où il peut écrire : { $path }
 mcp-digest = empreinte : { $digest }
 mcp-changed = champs modifiés : { $fields }
 mcp-question = Utiliser ce serveur MCP ?
@@ -1278,6 +1281,7 @@ status-time-overhead = non attribué
 status-cache = Cache du prompt, dernier tour
 status-cache-read = servi depuis le cache
 status-cache-written = écrit dans le cache pour le tour suivant
+hint-cache-hit-rate = cache { $rate } %
 status-trust = Confiance
 status-nothing-vouched-for = rien d'approuvé
 status-trusted = fiable

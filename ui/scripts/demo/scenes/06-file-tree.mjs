@@ -15,11 +15,8 @@ export default {
     const { page } = s
     await openNewest(s, { hold: 1.2 })
 
-    // The tree is the last of the five panels and may be switched off from a previous run.
-    const pick = page.locator('.panel-pick[aria-controls="panel-files"]')
-    if ((await pick.count()) && (await pick.getAttribute('aria-pressed')) === 'false') {
-      await s.click(pick)
-    }
+    // The tree sits on the Files tab of the context column, which opens on Overview.
+    await s.click(page.getByRole('tab', { name: 'Files', exact: true }))
     const tree = page.locator('.tree')
     if (!(await tree.count())) s.skip('this session has no folder to list')
 
@@ -56,9 +53,9 @@ export default {
     }
 
     await s.say('Dotfiles', 'Hidden entries sit behind a toggle.')
-    await s.click(page.locator('.tree-tool').first())
+    await s.click(page.locator('.tree-tool.dotfiles'))
     await s.beat(1.2)
-    await s.click(page.locator('.tree-tool').first())
+    await s.click(page.locator('.tree-tool.dotfiles'))
     await s.beat(0.8)
 
     // The filter, typed against something actually on screen — a made-up query narrowing to
@@ -67,8 +64,9 @@ export default {
     const longest = names.reduce((a, b) => (b.length > a.length ? b : a), '')
     const query = longest.length > 6 ? longest.slice(2, 6) : longest.slice(0, 3)
     if (query) {
-      await s.say('Filter by name', 'The box above the tree narrows it as you type.')
-      await s.slowType('.tree-find', query)
+      await s.say('Filter by name', 'Search opens a box above the tree that narrows it as you type.')
+      await s.click('[data-test="tree-search-toggle"]')
+      await s.slowType('.tree-find input', query)
       await s.beat(1)
       if (await page.locator('.tree-note').isVisible().catch(() => false)) {
         await s.say(
@@ -80,7 +78,7 @@ export default {
         await s.unspot()
       }
       await s.pointAt('.tree-find')
-      await page.locator('.tree-find').press('Escape')
+      await page.locator('.tree-find input').press('Escape')
       await s.beat(0.8)
     }
 

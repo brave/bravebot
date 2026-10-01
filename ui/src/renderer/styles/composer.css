@@ -1,0 +1,359 @@
+/* ---------------------------------------------------------------- the composer
+
+   One box: attachments on top, the field, and a toolbar along its foot. What is said about
+   sending docks onto its top edge as a tray of the same width (the backend notice, the queue),
+   and what asks for the reader's eye floats above it as a pill. Lined up under the reading
+   column, so the box is as wide as the conversation it writes into. */
+
+.composer-dock {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-l);
+  padding-inline: max(var(--leo-spacing-2xl), calc((100% - var(--reading-width)) / 2));
+  padding-bottom: var(--leo-spacing-xl);
+  isolation: isolate;
+}
+/* The transcript scrolls to the dock's top edge. Rather than cut the text off there, the dock's
+   ground is transparent at the top and reaches the panel colour a little way down, so the last
+   lines fade out behind the box. It reaches up over the transcript by the fade's own height and
+   takes no clicks. */
+.composer-dock::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: calc(-1 * var(--leo-spacing-3xl)) 0 0;
+  background: linear-gradient(to bottom, transparent, var(--surface-panel) var(--leo-spacing-3xl));
+  pointer-events: none;
+}
+
+.composer {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.composer-stack { display: flex; flex-direction: column; min-width: 0; }
+
+.composer-box {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-field);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-raised);
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
+}
+.composer-box:hover { border-color: var(--border-strong); }
+.composer-box:focus-within {
+  border-color: var(--border-focus);
+  box-shadow: var(--shadow-raised), var(--shadow-focus);
+}
+/* A tray above takes the top corners: the two read as one object. */
+.composer-tray + .composer-box,
+.composer-tray + .composer-tray { border-top-left-radius: 0; border-top-right-radius: 0; }
+
+.composer leo-textarea {
+  /* Plain mode: no chrome of Leo's own, because the box around it carries the border and the
+     focus state. It has no padding either, so the host supplies it. */
+  --leo-control-font: var(--leo-font-large-regular);
+  --leo-control-focus-effect: none;
+  display: block;
+  min-width: 0;
+  padding: var(--leo-spacing-l) var(--leo-spacing-xl) var(--leo-spacing-s);
+  box-sizing: border-box;
+}
+
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-s);
+  min-width: 0;
+  padding: var(--leo-spacing-m);
+}
+.toolbar-spacer { flex: 1; min-width: 0; }
+.composer-toolbar .model-picker { flex: 0 1 auto; min-width: 0; max-width: 220px; margin: 0; }
+.composer .model-trigger { width: auto; max-width: 100%; --leo-button-color: var(--ink-tertiary); }
+.composer .model-current { max-width: 180px; }
+.composer .attach-files { --leo-button-color: var(--ink-secondary); }
+.composer .send {
+  flex: none;
+  --leo-icon-size: var(--icon-control);
+  --leo-button-radius: var(--radius-pill);
+}
+
+/* ---- context meter */
+
+.context-meter {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--hit);
+  height: var(--hit);
+  border-radius: var(--radius-control);
+  --leo-progressring-size: var(--icon-meta);
+  --leo-progressring-stroke-width: 2px;
+  --leo-progressring-color: var(--ink-tertiary);
+}
+.context-meter:hover { background: var(--surface-hover); }
+.context-meter:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+.context-meter.high { --leo-progressring-color: var(--status-warning); }
+.context-meter.full { --leo-progressring-color: var(--status-error); }
+.meter-ring { display: grid; }
+
+/* ---- attachments */
+
+.attachment-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--leo-spacing-s);
+  padding: var(--leo-spacing-m) var(--leo-spacing-m) 0;
+}
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--leo-spacing-s);
+  max-width: 100%;
+  height: var(--hit);
+  padding-left: var(--leo-spacing-m);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--surface-sunken);
+}
+.attachment-name {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: var(--type-code);
+  color: var(--ink-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.attachment-name:hover { text-decoration: underline; }
+.attachment-name:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; border-radius: var(--radius-chip); }
+.attachment-trust {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--leo-spacing-s);
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+  --leo-icon-size: var(--icon-caption);
+  --leo-icon-color: var(--status-warning);
+}
+.attachment-trust:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; border-radius: var(--radius-chip); }
+
+/* ---- trays: the queue and the backend notice */
+
+.composer-tray {
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-xs);
+  padding: var(--leo-spacing-m) var(--leo-spacing-l);
+  border: 1px solid var(--border-subtle);
+  border-bottom: 0;
+  border-radius: var(--radius-card) var(--radius-card) 0 0;
+  background: var(--surface-sunken);
+  font: var(--type-caption);
+  color: var(--ink-secondary);
+}
+.tray-head { display: flex; align-items: center; gap: var(--leo-spacing-m); min-height: var(--hit); }
+.tray-title { flex: none; font: var(--type-caption-strong); color: var(--ink-secondary); }
+.tray-title .num { font: var(--type-caption); color: var(--ink-tertiary); font-variant-numeric: tabular-nums; }
+.tray-note {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+}
+.tray-action { flex: none; }
+.tray-row { display: flex; align-items: center; gap: var(--leo-spacing-m); min-height: var(--hit); }
+.tray-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font: var(--type-meta);
+  color: var(--ink-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-notice {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--leo-spacing-s) var(--leo-spacing-m);
+  --leo-icon-size: var(--icon-meta);
+  --leo-icon-color: var(--status-warning);
+}
+.composer-notice strong { font: var(--type-caption-strong); color: var(--ink-primary); }
+.composer-notice .notice-text { flex: 1 1 16em; min-width: 0; }
+.composer-notice .notice-actions { display: flex; gap: var(--leo-spacing-xs); margin-left: auto; }
+
+/* ---- attention pills: centred over the top of the box, and only when there is something */
+
+.attention-pills {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  justify-content: center;
+  gap: var(--leo-spacing-m);
+  padding-bottom: var(--leo-spacing-m);
+  pointer-events: none;
+}
+.attention-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--leo-spacing-s);
+  height: var(--hit);
+  padding: 0 var(--leo-spacing-l);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-floating);
+  font: var(--type-meta-strong);
+  color: var(--ink-primary);
+  cursor: pointer;
+  pointer-events: auto;
+  animation: pill-in var(--motion-fast);
+  --leo-icon-size: var(--icon-meta);
+  --leo-icon-color: currentColor;
+}
+.attention-pill:hover { background: var(--surface-hover); }
+.attention-pill:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+.attention-pill.warning {
+  border-color: var(--status-warning);
+  background: var(--status-warning-bg);
+  color: var(--leo-color-systemfeedback-warning-text);
+}
+/* Room under the last row for the pill that floats over it, so it covers nothing. */
+.transcript:has(.attention-pill) .entries { padding-bottom: calc(var(--leo-spacing-3xl) + var(--hit)); }
+@keyframes pill-in {
+  from { opacity: 0; transform: translateY(var(--leo-spacing-s)); }
+}
+
+/* ---- a fresh session: the composer in the middle of the column, under a greeting */
+
+.composer-spacer {
+  flex: 0 0 0;
+  transition: flex-grow var(--motion-panel);
+}
+.transcript.fresh .composer-spacer { flex-grow: 1; }
+.transcript.fresh .entries { justify-content: flex-end; }
+.fresh-greeting { text-align: center; padding-bottom: var(--leo-spacing-xl); }
+.fresh-greeting h1 { margin: 0 0 var(--leo-spacing-m); font: var(--leo-font-heading-h2); color: var(--ink-primary); }
+.fresh-project { font: inherit; color: var(--ink-secondary); }
+.fresh-greeting p { margin: 0; font: var(--type-body); color: var(--ink-tertiary); }
+.suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--leo-spacing-m);
+  animation: pill-in var(--motion-panel);
+}
+.suggestion {
+  flex: none;
+  height: var(--hit);
+  padding: 0 var(--leo-spacing-l);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--surface-raised);
+  font: var(--type-meta);
+  color: var(--ink-secondary);
+  cursor: pointer;
+  transition: background-color var(--motion-fast), color var(--motion-fast);
+}
+.suggestion:hover { background: var(--surface-hover); color: var(--ink-primary); }
+.suggestion:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+
+/* ---- no session: the welcome */
+
+.empty-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  place-items: center;
+  padding: var(--leo-spacing-3xl) var(--leo-spacing-2xl);
+}
+.welcome { width: min(560px, 100%); display: flex; flex-direction: column; gap: var(--leo-spacing-l); }
+.welcome-mark {
+  display: grid;
+  place-items: center;
+  width: var(--leo-spacing-5xl);
+  height: var(--leo-spacing-5xl);
+  margin-bottom: var(--leo-spacing-m);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--surface-raised);
+  --leo-icon-size: var(--icon-hero);
+  --leo-icon-color: var(--ink-secondary);
+}
+.welcome h1 { margin: 0; font: var(--leo-font-heading-h2); color: var(--ink-primary); }
+.welcome-lede { margin: 0; font: var(--type-body); color: var(--ink-secondary); }
+.welcome-actions { display: flex; align-items: center; gap: var(--leo-spacing-m); margin-top: var(--leo-spacing-s); }
+.welcome-open { flex: none; }
+.welcome-shortcut { font: var(--type-caption); color: var(--ink-tertiary); }
+.welcome .composer-tray { margin: 0; border-bottom: 1px solid var(--border-subtle); border-radius: var(--radius-card); }
+.welcome-recents { display: flex; flex-direction: column; margin-top: var(--leo-spacing-2xl); }
+.welcome-recents h2 {
+  margin: 0 0 var(--leo-spacing-s);
+  padding: 0 var(--leo-spacing-m);
+  font: var(--type-caption-strong);
+  color: var(--ink-tertiary);
+}
+.welcome-recent {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-l);
+  min-height: var(--leo-spacing-5xl);
+  padding: 0 var(--leo-spacing-m);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  --leo-icon-size: var(--icon-control);
+  --leo-icon-color: var(--ink-tertiary);
+}
+.welcome-recent:hover { background: var(--surface-hover); }
+.welcome-recent:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+.recent-text { display: flex; flex-direction: column; min-width: 0; }
+.recent-text strong { font: var(--type-body-strong); color: var(--ink-primary); }
+.recent-path {
+  overflow: hidden;
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Text for a screen reader and a search, drawn nowhere. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (forced-colors: active) {
+  .composer-tray,
+  .attention-pill,
+  .suggestion { border: 1px solid CanvasText; }
+  .composer-box:focus-within { outline: 2px solid Highlight; }
+}
+
+/* Beside Send, so it reads as the other way to send what is written. */
+.composer-toolbar .plan-first { flex: none; white-space: nowrap; }

@@ -996,6 +996,17 @@ fn table(
                                         to say it, and the delegates cannot start until you \
                                         have.",
                         "items": {"type": "string"}
+                    },
+                    "isolation": {
+                        "type": "string",
+                        "description": "Optional. \"checkout\" gives each delegate a new \
+                                        checkout of the last commit to work in, so that \
+                                        delegates writing at the same time do not edit or \
+                                        build in one working tree. Changes not yet committed \
+                                        are not in it, and what it changes stays there until \
+                                        it is brought back. Not for a \"reader\", and not for \
+                                        a delegate that is already in one.",
+                        "enum": ["checkout"]
                     }
                 },
                 "required": ["kind", "task"]
@@ -2208,7 +2219,7 @@ fn target_of<S: Sink>(
 
         // A call that named a reference instead of a path says so with the reference, which is
         // then resolved below: it is the planner that cannot know the name, not the person.
-        let key = if arguments.get(key).is_none() && arguments.get("path_ref").is_some() {
+        let key = if !names(arguments, key) && names(arguments, "path_ref") {
             "path_ref"
         } else {
             key
@@ -2228,8 +2239,9 @@ fn target_of<S: Sink>(
     // searched them afterwards would be inspecting content under a witness minted to put it on a
     // screen, which LABEL-6 refuses. Text with no reference in it comes back as it went in, so
     // there is nothing left here to test it for.
-    let names = policy.names_for_display(slots);
-    let shaped = policy.render_in_place(tool, &named, |text| name_references(&text, &names));
+    let display_names = policy.names_for_display(slots);
+    let shaped =
+        policy.render_in_place(tool, &named, |text| name_references(&text, &display_names));
     let proof = policy.authorise_display_release("what a tool is working on");
     shaped.declassify(&proof)
 }
@@ -2882,6 +2894,35 @@ fn argument(arguments: &Value, key: &str) -> Option<Labelled<String>> {
     ))
 }
 
+/// An argument that names something, where a blank one names nothing.
+///
+/// A planner sent a schema whose optional fields are all strings will sometimes fill every one
+/// of them, and the ones it did not mean to use come back as `""`. For a path or a reference an
+/// empty string is never a choice anyone made, so it is the same as the field being left out.
+/// Counting it as given turned `{"path": "a.html", "path_ref": ""}` into "not both", every time,
+/// and a planner that could not see which half was wrong sent the same call again.
+///
+/// Not for `contents`, where an empty string is a request for an empty file.
+///
+/// Decided on the call as it arrived, before anything is labelled: whether a field was filled in
+/// is the shape of the call, the same thing asking whether the key is present is.
+fn named_argument(arguments: &Value, key: &str) -> Option<Labelled<String>> {
+    if names(arguments, key) {
+        argument(arguments, key)
+    } else {
+        None
+    }
+}
+
+/// Whether the call gave `key` a value that names something. See [`named_argument`].
+fn names(arguments: &Value, key: &str) -> bool {
+    match arguments.get(key) {
+        None | Some(Value::Null) => false,
+        Some(Value::String(given)) => !given.trim().is_empty(),
+        Some(_) => true,
+    }
+}
+
 /// The reference names in a `reads` argument, as one line.
 ///
 /// Wrapped like every other argument: what the planner asked for is model output, and the
@@ -3383,8 +3424,8 @@ fn path_argument<S: Sink>(
     slots: &SlotStore,
     arguments: &Value,
 ) -> Result<PathArgument, String> {
-    let named = argument(arguments, "path");
-    let referenced = argument(arguments, "path_ref");
+    let named = named_argument(arguments, "path");
+    let referenced = named_argument(arguments, "path_ref");
 
     match (named, referenced) {
         (Some(_), Some(_)) => Err(
@@ -3865,7 +3906,7 @@ fn write_file<S: Sink, C: Confirmer>(
         (found.path, found.destination, found.shown, found.released);
 
     let written = argument(arguments, "contents");
-    let named = argument(arguments, "contents_ref");
+    let named = named_argument(arguments, "contents_ref");
 
     // Two sources would leave the driver deciding which one was meant, and they say different
     // things about what lands in the file. Neither is a decision taken from content: both
@@ -4548,7 +4589,7 @@ fn watch_file<S: Sink>(
     // it here would put that name into the user's own role hours later, which is exactly what
     // the sentence is built to prevent. Refused before the argument is read, so nothing resolves
     // the reference on the way to saying no.
-    if arguments.get("path_ref").is_some() {
+    if names(arguments, "path_ref") {
         return Produced::problem(
             "refused: watch_file takes 'path' and no reference. A reference names a file this \
              conversation was never shown the name of, and a watch reports the path it was armed \
@@ -5553,10 +5594,11 @@ fn run<S: Sink, C: Confirmer>(
     // The reference whose contents go to the first program's standard input, where the call named
     // one. Present but not a string is refused rather than dropped, for the reason a directory is:
     // a field the driver quietly ignored would run a line over nothing, and a planner that asked
-    // for a document to be filtered would be handed the filter's answer about an empty one.
+    // for a document to be filtered would be handed the filter's answer about an empty one. A
+    // blank string names no document, so it is the field left out, as for every other reference.
     let named_stdin = match arguments.get("stdin_ref") {
         None | Some(Value::Null) => None,
-        Some(Value::String(_)) => argument(arguments, "stdin_ref"),
+        Some(Value::String(_)) => named_argument(arguments, "stdin_ref"),
         Some(_) => {
             return Produced::problem(
                 "error: 'stdin_ref' must be a string naming a reference, e.g. \"ref:1\"",
@@ -6721,8 +6763,9 @@ fn spawn_agent<S: Sink, R: Reporter>(
         String::new(),
     );
     let mut started = Vec::new();
+    let mut commits: Vec<String> = Vec::new();
     let mut kind_name = String::new();
-    let mut rest_refused = None;
+    let mut rest_refused: Option<String> = None;
 
     for task in &tasks {
         // Numbered by the kernel, beneath this run's own number in the order this run spawned
@@ -6747,11 +6790,33 @@ fn spawn_agent<S: Sink, R: Reporter>(
             // The ones before it are started and on the screen, so they run and the planner is
             // told the rest did not.
             Err(denial) => {
-                rest_refused = Some(denial);
+                rest_refused = Some(denial.to_string());
                 break;
             }
         };
         let id = spec.id();
+
+        // Compared only once the gate above has passed, which is when this run has met nothing a
+        // name could be steered by (CHECKOUT-1).
+        let state = match wants_checkout(arguments, spec.kind(), tools) {
+            Ok(state) => state,
+            Err(refusal) if started.is_empty() => return Produced::problem(refusal),
+            Err(refusal) => {
+                rest_refused = Some(refusal);
+                break;
+            }
+        };
+        let made = match state {
+            None => None,
+            Some(state) => match tools.workspace.checkout_for(policy, state) {
+                Ok(made) => Some(made),
+                Err(refusal) if started.is_empty() => return Produced::problem(refusal),
+                Err(refusal) => {
+                    rest_refused = Some(refusal);
+                    break;
+                }
+            },
+        };
 
         // The task is released for a screen the way the target of any other call is. A person
         // watching several delegates has nothing else to tell them apart by.
@@ -6775,7 +6840,15 @@ fn spawn_agent<S: Sink, R: Reporter>(
         // Everything the kernel settled, taken off the policy here on the turn's own thread. From
         // this point the delegate needs nothing further from the run that spawned it, which is
         // what lets the two run at the same time.
-        let seeded = crate::delegate::seed(policy, spec, tools.remembering);
+        let mut seeded =
+            crate::delegate::seed(policy, spec, tools.remembering.filter(|_| made.is_none()));
+        if let Some(made) = made {
+            if let Some(checkout) = made.checkout() {
+                seeded.file_authority = seeded.file_authority.rooted_at(checkout.key());
+                commits.push(checkout.commit().to_string());
+            }
+            seeded.workspace = Some(made);
+        }
         produced = produced.delegating(id, seeded);
     }
 
@@ -6797,6 +6870,19 @@ fn spawn_agent<S: Sink, R: Reporter>(
             started.len()
         )
     };
+    let body = match commits.first() {
+        Some(commit) if started.len() == 1 => format!(
+            "{body} It works in a checkout of commit {commit}, which has no changes that are not \
+             committed and is not your working directory. It keeps no memory between \
+             conversations and is not offered lsp."
+        ),
+        Some(commit) => format!(
+            "{body} Each works in a checkout of its own of commit {commit}, which has no changes \
+             that are not committed and is not your working directory. None keeps memory between \
+             conversations or is offered lsp."
+        ),
+        None => body,
+    };
     let body = match (rest_refused, tasks.len() - started.len()) {
         (Some(denial), 1) => format!("{body} The last one was not started, refused: {denial}"),
         (Some(denial), left) => {
@@ -6814,6 +6900,45 @@ fn spawn_agent<S: Sink, R: Reporter>(
     produced.origin = format!("a {kind_name} delegate");
     produced.note = note;
     produced
+}
+
+/// Whether this call asks for a checkout for each delegate, or why it may not have one
+/// (CHECKOUT-1, CHECKOUT-3, CHECKOUT-6).
+fn wants_checkout<'a>(
+    arguments: &Value,
+    kind: bravebot_core::delegate::Kind,
+    tools: &Tools<'a>,
+) -> Result<Option<&'a std::path::Path>, String> {
+    match arguments.get("isolation") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::String(value)) if value == "checkout" => {}
+        Some(_) => {
+            return Err(
+                "error: 'isolation' may only be \"checkout\"; leave it out for a delegate that \
+                 works in your working directory"
+                    .to_string(),
+            );
+        }
+    }
+    if kind == bravebot_core::delegate::Kind::Reader {
+        return Err(
+            "refused: a reader writes nothing, so a checkout separates it from nobody and would \
+             show it the last commit in place of your working tree"
+                .to_string(),
+        );
+    }
+    if tools.workspace.checkout().is_some() {
+        return Err(
+            "refused: you already work in a checkout, which the delegates you start share"
+                .to_string(),
+        );
+    }
+    match tools.home {
+        Some(state) if !bravebot_core::incognito::engaged() => Ok(Some(state)),
+        _ => {
+            Err("refused: this session keeps no state directory to make a checkout in".to_string())
+        }
+    }
 }
 
 /// The most delegates one call may fan a task out over.

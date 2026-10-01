@@ -1,0 +1,212 @@
+.note {
+  margin: 6px 0 0;
+  padding: 5px 9px;
+  border-radius: var(--leo-radius-s);
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: var(--leo-typography-x-small-regular-font-size);
+}
+
+.model-picker { position: relative; align-self: center; flex: 0 1 auto; min-width: 70px; max-width: 220px; }
+/* Layout only — size, type, and icons come from Leo Button medium defaults. */
+.model-trigger { width: 100%; max-width: 100%; min-width: 0; flex-grow: 0; }
+.model-current { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Leo ButtonMenu draws the popup. These rules only size the rows inside it.
+   Nested options do not receive the menu's ::slotted item metrics, which match
+   direct children only, so the same tokens are applied here. */
+.model-menu { --model-menu-width: min(360px, calc(100vw - 16px)); display: block; max-width: 100%; }
+.model-heading,
+.model-menu .model-search,
+.model-menu .model-notices,
+.model-menu leo-menu-section,
+.model-menu .model-footnote,
+.model-menu leo-hr { width: var(--model-menu-width); box-sizing: border-box; }
+.model-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--leo-spacing-m);
+  padding: var(--leo-spacing-l) var(--leo-spacing-xl) var(--leo-spacing-s);
+}
+.model-heading-title { font: var(--leo-font-small-semibold); min-width: 0; }
+.model-heading leo-button { flex: none; flex-grow: 0; }
+.model-menu .model-search {
+  width: calc(var(--model-menu-width) - 2 * var(--leo-spacing-xl));
+  margin: 0 var(--leo-spacing-xl) var(--leo-spacing-s);
+}
+.model-notices:empty { display: none; }
+.model-menu leo-menu-section {
+  display: flex;
+  flex-direction: column;
+  max-height: min(240px, 40vh);
+  overflow-y: auto;
+  padding: var(--leo-spacing-s) 0;
+}
+.model-menu leo-option {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  margin: 0 var(--leo-spacing-s);
+  padding: var(--leo-spacing-m) var(--leo-spacing-l);
+  border-radius: var(--leo-radius-m);
+  cursor: pointer;
+  color: var(--leo-color-text-primary);
+}
+.model-menu leo-option:hover,
+.model-menu leo-option.active { background: var(--leo-color-container-highlight); }
+.model-menu leo-option:active {
+  background: var(--leo-color-container-interactive);
+  color: var(--leo-color-text-interactive);
+}
+.model-menu leo-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.model-menu leo-option[data-current='true'] .model-name { color: var(--leo-color-text-interactive); }
+.model-check {
+  width: 16px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  color: var(--leo-color-text-interactive);
+}
+.model-check leo-icon { --leo-icon-size: 16px; }
+.model-description { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.model-name { font: var(--leo-font-small-regular); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-detail { font: var(--type-caption); color: var(--ink-tertiary); }
+.model-detail:empty { display: none; }
+/* Provider heading: a caption above its models, not a selectable row. */
+.model-group { margin: 0 var(--leo-spacing-s); padding: var(--leo-spacing-m) var(--leo-spacing-l) var(--leo-spacing-xs); font: var(--type-caption-strong); color: var(--ink-tertiary); }
+.model-capabilities { display: flex; flex: none; gap: var(--leo-spacing-s); color: var(--ink-tertiary); --leo-icon-size: var(--icon-meta); }
+.model-capability { display: inline-flex; }
+.model-menu .model-capability,
+.model-menu .model-default { flex: none; }
+.model-status { font: var(--leo-font-x-small-regular); color: var(--leo-color-text-tertiary); margin: 0; padding: var(--leo-spacing-s) var(--leo-spacing-xl); }
+.model-footnote {
+  margin: 0;
+  padding: var(--leo-spacing-m) var(--leo-spacing-xl);
+  font: var(--leo-font-x-small-regular);
+  color: var(--leo-color-text-tertiary);
+}
+
+
+.chevron { transition: transform var(--panel-motion); display: inline-block; }
+.chevron.open { transform: rotate(90deg); }
+/* Opening a panel grows it into place rather than snapping. The mechanism is in Fold.tsx,
+   which explains why it is a grid track and not a height. Shared with the runs of tool
+   calls in the transcript, so both kinds of fold in this window move the same way. */
+.fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--panel-motion);
+}
+.fold.open { grid-template-rows: 1fr; }
+
+/* The clipping happens here and the padding one level in: padding on the clipped box would
+   keep a closed fold as tall as its own padding. */
+.fold-clip { overflow: hidden; }
+
+/* A closed fold should not be tabbable or read out, and clipping alone does neither.
+   Hiding is held off until the collapse has finished so there is something to watch on the
+   way down; on the way up it lifts at once. */
+.fold:not(.open) > .fold-clip {
+  visibility: hidden;
+  transition: visibility 0s var(--panel-duration);
+}
+
+/* Someone who has asked for less movement gets the old instant toggle. */
+@media (prefers-reduced-motion: reduce) {
+  .fold, .fold:not(.open) > .fold-clip, .chevron { transition: none; }
+}
+
+
+/* Leo's Collapse is a raised card by default; in the context column and the transcript a
+   disclosure is only a heading that opens, so the chrome is switched off and what is left is
+   the title, the arrow and the animation. */
+.flat-collapse {
+  --leo-collapse-background-color: transparent;
+  --leo-collapse-background-color-hover: transparent;
+  --leo-collapse-border-color: transparent;
+  --leo-collapse-border-color-hover: transparent;
+  --leo-collapse-shadow: none;
+  --leo-collapse-shadow-hover: none;
+  --leo-collapse-radius: 0;
+  --leo-collapse-summary-padding: var(--leo-spacing-m) var(--leo-spacing-xl);
+  --leo-collapse-content-padding: 0;
+  --leo-collapse-summary-color: var(--ink-dim);
+  --leo-collapse-summary-color-hover: var(--ink);
+  --leo-collapse-icon-size: 16px;
+}
+/* Present only to catch a right-click on a transcript entry. It must not be a box: the
+   entries are block-level with collapsing margins, and a wrapper that generated one would
+   change the spacing of every row. */
+
+/* ---------------------------------------------------------------- export */
+
+/* The trigger is a plain Leo button until the menu is open. The rows themselves are
+   ButtonMenu items; these only arrange the label, the extension, and the tool-calls tick. */
+.export-menu { margin-left: auto; flex-grow: 0; }
+.export-tools-row {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+}
+.export-tools-row leo-icon { --leo-icon-size: 18px; }
+.export-format { white-space: nowrap; }
+
+/* ------------------------------------------------------------------ bots
+
+   A bot is a name, a purpose, a memory and a checkout. What a row shows is what tells two of them
+   apart at a glance: the face, the name, and where it works. */
+
+/* The avatar: a small figure turning slowly, drawn by the shared renderer in `avatar/stage.ts`.
+   Nothing here paints the figure — its colours are its own, from a fixed set, and deliberately do
+   not follow the theme (see figure.ts for why). What this sheet does give it is the chip: a faint
+   neutral disc behind it, the shape every list of faces uses. It does two jobs. It makes every
+   avatar the same shape, so a tall head and a squat one sit in the row the same way, and it puts a
+   surface behind the pale pieces — a bobble, an ear — which on a light theme were otherwise pale
+   paint on a paler page. Mid-grey at low alpha, so it is a shade darker than a light column and a
+   shade lighter than a dark one, whichever the theme is. The canvas is transparent where there is
+   no figure, so the disc shows through around it and the body is cropped by the circle at the
+   bottom corners the way a headshot is. */
+.bot-avatar-frame {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  vertical-align: middle;
+}
+.bot-avatar-status {
+  position: absolute;
+  right: calc(var(--leo-spacing-xs) * -1);
+  bottom: calc(var(--leo-spacing-xs) * -1);
+  display: grid;
+  place-items: center;
+  padding: 1px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-panel);
+  --leo-icon-size: var(--status-size);
+  --leo-icon-color: var(--ink-secondary);
+}
+.bot-avatar-status-failed { --leo-icon-color: var(--status-error); }
+.bot-avatar {
+  flex: none;
+  display: block;
+  border-radius: 50%;
+  background: var(--hover-wash);
+}
+/* The flat mark, which is what a machine with no WebGL gets instead. It carries its own fill — the
+   same shades the figure would have been — so there is nothing to paint here beyond the chip above,
+   which it shares. */
+
+@media (prefers-reduced-motion: reduce) { .entries { scroll-behavior: auto; } }
+
+.app .model-capability, .app .model-detail, .app .model-footnote { font-size: var(--leo-typography-x-small-regular-font-size); }
+.app .model-name { font-size: var(--leo-typography-components-tableheader-font-size); }
+
+
+
+
+
+
+/* A Leo spinner beside a line of status text. */
+[role='status']:has(> leo-progressring) { display: flex; align-items: center; gap: var(--leo-spacing-m); }

@@ -1,6 +1,6 @@
 // Exercise the real composer with deterministic model/session replies; no paid inference.
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
@@ -12,14 +12,15 @@ try {
   page.setDefaultTimeout(15000)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
-  await app.evaluate(({ ipcMain, BrowserWindow }) => {
+  mkdirSync('/tmp/bravebot-model-picker-project', { recursive: true })
+  await app.evaluate(({ ipcMain, BrowserWindow, dialog }) => {
     const defaultModel = 'openrouter/anthropic/claude-haiku-4.5'
     const directory = '/tmp/bravebot-model-picker-project'
     const rows = ['A', 'B'].map((id) => ({ id, directory, title: `Conversation ${id}`,
       project: 'model-picker-project', branch: null, updated: 1, bytes: 1 }))
     globalThis.modelTest = { sent: [], fail: false, loading: false }
-    ipcMain.removeHandler('bravebot:choose-directory')
-    ipcMain.handle('bravebot:choose-directory', () => directory)
+    // The native picker is what grants a folder to a new bot, so answer the dialog rather than the channel.
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] })
     ipcMain.removeHandler('bravebot:request')
     ipcMain.handle('bravebot:request', async (_, method, params) => {
       if (method === 'models.list') {
@@ -49,7 +50,7 @@ try {
     })
   })
   await page.reload()
-  await page.getByRole('button', { name: /^\+ New session$/ }).click()
+  await page.locator('[data-test="new-session"]').click()
   await page.getByRole('button', { name: "Don't trust", exact: true }).click()
   const trigger = page.locator('.model-trigger')
   await trigger.waitFor()
@@ -65,21 +66,27 @@ try {
     'Export is in the conversation header');
 
   await trigger.click()
-  await page.getByRole('option', { name: /Claude Sonnet/ }).waitFor()
-  assert.deepEqual(await page.getByRole('option', { name: /Claude Sonnet/ }).locator('.model-capability').allTextContents(), ['Text', 'Tools'])
+  const sonnet = page.getByRole('option', { name: /Claude Sonnet/ })
+  await sonnet.waitFor()
+  await page.locator('leo-menu-section').hover()
+  await sonnet.hover()
+  assert.equal(await page.locator('.model-popover').isVisible(), true, 'hovering a model keeps the menu open')
+  assert.equal(await sonnet.isVisible(), true)
+  assert.deepEqual(await sonnet.locator('.model-capability').evaluateAll((badges) => badges.map((badge) => badge.getAttribute('aria-label'))), ['Text', 'Tools'])
   assert.equal(await page.getByRole('option', { name: /Brave model/ }).locator('.model-capability').count(), 0)
   const search = page.getByRole('combobox', { name: 'Search models' })
+  const models = page.locator('.model-menu')
   await search.fill('VISION')
-  assert.equal(await page.getByRole('option').count(), 2)
+  assert.equal(await models.getByRole('option').count(), 2)
   await search.fill('openrouter reasoning')
-  assert.equal(await page.getByRole('option').count(), 1)
-  assert.match(await page.getByRole('option').innerText(), /Sonnet/)
+  assert.equal(await models.getByRole('option').count(), 1)
+  assert.match(await models.getByRole('option').innerText(), /Sonnet/)
   await search.fill('brave tools')
-  assert.equal(await page.getByRole('option').count(), 0)
+  assert.equal(await models.getByRole('option').count(), 0)
   await search.fill('sonnet')
-  assert.equal(await page.getByRole('option').count(), 1)
+  assert.equal(await models.getByRole('option').count(), 1)
   await search.press('Enter')
-  assert.equal(await page.locator('.model-popover').count(), 0)
+  assert.equal(await page.locator('.model-popover').isVisible(), false)
   assert.equal(await trigger.evaluate((element) => element === document.activeElement), true)
   assert.match(await trigger.getAttribute('aria-label'), /Sonnet|sonnet/)
   assert.equal(await page.locator('.model-current').innerText(), 'Claude Sonnet 4.5')
@@ -95,12 +102,12 @@ try {
   assert.equal(await entry.inputValue(), 'Use this conversation’s selected model\nOn a second line')
   assert.equal(await app.evaluate(() => globalThis.modelTest.sent.length), 0)
   await entry.press('Enter')
-  assert.equal(await trigger.isDisabled(), true)
+  assert.equal(await trigger.evaluate((host) => host.shadowRoot?.querySelector('button')?.disabled), true)
   const sent = await app.evaluate(() => globalThis.modelTest.sent)
   assert.equal(sent[0].model, 'openrouter/anthropic/claude-sonnet-4.5')
   assert.equal(sent[0].prompt, 'Use this conversation’s selected model\nOn a second line')
   await app.evaluate(() => globalThis.finishModelTurn())
-  await page.waitForFunction(() => !document.querySelector('.model-trigger').disabled)
+  await page.waitForFunction(() => !document.querySelector('.model-trigger')?.shadowRoot?.querySelector('button')?.disabled)
   await page.waitForFunction(() => localStorage.getItem('bravebot.conversation-model:["/tmp/bravebot-model-picker-project","A"]')?.includes('sonnet'))
 
   await page.locator('.session').filter({ hasText: 'Conversation B' }).click()
@@ -138,11 +145,11 @@ try {
       return { ok: { turn: 1 } }
     })
   })
-  await page.locator('.sidebar-tab').nth(1).click()
+  await page.locator('[data-test="sidebar-tabs"]').getByText('Bots', { exact: true }).click()
   await page.getByRole('button', { name: 'New bot', exact: true }).click()
   const form = page.locator('.bot-form')
-  await form.getByLabel('Name', { exact: true }).fill('Web dev model test')
-  await form.getByLabel('Purpose', { exact: true }).fill('Build accessible websites.')
+  await form.getByRole('textbox', { name: 'Name', exact: true }).fill('Web dev model test')
+  await form.getByRole('textbox', { name: 'Purpose', exact: true }).fill('Build accessible websites.')
   await form.getByRole('button', { name: 'Choose a folder…' }).click()
   const preview = form.locator('[data-avatar]')
   const firstFace = await preview.getAttribute('data-avatar')
@@ -150,7 +157,7 @@ try {
   await page.waitForFunction((first) => document.querySelector('.bot-form [data-avatar]')?.getAttribute('data-avatar') !== first, firstFace)
   const chosenFace = await preview.getAttribute('data-avatar')
   const avatarBox = await preview.boundingBox()
-  const nameBox = await form.getByLabel('Name', { exact: true }).boundingBox()
+  const nameBox = await form.getByRole('textbox', { name: 'Name', exact: true }).boundingBox()
   assert(nameBox.x > avatarBox.x + avatarBox.width, 'name is beside the avatar')
   await form.locator('.model-trigger').click()
   await search.fill('no-such-model')
@@ -176,7 +183,7 @@ try {
   await search.press('Enter')
   await page.waitForFunction(async () => (await window.bravebot.readBots())[0]?.model?.includes('haiku'))
   await page.reload()
-  await page.locator('.sidebar-tab').nth(1).click()
+  await page.locator('[data-test="sidebar-tabs"]').getByText('Bots', { exact: true }).click()
   await botRow.click()
   await page.getByRole('button', { name: 'New conversation', exact: true }).click()
   await page.getByRole('button', { name: "Don't trust", exact: true }).click()
@@ -184,7 +191,7 @@ try {
   assert.match(await botTrigger.getAttribute('aria-label'), /haiku/)
   await page.locator('.composer textarea').fill('Use the saved bot model')
   await page.locator('.composer .send').click()
-  await page.waitForFunction(() => document.querySelector('.composer .model-trigger')?.disabled)
+  await page.waitForFunction(() => document.querySelector('.composer .model-trigger')?.shadowRoot?.querySelector('button')?.disabled)
   const botSent = await app.evaluate(() => globalThis.modelTest.botSent)
   assert.equal(botSent.model, 'openrouter/anthropic/claude-haiku-4.5')
   assert.equal(botSent.slug, stored.slug)
@@ -195,4 +202,5 @@ try {
 } finally {
   await app.close()
   rmSync(profile, { recursive: true, force: true })
+  rmSync('/tmp/bravebot-model-picker-project', { recursive: true, force: true })
 }

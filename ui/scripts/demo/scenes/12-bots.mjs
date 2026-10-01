@@ -60,7 +60,7 @@ export default {
       rmSync(join(bot.directory, '.bravebot-ui', 'bots', `${bot.slug}.md`), { force: true })
     }
 
-    const tab = page.locator('.sidebar-tab').nth(1)
+    const tab = page.locator('.sidebar-tabs [role="option"]').nth(1)
     if (!(await tab.count())) s.skip('this build has no bots tab')
 
     await s.say('Bots', 'The left column holds two lists. This is the other one.', 2.2)
@@ -97,9 +97,9 @@ export default {
     const form = page.locator('.bot-form')
     if (!(await form.count())) s.skip('the new-bot form did not open')
 
-    await s.slowType(form.locator('input').first(), NAME)
+    await s.slowType(form.getByRole('textbox', { name: 'Name', exact: true }), NAME)
     await s.beat(0.5)
-    await s.slowType(form.locator('textarea').first(), PURPOSE)
+    await s.slowType(form.getByRole('textbox', { name: 'Purpose', exact: true }), PURPOSE)
     await s.beat(0.8)
 
     const choose = form.locator('.bot-choose')
@@ -169,7 +169,7 @@ export default {
     await s.click(row.locator('.bot-edit'))
     await page.waitForTimeout(700)
 
-    const purpose = page.locator('.bot-form textarea').first()
+    const purpose = page.locator('.bot-form').getByRole('textbox', { name: 'Purpose', exact: true })
     if (await purpose.count()) {
       await s.spotlight(purpose, 2.0)
       await s.unspot()

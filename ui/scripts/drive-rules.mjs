@@ -96,10 +96,14 @@ try {
 
   const composer = page.locator('.composer textarea')
   const stop = page.locator('.composer .stop')
+  const replies = page.locator('.bubble.assistant')
+  // A turn the fixture answers at once can show and hide Stop between two polls, so a turn is
+  // waited out by its reply.
   const ask = async (prompt) => {
+    const before = await replies.count()
     await composer.fill(prompt)
     await page.locator('.composer .send').click()
-    await stop.waitFor({ state: 'visible' })
+    await replies.nth(before).waitFor()
     await stop.waitFor({ state: 'hidden' })
   }
 
@@ -129,7 +133,8 @@ try {
   await page.screenshot({ path: join(output, 'rules-refused.png') })
 
   // ---- the rules in force, in the permissions dialog ----------------------------------------
-  await page.getByRole('button', { name: 'Permissions', exact: true }).click()
+  await page.getByRole('button', { name: 'More', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Permissions…', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Conversation permissions', exact: true })
   await dialog.getByText('Rules from settings files', { exact: true }).waitFor()
   const listed = await dialog.innerText()

@@ -1,31 +1,75 @@
-import { useId, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
+import { Icon, Input } from '../nala'
 
-/** Keep search optional, while never hiding an active filter. */
-export function SidebarTools({ action, children, query, onQuery, label }: {
-  action: ReactNode
-  children?: ReactNode
+/**
+ * The search field at the head of a sidebar list, and whatever sits beside it.
+ *
+ * Always shown rather than behind a toggle: a filter that has to be opened first is one more
+ * step every time, and an active query must never be hidden behind a closed control. Escape
+ * clears it, the way a search field does everywhere else on the platform.
+ */
+export function SidebarSearch({ query, onQuery, label, placeholder, children }: {
   query: string
   onQuery: (value: string) => void
+  /** The accessible name, which drivers and screen readers find it by. */
   label: string
+  placeholder: string
+  children?: ReactNode
 }): React.JSX.Element {
-  const [expanded, setExpanded] = useState(false)
-  const trigger = useRef<HTMLButtonElement>(null)
-  const id = useId()
-  const close = () => { onQuery(''); setExpanded(false); trigger.current?.focus() }
-  return <>
-    <div className="sidebar-actions">
-      <div className="sidebar-create">{action}</div>
-      <button ref={trigger} className="sidebar-search-toggle" aria-label={label} title={label}
-        aria-expanded={expanded} aria-controls={id} onClick={() => expanded ? close() : setExpanded(true)}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg>
-      </button>
+  const field = useRef<HTMLElement>(null)
+  const latest = useRef({ query, onQuery })
+  latest.current = { query, onQuery }
+  useEffect(() => {
+    const host = field.current
+    if (!host) return
+    const keys = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape' || !latest.current.query) return
+      event.preventDefault()
+      event.stopPropagation()
+      latest.current.onQuery('')
+    }
+    host.addEventListener('keydown', keys)
+    return () => host.removeEventListener('keydown', keys)
+  }, [])
+  return (
+    <div className="sidebar-search-row">
+      <Input
+        ref={field}
+        type="search"
+        size="small"
+        className="sidebar-search"
+        aria-label={label}
+        placeholder={placeholder}
+        value={query}
+        data-test="sidebar-search"
+        onInput={({ value }) => onQuery(value)}
+        onChange={({ value }) => onQuery(value)}
+      >
+        <Icon name="search" slot="left-icon" />
+      </Input>
       {children}
     </div>
-    {expanded && <div className="sidebar-search" id={id}>
-      <input autoFocus type="search" className="session-find" aria-label={label} placeholder={`${label}…`}
-        value={query} onChange={event => onQuery(event.target.value)}
-        onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); close() } }} />
-      <button aria-label="Close search" title="Clear and close search" onClick={close}>×</button>
-    </div>}
-  </>
+  )
+}
+
+/**
+ * A full-width row button in the sidebar's head or foot: an icon, a label, and the shortcut
+ * that does the same thing, in caption ink on the right.
+ */
+export function SidebarRow({ icon, label, hint, className, onClick, 'data-test': dataTest }: {
+  icon: 'plus-add' | 'settings'
+  label: string
+  hint?: string
+  className?: string
+  onClick: () => void
+  'data-test'?: string
+}): React.JSX.Element {
+  return (
+    <button type="button" className={`sidebar-row${className ? ` ${className}` : ''}`} onClick={onClick} data-test={dataTest}
+      aria-keyshortcuts={hint === '⌘N' ? 'Meta+N' : undefined}>
+      <Icon name={icon} />
+      <span className="sidebar-row-label">{label}</span>
+      {hint && <kbd className="sidebar-row-hint" aria-hidden="true">{hint}</kbd>}
+    </button>
+  )
 }

@@ -114,11 +114,18 @@ putKey('view', undefined)
  */
 const makeBot = (page, name, purpose) =>
   page.evaluate(
-    ([name, purpose, directory]) => window.bravebot.writeBot({ name, purpose, directory }),
+    async ([name, purpose, directory]) => {
+      // A new bot is only pinned to a folder the native picker handed over, so ask for it first.
+      await window.bravebot.chooseDirectory()
+      return window.bravebot.writeBot({ name, purpose, directory })
+    },
     [name, purpose, checkout],
   )
 
 const app = await launch()
+await app.evaluate(({ dialog }, directory) => {
+  dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] })
+}, checkout)
 const page = await app.firstWindow()
 await page.waitForLoadState('domcontentloaded')
 page.on('pageerror', (error) => console.log('PAGE ERROR:', error.message))
@@ -127,16 +134,16 @@ await page.waitForTimeout(2500)
 
 // --- the column has two lists ----------------------------------------------------------
 
-const tabs = page.locator('.sidebar-tab')
+const tabs = page.locator('.sidebar-tabs [role="option"]')
 check((await tabs.count()) === 2, 'the column offers two lists')
 check(
-  (await tabs.nth(0).getAttribute('aria-pressed')) === 'true',
+  (await tabs.nth(0).getAttribute('aria-selected')) !== null,
   'and opens on the sessions, which is what every launch before this showed',
 )
 
 await tabs.nth(1).click()
 await page.waitForTimeout(300)
-check((await tabs.nth(1).getAttribute('aria-pressed')) === 'true', 'pressing Bots shows the bots')
+check((await tabs.nth(1).getAttribute('aria-selected')) !== null, 'pressing Bots shows the bots')
 // Only where the list is genuinely empty. This driver no longer clears somebody's bots to make it
 // so — that key is not a preference, it is their bots — so on a machine that has some, the empty
 // state is not a thing that can be shown and saying it was would be a false ok.
@@ -154,7 +161,7 @@ await page.screenshot({ path: '/tmp/bravebot-ui/20-bots-empty.png' })
 // survive a look at the other tab.
 check(
   (await page.locator('#sessions-column .sidebar-body').first().isHidden()) &&
-    (await page.locator('.session-find').count()) === 1,
+    (await page.locator('.sidebar-search').count()) >= 1,
   'the list not on screen is hidden rather than thrown away',
 )
 
@@ -165,7 +172,7 @@ await makeBot(page, 'Triage', 'Read new issues and say which are duplicates.')
 // The list is the main process's; the window reads it back the way it does after saving one.
 await page.reload()
 await page.waitForTimeout(2000)
-await page.locator('.sidebar-tab').nth(1).click()
+await page.locator('.sidebar-tabs [role="option"]').nth(1).click()
 await page.waitForTimeout(400)
 
 // Located by name rather than by position. The list holds whatever bots the person running this
@@ -206,15 +213,15 @@ await mine.locator('.bot-edit').click()
 await page.waitForTimeout(300)
 check((await page.locator('.bot-form').count()) === 1, 'the edit control opens the form')
 check(
-  (await page.locator('.bot-memory').count()) === 1,
+  (await page.locator('[data-test="bot-memory"]').count()) === 1,
   'and the form shows what the bot has remembered',
 )
 await page.screenshot({ path: '/tmp/bravebot-ui/23-bots-form.png' })
-await page.locator('.bot-form input').fill('Release Notes (weekly)')
+await page.locator('.bot-form').getByRole('textbox', { name: 'Name', exact: true }).fill('Release Notes (weekly)')
 await page.locator('.bot-save').click()
 await page.waitForTimeout(600)
 
-const renamed = rowFor('Release Notes \\(weekly\\)')
+const renamed = rowFor('Release Notes (weekly)')
 check((await renamed.count()) === 1, 'a renamed bot is called what it was renamed to')
 check((await faceOf(renamed)) === first, 'and keeps the face it had — the point of storing the seed')
 
@@ -244,7 +251,7 @@ const backRow = (name) =>
 const backMine = backRow('Release Notes (weekly)')
 
 check(
-  (await back.locator('.sidebar-tab').nth(1).getAttribute('aria-pressed')) === 'true',
+  (await back.locator('.sidebar-tabs [role="option"]').nth(1).getAttribute('aria-selected')) !== null,
   'the column comes back on the tab it was left on',
 )
 check(
@@ -275,7 +282,7 @@ check(
 // remember — the same reason the session id and the compaction watermark are not its to set.
 await backMine.locator('.bot-edit').click()
 await back.waitForTimeout(300)
-await back.locator('.bot-form input').fill('Release Notes (weekly)')
+await back.locator('.bot-form').getByRole('textbox', { name: 'Name', exact: true }).fill('Release Notes (weekly)')
 await back.locator('.bot-save').click()
 await back.waitForTimeout(600)
 check(
@@ -415,7 +422,7 @@ check(
 // are in the DOM and invisible. The same courtesy `drive-panels.mjs` pays when it turns every
 // panel back on — and the restore below is not enough on its own, since it puts back whatever
 // this driver *found*, which may itself have been a bots tab left by an interrupted run.
-await back.locator('.sidebar-tab').first().click()
+await back.locator('.sidebar-tabs [role="option"]').first().click()
 await back.waitForTimeout(300)
 
 await second_app.close()

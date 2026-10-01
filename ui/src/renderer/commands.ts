@@ -33,6 +33,10 @@ export interface CommandActions {
   cancel: () => void
   toggle: (side: Side) => void
   resetColumns: () => void
+  /** Open the find bar over the transcript. */
+  find: () => void
+  /** Put the caret in the composer. */
+  focusComposer: () => void
   about: () => void
   doctor: () => void
   /** Open the session a right-click named. */
@@ -56,10 +60,10 @@ export interface CommandActions {
   /** Flip whether an export carries the tool calls as well as the conversation. */
   toggleExportTools: () => void
   /**
-   * Open the theme picker.
+   * Open the appearance picker.
    *
-   * Here rather than among the things this module may not reach, because a theme is not an
-   * answer: the names are read off disk and drawn for a person, nothing about them is labelled,
+   * Here rather than among the things this module may not reach, because an appearance is not an
+   * answer: System / Light / Dark are drawn for a person, nothing about them is labelled,
    * and choosing one decides nothing the agent asked. The paragraphs above are about approvals,
    * and this is not one.
    */
@@ -119,6 +123,10 @@ export function useCommandRouter(actions: CommandActions): void {
           return act.toggle('right')
         case 'view.reset-columns':
           return act.resetColumns()
+        case 'view.find':
+          return act.find()
+        case 'view.focus-composer':
+          return act.focusComposer()
         case 'view.theme':
           return act.theme()
         case 'app.about':

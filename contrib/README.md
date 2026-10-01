@@ -91,6 +91,47 @@ target itself.
 passes on this tree today and would have passed on the tree that shipped the front end at 0.1.0.
 `--root` points it at another tree, which is what the selftest uses.
 
+## check-deny-reasons.py
+
+Fails an exception in `deny.toml` that has no `reason`.
+
+cargo-deny makes `reason` optional on an advisory to ignore, a duplicate to skip and a crate to ban,
+and accepts a bare string in place of the table. An ignored advisory is one the binary ships with
+anyway, so an entry with no reason gives a reviewer nothing to agree to. It reads `[advisories]
+ignore` and `[bans]` `skip`, `skip-tree` and `deny`. Whether a reason is good is still a review
+question (DEP-001).
+
+```sh
+make check-deps           # runs it before building cargo-deny
+contrib/check-deny-reasons.py
+```
+
+`--selftest` checks the verdict on inputs whose answer is known and reads no file. CI reaches it
+through the Dependency policy job.
+
+## check-narration.py
+
+Fails a change that narrates its writer's own process.
+
+Reads the commit messages a change adds, the pull request title and body where `PR_TITLE` and
+`PR_BODY` are set, and every line the change adds, and fails on a first-person phrase from a fixed
+list: a correction of an earlier claim, or an account of what was guessed, assumed or checked. The
+rule is in [commits.md](../docs/development/commits.md). A paraphrase passes, so a reviewer still
+reads for it, and nothing allows a hit: the sentence is reworded to state what is true about the
+code. This file is the one path not read, since it lists the phrases.
+
+```sh
+make check-narration            # this branch against its merge base with upstream/main or origin/main
+make check-narration BASE=<ref> # or against another ref
+```
+
+In CI it reads the pull request's commits, from the base to the tip of the branch, and the diff of
+the merge commit against the base. Locally it reads the branch's commits, its uncommitted edits
+and its untracked files. The
+[narration workflow](../.github/workflows/narration.yml) is separate from `ci.yml` so that editing
+a title or body runs this alone. `--selftest` builds a repository and checks what each source
+contributes; `make check-narration` runs it first.
+
 ## affected-checks.py
 
 Says which checks a change needs, from the paths it touches. CI's `Affected checks` job runs it on

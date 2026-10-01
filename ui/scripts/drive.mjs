@@ -33,7 +33,7 @@ if (sessions > 0) {
   titles.forEach((t, i) => console.log(`  - ${t.slice(0, 54)}  [${where[i]}]`))
 }
 
-const build = await page.locator('.build').textContent().catch(() => null)
+const build = await page.locator('.sessions').getAttribute('data-build').catch(() => null)
 console.log(`agent build      : ${build ?? '(none shown)'}`)
 
 await page.screenshot({ path: `${shots}/01-launched.png`, fullPage: false })
@@ -41,7 +41,7 @@ await page.screenshot({ path: `${shots}/01-launched.png`, fullPage: false })
 // The filter box. Driven before anything is opened, and left empty, because every other
 // driver clicks `.session` first and expects that to be the newest session.
 if (sessions > 0) {
-  const box = page.locator('.session-find')
+  const box = page.getByRole('searchbox', { name: 'Filter sessions', exact: true })
   const first = (await page.locator('.session-title').first().textContent()) ?? ''
   // A word from the newest session's title, long enough not to be in every other one.
   const word = first.split(/\s+/).find((w) => w.length > 4) ?? first.slice(0, 6)
@@ -81,8 +81,22 @@ if (sessions > 0) {
   // this starts by putting the column flat rather than assuming it inherited it that way,
   // and puts it back flat at the end — the drivers share persisted state, and one that left
   // the list grouped would change what the next one's `.session` counts mean.
-  const toggle = page.locator('.session-group')
-  const pressed = async () => (await toggle.getAttribute('aria-pressed')) === 'true'
+  // Grouping lives in View options, as a checkable item; `toggle` flips it through the menu.
+  const options = page.locator('[data-test="view-options"]')
+  const item = page.getByRole('menuitemcheckbox', { name: 'Group by project' })
+  const pressed = async () => {
+    await options.click()
+    const on = (await item.getAttribute('aria-checked')) === 'true'
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(100)
+    return on
+  }
+  const toggle = {
+    click: async () => {
+      await options.click()
+      await item.click()
+    },
+  }
   if (await pressed()) {
     await toggle.click()
     await page.waitForTimeout(200)
@@ -185,7 +199,7 @@ if (sessions > 0) {
   await page.waitForTimeout(200)
   const narrowed = await page.locator('.session-group-section').evaluateAll((sections) =>
     sections.map((section) => ({
-      path: section.querySelector('.session-group-fold')?.getAttribute('title') ?? '',
+      path: section.querySelector('.session-group-fold')?.getAttribute('data-tooltip') ?? '',
       rows: section.querySelectorAll('.session').length,
     }))
   )
@@ -207,7 +221,7 @@ if (sessions > 0) {
   // since been deleted or moved, and the bridge rightly refuses those with `not_a_directory`
   // — a real answer, but not the one this assertion is about.
   const paths = await page.locator('.session-group-fold').evaluateAll((heads) =>
-    heads.map((head) => head.getAttribute('title') ?? '')
+    heads.map((head) => head.getAttribute('data-tooltip') ?? '')
   )
   const where = paths.find((path) => path && existsSync(path))
   if (!where) {
@@ -215,7 +229,7 @@ if (sessions > 0) {
   } else {
     const head = page
       .locator('.session-group-head')
-      .filter({ has: page.locator(`.session-group-fold[title="${where}"]`) })
+      .filter({ has: page.locator(`.session-group-fold[data-tooltip="${where}"]`) })
     await head.locator('.session-group-new').click()
     await page.waitForTimeout(900)
     const asked = (await page.locator('.trust .path').textContent().catch(() => null)) ?? ''
@@ -227,7 +241,7 @@ if (sessions > 0) {
   // Declined rather than trusted: this is not a session anybody meant to keep, and saying
   // yes here would be answering a question about somebody's real checkout on their behalf.
   if (await page.locator('.trust').isVisible().catch(() => false)) {
-    await page.locator('.trust-actions .decline').click()
+    await page.locator('[data-test="trust-decline"]').click()
     await page.waitForTimeout(400)
   }
 
@@ -261,18 +275,17 @@ if (sessions > 0) {
   const named = async (what, selector) => {
     const found = page.locator(selector).first()
     if (!(await found.count())) return console.log(`  – ${what}: not on screen, skipped`)
-    const said = await found.getAttribute('title')
+    const said = (await found.getAttribute('data-tooltip')) ?? (await found.getAttribute('title'))
     console.log(`  ${said ? '·' : '✗'} ${what}: ${said ?? 'NO TITLE  FAIL'}`)
   }
   console.log('tooltips')
   await named('divider', '.gutter:not(.inert)')
-  await named('filter box', '.session-find')
-  await named('group toggle', '.session-group')
+  await named('view options', '[data-test="view-options"] .icon-button')
   await named('session title', '.session-title')
   await named('header path', '.transcript-head .where')
-  await named('context section', '.panel-head')
-  await named('a file read', '.files code')
-  await named('a run of steps', '.tool-run-head')
+  await named('context section', '.panel-collapse .panel-title')
+  await named('a file read', '.files [data-tooltip]')
+  await named('a run of steps', '.tool-run-collapse summary')
   await named('a link the model wrote', '.bubble a[href]')
   await named('a confined origin', '.quarantine-head .origin')
 }

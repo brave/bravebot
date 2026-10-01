@@ -17,8 +17,7 @@ import { parseView } from '../shared/view'
 import { parseContextRef, parseWindowState } from '../shared/commands'
 import { installMenu, popupContext, rebuildMenu, refreshMenu } from './menu'
 import { noteProject, recents } from './recents'
-import { putBots, putLayout, putPanels, putTheme, putView, readState } from './state'
-import { parsePanels } from '../shared/state'
+import { putBots, putLayout, putTheme, putView, readState } from './state'
 import { isProjectPath } from '../shared/recents'
 import { forks, noteFork } from './forks'
 import {
@@ -53,8 +52,8 @@ import {
   type ExportOutcome,
 } from '../shared/export'
 import { printToPdf } from './export'
-import { readThemes, themesDirectory, watchThemes } from './theme'
-import { parseChosenTheme } from '../shared/theme'
+import { applyNativeAppearance } from './theme'
+import { parseAppearance } from '../shared/theme'
 import { readExperience, writeExperience } from './experience'
 import { editMemory, memoryHistory, snapshotMemory, removeMemoryHistory } from './memory'
 
@@ -91,6 +90,27 @@ interface BotFailure {
 }
 
 let window: BrowserWindow | null = null
+
+/**
+ * Send to the window's page, or nothing where it has gone. Focus and blur events, bridge messages
+ * and a consolidation ending can all arrive while the page is closing, reloading or has crashed,
+ * and Electron logs "Render frame was disposed" for a message sent to a frame that is gone. There
+ * is nobody left to receive it. The frame is checked rather than the send wrapped, because
+ * Electron catches that failure itself and logs it before returning.
+ */
+function tell(channel: string, ...args: unknown[]): void {
+  const contents = window?.webContents
+  if (!contents || contents.isDestroyed()) return
+  let frame
+  try {
+    frame = contents.mainFrame
+  } catch {
+    return
+  }
+  if (frame.isDestroyed() || frame.detached) return
+  frame.send(channel, ...args)
+}
+
 let bridge: Bridge | null = null
 // Model discovery uses its own process so a slow listing never blocks live turn replies.
 let selectedSettings: string | null = null
@@ -118,7 +138,6 @@ function listModels(directory?: string): Promise<unknown> {
   return modelListing
 }
 
-let stopWatchingThemes: (() => void) | null = null
 
 /**
  * Send a turn as a bot, which is the only path that may name a file.
@@ -213,7 +232,7 @@ async function sendBotTurn(
  * did not happen.
  */
 function ended(session: string, slug: string | null, delivered: boolean): void {
-  window?.webContents.send('bravebot:bots:consolidated', { session, slug, delivered })
+  tell('bravebot:bots:consolidated', { session, slug, delivered })
 }
 
 async function consolidate(session: string, slug: string): Promise<void> {
@@ -222,7 +241,7 @@ async function consolidate(session: string, slug: string): Promise<void> {
   // Set before the send rather than after it, because the answer can arrive before an `await`
   // resumes and a flag set late is a flag that was never set.
   consolidating.add(session)
-  window?.webContents.send('bravebot:bots:consolidating', { session, slug })
+  tell('bravebot:bots:consolidating', { session, slug })
   const answer = await sendBotTurn(
     session,
     held,
@@ -256,11 +275,11 @@ function createWindow(): void {
     ...(process.platform === 'darwin'
       ? {
           titleBarStyle: 'hiddenInset' as const,
-          trafficLightPosition: { x: 16, y: 18 },
+          trafficLightPosition: { x: 16, y: 24 },
           vibrancy: 'sidebar' as const,
           backgroundColor: '#00000000',
         }
-      : { backgroundColor: '#181818' }),
+      : { backgroundColor: '#141415' }),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -271,6 +290,9 @@ function createWindow(): void {
   })
 
   window.once('ready-to-show', () => window?.show())
+  // The renderer quiets its accents while the window is in the background, as native windows do.
+  window.on('focus', () => tell('bravebot:window:active', true))
+  window.on('blur', () => tell('bravebot:window:active', false))
 
   // Nothing in this app navigates anywhere. A link opens in the user's browser, and an
   // in-window navigation is refused outright rather than sandboxed.
@@ -338,7 +360,7 @@ function createWindow(): void {
     // same window in the order they are sent, and the wrong order here is visible: a consolidation
     // announced before the `turn.done` that provoked it draws its line above the reply it comes
     // after, which reads as though the app interrupted rather than followed.
-    window?.webContents.send('bravebot:event', message)
+    tell('bravebot:event', message)
     after?.()
   }, selectedSettings)
 
@@ -350,19 +372,6 @@ function createWindow(): void {
   }, 1000)
   window.on('closed', () => { if (watchClock) clearInterval(watchClock); watchClock = null })
 
-  // Watching the palettes directory, so that editing one is an editing loop rather than a relaunch
-  // each time. Torn down with the window rather than at quit: on macOS the last window can close
-  // and a new one be built from the dock, and a watcher left holding a `webContents` that is gone
-  // would be one more thing keeping it alive.
-  stopWatchingThemes?.()
-  stopWatchingThemes = watchThemes(() => {
-    window?.webContents.send('bravebot:theme:changed', {
-      themes: readThemes(),
-      chosen: readState().theme,
-      directory: themesDirectory(),
-    })
-  })
-
   if (process.env.ELECTRON_RENDERER_URL) {
     void window.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
@@ -370,8 +379,6 @@ function createWindow(): void {
   }
 
   window.on('closed', () => {
-    stopWatchingThemes?.()
-    stopWatchingThemes = null
     bridge?.dispose()
     bridge = null
     runningHandles.clear()
@@ -384,6 +391,7 @@ function createWindow(): void {
   // dock icon builds a new one — with the menu installed once, every item would still be
   // pointing at the window that was closed, and the whole menu would go quiet with nothing
   // on screen to say why.
+  applyNativeAppearance(parseAppearance(readState().theme))
   installMenu(window)
 }
 
@@ -606,7 +614,7 @@ app.whenReady().then(() => {
   })
 
   // What the window remembers between launches: the column widths and folds, how the session
-  // list is arranged, and which panels the context column is showing.
+  // list is arranged.
   //
   // A file rather than `localStorage`, because the renderer is loaded from `file://` and
   // Chromium does not keep storage for that origin across launches — writes work for the
@@ -745,29 +753,18 @@ app.whenReady().then(() => {
     },
   )
 
-  ipcMain.handle('bravebot:panels:read', () => readState().panels)
-
-  ipcMain.handle('bravebot:panels:write', (_event, value: unknown) => putPanels(parsePanels(value)))
-
-  // The theme. The chosen name is a key in the same file as the three above; the list it is chosen
-  // from is built here, because reading a directory of palettes is not something the renderer does.
-  //
-  // What crosses is a *name*. Not a path — the renderer cannot see the filesystem and this does not
-  // become the first place it can reach one — and not a colour either, so nothing painted in this
-  // window is something the renderer composed. Validated on the way in like the rest, and checked
-  // against the list as well: a name nobody is offering is a bug on this side rather than a
-  // preference, and writing it down would outlive the session that caused it.
+  // Appearance: System / Light / Dark. The name is a key in the same file as the columns;
+  // Electron's nativeTheme is told so scrollbars and vibrancy follow the page.
 
   ipcMain.handle('bravebot:theme:read', () => ({
-    themes: readThemes(),
-    chosen: readState().theme,
-    directory: themesDirectory(),
+    chosen: parseAppearance(readState().theme),
   }))
 
   ipcMain.handle('bravebot:theme:write', (_event, value: unknown) => {
-    const name = parseChosenTheme(value)
-    if (!readThemes().some((theme) => theme.name === name)) return
-    putTheme(name)
+    const appearance = parseAppearance(value)
+    putTheme(appearance)
+    applyNativeAppearance(appearance)
+    tell('bravebot:theme:changed', { chosen: appearance })
   })
 
   // Choosing a project is a native affair: the renderer cannot see the filesystem and

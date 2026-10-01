@@ -24,7 +24,7 @@ async function banner(auto) {
     const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
     await trust.getByRole('button', { name: 'Trust this directory' }).click()
     await trust.waitFor({ state: 'hidden' })
-    const notice = page.locator('.transcript-head .vetting-banner')
+    const notice = page.locator('.entries .session-banner')
     if (auto) await notice.waitFor()
     const shown = await notice.count() ? await notice.innerText() : null
     mkdirSync('/tmp/bravebot-ui', { recursive: true })

@@ -31,10 +31,16 @@ On macOS or Linux, from the repository root:
    bravebot mcp add brave -s user --dir ~/.bravebot-browser -- <path to>/bravebot-browser mcp
    ```
 
-A session then offers `brave:get_platform_info`, `brave:list_tabs`, `brave:read_page`,
-`brave:search_history` and `brave:search_bookmarks`, and asks you before each call, as it does for
-any server. Ask it for the platform Brave runs on to check the extension answers: that tool tells
-nothing about you, and it is the only one on until you turn others on in the extension's options.
+4. Check it answers. Start a session and ask it to call `brave:get_platform_info`, which returns
+   the operating system and architecture Brave runs on and nothing about you. It is the only tool
+   on until you turn others on.
+
+5. Turn on the tools you want. In `brave://extensions`, choose **Details** on BraveBot, then
+   **Extension options**. A switch saves as soon as it changes, and the next call uses it.
+
+A session offers `brave:get_platform_info`, `brave:list_tabs`, `brave:read_page`,
+`brave:search_history` and `brave:search_bookmarks`. It asks you to accept that list the first time,
+and again whenever the list changes, then asks you before each call, as it does for any server.
 
 ## What it may do
 
@@ -48,6 +54,23 @@ characters of its text, saying when it cut a page short. Brave's own pages, such
 the Web Store cannot be read.
 
 What the extension returns reaches the session as any server's result does: untrusted, and private.
+
+## When it does not answer
+
+- **No Brave extension is connected.** Brave is not running, the extension is off or not loaded in
+  `brave://extensions`, or Brave could not start the relay. Run `install` again if the relay has
+  moved since you last did, since the manifest names it by its path.
+- **`<tool>` is turned off in the BraveBot extension's options.** Turn it on, as in step 5.
+- **The Brave extension did not reply within 30 seconds.** The call can be made again.
+
+## Removing it
+
+1. `bravebot mcp remove brave`.
+2. Choose **Remove** on BraveBot in `brave://extensions`. The relay stops with it.
+3. Delete the host manifest `install` wrote, `com.brave.bravebot.json` in
+   `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/` on macOS, or
+   `~/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts/` on Linux.
+4. Delete `~/.bravebot-browser`.
 
 ## Tests
 

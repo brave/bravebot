@@ -9,7 +9,7 @@
 
 /** What each side column may be, and where it starts. */
 export const SIDES = {
-  left: { min: 200, max: 400, initial: 250 },
+  left: { min: 220, max: 400, initial: 260 },
   right: { min: 240, max: 420, initial: 300 },
 } as const
 
@@ -66,11 +66,11 @@ export const shown = (layout: Layout, side: Side): number =>
 /**
  * How long a fold takes, for the code that has to wait for one.
  *
- * Must match `--panel-duration` in the stylesheet, which is the timing the context panels
- * already fold on. The value is duplicated because CSS owns the animation and JavaScript
- * owns when it is armed; there is no reading one from the other that is worth the cost.
+ * Must match `--panel-duration` in `styles/tokens.css`, which is Leo's `--leo-duration-m`. The
+ * value is duplicated because CSS owns the animation and JavaScript owns when it is armed;
+ * there is no reading one from the other that is worth the cost.
  */
-export const FOLD_MS = 180
+export const FOLD_MS = 200
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(Math.round(value), min), max)

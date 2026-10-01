@@ -226,6 +226,34 @@ test('diff line numbers account for elided spans, insertions and deletions', () 
   assert.equal(searchableText({ kind: 'user', id: 'internal-secret-id', text: 'Visible prompt' }), 'Visible prompt')
 })
 
+test('a rewritten line marks only the words that changed, on both sides', () => {
+  const { intraline, numberedDiffLines, diffStats } = load('src/renderer/transcript.ts')
+  const words = intraline('  private lock = new Mutex()', '  private readLock = new RwLock()')
+  const changed = (spans) => spans.filter((span) => span.changed).map((span) => span.text)
+  assert.deepEqual(changed(words.removed), ['lock', 'Mutex'])
+  assert.deepEqual(changed(words.added), ['readLock', 'RwLock'])
+  // Nothing is lost or invented: each side joins back into its own line.
+  assert.equal(words.removed.map((span) => span.text).join(''), '  private lock = new Mutex()')
+  assert.equal(words.added.map((span) => span.text).join(''), '  private readLock = new RwLock()')
+  // Two lines sharing only whitespace are a replacement, and emphasising all of it says nothing.
+  assert.equal(intraline('alpha beta', 'gamma delta'), null)
+
+  const lines = numberedDiffLines([
+    { kind: 'kept', text: 'class Store {' },
+    { kind: 'removed', text: 'let a = 1' },
+    { kind: 'added', text: 'let a = 2' },
+    { kind: 'added', text: 'let b = 3' },
+    { kind: 'removed', text: 'orphan' },
+  ])
+  assert.equal(lines[0].spans, undefined)
+  assert.deepEqual(changed(lines[1].spans), ['1'])
+  assert.deepEqual(changed(lines[2].spans), ['2'])
+  // The second addition has no removal to pair with, and the trailing removal follows no run.
+  assert.equal(lines[3].spans, undefined)
+  assert.equal(lines[4].spans, undefined)
+  assert.deepEqual(diffStats([{ kind: 'elided', lines: 9 }, { kind: 'added', text: 'x' }, { kind: 'removed', text: 'y' }, { kind: 'added', text: 'z' }]), { added: 2, removed: 1 })
+})
+
 
 test('ending a turn invalidates pending approvals without changing prior decisions', () => {
   const { interruptPending, outstanding } = load('src/renderer/transcript.ts')
@@ -253,19 +281,17 @@ test('request IDs reused in later turns never rewrite prior answers or approvals
 })
 
 
-test('built-in accent and message foregrounds meet normal-text contrast', () => {
-  const { BUILTINS, roleVariables } = load('src/shared/theme.ts')
-  const luminance = (hex) => {
-    const linear = hex.slice(1).match(/../g).map((channel) => parseInt(channel, 16) / 255).map((c) => c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4)
-    return .2126 * linear[0] + .7152 * linear[1] + .0722 * linear[2]
-  }
-  for (const theme of BUILTINS) for (const dark of [false, true]) {
-    const vars = roleVariables(theme, dark)
-    for (const role of ['note', 'primary']) {
-      const a = luminance(vars[`--role-${role}`]), b = luminance(vars[`--role-${role}-ink`])
-      assert.ok((Math.max(a, b) + .05) / (Math.min(a, b) + .05) >= 4.5, `${theme.name} ${role}`)
-    }
-  }
+test('appearance parsing accepts system/light/dark and maps legacy names to system', () => {
+  const { parseAppearance, APPEARANCES, SYSTEM } = load('src/shared/theme.ts')
+  assert.equal(parseAppearance(undefined), SYSTEM)
+  assert.equal(parseAppearance(''), SYSTEM)
+  assert.equal(parseAppearance('light'), 'light')
+  assert.equal(parseAppearance('dark'), 'dark')
+  assert.equal(parseAppearance('system'), 'system')
+  assert.equal(parseAppearance('brave'), SYSTEM)
+  assert.equal(parseAppearance('nord'), SYSTEM)
+  assert.equal(parseAppearance('catppuccin-mocha'), SYSTEM)
+  assert.deepEqual([...APPEARANCES], ['system', 'light', 'dark'])
 })
 
 
@@ -319,12 +345,36 @@ function liveSession() {
   const { apply } = load('src/renderer/App.tsx')
   const { workingWord } = load('src/renderer/components/Transcript.tsx')
   const session = {
-    live: { handle: 's-1', summary: { title: '', project: '', branch: null, directory: '/', id: 'a' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, checking: null, tokens: 0, running: false, archived: 0, awaitingOrdinal: null, bot: null },
+    live: { handle: 's-1', summary: { title: '', project: '', branch: null, directory: '/', id: 'a' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, checking: null, composing: null, tokens: 0, running: false, archived: 0, awaitingOrdinal: null, bot: null },
   }
   session.send = (event, data) => apply({ event, data }, (update) => { session.live = update(session.live) }, () => {}, () => {})
-  session.word = () => workingWord(session.live.phase, session.live.checking)
+  session.word = () => workingWord(session.live.phase, session.live.checking, session.live.composing)
   return session
 }
+
+// A long call can take minutes to write, and the round's phase is the same for all of it, so the
+// call's name is the only thing that says what the wait is for. It goes when anything else takes over.
+test('the call being written names the wait, and every event that ends it clears it', () => {
+  const session = liveSession()
+  session.send('turn.started', { turn: 1 })
+  session.send('phase', { phase: 'thinking' })
+  session.send('composing', { call: 'Write' })
+  assert.equal(session.word(), 'Preparing a call: Write')
+  session.send('check.started', { lines: 2 })
+  assert.equal(session.word(), 'Checking 2 lines', 'a running check lost the word to the call')
+  session.send('check.finished', {})
+  assert.equal(session.word(), 'Preparing a call: Write')
+  session.send('composing', { call: null })
+  assert.equal(session.word(), 'Thinking', 'an attempt thrown away left its call drawn')
+  for (const [ender, data] of [['phase', { phase: 'planning' }], ['narration', { text: 'Reading it.' }], ['tool.started', { verb: 'Write', target: 'a.txt', why: null, note: null, failed: false, untrusted: false, changes: [], waitedSeconds: null }]]) {
+    session.send('composing', { call: 'Write' })
+    session.send(ender, data)
+    assert.equal(session.live.composing, null, `${ender} left the call being written drawn`)
+  }
+  session.send('composing', { call: 'Read' })
+  session.send('turn.error', { kind: 'failed', message: 'x', category: 'other', attempts: 1, status: null, turn: 1, prompt: 'p', contextTokens: 0, id: null })
+  assert.equal(session.live.composing, null)
+})
 
 // A check is a whole model call inside a tool call whose row is already drawn, and the round's phase
 // does not change while it runs. Where screening is on and the verdict is safe no prompt is drawn
@@ -450,7 +500,7 @@ test('a turn the output limit ended says the limit and what the reply was writin
   const raise = /raise the limit with BRAVEBOT_OUTPUT_BUDGET in the env block of ~\/\.bravebot\/settings\.json\./
 
   const call = failed('too-long', { ceiling: 32000, call: { tool: 'write_file' }, thought: true })
-  assert.match(call, /<strong>The reply reached its output limit<\/strong>/)
+  assert.match(call, /<span slot="title">The reply reached its output limit<\/span>/)
   assert.match(call, /reached its limit of 32,000 tokens part way through a call to write_file, so the call was not made\. Ask for the work in smaller parts, or /)
   assert.match(call, raise)
 

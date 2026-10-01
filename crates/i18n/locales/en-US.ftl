@@ -633,6 +633,10 @@ mcp-dir-not-a-directory = { $path } is not a directory
 mcp-dir-not-a-directory-unshown =
     the word after --dir is not a directory, and is not repeated since it may be a value
 mcp-dir-not-text = { $path } cannot be written into mcp.json, which holds text
+# A server may write its directory, and git runs the commands a repository's configuration names.
+mcp-dir-in-a-repository =
+    { $path } is in the git repository at { $repository }, and a server may write its directory,
+    where git finds commands to run: give it a directory outside any repository
 mcp-not-added = { $alias } was not declared: { $problem }
 mcp-not-declared = no MCP server is declared as { $alias }
 # What is wrong with a declaration, from a flag or from mcp.json. None of these repeats a value: the
@@ -672,7 +676,7 @@ mcp-variables = variables: { $names }
 mcp-variable-stored = { $name } (stored)
 # A file a stored value or an argument names, which the server is let read.
 mcp-may-read = may read: { $path }
-mcp-directory = directory: { $path }
+mcp-directory = directory, which it may write: { $path }
 mcp-digest = digest: { $digest }
 # Where a declaration replaced one that was approved, which of its fields differ.
 mcp-changed = changed: { $fields }
@@ -1436,6 +1440,8 @@ status-time-overhead = unaccounted for
 status-cache = Prompt cache, last turn
 status-cache-read = served from the cache
 status-cache-written = written to it for the next turn
+# The latest turn's cache read as a share of its prompt tokens, on the footer.
+hint-cache-hit-rate = cache { $rate }%
 status-trust = Trust
 status-nothing-vouched-for = nothing vouched for
 status-trusted = trusted

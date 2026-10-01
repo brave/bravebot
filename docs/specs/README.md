@@ -22,7 +22,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [delegation.md](delegation.md) | `DELEGATE` | 24 | a second planner, narrower than the first, and what crosses back from one |
 | [addressing-a-definition.md](addressing-a-definition.md) | `ADDRESS` | 12 | running one of those definitions yourself, in place of describing the work and hoping the planner picks it |
 | [definition-memory.md](definition-memory.md) | `MEMORY` | 11 | what a definition keeps between conversations, which checkout it works in, and the desktop's bots as definitions (the desktop's bots proposed, not built) |
-| [checkouts.md](checkouts.md) | `CHECKOUT` | 21 | a delegate given a checkout of its own, so workers stop editing and building in one tree, and how its work comes back (proposed, not built) |
+| [checkouts.md](checkouts.md) | `CHECKOUT` | 21 | a delegate given a checkout of its own, so workers stop editing and building in one tree, and how its work comes back (partly built) |
 | [turns.md](turns.md) | `TURN` | 7 | how long a turn may go on, what happens when it does not stop, and what is said when it produces nothing, checks nothing or runs into its output ceiling |
 | [prompting.md](prompting.md) | `PROMPT` | 10 | every moment the system stops and puts something to a human, and what an answer grants |
 | [permission-modes.md](permission-modes.md) | `MODE` | 10 | a standing answer to those prompts: accepting edits, planning, or asking about nothing at all |
@@ -41,7 +41,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [scroller.md](scroller.md) | `SCROLL` | 9 | reading back through what happened: the mode Ctrl-O opens over the transcript, and the keys inside it |
 | [credential-protection.md](credential-protection.md) | `CRED` | 25 | where credentials come from, which of them may be held at all, and what each tier owes |
 | [premium-credentials.md](premium-credentials.md) | `PREM` | 9 | importing a Leo Premium subscription and spending its credentials |
-| [sandboxing.md](sandboxing.md) | `SANDBOX` | 13 | operating-system confinement for processes running code we did not write |
+| [sandboxing.md](sandboxing.md) | `SANDBOX` | 14 | operating-system confinement for processes running code we did not write |
 | [mcp.md](mcp.md) | `MCP` | 9 | tools that come from outside this repository, and what they are allowed to do |
 | [mcp-servers.md](mcp-servers.md) | `SERVERS` | 14 | how a person declares one of those servers, what that declaration is trusted for, and what is asked before a tool from one runs |
 | [browser.md](browser.md) | `BROWSER` | 15 | reaching a Brave extension from a session: the relay between them, who starts each half, and how each trusts the other |

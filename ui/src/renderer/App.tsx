@@ -16,14 +16,16 @@ import type {
   TodoRow,
 } from '../shared/protocol'
 import { Sidebar } from './components/Sidebar'
-import { SessionInfo } from './components/Sessions'
-import { Transcript } from './components/Transcript'
+import { SessionInfo, type SessionInfoValue, type SessionStatus } from './components/Sessions'
+import { FIND_EVENT, FOCUS_COMPOSER_EVENT, Transcript } from './components/Transcript'
 import { Context } from './components/Context'
 import { Gutter, useColumns } from './components/Gutter'
 import { shown } from './columns'
 import { TrustPrompt } from './components/TrustPrompt'
 import { Unconfigured } from './components/Unconfigured'
 import { Notice } from './components/Notice'
+import { TooltipLayer } from './components/TooltipLayer'
+import { useEvent, useStableValue } from './hooks'
 import { About, type AboutInfo } from './components/About'
 import { conversationModel, rememberModel } from './models'
 import type { ExportFormat } from '../shared/export'
@@ -37,9 +39,10 @@ import { receiveTurn, type Turns, type TurnDisclosure } from './turn-details'
 import { AuditInspector } from './components/AuditInspector'
 import { conversationKey } from '../shared/experience'
 import { useExperience, conversationPreferences, setConversation, experienceError } from './experience'
-import { ThemePicker } from './components/ThemePicker'
-import { applyTheme, watchAppearance } from './theme'
-import { BRAVE, BRAVE_THEME, BUILTINS, findTheme, type Theme } from '../shared/theme'
+import { showToast } from './toasts'
+import { AppearancePicker } from './components/AppearancePicker'
+import { applyAppearance } from './theme'
+import { SYSTEM, parseAppearance, type Appearance } from '../shared/theme'
 
 /** What the app is doing, which decides most of what the interface offers. */
 interface Live {
@@ -65,6 +68,8 @@ interface Live {
   phase: Phase | null
   /** What a running confined check was given. Beside the phase, which a check does not change. */
   checking: Checking | null
+  /** The word of the tool call the model is writing, while it is; the call itself is not yet drawn. */
+  composing: string | null
   tokens: number
   contextTokens?: number
   running: boolean
@@ -280,24 +285,12 @@ export function App(): React.JSX.Element {
   const [bots, setBots] = useState<Bot[]>([])
 
   /**
-   * What this window is painted in, and whether the picker is open.
+   * Appearance (System / Light / Dark) and whether the picker is open.
    *
-   * The name is remembered in `bravebot-ui.json` like the columns and the panels, and arrives the
-   * same way theirs do — asynchronously, so it cannot seed `useState`.
-   *
-   * Seeded from the set compiled into the app rather than from nothing, so that the picker has
-   * rows even if the read never answers — the palettes somebody wrote are the only part of the
-   * list that has to come off disk.
-   *
-   * The list is kept beside the name for two reasons: the picker has something to open on without
-   * a round trip, and `applyTheme` has a palette to re-resolve against when the system flips to
-   * dark — a palette that names only an accent inherits the other eight, and what it inherits
-   * changes. It can also change under the window, which is what `onThemeChanged` below is for:
-   * somebody editing a palette file should see the window follow.
+   * Remembered in `bravebot-ui.json` like the columns; arrives asynchronously, so it cannot
+   * seed `useState`.
    */
-  const [themes, setThemes] = useState<readonly Theme[]>(BUILTINS)
-  const [chosen, setChosen] = useState(BRAVE)
-  const [themesDirectory, setThemesDirectory] = useState('')
+  const [chosen, setChosen] = useState<Appearance>(SYSTEM)
   const [picking, setPicking] = useState(false)
 
   // Read inside the event handler, which is installed once and must not close over a
@@ -339,70 +332,26 @@ export function App(): React.JSX.Element {
   botsRef.current = bots
 
   /**
-   * The theme in force, kept as a ref so that the appearance watcher below has the current one
-   * without being torn down and reinstalled every time the choice changes.
-   */
-  const themeRef = useRef<Theme | null>(null)
-  themeRef.current = findTheme(themes, chosen) ?? null
-
-  /**
-   * Whether the picker has the window, which decides whether an answer from disk may repaint it.
-   *
-   * A ref and not the state below, because `takeTheme` is installed once and would otherwise read
-   * whatever `picking` was when it was made.
-   */
-  const previewing = useRef(false)
-
-  /**
-   * Take what the main process answered, and paint the window in it.
-   *
-   * Except while the picker is open, when the list is taken and the painting is not. Opening the
-   * picker asks for the list again, and the watcher can answer at any moment; either reply landing
-   * a frame after somebody pressed an arrow would put the *chosen* theme back over the preview
-   * they were looking at. The picker owns the window until it closes, and Escape is what puts the
-   * previous one back.
-   */
-  const takeTheme = useCallback((state: { themes: Theme[]; chosen: string; directory: string }) => {
-    setThemes(state.themes)
-    setChosen(state.chosen)
-    setThemesDirectory(state.directory)
-    if (previewing.current) return
-    const theme = findTheme(state.themes, state.chosen)
-    if (theme) applyTheme(theme)
-  }, [])
-
-  /**
-   * Read the list again.
-   *
-   * Called when the picker opens as well as at startup, because the watcher can only tell the
-   * window about a palette written while the window was running — and it is the one moment the
-   * list has to be right. A round trip nobody is waiting on is cheaper than a picker that does not
-   * offer a file somebody just saved.
-   */
-  const refreshThemes = useCallback(() => {
-    void window.bravebot
-      .readTheme()
-      .then(takeTheme)
-      .catch(() => undefined)
-  }, [takeTheme])
-
-  /**
-   * Paint the window, and keep it painted as the answer changes underneath.
-   *
-   * Three things can change it: this window's own picker, a palette file being written — which
-   * arrives on `onThemeChanged` — and the system flipping to dark, which only matters for a
-   * palette that inherits some of its roles but matters a lot to that one. All three land in the
-   * same place.
+   * Paint the window from the remembered appearance at startup, and follow writes
+   * that arrive through the main process (another window, a driver, the picker).
    */
   useEffect(() => {
-    refreshThemes()
-    const stopListening = window.bravebot.onThemeChanged(takeTheme)
-    const stopWatching = watchAppearance(() => themeRef.current ?? BRAVE_THEME)
-    return () => {
-      stopListening()
-      stopWatching()
+    const take = (state: { chosen: Appearance }): void => {
+      const appearance = parseAppearance(state.chosen)
+      setChosen(appearance)
+      applyAppearance(appearance)
     }
-  }, [takeTheme, refreshThemes])
+    void window.bravebot
+      .readTheme()
+      .then(take)
+      .catch(() => undefined)
+    return window.bravebot.onThemeChanged(take)
+  }, [])
+
+  useEffect(() => window.bravebot.onWindowActive((active) => {
+    if (active) delete document.documentElement.dataset.windowInactive
+    else document.documentElement.dataset.windowInactive = ''
+  }), [])
 
   const refresh = useCallback(async () => {
     try {
@@ -524,6 +473,7 @@ export function App(): React.JSX.Element {
         phase: null,
         checking: null,
         tokens: 0,
+        composing: null,
         running: false,
         // A record with no stored map was written before maps were kept. Nothing
         // recorded is not the same as nothing trusted, so it is asked about again.
@@ -595,6 +545,7 @@ export function App(): React.JSX.Element {
         phase: null,
         checking: null,
         tokens: 0,
+        composing: null,
         running: false,
         contextTokens: 0,
         askingTrust: made.remembered ? null : chosen,
@@ -797,33 +748,51 @@ export function App(): React.JSX.Element {
   const forked = useMemo(() => forkedSessions(forks), [forks])
 
   // Bot conversations and unsent drafts remain reachable from the unified session list.
-  const ownSessions = sessions.map((summary) => {
+  // Unrecorded sessions are stamped to the minute so the list serialises the same between
+  // keystrokes and the column is not re-rendered for a clock that nobody can see move.
+  const now = Math.floor(Date.now() / 60000) * 60
+  const unstableSessions = sessions.map((summary) => {
     const current = [...openedLives.current.values()].find((item) => item.summary.id === summary.id && item.summary.directory === summary.directory)
     return current ? { ...summary, title: current.summary.title } : summary
   })
   for (const current of openedLives.current.values()) {
     const id = current.summary.id ?? current.draftId
-    if (!id || ownSessions.some((summary) => summary.id === id && summary.directory === current.summary.directory)) continue
-    ownSessions.unshift({ ...current.summary, id, updated: Date.now() / 1000, bytes: 0 })
+    if (!id || unstableSessions.some((summary) => summary.id === id && summary.directory === current.summary.directory)) continue
+    unstableSessions.unshift({ ...current.summary, id, updated: now, bytes: 0 })
   }
   for (const [key, preference] of Object.entries(preferences.conversations)) {
     if (!preference.draft.trim()) continue
     try {
       const [directory, id]: unknown[] = JSON.parse(key)
-      if (typeof directory !== 'string' || typeof id !== 'string' || !id.startsWith('draft:') || ownSessions.some((session) => session.directory === directory && session.id === id)) continue
-      ownSessions.unshift({ id, directory, title: `Draft · ${preference.draft.slice(0, 60)}`, project: projectLabel(directory), branch: null, updated: Date.now() / 1000, bytes: 0 })
+      if (typeof directory !== 'string' || typeof id !== 'string' || !id.startsWith('draft:') || unstableSessions.some((session) => session.directory === directory && session.id === id)) continue
+      unstableSessions.unshift({ id, directory, title: `Draft · ${preference.draft.slice(0, 60)}`, project: projectLabel(directory), branch: null, updated: now, bytes: 0 })
     } catch { /* Ignore malformed preference keys. */ }
   }
-  const sessionInfo: Record<string, { bot?: string; state?: string }> = {}
+  const ownSessions = useStableValue(unstableSessions)
+  const unstableInfo: Record<string, SessionInfoValue> = {}
   for (const summary of ownSessions) {
     const current = [...openedLives.current.values()].find((item) => (item.summary.id ?? item.draftId) === summary.id && item.summary.directory === summary.directory)
     const owner = preferences.conversations[conversationKey(summary.directory, summary.id)]?.botSlug
     const bot = bots.find((item) => (item.conversations.includes(summary.id) || item.slug === owner) && item.directory === summary.directory)
-    sessionInfo[conversationKey(summary.directory, summary.id)] = {
-      bot: bot?.name ?? bots.find((item) => item.slug === current?.bot?.slug)?.name,
-      state: current ? t.outstanding(current.entries) ? t.outstanding(current.entries)?.kind === 'ask' ? 'Needs answer' : 'Needs approval' : current.running ? 'Working' : current.entries.at(-1)?.kind === 'error' ? 'Failed' : current.outcome === 'complete' ? 'Completed' : 'Ready' : undefined,
+      ?? bots.find((item) => item.slug === current?.bot?.slug)
+    const outstanding = current ? t.outstanding(current.entries) : undefined
+    // Only what asks something of the reader. "Ready" and "Completed" were true of nearly
+    // every row and so said nothing about any of them.
+    const status: SessionStatus | undefined = !current ? undefined
+      : outstanding ? (outstanding.kind === 'ask' ? 'answer' : 'approval')
+        : current.running ? 'working'
+          : current.entries.at(-1)?.kind === 'error' ? 'failed'
+            : undefined
+    if (!bot && !status) continue
+    unstableInfo[conversationKey(summary.directory, summary.id)] = {
+      bot: bot ? { name: bot.name, avatar: bot.avatar } : undefined,
+      status,
     }
   }
+  const sessionInfo = useStableValue(unstableInfo)
+  const attention = Object.entries(sessionInfo).filter(([key, info]) =>
+    (info.status === 'answer' || info.status === 'approval') &&
+    key !== (live ? conversationKey(live.summary.directory, live.summary.id ?? live.draftId ?? '') : '')).length
 
   /**
    * Show a bot.
@@ -1027,9 +996,8 @@ export function App(): React.JSX.Element {
    * Write the conversation to a file.
    *
    * The turns go over structured and the main process composes the document — see
-   * `shared/export.ts`. A saved file is reported through `Notice`, whose body is a `<pre>`,
-   * so a long path wraps instead of running off the panel; a failure goes to the header note
-   * where every other recoverable failure in this component already goes.
+   * `shared/export.ts`. A saved file is confirmed in a toast that names where it went; a failure
+   * goes to the problem toast where every other recoverable failure in this component goes.
    */
   const exportSession = useCallback(
     async (format: ExportFormat) => {
@@ -1044,7 +1012,7 @@ export function App(): React.JSX.Element {
         },
       })
       if (outcome.status === 'saved') {
-        setNotice({ title: 'Exported', body: `Saved to\n${outcome.where}` })
+        showToast('Exported', `Saved to ${outcome.where}`)
       } else if (outcome.status === 'failed') {
         setProblem(`Could not export that: ${outcome.message}`)
       }
@@ -1067,7 +1035,7 @@ export function App(): React.JSX.Element {
    * decision the planner benefits from.
    */
   const copy = useCallback((text: string) => {
-    void navigator.clipboard.writeText(text).catch(() => setProblem('Could not copy that.'))
+    void navigator.clipboard.writeText(text).then(() => showToast('Copied to clipboard'), () => setProblem('Could not copy that.'))
   }, [])
 
   const openSession = useCallback(
@@ -1158,6 +1126,7 @@ export function App(): React.JSX.Element {
           phase: null,
           checking: null,
           tokens: 0,
+          composing: null,
           running: false,
           contextTokens: forked.contextTokens,
           askingTrust: forked.trust.known ? null : forked.directory,
@@ -1227,6 +1196,8 @@ export function App(): React.JSX.Element {
     cancel: () => void cancel(),
     toggle,
     resetColumns,
+    find: () => document.dispatchEvent(new Event(FIND_EVENT)),
+    focusComposer: () => document.dispatchEvent(new Event(FOCUS_COMPOSER_EVENT)),
     about: () => void about(),
     doctor: () => void doctor(),
     openSession,
@@ -1237,8 +1208,6 @@ export function App(): React.JSX.Element {
     exportSession: (format) => void exportSession(format),
     toggleExportTools: () => setIncludeTools((on) => !on),
     theme: () => {
-      previewing.current = true
-      refreshThemes()
       setPicking(true)
     },
   })
@@ -1257,6 +1226,19 @@ export function App(): React.JSX.Element {
     [live, draft, collapsed, canExport, includeTools, backendReady],
   )
   usePublishedState(menuState)
+
+  // Stable, so the memoised columns either side of the transcript are not re-drawn by typing.
+  const newBotConversation = useEvent((bot: Bot) => { void create(bot.directory, { slug: bot.slug, model: bot.model }) })
+  const botConversation = useEvent((bot: Bot, summary: SessionSummary) => { void showSession(summary, undefined, { slug: bot.slug, model: bot.model }) })
+  const stableShowSession = useEvent(showSession)
+  const stableCreate = useEvent(create)
+  const openSettings = useEvent(() => setAgentSettings(true))
+  const closeContext = useEvent(() => toggle('right'))
+  const stableCloseAudit = useEvent(closeAudit)
+  const auditTurn = selectedAudit && selectedAudit.turn !== null ? live?.turns[selectedAudit.turn] : undefined
+  const auditPanel = useMemo(() => selectedAudit
+    ? <AuditInspector key={`${selectedAudit.handle}:${selectedAudit.turn}`} details={auditTurn} onClose={stableCloseAudit} />
+    : null, [selectedAudit, auditTurn, stableCloseAudit])
 
   return (
     <div
@@ -1286,12 +1268,12 @@ export function App(): React.JSX.Element {
     >
       <SessionInfo.Provider value={sessionInfo}><Sidebar
         sessions={ownSessions}
-        onNewBotConversation={(bot) => { void create(bot.directory, { slug: bot.slug, model: bot.model }) }}
-        onBotConversation={(bot, summary) => { void showSession(summary, undefined, { slug: bot.slug, model: bot.model }) }}
+        onNewBotConversation={newBotConversation}
+        onBotConversation={botConversation}
         openId={live?.summary.id ?? live?.draftId ?? reading?.record.id ?? undefined}
         forked={forked}
-        onOpen={showSession}
-        onNew={create}
+        onOpen={stableShowSession}
+        onNew={stableCreate}
         bots={bots}
         openSlug={live?.bot?.slug ?? null}
         openDoing={openDoing}
@@ -1299,7 +1281,7 @@ export function App(): React.JSX.Element {
         onRetireBot={retireBot}
         onRemoveBot={removeBot}
         build={build}
-        onSettings={() => setAgentSettings(true)}
+        onSettings={openSettings}
       /></SessionInfo.Provider>
       <Gutter
         side="left"
@@ -1310,6 +1292,9 @@ export function App(): React.JSX.Element {
         onReset={reset}
         onNudge={nudge}
       />
+      {/* The conversation and the inspector share one raised card. A subgrid, so its columns
+          are still the window's tracks and a fold or a drag moves them without this knowing. */}
+      <div className="workspace">
       <Transcript
         onAudit={openAudit}
         onTurnDisclosure={discloseTurn}
@@ -1344,6 +1329,7 @@ export function App(): React.JSX.Element {
         problem={experienceError() || problem}
         collapsed={collapsed}
         onToggle={toggle}
+        attention={attention}
         draft={draft}
         onDraft={setDraft}
         onModel={(model) => void chooseModel(model)}
@@ -1373,17 +1359,8 @@ export function App(): React.JSX.Element {
         onReset={reset}
         onNudge={nudge}
       />
-      <Context live={live} onClose={() => toggle('right')} audit={selectedAudit ?
-        <AuditInspector key={`${selectedAudit.handle}:${selectedAudit.turn}`} details={selectedAudit.turn === null ? undefined : live?.turns[selectedAudit.turn]} onClose={closeAudit} /> : null} />
-      {[...openedLives.current.values()].some((item) => item.handle !== live?.handle && item.running) && (
-        <div className="background-tasks" aria-label="Background tasks">
-          {[...openedLives.current.values()].filter((item) => item.handle !== live?.handle && item.running).map((item) => (
-            <button key={item.handle} onClick={() => setLive(item)}>
-              {t.outstanding(item.entries) ? t.outstanding(item.entries)?.kind === 'ask' ? 'Answer needed' : 'Approval needed' : 'Working'} · {item.summary.title}
-            </button>
-          ))}
-        </div>
-      )}
+      <Context live={live} onClose={closeContext} audit={auditPanel} />
+      </div>
       {aboutInfo && <About info={aboutInfo} onClose={() => setAboutInfo(null)} />}
       {notice && (
         <Notice title={notice.title} body={notice.body} onClose={() => setNotice(null)} />
@@ -1394,22 +1371,17 @@ export function App(): React.JSX.Element {
         <TrustPrompt directory={live.askingTrust} keeping={live.keepingTrust} onAnswer={answerTrust} />
       )}
       {picking && (
-        <ThemePicker
-          themes={themes}
+        <AppearancePicker
           chosen={chosen}
-          directory={themesDirectory}
-          onKeep={(name) => {
-            window.bravebot.writeTheme(name)
-            setChosen(name)
-            previewing.current = false
+          onKeep={(appearance) => {
+            window.bravebot.writeTheme(appearance)
+            setChosen(appearance)
             setPicking(false)
           }}
-          onClose={() => {
-            previewing.current = false
-            setPicking(false)
-          }}
+          onClose={() => setPicking(false)}
         />
       )}
+      <TooltipLayer />
     </div>
   )
 }
@@ -1435,12 +1407,15 @@ export function apply(
       case 'watch.ended':
         return { ...old, entries: [...old.entries, t.narrated(`Watch ${message.data.number} ended: ${message.data.reason}${message.data.message ? `. ${message.data.message}` : ''}`)] }
       case 'turn.started':
-        return { ...old, running: true, phase: null, checking: null, tokens: 0,
+        return { ...old, running: true, phase: null, checking: null, composing: null, tokens: 0,
           entries: t.beginTurn(old.entries, message.data.turn) }
       case 'audit':
         return old
+      // A phase opens a round, so a call written in the last one is over.
       case 'phase':
-        return { ...old, phase: message.data.phase }
+        return { ...old, phase: message.data.phase, composing: null }
+      case 'composing':
+        return { ...old, composing: message.data.call }
       // The phase is left alone: it is what the word goes back to once the check is over.
       case 'check.started':
         return { ...old, checking: message.data }
@@ -1449,9 +1424,9 @@ export function apply(
       case 'tokens':
         return { ...old, tokens: message.data.written }
       case 'narration':
-        return { ...old, entries: [...old.entries, t.narrated(message.data.text)] }
+        return { ...old, composing: null, entries: [...old.entries, t.narrated(message.data.text)] }
       case 'tool.started':
-        return { ...old, entries: [...old.entries, t.started(message.data)] }
+        return { ...old, composing: null, entries: [...old.entries, t.started(message.data)] }
       case 'tool.finished':
         return { ...old, entries: t.finish(old.entries, message.data) }
       case 'landed':
@@ -1510,6 +1485,7 @@ export function apply(
           phase: null,
           // A consolidating turn stays running, so a check whose end was never heard would stay drawn.
           checking: null,
+          composing: null,
           entries: [...t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt), t.replied(message.data.reply, message.data.turn)],
           awaitingOrdinal: null,
           archived: message.data.archived,
@@ -1526,6 +1502,7 @@ export function apply(
           running: false,
           phase: null,
           checking: null,
+          composing: null,
           entries: [...t.interruptPending(t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt)), { ...t.errored(`${kind}: ${detail}`), category: kind === 'cancelled' ? 'cancelled' : message.data.category, attempts: message.data.attempts, status: message.data.status, cutOff: message.data.cutOff, turn: message.data.turn }],
           awaitingOrdinal: null,
           queuePaused: true,

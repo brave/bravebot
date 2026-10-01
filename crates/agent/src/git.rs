@@ -26,6 +26,7 @@ use gix_odb::pack::data::decode::header::ResolvedBase;
 
 use crate::diff::{Change, Diff};
 
+pub mod checkout;
 mod status;
 
 /// Commits a log shows when the planner names no count.
@@ -5695,6 +5696,869 @@ mod tests {
             assert_eq!(
                 answer.text,
                 "Nothing to commit among the paths this answer could read.\n"
+            );
+        }
+    }
+
+    mod checkouts {
+        use super::*;
+        use crate::git::checkout::{Bound, Conversion, Made, Name, Refused, check_name, make};
+        use crate::git::status::{Stat, parse_index};
+
+        fn target(repo: &Repo) -> PathBuf {
+            repo.root.join("checkout")
+        }
+
+        fn admin(repo: &Repo) -> PathBuf {
+            repo.git.join("worktrees").join("c1")
+        }
+
+        fn made_by(
+            repo: &Repo,
+            withheld: &dyn Fn(&str) -> bool,
+            trusted: &dyn Fn(&str) -> bool,
+            bound: Bound,
+        ) -> Result<Made, Refused> {
+            survey(&repo.git, Query::Status, later())?;
+            make(&repo.git, &target(repo), "c1", withheld, trusted, bound)
+        }
+
+        fn made_with(
+            repo: &Repo,
+            withheld: &dyn Fn(&str) -> bool,
+            bound: Bound,
+        ) -> Result<Made, Refused> {
+            made_by(repo, withheld, &|_| true, bound)
+        }
+
+        fn made(repo: &Repo) -> Result<Made, Refused> {
+            made_with(repo, &|_| false, Bound::FIXED)
+        }
+
+        /// `entries` as HEAD's tree on `main`.
+        fn committed(repo: &Repo, entries: &[(&str, &str, ObjectId)]) -> ObjectId {
+            let commit = repo.commit(repo.tree(entries), &[], T1, "first");
+            repo.point("refs/heads/main", commit);
+            commit
+        }
+
+        fn nothing_written(repo: &Repo, refused: &Refused) {
+            assert!(
+                !target(repo).exists(),
+                "a checkout refused with {refused:?} left its directory"
+            );
+            assert!(
+                !admin(repo).exists(),
+                "a checkout refused with {refused:?} left its worktrees entry"
+            );
+        }
+
+        /// How git names a path in the files of a linked worktree.
+        fn spelled(path: &Path) -> String {
+            path.to_str().expect("UTF-8").replace('\\', "/")
+        }
+
+        fn gitlink() -> ObjectId {
+            ObjectId::from_hex(b"1111111111111111111111111111111111111111").expect("hex")
+        }
+
+        /// A checkout git reads as its own: every file of HEAD's tree written as stored, the
+        /// index recording the stat data of what was written so nothing reads as changed, and
+        /// the linked worktree registered on HEAD's commit, detached, with no ref moved.
+        #[test]
+        fn a_checkout_writes_heads_tree_as_a_detached_linked_worktree() {
+            let repo = Repo::new("checkout-tree");
+            let readme = repo.blob("hello\n");
+            let script = repo.blob("#!/bin/sh\necho hi\n");
+            let link = repo.blob("README");
+            let lib = repo.blob("pub fn f() {}\n");
+            let src = repo.tree(&[("100644", "lib.rs", lib)]);
+            let commit = committed(
+                &repo,
+                &[
+                    ("100644", "README", readme),
+                    ("100755", "run.sh", script),
+                    ("120000", "link", link),
+                    ("40000", "src", src),
+                    ("160000", "vendor", gitlink()),
+                ],
+            );
+
+            let made = made(&repo).expect("made");
+            assert_eq!(made.commit, commit);
+            assert!(made.left_out.is_empty(), "{:?}", made.left_out);
+
+            let out = target(&repo);
+            let read = |path: &str| std::fs::read_to_string(out.join(path)).expect(path);
+            assert_eq!(read("README"), "hello\n");
+            assert_eq!(read("run.sh"), "#!/bin/sh\necho hi\n");
+            assert_eq!(read("src/lib.rs"), "pub fn f() {}\n");
+            let vendor = std::fs::read_dir(out.join("vendor")).expect("a submodule's directory");
+            assert_eq!(vendor.count(), 0, "a submodule was written into");
+            if cfg!(unix) {
+                let target = std::fs::read_link(out.join("link")).expect("a symbolic link");
+                assert_eq!(target, Path::new("README"));
+            } else {
+                assert_eq!(read("link"), "README");
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = |path: &str| {
+                    std::fs::metadata(out.join(path))
+                        .expect(path)
+                        .permissions()
+                        .mode()
+                        & 0o777
+                };
+                assert_eq!(mode("README"), 0o600);
+                assert_eq!(mode("run.sh"), 0o700);
+            }
+
+            let admin = admin(&repo);
+            assert_eq!(read(".git"), format!("gitdir: {}\n", spelled(&admin)));
+            let admin_file = |name: &str| std::fs::read_to_string(admin.join(name)).expect(name);
+            assert_eq!(admin_file("HEAD"), format!("{}\n", commit.to_hex()));
+            assert_eq!(admin_file("commondir"), "../..\n");
+            assert_eq!(admin_file("gitdir"), format!("{}/.git\n", spelled(&out)));
+
+            let index = std::fs::read(admin.join("index")).expect("index");
+            assert_eq!(index[4..8], 2u32.to_be_bytes(), "no entry needs version 3");
+            let entries = parse_index(&index).expect("an index git reads");
+            let listed: Vec<(&[u8], u32, ObjectId, bool)> = entries
+                .iter()
+                .map(|e| (e.path.as_slice(), e.mode, e.id, e.skip_worktree))
+                .collect();
+            assert_eq!(
+                listed,
+                [
+                    (&b"README"[..], 0o100644, readme, false),
+                    (b"link", 0o120000, link, false),
+                    (b"run.sh", 0o100755, script, false),
+                    (b"src/lib.rs", 0o100644, lib, false),
+                    (b"vendor", 0o160000, gitlink(), false),
+                ]
+            );
+            for entry in entries.iter().filter(|e| e.mode != 0o160000) {
+                let path = out.join(std::str::from_utf8(&entry.path).expect("UTF-8"));
+                let now = Stat::of(&std::fs::symlink_metadata(&path).expect("written"));
+                assert!(
+                    entry.stat.unchanged(&now),
+                    "{} reads as changed",
+                    path.display()
+                );
+            }
+
+            assert_eq!(
+                std::fs::read_to_string(repo.git.join("HEAD")).expect("HEAD"),
+                "ref: refs/heads/main\n"
+            );
+            let heads: Vec<_> = std::fs::read_dir(repo.git.join("refs/heads"))
+                .expect("heads")
+                .map(|e| e.expect("entry").file_name())
+                .collect();
+            assert_eq!(heads, ["main"], "a branch was made");
+        }
+
+        /// A path a deny rule covers stays out of the checkout, and the index marks it
+        /// skip-worktree so git reads its absence as no change rather than a deletion.
+        #[test]
+        fn a_path_a_deny_rule_covers_is_left_out_and_marked_skip_worktree() {
+            let repo = Repo::new("checkout-withheld");
+            let readme = repo.blob("hello\n");
+            let secret = repo.blob("token\n");
+            let key = repo.blob("key\n");
+            let dir = repo.tree(&[("100644", "key", key)]);
+            committed(
+                &repo,
+                &[
+                    ("100644", "README", readme),
+                    ("100644", "secret.txt", secret),
+                    ("40000", "dir", dir),
+                ],
+            );
+
+            let withheld = |path: &str| path == "secret.txt" || path.starts_with("dir/");
+            let made = made_with(&repo, &withheld, Bound::FIXED).expect("made");
+            assert_eq!(made.left_out, ["dir/key", "secret.txt"]);
+
+            let out = target(&repo);
+            assert!(out.join("README").exists());
+            assert!(
+                !out.join("secret.txt").exists(),
+                "a withheld file was written"
+            );
+            assert!(
+                !out.join("dir").exists(),
+                "a withheld file's directory was made"
+            );
+            let index = std::fs::read(admin(&repo).join("index")).expect("index");
+            assert_eq!(
+                index[4..8],
+                3u32.to_be_bytes(),
+                "skip-worktree needs version 3"
+            );
+            let entries = parse_index(&index).expect("an index git reads");
+            let skipped: Vec<(&[u8], bool)> = entries
+                .iter()
+                .map(|e| (e.path.as_slice(), e.skip_worktree))
+                .collect();
+            assert_eq!(
+                skipped,
+                [
+                    (&b"README"[..], false),
+                    (b"dir/key", true),
+                    (b"secret.txt", true)
+                ]
+            );
+        }
+
+        /// What would have git write a file other than as it is stored refuses the checkout
+        /// before anything is written, whichever attributes file or setting asks for it.
+        #[test]
+        fn an_attribute_or_setting_git_converts_by_refuses_the_checkout() {
+            let attributes = [
+                (".gitattributes", "*.txt filter=lfs\n", Conversion::Filter),
+                ("sub/.gitattributes", "* ident\n", Conversion::Ident),
+                (
+                    ".gitattributes",
+                    "# a comment\n*.txt working-tree-encoding=UTF-16\n",
+                    Conversion::Encoding,
+                ),
+                (
+                    ".gitattributes",
+                    "*.bat text eol=CRLF\n",
+                    Conversion::EolCrlf,
+                ),
+                ("info/attributes", "* filter=x\n", Conversion::Filter),
+            ];
+            for (at, text, expected) in attributes {
+                let repo = Repo::new("checkout-converts");
+                let readme = repo.blob("hello\n");
+                let rules = repo.blob(text);
+                match at.strip_prefix("info/") {
+                    Some(_) => {
+                        repo.put(at, text);
+                        committed(&repo, &[("100644", "README", readme)]);
+                    }
+                    None if at.contains('/') => {
+                        let sub = repo.tree(&[("100644", ".gitattributes", rules)]);
+                        committed(
+                            &repo,
+                            &[("100644", "README", readme), ("40000", "sub", sub)],
+                        );
+                    }
+                    None => {
+                        committed(
+                            &repo,
+                            &[
+                                ("100644", "README", readme),
+                                ("100644", ".gitattributes", rules),
+                            ],
+                        );
+                    }
+                }
+                let refused = made(&repo).expect_err(at);
+                assert_eq!(refused, Refused::Converts(expected), "{at}: {text}");
+                nothing_written(&repo, &refused);
+            }
+
+            let settings = [
+                ("[core]\n\tautocrlf = true\n", Conversion::AutoCrlf),
+                ("[core]\n\teol = CRLF\n", Conversion::CoreEol),
+            ];
+            for (config, expected) in settings {
+                let repo = Repo::new("checkout-converts-config");
+                let readme = repo.blob("hello\n");
+                committed(&repo, &[("100644", "README", readme)]);
+                repo.put("config", config);
+                let refused = made(&repo).expect_err(config);
+                assert_eq!(refused, Refused::Converts(expected), "{config}");
+                nothing_written(&repo, &refused);
+            }
+        }
+
+        /// An attribute that turns a conversion off, or one that writes a file as it is stored
+        /// here, does not refuse.
+        #[test]
+        fn an_attribute_git_writes_a_file_as_stored_by_is_accepted() {
+            let repo = Repo::new("checkout-as-stored");
+            let readme = repo.blob("hello\n");
+            let text = if cfg!(windows) {
+                "*.png binary -filter !ident\n*.sh eol=lf\n"
+            } else {
+                "*.png binary -filter !ident\n*.sh eol=lf\n*.txt text\n"
+            };
+            let rules = repo.blob(text);
+            committed(
+                &repo,
+                &[
+                    ("100644", "README", readme),
+                    ("100644", ".gitattributes", rules),
+                ],
+            );
+            repo.put("config", "[core]\n\tautocrlf = input\n\teol = lf\n");
+            let made = made(&repo).expect("made");
+            assert!(made.left_out.is_empty());
+            assert_eq!(
+                std::fs::read_to_string(target(&repo).join(".gitattributes")).expect("written"),
+                text
+            );
+        }
+
+        /// An attributes file a deny rule covers cannot be read for a conversion, so it refuses
+        /// rather than being left out.
+        #[test]
+        fn an_attributes_file_a_deny_rule_covers_refuses_the_checkout() {
+            let repo = Repo::new("checkout-attributes-withheld");
+            let readme = repo.blob("hello\n");
+            let rules = repo.blob("* filter=x\n");
+            let sub = repo.tree(&[("100644", ".gitattributes", rules)]);
+            committed(
+                &repo,
+                &[("100644", "README", readme), ("40000", "sub", sub)],
+            );
+            let refused = made_with(&repo, &|path| path.starts_with("sub/"), Bound::FIXED)
+                .expect_err("refused");
+            assert_eq!(refused, Refused::AttributesWithheld);
+            nothing_written(&repo, &refused);
+        }
+
+        /// An attributes file's contents carry its own path's label, so one the map does not trust
+        /// refuses the checkout before it is read. The refusal is the same whatever the file sets,
+        /// and differs from what the same files give where the map trusts them.
+        #[test]
+        fn an_attributes_file_the_map_does_not_trust_refuses_the_checkout_unread() {
+            let sets = [
+                ("plain", "*.md diff\n", None),
+                ("filter", "* filter=x\n", Some(Conversion::Filter)),
+            ];
+            for (name, text, converts) in sets {
+                let repo = Repo::new(&format!("checkout-attributes-untrusted-{name}"));
+                let readme = repo.blob("hello\n");
+                let rules = repo.blob(text);
+                let sub = repo.tree(&[("100644", ".gitattributes", rules)]);
+                committed(
+                    &repo,
+                    &[("100644", "README", readme), ("40000", "sub", sub)],
+                );
+                let refused = made_by(
+                    &repo,
+                    &|_| false,
+                    &|path| !path.starts_with("sub/"),
+                    Bound::FIXED,
+                )
+                .expect_err(name);
+                assert_eq!(refused, Refused::AttributesUntrusted, "{name}");
+                nothing_written(&repo, &refused);
+
+                let trusted = made(&repo);
+                match converts {
+                    Some(conversion) => {
+                        assert_eq!(trusted.expect_err(name), Refused::Converts(conversion))
+                    }
+                    None => {
+                        trusted.expect(name);
+                    }
+                }
+            }
+        }
+
+        /// A tree entry git's own checks refuse to write is refused here before anything is
+        /// written, as each file system that reads it as `.git` or as a way out spells it.
+        #[test]
+        fn a_name_git_refuses_to_check_out_refuses_the_checkout() {
+            let names: [(&[u8], Name); 9] = [
+                (b"..", Name::Dot),
+                (b".", Name::Dot),
+                (b"a/b", Name::Separator),
+                (b".GIT", Name::DotGit),
+                (b"git~1", Name::DotGit),
+                (b".git . ", Name::DotGit),
+                (b".git::$INDEX_ALLOCATION", Name::DotGit),
+                (".g\u{200c}it".as_bytes(), Name::DotGit),
+                (b"caf\xe9", Name::NotUtf8),
+            ];
+            for (name, expected) in names {
+                let repo = Repo::new("checkout-name");
+                let readme = repo.blob("hello\n");
+                let mut bytes = b"100644 ".to_vec();
+                bytes.extend_from_slice(name);
+                bytes.push(0);
+                bytes.extend_from_slice(readme.as_bytes());
+                let inner = repo.object(Kind::Tree, &bytes);
+                committed(
+                    &repo,
+                    &[("100644", "README", readme), ("40000", "sub", inner)],
+                );
+                let refused = made(&repo).expect_err(&String::from_utf8_lossy(name));
+                assert_eq!(refused, Refused::Name(expected), "{}", name.escape_ascii());
+                nothing_written(&repo, &refused);
+            }
+        }
+
+        /// A name Windows cannot hold as written is refused there, as Git for Windows refuses
+        /// it. A drive prefix such as `C:x` is among them: a path joined onto it replaces the
+        /// checkout's own. Elsewhere the same names are allowed.
+        #[test]
+        fn a_name_windows_cannot_hold_is_refused_on_windows_alone() {
+            let refused: [&[u8]; 10] = [
+                b"C:evil", b"a:b", b"CON", b"con.txt", b"LPT1", b"CONIN$", b"foo.", b"foo ",
+                b"a?b", b"a\x01b",
+            ];
+            for name in refused {
+                let shown = name.escape_ascii();
+                assert_eq!(check_name(name, true), Err(Name::Windows), "{shown}");
+                assert_eq!(check_name(name, false), Ok(()), "{shown}");
+            }
+            for name in [
+                &b"README"[..],
+                b"a.b",
+                b"COM0",
+                b"LPT10",
+                b"CONSOLE",
+                b"nul2.txt",
+            ] {
+                assert_eq!(check_name(name, true), Ok(()), "{}", name.escape_ascii());
+            }
+        }
+
+        /// A tree that names one entry twice refuses the checkout, even where a deny rule covers
+        /// the entry and so neither is written.
+        #[test]
+        fn a_tree_naming_an_entry_twice_refuses_the_checkout() {
+            let repo = Repo::new("checkout-twice");
+            let readme = repo.blob("hello\n");
+            let secret = repo.blob("token\n");
+            let mut bytes = Vec::new();
+            for _ in 0..2 {
+                bytes.extend_from_slice(b"100644 secret\0");
+                bytes.extend_from_slice(secret.as_bytes());
+            }
+            let sub = repo.object(Kind::Tree, &bytes);
+            committed(
+                &repo,
+                &[("100644", "README", readme), ("40000", "sub", sub)],
+            );
+            let refused = made_with(&repo, &|path| path == "sub/secret", Bound::FIXED)
+                .expect_err("named twice");
+            assert_eq!(refused, Refused::Name(Name::Folded));
+            nothing_written(&repo, &refused);
+        }
+
+        /// Two paths the file system takes for one refuse the checkout and leave nothing
+        /// behind, where the file system folds them; where it does not, both are written.
+        #[test]
+        fn two_paths_the_file_system_takes_for_one_refuse_the_checkout() {
+            let repo = Repo::new("checkout-folded");
+            std::fs::write(repo.root.join("probe"), "").expect("probe");
+            let folds = repo.root.join("PROBE").exists();
+            let upper = repo.blob("upper\n");
+            let lower = repo.blob("lower\n");
+            committed(
+                &repo,
+                &[("100644", "README", upper), ("100644", "readme", lower)],
+            );
+            let made = made(&repo);
+            if folds {
+                let refused = made.expect_err("folded");
+                assert_eq!(refused, Refused::Name(Name::Folded));
+                nothing_written(&repo, &refused);
+            } else {
+                made.expect("made where names are case-sensitive");
+                let out = target(&repo);
+                assert_eq!(
+                    std::fs::read_to_string(out.join("readme")).expect("readme"),
+                    "lower\n"
+                );
+            }
+        }
+
+        /// A tree past the bound refuses the checkout from the object headers, before anything
+        /// is written.
+        #[test]
+        fn a_tree_past_the_bound_refuses_the_checkout() {
+            let repo = Repo::new("checkout-bound");
+            let a = repo.blob("hello\n");
+            let b = repo.blob("world\n");
+            committed(&repo, &[("100644", "a", a), ("100644", "b", b)]);
+            let cases = [
+                (
+                    Bound {
+                        files: 1,
+                        bytes: 1 << 20,
+                    },
+                    Refused::TooManyFiles,
+                ),
+                (
+                    Bound {
+                        files: 10,
+                        bytes: 11,
+                    },
+                    Refused::TooManyBytes,
+                ),
+            ];
+            for (bound, expected) in cases {
+                let refused = made_with(&repo, &|_| false, bound).expect_err("bounded");
+                assert_eq!(refused, expected, "{bound:?}");
+                nothing_written(&repo, &refused);
+            }
+            made_with(
+                &repo,
+                &|_| false,
+                Bound {
+                    files: 2,
+                    bytes: 12,
+                },
+            )
+            .expect("a tree at the bound is made");
+        }
+
+        /// Directories count against the file bound, since a tree may name one subtree many
+        /// times and each name is walked.
+        #[test]
+        fn directories_count_against_the_file_bound() {
+            let repo = Repo::new("checkout-bound-dirs");
+            let a = repo.blob("hello\n");
+            let empty = repo.tree(&[]);
+            committed(
+                &repo,
+                &[
+                    ("100644", "a", a),
+                    ("40000", "d1", empty),
+                    ("40000", "d2", empty),
+                    ("40000", "d3", empty),
+                ],
+            );
+            let bound = Bound {
+                files: 2,
+                bytes: 1 << 20,
+            };
+            let refused = made_with(&repo, &|_| false, bound).expect_err("bounded");
+            assert_eq!(refused, Refused::TooManyFiles);
+            nothing_written(&repo, &refused);
+        }
+
+        /// An attributes file past the byte bound refuses the checkout without being read.
+        #[test]
+        fn an_attributes_file_past_the_byte_bound_is_not_read() {
+            let repo = Repo::new("checkout-bound-attributes");
+            let rules = repo.blob("* filter=x\n");
+            committed(&repo, &[("100644", ".gitattributes", rules)]);
+            let bound = Bound {
+                files: 10,
+                bytes: 5,
+            };
+            let refused = made_with(&repo, &|_| false, bound).expect_err("bounded");
+            assert_eq!(refused, Refused::TooManyBytes);
+            nothing_written(&repo, &refused);
+        }
+
+        /// An attributes file named in another case is taken for one, as a file system that
+        /// ignores case opens it, and refuses unread where the map does not trust it.
+        #[test]
+        fn an_attributes_file_named_in_another_case_is_taken_for_one() {
+            let repo = Repo::new("checkout-attributes-case");
+            let readme = repo.blob("hello\n");
+            let rules = repo.blob("* filter=x\n");
+            committed(
+                &repo,
+                &[
+                    ("100644", "README", readme),
+                    ("100644", ".GitAttributes", rules),
+                ],
+            );
+            let refused = made(&repo).expect_err("read");
+            assert_eq!(refused, Refused::Converts(Conversion::Filter));
+            nothing_written(&repo, &refused);
+            let untrusted = |path: &str| path != ".GitAttributes";
+            let refused =
+                made_by(&repo, &|_| false, &untrusted, Bound::FIXED).expect_err("untrusted");
+            assert_eq!(refused, Refused::AttributesUntrusted);
+            nothing_written(&repo, &refused);
+        }
+
+        /// `config.worktree` is the main worktree's, so a conversion it sets does not refuse a
+        /// linked worktree's checkout.
+        #[test]
+        fn a_setting_in_config_worktree_does_not_refuse_the_checkout() {
+            let repo = Repo::new("checkout-config-worktree");
+            let readme = repo.blob("hello\n");
+            committed(&repo, &[("100644", "README", readme)]);
+            repo.put(
+                "config",
+                "[core]\n\trepositoryformatversion = 1\n\tautocrlf = false\n\
+                 [extensions]\n\tworktreeConfig = true\n",
+            );
+            repo.put("config.worktree", "[core]\n\tautocrlf = true\n");
+            made(&repo).expect("made");
+        }
+
+        /// A `worktrees` directory that is a link declines the checkout before anything is
+        /// written, as the admin files would be written wherever it points.
+        #[cfg(unix)]
+        #[test]
+        fn a_worktrees_link_declines_the_checkout() {
+            let repo = Repo::new("checkout-worktrees-link");
+            let readme = repo.blob("hello\n");
+            committed(&repo, &[("100644", "README", readme)]);
+            let elsewhere = repo.root.join("elsewhere");
+            std::fs::create_dir(&elsewhere).expect("elsewhere");
+            std::os::unix::fs::symlink(&elsewhere, repo.git.join("worktrees")).expect("link");
+            let refused = made(&repo).expect_err("linked");
+            assert_eq!(refused, Refused::Declined(Declined::Linked));
+            assert!(!target(&repo).exists(), "the declined checkout was made");
+            let written = std::fs::read_dir(&elsewhere).expect("elsewhere").count();
+            assert_eq!(written, 0, "admin files were written through the link");
+        }
+
+        /// A link whose target holds a NUL, which no link can, is written with `_` in its place.
+        #[cfg(unix)]
+        #[test]
+        fn a_link_target_holding_a_nul_is_written_with_an_underscore() {
+            let repo = Repo::new("checkout-link-nul");
+            let link = repo.object(Kind::Blob, b"a\0b");
+            committed(&repo, &[("120000", "link", link)]);
+            made(&repo).expect("made");
+            let written = std::fs::read_link(target(&repo).join("link")).expect("a link");
+            assert_eq!(written, Path::new("a_b"));
+        }
+
+        /// A directory that exists, or a `worktrees/` entry another worktree holds, refuses the
+        /// checkout and is left as it was.
+        #[test]
+        fn a_checkout_where_one_exists_is_refused_and_leaves_it_alone() {
+            let repo = Repo::new("checkout-taken");
+            let readme = repo.blob("hello\n");
+            committed(&repo, &[("100644", "README", readme)]);
+
+            std::fs::create_dir(target(&repo)).expect("existing checkout");
+            std::fs::write(target(&repo).join("kept"), "mine\n").expect("kept");
+            assert_eq!(made(&repo).expect_err("taken"), Refused::Taken);
+            assert_eq!(
+                std::fs::read_to_string(target(&repo).join("kept")).expect("kept"),
+                "mine\n"
+            );
+            assert!(!target(&repo).join("README").exists());
+            assert!(!admin(&repo).exists());
+            std::fs::remove_dir_all(target(&repo)).expect("removed");
+
+            repo.put("worktrees/c1/gitdir", "/elsewhere/.git\n");
+            assert_eq!(made(&repo).expect_err("taken"), Refused::Taken);
+            assert!(!target(&repo).exists(), "the refused checkout was left");
+            assert_eq!(
+                std::fs::read_to_string(admin(&repo).join("gitdir")).expect("kept"),
+                "/elsewhere/.git\n"
+            );
+        }
+
+        /// A refusal found while writing removes the checkout and its own `worktrees/` entry,
+        /// and an entry another worktree holds under the same name is refused before writing,
+        /// so it is never removed.
+        #[test]
+        fn a_refusal_while_writing_removes_only_what_the_checkout_made() {
+            let repo = Repo::new("checkout-unwound-long");
+            let readme = repo.blob("hello\n");
+            let long = "a".repeat(300);
+            committed(
+                &repo,
+                &[("100644", "README", readme), ("100644", &long, readme)],
+            );
+            repo.put("worktrees/other/gitdir", "/elsewhere/.git\n");
+            assert_eq!(made(&repo).expect_err("too long"), Refused::Unwritable);
+            assert!(!target(&repo).exists());
+            assert!(!admin(&repo).exists());
+            assert!(repo.git.join("worktrees/other/gitdir").exists());
+
+            let repo = Repo::new("checkout-unwound");
+            std::fs::write(repo.root.join("probe"), "").expect("probe");
+            if !repo.root.join("PROBE").exists() {
+                eprintln!(
+                    "names here are case-sensitive, so no folded pair is found while writing"
+                );
+                return;
+            }
+            let upper = repo.blob("upper\n");
+            let lower = repo.blob("lower\n");
+            committed(
+                &repo,
+                &[("100644", "README", upper), ("100644", "readme", lower)],
+            );
+            repo.put("worktrees/other/gitdir", "/elsewhere/.git\n");
+            assert_eq!(
+                made(&repo).expect_err("folded"),
+                Refused::Name(Name::Folded)
+            );
+            assert!(!target(&repo).exists());
+            assert!(!admin(&repo).exists());
+            assert!(repo.git.join("worktrees/other/gitdir").exists());
+
+            repo.put("worktrees/c1/gitdir", "/elsewhere/.git\n");
+            assert_eq!(made(&repo).expect_err("taken"), Refused::Taken);
+            assert!(!target(&repo).exists());
+            assert_eq!(
+                std::fs::read_to_string(admin(&repo).join("gitdir")).expect("kept"),
+                "/elsewhere/.git\n"
+            );
+        }
+
+        /// Removing a checkout takes its directory and its entry and no other entry, and goes
+        /// through no link.
+        #[test]
+        fn removing_a_checkout_takes_its_directory_and_its_entry_alone() {
+            use crate::git::checkout::remove;
+            let repo = Repo::new("checkout-removed");
+            let readme = repo.blob("hello\n");
+            committed(&repo, &[("100644", "README", readme)]);
+            repo.put("worktrees/other/gitdir", "/elsewhere/.git\n");
+            made(&repo).expect("made");
+            assert!(target(&repo).join("README").exists());
+
+            remove(&repo.git, &target(&repo), "c1").expect("removed");
+            assert!(!target(&repo).exists());
+            assert!(!admin(&repo).exists());
+            assert!(repo.git.join("worktrees/other/gitdir").exists());
+            remove(&repo.git, &target(&repo), "c1").expect("already gone");
+
+            made(&repo).expect("made again");
+            for id in ["", "../c1", "c1/x", "c 1"] {
+                assert!(
+                    remove(&repo.git, &target(&repo), id).is_err(),
+                    "removed with the id {id:?}"
+                );
+            }
+            assert!(target(&repo).join("README").exists());
+            assert!(admin(&repo).exists());
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn removing_a_checkout_leaves_everything_where_worktrees_is_a_link() {
+            use crate::git::checkout::remove;
+            let repo = Repo::new("checkout-removed-linked");
+            let readme = repo.blob("hello\n");
+            committed(&repo, &[("100644", "README", readme)]);
+            made(&repo).expect("made");
+            let elsewhere = repo.root.join("elsewhere");
+            std::fs::rename(repo.git.join("worktrees"), &elsewhere).expect("moved");
+            std::os::unix::fs::symlink(&elsewhere, repo.git.join("worktrees")).expect("link");
+
+            assert_eq!(
+                remove(&repo.git, &target(&repo), "c1").expect_err("linked"),
+                Refused::Declined(Declined::Linked)
+            );
+            assert!(target(&repo).join("README").exists());
+            assert!(elsewhere.join("c1").exists());
+        }
+
+        /// Making a checkout starts no program the repository names: no hook and no
+        /// fsmonitor runs, as they would under `git worktree add`.
+        #[cfg(unix)]
+        #[test]
+        fn a_checkout_starts_no_program_the_repository_names() {
+            use std::os::unix::fs::PermissionsExt;
+            let repo = Repo::new("checkout-programs");
+            let readme = repo.blob("hello\n");
+            committed(&repo, &[("100644", "README", readme)]);
+            let marker = repo.root.join("ran");
+            let script = format!("#!/bin/sh\ntouch '{}'\n", marker.display());
+            for hook in ["post-checkout", "reference-transaction"] {
+                repo.put(&format!("hooks/{hook}"), &script);
+                let path = repo.git.join("hooks").join(hook);
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                    .expect("runnable");
+            }
+            repo.put(
+                "config",
+                &format!(
+                    "[core]\n\trepositoryformatversion = 0\n\tfsmonitor = {}\n",
+                    repo.git.join("hooks/post-checkout").display()
+                ),
+            );
+            made(&repo).expect("made");
+            assert!(!marker.exists(), "a program the repository names was run");
+        }
+
+        #[cfg(unix)]
+        fn git(dir: &Path, args: &[&str]) -> Option<std::process::Output> {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_WORK_TREE")
+                .env_remove("GIT_INDEX_FILE")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .output()
+                .ok()
+        }
+
+        #[cfg(unix)]
+        fn git_text(dir: &Path, args: &[&str]) -> String {
+            let out = git(dir, args).expect("git ran");
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8(out.stdout).expect("UTF-8")
+        }
+
+        /// git itself reads the checkout as a clean linked worktree, detached on HEAD's commit,
+        /// with a withheld path absent but not deleted. Skipped, saying so, where git is not
+        /// installed.
+        #[cfg(unix)]
+        #[test]
+        fn git_reads_the_checkout_as_a_clean_detached_worktree() {
+            let repo = Repo::new("checkout-git");
+            if git(&repo.root, &["--version"]).is_none_or(|out| !out.status.success()) {
+                eprintln!("git is not installed, so the checkout is not compared with git's own");
+                return;
+            }
+            let readme = repo.blob("hello\n");
+            let script = repo.blob("#!/bin/sh\necho hi\n");
+            let link = repo.blob("README");
+            let secret = repo.blob("token\n");
+            let lib = repo.blob("pub fn f() {}\n");
+            let src = repo.tree(&[("100644", "lib.rs", lib)]);
+            let commit = committed(
+                &repo,
+                &[
+                    ("100644", "README", readme),
+                    ("100755", "run.sh", script),
+                    ("120000", "link", link),
+                    ("100644", "secret.txt", secret),
+                    ("40000", "src", src),
+                ],
+            );
+            made_with(&repo, &|path| path == "secret.txt", Bound::FIXED).expect("made");
+            let out = target(&repo);
+
+            let unrefreshed = git(&out, &["diff-files", "--quiet"]).expect("git ran");
+            assert!(
+                unrefreshed.status.success(),
+                "git reads a file as changed before refreshing the index: {}",
+                git_text(&out, &["diff-files", "--name-status"])
+            );
+            assert_eq!(git_text(&out, &["status", "--porcelain=v1", "-uall"]), "");
+            assert_eq!(
+                git_text(&out, &["ls-files", "-v", "secret.txt"]),
+                "S secret.txt\n"
+            );
+            assert_eq!(
+                git_text(&out, &["rev-parse", "HEAD"]),
+                format!("{}\n", commit.to_hex())
+            );
+            let listed = git_text(&repo.root, &["worktree", "list", "--porcelain"]);
+            let expected = format!(
+                "worktree {}\nHEAD {}\ndetached\n",
+                out.display(),
+                commit.to_hex()
+            );
+            assert!(listed.contains(&expected), "{listed}");
+            assert_eq!(
+                git_text(&repo.root, &["worktree", "prune", "--dry-run", "--verbose"]),
+                ""
             );
         }
     }

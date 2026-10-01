@@ -161,6 +161,13 @@ the paths refuses the whole policy and names that path, rather than confining th
 of them. Running under fewer paths than the policy names while the record says the policy was applied
 is the same silent degradation, reached one grant at a time.
 
+**On macOS a write grant does not reach a `.git`.** git runs the commands a repository's
+configuration and hooks name, unconfined, the next time anybody runs git there, so a confined process
+that could write one could run code outside its confinement. A grant to write a directory refuses a
+write to any `.git` beneath it, in any case. On every platform an MCP server is also refused a
+directory inside a repository. Linux's Landlock cannot hold one directory back from a grant, so there
+a `.git` beneath a server's directory, its home or the temporary directory is one it may write.
+
 **A write grant covers moving a file inside it.** Writing a temporary file and renaming it into place
 is how a compiler, a package manager and an editor write anything, so a grant to write a path covers
 moving a file from anywhere under it to anywhere else under it. On Linux this needs a kernel right that

@@ -942,6 +942,21 @@ go stale independently: one build ships both surfaces, and every build ships the
   does not cover this: it compares `/a/one` with `/a/two`, which differ before the mapping is
   applied.
 
+- **A resume trusts whatever checkout stands at the recorded path.** A record holds the directory
+  it was written in as a path and nothing that identifies the checkout there, and a resume restores
+  the trust map and the vouched commands under whatever stands at that path now. A person who
+  removes a checkout, puts a different one at the same path and resumes an old session there is not
+  asked the startup trust question, and a command vouched for in that session runs without asking,
+  its output labelled trusted ([RUN-7](tools/run.md#RUN-7)). A fresh session at that path asks both
+  ([TRUST-6](trust-map.md#TRUST-6), [RUN-9](tools/run.md#RUN-9)). A resume continues the session as
+  it was left, and the permissions it holds were given for the path, so this is accepted.
+
+  Closing it means recording the project root's identity, as [TRUST-23](trust-map.md#TRUST-23)
+  records it for a remembered answer (when the directory was made and its number on the volume), and
+  restoring the map, the vouched commands and the `/add-dir` directories only where it matches. A
+  move or rename on one volume would keep them; a copy, a restore from backup or a re-clone of the
+  same project would be asked again.
+
 - **A record grows with what its turns wrote over.** Every rewind point carries a copy of the
   conversation and the bytes the turn overwrote, and the whole record is rewritten after every
   turn. A session whose turns rewrite large files therefore writes a large record repeatedly,

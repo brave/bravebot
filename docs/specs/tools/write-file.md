@@ -25,11 +25,17 @@ Exactly one of the two. Both would leave the driver choosing between text the pl
 bytes nobody has read, and neither names anything to write, so both shapes are refused before
 anyone is asked to approve a write.
 
+A blank `contents_ref`, `path` or `path_ref` counts as left out, since an empty string names nothing.
+Planners that fill every optional field send the unused ones as `""`, and refusing those as "not
+both" gave them a refusal they could not act on. A blank `contents` is still given: it is an empty
+file.
+
 **Why.** The worst a wrong reference can do is put the wrong quarantined bytes into a path that
 still had to be endorsed on its own.
 
 `verified-by: bravebot_agent::turn::a_quarantined_file_is_rewritten_by_a_processor`
 `verified-by: bravebot_agent::turn::a_write_that_names_two_bodies_or_none_is_refused`
+`verified-by: bravebot_agent::turn::a_write_with_blank_references_beside_its_path_and_contents_goes_through`
 
 <a id="WRITE-2"></a>
 ### WRITE-2: a reference that names no file is not a destination
