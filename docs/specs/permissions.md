@@ -292,7 +292,9 @@ Nor is it about the directory a call happened to name, so it holds whichever way
 the file. A listing or a search consults the rules for every entry its walk reaches as well as for
 the directory it was asked for, and an entry a rule covers is left out before the file is opened or
 its name is reported. A directory a rule covers is not descended into. Both are decided ahead of
-the walk's own caps, so a rule never costs a listing or a search the files it was asked about.
+the walk's own caps, so a rule never costs a listing or a search the files it was asked about. A walk
+does not follow a symbolic link it meets: the entry is neither reported nor descended into, so a
+link to a denied file is not a second name a listing or a search hands back.
 
 What comes back says a rule was the reason only where the rule is the whole reason: a search that
 had nothing left to read reports that and that retrying is not the answer, and one that read the
@@ -324,6 +326,12 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_written_through_a_link_to_it`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_edited_through_a_link_to_it`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_through_a_link_to_it`
+`verified-by: bravebot_agent::turn::a_file_an_edit_rule_denies_is_not_written_through_a_link_to_it`
+`verified-by: bravebot_agent::turn::a_file_an_edit_rule_denies_is_not_edited_through_a_link_to_it`
+`verified-by: bravebot_agent::turn::a_denied_file_is_not_created_through_a_link_to_it`
+`verified-by: bravebot_agent::turn::a_link_to_a_directory_a_rule_covers_is_not_read_through`
+`verified-by: bravebot_agent::turn::a_link_to_a_directory_a_rule_covers_is_not_written_through`
+`verified-by: bravebot_agent::turn::a_link_to_a_directory_a_rule_covers_is_not_listed_or_searched_through`
 `verified-by: bravebot_agent::turn::an_ask_rule_still_prompts_for_a_write_through_a_link_to_the_file`
 `verified-by: bravebot_agent::turn::a_denied_directory_is_not_written_under_another_case_of_its_name`
 `verified-by: bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only`
@@ -335,6 +343,7 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::workspace::a_search_does_not_open_a_file_a_deny_rule_covers`
 `verified-by: bravebot_agent::workspace::a_listing_does_not_enumerate_a_tree_a_deny_rule_covers`
 `verified-by: bravebot_agent::workspace::a_denied_file_does_not_spend_a_searchs_budget`
+`verified-by: bravebot_agent::turn::a_walk_does_not_report_a_link_to_a_denied_file`
 
 <a id="PERM-8"></a>
 ### PERM-8: an allow rule answers a prompt and grants nothing else
