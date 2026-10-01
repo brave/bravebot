@@ -1471,6 +1471,8 @@ export function apply(
         return { ...old, entries: [...old.entries, t.askedServer(message.data)] }
       case 'manifest.request':
         return { ...old, entries: [...old.entries, t.askedManifest(message.data)] }
+      case 'exposure.request':
+        return { ...old, entries: [...old.entries, t.askedExposure(message.data)] }
       // A run is not a turn, so it adds no turn marker and no reply to the conversation.
       case 'manifest.started':
         return { ...old, running: true, phase: null, checking: null, tokens: 0 }

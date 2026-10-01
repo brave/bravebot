@@ -414,6 +414,7 @@ const ALLOWED = new Set([
   'manifest.run',
   'manifest.read',
   'manifest.reply',
+  'exposure.reply',
   'ask.reply',
   'trust.reply',
   'permissions.list',

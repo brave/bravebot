@@ -17,6 +17,7 @@ import type {
   Change,
   ConfirmRequest,
   CutOff,
+  ExposureRequest,
   FetchRequest,
   Landing,
   ManifestError,
@@ -130,6 +131,14 @@ export type Entry = (
    */
   | { kind: 'manifest'; id: string; request: ManifestRequest; decision: 'approve' | 'reject' | null }
   /**
+   * A file holding a credential, awaiting a decision about whether the model may read it, or
+   * the record of one already made.
+   *
+   * No `remember`. An approval covers the file for the conversation, and the agent keeps track
+   * of it.
+   */
+  | { kind: 'exposure'; id: string; request: ExposureRequest; decision: 'approve' | 'reject' | null }
+  /**
    * The task a manifest run was asked to plan.
    *
    * Not a `user` entry. A run is not part of the conversation, so its task has no ordinal, cannot
@@ -236,6 +245,7 @@ export const askedVet = (request: VetRequest): Entry => ({ kind: 'vet', id: next
 export const askedFetch = (request: FetchRequest): Entry => ({ kind: 'fetch', id: nextId(), request, decision: null })
 export const askedServer = (request: ServerRequest): Entry => ({ kind: 'server', id: nextId(), request, decision: null })
 export const askedManifest = (request: ManifestRequest): Entry => ({ kind: 'manifest', id: nextId(), request, decision: null })
+export const askedExposure = (request: ExposureRequest): Entry => ({ kind: 'exposure', id: nextId(), request, decision: null })
 export const planAsked = (text: string): Entry => ({ kind: 'plan-task', id: nextId(), text })
 export const planReplied = (text: string, record: string | null): Entry => ({ kind: 'plan-reply', id: nextId(), text, record })
 export const planEnded = (ended: ManifestError): Entry => ({ kind: 'plan-ended', id: nextId(), ended })
@@ -338,6 +348,7 @@ export const REPLY = {
   fetch: 'fetch.reply',
   server: 'server.reply',
   manifest: 'manifest.reply',
+  exposure: 'exposure.reply',
 } as const
 
 /** Which kinds of question a person can answer with a yes or a no. */
@@ -520,6 +531,7 @@ export function searchableText(entry: Entry): string {
     case 'fetch': return [entry.request.url, entry.request.host].join(' ')
     case 'server': return [entry.request.language, entry.request.program, entry.request.workspace].join(' ')
     case 'manifest': return [entry.request.task, ...entry.request.steps].join(' ')
+    case 'exposure': return [entry.request.path, ...entry.request.credentials].join(' ')
     case 'plan-ended': return [entry.ended.problem ?? '', entry.ended.attempt?.plan ?? '', ...(entry.ended.attempt?.steps ?? [])].join(' ')
     case 'vouch': return [entry.request.path, entry.request.preview].join(' ')
     case 'ask': return entry.request.prompts.map((prompt) => [prompt.header, prompt.question, ...prompt.rows.map((row) => `${row.label} ${row.detail ?? ''}`)].join(' ')).join(' ')

@@ -460,6 +460,19 @@ export interface ManifestError {
   notices?: string[]
 }
 
+/**
+ * A vouched file the planner asked to read, which the scan found a credential in.
+ *
+ * `credentials` has one line per finding, as the agent wrote it: the kind, where it is, and a
+ * mask of the value. No line holds any part of a value, and the file's text is not sent.
+ */
+export interface ExposureRequest {
+  request: number
+  path: string
+  credentials: string[]
+  summary: string
+}
+
 /** A pipeline the planner wants to run. */
 export interface RunRequest {
   request: number
@@ -603,6 +616,7 @@ export interface EventMap {
   'fetch.request': FetchRequest
   'server.request': ServerRequest
   'manifest.request': ManifestRequest
+  'exposure.request': ExposureRequest
   'manifest.started': { run: number }
   'manifest.done': ManifestDone
   'manifest.error': ManifestError

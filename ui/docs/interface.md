@@ -24,15 +24,17 @@ Three columns, each side one resizable and foldable:
   agents with a purpose and a memory, each pinned to one checkout. See *Bots* below.
 - **Transcript** — the conversation, with the turn's tool calls gathered into runs that
   fold away, and confined content shown as what it is rather than as text the model read.
-  Eight kinds of question are put here and answered here: a **write** (as a diff), a
+  Nine kinds of question are put here and answered here: a **write** (as a diff), a
   **command** to run (as the argv, plus the binary each name resolved to), whether the
   planner may **read what a command printed** (as the bytes in full), whether to **vouch**
   for a quarantined path, whether to **fetch** an address (as the address, and the host it
   reaches on a line of its own), whether to **start a language server** (as the binary and
   the tree it would index, saying where that runs build tooling), whether to **run a plan**
-  (as the task and every step), and a **series of questions** the planner wants to put to
-  you: choices to pick from, or your own words. The turn blocks until one is answered. Window
-  close and app shutdown refuse outstanding questions. For the last of the eight that means *no answers at all* rather than a decline per question: a decline
+  (as the task and every step), whether the model may **read a file that holds a
+  credential** (as the file and what the scan found, without the value), and a **series of
+  questions** the planner wants to put to you: choices to pick from, or your own words. The
+  turn blocks until one is answered. Window close and app shutdown refuse outstanding
+  questions. For the last of the nine that means *no answers at all* rather than a decline per question: a decline
   somebody made and a question that never reached them must not look alike.
 - **Context** — an inspector with **Overview**, **Changes** and **Files** tabs.
   Overview summarises the plan, reads and confined material; Changes distinguishes
@@ -445,10 +447,10 @@ over an approval card covers the diff or the argv the decision rests on. The exc
 **Run and don't ask again**, whose tooltip lists the programs the vouch would cover, which
 is the one thing its label cannot say.
 
-**No key answers a question.** The eight the agent can ask (a write, a command, whether the
+**No key answers a question.** The nine the agent can ask (a write, a command, whether the
 planner may read output, whether to vouch, whether to fetch, whether to start a language
-server, whether to run a plan, and a series of questions) are answered in the transcript and
-nowhere else. An approval is a claim that somebody looked at
+server, whether to run a plan, whether to send a file holding a credential, and a series of
+questions) are answered in the transcript and nowhere else. An approval is a claim that somebody looked at
 the evidence, and a keystroke can be typed from muscle memory into a window whose contents
 changed a frame ago. The absence is structural: no command id names an approval, and the dispatch table in
 `src/renderer/commands.ts` is not given the callbacks that answer.
