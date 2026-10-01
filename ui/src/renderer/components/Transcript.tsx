@@ -135,7 +135,8 @@ const afterMenu = (open: () => void): void => { setTimeout(open, 0) }
  * The find bar's field.
  *
  * Keys are read by a listener on the host rather than through Leo's `onKeyDown`, whose handler is
- * the one from the first render and would step through the matches of the first query typed.
+ * the one from the first render and would step through the matches of the first query typed. Leo
+ * re-dispatches the key on the host as an event that carries the keyboard event in `innerEvent`.
  */
 function FindInput({ query, onQuery, onClose, onStep }: {
   query: string
@@ -149,7 +150,8 @@ function FindInput({ query, onQuery, onClose, onStep }: {
   useEffect(() => {
     const element = host.current
     if (!element) return
-    const key = (event: KeyboardEvent) => {
+    const key = (heard: Event) => {
+      const event = ((heard as Event & { innerEvent?: KeyboardEvent }).innerEvent ?? heard) as KeyboardEvent
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); latest.current.onClose() }
       if (event.key === 'Enter') { event.preventDefault(); latest.current.onStep(event.shiftKey) }
     }
