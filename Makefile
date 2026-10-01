@@ -58,6 +58,7 @@ help:
 	@echo "  make check-security        The security audit's deterministic half"
 	@echo "  make check-locales         Hold the catalogs to contrib/untranslated-messages.txt"
 	@echo "  make check-versions        Whether every file stating the version states the same one"
+	@echo "  make check-narration       Whether this branch's commits and lines narrate their writer's process [BASE=ref]"
 	@echo "  make check-docs            Build the documentation website under docs/website"
 	@echo "  make docs-changes          What has landed in the specs since the site was updated"
 	@echo "  make docs-updated-to-sha   The commit the documentation site is current as of"
@@ -268,6 +269,8 @@ check-npm:
 # Installed under the cache rather than into ~/.cargo/bin, so running this never changes what
 # `cargo deny` means anywhere else.
 #
+# contrib/check-deny-reasons.py runs first, since it answers at once and the install below does not.
+#
 # unmatched-skip is a warning by default: raised here because a skip entry that no longer
 # matches is a recorded reason for a duplicate that is no longer there. --locked for the same
 # reason every other cargo command here takes it: the answer is about the versions Cargo.lock
@@ -276,6 +279,8 @@ CARGO_DENY_VERSION = 0.20.2
 CARGO_DENY_ROOT = $(HOME)/.cache/bravebot-deny
 .PHONY: check-deps
 check-deps:
+	@python3 contrib/check-deny-reasons.py --selftest
+	@python3 contrib/check-deny-reasons.py
 	@"$(CARGO_DENY_ROOT)/bin/cargo-deny" --version 2>/dev/null | grep -qx "cargo-deny $(CARGO_DENY_VERSION)" || { \
 		echo "building cargo-deny $(CARGO_DENY_VERSION) into $(CARGO_DENY_ROOT), which takes a few minutes"; \
 		cargo install --quiet --locked cargo-deny@$(CARGO_DENY_VERSION) --root "$(CARGO_DENY_ROOT)"; \
@@ -339,7 +344,7 @@ docs-updated-to-sha:
 # All local checks before pushing, including the UI and Linux code paths.
 # Requires Docker and the desktop runtime dependencies described in checks.md.
 .PHONY: check-all-local check-all
-check-all-local: check-scripts check check-spec check-security check-locales check-versions check-docs check-npm check-deps check-ui check-reviewdog
+check-all-local: check-scripts check check-spec check-security check-locales check-versions check-narration check-docs check-npm check-deps check-ui check-reviewdog
 check-all: check-all-local check-msrv check-windows check-linux
 
 # The gates this branch's changes need, against its merge base with BASE, which check-reviewdog
@@ -420,6 +425,16 @@ check-ui-walkthrough:
 .PHONY: locales
 locales:
 	@python3 contrib/check-locales.py --report
+
+# Whether this branch's commit messages and added lines, and in CI the pull request's title and
+# body, narrate their writer's process: a correction of an earlier claim, or an account of what was
+# guessed or checked. A fixed list of phrases, so a paraphrase still needs a reviewer. On a pull
+# request the range is the merge commit's two parents, and elsewhere it is BASE's merge base with
+# this branch, including uncommitted and untracked files. No toolchain, so CI answers in seconds.
+.PHONY: check-narration
+check-narration:
+	python3 contrib/check-narration.py --selftest
+	python3 contrib/check-narration.py $(if $(BASE),--base '$(BASE)')
 
 # Whether every catalog matches contrib/untranslated-messages.txt, which records the messages each
 # translation is knowingly missing. A gap is allowed and silence about one is not: falling back to

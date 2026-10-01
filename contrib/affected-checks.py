@@ -65,7 +65,7 @@ DESKTOP = ("ui-bridge", "ui-files")
 # gates cover what it checks short of linking every target.
 ALWAYS = (
     "check-scripts", "check-spec", "check-security", "check-locales", "check-versions",
-    "check-reviewdog",
+    "check-narration", "check-reviewdog",
 )
 HOST = {
     "rust": ("check",),
@@ -83,7 +83,7 @@ def classify(path, desktop):
         return EVERYTHING
     if path in ("Cargo.toml", "Cargo.lock"):
         return frozenset({"rust", "ui", "build", "deps"})
-    if path == "deny.toml":
+    if path in ("deny.toml", "contrib/check-deny-reasons.py"):
         return frozenset({"deps"})
     if path == "Dockerfile.cross":
         return frozenset({"build"})
@@ -261,6 +261,7 @@ CASES = (
     ("Cargo.lock", {"rust", "ui", "build", "deps"}),
     ("Cargo.toml", {"rust", "ui", "build", "deps"}),
     ("deny.toml", {"deps"}),
+    ("contrib/check-deny-reasons.py", {"deps"}),
     ("Dockerfile.cross", {"build"}),
     ("crates/tui/src/render.rs", {"rust"}),
     ("crates/core/src/policy.rs", {"rust", "ui"}),
