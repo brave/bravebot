@@ -16,7 +16,7 @@ import unittest
 ROOT = Path(__file__).resolve().parent.parent
 GATES = (
     "check-scripts", "check", "check-spec", "check-security", "check-locales", "check-versions",
-    "check-docs", "check-npm", "check-deps", "check-msrv", "check-windows",
+    "check-narration", "check-docs", "check-npm", "check-deps", "check-msrv", "check-windows",
     "check-linux", "check-ui", "check-reviewdog",
 )
 
