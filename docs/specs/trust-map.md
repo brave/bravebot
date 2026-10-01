@@ -451,6 +451,8 @@ and an absolute path outside those are refused rather than resolved, in an added
 in the project, and a symlink leaving one is refused.
 A relative path always means the project, so no file has two spellings. Naming a directory
 includes nothing, since a directory is somewhere to type through rather than a file to read.
+[CHECKOUT-7](checkouts.md#CHECKOUT-7), which nothing yet builds, gives a delegate a checkout of its
+own as its working directory, from which the session's working directory is not reachable.
 
 Confinement is decided by where an operation lands and not by how its path is spelled, so it holds
 for a file that does not exist yet: a write creates what it names, and a symlink out of the tree is
@@ -495,6 +497,9 @@ The user's own directory is read as trusted by provenance rather than by any rul
 project's own files are **not** covered by that and are read through this spec, whatever their
 names. What is kept in that directory and how it is found is
 [instructions.md](instructions.md); what it is trusted for is [skills.md](skills.md).
+[CHECKOUT-6](checkouts.md#CHECKOUT-6), which nothing yet builds, puts the checkouts delegates are
+given under that directory. They hold a project's files, so they are read through this spec
+([CHECKOUT-8](checkouts.md#CHECKOUT-8)).
 
 **Why.** The map is keyed by workspace-relative paths and has nothing to say about a path outside
 the workspace. Asking it about one would be laundering.
@@ -712,6 +717,12 @@ plan's write set, is shown in the prompt, and takes every write gate a path in t
 ([tools/command-line.md](tools/command-line.md)). What it buys is a fixed place that needs no name
 invented for it, that a repository does not report, that no walk has to skip, and that goes when the
 session does. It buys no prompt anybody would otherwise see.
+
+[CHECKOUT-7](checkouts.md#CHECKOUT-7), which nothing yet builds, reaches a delegate's checkout on
+like grounds: it was created here and is this account's, and in place of being empty it holds only
+what the driver wrote from a `.git` the map trusts, each file labelled as the same path in the
+working directory is. [CHECKOUT-11](checkouts.md#CHECKOUT-11) has a write there take every gate the
+same write in the working directory takes.
 
 One directory inside the temporary directory is reached and not the directory that one sits in, so
 `/tmp` is no more writable than it was and the reason `/add-dir /tmp` is the wrong answer is
@@ -1132,6 +1143,9 @@ this build gives, and that is this account's at mode `0700`. A directory reaches
 its lock is held, so one still being made is left, and a program a session starts does not inherit
 the lock. A link under such a name is judged as a link rather than as what it points at. A local MCP
 server's home is removed on the same terms. On Windows nothing is removed.
+[CHECKOUT-16](checkouts.md#CHECKOUT-16), which nothing yet builds, sweeps delegates' checkouts under
+the state directory with a lock of the same kind, taken as each is created, removing one that no
+session record for its workspace lists and no running session holds.
 
 A session waits a second at most for its own directory's lock. One that cannot have it by then, or
 on a file system that refuses a lock on a directory, keeps its directory at `1700`, which is as

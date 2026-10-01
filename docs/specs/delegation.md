@@ -125,6 +125,9 @@ The three kinds are ordered, so choosing a wider one never costs a narrower one'
 A language server goes with running programs and never without it, because starting one runs the
 project's build tooling ([LSP-9](tools/lsp.md#LSP-9)).
 
+[CHECKOUT-3](checkouts.md#CHECKOUT-3), which nothing yet builds, lets a checker or a worker work in
+a checkout of its own, and refuses one to a reader.
+
 A reader and a checker hold no MCP server's grant ([SERVERS-9](mcp-servers.md#SERVERS-9)). What a
 server's tool does is the server's to say, so a call to one may write or run anything, and a worker
 is the one kind already let write and run. No kind names a server, since which servers a session
@@ -328,6 +331,10 @@ round. A parent shown a private report holds it from then on.
 The exchange, the tool results, the narration and the quarantine all end with the delegate. A
 reference minted inside one names nothing afterwards, and none of it can be asked for later.
 
+[CHECKOUT-18](checkouts.md#CHECKOUT-18), which nothing yet builds, has the driver say one more
+thing beside the report, from its own record: where a delegate's checkout is, the commit it holds,
+and the paths that could come back from it.
+
 **Why.** This is the feature rather than a restriction on it. A delegate whose reading reached
 its parent's context would have moved the log rather than absorbed it.
 
@@ -464,6 +471,10 @@ Each holds its own conversation, quarantine, capabilities, routing grants and pr
 They share live file authority because their effects touch the same filesystem. A capture boundary
 spans one operation, so a large listing or search can delay other captures until it finishes.
 Reservations are per path, so writes to other paths proceed.
+
+[checkouts.md](checkouts.md), which nothing yet builds, proposes a delegate that works in a checkout
+of its own, so that two workers stop building each other's edits. Its writes still go through the
+one live file authority, under the checkout's paths.
 
 **Why.** A turn that asked three questions waits on the slowest and not on the sum. Running them
 one at a time would also make the reading order the asking order, so a build would have to finish
@@ -665,6 +676,10 @@ person wrote gets a `reader`'s ceiling, and is told so ([DELEGATE-6](#DELEGATE-6
 
 The `memory:` key is taken over as the body is, because a memory changes what a run knows and
 never what it may do. [MEMORY-2](definition-memory.md#MEMORY-2) specifies that key.
+
+[CHECKOUT-2](checkouts.md#CHECKOUT-2), which nothing yet builds, adds an `isolation:` key met as the
+kind is: either definition asking gives a checkout, so a later one can add it and cannot take it
+away.
 
 DELEGATE-19 says a checked-in file granting a capability would make the file the author of
 authority rather than the person who vouched for it, and a wider `kind:` for a name that person
