@@ -14967,6 +14967,7 @@ mod tests {
                     name: "read_file".to_string(),
                     arguments: r#"{"path":"src/main.rs"}"#.to_string(),
                 },
+                extra_content: None,
             };
             let transcript = resumed(
                 vec![
@@ -15030,6 +15031,7 @@ mod tests {
                     name: "search".to_string(),
                     arguments: r#"{"pattern":"MAX_STEPS"}"#.to_string(),
                 },
+                extra_content: None,
             };
             let transcript = resumed(
                 vec![

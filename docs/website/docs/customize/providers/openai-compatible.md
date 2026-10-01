@@ -53,6 +53,40 @@ The names it knows are compiled in, and nothing is fetched to resolve one. This 
 bearer credential gets sent, so a service that could decide it could redirect your token by answering
 a request.
 
+### Google Vertex AI
+
+Vertex AI has an OpenAI-compatible endpoint that takes an API key. An entry keyed `google-vertex`
+reaches it:
+
+```json
+{
+  "provider": {
+    "google-vertex": {
+      "options": { "project": "<your project id>", "location": "global" }
+    }
+  },
+  "model": "google-vertex/google/gemini-2.5-flash"
+}
+```
+
+The host is built from `project` and `location`, which is `global` where you state none, and a
+`project` is required. One holding a character a project id cannot hold, such as `/` or `@`, configures
+nothing rather than sending your key somewhere else. A stated `baseURL` still wins.
+
+The key is read from `GOOGLE_API_KEY` and sent in the `x-goog-api-key` header, which is the only
+place Google reads it from. Export it as `GOOGLE_API_KEY=<your key>`, or name another variable in
+`env`.
+
+With no block, exporting `GOOGLE_API_KEY` and `GOOGLE_CLOUD_PROJECT` is enough, and `VERTEX_LOCATION`
+sets a location other than `global`. Both of the first two are needed, and a block replaces this. The
+service is only asked once a model named `google-vertex/...` is chosen. `GOOGLE_API_KEY` is a name
+other Google tools read as well, so the key you exported for one of them is what is sent here once
+you choose such a model.
+
+Vertex AI has no model listing a key can call, so `/model` offers only the models the block lists.
+Name any other with the id in front, as above. Signing in with Google Cloud credentials instead of a
+key is not supported.
+
 ### The credential
 
 Name a variable in `env` and keep the token wherever you already keep secrets. `options.apiKey` is

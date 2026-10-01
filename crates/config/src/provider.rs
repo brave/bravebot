@@ -52,11 +52,29 @@ pub(crate) fn known_endpoint(id: &str) -> Option<&'static str> {
 
 /// The variable the other tool reads `id`'s token from, where the id is one compiled in.
 pub(crate) fn known_variable(id: &str) -> Option<&'static str> {
+    if id == GOOGLE_VERTEX_ID {
+        return Some(crate::env_var::GOOGLE_API_KEY);
+    }
     KNOWN_ENDPOINTS
         .iter()
         .find(|(known, _, _)| *known == id)
         .map(|(_, _, variable)| *variable)
 }
+
+/// The id naming Google Vertex AI, which is reached through its OpenAI-compatible endpoint.
+///
+/// Not in [`KNOWN_ENDPOINTS`] for the reason Bedrock is not: the endpoint carries the project and
+/// the location, so it is built from `options.project` and `options.location`.
+pub(crate) const GOOGLE_VERTEX_ID: &str = "google-vertex";
+
+/// The location Vertex AI is reached in where none is stated.
+const VERTEX_DEFAULT_LOCATION: &str = "global";
+
+/// The header a Vertex AI key travels in.
+///
+/// The service refuses the same key as a bearer token, so this is where it goes instead of
+/// `authorization`.
+const VERTEX_KEY_HEADER: &str = "x-goog-api-key";
 
 /// The context window a gateway model is assumed to have, in prompt tokens.
 ///
@@ -167,14 +185,21 @@ impl Provider {
         if id == AWS_PROVIDER_ID {
             return Self::aws(id, entry, options);
         }
-        let base_url = options
+        let stated = options
             .and_then(|options| options.get("baseURL"))
             .and_then(serde_json::Value::as_str)
             .map(str::trim)
-            .filter(|url| !url.is_empty())
-            // A stated endpoint wins, so a block pointing a known name at a proxy or a private
-            // deployment reaches the host it named rather than the one compiled in.
-            .or_else(|| known_endpoint(id))?;
+            .filter(|url| !url.is_empty());
+        // A stated endpoint wins, so a block pointing a known name at a proxy or a private
+        // deployment reaches the host it named rather than the one compiled in.
+        let base_url = match stated {
+            Some(url) => url.to_string(),
+            None if id == GOOGLE_VERTEX_ID => vertex_endpoint(
+                string(options.and_then(|options| options.get("project"))).as_deref(),
+                string(options.and_then(|options| options.get("location"))).as_deref(),
+            )?,
+            None => known_endpoint(id)?.to_string(),
+        };
 
         Some(Self {
             id: id.to_string(),
@@ -185,6 +210,33 @@ impl Provider {
                 .and_then(|options| string(options.get("apiKey")))
                 .map(Secret::new),
             models: models(entry.get("models")),
+            bedrock: None,
+        })
+    }
+
+    /// The Vertex AI service the environment names, where it names one.
+    ///
+    /// The key and the project both have to hold a value, and neither is guessed: a key with no
+    /// project is a request the service refuses, and a project with no key is a service nobody
+    /// could sign in to. The entry names `GOOGLE_API_KEY` in `env`, so an exported key is read again
+    /// when a request needs it, and holds the value `lookup` found for the case where the key lives
+    /// only in a settings file.
+    pub(crate) fn from_environment(lookup: &impl Fn(&str) -> Option<String>) -> Option<Self> {
+        let filled = |name: &str| lookup(name).filter(|value| !value.trim().is_empty());
+        let mut key = filled(crate::env_var::GOOGLE_API_KEY)?;
+        let token = Secret::new(key.trim());
+        crate::scrub(&mut key);
+        let project = filled(crate::env_var::GOOGLE_CLOUD_PROJECT)?;
+        let location = filled(crate::env_var::VERTEX_LOCATION);
+        let base_url = vertex_endpoint(Some(project.trim()), location.as_deref().map(str::trim))?;
+
+        Some(Self {
+            id: GOOGLE_VERTEX_ID.to_string(),
+            name: None,
+            base_url,
+            env: vec![crate::env_var::GOOGLE_API_KEY.to_string()],
+            api_key: Some(token),
+            models: Vec::new(),
             bedrock: None,
         })
     }
@@ -235,6 +287,35 @@ impl Provider {
     /// gateway implements, so a caller asks and falls back rather than relying on it.
     pub fn account_models_url(&self) -> String {
         format!("{}/models/user", self.base_url)
+    }
+
+    /// Whether this service can be asked what it serves.
+    ///
+    /// Not Vertex AI, which has no listing a key can call: the request would carry the key to be
+    /// answered 404.
+    pub fn has_roster(&self) -> bool {
+        self.id != GOOGLE_VERTEX_ID
+    }
+
+    /// The header this service takes its credential in, and the value to put there.
+    ///
+    /// `authorization` with a bearer token everywhere but Vertex AI, which refuses a key sent that
+    /// way and takes it in `x-goog-api-key`. The only place either header is chosen, so a request
+    /// and a roster cannot disagree about it.
+    pub fn credential_header(&self, token: &str) -> (&'static str, String) {
+        if self.id == GOOGLE_VERTEX_ID {
+            (VERTEX_KEY_HEADER, token.to_string())
+        } else {
+            ("authorization", format!("Bearer {token}"))
+        }
+    }
+
+    /// Whether a tool call's `extra_content` is sent back to this service.
+    ///
+    /// Vertex AI attaches a thought signature there and refuses the next request without it.
+    /// Another service either ignores the member or refuses the request for carrying it.
+    pub fn takes_extra_content(&self) -> bool {
+        self.id == GOOGLE_VERTEX_ID
     }
 
     /// What to show a person choosing this provider.
@@ -339,6 +420,35 @@ impl fmt::Debug for Credential {
             Self::NotNeeded => f.write_str("NotNeeded"),
         }
     }
+}
+
+/// The OpenAI-compatible endpoint of Vertex AI for a project and location, without a trailing slash.
+///
+/// `None` where there is no project, or where either value holds a character that would move the
+/// request: both are written into the URL, and a `/`, `@`, `?` or `#` in one would send the key to
+/// another host or another route than the one named. The location picks the host, so it is checked
+/// more tightly than the project, which only sits in the path.
+fn vertex_endpoint(project: Option<&str>, location: Option<&str>) -> Option<String> {
+    let project = project?;
+    let location = location.unwrap_or(VERTEX_DEFAULT_LOCATION);
+    let project_ok = project.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && project
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'));
+    let location_ok = location
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if !project_ok || !location_ok {
+        return None;
+    }
+    let host = if location == VERTEX_DEFAULT_LOCATION {
+        "aiplatform.googleapis.com".to_string()
+    } else {
+        format!("{location}-aiplatform.googleapis.com")
+    };
+    Some(format!(
+        "https://{host}/v1/projects/{project}/locations/{location}/endpoints/openapi"
+    ))
 }
 
 /// A string value with surrounding space removed, or `None` when nothing is left.
@@ -459,6 +569,112 @@ mod tests {
         let mut all = parsed(text);
         assert_eq!(all.len(), 1, "expected exactly one provider");
         all.remove(0)
+    }
+
+    const PLACEHOLDER_PROJECT: &str = "example-project-1";
+
+    fn vertex(options: &str) -> Vec<Provider> {
+        parsed(&format!(
+            r#"{{"provider": {{"google-vertex": {{"options": {options}}}}}}}"#
+        ))
+    }
+
+    /// The default location is `global`, whose host carries no location prefix.
+    #[test]
+    fn a_google_vertex_entry_is_reached_at_the_host_its_project_and_location_build() {
+        let all = vertex(&format!(r#"{{"project": "{PLACEHOLDER_PROJECT}"}}"#));
+        assert_eq!(all.len(), 1);
+        assert_eq!(
+            all[0].chat_completions_url(),
+            "https://aiplatform.googleapis.com/v1/projects/example-project-1/locations/global/endpoints/openapi/chat/completions"
+        );
+        assert_eq!(all[0].host(), "aiplatform.googleapis.com");
+    }
+
+    #[test]
+    fn a_google_vertex_entry_in_a_region_is_reached_at_that_regions_host() {
+        let all = vertex(&format!(
+            r#"{{"project": "{PLACEHOLDER_PROJECT}", "location": "us-central1"}}"#
+        ));
+        assert_eq!(all.len(), 1);
+        assert_eq!(
+            all[0].base_url,
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/example-project-1/locations/us-central1/endpoints/openapi"
+        );
+        assert_eq!(all[0].host(), "us-central1-aiplatform.googleapis.com");
+    }
+
+    #[test]
+    fn a_google_vertex_entry_without_a_project_configures_nothing() {
+        assert!(vertex("{}").is_empty());
+        assert!(vertex(r#"{"location": "us-central1"}"#).is_empty());
+        assert!(vertex(r#"{"project": "   "}"#).is_empty());
+    }
+
+    /// Both values are written into the URL, so one that could change the host or the route
+    /// would carry the key somewhere the person did not name.
+    #[test]
+    fn a_project_or_location_that_would_move_the_request_configures_nothing() {
+        for project in [
+            "p/../other",
+            "p@evil.invalid",
+            "p?x=1",
+            "p#frag",
+            "-leading",
+            "has space",
+            "p\\q",
+        ] {
+            let options = serde_json::json!({"project": project}).to_string();
+            assert!(
+                vertex(&options).is_empty(),
+                "project {project:?} was accepted"
+            );
+        }
+        for location in [
+            "evil.invalid/",
+            "x@y",
+            "US-CENTRAL1",
+            "a.b",
+            "us central",
+            "a/b",
+            "a:443",
+        ] {
+            let options = serde_json::json!({"project": PLACEHOLDER_PROJECT, "location": location})
+                .to_string();
+            assert!(
+                vertex(&options).is_empty(),
+                "location {location:?} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stated_endpoint_beats_the_google_vertex_host() {
+        let all = vertex(&format!(
+            r#"{{"project": "{PLACEHOLDER_PROJECT}", "baseURL": "https://proxy.example.invalid/v1"}}"#
+        ));
+        assert_eq!(all[0].base_url, "https://proxy.example.invalid/v1");
+        let no_project = vertex(r#"{"baseURL": "https://proxy.example.invalid/v1"}"#);
+        assert_eq!(no_project[0].base_url, "https://proxy.example.invalid/v1");
+    }
+
+    #[test]
+    fn a_google_vertex_key_is_sent_in_its_own_header() {
+        let all = vertex(&format!(r#"{{"project": "{PLACEHOLDER_PROJECT}"}}"#));
+        assert_eq!(
+            all[0].credential_header("a-key"),
+            ("x-goog-api-key", "a-key".to_string())
+        );
+        let other =
+            one(r#"{"provider": {"gw": {"options": {"baseURL": "https://example.invalid/v1"}}}}"#);
+        assert_eq!(
+            other.credential_header("a-token"),
+            ("authorization", "Bearer a-token".to_string())
+        );
+        assert!(!all[0].has_roster());
+        assert!(other.has_roster());
+        assert!(all[0].takes_extra_content());
+        assert!(!other.takes_extra_content());
     }
 
     /// The point of the block: a `provider` entry copied out of `opencode.json` configures this

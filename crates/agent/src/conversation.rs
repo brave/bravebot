@@ -888,6 +888,7 @@ mod tests {
                 name: name.to_string(),
                 arguments: arguments.to_string(),
             },
+            extra_content: None,
         }
     }
 
@@ -913,6 +914,7 @@ mod tests {
                     name: "write_file".to_string(),
                     arguments: "{}".to_string(),
                 },
+                extra_content: None,
             }],
         ));
 
@@ -936,6 +938,7 @@ mod tests {
                     name: "write_file".to_string(),
                     arguments: "{}".to_string(),
                 },
+                extra_content: None,
             }],
         ));
         conversation.push(Message::tool_result("call-1", "wrote index.html"));
@@ -1319,6 +1322,7 @@ mod tests {
                         name: "read_file".to_string(),
                         arguments: r#"{"path":"src/main.rs"}"#.to_string(),
                     },
+                    extra_content: None,
                 }],
             ));
             conversation.push(Message::tool_result(format!("call-{round}"), "some lines"));
@@ -1364,6 +1368,7 @@ mod tests {
                             name: "search".to_string(),
                             arguments: r#"{"pattern":"x"}"#.to_string(),
                         },
+                        extra_content: None,
                     }],
                 ));
                 for _ in 0..answers {
@@ -1549,6 +1554,7 @@ mod tests {
                         name: "read_file".to_string(),
                         arguments: r#"{"path":"src/main.rs"}"#.to_string(),
                     },
+                    extra_content: None,
                 }],
             ));
             conversation.push(Message::tool_result(format!("call-{round}"), "some lines"));

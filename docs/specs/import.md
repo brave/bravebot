@@ -121,7 +121,7 @@ A proxy the environment names carries this request as it carries every other
 | Claude Code | `env.AWS_REGION` or `env.AWS_PROFILE` in the settings file | the same names under `env` |
 | Claude Code | `env.ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` in the settings file | the same names under `env` |
 | Claude Code | `env.ANTHROPIC_MODEL` or `model` is `opus`, `sonnet` or `haiku`, and that tier names a model | `model` |
-| opencode | a `provider` entry bravebot's own reading keeps, whose `npm` is absent, `@ai-sdk/openai-compatible`, `@openrouter/ai-sdk-provider` for `openrouter`, or `@ai-sdk/amazon-bedrock` for `amazon-bedrock` | that entry under `provider`, holding only the fields bravebot reads: `name`, `env`, `models`, `options.baseURL`, `options.region`, `options.profile`, and the credential as [IMPORT-6](#IMPORT-6) says |
+| opencode | a `provider` entry bravebot's own reading keeps, whose `npm` is absent, `@ai-sdk/openai-compatible`, `@openrouter/ai-sdk-provider` for `openrouter`, or `@ai-sdk/amazon-bedrock` for `amazon-bedrock`, or `@ai-sdk/google-vertex` for `google-vertex` | that entry under `provider`, holding only the fields bravebot reads: `name`, `env`, `models`, `options.baseURL`, `options.region`, `options.profile`, `options.project`, `options.location`, and the credential as [IMPORT-6](#IMPORT-6) says |
 | opencode | an `auth.json` entry of `type: "api"` for an id whose endpoint is compiled in, with no config entry for that id | a `provider` entry for that id, with the credential as [IMPORT-6](#IMPORT-6) says |
 | opencode | a top-level `model` of the form `provider/model`, where the import writes that provider's entry | `model`, in the form that names the gateway; for `amazon-bedrock`, the model's own id, added to that entry's `models` |
 | Ollama | a server answering [IMPORT-10](#IMPORT-10)'s request with a model it can serve | `provider.ollama`: `{"name": "Ollama (local)", "options": {"baseURL": "<address>/v1"}}`, and `model: "ollama/<name>"` for the model [IMPORT-10](#IMPORT-10) chooses |
@@ -134,6 +134,13 @@ substitution and would send its requests nowhere. It is listed as left ([IMPORT-
 `cohere`, `google`, `google-vertex` and `google-vertex-anthropic` through their own SDKs when the
 entry names none, so an entry for one of those ids is left as naming another SDK
 ([IMPORT-4](#IMPORT-4)). Any other id with no `npm` is OpenAI-compatible.
+
+**A `google-vertex` entry naming a project is the exception.** The service it names is reached
+through its OpenAI-compatible endpoint ([BACKEND-49](backends.md#BACKEND-49)), so the entry is
+offered where it states `options.project`. One stating none is left ([IMPORT-4](#IMPORT-4)), because
+the endpoint cannot be built without a project and nothing here guesses one. The key is not copied
+from the environment: an entry naming no variable is written with `GOOGLE_API_KEY`, the variable
+opencode reads for this id.
 
 **A model's `limit` is copied where bravebot reads it.** That is where both `context` and `output`
 are present and at least one of them is above zero, so the written entry states the same window and
@@ -194,7 +201,9 @@ reason:
 
 - Claude Code's `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_BASE_URL`: Anthropic's
   own wire format, which no service here speaks;
-- `CLAUDE_CODE_USE_VERTEX`;
+- `CLAUDE_CODE_USE_VERTEX`, which serves Claude models through Google Cloud credentials, and an
+  opencode `google-vertex` entry naming no project, which the service's endpoint cannot be built
+  without ([IMPORT-3](#IMPORT-3));
 - `AWS_BEARER_TOKEN_BEDROCK`, and an opencode `auth.json` key for `amazon-bedrock`, which is the
   same bearer token, since bravebot signs Bedrock requests through the AWS credential chain;
 - Bedrock switched on with no region;
@@ -215,6 +224,8 @@ be imported, no question is asked, and these lines are said before the refusal's
 could hold. The lines about what was left are there because a person who uses Claude Code with an
 API key would otherwise see the three routes and no sign that their setup was looked at.
 
+`verified-by: bravebot_config::import::a_google_vertex_entry_naming_a_project_is_offered_with_its_project_and_location`
+`verified-by: bravebot_config::import::a_google_vertex_entry_naming_no_project_is_left_and_said`
 `verified-by: bravebot_config::import::an_api_key_helper_is_never_imported`
 `verified-by: bravebot_config::import::permissions_hooks_and_mcp_servers_are_never_imported`
 `verified-by: bravebot_config::import::what_claude_code_uses_and_bravebot_cannot_is_named_and_not_shown`

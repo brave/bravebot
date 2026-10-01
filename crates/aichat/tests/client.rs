@@ -2162,6 +2162,90 @@ fn a_gateway_with_a_credential_is_asked_what_that_account_may_reach() {
     assert_eq!(captured.header("authorization"), Some("Bearer a-token"));
 }
 
+/// A Google Vertex entry is pointed at the local server by a stated endpoint, which is the one way
+/// to reach anything but Google from it.
+fn vertex_at(endpoint: &str) -> bravebot_config::provider::Provider {
+    let text = format!(
+        r#"{{"provider": {{"google-vertex": {{"options": {{"project": "example-project-1", "baseURL": "{endpoint}/v1"}}}}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+        panic!("not an object");
+    };
+    bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider")
+}
+
+/// The endpoint has no listing a key can call, so asking would carry the key to be answered 404.
+/// No request is made at all, with a credential or without one.
+#[test]
+fn a_google_vertex_entry_is_not_asked_for_a_roster() {
+    let (endpoint, received) = serve(GATEWAY_ROSTER);
+    let provider = vertex_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    for token in [Some("placeholder-key"), None] {
+        let models =
+            bravebot_aichat::models::list_from_gateway(&mut policy, &provider, token, &egress)
+                .expect("nothing to fetch is not a failure");
+        assert!(models.is_empty(), "{models:?}");
+    }
+    assert!(
+        received.recv_timeout(Duration::from_millis(300)).is_err(),
+        "a roster was asked for"
+    );
+}
+
+/// The key goes out in the header the service reads, and a request the service refuses is reported
+/// without it: the error is what gets pasted into an issue.
+#[test]
+fn a_refused_google_vertex_request_does_not_repeat_the_key() {
+    const KEY: &str = "placeholder-key-5d1f9a";
+    let (endpoint, received) = serve_attempts(vec![Attempt::Status(401)]);
+    let config = config_for(&endpoint);
+    let provider = vertex_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let error = AichatClient::new(&config, &egress)
+        .for_gateway(
+            &provider,
+            "google/gemini-2.5-flash",
+            Some(bravebot_config::Secret::new(KEY)),
+        )
+        .complete_streaming(
+            &mut policy,
+            &ChatRequest::new(
+                "google-vertex/google/gemini-2.5-flash",
+                vec![Message::user("hello")],
+            ),
+            |_| {},
+        )
+        .expect_err("the service refused");
+
+    let sent = received.recv().expect("the request arrived");
+    assert_eq!(sent.header("x-goog-api-key"), Some(KEY));
+    assert_eq!(sent.header("authorization"), None);
+    for said in [error.to_string(), format!("{error:?}")] {
+        assert!(!said.contains(KEY), "the key is in {said}");
+    }
+}
+
 /// A malformed tool call must not hide a valid bill.
 #[test]
 fn malformed_whole_reply_keeps_known_usage() {

@@ -1240,7 +1240,7 @@ sent.
 `verified-by: bravebot_agent::turn::a_turn_without_attachments_sends_the_prompt_and_nothing_beside_it`
 
 <a id="BACKEND-33"></a>
-### BACKEND-33: an `env` block names these thirteen variables
+### BACKEND-33: an `env` block names these sixteen variables
 
 The `env` block of a settings file sets variables under their own names, and these are the names
 something reads:
@@ -1260,16 +1260,20 @@ something reads:
 | `ANTHROPIC_DEFAULT_OPUS_MODEL` | the model the tier word `opus` names |
 | `ANTHROPIC_DEFAULT_SONNET_MODEL` | the model the tier word `sonnet` names |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | the model the tier word `haiku` names |
+| `GOOGLE_API_KEY` | the key a request to Google Vertex AI is sent with |
+| `GOOGLE_CLOUD_PROJECT` | the Google Cloud project that request is made under |
+| `VERTEX_LOCATION` | the location it is made in, where that is not `global` |
 
 A gateway is not configured from this block: it is a `provider` entry, whose shape BACKEND-13
-states and whose credential BACKEND-16 names. The top-level `model` key is not one of these either, being a
+states and whose credential BACKEND-16 names. The three Google names are the one exception, and only
+together: BACKEND-50 says when they name a service. The top-level `model` key is not one of these either, being a
 choice rather than a variable, and BACKEND-11 is what ranks it.
 
 **Why.** A configuration surface that is described but never named is one nobody can use without
 reading the source. Anything written *about* this system (the site somebody installs it from, a
 message telling a person what to set) is written from what is stated here, so a backend whose
 variables are named nowhere is a backend that reaches people undocumented however completely its
-behaviour is specified. Naming them is also what makes the set reviewable: a fourteenth variable is
+behaviour is specified. Naming them is also what makes the set reviewable: a seventeenth variable is
 a change to this table, which a person reads, rather than a constant added to a file nobody is
 asked to look at.
 
@@ -2051,6 +2055,128 @@ which is one fewer model requested rather than a list that decides nothing.
 `verified-by: bravebot_tui::persist::a_pick_the_managed_layer_refuses_is_set_aside_and_names_the_file`
 `verified-by: bravebot_ui_bridge::models::the_window_neither_offers_nor_requests_a_model_this_machine_refuses`
 
+<a id="BACKEND-49"></a>
+### BACKEND-49: a `google-vertex` entry is reached at a host built from its project and location
+
+A `provider` entry keyed `google-vertex` reaches Google Vertex AI through its OpenAI-compatible
+endpoint. It states `options.project`, and may state `options.location`, which is `global` where it
+does not. The endpoint is built from the two: `https://aiplatform.googleapis.com/v1/projects/<project>/locations/global/endpoints/openapi`
+for `global`, and `https://<location>-aiplatform.googleapis.com/v1/projects/<project>/locations/<location>/endpoints/openapi`
+for any other. An `options.baseURL` the entry states is where its requests go regardless, as
+[BACKEND-17](#BACKEND-17) says of every known name.
+
+An entry stating neither a project nor an endpoint configures no service. So does one whose project or location holds a
+character outside the ones Google allows in it: a project is letters, digits, `_`, `.`, `:` and `-`
+and starts with a letter or a digit, and a location is lowercase letters, digits and `-`.
+
+The entry has no roster to ask for. The endpoint has no model listing a key can call, so
+[BACKEND-19](#BACKEND-19) asks nothing of it: a `google-vertex` entry offers the models it lists and
+no others, and a model it does not list is named qualified, as
+`google-vertex/google/gemini-2.5-flash`, which [BACKEND-18](#BACKEND-18) routes to it.
+
+**Why.** The service requires a project, and a request without one is refused, so a guessed project
+is a request that fails somewhere far from the mistake, which is the argument [BACKEND-29](#BACKEND-29)
+makes about a region. The host carries the location, so it is built rather than stated, and that
+is also why it is checked: a project or location is written into a URL, and one holding `/`, `@`, `?`
+or `#` would send the key to another host or another route than the one the person named. Refusing
+the entry is the only answer that cannot send it anywhere. The host is compiled in, with a stated
+endpoint as the one way to change it, so it is a destination somebody reviewed and no host is
+derived from anything a model or a fetched page said ([routing.md](routing.md)).
+
+Not asked for a roster because the request would spend a round trip and carry the key to be told
+404. A model named qualified needs no roster, and a block listing models pins a short list exactly
+as it does for any other gateway.
+
+`verified-by: bravebot_config::provider::a_google_vertex_entry_is_reached_at_the_host_its_project_and_location_build`
+`verified-by: bravebot_config::provider::a_google_vertex_entry_in_a_region_is_reached_at_that_regions_host`
+`verified-by: bravebot_config::provider::a_google_vertex_entry_without_a_project_configures_nothing`
+`verified-by: bravebot_config::provider::a_project_or_location_that_would_move_the_request_configures_nothing`
+`verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_google_vertex_host`
+`verified-by: bravebot_aichat::client::a_google_vertex_entry_is_not_asked_for_a_roster`
+`verified-by: bravebot_config::lib::a_name_qualified_by_the_google_vertex_id_names_that_service_and_the_rest_is_sent`
+
+<a id="BACKEND-50"></a>
+### BACKEND-50: the environment names a Google Vertex service when no block does
+
+`GOOGLE_API_KEY` and `GOOGLE_CLOUD_PROJECT`, with `VERTEX_LOCATION` where the location is not
+`global`, configure the `google-vertex` service of [BACKEND-49](#BACKEND-49), whether they are
+exported or set in the `env` block of a settings file. Both of the first two have to hold a value:
+either one missing or blank configures nothing, and a project or location
+that BACKEND-49 refuses configures nothing.
+
+The key is read from `GOOGLE_API_KEY` when a request needs it, as [BACKEND-16](#BACKEND-16) says of
+any variable a gateway names, so a key exported after the session opened is the one sent. A key set
+only in the `env` block is held by the configuration, and an exported one outranks it, as
+[BACKEND-35](#BACKEND-35) ranks every name.
+
+A `provider.google-vertex` entry that configures a service replaces this route, and so does a managed gateway list
+([BACKEND-38](#BACKEND-38)), which is the only list there is: an organisation that pinned its
+gateways is not given another by a variable. The block names its own project and location and reads
+neither variable for them. Configuring the service changes no model that is in force: nothing is
+sent to Google until a model named `google-vertex/...` is selected ([BACKEND-13](#BACKEND-13)).
+
+**Why.** `GOOGLE_API_KEY` is a name other Google clients read, and a key exported for one of them
+may be scoped to a service other than this one. What limits that is where the key goes and when: only
+to the compiled-in Google host, only once the person has chosen a model that names this service, and
+only when a project is set as well, which a shell exporting the key for another tool seldom does.
+The alternative, a name of this program's own, keeps the key away from every ambient reader and gives
+up the convenience of the name the other tool reads, which is why the ambient one is not required
+here: the block names any variable the person prefers.
+
+An entry replaces the route rather than merging with it, so that what a file says is not quietly
+completed by a variable the file does not mention. An entry that configures nothing, for want of a
+project, is dropped as any such entry is, and leaves the route open. A managed list is exempt for the reason
+[BACKEND-38](#BACKEND-38) gives: a destination list a variable could add to is one that pins nothing.
+
+`verified-by: bravebot_config::lib::the_environment_names_a_google_vertex_service_when_no_block_does`
+`verified-by: bravebot_config::lib::the_environment_route_needs_both_a_key_and_a_project`
+`verified-by: bravebot_config::lib::a_key_set_only_in_the_env_block_reaches_the_google_vertex_service`
+`verified-by: bravebot_config::lib::an_exported_key_outranks_the_one_in_the_env_block`
+`verified-by: bravebot_config::lib::a_google_vertex_block_replaces_the_environment_route`
+`verified-by: bravebot_config::lib::a_managed_gateway_list_takes_no_google_vertex_from_the_environment`
+`verified-by: bravebot_config::lib::a_google_vertex_service_from_the_environment_leaves_the_model_in_force_alone`
+`verified-by: bravebot_config::lib::a_google_vertex_service_holds_a_credential_the_record_names_by_host`
+
+<a id="BACKEND-51"></a>
+### BACKEND-51: a Vertex key is sent in `x-goog-api-key` and nowhere else
+
+Every request to a `google-vertex` service carries its key in the `x-goog-api-key` header and no
+`authorization` header. The key is in no trace, no error text a refused request produces, and no
+session record.
+
+**Why.** The service refuses the key as a bearer token (401, "Expected OAuth 2 access token"), so
+the header every other gateway takes is the one that cannot work here. Sending the key in both would
+put a credential in a header the service does not read for it, which is a copy for anything on the
+path to log. The absence from errors and records is [CRED-23](credential-protection.md#CRED-23)'s
+concern applied to a new header: the value travels in a `Secret`, and a service that echoes a
+request back in its error body is quoted without the header.
+
+`verified-by: bravebot_aichat::lib::a_google_vertex_request_carries_its_key_in_x_goog_api_key_and_no_authorization_header`
+`verified-by: bravebot_aichat::lib::another_gateway_still_sends_its_token_as_a_bearer`
+`verified-by: bravebot_aichat::client::a_refused_google_vertex_request_does_not_repeat_the_key`
+`verified-by: bravebot_config::provider::a_google_vertex_key_is_sent_in_its_own_header`
+
+<a id="BACKEND-52"></a>
+### BACKEND-52: what a service attached to a tool call is sent back with it, to that service only
+
+A tool call the service answered with an `extra_content` member is kept with that member, from the
+streamed reply through the stored conversation, and sent back unchanged with the call on the next
+request. A call with none carries none, and a session record written before the member existed reads
+back unchanged. The member is sent only to a `google-vertex` service: any other service's request
+is built without it.
+
+**Why.** Vertex attaches a thought signature to each call and refuses the next request, with 400,
+on models that require it unless the call comes back with it. A call rebuilt from only its name and
+arguments loses it. The member is opaque: nothing here reads inside it, so a change in what Google
+puts there costs nothing. Sent to Google only because another service either ignores it or, on a
+strict one, refuses the request, and a conversation can change service between two turns.
+
+`verified-by: bravebot_aichat::protocol::a_tool_calls_extra_content_is_kept_from_the_stream_and_sent_back`
+`verified-by: bravebot_aichat::protocol::a_tool_call_without_extra_content_is_built_as_before`
+`verified-by: bravebot_aichat::protocol::a_record_written_before_extra_content_reads_back_unchanged`
+`verified-by: bravebot_aichat::protocol::extra_content_is_taken_from_every_call_in_a_body_and_the_call_stays`
+`verified-by: bravebot_aichat::lib::extra_content_reaches_only_a_google_vertex_service`
+
 ## Known costs
 
 - **The refusal is made at startup, and a model chosen mid-session is not checked again.**
@@ -2309,3 +2435,19 @@ which is one fewer model requested rather than a list that decides nothing.
 - **A reply that stopped short reads like one that finished.** BACKEND-42 keeps the text, and text
   is all it is: the sentence ends wherever the ceiling fell. What says otherwise is a line beside
   it, which somebody reading only the answer does not have to notice.
+
+- **Vertex is reached by key alone, and a block does not read the environment's project.** A
+  `provider.google-vertex` entry takes its project and location from itself, so somebody with
+  `GOOGLE_CLOUD_PROJECT` exported, as opencode reads it, still states a project in the block.
+  Signing in with Google Cloud credentials, a service account or application default credentials
+  is not supported; a key is the one credential this reaches it with.
+
+- **`GOOGLE_API_KEY` is a name other tools read.** The route BACKEND-50 describes sends the key
+  somebody exported for another Google client to Vertex, once they have chosen a model that names it
+  and have a project set. A key scoped to another Google service is refused there, which is a failed
+  request rather than a leak, since the host is Google's own.
+
+- **The name `google-vertex` means Vertex's behaviour at any endpoint.** An entry keyed `google-vertex`
+  sends its key in `x-goog-api-key`, is not asked for a roster and sends `extra_content` back, even
+  where its `baseURL` names a proxy. A proxy that wants a bearer token is reached by keying the
+  entry with another name, which gets the behaviour of any other gateway.

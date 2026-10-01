@@ -1237,6 +1237,7 @@ impl Reply {
                         arguments.clone()
                     }),
                 },
+                extra_content: None,
             })
             .collect()
     }

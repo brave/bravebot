@@ -246,29 +246,42 @@ pub fn list_from_gateway<S: Sink>(
     token: Option<&str>,
     egress: &Egress,
 ) -> Result<Vec<Model>, ChatError> {
+    // Vertex AI has no listing a key can call, so asking would carry the key to be answered 404.
+    if !provider.has_roster() {
+        return Ok(Vec::new());
+    }
+
     if token.is_some() {
         // Any failure falls through to the wide roster: a gateway with no such route answers 404,
         // one that has it under another name answers something undecodable, and neither is a reason
         // to offer nothing when a list that does work is one request away.
-        if let Ok(listed) = fetch_listing(policy, provider.account_models_url(), token, egress) {
+        if let Ok(listed) = fetch_listing(
+            policy,
+            provider,
+            provider.account_models_url(),
+            token,
+            egress,
+        ) {
             return Ok(offered_by_gateway(provider, listed));
         }
     }
 
-    let listed = fetch_listing(policy, provider.models_url(), token, egress)?;
+    let listed = fetch_listing(policy, provider, provider.models_url(), token, egress)?;
     Ok(offered_by_gateway(provider, listed))
 }
 
 /// One roster request, decoded.
 fn fetch_listing<S: Sink>(
     policy: &mut Policy<'_, S>,
+    provider: &bravebot_config::provider::Provider,
     url: String,
     token: Option<&str>,
     egress: &Egress,
 ) -> Result<Vec<ListedByGateway>, ChatError> {
     let mut request = Request::get(&url).header("accept", "application/json");
     if let Some(token) = token {
-        request = request.header("authorization", format!("Bearer {token}"));
+        let (name, value) = provider.credential_header(token);
+        request = request.header(name, value);
     }
 
     let response = egress.fetch(policy, request, Label::untrusted_public())?;

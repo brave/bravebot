@@ -67,6 +67,18 @@ pub const BEDROCK_OPUS_MODEL: &str = "ANTHROPIC_DEFAULT_OPUS_MODEL";
 pub const BEDROCK_SONNET_MODEL: &str = "ANTHROPIC_DEFAULT_SONNET_MODEL";
 pub const BEDROCK_HAIKU_MODEL: &str = "ANTHROPIC_DEFAULT_HAIKU_MODEL";
 
+/// The key a request to Google Vertex AI is sent with.
+///
+/// A name other Google clients read, which is why it is only ever sent to the one host compiled in
+/// for that service and only once a model naming that service is chosen.
+pub const GOOGLE_API_KEY: &str = "GOOGLE_API_KEY";
+
+/// The Google Cloud project a Vertex AI request is made under. Required beside [`GOOGLE_API_KEY`].
+pub const GOOGLE_CLOUD_PROJECT: &str = "GOOGLE_CLOUD_PROJECT";
+
+/// The location a Vertex AI request is made in. `global` where it is not set.
+pub const VERTEX_LOCATION: &str = "VERTEX_LOCATION";
+
 /// Every name the Bedrock backend reads, in the order `doctor` reports them.
 pub const BEDROCK_ALL: [&str; 6] = [
     USE_BEDROCK,

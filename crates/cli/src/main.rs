@@ -2849,6 +2849,9 @@ fn report_gateway(provider: &bravebot_config::provider::Provider) {
                 .collect::<Vec<_>>()
                 .join(", "),
         ),
+        true if !provider.has_roster() => {
+            fact(t!(doctor_tiers), t!(doctor_gateway_models_unlisted))
+        }
         true => fact(t!(doctor_tiers), t!(doctor_gateway_models_absent)),
     }
 }

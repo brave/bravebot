@@ -971,23 +971,44 @@ impl Config {
         settings: &Settings,
         managed: &Managed,
     ) -> Result<Self, ConfigError> {
-        let mut config = Self::from_lookup_with_providers(
-            |key| match managed.get(key) {
-                Some(pinned) => Some(pinned.to_string()),
-                None => match key {
-                    env_var::DEFAULT_MODEL => resolve_model(env::var(key).ok(), settings, built_in),
-                    _ => resolve(key, env::var(key).ok(), built_in)
-                        .or_else(|| settings.get(key).map(str::to_string)),
-                },
+        Self::from_sources(settings, managed, |key| env::var(key).ok(), built_in)
+    }
+
+    /// [`Config::from_env_and_settings`] over sources it is handed, so the ranking of the layers is
+    /// something a test can exercise without the process environment or the build's own values.
+    fn from_sources(
+        settings: &Settings,
+        managed: &Managed,
+        exported: impl Fn(&str) -> Option<String>,
+        baked: impl Fn(&str) -> Option<String>,
+    ) -> Result<Self, ConfigError> {
+        let lookup = |key: &str| match managed.get(key) {
+            Some(pinned) => Some(pinned.to_string()),
+            None => match key {
+                env_var::DEFAULT_MODEL => resolve_model(exported(key), settings, &baked),
+                _ => resolve(key, exported(key), &baked)
+                    .or_else(|| settings.get(key).map(str::to_string)),
             },
-            // A gateway is a destination too, so an approved endpoint pins nothing while anybody can
-            // add one beside it. The managed block replaces the person's rather than merging with
-            // it, empty included, which is the only way to say that there are to be none.
-            match managed.gateways() {
-                Some(gateways) => gateways.to_vec(),
-                None => settings.providers().to_vec(),
-            },
-        )?;
+        };
+        // A gateway is a destination too, so an approved endpoint pins nothing while anybody can
+        // add one beside it. The managed block replaces the person's rather than merging with
+        // it, empty included, which is the only way to say that there are to be none.
+        let providers = match managed.gateways() {
+            Some(gateways) => gateways.to_vec(),
+            None => {
+                let mut providers = settings.providers().to_vec();
+                // The environment names a Vertex AI service only where no block does, so a file
+                // is never quietly completed by a variable it does not mention.
+                if !providers
+                    .iter()
+                    .any(|entry| entry.id == provider::GOOGLE_VERTEX_ID)
+                {
+                    providers.extend(provider::Provider::from_environment(&lookup));
+                }
+                providers
+            }
+        };
+        let mut config = Self::from_lookup_with_providers(lookup, providers)?;
         // Carried rather than consulted here: the name to check against the lists arrives later, from
         // any of the places that may name a model, and each is checked against the same pair
         // (BACKEND-48).
@@ -2310,22 +2331,7 @@ mod tests {
         exported: impl Fn(&str) -> Option<String>,
         baked: impl Fn(&str) -> Option<String>,
     ) -> Result<Config, ConfigError> {
-        let mut config = Config::from_lookup_with_providers(
-            |key| match managed.get(key) {
-                Some(pinned) => Some(pinned.to_string()),
-                None => match key {
-                    env_var::DEFAULT_MODEL => resolve_model(exported(key), settings, &baked),
-                    _ => resolve(key, exported(key), &baked)
-                        .or_else(|| settings.get(key).map(str::to_string)),
-                },
-            },
-            match managed.gateways() {
-                Some(gateways) => gateways.to_vec(),
-                None => settings.providers().to_vec(),
-            },
-        )?;
-        config.models = managed.models().clone();
-        Ok(config)
+        Config::from_sources(settings, managed, exported, baked)
     }
 
     /// The names a settings file may set are the names something reads, and this is all of them. A
@@ -2347,11 +2353,23 @@ mod tests {
                 "AWS_PROFILE": "profile-from-the-file",
                 "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-arn",
                 "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-arn",
-                "ANTHROPIC_DEFAULT_HAIKU_MODEL": "haiku-arn"
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL": "haiku-arn",
+                "GOOGLE_API_KEY": "google-key-from-the-file",
+                "GOOGLE_CLOUD_PROJECT": "project-from-the-file",
+                "VERTEX_LOCATION": "us-east5"
             }}"#,
         );
         let config = resolved(&settings, |_| None, |_| None).expect("configured");
 
+        let vertex = vertex_of(&config).expect("a google-vertex service");
+        assert_eq!(
+            vertex.base_url,
+            "https://us-east5-aiplatform.googleapis.com/v1/projects/project-from-the-file/locations/us-east5/endpoints/openapi"
+        );
+        assert_eq!(
+            token_of(&vertex.credential(|_| None)),
+            Some("google-key-from-the-file")
+        );
         assert_eq!(config.signing_key.expose(), "signing-key-from-the-file");
         assert_eq!(config.key_id, "key-id-from-the-file");
         assert_eq!(config.endpoint, "https://endpoint.invalid");
@@ -2711,6 +2729,211 @@ mod tests {
             resolved_under(&managed, &settings, |_| None, complete_env).expect("configured");
         let ids: Vec<&str> = config.providers.iter().map(|p| p.id.as_str()).collect();
         assert_eq!(ids, vec!["mine"]);
+    }
+
+    const PLACEHOLDER_KEY: &str = "placeholder-google-key";
+    const PLACEHOLDER_PROJECT: &str = "example-project-1";
+
+    fn google_env(key: &str) -> Option<String> {
+        match key {
+            env_var::GOOGLE_API_KEY => Some(PLACEHOLDER_KEY.into()),
+            env_var::GOOGLE_CLOUD_PROJECT => Some(PLACEHOLDER_PROJECT.into()),
+            _ => None,
+        }
+    }
+
+    fn vertex_of(config: &Config) -> Option<&provider::Provider> {
+        config
+            .providers
+            .iter()
+            .find(|provider| provider.id == provider::GOOGLE_VERTEX_ID)
+    }
+
+    /// BACKEND-18: the id in front picks the service, and the rest, slashes included, is what
+    /// Google is asked for, since its own model names carry one.
+    #[test]
+    fn a_name_qualified_by_the_google_vertex_id_names_that_service_and_the_rest_is_sent() {
+        let config = resolved(&Settings::default(), google_env, |_| None).expect("configured");
+        let (provider, wire) = config
+            .provider_for("google-vertex/google/gemini-2.5-flash")
+            .expect("the service");
+        assert_eq!(provider.id, provider::GOOGLE_VERTEX_ID);
+        assert_eq!(wire, "google/gemini-2.5-flash");
+        assert!(config.provider_for("google/gemini-2.5-flash").is_none());
+    }
+
+    #[test]
+    fn the_environment_names_a_google_vertex_service_when_no_block_does() {
+        let config = resolved(&Settings::default(), google_env, |_| None).expect("configured");
+        let vertex = vertex_of(&config).expect("a google-vertex service");
+        assert_eq!(
+            vertex.base_url,
+            "https://aiplatform.googleapis.com/v1/projects/example-project-1/locations/global/endpoints/openapi"
+        );
+        assert_eq!(
+            token_of(&vertex.credential(google_env)),
+            Some(PLACEHOLDER_KEY)
+        );
+
+        let regional = resolved(
+            &Settings::default(),
+            |key| match key {
+                env_var::VERTEX_LOCATION => Some("europe-west4".into()),
+                other => google_env(other),
+            },
+            |_| None,
+        )
+        .expect("configured");
+        assert_eq!(
+            vertex_of(&regional).expect("a service").host(),
+            "europe-west4-aiplatform.googleapis.com"
+        );
+    }
+
+    fn token_of(credential: &provider::Credential) -> Option<&str> {
+        match credential {
+            provider::Credential::Token(token) => Some(token.expose()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn the_environment_route_needs_both_a_key_and_a_project() {
+        for (state, lookup) in [
+            (
+                "a key alone",
+                (|k: &str| (k == env_var::GOOGLE_API_KEY).then(|| PLACEHOLDER_KEY.to_string()))
+                    as fn(&str) -> Option<String>,
+            ),
+            ("a project alone", |k: &str| {
+                (k == env_var::GOOGLE_CLOUD_PROJECT).then(|| PLACEHOLDER_PROJECT.to_string())
+            }),
+            ("a blank key", |k: &str| match k {
+                env_var::GOOGLE_API_KEY => Some("  ".into()),
+                env_var::GOOGLE_CLOUD_PROJECT => Some(PLACEHOLDER_PROJECT.into()),
+                _ => None,
+            }),
+            ("a blank project", |k: &str| match k {
+                env_var::GOOGLE_API_KEY => Some(PLACEHOLDER_KEY.into()),
+                env_var::GOOGLE_CLOUD_PROJECT => Some("".into()),
+                _ => None,
+            }),
+            ("a project that would move the request", |k: &str| match k {
+                env_var::GOOGLE_API_KEY => Some(PLACEHOLDER_KEY.into()),
+                env_var::GOOGLE_CLOUD_PROJECT => Some("p@evil.invalid".into()),
+                _ => None,
+            }),
+            (
+                "a location that would move the request",
+                |k: &str| match k {
+                    env_var::VERTEX_LOCATION => Some("evil.invalid/".into()),
+                    other => google_env(other),
+                },
+            ),
+        ] {
+            let config = resolved(&Settings::default(), lookup, complete_env).expect("configured");
+            assert!(vertex_of(&config).is_none(), "{state} configured a service");
+        }
+    }
+
+    #[test]
+    fn a_key_set_only_in_the_env_block_reaches_the_google_vertex_service() {
+        let settings = Settings::parse(&format!(
+            r#"{{"env": {{"GOOGLE_API_KEY": "{PLACEHOLDER_KEY}", "GOOGLE_CLOUD_PROJECT": "{PLACEHOLDER_PROJECT}"}}}}"#
+        ));
+        let config = resolved(&settings, |_| None, |_| None).expect("configured");
+        let vertex = vertex_of(&config).expect("a google-vertex service");
+        assert_eq!(
+            token_of(&vertex.credential(|_| None)),
+            Some(PLACEHOLDER_KEY)
+        );
+    }
+
+    #[test]
+    fn an_exported_key_outranks_the_one_in_the_env_block() {
+        let settings = Settings::parse(&format!(
+            r#"{{"env": {{"GOOGLE_API_KEY": "key-from-the-file", "GOOGLE_CLOUD_PROJECT": "{PLACEHOLDER_PROJECT}"}}}}"#
+        ));
+        let exported = |key: &str| (key == env_var::GOOGLE_API_KEY).then(|| "key-exported".into());
+        let config = resolved(&settings, exported, |_| None).expect("configured");
+        let vertex = vertex_of(&config).expect("a service");
+        // What the configuration holds, with nothing exported when a request is made.
+        assert_eq!(token_of(&vertex.credential(|_| None)), Some("key-exported"));
+        // What a request reads once the variable is exported, as a key set later is.
+        assert_eq!(token_of(&vertex.credential(exported)), Some("key-exported"));
+    }
+
+    #[test]
+    fn a_google_vertex_block_replaces_the_environment_route() {
+        let settings = Settings::parse(
+            r#"{"provider": {"google-vertex": {"options": {"project": "project-from-the-block", "location": "us-east5"}}}}"#,
+        );
+        let config = resolved(&settings, google_env, complete_env).expect("configured");
+        let all: Vec<_> = config
+            .providers
+            .iter()
+            .filter(|provider| provider.id == provider::GOOGLE_VERTEX_ID)
+            .collect();
+        assert_eq!(all.len(), 1);
+        assert_eq!(
+            all[0].base_url,
+            "https://us-east5-aiplatform.googleapis.com/v1/projects/project-from-the-block/locations/us-east5/endpoints/openapi"
+        );
+
+        // An entry that configures nothing is dropped like any other, so it leaves the route open.
+        let unusable = Settings::parse(r#"{"provider": {"google-vertex": {}}}"#);
+        let config = resolved(&unusable, google_env, complete_env).expect("configured");
+        assert!(vertex_of(&config).is_some());
+    }
+
+    #[test]
+    fn a_managed_gateway_list_takes_no_google_vertex_from_the_environment() {
+        let managed = managed::scratch(
+            "resolve-gateways-no-vertex",
+            r#"{"provider": {"approved": {"options": {"baseURL": "https://approved.example/v1"}}}}"#,
+        );
+        let config = resolved_under(&managed, &Settings::default(), google_env, complete_env)
+            .expect("configured");
+        let ids: Vec<&str> = config.providers.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, vec!["approved"]);
+
+        let none = managed::scratch("resolve-gateways-no-vertex-empty", r#"{"provider": {}}"#);
+        let config = resolved_under(&none, &Settings::default(), google_env, complete_env)
+            .expect("configured");
+        assert!(config.providers.is_empty());
+    }
+
+    /// BACKEND-13: a service nobody chose is not the one that is asked, so the two variables a
+    /// shell exports for another tool change neither the model in force nor who serves it.
+    #[test]
+    fn a_google_vertex_service_from_the_environment_leaves_the_model_in_force_alone() {
+        let without = resolved(&Settings::default(), |_| None, complete_env).expect("configured");
+        let with = resolved(&Settings::default(), google_env, complete_env).expect("configured");
+        assert_eq!(with.default_model, without.default_model);
+        assert_eq!(with.serves_aichat(), without.serves_aichat());
+        assert_eq!(with.model_named("haiku"), without.model_named("haiku"));
+        assert_eq!(
+            with.model_named("automatic"),
+            without.model_named("automatic")
+        );
+    }
+
+    /// CRED-2: the key is a credential this machine holds and spends, so the record names it by
+    /// the host it would be revoked at, and only when the service is there.
+    #[test]
+    fn a_google_vertex_service_holds_a_credential_the_record_names_by_host() {
+        let config = resolved(&Settings::default(), google_env, complete_env).expect("configured");
+        assert!(config.held(false).iter().any(|held| matches!(
+            held,
+            Held::GatewayToken { host } if *host == "aiplatform.googleapis.com"
+        )));
+        let config = resolved(&Settings::default(), |_| None, complete_env).expect("configured");
+        assert!(
+            !config
+                .held(false)
+                .iter()
+                .any(|held| matches!(held, Held::GatewayToken { .. }))
+        );
     }
 
     /// Every name but the top-level `model` key ranks below what the build baked in, so a released

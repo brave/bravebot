@@ -172,6 +172,33 @@ pub struct ToolCallRequest {
     #[serde(rename = "type", default = "function_kind")]
     pub kind: String,
     pub function: ToolCallRequestFunction,
+    /// What the service attached to the call, sent back as it arrived.
+    ///
+    /// Vertex AI puts a thought signature here and refuses the next request without it. Opaque:
+    /// nothing reads inside it. Absent for a call that arrived with none, and skipped then, so a
+    /// record written before this field existed reads back as it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_content: Option<Value>,
+}
+
+/// Take `extra_content` out of every tool call in a request body.
+///
+/// For a service that does not take it, which either ignores the member or refuses the request for
+/// carrying it. The call itself stays.
+pub fn remove_extra_content(body: &mut Value) {
+    let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for message in messages {
+        let Some(calls) = message.get_mut("tool_calls").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for call in calls {
+            if let Some(call) = call.as_object_mut() {
+                call.remove("extra_content");
+            }
+        }
+    }
 }
 
 fn function_kind() -> String {
@@ -525,6 +552,9 @@ pub struct ToolCall {
     #[serde(default)]
     pub id: Option<String>,
     pub function: ToolCallFunction,
+    /// What the service attached to the call, which [`ToolCall::as_request`] sends back with it.
+    #[serde(default)]
+    pub extra_content: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -548,6 +578,7 @@ impl ToolCall {
                 name: self.function.name.clone(),
                 arguments: arguments_to_send(self.function.arguments.as_deref()),
             },
+            extra_content: self.extra_content.clone(),
         })
     }
 
@@ -759,6 +790,8 @@ pub struct ToolCallDelta {
     pub id: Option<String>,
     #[serde(default)]
     pub function: Option<ToolCallFunctionDelta>,
+    #[serde(default)]
+    pub extra_content: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -796,6 +829,7 @@ pub struct StreamAccumulator {
 #[derive(Debug, Default)]
 struct PartialCall {
     id: Option<String>,
+    extra_content: Option<Value>,
     name: String,
     arguments: String,
 }
@@ -847,6 +881,9 @@ impl StreamAccumulator {
                 };
                 if let Some(id) = fragment.id {
                     call.id = Some(id);
+                }
+                if fragment.extra_content.is_some() {
+                    call.extra_content = fragment.extra_content;
                 }
                 if let Some(function) = fragment.function {
                     if let Some(name) = function.name {
@@ -949,6 +986,7 @@ impl StreamAccumulator {
                     name: call.name.clone(),
                     arguments: Some(call.arguments.clone()),
                 },
+                extra_content: call.extra_content.clone(),
             })
             .collect()
     }
@@ -1569,6 +1607,7 @@ mod tests {
                 name: "list".into(),
                 arguments: arguments.map(str::to_string),
             },
+            extra_content: None,
         };
         for missing in [None, Some(""), Some(" \n")] {
             let sent = call(missing).as_request().expect("a call with an id");
@@ -1595,6 +1634,78 @@ mod tests {
         assert_eq!(stored("  ").function.arguments, "{}");
         let given = r#"{"query":"rust"}"#;
         assert_eq!(stored(given).function.arguments, given);
+    }
+
+    /// Vertex AI attaches a thought signature to a call and refuses the next request on a model that
+    /// requires it unless the call comes back with it. Kept through the stream, and through the
+    /// non-streamed reply, to the request built from the call.
+    #[test]
+    fn a_tool_calls_extra_content_is_kept_from_the_stream_and_sent_back() {
+        let signature = serde_json::json!({"google": {"thought_signature": "opaque-signature"}});
+        let chunk = |raw: &str| -> ChatChunk { serde_json::from_str(raw).expect("a chunk") };
+        let mut acc = StreamAccumulator::new();
+        acc.push(chunk(
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_file","arguments":"{\"pa"},
+                "extra_content":{"google":{"thought_signature":"opaque-signature"}}}]}}]}"#,
+        ));
+        acc.push(chunk(
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"th\":\"a.rs\"}"}}]}}]}"#,
+        ));
+        let calls = acc.tool_calls();
+        assert_eq!(calls[0].extra_content.as_ref(), Some(&signature));
+        let sent = serde_json::to_value(calls[0].as_request().expect("a call with an id"))
+            .expect("serializes");
+        assert_eq!(sent["extra_content"], signature);
+
+        let raw = r#"{"choices":[{"message":{"role":"assistant","tool_calls":[
+            {"id":"call_2","type":"function","function":{"name":"read_file","arguments":"{}"},
+             "extra_content":{"google":{"thought_signature":"opaque-signature"}}}
+        ]}}]}"#;
+        let parsed: ChatResponse = serde_json::from_str(raw).unwrap();
+        let sent = serde_json::to_value(parsed.tool_calls()[0].as_request().expect("an id"))
+            .expect("serializes");
+        assert_eq!(sent["extra_content"], signature);
+    }
+
+    #[test]
+    fn a_tool_call_without_extra_content_is_built_as_before() {
+        let raw = r#"{"choices":[{"message":{"tool_calls":[
+            {"id":"call_1","function":{"name":"list","arguments":"{}"}}
+        ]}}]}"#;
+        let parsed: ChatResponse = serde_json::from_str(raw).unwrap();
+        let sent = serde_json::to_value(parsed.tool_calls()[0].as_request().expect("an id"))
+            .expect("serializes");
+        assert!(sent.get("extra_content").is_none(), "{sent}");
+    }
+
+    /// A session record written before the member existed carries none, and reads back without
+    /// growing one when it is written again.
+    #[test]
+    fn a_record_written_before_extra_content_reads_back_unchanged() {
+        let stored = serde_json::json!({
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "list", "arguments": "{}"},
+        });
+        let call: ToolCallRequest = serde_json::from_value(stored.clone()).expect("a stored call");
+        assert!(call.extra_content.is_none());
+        assert_eq!(serde_json::to_value(&call).expect("serializes"), stored);
+    }
+
+    #[test]
+    fn extra_content_is_taken_from_every_call_in_a_body_and_the_call_stays() {
+        let mut body = serde_json::json!({"messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "tool_calls": [
+                {"id": "a", "type": "function", "function": {"name": "f", "arguments": "{}"}, "extra_content": {"x": 1}},
+                {"id": "b", "type": "function", "function": {"name": "g", "arguments": "{}"}}
+            ]}
+        ]});
+        remove_extra_content(&mut body);
+        let calls = &body["messages"][1]["tool_calls"];
+        assert_eq!(calls[0]["id"], "a");
+        assert_eq!(calls[1]["id"], "b");
+        assert!(calls[0].get("extra_content").is_none());
     }
 
     #[test]
