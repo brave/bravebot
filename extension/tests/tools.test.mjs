@@ -72,22 +72,32 @@ function browser({
       // that tab: at the tab's own URL unless the page says it moved.
       async executeScript(options) {
         const tabId = options.target.tabId;
-        const frameId = options.target.frameIds?.[0] ?? 0;
-        calls.push(["scripting.executeScript", tabId, frameId]);
+        const documentId = options.target.documentIds?.[0];
+        const frame = (frames[tabId] ?? []).find(
+          (candidate) => candidate.documentId === documentId,
+        );
+        const frameId = frame?.frameId ?? 0;
+        calls.push([
+          "scripting.executeScript",
+          tabId,
+          frameId,
+          documentId ?? null,
+        ]);
         const page = pages[`${tabId}:${frameId}`] ?? pages[tabId];
         if (page instanceof Error) {
           throw page;
         }
         if (page === null) {
-          return [{ frameId }];
+          return [{ frameId, documentId }];
         }
-        const frame = (frames[tabId] ?? []).find(
-          (candidate) => candidate.frameId === frameId,
-        );
         const at =
           page.href ?? frame?.url ?? tabs.find((tab) => tab.id === tabId)?.url;
         return inPage(at, page, calls, () => [
-          { frameId, result: options.func(...(options.args ?? [])) },
+          {
+            frameId,
+            documentId,
+            result: options.func(...(options.args ?? [])),
+          },
         ]);
       },
     },
@@ -229,14 +239,44 @@ test("list_frames gives web URLs in exactly the tab asked for", async () => {
     tabs,
     frames: {
       1: [
-        { frameId: 0, parentFrameId: -1, url: "https://brave.com/" },
-        { frameId: 7, parentFrameId: 0, url: "https://child.example/app" },
-        { frameId: 8, parentFrameId: 0, url: "about:blank" },
-        { frameId: 9, parentFrameId: 0, url: "blob:https://brave.com/id" },
+        {
+          frameId: 0,
+          documentId: "main-one",
+          parentFrameId: -1,
+          url: "https://brave.com/",
+        },
+        {
+          frameId: 7,
+          documentId: "child-one",
+          parentFrameId: 0,
+          url: "https://child.example/app",
+        },
+        {
+          frameId: 8,
+          documentId: "blank-one",
+          parentFrameId: 0,
+          url: "about:blank",
+        },
+        {
+          frameId: 9,
+          documentId: "blob-one",
+          parentFrameId: 0,
+          url: "blob:https://brave.com/id",
+        },
       ],
       2: [
-        { frameId: 0, parentFrameId: -1, url: "https://brave.com/search" },
-        { frameId: 3, parentFrameId: 0, url: "https://other.example/" },
+        {
+          frameId: 0,
+          documentId: "main-two",
+          parentFrameId: -1,
+          url: "https://brave.com/search",
+        },
+        {
+          frameId: 3,
+          documentId: "other-two",
+          parentFrameId: 0,
+          url: "https://other.example/",
+        },
       ],
     },
   });
@@ -273,7 +313,9 @@ test("list_frames refuses a tab that moved", async () => {
     tabs,
     tabsAfterRead: { 1: { id: 1, url: "https://elsewhere.example/" } },
     frames: {
-      1: [{ frameId: 4, url: "https://private.example/" }],
+      1: [
+        { frameId: 4, documentId: "private", url: "https://private.example/" },
+      ],
     },
   });
   const reply = await handle(
@@ -292,8 +334,8 @@ test("read_page selects one frame and refuses ambiguity", async () => {
     tabs,
     frames: {
       1: [
-        { frameId: 0, url: "https://brave.com/" },
-        { frameId: 7, url: child },
+        { frameId: 0, documentId: "outer", url: "https://brave.com/" },
+        { frameId: 7, documentId: "child", url: child },
       ],
     },
     pages: {
@@ -318,15 +360,43 @@ test("read_page selects one frame and refuses ambiguity", async () => {
   });
   assert.deepEqual(
     chrome.calls.filter(([name]) => name === "scripting.executeScript"),
-    [["scripting.executeScript", 1, 7]],
+    [["scripting.executeScript", 1, 7, "child"]],
+  );
+
+  const reused = browser({
+    tabs,
+    frames: {
+      1: [
+        { frameId: 7, documentId: "old", url: "https://old.example/" },
+        { frameId: 8, documentId: "chosen", url: child },
+      ],
+    },
+    pages: {
+      "1:7": { title: "Old", text: "wrong document" },
+      "1:8": { title: "Chosen", text: "chosen document" },
+    },
+  });
+  const hardened = await handle(
+    {
+      id: 2,
+      method: "read_page",
+      params: { url: "https://brave.com/", frame_url: child },
+    },
+    reused,
+  );
+  assert.equal(hardened.result.text, "chosen document");
+  assert.ok(!JSON.stringify(hardened).includes("wrong document"));
+  assert.deepEqual(
+    reused.calls.filter(([name]) => name === "scripting.executeScript"),
+    [["scripting.executeScript", 1, 8, "chosen"]],
   );
 
   const ambiguous = browser({
     tabs,
     frames: {
       1: [
-        { frameId: 7, url: child },
-        { frameId: 8, url: child },
+        { frameId: 7, documentId: "first", url: child },
+        { frameId: 8, documentId: "second", url: child },
       ],
     },
     pages: {
@@ -362,21 +432,11 @@ test("read_page refuses a missing or moved frame", async () => {
   assert.match(absent.error.message, /no frame in .* is at/);
   assert.ok(!reached(missing, "scripting.executeScript"));
 
-  const opaque = browser({ tabs });
-  const unnamed = await handle(
-    {
-      id: 2,
-      method: "read_page",
-      params: { url: "https://brave.com/", frame_url: "about:blank" },
-    },
-    opaque,
-  );
-  assert.equal(unnamed.error.code, -32602);
-  assert.ok(!reached(opaque, "webNavigation.getAllFrames"));
-
   const moved = browser({
     tabs,
-    frames: { 1: [{ frameId: 7, url: child }] },
+    frames: {
+      1: [{ frameId: 7, documentId: "moved", url: child }],
+    },
     pages: {
       "1:7": {
         href: "https://elsewhere.example/",
@@ -411,7 +471,9 @@ test("read_page refuses a framed read when its outer tab moved", async () => {
         { id: 1, url: "https://elsewhere.example/" },
       ],
     },
-    frames: { 1: [{ frameId: 7, url: child }] },
+    frames: {
+      1: [{ frameId: 7, documentId: "child", url: child }],
+    },
     pages: { "1:7": { title: "Child", text: "not returned" } },
   });
   const reply = await handle(
@@ -424,6 +486,25 @@ test("read_page refuses a framed read when its outer tab moved", async () => {
   );
   assert.match(reply.error.message, /tab left .* before its frame was read/);
   assert.ok(!JSON.stringify(reply).includes("not returned"));
+});
+
+// An optional frame URL still has to be a nonempty string and name web
+// content. Invalid arguments reach no frame-navigation or scripting API.
+test("read_page validates frame_url before asking for frames", async () => {
+  for (const frame_url of ["", null, 5, "about:blank"]) {
+    const chrome = browser({ tabs });
+    const reply = await handle(
+      {
+        id: 1,
+        method: "read_page",
+        params: { url: "https://brave.com/", frame_url },
+      },
+      chrome,
+    );
+    assert.equal(reply.error.code, -32602, String(frame_url));
+    assert.ok(!reached(chrome, "webNavigation.getAllFrames"));
+    assert.ok(!reached(chrome, "scripting.executeScript"));
+  }
 });
 
 // The URL is what a person approved. A tab whose URL only starts the same is a
@@ -443,7 +524,7 @@ test("read_page reads the tab at exactly that URL and no other", async () => {
   assert.equal(reply.result.text, "search");
   assert.deepEqual(
     chrome.calls.filter(([name]) => name === "scripting.executeScript"),
-    [["scripting.executeScript", 2, 0]],
+    [["scripting.executeScript", 2, 0, null]],
   );
 
   const near = browser({
@@ -479,7 +560,15 @@ test("an answer holds no unpaired surrogate", async () => {
   const broken = "a\ud800b";
   const chrome = browser({
     tabs: [{ id: 1, windowId: 10, title: broken, url: "https://brave.com/" }],
-    frames: { 1: [{ frameId: 4, url: `https://frame.example/${broken}` }] },
+    frames: {
+      1: [
+        {
+          frameId: 4,
+          documentId: "broken",
+          url: `https://frame.example/${broken}`,
+        },
+      ],
+    },
     pages: { 1: { title: broken, text: `text ${broken}` } },
   });
   for (const [method, params] of [

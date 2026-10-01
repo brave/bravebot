@@ -201,7 +201,7 @@ export const TOOLS = {
       injected = await chrome.scripting.executeScript({
         target: {
           tabId: tab.id,
-          ...(frame ? { frameIds: [frame.frameId] } : {}),
+          ...(frame ? { documentIds: [frame.documentId] } : {}),
         },
         func: (expectedUrl) => {
           if (location.href !== expectedUrl) {

@@ -319,8 +319,9 @@ for, character for character, and says which is the top frame. Where no tab is a
 without asking for frames. Where the tab leaves that URL before its frames are returned it fails
 without returning any frame URL.
 
-`read_page` with no `frame_url` reads that tab's top page as before. With a `frame_url`, it reads
-only the one frame at that exact HTTP or HTTPS URL inside the tab at `url`. Where there is no such
+`read_page` with no `frame_url` reads the top page of the tab at `url`. With a `frame_url`, it reads
+only the one document at that exact HTTP or HTTPS URL inside the tab at `url`, using the document
+identity Brave returned with the frame rather than a reusable frame number. Where there is no such
 frame, or more than one, it fails without running a script. It also fails without returning any
 text if the frame leaves `frame_url`, or the outer tab leaves `url`, before the read completes.
 
@@ -329,12 +330,18 @@ character, and says whether it cut the page short. A page the browser will not l
 read, such as its own settings, is a failure saying so.
 
 **Why.** Both URLs are what the person saw in the question before the call. A `list_frames` result
-is untrusted content, so the planner does not read it: the person chooses a URL from the result and
-supplies it in a later message. A tab or frame whose URL only resembles one is different content,
-which they could have refused. A non-web frame URL such as `about:blank` does not tell them which
-content it will expose. Two frames at the same URL cannot be told apart by the argument they
-approved.
+is untrusted and private under [MCP-1](mcp.md#MCP-1), [LABEL-3](labels.md#LABEL-3) gives the planner
+only its quarantined reference, and [VIEW-3](terminal-transcript.md#VIEW-3) shows its marked content
+to the person. The person chooses a URL from that result and supplies it in a later message. A tab
+or frame whose URL only resembles one is different content, which they could have refused. A
+non-web frame URL such as `about:blank` does not tell them which content it will expose. Two frames
+at the same URL cannot be told apart by the argument they approved.
 
+`verified-by: bravebot_mcp::stdio::a_tool_result_is_labelled_untrusted_and_private`
+`verified-by: bravebot_core::policy::untrusted_content_is_presented_as_a_reference`
+`verified-by: bravebot_core::reference::a_quarantined_presentation_shows_no_content`
+`verified-by: bravebot_tui::render::quarantined_content_is_shown_and_marked_on_every_line`
+`verified-by: bravebot_agent::turn::quarantined_content_reaches_the_person_and_not_the_planner`
 `verified-by: by-construction (extension/tests/tools.test.mjs uses tabs and frames with distinct ids, URLs and text to assert exact tab and frame selection, each navigation check and refusal, the text bound, and that a URL no tab or unique frame is at reaches no script; make check-extension runs it, and check-ui-build depends on that target, so the Front end CI job runs it on every change the classifier gives the ui area, which a change under extension/ is)`
 
 <a id="BROWSER-14"></a>
