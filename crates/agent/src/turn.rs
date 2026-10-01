@@ -19,7 +19,7 @@ use bravebot_core::cancel::Cancel;
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::Sink;
 use bravebot_core::permissions::Permissions;
-use bravebot_core::policy::{Policy, ReleasePlan, Routing, Vouched};
+use bravebot_core::policy::{AfterCeilingStop, Policy, ReleasePlan, Routing, Vouched};
 use bravebot_core::programs::TrustedPrograms;
 use bravebot_core::reference::Presentation;
 use bravebot_core::trust::TrustStore;
@@ -372,10 +372,15 @@ fn ceiling_stop_narration(cut_off: &bravebot_aichat::CutOff, may_call_tools: boo
         return t!(ceiling_stop_answer_now, tokens = tokens);
     }
     match (&cut_off.call, cut_off.thought) {
-        (Some(OpenCall { tool: Some(tool) }), _) => {
+        (
+            Some(OpenCall {
+                tool: Some(tool), ..
+            }),
+            _,
+        ) => {
             t!(ceiling_stop_in_call, tokens = tokens, tool = tool.as_str())
         }
-        (Some(OpenCall { tool: None }), _) => t!(ceiling_stop_in_a_call, tokens = tokens),
+        (Some(OpenCall { tool: None, .. }), _) => t!(ceiling_stop_in_a_call, tokens = tokens),
         (None, true) => t!(ceiling_stop_thinking, tokens = tokens),
         (None, false) => t!(ceiling_stop_silent, tokens = tokens),
     }
@@ -387,16 +392,37 @@ fn answer_stopped_narration(cut_off: &bravebot_aichat::CutOff) -> String {
     use bravebot_aichat::OpenCall;
     let tokens = cut_off.ceiling;
     match &cut_off.call {
-        Some(OpenCall { tool: Some(tool) }) => t!(
+        Some(OpenCall {
+            tool: Some(tool), ..
+        }) => t!(
             ceiling_stop_ends_in_call,
             tokens = tokens,
             tool = tool.as_str()
         ),
-        Some(OpenCall { tool: None }) => t!(ceiling_stop_ends_in_a_call, tokens = tokens),
+        Some(OpenCall { tool: None, .. }) => t!(ceiling_stop_ends_in_a_call, tokens = tokens),
         None => "the model reached its output limit, so this answer stops where it did. \
                  What it wrote is kept; raise BRAVEBOT_OUTPUT_BUDGET or ask for less in one turn"
             .to_string(),
     }
+}
+
+/// Put a reply the output ceiling stopped in the trail, with what the turn did about it (TURN-7).
+fn record_ceiling_stop<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    round: usize,
+    cut_off: &bravebot_aichat::CutOff,
+    then: AfterCeilingStop,
+) {
+    policy.record_ceiling_stop(
+        round,
+        cut_off.ceiling,
+        cut_off
+            .call
+            .as_ref()
+            .map(|call| (call.tool.as_deref(), call.arguments)),
+        cut_off.thought,
+        then,
+    );
 }
 
 /// What the planner is told after a reply of its own reached the output ceiling (TURN-7).
@@ -413,10 +439,15 @@ fn after_a_ceiling_stop(
     use bravebot_aichat::OpenCall;
     let ceiling = cut_off.ceiling;
     let stopped = match (&cut_off.call, cut_off.thought) {
-        (Some(OpenCall { tool: Some(tool) }), _) => {
+        (
+            Some(OpenCall {
+                tool: Some(tool), ..
+            }),
+            _,
+        ) => {
             format!("while writing a call to {tool}, so the call was not made")
         }
-        (Some(OpenCall { tool: None }), _) => {
+        (Some(OpenCall { tool: None, .. }), _) => {
             "while writing a tool call, so the call was not made".to_string()
         }
         (None, true) => "while thinking, before it said or did anything".to_string(),
@@ -424,7 +455,9 @@ fn after_a_ceiling_stop(
     };
     let next = match &cut_off.call {
         _ if !may_call_tools => "Answer now, in fewer words.",
-        Some(OpenCall { tool: Some(tool) }) if tools::writes_a_file(tool) => match (
+        Some(OpenCall {
+            tool: Some(tool), ..
+        }) if tools::writes_a_file(tool) => match (
             request.offered("write_file").is_some(),
             request.offered("edit_file").is_some(),
         ) {
@@ -3494,6 +3527,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             // A reply that ran out wrote something, so it was not empty.
                             asked_after_an_empty_reply = false;
                             if let Some(cut_off) = error.cut_off() {
+                                record_ceiling_stop(
+                                    &mut policy,
+                                    steps,
+                                    cut_off,
+                                    AfterCeilingStop::AskedAgain,
+                                );
                                 reporter.narration(ceiling_stop_narration(cut_off, may_call_tools));
                                 conversation.push(Message::user(after_a_ceiling_stop(
                                     cut_off,
@@ -3502,6 +3541,18 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 )));
                             }
                             continue;
+                        }
+                        // The second in a row, and it wrote nothing: the stop is the turn's failure.
+                        Err(error) if error.cut_off().is_some() => {
+                            if let Some(cut_off) = error.cut_off() {
+                                record_ceiling_stop(
+                                    &mut policy,
+                                    steps,
+                                    cut_off,
+                                    AfterCeilingStop::Ended,
+                                );
+                            }
+                            return Err(error.into());
                         }
                         other => other?,
                     };
@@ -3535,6 +3586,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         && !asked_after_a_ceiling_stop
                     {
                         asked_after_a_ceiling_stop = true;
+                        record_ceiling_stop(
+                            &mut policy,
+                            steps,
+                            cut_off,
+                            AfterCeilingStop::AskedAgain,
+                        );
                         record_answer(&mut policy, conversation, &completion.content)?;
                         narrate_between_calls(&mut policy, &mut reporter, &completion.content);
                         reporter.narration(ceiling_stop_narration(cut_off, may_call_tools));
@@ -3553,6 +3610,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // that ends mid-sentence is worth nothing if it is read as a whole one. It carries
                     // no calls, so this round is the last.
                     if let Some(cut_off) = &completion.cut_off {
+                        record_ceiling_stop(
+                            &mut policy,
+                            steps,
+                            cut_off,
+                            AfterCeilingStop::KeptTheText,
+                        );
                         reporter.narration(answer_stopped_narration(cut_off));
                     }
 
@@ -4922,6 +4985,8 @@ mod tests {
         use bravebot_core::label::Label;
 
         pub(super) const CEILING: u64 = 32_000;
+        /// How many bytes of its arguments a stopped call had, where a test does not say.
+        pub(super) const ARRIVED: usize = 118_234;
         pub(super) const TOLD: &str = "(from the system, not the user) Your last reply reached the output limit of 32000 tokens";
 
         pub(super) fn said(
@@ -4959,6 +5024,7 @@ mod tests {
                 ceiling: CEILING,
                 call: Some(OpenCall {
                     tool: Some(tool.into()),
+                    arguments: ARRIVED,
                 }),
                 thought: false,
             }
@@ -4987,6 +5053,21 @@ mod tests {
             Vec<String>,
             PathBuf,
         ) {
+            let (outcome, reporter, bodies, scratch, _) = traced(name, replies);
+            (outcome, reporter, bodies, scratch)
+        }
+
+        /// The same, with every line the trail recorded about a ceiling stop.
+        pub(super) fn traced(
+            name: &str,
+            replies: Vec<Result<Completion, BackendError>>,
+        ) -> (
+            Result<Outcome, TurnError>,
+            crate::report::RecordingReporter,
+            Vec<String>,
+            PathBuf,
+            Vec<String>,
+        ) {
             let scratch = crate::testutil::scratch_dir(name);
             let _ = std::fs::remove_dir_all(&scratch);
             std::fs::create_dir_all(&scratch).unwrap();
@@ -5001,6 +5082,7 @@ mod tests {
             let mut trust = TrustStore::new("/work");
             trust.trust(".");
             let mut reporter = crate::report::RecordingReporter::default();
+            let mut sink = bravebot_core::event::RecordingSink::new();
             scripted::script(replies);
             let outcome = resume(
                 &config,
@@ -5010,7 +5092,7 @@ mod tests {
                 &mut Conversation::new(),
                 &mut crate::confirm::ApproveWrites,
                 &mut reporter,
-                &mut bravebot_core::event::RecordingSink::new(),
+                &mut sink,
                 trust,
                 TrustedPrograms::new(),
                 None,
@@ -5018,7 +5100,19 @@ mod tests {
             )
             .outcome;
             scripted::clear();
-            (outcome, reporter, scripted::asked(), scratch)
+            let stops = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    bravebot_core::event::Event::GatePassed { gate, detail }
+                        if *gate == "ceiling" =>
+                    {
+                        Some(detail.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            (outcome, reporter, scripted::asked(), scratch, stops)
         }
 
         pub(super) fn told(bodies: &[String]) -> Vec<usize> {
@@ -5214,6 +5308,86 @@ mod tests {
         );
     }
 
+    /// A turn that went on past a ceiling stop shows no sign of it afterwards except here, and one
+    /// that ended on one is read back to ask what the model spent the ceiling on. Each stop is a
+    /// line with the round, what was open and how much of it had arrived, whether it reasoned, and
+    /// which of the three things the turn did next. A turn that never reached the ceiling has none,
+    /// and no line carries anything the reply wrote.
+    #[test]
+    fn the_trail_says_what_each_ceiling_stop_was_writing_and_what_the_turn_did() {
+        use bravebot_aichat::CutOff;
+        use ceiling::*;
+        let thinking = CutOff {
+            ceiling: CEILING,
+            call: None,
+            thought: true,
+        };
+        let (outcome, _, _, _, stops) = traced(
+            "ceiling-stop-traced-to-the-end",
+            vec![
+                failed(in_a_call_to("write_file")),
+                said("", &[("list_files", r#"{"directory":"."}"#)], None),
+                failed(thinking),
+                failed(in_a_call_to("write_file")),
+            ],
+        );
+        assert!(outcome.is_err(), "{outcome:?}");
+        assert_eq!(stops.len(), 3, "{stops:#?}");
+        assert_eq!(
+            stops[0],
+            "round 0: stopped at the output limit of 32000 tokens; a call to write_file was open \
+             with 118234 bytes of its arguments, and was not made; no reasoning arrived; the \
+             planner was told why and asked again"
+        );
+        assert!(
+            stops[1].starts_with("round 1: ")
+                && stops[1].contains("; no call was open; reasoning arrived; ")
+                && stops[1].ends_with("asked again"),
+            "{}",
+            stops[1]
+        );
+        assert!(
+            stops[2].starts_with("round 1: ")
+                && stops[2].contains("a call to write_file was open")
+                && stops[2].ends_with("the turn ends on it, with nothing written"),
+            "{}",
+            stops[2]
+        );
+
+        let (outcome, _, _, _, stops) = traced(
+            "ceiling-stop-traced-to-its-text",
+            vec![
+                said("Writing it.", &[], Some(in_a_call_to("write_file"))),
+                said(
+                    "The rest of the plan",
+                    &[],
+                    Some(CutOff {
+                        ceiling: CEILING,
+                        call: None,
+                        thought: false,
+                    }),
+                ),
+            ],
+        );
+        assert_eq!(outcome.unwrap().reply_for_display(), "The rest of the plan");
+        assert_eq!(stops.len(), 2, "{stops:#?}");
+        assert!(stops[0].ends_with("asked again"), "{}", stops[0]);
+        assert!(
+            stops[1].ends_with("what it wrote is the answer, and the turn ends there"),
+            "{}",
+            stops[1]
+        );
+        assert!(
+            stops
+                .iter()
+                .all(|line| !line.contains("Writing it") && !line.contains("The rest")),
+            "{stops:#?}"
+        );
+
+        let (_, _, _, _, stops) = traced("ceiling-never-reached", vec![said("done", &[], None)]);
+        assert!(stops.is_empty(), "{stops:#?}");
+    }
+
     /// The remedy the planner is given follows what the reply was writing, and names no tool the
     /// request did not offer: a file too big for one reply is written in parts, any other call is
     /// made smaller, a reply that thought until the ceiling is asked to act, and a turn with no
@@ -5226,6 +5400,7 @@ mod tests {
             ceiling: 32_000,
             call: tool.map(|tool| OpenCall {
                 tool: tool.map(str::to_owned),
+                arguments: 0,
             }),
             thought,
         };
@@ -5300,6 +5475,7 @@ mod tests {
             ceiling: 32_000,
             call: Some(OpenCall {
                 tool: Some("write_file".into()),
+                arguments: 0,
             }),
             thought: false,
         };

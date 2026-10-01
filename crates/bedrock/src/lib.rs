@@ -115,11 +115,11 @@ impl fmt::Display for BedrockError {
                 let ceiling = cut_off.ceiling;
                 write!(f, "the model reached its output limit of {ceiling} tokens ")?;
                 match (&cut_off.call, cut_off.thought) {
-                    (Some(OpenCall { tool: Some(tool) }), _) => write!(
+                    (Some(OpenCall { tool: Some(tool), .. }), _) => write!(
                         f,
                         "while writing a call to {tool}, so the call was not made"
                     )?,
-                    (Some(OpenCall { tool: None }), _) => {
+                    (Some(OpenCall { tool: None, .. }), _) => {
                         f.write_str("while writing a tool call, so the call was not made")?
                     }
                     (None, true) => f.write_str("while thinking, and wrote nothing")?,
@@ -636,8 +636,11 @@ impl<'a> BedrockClient<'a> {
         if cut_off {
             // A call is open where the reply's last block is one: whatever came before it, the
             // model was writing that call when it ran out.
+            // A whole reply carries its arguments parsed, so they are counted written back out.
             let open = match blocks.last() {
-                Some(protocol::ReplyBlock::ToolUse { tool_use }) => Some(tool_use.name.as_str()),
+                Some(protocol::ReplyBlock::ToolUse { tool_use }) => {
+                    Some((tool_use.name.as_str(), tool_use.input.to_string().len()))
+                }
                 _ => None,
             };
             let thought = blocks.iter().any(protocol::ReplyBlock::is_reasoning);
@@ -662,20 +665,22 @@ impl<'a> BedrockClient<'a> {
 
     /// What a reply the ceiling stopped was doing, from its structure.
     ///
-    /// `open` is the name of the call it was writing, where one was open. The
-    /// name is looked up in the request's own list and the request's copy kept, so what travels
-    /// on is a name this program offered and never one the reply spelt.
+    /// `open` is the name of the call it was writing, where one was open, and how many bytes of
+    /// its arguments had arrived. The name is looked up in the request's own list and the
+    /// request's copy kept, so what travels on is a name this program offered and never one the
+    /// reply spelt.
     fn cut_off(
         &self,
         request: &ChatRequest,
         model: &str,
-        open: Option<&str>,
+        open: Option<(&str, usize)>,
         thought: bool,
     ) -> CutOff {
         CutOff {
             ceiling: self.ceiling_for(model),
-            call: open.map(|name| OpenCall {
+            call: open.map(|(name, arguments)| OpenCall {
                 tool: request.offered(name),
+                arguments,
             }),
             thought,
         }
@@ -917,7 +922,9 @@ impl<'a> BedrockClient<'a> {
         }
 
         if reply.stop_reason.as_deref() == Some(protocol::STOP_REASON_MAX_TOKENS) {
-            let open = reply.open_call().map(|(_, _, name, _)| name.as_str());
+            let open = reply
+                .open_call()
+                .map(|(_, _, name, arguments)| (name.as_str(), arguments.len()));
             let cut_off = self.cut_off(request, &model, open, reply.thought);
             return self.what_was_written(reply.text, label, model, reply.usage, cut_off);
         }
@@ -3327,6 +3334,11 @@ mod tests {
                     ceiling: OUTPUT_LIMIT,
                     call: Some(OpenCall {
                         tool: Some("write_file".into()),
+                        arguments: if streaming {
+                            r#"{"path":""#.len()
+                        } else {
+                            "{}".len()
+                        },
                     }),
                     thought: false,
                 }),
@@ -3424,6 +3436,54 @@ mod tests {
             assert!(
                 said.contains("while writing a tool call"),
                 "streaming={streaming}: {said}"
+            );
+        }
+    }
+
+    /// How much of the call had arrived says whether the ceiling went on one file's worth of
+    /// argument or on a call barely begun, and the stop is the only record of it: the call itself
+    /// is dropped. Counted over every piece a stream sent, not only the last.
+    #[test]
+    fn a_reply_the_ceiling_stopped_says_how_much_of_its_call_had_arrived() {
+        let pieces = [r#"{"path":"a.py","#, r#""contents":"import pyg"#];
+        for streaming in [false, true] {
+            let (body, arrived) = if streaming {
+                let mut body = eventstream::tests::frame(
+                    "contentBlockStart",
+                    br#"{"contentBlockIndex":0,"start":{"toolUse":{"toolUseId":"a","name":"write_file"}}}"#,
+                );
+                for piece in pieces {
+                    let delta = serde_json::json!({
+                        "contentBlockIndex": 0,
+                        "delta": {"toolUse": {"input": piece}},
+                    });
+                    body.extend(eventstream::tests::frame(
+                        "contentBlockDelta",
+                        delta.to_string().as_bytes(),
+                    ));
+                }
+                body.extend(eventstream::tests::frame(
+                    "messageStop",
+                    br#"{"stopReason":"max_tokens"}"#,
+                ));
+                (body, pieces.concat().len())
+            } else {
+                let input = r#"{"path":"a.py","contents":"import pyg"}"#;
+                let body = format!(
+                    r#"{{"stopReason":"max_tokens","output":{{"message":{{"content":[
+                        {{"toolUse":{{"toolUseId":"a","name":"write_file","input":{input}}}}}
+                    ]}}}}}}"#
+                );
+                (body.into_bytes(), input.len())
+            };
+            let error = one_failed_reply(streaming, body, &writing_a_file("opus-arn"));
+            let BedrockError::TooLong(cut_off) = &error else {
+                panic!("streaming={streaming}: {error:?}");
+            };
+            assert_eq!(
+                cut_off.call.as_ref().map(|call| call.arguments),
+                Some(arrived),
+                "streaming={streaming}: {cut_off:?}"
             );
         }
     }

@@ -73,6 +73,13 @@ It is recorded *after* the conversation is shortened, so a summary refused on th
 no line claiming one was made. Counts and nothing else, so this carries no more content than the
 rest of the trail does.
 
+## A reply stopped at the output limit is recorded
+
+Every reply the output limit stopped gets a line: the limit, the tool-calling round, the tool it was
+writing a call to and how many bytes of that call had arrived, whether any reasoning arrived, and
+what the turn did next: asked the model again, kept what it wrote as the answer, or ended. The tool
+is named as bravebot offered it. Nothing the reply wrote is in the line.
+
 ## Planning is recorded
 
 A planning call is a gate like any other and gets its own line, refusals included. A run planned in
