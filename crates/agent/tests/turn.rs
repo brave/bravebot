@@ -26544,7 +26544,9 @@ mod usage {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    const WAIT: Duration = Duration::from_secs(5);
+    /// Long enough that a CI runner stalling for seconds fails no step. A wait returns as soon as
+    /// what it waits for arrives, so a passing run takes no longer for it.
+    const WAIT: Duration = Duration::from_secs(30);
 
     /// Holding the reply lets tests inspect progress before another request can finish.
     struct Pending {
