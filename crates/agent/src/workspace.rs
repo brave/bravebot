@@ -769,6 +769,19 @@ impl Workspace {
             });
         }
 
+        // The key holds the file tools to the working directory, and moving the working directory
+        // outward is how that reach grows without a name being opened: a parent contains whatever
+        // `resolve_directory` refused beside the old root, so the move reaches by relocation what
+        // the key refuses by name (PERM-16). Refused here rather than at the command, for the
+        // reason `resolve_directory` refuses here: this is the one function a root moves through.
+        if self.reads_stay_inside && !canonical.starts_with(&self.root) {
+            return Err(WorkspaceError::Invalid {
+                path: directory.to_string(),
+                reason: "is not inside the working directory, and \
+                         permissions.readsStayInWorkspace keeps the file tools inside it",
+            });
+        }
+
         if self.reaches_scratch(&canonical) {
             return Err(WorkspaceError::Invalid {
                 path: directory.to_string(),

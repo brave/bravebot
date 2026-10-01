@@ -804,7 +804,7 @@ gate asks what it asked before, and nothing is refused for being unmentioned.
 
 | Key | What `true` does |
 |---|---|
-| `readsStayInWorkspace` | the file tools refuse every path outside the working directory, in every mode, whatever a rule, a mode, or an answer you give during the session would otherwise open. `/add-dir` and `--add-dir` are refused, and a name in `additionalDirectories` is refused rather than put to you |
+| `readsStayInWorkspace` | the file tools refuse every path outside the working directory, in every mode. No directory opens beside the workspace, whatever a rule, a mode, or an answer you give during the session would otherwise open: `/add-dir` and `--add-dir` are refused, and a name in `additionalDirectories` is refused rather than put to you. `/cd` may move further into the tree and not back out |
 | `bypassUnreachable` | the mode that asks about nothing is out of reach, and `--dangerously-skip-permissions` is refused with the key and the file named rather than ignored |
 
 Both are **off until a file turns one on**, exactly as [`vetting`](#vetting) is: a file naming neither
@@ -821,10 +821,10 @@ restricted to `~/.bravebot/settings.json` the way `vetting.auto` is: a checkout 
 nothing away from you.
 
 `readsStayInWorkspace` governs the file tools, as the path rules do. It does not confine a program
-`run` starts, and `/cd` still moves the working directory: the tools stay inside whatever the working
-directory is, so nothing is open beside it at any moment. It is read when the session opens, so a
-session already confined stays confined wherever it moves, and one that moves into a checkout asking
-for it is confined from the next session there.
+`run` starts. `/cd` may move further into the tree and not back out, so the reach never grows: a
+parent holds whatever was refused beside the old directory, and allowing the move back would allow
+every move outward. To work above where you are, start a session there. It is read when the session
+opens, so one that moves into a checkout asking for it is confined from the next session there.
 
 ### `attribution`
 
