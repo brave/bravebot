@@ -20,13 +20,14 @@ function browser({
   tabs = [],
   pages = {},
   frames = {},
-  tabsAfterRead = {},
+  tabMovesAfterFrames = {},
+  tabMovesAfterScript = {},
   history = [],
   bookmarks = [],
   stored = tabsOn,
 } = {}) {
   const calls = [];
-  const tabReads = new Map();
+  const currentTabs = new Map(tabs.map((tab) => [tab.id, tab]));
   return {
     calls,
     storage: {
@@ -44,18 +45,15 @@ function browser({
       },
       async get(tabId) {
         calls.push(["tabs.get", tabId]);
-        const replacements = tabsAfterRead[tabId];
-        if (Array.isArray(replacements)) {
-          const at = tabReads.get(tabId) ?? 0;
-          tabReads.set(tabId, at + 1);
-          return replacements[Math.min(at, replacements.length - 1)];
-        }
-        return replacements ?? tabs.find((tab) => tab.id === tabId);
+        return currentTabs.get(tabId);
       },
     },
     webNavigation: {
       async getAllFrames({ tabId }) {
         calls.push(["webNavigation.getAllFrames", tabId]);
+        if (tabMovesAfterFrames[tabId]) {
+          currentTabs.set(tabId, tabMovesAfterFrames[tabId]);
+        }
         return frames[tabId] ?? [];
       },
     },
@@ -83,6 +81,9 @@ function browser({
           frameId,
           documentId ?? null,
         ]);
+        if (tabMovesAfterScript[tabId]) {
+          currentTabs.set(tabId, tabMovesAfterScript[tabId]);
+        }
         const page = pages[`${tabId}:${frameId}`] ?? pages[tabId];
         if (page instanceof Error) {
           throw page;
@@ -311,7 +312,9 @@ test("list_frames gives web URLs in exactly the tab asked for", async () => {
 test("list_frames refuses a tab that moved", async () => {
   const chrome = browser({
     tabs,
-    tabsAfterRead: { 1: { id: 1, url: "https://elsewhere.example/" } },
+    tabMovesAfterFrames: {
+      1: { id: 1, url: "https://elsewhere.example/" },
+    },
     frames: {
       1: [
         { frameId: 4, documentId: "private", url: "https://private.example/" },
@@ -465,11 +468,8 @@ test("read_page refuses a framed read when its outer tab moved", async () => {
   const child = "https://child.example/app";
   const chrome = browser({
     tabs,
-    tabsAfterRead: {
-      1: [
-        { id: 1, url: outer },
-        { id: 1, url: "https://elsewhere.example/" },
-      ],
+    tabMovesAfterScript: {
+      1: { id: 1, url: "https://elsewhere.example/" },
     },
     frames: {
       1: [{ frameId: 7, documentId: "child", url: child }],
