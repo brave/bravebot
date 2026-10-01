@@ -208,7 +208,7 @@ export default {
     if (await page.locator('.trust').isVisible().catch(() => false)) {
       await s.say('Trust the directory', 'Asked once, per checkout, before anything happens in it.', 2.2)
       await s.shot('02-trust')
-      await s.click('.trust-actions .approve')
+      await s.click('[data-test="trust-approve"]')
       await page.waitForTimeout(600 * s.speed)
     }
 

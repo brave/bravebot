@@ -231,6 +231,7 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
                     spend: BTreeMap::new(),
                     timing: BTreeMap::new(),
                     cached: None,
+                    cached_prompt_tokens: None,
                     trust: TrustStore::new(&project),
                     programs: TrustedPrograms::new(),
                     transcript_len: 0,

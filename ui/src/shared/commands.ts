@@ -35,6 +35,8 @@ export type CommandId =
   | 'view.fold-left'
   | 'view.fold-right'
   | 'view.reset-columns'
+  | 'view.find'
+  | 'view.focus-composer'
   | 'view.theme'
   | 'app.about'
   | 'help.doctor'
@@ -161,11 +163,13 @@ export const COMMANDS: readonly Command[] = [
     requires: 'always',
   },
   { id: 'view.reset-columns', label: 'Reset Columns', requires: 'always' },
+  { id: 'view.find', label: 'Find in Conversation', accelerator: 'CmdOrCtrl+F', requires: 'session' },
+  { id: 'view.focus-composer', label: 'Focus Composer', accelerator: 'CmdOrCtrl+L', requires: 'session' },
   // Always available, including with nothing open: the window is painted whether or not there is
   // a session in it, and a person who has just launched the app is exactly who wants to change
   // how it looks. No accelerator — it is not a thing anybody does twice in a sitting, and the
   // shortcuts left are worth more to the folds.
-  { id: 'view.theme', label: 'Theme…', requires: 'always' },
+  { id: 'view.theme', label: 'Appearance…', requires: 'always' },
   { id: 'app.about', label: 'About Brave Bot', requires: 'always' },
   { id: 'help.doctor', label: 'Run Diagnostics…', requires: 'always' },
 ]

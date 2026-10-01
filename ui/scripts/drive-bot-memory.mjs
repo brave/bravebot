@@ -121,7 +121,7 @@ await page.evaluate(
 )
 await page.reload()
 await page.waitForTimeout(2000)
-await page.locator('.sidebar-tab').nth(1).click()
+await page.locator('.sidebar-tabs [role="option"]').nth(1).click()
 await page.waitForTimeout(400)
 
 const mine = page

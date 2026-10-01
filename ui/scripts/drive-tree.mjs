@@ -32,12 +32,12 @@ const check = (ok, what) => {
 // it was left that way.
 async function showSessions(page) {
   await page
-    .locator('.sidebar-tab')
+    .locator('.sidebar-tabs [role="option"]')
     .first()
     .waitFor({ state: 'visible', timeout: 15000 })
     .catch(() => undefined)
   await page
-    .locator('.sidebar-tab')
+    .locator('.sidebar-tabs [role="option"]')
     .first()
     .click({ timeout: 3000 })
     .catch(() => undefined)
@@ -71,15 +71,11 @@ if ((await page.locator('.session').count()) === 0) {
 await page.locator('.session').first().click()
 await page.waitForTimeout(1600)
 
-// The file tree can be turned off from the bar at the top of the column, and that choice is
-// remembered between launches — so a run puts it back rather than assuming it inherited a column
-// with a tree in it. The same courtesy the columns get above. After the session is opened, because
-// the bar belongs to a column with something in it and there is no bar before then.
-const filesPick = page.locator('.panel-pick').last()
-if ((await filesPick.getAttribute('aria-pressed')) === 'false') {
-  await filesPick.click()
-  await page.waitForTimeout(400)
-}
+// The file tree lives on the Files tab of the context column, which opens on Overview, so the
+// run brings the tab forward. After the session is opened, because the tabs belong to a column
+// with something in it and there is none before then.
+await page.getByRole('tab', { name: 'Files', exact: true }).click()
+await page.waitForTimeout(400)
 
 const rows = page.locator('.tree-list[role="tree"] > li > .tree-row')
 // The names alone, not the rows: a row also holds a chevron and the two-letter type badge, and
@@ -89,7 +85,7 @@ const names = () =>
   page.locator('.tree-list[role="tree"] > li > .tree-row .tree-name').allInnerTexts()
 
 // --- the folder is on screen -----------------------------------------------------------
-const root = await page.locator('.tree-root').getAttribute('title')
+const root = await page.locator('.tree-root').getAttribute('data-tooltip')
 check(typeof root === 'string' && root.startsWith('/'), `the panel names the folder (${root})`)
 await page.waitForTimeout(600)
 const first = await rows.count()
@@ -98,7 +94,7 @@ check(first > 0, `the root of the folder is listed (${first} rows)`)
 // --- dotfiles are behind the toggle ----------------------------------------------------
 const dotty = (list) => list.filter((name) => name.trim().startsWith('.')).length
 check(dotty(await names()) === 0, 'no dot-prefixed entry is listed until asked for')
-await page.locator('.tree-tool').first().click()
+await page.locator('.tree-tool.dotfiles').click()
 await page.waitForTimeout(500)
 const shown = await names()
 check(shown.length >= first, `showing hidden entries never lists fewer (${first} → ${shown.length})`)
@@ -107,7 +103,7 @@ if (dotty(shown) > 0) {
 } else {
   console.log('  --   this project has no dotfiles in its root; nothing for the toggle to add')
 }
-await page.locator('.tree-tool').first().click()
+await page.locator('.tree-tool.dotfiles').click()
 await page.waitForTimeout(400)
 
 // --- a directory expands ---------------------------------------------------------------
@@ -179,22 +175,25 @@ if (sample.length < 5) {
   console.log('  --   nothing in this root has a name long enough to filter on')
 } else {
   const term = sample.slice(2, 5)
-  await page.locator('.tree-find').fill(term)
+  // The search field opens from the magnifier and closes again with Escape.
+  await page.locator('[data-test="tree-search-toggle"]').click()
+  await page.locator('.tree-find input').fill(term)
   await page.waitForTimeout(500)
-  const after = await rows.count()
-  check(after > 0 && after <= before, `filtering on "${term}" narrows the list (${before} → ${after})`)
+  // A query searches the whole project by name, and answers with paths in place of the tree.
+  const found = (await page.locator('.file-search-results .search-result').allTextContents()).map((path) => path.trim())
+  check(found.length > 0, `searching for "${term}" finds the file it came from (${found.length})`)
   check(
-    (await names()).every((name) => name.toLowerCase().includes(term.toLowerCase())) ||
-      (await page.locator('.tree-list[role="tree"] > li[aria-expanded="true"]').count()) > 0,
-    'a row that does not match itself is only there to hold a match underneath it',
+    found.every((path) => path.toLowerCase().includes(term.toLowerCase())),
+    'and every path it lists contains the term',
   )
   check(
     await page.locator('.tree-note').isVisible(),
     'and the panel says it has only read the folders that were opened',
   )
-  await page.locator('.tree-find').press('Escape')
+  await page.locator('.tree-find input').press('Escape')
   await page.waitForTimeout(400)
-  check((await rows.count()) === before, 'Escape clears the filter')
+  const cleared = await rows.count()
+  check(cleared === before, `Escape clears the filter (${before} → ${cleared}, search ${await page.locator('.tree-find').count() ? 'still open' : 'closed'})`)
 }
 
 // --- the boundary ----------------------------------------------------------------------
@@ -223,7 +222,7 @@ const link = root ? join(root, 'bravebot-tree-probe-link') : null
 try {
   if (link) {
     symlinkSync('/etc', link)
-    await page.locator('.tree-tool').nth(1).click()
+    await page.getByRole('button', { name: 'Read the folder again' }).click()
     await page.waitForTimeout(900)
     const probe = page
       .locator('.tree-list[role="tree"] > li')

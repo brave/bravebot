@@ -6,10 +6,23 @@ export interface Hook { on: 'turn-started' | 'tool-finished' | 'turn-finished'; 
 /** `entire` is false where the agent passed over part of the file, so composing it back from
  * `hooks` alone would drop what it did not read. */
 export interface HooksDocument { path: string; text: string | null; entire: boolean; hooks: Hook[] }
+/** A refusal that only ever narrows: `value` is null where nothing named it, `path` the weakest file that did. */
+export interface Refusal { value: boolean | null; path: string | null; managed: boolean }
+/** What the settings in force say about the two refusing keys and the run limits. A null limit is the agent's built-in figure. */
+export interface Limits {
+  readsStayInWorkspace: Refusal
+  bypassUnreachable: Refusal
+  unreadable: { name: string; path: string }[]
+  run: { defaultSeconds: number | null; maxSeconds: number | null; maxOutput: number | null }
+}
 export interface AgentSettings {
   build: string; configured: boolean; problem: string | null; model: string | null
   brave: boolean; bedrock: boolean; providers: { name: string; credential: string }[]
   selected: string | null; layers: string[]; overrides: { name: string; path: string }[]
+  /** Keys a project file named that the agent reads from the home directory only. */
+  ignored?: { name: string; path: string }[]
+  /** Absent when an older agent built the report. */
+  limits?: Limits
   managed: { path: string | null; keys: string[] }
   network: { roots: string[]; problem: string | null; trustsNothing: boolean; proxy: string | null; authenticated: boolean; unusableProxy: string | null; noProxy: string | null }
 }

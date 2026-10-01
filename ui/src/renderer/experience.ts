@@ -23,6 +23,18 @@ export function useExperience(): Experience {
   return useSyncExternalStore((listener) => { listeners.add(listener); start(); return () => { listeners.delete(listener) } }, () => state)
 }
 
+/**
+ * One derived value, re-rendering only when it changes. The selector must return a primitive or
+ * a reference the store keeps stable (a single conversation's record is replaced only when that
+ * conversation changes), or every emit would look like a change.
+ */
+export function useExperienceValue<T>(select: (experience: Experience) => T): T {
+  return useSyncExternalStore((listener) => { listeners.add(listener); start(); return () => { listeners.delete(listener) } }, () => select(state))
+}
+
+export const useConversationPreferences = (key: string): ConversationPreferences | undefined =>
+  useExperienceValue((experience) => experience.conversations[key])
+
 export const experienceError = () => saveError
 export const conversationPreferences = (key: string) => state.conversations[key] ?? EMPTY_CONVERSATION
 

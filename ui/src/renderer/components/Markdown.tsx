@@ -1,8 +1,12 @@
 import { memo, isValidElement, useState, type ReactNode } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
+import rehypeHighlight, { type Options as HighlightOptions } from 'rehype-highlight'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
+import { ALIASES, LANGUAGES, PLAIN_TEXT } from '../highlight'
 import { isSubpath } from '../../shared/files'
+import { Button, Icon } from '../nala'
+import { CopyButton } from './CopyButton'
 
 /**
  * The model's own words, formatted.
@@ -66,14 +70,30 @@ const PLUGINS = [
   remarkBreaks,
 ]
 
+/**
+ * Colour for fenced code, as class names on spans.
+ *
+ * The highlighter works on the syntax tree react-markdown already builds and adds `hljs-*`
+ * classes to it, so the no-HTML property above holds: nothing here parses a string as markup.
+ * Only a fence that names its language is coloured. Guessing would re-run every grammar over
+ * each block, and a guess that is wrong paints confident colour on the wrong structure.
+ */
+const HIGHLIGHT: HighlightOptions = {
+  detect: false,
+  languages: LANGUAGES,
+  aliases: ALIASES,
+  plainText: PLAIN_TEXT,
+}
+const REHYPE = [[rehypeHighlight, HIGHLIGHT] as [typeof rehypeHighlight, HighlightOptions]]
+
 const COMPONENTS: Components = {
   pre({ children }) { return <CodeBlock>{children}</CodeBlock> },
   a({ href, children }) {
     const url = safeUrl(href)
     const local = href?.replace(/^\.\//, '').replace(/(?::\d+|#L\d+)$/, '')
-    if (!url && local && isSubpath(local) && !local.includes(':')) return <button className="local-file-link" onClick={() => {
+    if (!url && local && isSubpath(local) && !local.includes(':')) return <button className="local-file-link" data-tooltip={`Preview ${local}`} onClick={() => {
       document.dispatchEvent(new CustomEvent('bravebot:preview-file', { detail: local }))
-    }}>{children}</button>
+    }}><Icon name="file-code" /><span>{children}</span></button>
     // `target="_blank"` is load-bearing, not decoration. The main process refuses
     // in-window navigation outright and answers a window-open by opening the user's
     // browser, so this is the only form of link that does anything at all.
@@ -134,15 +154,13 @@ function plain(node: ReactNode): string {
 
 function CodeBlock({ children }: { children: ReactNode }): React.JSX.Element {
   const [wrap, setWrap] = useState(false)
-  const [copied, setCopied] = useState(false)
-  const [error, setError] = useState(false)
-  const language = isValidElement<{ className?: string }>(children) ? children.props.className?.replace('language-', '') : undefined
+  const language = isValidElement<{ className?: string }>(children) ? /language-(\S+)/.exec(children.props.className ?? '')?.[1] : undefined
   return <div className="code-block">
-    <div className="code-toolbar"><span>{language || 'Code'}</span>
-      <button aria-pressed={wrap} onClick={() => setWrap(!wrap)}>Wrap</button>
-      <button onClick={() => { void navigator.clipboard.writeText(plain(children)).then(() => { setCopied(true); setError(false) }).catch(() => setError(true)) }}>{copied ? 'Copied' : 'Copy code'}</button>
+    <div className="code-toolbar">
+      <span className="code-language">{language || 'code'}</span>
+      <Button kind="plain-faint" size="tiny" className="code-wrap" aria-pressed={wrap} onClick={() => setWrap(!wrap)}>Wrap</Button>
+      <CopyButton text={() => plain(children)} label="Copy code" />
     </div>
-    {error && <p role="alert">Could not copy. Select the code and copy it manually.</p>}
     <pre className={wrap ? 'code-wrapped' : ''}>{children}</pre>
   </div>
 }
@@ -160,7 +178,7 @@ function CodeBlock({ children }: { children: ReactNode }): React.JSX.Element {
  */
 export const Markdown = memo(function Markdown({ text }: { text: string }): React.JSX.Element {
   return (
-    <ReactMarkdown remarkPlugins={PLUGINS} components={COMPONENTS}>
+    <ReactMarkdown remarkPlugins={PLUGINS} rehypePlugins={REHYPE} components={COMPONENTS}>
       {text}
     </ReactMarkdown>
   )

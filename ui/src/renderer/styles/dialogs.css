@@ -1,0 +1,412 @@
+/* Dialogs: one frame, four widths, one head and one footer, whatever they hold.
+
+   Leo draws the dialog box inside its shadow root and sizes it from these; a width, padding or
+   border on the host would land on the empty element that carries the class. */
+
+.modal {
+  --leo-dialog-width: min(560px, calc(100vw - 48px));
+  --leo-dialog-padding: var(--leo-spacing-2xl);
+  /* The host itself paints nothing (the box is in the top layer, in the shadow root), but a
+     host with no box at all is reported as hidden to anything that asks whether the dialog is
+     visible, including the drivers. One fixed pixel keeps it a real, unobtrusive element. */
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  color: var(--ink-primary);
+}
+.modal-sm { --leo-dialog-width: min(440px, calc(100vw - 48px)); }
+.modal-md { --leo-dialog-width: min(560px, calc(100vw - 48px)); }
+.modal-lg { --leo-dialog-width: min(760px, calc(100vw - 48px)); }
+.modal-xl { --leo-dialog-width: min(1080px, calc(100vw - 48px)); }
+
+.modal-title {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  font: var(--leo-font-heading-h4);
+  color: var(--ink-primary);
+}
+.modal-header-action { display: inline-flex; margin-left: auto; font: var(--type-body); }
+.modal-subtitle { display: block; font: var(--type-meta); color: var(--ink-secondary); }
+
+.modal p { margin: 0 0 var(--leo-spacing-l); font: var(--type-body); color: var(--ink-secondary); }
+.modal h3 { margin: var(--leo-spacing-2xl) 0 var(--leo-spacing-s); font: var(--type-body-strong); color: var(--ink-primary); }
+.modal h4 { margin: var(--leo-spacing-l) 0 var(--leo-spacing-s); font: var(--type-meta-strong); color: var(--ink-primary); }
+.modal code { font: var(--type-code); }
+
+/* The primary action at the right-hand end; a secondary one that should stand apart from it
+   carries `modal-leading` and goes to the other end. */
+.modal-actions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  width: 100%;
+}
+.modal-actions > .modal-leading { margin-right: auto; }
+
+.dialog-collapse {
+  --leo-collapse-radius: var(--radius-card);
+  --leo-collapse-shadow: none;
+  --leo-collapse-shadow-hover: none;
+  --leo-collapse-border-color: var(--border-hairline);
+  --leo-collapse-border-color-hover: var(--border-subtle);
+  display: block;
+  margin-top: var(--leo-spacing-m);
+}
+.dialog-collapse pre, .dialog-collapse ol { font: var(--type-meta); color: var(--ink-secondary); }
+.dialog-collapse pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: var(--type-code); }
+
+/* ---------------------------------------------------------------- trust */
+
+.trust .path {
+  display: block;
+  margin-bottom: var(--leo-spacing-xl);
+  padding: var(--leo-spacing-m) var(--leo-spacing-l);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-field);
+  background: var(--surface-sunken);
+  color: var(--ink-primary);
+  font: var(--type-code);
+  word-break: break-all;
+}
+.trust-options { list-style: none; margin: 0 0 var(--leo-spacing-l); padding: 0; display: flex; flex-direction: column; gap: var(--leo-spacing-l); }
+.trust-options li { display: flex; align-items: flex-start; gap: var(--leo-spacing-l); }
+.trust-options leo-icon { flex: none; margin-top: var(--leo-spacing-xs); color: var(--ink-tertiary); --leo-icon-size: var(--icon-control); }
+.trust-options p { margin: 0; font: var(--type-meta); }
+.trust-options strong { color: var(--ink-primary); font-weight: 600; }
+.trust .aside { font: var(--type-caption); color: var(--ink-tertiary); }
+.trust .aside code { font: var(--type-caption); font-family: var(--font-mono); word-break: break-all; }
+
+/* ---------------------------------------------------------------- notice */
+
+/* Output from `bravebot doctor`, whose length nobody controls. */
+.notice-body {
+  max-height: 50vh;
+  margin: 0;
+  padding: var(--leo-spacing-l);
+  overflow: auto;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-control);
+  background: var(--surface-sunken);
+  font: var(--type-code);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ------------------------------------------------------------ appearance */
+
+.appearance-field { display: flex; flex-direction: column; align-items: flex-start; gap: var(--leo-spacing-s); margin-bottom: var(--leo-spacing-xl); }
+.appearance-field:last-child { margin-bottom: 0; }
+.appearance-label { font: var(--type-meta-strong); color: var(--ink-primary); }
+.modal .theme-aside { margin: 0; font: var(--type-caption); color: var(--ink-tertiary); }
+
+/* ----------------------------------------------------- permissions, watches */
+
+.grant-lede { font: var(--type-meta); }
+.grant-section h3 { margin-top: var(--leo-spacing-xl); }
+.modal .grant-note { margin: 0 0 var(--leo-spacing-m); font: var(--type-caption); color: var(--ink-tertiary); }
+.grant-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+}
+.grant-row {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  min-height: calc(var(--row-h) + var(--leo-spacing-m));
+  padding: var(--leo-spacing-s) var(--leo-spacing-s) var(--leo-spacing-s) var(--leo-spacing-l);
+}
+.grant-row + .grant-row { border-top: 1px solid var(--border-hairline); }
+.grant-row > leo-icon { flex: none; color: var(--ink-tertiary); --leo-icon-size: var(--icon-meta); }
+.grant-row > code { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--ink-primary); }
+.grant-row > leo-button { flex: none; margin-left: auto; }
+.grant-state { flex: none; margin-left: auto; padding-right: var(--leo-spacing-m); font: var(--type-caption); color: var(--ink-tertiary); }
+.grant-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.grant-path { overflow-wrap: anywhere; font: var(--type-code); color: var(--ink-primary); }
+.grant-meta { font: var(--type-caption); color: var(--ink-tertiary); }
+.modal .grant-empty {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  margin: 0;
+  padding: var(--leo-spacing-m) var(--leo-spacing-l);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-card);
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+  --leo-icon-size: var(--icon-meta);
+}
+.watch-add { display: flex; align-items: flex-end; gap: var(--leo-spacing-m); margin-top: var(--leo-spacing-xl); }
+.watch-add leo-input { flex: 1; min-width: 0; }
+
+/* ------------------------------------------------------- agent settings */
+
+.settings-tabs { display: block; margin-bottom: var(--leo-spacing-l); }
+.settings-body section { padding: var(--leo-spacing-l) 0; border-bottom: 1px solid var(--border-hairline); }
+.settings-body section:last-child, .settings-body .settings-status { border-bottom: 0; }
+.settings-body h3 { margin: var(--leo-spacing-m) 0 var(--leo-spacing-s); }
+.settings-body p { font: var(--type-meta); }
+.settings-body dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--leo-spacing-s) var(--leo-spacing-2xl);
+  margin: 0 0 var(--leo-spacing-l);
+  font: var(--type-meta);
+}
+.settings-body dt { color: var(--ink-secondary); }
+.settings-body dd { margin: 0; overflow-wrap: anywhere; color: var(--ink-primary); }
+.settings-body pre {
+  margin: 0 0 var(--leo-spacing-l);
+  padding: var(--leo-spacing-l);
+  border-radius: var(--radius-control);
+  background: var(--surface-sunken);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: var(--type-code);
+}
+.settings-body ol { margin: 0 0 var(--leo-spacing-l); padding-left: var(--leo-spacing-2xl); font: var(--type-meta); }
+.setup-routes { display: flex; flex-direction: column; }
+.setup-routes section { padding: var(--leo-spacing-l); }
+.settings-path { overflow-wrap: anywhere; font: var(--type-code); color: var(--ink-primary); }
+.modal .settings-caption { font: var(--type-caption); color: var(--ink-tertiary); }
+.settings-error { display: flex; flex-direction: column; align-items: flex-start; gap: var(--leo-spacing-m); margin-bottom: var(--leo-spacing-l); }
+.settings-busy { font: var(--type-meta); color: var(--ink-secondary); }
+
+/* Label and description on the left, the control on the right, the way a settings pane is read. */
+.settings-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--leo-spacing-2xl);
+  padding: var(--leo-spacing-l) 0;
+  border-bottom: 1px solid var(--border-hairline);
+}
+.settings-row h3 { margin-top: 0; }
+.settings-row p:last-child { margin-bottom: 0; }
+.settings-row-control { display: flex; flex-direction: column; align-items: stretch; gap: var(--leo-spacing-s); }
+.settings-actions { display: flex; flex-wrap: wrap; gap: var(--leo-spacing-m); margin-top: var(--leo-spacing-l); }
+
+.hook-editor {
+  margin: 0 0 var(--leo-spacing-l);
+  padding: var(--leo-spacing-l) var(--leo-spacing-xl);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-card);
+  background: var(--surface-panel);
+}
+.hook-editor legend { padding: 0 var(--leo-spacing-s); font: var(--type-meta-strong); color: var(--ink-secondary); }
+.hook-editor leo-input, .hook-editor leo-dropdown { display: block; margin: var(--leo-spacing-m) 0; }
+.hook-argument { display: flex; align-items: flex-end; gap: var(--leo-spacing-m); }
+.hook-argument leo-input { flex: 1; }
+
+@media (max-width: 640px) {
+  .settings-body dl, .settings-row { grid-template-columns: 1fr; gap: var(--leo-spacing-s); }
+  .settings-body dd { margin-bottom: var(--leo-spacing-m); }
+}
+
+/* ------------------------------------------------------------- previews */
+
+.preview-code { margin: 0; }
+.preview-code .tree-glyph { flex: none; margin-right: var(--leo-spacing-s); color: var(--ink-tertiary); --leo-icon-size: var(--icon-meta); }
+.preview-code pre {
+  max-height: 60vh;
+  margin: 0;
+  padding: var(--leo-spacing-l);
+  overflow: auto;
+  background: var(--surface-raised);
+  font: var(--type-code);
+  white-space: pre;
+  tab-size: 4;
+}
+.modal .preview-status { display: flex; align-items: center; gap: var(--leo-spacing-m); margin: 0; padding: var(--leo-spacing-m) var(--leo-spacing-l); font: var(--type-caption); color: var(--ink-tertiary); }
+.expanded-diff .diff { max-height: 65vh; }
+
+/* ----------------------------------------------------------------- about */
+
+.about-hero { text-align: center; }
+.about-stage { position: relative; display: grid; justify-items: center; padding: var(--leo-spacing-m) 0 var(--leo-spacing-xl); }
+.about-stage::before {
+  content: '';
+  position: absolute;
+  width: 220px;
+  height: 180px;
+  pointer-events: none;
+  background: radial-gradient(ellipse, color-mix(in srgb, var(--accent) 19%, transparent), transparent 70%);
+}
+.about .about-mascot { position: relative; display: grid; place-items: center; padding: 0; width: 156px; height: 156px; border: 0; border-radius: var(--radius-pill); background: transparent; cursor: pointer; }
+.about .about-mascot:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.about-figure { display: block; }
+.about .about-hero h2 { margin: var(--leo-spacing-l) 0 var(--leo-spacing-s); font: var(--leo-font-heading-h2); color: var(--ink-primary); }
+.about-version {
+  display: inline-block;
+  max-width: 100%;
+  margin-top: var(--leo-spacing-m);
+  padding: var(--leo-spacing-xs) var(--leo-spacing-l);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  color: var(--ink-secondary);
+  font: var(--type-caption-strong);
+  overflow-wrap: anywhere;
+}
+.about-links { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--leo-spacing-2xl); margin: var(--leo-spacing-2xl) 0; font: var(--type-body); }
+.about-links leo-icon { --leo-icon-size: var(--icon-caption); }
+.about-details {
+  --leo-collapse-radius: var(--radius-card);
+  --leo-collapse-shadow: none;
+  --leo-collapse-shadow-hover: none;
+  --leo-collapse-border-color: var(--border-hairline);
+  display: block;
+  font: var(--type-meta);
+}
+.about-details dl { margin: 0 0 var(--leo-spacing-l); }
+.about-details dl > div { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: var(--leo-spacing-l); margin: var(--leo-spacing-m) 0; }
+.about-details dt { color: var(--ink-secondary); }
+.about-details dd { margin: 0; font: var(--type-code); overflow-wrap: anywhere; user-select: text; }
+.about-copy { display: flex; flex-wrap: wrap; align-items: center; gap: var(--leo-spacing-m); }
+.about-copy [role='status'] { font: var(--type-caption); color: var(--ink-tertiary); }
+.about-footer { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--leo-spacing-m); margin-top: var(--leo-spacing-xl); font: var(--type-caption); color: var(--ink-tertiary); }
+
+/* ------------------------------------------------------------------ bots */
+
+.bot-form { display: flex; flex-direction: column; gap: var(--leo-spacing-xl); margin: 0; }
+.bot-form-identity { display: grid; grid-template-columns: 88px minmax(0, 1fr); align-items: center; gap: var(--leo-spacing-xl); }
+.bot-form-identity leo-input { width: 100%; min-width: 0; }
+.bot-form-avatar { position: relative; display: grid; place-items: center; width: 88px; height: 88px; border-radius: var(--radius-pill); background: var(--surface-sunken); }
+.bot-avatar-refresh { position: absolute; right: calc(-1 * var(--leo-spacing-xs)); bottom: calc(-1 * var(--leo-spacing-xs)); background: var(--surface-raised); border-radius: var(--radius-pill); }
+
+.bot-field { display: flex; flex-direction: column; gap: var(--leo-spacing-s); min-width: 0; }
+.bot-field > span { font: var(--type-meta-strong); color: var(--ink-primary); }
+.bot-field leo-input, .bot-field leo-textarea { width: 100%; min-width: 0; }
+.bot-form-model .model-picker { align-self: flex-start; width: max-content; max-width: 100%; flex: none; }
+.bot-form-model .model-trigger { width: auto; }
+/* The menu's minimum is the anchor. Keep the popup at its own width once the anchor shrinks. */
+.bot-form-model .model-menu { --model-menu-width: min(360px, calc(100vw - 48px)); width: max-content; max-width: min(360px, calc(100vw - 48px)); }
+
+.bot-fixed-group { display: flex; flex-direction: column; align-items: flex-start; gap: var(--leo-spacing-s); }
+.modal .bot-fixed {
+  align-self: stretch;
+  margin: 0;
+  padding: var(--leo-spacing-m) var(--leo-spacing-l);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-field);
+  background: var(--surface-sunken);
+  color: var(--ink-secondary);
+  font: var(--type-code);
+  overflow-wrap: anywhere;
+}
+.bot-choose { align-self: flex-start; max-width: 100%; }
+.bot-choose-label { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal .bot-note { margin: 0; font: var(--type-caption); color: var(--ink-tertiary); }
+.bot-note code { font: var(--type-caption); font-family: var(--font-mono); }
+
+/* Pinned to the foot of the dialog, so Save is in reach however long the memory is. */
+.bot-actions {
+  position: sticky;
+  bottom: calc(-1 * var(--leo-spacing-2xl));
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  margin: 0 calc(-1 * var(--leo-spacing-2xl)) calc(-1 * var(--leo-spacing-2xl));
+  padding: var(--leo-spacing-l) var(--leo-spacing-2xl);
+  border-top: 1px solid var(--border-hairline);
+  background: var(--surface-raised);
+}
+.bot-spacer { flex: 1; }
+.bot-actions leo-button { flex: none; }
+
+.bot-memory-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-m);
+  padding: var(--leo-spacing-l) var(--leo-spacing-xl);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-card);
+}
+.memory-head { display: flex; align-items: center; justify-content: space-between; gap: var(--leo-spacing-l); }
+.memory-head h3 { margin: 0; }
+.memory-readable, .bot-memory {
+  max-height: 300px;
+  margin: 0;
+  padding: var(--leo-spacing-l);
+  overflow: auto;
+  border-radius: var(--radius-control);
+  background: var(--surface-sunken);
+}
+.memory-readable { font: var(--type-body); color: var(--ink-primary); overflow-wrap: anywhere; }
+.memory-readable p { margin: 0 0 var(--leo-spacing-l); color: inherit; }
+.memory-readable h1, .memory-readable h2, .memory-readable h3 { margin: 0 0 var(--leo-spacing-m); font: var(--type-body-strong); }
+.memory-readable ul, .memory-readable ol { margin: 0 0 var(--leo-spacing-l); padding-left: var(--leo-spacing-2xl); }
+.memory-readable pre { white-space: pre-wrap; overflow-wrap: anywhere; font: var(--type-code); }
+.bot-memory { color: var(--ink-secondary); font: var(--type-code); white-space: pre-wrap; }
+.memory-history { display: flex; flex-direction: column; }
+.memory-revision { border-bottom: 1px solid var(--border-hairline); --leo-collapse-summary-padding: var(--leo-spacing-m) 0; }
+.memory-history pre { max-height: 240px; margin: 0 0 var(--leo-spacing-m); padding: var(--leo-spacing-l); overflow: auto; border-radius: var(--radius-control); background: var(--surface-sunken); white-space: pre-wrap; font: var(--type-code); }
+.memory-actions { display: flex; flex-wrap: wrap; gap: var(--leo-spacing-m); }
+.memory-loading { font: var(--type-meta); color: var(--ink-secondary); }
+
+.bot-overview-card {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-l);
+  margin-bottom: var(--leo-spacing-l);
+  padding: var(--leo-spacing-l);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-card);
+  background: var(--surface-sunken);
+}
+.bot-overview-where { display: flex; flex-direction: column; min-width: 0; }
+.bot-overview-where strong { font: var(--type-body-strong); }
+.bot-overview-where code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--type-caption); font-family: var(--font-mono); color: var(--ink-tertiary); }
+.bot-overview h3:first-of-type { margin-top: var(--leo-spacing-l); }
+.modal .bot-purpose { color: var(--ink-primary); }
+.bot-history-head { display: flex; align-items: center; justify-content: space-between; gap: var(--leo-spacing-l); margin-top: var(--leo-spacing-2xl); }
+.bot-history-head h3 { margin: 0; }
+.bot-history-search { flex: 0 1 220px; min-width: 0; }
+.bot-conversations {
+  display: flex;
+  flex-direction: column;
+  max-height: 300px;
+  margin-top: var(--leo-spacing-m);
+  overflow-y: auto;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-card);
+}
+.bot-history-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--leo-spacing-xs);
+  width: 100%;
+  padding: var(--leo-spacing-m) var(--leo-spacing-l);
+  border: 0;
+  background: transparent;
+  color: var(--ink-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.bot-history-row + .bot-history-row { border-top: 1px solid var(--border-hairline); }
+.bot-history-row:hover { background: var(--surface-hover); }
+.bot-history-row:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+.bot-history-row strong { font: var(--type-meta-strong); overflow-wrap: anywhere; }
+.bot-history-row span { font: var(--type-caption); color: var(--ink-tertiary); }
+.bot-history-unavailable { margin: var(--leo-spacing-m); }
+.modal .bot-history-empty { display: flex; align-items: center; gap: var(--leo-spacing-m); margin: 0; padding: var(--leo-spacing-l); font: var(--type-caption); color: var(--ink-tertiary); --leo-icon-size: var(--icon-meta); }
+
+@media (prefers-reduced-motion: reduce) {
+  .modal.about { animation: none; }
+}
+@media (forced-colors: active) {
+  .grant-list, .bot-conversations, .bot-memory-panel, .bot-overview-card { border-color: CanvasText; }
+}
+
+.settings-rules h4 { margin: var(--leo-spacing-l) 0 var(--leo-spacing-xs); font: var(--type-meta-strong); }

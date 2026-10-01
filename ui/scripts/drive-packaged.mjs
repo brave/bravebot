@@ -86,7 +86,7 @@ check(
   `a release offers no Reload and no Developer Tools (${seen.developer.map((i) => i.label).join(', ') || 'none'})`,
 )
 check(
-  seen.view.filter(Boolean).join() === 'view.fold-left,view.fold-right,view.reset-columns,view.theme',
+  seen.view.filter(Boolean).join() === 'view.fold-left,view.fold-right,view.reset-columns,view.find,view.focus-composer,view.theme',
   `View offers columns and themes (${seen.view.filter(Boolean).join(', ')})`,
 )
 
@@ -106,7 +106,7 @@ check(
   seen.fromResources.includes('.app/Contents/Resources'),
   'and it was looked for inside the bundle',
 )
-const build = await page.locator('.build').textContent().catch(() => null)
+const build = await page.locator('.sessions').getAttribute('data-build').catch(() => null)
 check(Boolean(build && build.trim()), `the build stamp came back (${build?.trim() ?? 'nothing'})`)
 
 await page.screenshot({ path: '/tmp/bravebot-ui/13-packaged.png' })

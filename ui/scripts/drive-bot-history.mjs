@@ -49,53 +49,55 @@ try {
   const snap=async name=>{await page.waitForTimeout(400);await page.screenshot({path:join(output,name+'.png'),scale:'css'});console.log('VISUAL',name)}
   await page.reload();
   await page.getByRole('button',{name:'Sessions',exact:true}).click();
-  assert.equal(await page.getByRole('searchbox',{name:'Filter sessions',exact:true}).count(),0);
-  await snap('00-sidebar-compact');
-  await page.getByRole('button',{name:'Filter sessions',exact:true}).click();
+  // The filter is always there: no toggle to open it, and Escape clears it without taking it away.
   const filter=page.getByRole('searchbox',{name:'Filter sessions',exact:true});
+  assert.equal(await filter.count(),1);
+  await snap('00-sidebar-compact');
   await filter.fill('next iteration');
   assert.equal(await page.locator('.session-row').count(),1);
   await snap('00-sidebar-search');
   await filter.press('Escape');
-  assert.equal(await filter.count(),0);
-  assert.equal(await page.getByRole('button',{name:'Filter sessions',exact:true}).evaluate(el=>el===document.activeElement),true);
+  assert.equal(await filter.inputValue(),'');
+  await page.waitForFunction(()=>document.querySelectorAll('.session-row').length>1);
   await page.getByRole('button',{name:'Bots',exact:true}).click();
-  await page.getByRole('button',{name:'Search bots',exact:true}).click();
-  await page.getByRole('searchbox',{name:'Search bots',exact:true}).fill('no-such-bot');
+  const bots=page.getByRole('searchbox',{name:'Search bots',exact:true});
+  await bots.fill('no-such-bot');
   await page.getByText('No bots match this search.',{exact:true}).waitFor();
-  await page.getByRole('button',{name:'Close search',exact:true}).click();
+  await bots.press('Escape');
   const overview=async()=>{await page.locator('.bot').filter({hasText:'Review Bot'}).click();await page.getByRole('heading',{name:/Conversation history/}).waitFor()}
   await overview();
   assert.equal(await page.locator('.bot-conversations button').count(),3);
   assert.equal(await page.locator('.bot-history-unavailable').count(),1);
-  await page.getByRole('button',{name:/Review the sample project/}).getByText(/Archived/).waitFor();
+  await page.locator('.bot-conversations .bot-history-row').filter({hasText:'Review the sample project'}).getByText(/Archived/).waitFor();
   await snap('01-all-history');
   await page.getByRole('searchbox',{name:'Search bot conversations'}).fill('next iteration');
   assert.equal(await page.locator('.bot-conversations button').count(),1);
   await snap('02-filtered-history');
   await page.locator('.bot-conversations button').click();
   await page.getByRole('textbox',{name:'Message the agent'}).waitFor();
-  await overview();await page.locator('.bot-conversations button').filter({hasText:'Review the sample project'}).click();
+  await overview();await page.locator('.bot-conversations .bot-history-row').filter({hasText:'Review the sample project'}).click();
   await page.getByText('Review the project and show a code example.',{exact:true}).waitFor();
   await snap('03-open-archived-conversation');
   if (!(await page.getByRole('tab',{name:'Files',exact:true}).isVisible())) {
     await page.getByRole('button',{name:'Context panel',exact:true}).click();
   }
   await page.getByRole('tab',{name:'Files',exact:true}).click();
-  assert.equal(await page.locator('#panel-files .panel-head').count(),0);
+  assert.equal(await page.locator('#panel-files summary').count(),0);
   assert.equal(await page.getByRole('searchbox',{name:'Search project files by name'}).count(),0);
+  await page.locator('.tree-body').waitFor();
   const panel=await page.locator('.context').boundingBox();
   const tree=await page.locator('.tree-body').boundingBox();
-  assert.ok(Math.abs(panel.y+panel.height-tree.y-tree.height-14)<2,'File list fills panel height');
+  assert.ok(Math.abs(panel.y+panel.height-tree.y-tree.height-12)<2,'File list fills panel height');
   await snap('03-files-full-height');
   await page.getByRole('button',{name:'Search files',exact:true}).click();
   const fileSearch=page.getByRole('searchbox',{name:'Search project files by name'});
   await fileSearch.fill('sample');
-  await page.locator('.file-search-results button').filter({hasText:'src/nested/sample.txt'}).waitFor();
+  await page.locator('.file-search-results .search-result').filter({hasText:'src/nested/sample.txt'}).waitFor();
   await snap('03-files-search');
   await fileSearch.press('Escape');
+  await fileSearch.waitFor({state:'detached'});
   assert.equal(await fileSearch.count(),0);
-  assert.equal(await page.getByRole('button',{name:'Search files',exact:true}).evaluate(el=>el===document.activeElement),true);
+  assert.equal(await page.getByRole('button',{name:'Search files',exact:true}).evaluate(el => el === document.activeElement || el.getRootNode().host === document.activeElement),true);
 
   await overview();await page.getByRole('button',{name:'New conversation',exact:true}).click();
   await page.getByRole('button',{name:"Don't trust",exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});

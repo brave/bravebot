@@ -316,6 +316,9 @@ doctor-settings-allow-ignored =
 doctor-settings-granted = accordée
 doctor-settings-allow-granted =
     la règle allow { $rule } dans { $path } est accordée pour ce répertoire
+doctor-settings-unread = clé non lue
+doctor-settings-unread-key =
+    { $key } dans { $path } n'est pas lu par cette version : il ne configure rien et ne restreint rien
 doctor-settings-mcp-declared =
     { $key } dans { $path } déclare un serveur MCP, ce que seul ~/.bravebot/mcp.json peut faire :
     rien de ce qu'il contient n'est démarré
@@ -1290,6 +1293,7 @@ status-time-overhead = non attribué
 status-cache = Cache du prompt, dernier tour
 status-cache-read = servi depuis le cache
 status-cache-written = écrit dans le cache pour le tour suivant
+hint-cache-hit-rate = cache { $rate } %
 status-trust = Confiance
 status-nothing-vouched-for = rien d'approuvé
 status-trusted = fiable

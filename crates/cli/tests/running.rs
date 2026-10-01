@@ -1350,6 +1350,59 @@ fn doctor_names_an_allow_rule_a_checkout_wrote() {
     );
 }
 
+/// BACKEND-36 at the top level, from the process that reads the file: a key beside the ones this
+/// build reads is named with its file, the values are not, and the run still passes.
+///
+/// Running the binary because the report is the whole of the behaviour. The key is collected in
+/// `bravebot-config`, worded in `bravebot-i18n` and printed here, and a fix that stops short of the
+/// command leaves somebody believing the `sandbox` block they pasted confines this agent.
+///
+/// The hooks value is a string nothing else in the report could print, which is what makes the
+/// second assertion say the line carries names and not values: a report that printed the block back
+/// is a report people paste into issues, and this file is where a person writes a token.
+///
+/// Passing on purpose. A key written for a later release must not stop an older binary, which is
+/// BACKEND-36's own reason, so a report that failed here would be a soft refusal of the file.
+#[test]
+fn doctor_names_a_top_level_key_it_does_not_read() {
+    let scratch = Scratch::new("cli-running-unread-key").with_settings(
+        r#"{"sandbox": {"enabled": true},
+            "hooks": {"PreToolUse": "a-command-nothing-here-runs"},
+            "env": {"AWS_REGION": "us-west-2"}}"#,
+    );
+
+    let output = bravebot(
+        &scratch.path,
+        // A configuration with nothing wrong with it, for the reason the named-settings test above
+        // states: a run that stopped at the configuration would never reach the settings section.
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "doctor did not run: {stderr}");
+    let file = scratch.path.join(".bravebot").join("settings.json");
+    for key in ["sandbox", "hooks"] {
+        assert!(
+            stdout.contains(&format!("{key} in {}", file.display())),
+            "{key} was read and discarded with nothing said: {stdout}"
+        );
+    }
+    assert!(
+        !stdout.contains("a-command-nothing-here-runs"),
+        "the report printed what the key was set to: {stdout}"
+    );
+    // The file still applies, which is what separates naming a key from refusing one.
+    assert!(
+        stdout.contains("AWS_REGION"),
+        "the file stopped applying where one of its keys went unread: {stdout}"
+    );
+}
+
 /// PERM-14's exclusion, from the same process: a checkout's `allow` entry that is not a rule is
 /// named for what is wrong with it, under PERM-11, and not as a grant that was withheld.
 ///

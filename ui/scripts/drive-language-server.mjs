@@ -131,8 +131,9 @@ try {
   assert.deepEqual(scope.map((text) => text.trim()), [program, project], 'what would run, and the tree it would read')
   assert.match(await card.locator('.warn').innerText(), /code from your dependencies runs with your own access/, 'that it builds is said out loud')
   assert.deepEqual(await card.locator('.confirm-actions button').allInnerTexts(), ['Don’t start', 'Start for this conversation'])
-  assert.match(await page.locator('.pending-jump').innerText(), /Approval needed · Answer the language server/)
-  assert.ok(await page.locator('.composer .send, .composer button:has-text("Queue message")').first().isDisabled(), 'nothing can be sent while the question stands')
+  assert.match(await page.locator('.pending-jump').innerText(), /Approval needed/)
+  assert.equal(await page.locator('.pending-jump').getAttribute('data-tooltip'), 'Answer the language server')
+  assert.equal(await page.getByRole('button', { name: 'Send', exact: true }).count(), 0, 'nothing can be sent while the question stands: the round button is Stop')
   assert.deepEqual(started(), [], 'nothing started before anybody answered')
   await page.screenshot({ path: join(output, 'server-asked.png') })
 

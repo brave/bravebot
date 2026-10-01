@@ -30,7 +30,7 @@ export default {
   async run(s) {
     const { page } = s
 
-    const tab = page.locator('.sidebar-tab').nth(1)
+    const tab = page.locator('.sidebar-tabs [role="option"]').nth(1)
     if (!(await tab.count())) s.skip('this build has no bots tab')
     await s.click(tab)
     await page.waitForTimeout(600)

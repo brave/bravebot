@@ -1031,6 +1031,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.trust.clone()
     }
 
+    /// Put `authority` in place of this policy's, returning the one it replaces.
+    pub fn exchange_file_authority(
+        &mut self,
+        authority: crate::file_authority::FileAuthority,
+    ) -> crate::file_authority::FileAuthority {
+        std::mem::replace(&mut self.trust, authority)
+    }
+
     /// Capture bytes and decide their labels within one file-authority boundary.
     /// The closure must not prompt, call a model, or wait for a process or delegate.
     pub fn capture_files<R>(

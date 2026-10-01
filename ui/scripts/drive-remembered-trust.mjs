@@ -32,7 +32,7 @@ async function launch(drive) {
 }
 
 const trust = (page) => page.getByRole('dialog', { name: 'Project trust', exact: true })
-const banner = (page) => page.locator('.transcript-head .fork-banner', { hasText: 'Trust is remembered' })
+const banner = (page) => page.locator('.entries .session-banner', { hasText: 'Trust is remembered' })
 const openProject = (page) => page.getByRole('button', { name: 'Open project', exact: true }).click()
 
 try {
@@ -60,7 +60,7 @@ try {
     assert.equal(await trust(page).count(), 0, 'a remembered yes asks nothing')
     await page.screenshot({ path: `${shots}/remembered-3-not-asked.png` })
 
-    await page.getByRole('button', { name: 'Permissions', exact: true }).click()
+    await shown.getByRole('button', { name: 'Manage', exact: true }).click()
     const forget = page.getByRole('button', { name: 'Forget', exact: true })
     await forget.waitFor()
     await page.screenshot({ path: `${shots}/remembered-4-permissions.png` })
@@ -70,7 +70,7 @@ try {
     assert.equal(await shown.count(), 0, 'the banner went with the answer')
     await page.getByRole('button', { name: 'Done', exact: true }).click()
 
-    await page.getByRole('button', { name: '+ New session', exact: true }).click()
+    await page.getByRole('button', { name: 'New session', exact: true }).click()
     await trust(page).waitFor()
     await page.screenshot({ path: `${shots}/remembered-5-asked-again.png` })
   })

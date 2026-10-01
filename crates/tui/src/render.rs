@@ -3362,6 +3362,22 @@ fn loop_part(until: Option<std::time::Duration>) -> String {
     }
 }
 
+fn cache_hit_rate(session: &Session) -> Option<String> {
+    let cached = session.cached().filter(|cached| cached.read_tokens > 0)?;
+    let prompt_tokens = session
+        .cached_prompt_tokens()
+        .filter(|tokens| *tokens > 0)?;
+    let tenths = (u128::from(cached.read_tokens) * 1_000 + u128::from(prompt_tokens) / 2)
+        / u128::from(prompt_tokens);
+    let rate = format!(
+        "{}{}{}",
+        tenths / 10,
+        t!(number_decimal_separator),
+        tenths % 10
+    );
+    Some(t!(hint_cache_hit_rate, rate = rate).to_string())
+}
+
 /// The shortcut line. Keeps the bindings discoverable without a help command.
 fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // Read before the shell line as well as the ordinary one. A loop spends a turn whichever mode
@@ -3436,6 +3452,8 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         ),
     };
 
+    let cache = cache_hit_rate(session).unwrap_or_default();
+
     // Not a list of bindings any more. Every one of them, with what it does, is a `?` away, which
     // is both more than this line could hold and the moment a person wants to know; what stays here
     // is what the session is doing, which is the part they cannot ask for.
@@ -3479,6 +3497,7 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         editing,
         trail.to_string(),
         context,
+        cache,
         looping,
         watchable,
         SHORTCUTS_HINT.to_string(),
@@ -3497,9 +3516,9 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // narrow terminal, which would take the mode with it, and a mode nobody can read is worse than
     // a loop they can still find with `/loop` or `/status`.
     let expendable: &[usize] = if context_is_unmeasured {
-        &[3, 6, 2, 5, 4]
+        &[3, 7, 2, 4, 6, 5]
     } else {
-        &[6, 2, 3, 5, 4]
+        &[7, 2, 3, 4, 6, 5]
     };
     // A note is drawn over the right of this same row, so what the parts may occupy is the width
     // less that note. Fitted against the whole width instead, the last part that fits is one the
@@ -7716,6 +7735,53 @@ mod tests {
                 "{line:?}"
             );
         }
+    }
+
+    /// The last turn's cache read as a share of its prompt tokens, matching Pi's footer. A rate
+    /// built from the cache counts alone would include writes in the denominator and understate the
+    /// hit, so the fixture keeps those values distinct.
+    #[test]
+    fn the_hint_line_shows_the_last_turns_cache_hit_rate() {
+        let mut session = Session::new("none");
+        session.served_from_cache(
+            bravebot_aichat::protocol::Cached {
+                read_tokens: 41_200,
+                written_tokens: 1_800,
+            },
+            50_000,
+        );
+
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(hint.contains("cache 82.4%"), "{hint}");
+    }
+
+    /// A turn that only writes a cache entry has no read hit to report. The status panel still
+    /// reports the write, while a zero-percent footer rate would claim the read was measured as a
+    /// miss.
+    #[test]
+    fn the_hint_line_says_nothing_for_a_write_only_cache_turn() {
+        let mut session = Session::new("none");
+        session.served_from_cache(
+            bravebot_aichat::protocol::Cached {
+                read_tokens: 0,
+                written_tokens: 1_800,
+            },
+            50_000,
+        );
+
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(!hint.contains("cache "), "{hint}");
+    }
+
+    /// A backend saying nothing about its cache supplies two zeroes. Drawing a zero-percent hit
+    /// from those would turn absence of a measurement into a measured miss.
+    #[test]
+    fn the_hint_line_says_nothing_where_the_backend_reported_nothing() {
+        let mut session = Session::new("none");
+        session.served_from_cache(Default::default(), 50_000);
+
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(!hint.contains("cache "), "{hint}");
     }
 
     /// A line in shell mode is a command line, where a slash begins a path.

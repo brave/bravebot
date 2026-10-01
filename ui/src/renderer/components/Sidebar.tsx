@@ -23,13 +23,15 @@
  * prevent within a single one.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import type { SessionSummary } from '../../shared/protocol'
 import type { Bot } from '../../shared/bots'
 import type { Doing } from './BotAvatar'
 import type { Tab } from '../../shared/view'
 import { Sessions } from './Sessions'
 import { Bots } from './Bots'
+import { SidebarRow } from './SidebarTools'
+import { ControlItem, SegmentedControl } from '../nala'
 
 interface Props {
   sessions: SessionSummary[]
@@ -50,7 +52,7 @@ interface Props {
   build: string | null
 }
 
-export function Sidebar({
+export const Sidebar = memo(function Sidebar({
   sessions,
   onNewBotConversation,
   onBotConversation,
@@ -101,21 +103,21 @@ export function Sidebar({
   const show = useCallback((next: Tab) => setTab(next), [])
 
   return (
-    <aside className="sessions" id="sessions-column">
-      {/* The label stays put and `aria-pressed` carries which is on, the disclosure discipline
-          every toggle in this window follows. No tooltips: the labels are the whole of what
-          these do, and a popup could only repeat them. */}
-      <div className="sidebar-tabs" role="group" aria-label="What the column shows">
-        <button
-          className="sidebar-tab"
-          aria-pressed={tab === 'sessions'}
-          onClick={() => show('sessions')}
+    <aside className="sessions" id="sessions-column" data-build={build ?? undefined}>
+      {/* The column's titlebar: the traffic lights, then the switch between the two lists. The
+          strip drags the window; the control opts out. The label stays put and the selected
+          item carries which is on, the disclosure discipline every toggle here follows. */}
+      <div className="sidebar-titlebar">
+        <SegmentedControl
+          className="sidebar-tabs"
+          size="small"
+          value={tab}
+          data-test="sidebar-tabs"
+          onChange={({ value }) => { if (value === 'sessions' || value === 'bots') show(value) }}
         >
-          Sessions
-        </button>
-        <button className="sidebar-tab" aria-pressed={tab === 'bots'} onClick={() => show('bots')}>
-          Bots
-        </button>
+          <ControlItem value="sessions">Sessions</ControlItem>
+          <ControlItem value="bots">Bots</ControlItem>
+        </SegmentedControl>
       </div>
 
       <div className="sidebar-body" hidden={tab !== 'sessions'}>
@@ -146,12 +148,11 @@ export function Sidebar({
         />
       </div>
 
-      <button className="agent-settings-open" onClick={onSettings}>Agent settings</button>
-      {build && (
-        <footer className="build" title="The agent build these sessions are stamped with">
-          {build}
-        </footer>
-      )}
+      {/* The build the sessions are stamped with is in About; it rides here only as data, for
+          the drivers that check a packaged app is the one they built. */}
+      <footer className="sidebar-foot">
+        <SidebarRow icon="settings" label="Agent settings" className="agent-settings-open" onClick={onSettings} data-test="agent-settings" />
+      </footer>
     </aside>
   )
-}
+})

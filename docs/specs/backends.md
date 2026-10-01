@@ -1120,15 +1120,16 @@ Whatever presents these figures presents nothing when they are zero, rather than
 that may not have happened. That holds of each figure alone: a turn that established a prefix and
 read nothing back reports the write and says nothing about the read.
 
-**The status panel reports the last turn's, beside what the session cost.** The last turn rather
-than a total over the session, because caching is a property of a request: a session that compacted
-part way through has turns whose prefix survived and turns whose prefix was rewritten, and a total
-averages away the thing the figures are for. Nothing about a cache is kept in a session record, so a
-resumed session reports nothing until a turn has run. Clearing goes with what the conversation spent
-rather than with the model the user chose, the figures describing a prompt that has been thrown away.
-Anything else that changes which turn is the last one moves the figures with it: rewinding a turn
-puts back what the turn before it read, and a turn that failed or was stopped reports nothing rather
-than leaving the turn before it on the panel.
+**The status panel and footer report the last turn's.** The last turn rather than a total over the
+session, because caching is a property of a request: a session that compacted part way through has
+turns whose prefix survived and turns whose prefix was rewritten, and a total averages away the
+thing the figures are for. The footer shows the cached read as a percentage of the turn's prompt
+tokens. Nothing about a cache is kept in a session record, so a resumed session reports nothing
+until a turn has run. Clearing goes with what the conversation spent rather than with the model the
+user chose, the figures describing a prompt that has been thrown away. Anything else that changes
+which turn is the last one moves the figures with it: rewinding a turn puts back what the turn
+before it read, and a turn that failed or was stopped reports nothing rather than leaving the turn
+before it on the panel.
 
 **Presented as two figures and never as their sum.** They are priced in opposite directions, a read
 at a fraction of a fresh token and a write above one, so a turn that saved almost the whole prompt
@@ -1146,6 +1147,9 @@ says which turn it speaks for, the counts beside it being the session's.
 `verified-by: bravebot_tui::status::the_panel_says_how_much_of_the_prompt_came_out_of_the_cache`
 `verified-by: bravebot_tui::status::a_backend_that_reports_nothing_about_a_cache_gets_no_cache_lines`
 `verified-by: bravebot_tui::status::a_turn_that_only_wrote_to_the_cache_does_not_report_a_read_of_zero`
+`verified-by: bravebot_tui::render::the_hint_line_shows_the_last_turns_cache_hit_rate`
+`verified-by: bravebot_tui::render::the_hint_line_says_nothing_for_a_write_only_cache_turn`
+`verified-by: bravebot_tui::render::the_hint_line_says_nothing_where_the_backend_reported_nothing`
 `verified-by: bravebot_tui::state::clearing_forgets_what_the_last_turn_read_out_of_the_cache`
 `verified-by: bravebot_tui::state::the_cache_figure_follows_which_turn_is_the_last_one`
 `verified-by: bravebot_tui::sessions::a_rewind_point_keeps_no_cache_figure_in_the_record`
@@ -1354,6 +1358,19 @@ one would make a settings file from a newer release stop an older binary from st
 discarding one silently would make a typo and a forward-looking entry look identical to whoever is
 debugging it, which is why `doctor` reports the names rather than only the ones that landed.
 
+A top-level key beside the ones this build reads is kept on the same terms. The rest of the file
+applies, the key configures nothing and restricts nothing, and `doctor` names it with the file that
+set it, weakest first, every file that set one being named. The key is reported and what it was set
+to is not. A variable in `env` is not reported this way, being named already among the names the file
+set, and neither is a key inside a block this build reads.
+
+That holds because the reason above is about the file rather than about the `env` block. The file is
+documented as largely the shape of another tool's, so a block pasted from one arrives holding
+`sandbox` or `hooks`, and both read to whoever wrote them as a restriction in force. Reporting the
+key is also why the report still passes: a key written for a later release stopping an older binary
+is the refusal this clause exists to avoid, and a report that failed on one would be that refusal
+by a longer route.
+
 Keeping a name is not the same as acting on one, and the distance between the two is the whole of
 what makes the file safe to read. A block that could switch off credential scrubbing would be a
 block that hands this agent's secrets to every command it runs, decided by whatever last edited a
@@ -1362,6 +1379,10 @@ file in a checkout.
 `verified-by: bravebot_config::lib::a_name_nothing_consults_changes_nothing`
 `verified-by: bravebot_config::settings::a_name_this_crate_does_not_know_is_still_read`
 `verified-by: bravebot_config::settings::the_names_are_reportable_and_the_values_are_not`
+`verified-by: bravebot_config::settings::a_key_beside_the_ones_this_build_reads_is_named_with_the_file_that_set_it`
+`verified-by: bravebot_config::settings::a_key_this_build_reads_is_never_reported_as_unread`
+`verified-by: bravebot_config::settings::a_variable_nothing_consults_is_named_among_the_names_and_not_as_an_unread_key`
+`verified-by: bravebot_cli::running::doctor_names_a_top_level_key_it_does_not_read`
 
 <a id="BACKEND-37"></a>
 ### BACKEND-37: failures carry safe reasons and measured request counts

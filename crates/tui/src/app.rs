@@ -2588,6 +2588,7 @@ fn rewind_point(
         spend: session.spend_by_turn().clone(),
         timing: session.timing_by_turn().clone(),
         cached: session.cached(),
+        cached_prompt_tokens: session.cached_prompt_tokens(),
         trust: trust.clone(),
         programs: programs.clone(),
         transcript_len: began.transcript_len,
@@ -2698,7 +2699,7 @@ fn rewind(
     session.restore_timing(snapshot.timing);
     // With the spend, for the same reason clearing takes it: the figure describes a
     // prompt that is no longer part of what this session sent.
-    session.restore_cache(snapshot.cached);
+    session.restore_cache(snapshot.cached, snapshot.cached_prompt_tokens);
     session.written = 0;
     session.finished = None;
     *programs = snapshot.programs;
@@ -7148,7 +7149,10 @@ fn fold_outcome(
             // How much of what the turn sent the backend recognised, which the two figures above
             // cannot say: a turn costs the same tokens whether they were read or recognised, and
             // about ten times the money.
-            session.served_from_cache(outcome.cached);
+            session.served_from_cache(
+                outcome.cached,
+                outcome.tokens.saturating_sub(outcome.output_tokens),
+            );
 
             // What the turn's last request came to, against what it would be compacted at. Not
             // the same figure as the cost above: that adds every round together, this says how
@@ -17520,7 +17524,7 @@ mod tests {
             conversation.push(Message::assistant("said"));
             session.complete("said", vec![], 10);
             // What [`fold_outcome`] does on the path a finished turn takes.
-            session.served_from_cache(cached);
+            session.served_from_cache(cached, 1_000);
             session.record_turn(start, &conversation);
             save(&mut stored, &session, &conversation, &root);
         }
@@ -17538,6 +17542,14 @@ mod tests {
             Some(Some(figures[0])),
             "a live point does not hold what the turn before its own read, so a rewind in this \
              process has nothing to put back"
+        );
+        assert_eq!(
+            session
+                .rewind_points()
+                .last()
+                .and_then(|point| point.snapshot.cached_prompt_tokens),
+            Some(1_000),
+            "a live point does not hold the prompt total behind its cache figure"
         );
 
         // Read before the live rewind, which rewrites it: the resumed half below wants the record
@@ -17565,6 +17577,11 @@ mod tests {
             Some(figures[0]),
             "a rewind in the process that measured the figures left the rewound turn's on the panel"
         );
+        assert_eq!(
+            session.cached_prompt_tokens(),
+            Some(1_000),
+            "a rewind in the process did not restore the preceding prompt total"
+        );
 
         // A resume brings the points back without the figures, since the record keeps none.
         let conversation = Conversation::restored(record.conversation.clone());
@@ -17581,6 +17598,11 @@ mod tests {
             resumed.cached(),
             None,
             "the resumed session reported a cache before any turn had run in it"
+        );
+        assert_eq!(
+            resumed.cached_prompt_tokens(),
+            None,
+            "the resumed session reported a cache rate denominator"
         );
 
         rewind(
@@ -17833,6 +17855,7 @@ mod tests {
             spend: std::collections::BTreeMap::new(),
             timing: std::collections::BTreeMap::new(),
             cached: None,
+            cached_prompt_tokens: None,
             trust: TrustStore::new("/work"),
             programs: TrustedPrograms::new(),
             transcript_len: turns,

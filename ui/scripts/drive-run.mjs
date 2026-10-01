@@ -36,12 +36,12 @@ async function appears(locator, seconds, what) {
 // it was left that way.
 async function showSessions(page) {
   await page
-    .locator('.sidebar-tab')
+    .locator('.sidebar-tabs [role="option"]')
     .first()
     .waitFor({ state: 'visible', timeout: 15000 })
     .catch(() => undefined)
   await page
-    .locator('.sidebar-tab')
+    .locator('.sidebar-tabs [role="option"]')
     .first()
     .click({ timeout: 3000 })
     .catch(() => undefined)
@@ -68,7 +68,7 @@ await page.waitForTimeout(1500)
 // A session whose record kept no trust map asks again on open. Trusting is what lets the
 // turn get as far as wanting to run something.
 if (await page.locator('.trust').isVisible().catch(() => false)) {
-  await page.locator('.trust-actions .approve').click()
+  await page.locator('[data-test="trust-approve"]').click()
   await page.waitForTimeout(600)
 }
 
@@ -95,8 +95,8 @@ if (await appears(page.locator('.confirm.run'), 120, 'the pipeline is put to the
   // Drafting while a question stands is allowed; *sending* is not, so a prompt cannot get
   // past a decision nobody has made.
   check(
-    await page.locator('.composer .send').isDisabled(),
-    'nothing can be sent while the question stands',
+    await page.getByRole('button', { name: 'Stop', exact: true }).isEnabled(),
+    'the send control is Stop while the question stands',
   )
   const placeholder = await page.locator('.composer textarea').getAttribute('placeholder')
   check(

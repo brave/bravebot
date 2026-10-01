@@ -417,11 +417,10 @@ separate record holding less, which [RUN-19](#RUN-19) governs, and it puts no en
 A tree inside the project is written into the record relative to it and comes back under the
 directory the resumed session works in, as a rewind's paths and the trust map's rules are
 ([SESSION-22](../sessions.md#SESSION-22)); a tree outside the project is written in full, there
-being nothing to write it against. So a checkout that is moved or renamed keeps its entries, and an
-unrelated checkout standing where it used to be inherits none of them. Records are found by the
-directory a session ran in, which a second checkout at that path inherits, so a tree written in full
-would be an entry answering in a tree nobody vouched for: the hole this clause's own key exists to
-close, one checkout out.
+being nothing to write it against. So a checkout that is moved or renamed keeps its entries. The
+record names no checkout, only the path, so a different checkout put at that path inherits them as
+well when the session is resumed there, which is written down under Known costs in
+[sessions.md](../sessions.md).
 
 A record written before an entry held a tree restores as one given at the workspace root, which is
 the only place such an entry could ever have been spent. Nothing else is migrated: reading it any

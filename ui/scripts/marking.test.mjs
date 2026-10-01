@@ -458,8 +458,8 @@ test('a failure card reads the category and never the wording of the detail', ()
   const draw = (props) => renderToStaticMarkup(React.createElement(ErrorCard, props))
 
   // The tag decides, and a detail whose prose points the other way does not move it.
-  assert.match(draw({ category: 'rate-limited', detail: 'unauthorized: bad credential' }), /<strong>The provider is busy<\/strong>/)
-  assert.match(draw({ category: 'cancelled', detail: 'HTTP 429 from the gateway' }), /<strong>Task stopped<\/strong>/)
+  assert.match(draw({ category: 'rate-limited', detail: 'unauthorized: bad credential' }), /<span slot="title">The provider is busy<\/span>/)
+  assert.match(draw({ category: 'cancelled', detail: 'HTTP 429 from the gateway' }), /<span slot="title">Task stopped<\/span>/)
 
   // With no tag there is nothing to read, so the card says the unknown-category thing rather
   // than guessing from the sentence. These four details are the four the sniffing matched.
@@ -470,7 +470,7 @@ test('a failure card reads the category and never the wording of the detail', ()
     'payment required: 402, no credit balance',
   ]) {
     const drawn = draw({ detail })
-    assert.match(drawn, /<strong>The turn could not finish<\/strong>/, drawn)
+    assert.match(drawn, /<span slot="title">The turn could not finish<\/span>/, drawn)
   }
 
   // The detail is still shown, under the fold, which is where prose belongs.
@@ -485,8 +485,8 @@ test('undecided path exceptions are not shown as refusals or grants', () => {
     busy: false,
     onRevoke() {},
   }))
-  assert.match(markup, /vendor<\/code><span>Untrusted/)
-  assert.match(markup, /vendor\/ours<\/code><span>Not decided/)
+  assert.match(markup, /vendor<\/code><span[^>]*>Untrusted/)
+  assert.match(markup, /vendor\/ours<\/code><span[^>]*>Not decided/)
   assert.match(markup, /require write approval/)
   assert.doesNotMatch(markup, /<button/)
 })

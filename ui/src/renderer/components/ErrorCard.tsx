@@ -1,5 +1,6 @@
 import type { CutOff } from '../../shared/protocol'
 import { failureSummary } from '../failure'
+import { Alert, Button, Collapse } from '../nala'
 
 /**
  * A failure, titled from the category the agent sent and never from the words in the detail.
@@ -16,12 +17,20 @@ export function ErrorCard({ detail, onRetry, onModel, category, attempts, status
   detail: string; onRetry?: () => void; onModel?: () => void
 }): React.JSX.Element {
   const classified = failureSummary(category ?? '', cutOff)
-  return <div className="error-card" role="alert">
-    <strong>{classified.title}</strong><p>{classified.description}</p>
-    <div className="error-actions">
-      {onRetry && <button onClick={onRetry}>Draft continuation</button>}
-      {onModel && <button onClick={onModel}>Choose another model</button>}
-    </div>
-    <details><summary>Technical details</summary><pre>{detail}{attempts != null ? `\nRequests attempted: ${attempts}` : ''}{status != null ? `\nHTTP status: ${status}` : ''}</pre></details>
-  </div>
+  const technical = `${detail}${attempts != null ? `\nRequests attempted: ${attempts}` : ''}${status != null ? `\nHTTP status: ${status}` : ''}`
+  return (
+    <Alert type="error" className="error-card" data-test="error-card" hasActions={Boolean(onRetry || onModel)}>
+      <span slot="title">{classified.title}</span>
+      <p>{classified.description}</p>
+      {(onRetry || onModel) && (
+        <div slot="actions" className="error-actions">
+          {onRetry && <Button size="small" kind="outline" onClick={onRetry} data-test="error-retry">Draft continuation</Button>}
+          {onModel && <Button size="small" kind="plain" onClick={onModel} data-test="error-model">Choose another model</Button>}
+        </div>
+      )}
+      <Collapse title="Technical details" isOpen={undefined} data-test="error-details">
+        <pre>{technical}</pre>
+      </Collapse>
+    </Alert>
+  )
 }

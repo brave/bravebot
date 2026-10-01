@@ -31,13 +31,13 @@ const check = (ok, what) => {
 // it was left that way.
 async function showSessions(page) {
   await page
-    .locator('.sidebar-tab')
-    .first()
+    .locator('[data-test="sidebar-tabs"]')
+    .getByText('Sessions', { exact: true })
     .waitFor({ state: 'visible', timeout: 15000 })
     .catch(() => undefined)
   await page
-    .locator('.sidebar-tab')
-    .first()
+    .locator('[data-test="sidebar-tabs"]')
+    .getByText('Sessions', { exact: true })
     .click({ timeout: 3000 })
     .catch(() => undefined)
   await page.waitForTimeout(250)
@@ -149,6 +149,8 @@ const ALLOWED_IDS = [
   // agent asked. It reaches no agent method either — what crosses is a name, checked against the
   // list the main process built.
   'view.theme',
+  // Open the find bar and put the caret in the composer. Both move focus inside the window.
+  'view.find', 'view.focus-composer',
 ]
 const ours = every.filter((i) => i.id && !i.role).map((i) => i.id)
 check(
@@ -164,8 +166,8 @@ check(
 // reason the number became 15. Model discovery adds one read-only method, `models.list`.
 const allowed = (readFileSync('src/main/index.ts', 'utf8').match(/const ALLOWED = new Set\(\[([^\]]*)\]/) ?? [])[1]
 check(
-  allowed !== undefined && !/approve|decide/.test(allowed) && allowed.includes("'models.list'") && allowed.split(',').filter((s) => s.trim()).length === 16,
-  'the main-process allow-list is 16 methods including model discovery, none of which decides anything',
+  allowed !== undefined && !/approve|decide/.test(allowed) && allowed.includes("'models.list'") && allowed.split(',').filter((s) => s.trim()).length === 24,
+  'the main-process allow-list is 24 methods including model discovery, none of which decides anything',
 )
 
 // --- accelerators are declared (they cannot be *dispatched* from here) -----------------
@@ -203,7 +205,7 @@ if (hasSessions) {
   await page.locator('.session').first().click()
   await page.waitForTimeout(1200)
   if (await page.locator('.trust').isVisible().catch(() => false)) {
-    await page.locator('.trust-actions .approve').click()
+    await page.locator('[data-test="trust-approve"]').click()
     await page.waitForTimeout(500)
   }
   let open = await readMenu()
@@ -237,7 +239,8 @@ const widthOf = (selector) =>
 const before = await widthOf('.sessions')
 await click('view.fold-left')
 await page.waitForTimeout(400)
-check((await widthOf('.sessions')) < 1, `View → Hide Session List folds it (was ${Math.round(before)})`)
+const afterFold = await widthOf('.sessions')
+check(afterFold < 1, `View → Hide Session List folds it (was ${Math.round(before)}, now ${Math.round(afterFold)})`)
 check(
   (await page.locator('.fold-toggle.left').getAttribute('aria-expanded')) === 'false',
   'and the transcript header agrees the column is folded',
@@ -292,42 +295,46 @@ writeFileSync(
 const chevron = page.locator('.new-recent')
 check(await chevron.isVisible(), 'the New session button has a recents chevron')
 check(
-  (await chevron.getAttribute('aria-expanded')) === 'false',
+  (await chevron.locator('leo-button').getAttribute('aria-expanded')) === 'false',
   'and it says it is closed before it is opened',
 )
 await chevron.click()
 await page.waitForTimeout(350)
 check(await page.locator('[role="menu"]').isVisible(), 'clicking it opens a menu')
 check(
-  (await chevron.getAttribute('aria-expanded')) === 'true',
+  (await chevron.locator('leo-button').getAttribute('aria-expanded')) === 'true',
   'and the trigger now says it is open',
 )
-const rows = await page.locator('[role="menuitem"]').count()
+// Every session row keeps its own menu's items in the page, so count only this menu's.
+const recentRows = chevron.locator('[role="menuitem"]')
+const rows = await recentRows.count()
 check(rows === 2, `the two valid recents are listed and the bad one was dropped (${rows})`)
 check(
-  (await page.locator('[role="menuitem"]').first().textContent()).includes('alpha-project'),
+  (await recentRows.first().textContent()).includes('alpha-project'),
   'newest first, by folder name',
 )
 check(
-  (await page.locator('.popitem-detail').first().textContent()) === '/tmp/alpha-project',
+  (await page.locator('.recent-path').first().textContent()) === '/tmp/alpha-project',
   'with the full path under it, because two checkouts share a basename',
 )
+// Leo's menu moves focus on the first arrow, rather than when it opens.
+await page.keyboard.press('ArrowDown')
+await page.waitForTimeout(150)
 check(
-  await page.evaluate(() => document.activeElement?.getAttribute('role') === 'menuitem'),
-  'focus moved into the menu',
+  (await page.evaluate(() => document.activeElement?.textContent))?.includes('alpha-project'),
+  'ArrowDown moves focus onto the first row',
 )
 if (rows > 1) {
-  const before = await page.evaluate(() => document.activeElement?.textContent)
   await page.keyboard.press('ArrowDown')
   await page.waitForTimeout(150)
   check(
-    (await page.evaluate(() => document.activeElement?.textContent)) !== before,
-    'ArrowDown moves to another row',
+    (await page.evaluate(() => document.activeElement?.textContent))?.includes('beta-project'),
+    'and another ArrowDown moves to the next row',
   )
   await page.keyboard.press('Home')
   await page.waitForTimeout(150)
   check(
-    (await page.evaluate(() => document.activeElement?.textContent)) === before,
+    (await page.evaluate(() => document.activeElement?.textContent))?.includes('alpha-project'),
     'and Home comes back to the first',
   )
 }
@@ -336,19 +343,17 @@ await page.keyboard.press('Escape')
 await page.waitForTimeout(300)
 check(!(await page.locator('[role="menu"]').isVisible()), 'Escape closes it')
 check(
-  await page.evaluate(() => document.activeElement?.classList.contains('new-recent')),
+  await page.evaluate(() => !!document.activeElement?.closest('.new-recent')),
   'and focus went back to the button that opened it',
 )
 
-// --- recents are the main process's own record ---------------------------------------------
-// Typeahead, which is the part of a menu people only miss when it is absent.
 await chevron.click()
 await page.waitForTimeout(300)
 await page.keyboard.press('b')
-await page.waitForTimeout(200)
+await page.waitForTimeout(150)
 check(
-  (await page.evaluate(() => document.activeElement?.textContent))?.includes('beta'),
-  'typing a letter jumps to the row that starts with it',
+  (await page.evaluate(() => document.activeElement?.textContent))?.includes('beta-project'),
+  'typing a letter jumps to the matching recent project',
 )
 await page.keyboard.press('Escape')
 await page.waitForTimeout(250)

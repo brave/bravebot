@@ -1,8 +1,8 @@
 // The right column: what the session has touched. Five panels — the plan, files read, writes
-// and how far each got, anything confined, and the folder itself — each turned on and off
-// from the row of icons at the top.
+// and how far each got, anything confined, and the folder itself. The first four sit on the
+// Overview tab and the folder on the Files tab.
 //
-// Filmed by walking the row rather than by opening one panel, because the argument the column
+// Filmed by walking the panels rather than by opening one, because the argument the column
 // makes is cumulative: it is the whole of what the agent did, in one place, beside the
 // conversation that caused it.
 import { findSession, openSession, openNewest } from '../pick.mjs'
@@ -37,31 +37,22 @@ export default {
     await s.unspot()
     await s.shot('05-context')
 
-    // Everything off first, so each panel arrives on an empty column and is the only thing
-    // moving when its turn comes.
-    const picks = page.locator('.panel-pick')
-    const count = await picks.count()
-    for (let i = 0; i < count; i++) {
-      const pick = picks.nth(i)
-      if ((await pick.getAttribute('aria-pressed')) === 'true') {
-        await pick.click()
-        await page.waitForTimeout(160 * s.speed)
-      }
-    }
-    await s.beat(0.8)
-
-    for (let i = 0; i < count; i++) {
-      const pick = picks.nth(i)
-      const id = (await pick.getAttribute('aria-controls')) ?? ''
-      const key = Object.keys(LABELS).find((k) => id.includes(k)) ?? id
-      const [title, line] = LABELS[key] ?? [key, '']
-      await s.click(pick)
+    // Each Overview panel in turn, then the Files tab for the folder itself.
+    const ids = ['plan', 'read', 'writes', 'confined']
+    for (const id of ids) {
+      const [title, line] = LABELS[id]
+      const panel = page.locator(`#panel-${id}`)
+      if (!(await panel.isVisible().catch(() => false))) continue
+      await s.glideTo(panel)
       await s.say(title, line, 1.8)
     }
+    await s.click(page.getByRole('tab', { name: 'Files', exact: true }))
+    await s.say(LABELS.files[0], LABELS.files[1], 1.8)
+    await s.click(page.getByRole('tab', { name: 'Overview', exact: true }))
 
     await s.shot('05-panels')
     await s.say('Context', 'A panel folds from its own heading, too.')
-    const head = page.locator('.panel-head').first()
+    const head = page.locator('.panel-collapse summary').first()
     if (await head.count()) {
       await s.click(head)
       await s.beat(1)

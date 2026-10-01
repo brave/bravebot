@@ -98,8 +98,9 @@ try {
   assert.deepEqual(await first.locator('.confirm-actions button').allInnerTexts(), ['Don’t fetch', 'Fetch once'])
   assert.equal(await first.locator('a').count(), 0, 'the address is text, and no link')
   assert.deepEqual(reached, [], 'nothing went out before anybody answered')
-  assert.ok(await page.locator('.composer .send').isDisabled(), 'nothing can be sent while the question stands')
-  assert.match(await page.locator('.pending-jump').innerText(), /Approval needed · Answer the fetch/, 'and the composer says which question is waiting')
+  assert.equal(await page.getByRole('button', { name: 'Send', exact: true }).count(), 0, 'nothing can be sent while the question stands: the round button is Stop')
+  assert.match(await page.locator('.pending-jump').innerText(), /Approval needed/)
+  assert.equal(await page.locator('.pending-jump').getAttribute('data-tooltip'), 'Answer the fetch', 'and the composer says which question is waiting')
   await page.screenshot({ path: join(output, 'fetch-asked.png') })
 
   await first.getByRole('button', { name: 'Fetch once', exact: true }).click()

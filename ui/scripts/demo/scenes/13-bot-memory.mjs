@@ -35,7 +35,7 @@ export default {
   async run(s) {
     const { page } = s
 
-    const tab = page.locator('.sidebar-tab').nth(1)
+    const tab = page.locator('.sidebar-tabs [role="option"]').nth(1)
     if (!(await tab.count())) s.skip('this build has no bots tab')
     await s.click(tab)
     await page.waitForTimeout(600)
@@ -51,7 +51,7 @@ export default {
 
     if (await page.locator('.trust').isVisible().catch(() => false)) {
       await s.say('Trust the directory', 'The same question any new session asks, once per checkout.', 2.2)
-      await s.click('.trust-actions .approve')
+      await s.click('[data-test="trust-approve"]')
       await page.waitForTimeout(800)
     }
 
@@ -156,9 +156,9 @@ export default {
     // --- resumed -----------------------------------------------------------------------------
 
     await s.say('Leave, and come back', 'A bot is one session, resumed — not a new one each time.', 2.6)
-    await s.click(page.locator('.sidebar-tab').first())
+    await s.click(page.locator('.sidebar-tabs [role="option"]').first())
     await page.waitForTimeout(600)
-    await s.click(page.locator('.sidebar-tab').nth(1))
+    await s.click(page.locator('.sidebar-tabs [role="option"]').nth(1))
     await page.waitForTimeout(500)
     await s.click(row.locator('.bot-open-button'))
     await page.waitForTimeout(2000)

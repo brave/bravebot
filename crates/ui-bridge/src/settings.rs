@@ -1,6 +1,6 @@
 //! Configuration inspection uses the linked agent, never a separately installed CLI.
 use crate::protocol::{ErrorCode, Failure};
-use bravebot_config::{Config, Managed, NotADocument, Settings};
+use bravebot_config::{Config, Managed, Narrowing, NotADocument, Settings};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -47,6 +47,59 @@ pub fn validate(path: &Path) -> Result<(), Failure> {
     })
 }
 
+/// The keys a file above the person's own home directory named and the agent did not obey, with
+/// the file each came from.
+fn ignored(settings: &Settings) -> Vec<Value> {
+    let named = |key: &'static str, paths: Vec<&Path>| -> Vec<Value> {
+        paths
+            .into_iter()
+            .map(|path| json!({ "name": key, "path": path }))
+            .collect()
+    };
+    let mut ignored = named("model", settings.model_ignored().collect());
+    ignored.extend(named("provider", settings.providers_ignored().collect()));
+    ignored
+}
+
+/// What the settings in force say about the two keys that only refuse and the three run limits.
+///
+/// A limit nobody named is `null`: the built-in figure belongs to the crate that applies it, and
+/// answering with one here would be a second copy. A refusal in force is `true` and names the file
+/// that asked for it, or `managed` where the administrator's file did.
+fn limits(settings: &Settings, managed: &Managed) -> Value {
+    let narrowing = settings.narrowing().strictest(managed.narrowing());
+    let refusal = |key: &str, asked: Option<bool>| {
+        json!({
+            "value": asked,
+            "path": settings.narrowed_by(key),
+            "managed": managed_named(managed, key),
+        })
+    };
+    let deadlines = settings.run_deadlines();
+    json!({
+        "readsStayInWorkspace": refusal(Narrowing::READS_STAY_IN_WORKSPACE, narrowing.reads_stay_in_workspace),
+        "bypassUnreachable": refusal(Narrowing::BYPASS_UNREACHABLE, narrowing.bypass_unreachable),
+        "unreadable": settings
+            .narrowing_unreadable()
+            .map(|(path, key)| json!({ "name": key, "path": path }))
+            .collect::<Vec<_>>(),
+        "run": {
+            "defaultSeconds": deadlines.default.map(|d| d.as_secs()),
+            "maxSeconds": deadlines.ceiling.map(|d| d.as_secs()),
+            "maxOutput": settings.run_output_cap(),
+        },
+    })
+}
+
+fn managed_named(managed: &Managed, key: &str) -> bool {
+    let narrowing = managed.narrowing();
+    match key {
+        Narrowing::READS_STAY_IN_WORKSPACE => narrowing.reads_stay_in_workspace == Some(true),
+        Narrowing::BYPASS_UNREACHABLE => narrowing.bypass_unreachable == Some(true),
+        _ => false,
+    }
+}
+
 pub fn report(project: Option<&Path>, selected: Option<&Path>) -> Value {
     let settings = layers(project, selected);
     let managed = Managed::load();
@@ -72,6 +125,8 @@ pub fn report(project: Option<&Path>, selected: Option<&Path>) -> Value {
         "brave": configured.as_ref().is_ok_and(|c| c.serves_aichat()), "providers": providers,
         "selected": selected, "layers": settings.layers().collect::<Vec<_>>(),
         "overrides": settings.overridden().map(|(name, path)| json!({"name": name, "path": path})).collect::<Vec<_>>(),
+        "ignored": ignored(&settings),
+        "limits": limits(&settings, &managed),
         "managed": { "path": managed.path(), "keys": managed.pinned().collect::<Vec<_>>() },
         "network": { "roots": transport.roots().paths(),
             "problem": (!transport.trust_problems().is_empty()).then(|| transport.trust_problems().iter().map(ToString::to_string).collect::<Vec<_>>().join("\n")),
@@ -112,6 +167,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_project_files_model_and_provider_are_reported_as_ignored() {
+        let (directory, settings) = vetting_layers(
+            Some(r#"{"model":"home/model"}"#),
+            Some(r#"{"model":"project/model","provider":{}}"#),
+        );
+        let project = directory.path().join("project/.bravebot/settings.json");
+        assert_eq!(
+            ignored(&settings),
+            vec![
+                json!({ "name": "model", "path": project }),
+                json!({ "name": "provider", "path": project }),
+            ]
+        );
+        assert_eq!(
+            settings.model(),
+            Some("home/model"),
+            "the home file's model was not the one obeyed"
+        );
+
+        let (_, settings) = vetting_layers(Some(r#"{"model":"home/model"}"#), None);
+        assert!(
+            ignored(&settings).is_empty(),
+            "the person's own file was reported"
+        );
+    }
+
     fn vetting_layers(
         home_text: Option<&str>,
         project_text: Option<&str>,
@@ -136,6 +218,66 @@ mod tests {
         }
         let settings = Settings::layered(Some(home), Some(&project), None);
         (directory, settings)
+    }
+
+    #[test]
+    fn the_report_names_each_limit_and_the_file_that_asked_for_a_refusal() {
+        let (directory, settings) = vetting_layers(
+            Some(r#"{"run": {"defaultSeconds": 90, "maxOutput": 4096}}"#),
+            Some(
+                r#"{"permissions": {"readsStayInWorkspace": true, "bypassUnreachable": "yes"},
+                    "run": {"maxSeconds": 120}}"#,
+            ),
+        );
+        let project = directory.path().join("project/.bravebot/settings.json");
+        let report = limits(&settings, &Managed::default());
+        assert_eq!(
+            report["readsStayInWorkspace"],
+            json!({ "value": true, "path": project, "managed": false })
+        );
+        assert_eq!(
+            report["bypassUnreachable"],
+            json!({ "value": null, "path": null, "managed": false }),
+            "a value that is not a boolean is absence, not a refusal in force"
+        );
+        assert_eq!(
+            report["unreadable"],
+            json!([{ "name": "bypassUnreachable", "path": project }])
+        );
+        assert_eq!(
+            report["run"],
+            json!({ "defaultSeconds": 90, "maxSeconds": 120, "maxOutput": 4096 })
+        );
+
+        let (_, none) = vetting_layers(None, None);
+        let report = limits(&none, &Managed::default());
+        assert_eq!(
+            report["run"],
+            json!({ "defaultSeconds": null, "maxSeconds": null, "maxOutput": null }),
+            "an unnamed limit was reported as a figure"
+        );
+        assert_eq!(report["readsStayInWorkspace"]["value"], json!(null));
+    }
+
+    #[test]
+    fn a_managed_false_does_not_take_credit_for_a_refusal_another_file_asked_for() {
+        let (directory, settings) = vetting_layers(
+            None,
+            Some(r#"{"permissions": {"readsStayInWorkspace": true}}"#),
+        );
+        let managed_path = directory.path().join("home/managed.json");
+        std::fs::write(
+            &managed_path,
+            r#"{"permissions": {"readsStayInWorkspace": false}}"#,
+        )
+        .unwrap();
+        let managed = Managed::at(&managed_path);
+        let project = directory.path().join("project/.bravebot/settings.json");
+        assert_eq!(
+            limits(&settings, &managed)["readsStayInWorkspace"],
+            json!({ "value": true, "path": project, "managed": false }),
+            "the administrator was named for a refusal their file did not ask for"
+        );
     }
 
     #[test]

@@ -1,9 +1,11 @@
-import { SidebarTools } from './SidebarTools'
+import { SidebarRow, SidebarSearch } from './SidebarTools'
+import { IconButton } from './IconButton'
 import { BotMemory } from './BotMemory'
 import { Modal } from './Modal'
 import { botHistory } from '../../shared/bot-history'
 import { useExperience } from '../experience'
 import type { SessionSummary } from '../../shared/protocol'
+import { Alert, Button, Icon, Input, TextArea } from '../nala'
 /**
  * The other list in the left column: the bots somebody has defined.
  *
@@ -22,7 +24,7 @@ import type { SessionSummary } from '../../shared/protocol'
  * something that takes one sentence to say.
  */
 
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { activeBots, retiredBots, type Bot } from '../../shared/bots'
 import { newAvatarSeed } from '../../shared/avatar'
 import { projectLabel } from '../../shared/recents'
@@ -64,6 +66,7 @@ export function Bots({
   const [overviewSlug, setOverviewSlug] = useState<string | null>(null)
   const overview = bots.find(bot => bot.slug === overviewSlug) ?? null
   const [historyQuery, setHistoryQuery] = useState('')
+  const historySearch = useRef<HTMLElement>(null)
   const preferences = useExperience()
   const history = overview ? botHistory(overview, sessions, preferences) : []
   const filteredHistory = history.filter(row => `${row.session?.title ?? ''} ${row.id}`.toLowerCase().includes(historyQuery.toLowerCase()))
@@ -82,20 +85,16 @@ export function Bots({
 
   return (
     <>
-      <header className="sessions-head">
-        {/* The same control the session list's own opens with, so the two tabs begin the same
-            way. No split beside it: a bot's folder is asked for once, in the form. */}
-        <SidebarTools query={query} onQuery={setQuery} label="Search bots" action={<button className="new" onClick={() => setEditing('new')}>
-          <span className="plus" aria-hidden="true">
-            +
-          </span>
-          New bot
-        </button>} />
+      <header className="sidebar-head">
+        {/* The same row the session list opens with, so the two tabs begin the same way. No
+            split beside it: a bot's folder is asked for once, in the form. */}
+        <SidebarRow icon="plus-add" label="New bot" className="new" onClick={() => setEditing('new')} data-test="new-bot" />
+        <SidebarSearch query={query} onQuery={setQuery} label="Search bots" placeholder="Search bots" />
       </header>
 
       <div className="session-list">
         {inUse.length === 0 && editing !== 'new' && (
-          <p className="empty">
+          <p className="sidebar-empty">
             {query.trim() ? <>No bots match this search.</> : away.length === 0 ? (
               <>
                 No bots yet. A bot is a name, a purpose and a memory, working in one checkout — and
@@ -112,32 +111,44 @@ export function Bots({
         {inUse.map((bot) => <BotRow key={bot.slug} bot={bot} open={bot.slug === openSlug}
           doing={bot.slug === openSlug ? openDoing : bot.session === null ? 'waiting' : 'idle'}
           onOpen={() => setOverview(bot)} onEdit={() => setEditing(bot.slug)} />)}
-        {editing && <Modal title={editing === 'new' ? 'Create bot' : 'Edit bot'} onClose={() => setEditing(null)} className="bot-editor">
-          <h2>{editing === 'new' ? 'Create a bot' : 'Edit bot'}</h2>
+        {editing && <Modal title={editing === 'new' ? 'Create bot' : 'Edit bot'} size="lg" onClose={() => setEditing(null)} className="bot-editor"
+          subtitle={editing === 'new' ? 'A name, a purpose and a memory, working in one checkout.' : undefined}>
           <BotForm bot={bots.find((bot) => bot.slug === editing)} onCancel={() => setEditing(null)}
             onSave={async (next) => { const saved = await onSave(next); if (saved) setEditing(null); return saved }}
             onArchive={editing === 'new' ? undefined : () => { onRetire(editing, true); setEditing(null) }} />
         </Modal>}
-        {overview && <Modal title={overview.name} onClose={() => setOverview(null)} className="bot-overview">
-          <div className="bot-overview-title"><BotAvatar seed={overview.avatar} size={56} doing="open" /><div><h2>{overview.name}</h2><p>{overview.directory}</p></div></div>
-          <h3>Purpose</h3><p>{overview.purpose}</p>
-          <p className="bot-note">This bot carries its purpose and saved memory into each conversation. Conversation history belongs to individual tasks.</p>
-          <div className="bot-overview-actions">
-            <button className="primary" onClick={() => { onNewConversation(overview); setOverview(null) }}>New conversation</button>
-            <button onClick={() => { setEditing(overview.slug); setOverview(null) }}>Edit bot and memory</button>
+        {overview && <Modal title={overview.name} size="md" onClose={() => setOverview(null)} className="bot-overview"
+          actions={<>
+            <Button kind="plain-faint" size="small" className="modal-leading bot-overview-done" onClick={() => setOverview(null)}>Done</Button>
+            <Button kind="outline" size="small" onClick={() => { setEditing(overview.slug); setOverview(null) }}>Edit bot and memory</Button>
+            <Button kind="filled" size="small" onClick={() => { onNewConversation(overview); setOverview(null) }}>New conversation</Button>
+          </>}>
+          <div className="bot-overview-card">
+            <BotAvatar seed={overview.avatar} size={56} doing="open" />
+            <div className="bot-overview-where">
+              <strong>{projectLabel(overview.directory)}</strong>
+              <code data-tooltip={overview.directory}>{overview.directory}</code>
+            </div>
           </div>
-          <h3>Conversation history ({history.length})</h3>
+          <h3>Purpose</h3>
+          <p className="bot-purpose">{overview.purpose}</p>
+          <p className="bot-note">This bot carries its purpose and saved memory into each conversation. Conversation history belongs to individual tasks.</p>
+          <div className="bot-history-head">
+            <h3>Conversation history <span className="num">· {history.length}</span></h3>
+            {history.length > 0 && <Input ref={historySearch} size="small" className="bot-history-search" type="search" aria-label="Search bot conversations" placeholder="Search conversations…" value={historyQuery}
+              onInput={({ value }) => setHistoryQuery(value)} onChange={({ value }) => setHistoryQuery(value)}>
+              <Icon name="search" slot="left-icon" />
+            </Input>}
+          </div>
           <p className="bot-note">All conversations for this bot, including archived conversations and drafts. Starting a new conversation keeps the earlier ones here.</p>
-          {history.length > 0 && <input className="bot-history-search" type="search" aria-label="Search bot conversations" placeholder="Search conversations…" value={historyQuery} onChange={event => setHistoryQuery(event.target.value)} />}
           <div className="bot-conversations" aria-label="Bot conversation history">
             {filteredHistory.map(({ id, session, archived }) => session ?
-              <button key={id} onClick={() => { onConversation(overview, session); setOverview(null) }}>
+              <button type="button" key={id} className="bot-history-row" onClick={() => { onConversation(overview, session); setOverview(null) }}>
                 <strong>{session.title}</strong><span>{id.startsWith('draft:') ? 'Draft' : new Date(session.updated * 1000).toLocaleDateString()}{archived ? ' · Archived' : ''}</span>
-              </button> : <div className="bot-history-unavailable" key={id}><strong>Unavailable conversation</strong><code>{id}</code><span>The saved record is not currently available in the session list.</span></div>)}
-            {history.length === 0 && <p>No conversations yet.</p>}
-            {history.length > 0 && filteredHistory.length === 0 && <p>No conversations match “{historyQuery}”.</p>}
+              </button> : <Alert type="info" size="small" className="bot-history-unavailable" key={id}><span slot="title">Unavailable conversation</span><code>{id}</code><span>The saved record is not currently available in the session list.</span></Alert>)}
+            {history.length === 0 && <p className="bot-history-empty"><Icon name="message-bubble" />No conversations yet.</p>}
+            {history.length > 0 && filteredHistory.length === 0 && <p className="bot-history-empty"><Icon name="search" />No conversations match “{historyQuery}”.</p>}
           </div>
-          <button onClick={() => setOverview(null)}>Done</button>
         </Modal>}
       </div>
 
@@ -154,6 +165,7 @@ export function Bots({
               closes looks the same in both tabs. */}
           <div className="session-group-head">
             <button
+              type="button"
               className="session-group-fold"
               aria-expanded={showing}
               // Closing the archive puts down whatever was picked up in it. A row left armed
@@ -163,11 +175,9 @@ export function Bots({
                 setShowing(!showing)
               }}
             >
-              <span className={`chevron ${showing ? 'open' : ''}`} aria-hidden="true">
-                ›
-              </span>
+              <Icon className={`chevron ${showing ? 'open' : ''}`} name="carat-right" />
               <span className="session-group-name">Archived</span>
-              <span className="count">{away.length}</span>
+              <span className="count num">{away.length}</span>
             </button>
           </div>
           {/* The rows scroll on their own once there are enough of them. A fold pinned to the
@@ -221,26 +231,17 @@ function BotRow({
   const where = projectLabel(bot.directory)
   return (
     <div className={`bot${open ? ' bot-open' : ''}`}>
-      <button className="bot-open-button" onClick={() => onOpen(bot)}>
-        <BotAvatar seed={bot.avatar} doing={doing} />
+      <button type="button" className="bot-open-button" aria-current={open ? 'true' : undefined} onClick={() => onOpen(bot)}>
+        <BotAvatar seed={bot.avatar} doing={doing} size={28} />
         <span className="bot-said">
           <span className="bot-name">{bot.name}</span>
-          {/* The whole path in the tooltip, because the column clips it — the one case the
-              tooltip rule here allows, which is text the layout took away. */}
-          <span className="bot-where" title={bot.directory}>
+          <span className="bot-where">
             {where}
             {bot.session === null && ' · not spoken to yet'}
           </span>
         </span>
       </button>
-      <button
-        className="bot-edit"
-        aria-label={`Edit ${bot.name}`}
-        title={`Edit ${bot.name}`}
-        onClick={onEdit}
-      >
-        <span aria-hidden="true">⋯</span>
-      </button>
+      <IconButton icon="edit-pencil" size="tiny" className="bot-edit" label={`Edit ${bot.name}`} tooltip={false} onClick={onEdit} />
     </div>
   )
 }
@@ -298,43 +299,46 @@ function ArchivedRow({
         ) : (
           // The whole path in the tooltip, for the reason the row above gives: the column clips
           // it, and this is text the layout took away.
-          <span className="bot-where" title={bot.directory}>
+          <span className="bot-where" data-tooltip={bot.directory}>
             {where}
           </span>
         )}
       </span>
       {asking ? (
         <>
-          <button type="button" className="bot-keep" onClick={onCancel}>
+          <Button kind="plain-faint" size="tiny" className="bot-keep" onClick={onCancel}>
             Keep
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            kind="outline"
+            size="tiny"
             className="bot-delete bot-delete-armed"
-            title={`Delete ${bot.name} and its local memory history for good. Project files and conversations are kept.`}
+            data-tooltip={`Delete ${bot.name} and its local memory history for good. Project files and conversations are kept.`}
             onClick={onDelete}
           >
             Delete
-          </button>
+          </Button>
         </>
       ) : (
         <>
-          <button
-            type="button"
+          <Button
+            kind="outline"
+            size="tiny"
             className="bot-restore"
-            title={`Bring ${bot.name} back, with its session, its memory and its face.`}
+            data-tooltip={`Bring ${bot.name} back, with its session, its memory and its face.`}
             onClick={onRestore}
           >
             Restore
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            kind="plain-faint"
+            size="tiny"
             className="bot-delete"
-            title={`Delete ${bot.name} for good. Local memory history is deleted. Project files and conversations are kept.`}
+            data-tooltip={`Delete ${bot.name} for good. Local memory history is deleted. Project files and conversations are kept.`}
             onClick={onAsk}
           >
             Delete
-          </button>
+          </Button>
         </>
       )}
     </div>
@@ -376,6 +380,42 @@ function BotForm({
 
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const formRef = useRef<HTMLFormElement>(null)
+  // The host does not forward `type` or `aria-label` into the shadow control.
+  useEffect(() => {
+    // Leo rebuilds a button's shadow tree when its slot changes, which drops the `type` set
+    // during the commit. A Leo button can be a submit button only by asking the form to submit
+    // (below), so this only keeps the others from behaving like one.
+    // Apply again after that.
+    let frame = 0
+    let timer = 0
+    const apply = () => {
+      formRef.current?.querySelectorAll('leo-button').forEach((host) => {
+        const button = host.shadowRoot?.querySelector('button')
+        if (!button) return
+        button.type = host.classList.contains('bot-save') ? 'submit' : 'button'
+      })
+    }
+    apply()
+    frame = requestAnimationFrame(apply)
+    timer = window.setTimeout(apply, 0)
+    return () => {
+      cancelAnimationFrame(frame)
+      window.clearTimeout(timer)
+    }
+  }, [saving])
+  const onEscape = ({ innerEvent }: { innerEvent: Event }) => {
+    if ((innerEvent as KeyboardEvent).key === 'Escape') onCancel()
+  }
+  // The save control lives in Leo's shadow tree, so the browser does not treat
+  // it as this form's submit button. Enter in the name field and the button's
+  // own click ask the form to submit.
+  const submitForm = () => formRef.current?.requestSubmit()
+  const onNameKey = ({ innerEvent }: { innerEvent: Event }) => {
+    const key = (innerEvent as KeyboardEvent).key
+    if (key === 'Escape') onCancel()
+    if (key === 'Enter') { innerEvent.preventDefault(); submitForm() }
+  }
   const save = async (value: Parameters<typeof onSave>[0]) => {
     if (saving) return
     setSaving(true); setSaveError('')
@@ -389,55 +429,54 @@ function BotForm({
 
   return (
     <form
+      ref={formRef}
       className="bot-form"
       onSubmit={(event) => {
         event.preventDefault()
+        const submitter = (event.nativeEvent as SubmitEvent).submitter
+        if (submitter) {
+          const root = submitter.getRootNode()
+          const host = root instanceof ShadowRoot ? root.host : submitter
+          if (!host.classList.contains('bot-save')) return
+        }
         if (ready) {
           void save({ slug: bot?.slug, avatar: bot ? undefined : avatar, model, name: name.trim(), purpose: purpose.trim(), directory })
         }
       }}
     >
-      <div className={bot ? undefined : "bot-form-identity"}>
-        {!bot && (
-          <div className="bot-form-avatar">
-            <BotAvatar seed={avatar} size={76} doing="waiting" />
-            <button
-              type="button"
-              className="bot-avatar-refresh"
-              aria-label="Refresh avatar"
-              title="Try a new avatar appearance"
-              onClick={() => setAvatar(newAvatarSeed(crypto.randomUUID()))}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M20 7v5h-5M4 17v-5h5" />
-                <path d="M6.1 7a7 7 0 0 1 11.6-1L20 12M4 12l2.3 6A7 7 0 0 0 17.9 17" />
-              </svg>
-            </button>
-          </div>
-        )}
+      <div className="bot-form-identity">
+        <div className="bot-form-avatar">
+          <BotAvatar seed={bot?.avatar ?? avatar} size={76} doing="waiting" />
+          {!bot && (
+            <IconButton icon="refresh" label="Refresh avatar" tooltip="Try a new avatar appearance" kind="outline" size="tiny"
+              className="bot-avatar-refresh" onClick={() => setAvatar(newAvatarSeed(crypto.randomUUID()))} />
+          )}
+        </div>
 
-        <label className="bot-field">
-          <span>Name</span>
-          <input
+        <div className="bot-field">
+          <Input
+            autofocus
             value={name}
-            autoFocus
             placeholder="Web dev bot"
-            onChange={(event) => setName(event.target.value)}
-            onKeyDown={(event) => event.key === 'Escape' && onCancel()}
-          />
-        </label>
+            onInput={({ value }) => setName(value)}
+            onChange={({ value }) => setName(value)}
+            onKeyDown={onNameKey}
+          >Name</Input>
+        </div>
       </div>
 
-      <label className="bot-field">
-        <span>Purpose</span>
-        <textarea
+      <div className="bot-field">
+        <TextArea
           value={purpose}
-          rows={4}
+          minRows={4}
+          maxRows={12}
+          resizeable
           placeholder="Build responsive pages, fix UI bugs, and improve accessibility. Follow the project’s existing styles and test your changes."
-          onChange={(event) => setPurpose(event.target.value)}
-          onKeyDown={(event) => event.key === 'Escape' && onCancel()}
-        />
-      </label>
+          onInput={({ value }) => setPurpose(value)}
+          onChange={({ value }) => setPurpose(value)}
+          onKeyDown={onEscape}
+        >Purpose</TextArea>
+      </div>
 
       <div className="bot-field bot-form-model">
         <span>Model</span>
@@ -447,13 +486,14 @@ function BotForm({
       <div className="bot-field">
         <span>Project folder</span>
         {bot ? (
-          <div><p className="bot-fixed" title={bot.directory}>{bot.directory}</p>
+          <div className="bot-fixed-group"><p className="bot-fixed" data-tooltip={bot.directory}>{bot.directory}</p>
           <p className="bot-note">The project stays fixed to keep this bot’s memory and conversations together.</p>
-          <button type="button" onClick={() => { void window.bravebot.chooseDirectory().then((folder) => { if (folder) void save({ name: `${name} copy`, purpose, model, directory: folder }) }) }}>Duplicate into another project</button></div>
+          <Button kind="outline" size="small" onClick={() => { void window.bravebot.chooseDirectory().then((folder) => { if (folder) void save({ name: `${name} copy`, purpose, model, directory: folder }) }) }}>Duplicate into another project</Button></div>
         ) : (
-          <button type="button" className="bot-choose" onClick={() => void choose()}>
-            {directory || 'Choose a folder…'}
-          </button>
+          <Button kind="outline" size="medium" className="bot-choose" data-tooltip={directory || undefined} onClick={() => void choose()}>
+            <Icon name="folder-open" slot="icon-before" />
+            <span className="bot-choose-label">{directory || 'Choose a folder…'}</span>
+          </Button>
         )}
       </div>
 
@@ -468,11 +508,12 @@ function BotForm({
 
       {bot && <BotMemory slug={bot.slug} />}
 
-      {saveError && <p role="alert">{saveError}</p>}
+      {saveError && <Alert type="error" size="small" role="alert">{saveError}</Alert>}
       <div className="bot-actions">
         {onArchive && (
-          <button
-            type="button"
+          <Button
+            kind="plain-faint"
+            size="medium"
             className="bot-archive-button"
             // The one thing worth saying about a bot leaving the list is what it does *not* do,
             // since a row disappearing looks like everything about it disappearing. It used to
@@ -480,19 +521,19 @@ function BotForm({
             // with it the slug naming the memory file and the seed the face was drawn from, so
             // "its memory is left where it is" was true and no comfort at all. Now the sentence
             // is easy, because the thing it describes is.
-            title="Put this bot away. It keeps its session, its memory and its face, and can be brought back from the archive."
+            data-tooltip="Put this bot away. It keeps its session, its memory and its face, and can be brought back from the archive."
             onClick={onArchive}
           >
             Archive
-          </button>
+          </Button>
         )}
         <span className="bot-spacer" />
-        <button type="button" onClick={onCancel}>
+        <Button kind="plain-faint" size="medium" onClick={onCancel}>
           Cancel
-        </button>
-        <button type="submit" className="bot-save" disabled={!ready || saving}>
+        </Button>
+        <Button kind="filled" size="medium" type="submit" className="bot-save" isDisabled={!ready || saving} onClick={submitForm}>
           {saving ? 'Saving…' : bot ? 'Save' : 'Create'}
-        </button>
+        </Button>
       </div>
     </form>
   )

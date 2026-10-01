@@ -25,6 +25,7 @@ use bravebot_core::value::Labelled;
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -298,6 +299,97 @@ pub struct Workspace {
     /// the path they came from and never inspected.
     backups: Arc<Mutex<Vec<Backup>>>,
     rewind: Arc<Mutex<CoverageTracker>>,
+    /// The checkout this workspace is the root of, where it is a delegate's (CHECKOUT-7).
+    checkout: Option<Arc<CheckoutInfo>>,
+    /// The roots of the checkouts the session made whose rules a history answer meets
+    /// (CHECKOUT-12): those still there, and those removed with a rule that distrusts a path.
+    ///
+    /// Shared by every clone, since a delegate's workspace is a clone and its checkout is the
+    /// session's.
+    checkouts: Arc<Mutex<Vec<PathBuf>>>,
+    /// The number the next checkout takes, shared for the reason `checkouts` is.
+    checkout_numbers: Arc<AtomicU64>,
+}
+
+/// A checkout a delegate works in, as the driver recorded it (CHECKOUT-5, CHECKOUT-7).
+#[derive(Debug)]
+pub struct CheckoutInfo {
+    id: String,
+    path: PathBuf,
+    key: String,
+    commit: String,
+    left_out: Vec<String>,
+    git_dir: PathBuf,
+    /// The workspace the delegate's parent had, which is where sources are read from
+    /// (CHECKOUT-9).
+    source: Workspace,
+    /// Whether the driver recorded a file effect in the checkout or a program started in it
+    /// (CHECKOUT-15).
+    worked_in: AtomicBool,
+    listed: Arc<Mutex<Vec<PathBuf>>>,
+}
+
+/// What became of a checkout when its delegate ended (CHECKOUT-15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Retired {
+    /// Something was done in it, so it stays.
+    Kept,
+    /// Nothing was, so it and its entry are gone.
+    Removed,
+    /// Nothing was done in it and it could not be removed.
+    Stuck,
+}
+
+impl CheckoutInfo {
+    /// The number the session gave it, `c1` and on.
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The commit it holds, in full.
+    pub fn commit(&self) -> &str {
+        &self.commit
+    }
+
+    /// The repository-relative paths a deny rule covered, which were not written.
+    pub fn left_out(&self) -> &[String] {
+        &self.left_out
+    }
+
+    /// Record that a file effect or a program happened in the checkout.
+    pub fn mark_worked_in(&self) {
+        self.worked_in.store(true, Ordering::SeqCst);
+    }
+
+    pub fn worked_in(&self) -> bool {
+        self.worked_in.load(Ordering::SeqCst)
+    }
+
+    /// End the checkout: remove it unless the record shows something was done in it. Its rules go
+    /// with it, except those that distrust a path, which stay for as long as the session lasts
+    /// (CHECKOUT-8, CHECKOUT-12).
+    pub fn retire(&self, authority: &bravebot_core::file_authority::FileAuthority) -> Retired {
+        if self.worked_in() {
+            return Retired::Kept;
+        }
+        if crate::git::checkout::remove(&self.git_dir, &self.path, &self.id).is_err() {
+            return Retired::Stuck;
+        }
+        if !authority.withdraw_beneath(&self.key)
+            && let Ok(mut listed) = self.listed.lock()
+        {
+            listed.retain(|root| root != &self.path);
+        }
+        Retired::Removed
+    }
 }
 
 #[cfg(test)]
@@ -491,6 +583,9 @@ impl Workspace {
             reads_stay_inside: false,
             backups: Arc::new(Mutex::new(Vec::new())),
             rewind: Arc::default(),
+            checkout: None,
+            checkouts: Arc::default(),
+            checkout_numbers: Arc::new(AtomicU64::new(1)),
         })
     }
 
@@ -2633,11 +2728,28 @@ impl Workspace {
             };
             let withheld = |inside: &str| policy.read_is_denied(&self.trust_key(&spelled(inside)));
             let answer = opened.answer(&request, &withheld).map_err(declined)?;
-            let shown: Vec<String> = answer
+            let mut shown: Vec<String> = answer
                 .shown
                 .iter()
                 .map(|inside| self.trust_key(&spelled(inside)))
                 .collect();
+            let checkouts: Vec<String> = self.checkouts.lock().map_or_else(
+                |_| Vec::new(),
+                |listed| {
+                    listed
+                        .iter()
+                        .map(|root| self.trust_key(&root.to_string_lossy()))
+                        .collect()
+                },
+            );
+            for root in &checkouts {
+                shown.extend(
+                    answer
+                        .shown
+                        .iter()
+                        .map(|inside| format!("{root}/{}", inside.trim_start_matches('/'))),
+                );
+            }
             let label = policy.observe_repository(
                 Capability::FileRead,
                 &read_set,
@@ -2690,7 +2802,7 @@ impl Workspace {
     }
 
     /// Make a checkout of the repository at the workspace's root at `target`, registered in its
-    /// `.git` as `worktrees/<id>` ([CHECKOUT-4], [CHECKOUT-5]). Nothing calls this yet.
+    /// `.git` as `worktrees/<id>` ([CHECKOUT-4], [CHECKOUT-5]).
     ///
     /// Refused unless `read_git` would open the repository: the map has to trust `.git` and
     /// everything beneath it, and no deny rule may cover a file there that a status reads, which
@@ -2732,6 +2844,123 @@ impl Workspace {
         };
         crate::git::checkout::make(&git_dir, target, id, &withheld, &trusted, bound)
             .map_err(refused)
+    }
+
+    /// The checkout this workspace is the root of, where it is a delegate's (CHECKOUT-7).
+    pub fn checkout(&self) -> Option<&CheckoutInfo> {
+        self.checkout.as_deref()
+    }
+
+    pub(crate) fn checkout_handle(&self) -> Option<Arc<CheckoutInfo>> {
+        self.checkout.clone()
+    }
+
+    /// The workspace instructions, skills and definitions are read from: this one, or the
+    /// working directory's where this one is a checkout (CHECKOUT-9).
+    pub fn sources(&self) -> &Workspace {
+        self.checkout
+            .as_deref()
+            .map_or(self, |checkout| &checkout.source)
+    }
+
+    /// Make a checkout for one delegate and return the workspace it works in (CHECKOUT-1,
+    /// CHECKOUT-3, CHECKOUT-6, CHECKOUT-7, CHECKOUT-8).
+    ///
+    /// `state` is the state directory the checkout is made under. The sentence an `Err` carries is
+    /// the driver's own and names no text read from the repository.
+    ///
+    /// Refused where this is already a checkout, where a directory the session opened holds the
+    /// working directory or the checkout, where the working directory holds the checkout, and
+    /// wherever [`Workspace::make_checkout`] refuses. The rules the map holds under the working
+    /// directory are copied to the checkout before anything can reach it.
+    pub fn checkout_for<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        state: &Path,
+    ) -> Result<Workspace, String> {
+        let refused = |why: &str| format!("No checkout was made: {why}");
+        if self.checkout.is_some() {
+            return Err(refused(
+                "this delegate already works in a checkout, which the delegates it starts share",
+            ));
+        }
+        let overlaps = |directory: &Path| {
+            directory.starts_with(&self.root)
+                || self
+                    .added
+                    .iter()
+                    .any(|dir| self.root.starts_with(dir) || directory.starts_with(dir))
+        };
+        let overlap = || {
+            refused(
+                "it would sit inside the working directory, or a directory opened beside it \
+                 holds the working directory or the checkout",
+            )
+        };
+        let unmade = || refused("the directory for checkouts could not be made");
+        let directory = state
+            .canonicalize()
+            .map_err(|_| unmade())?
+            .join("checkouts")
+            .join(crate::home::key_for(&self.root));
+        if overlaps(&directory) {
+            return Err(overlap());
+        }
+        let made_directory = crate::home::create_directory(&directory)
+            .and_then(|()| directory.canonicalize())
+            .map_err(|_| unmade())?;
+        if overlaps(&made_directory) {
+            return Err(overlap());
+        }
+        if refuse_unkeyable(&made_directory, "checkouts", BACKSLASH_SEPARATES).is_err() {
+            return Err(refused("no trust rule can be keyed under its directory"));
+        }
+        let mut tries = 0;
+        let (id, target, made) = loop {
+            let number = self.checkout_numbers.fetch_add(1, Ordering::SeqCst);
+            let id = format!("c{number}");
+            let target = made_directory.join(&id);
+            match self.make_checkout(policy, &target, &id, crate::git::checkout::Bound::FIXED) {
+                Ok(made) => break (id, target, made),
+                Err(WorkspaceError::Checkout {
+                    refused: crate::git::checkout::Refused::Taken,
+                    ..
+                }) if tries < 16 => tries += 1,
+                Err(WorkspaceError::Checkout { refused: why, .. }) => {
+                    return Err(why.describe("the working directory"));
+                }
+                Err(WorkspaceError::Denied(_)) => {
+                    return Err(refused(
+                        "the policy did not allow the repository to be read",
+                    ));
+                }
+                Err(_) => return Err(refused("the repository could not be read")),
+            }
+        };
+
+        let key = self.trust_key(&target.to_string_lossy());
+        policy.file_authority().copy_beneath("", &key);
+        if let Ok(mut listed) = self.checkouts.lock() {
+            listed.push(target.clone());
+        }
+
+        let mut delegate = self.clone();
+        delegate.root = target.clone();
+        delegate.backups = Arc::new(Mutex::new(Vec::new()));
+        delegate.rewind = Arc::default();
+        delegate.memories = None;
+        delegate.checkout = Some(Arc::new(CheckoutInfo {
+            id,
+            path: target,
+            key,
+            commit: made.commit.to_string(),
+            left_out: made.left_out,
+            git_dir: self.root.join(".git"),
+            source: self.clone(),
+            worked_in: AtomicBool::new(false),
+            listed: self.checkouts.clone(),
+        }));
+        Ok(delegate)
     }
 
     /// Collect workspace-relative paths of regular files beneath `directory`.

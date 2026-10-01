@@ -1,15 +1,34 @@
-import { SidebarTools } from './SidebarTools'
-import { createContext, useContext, useCallback, useMemo, useRef, useState } from 'react'
+import { SidebarRow, SidebarSearch } from './SidebarTools'
+import { shortAgo } from '../time'
+import { createContext, memo, useContext, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SessionSummary } from '../../shared/protocol'
 import type { ContextTarget } from '../../shared/commands'
 import { keyOf } from '../../shared/forks'
 import { projectLabel } from '../../shared/recents'
 import { Fold } from './Fold'
 import { ForkIcon } from './ForkIcon'
-import { PopMenu, type PopItem } from './PopMenu'
+import { BotFace } from './BotAvatar'
+import { IconButton } from './IconButton'
+import { IconMenu } from './IconMenu'
 import { conversationKey } from '../../shared/experience'
-import { useExperience, setConversation } from '../experience'
-export const SessionInfo = createContext<Record<string, { bot?: string; state?: string }>>({})
+import { useConversationPreferences, useExperienceValue, setConversation } from '../experience'
+import { ButtonMenu, Icon, ProgressRing } from '../nala'
+
+/** What a row says about a session that is open somewhere: only what asks something of the reader. */
+export type SessionStatus = 'working' | 'answer' | 'approval' | 'failed'
+
+export interface SessionInfoValue {
+  bot?: { name: string; avatar: string }
+  status?: SessionStatus
+}
+export const SessionInfo = createContext<Record<string, SessionInfoValue>>({})
+
+const STATUS_WORDS: Record<SessionStatus, string> = {
+  working: 'Working',
+  answer: 'Waiting for your answer',
+  approval: 'Waiting for your approval',
+  failed: 'The last turn failed',
+}
 
 interface Props {
   sessions: SessionSummary[]
@@ -21,9 +40,8 @@ interface Props {
   /**
    * How the list is arranged, and how to say it changed.
    *
-   * Held by [`Sidebar`] rather than here, which is a departure from the note on `query` below and
-   * for the reason that note itself gives: this half is written to disk, and the column now has
-   * two lists sharing one file. One owner of what is remembered means one write, rather than two
+   * Held by [`Sidebar`] rather than here: this half is written to disk, and the column has two
+   * lists sharing one file. One owner of what is remembered means one write, rather than two
    * components racing to describe the same preference.
    */
   grouped: boolean
@@ -46,12 +64,22 @@ function contextMenu(target: ContextTarget, id: string) {
 }
 
 /**
+ * Which conversations are pinned or archived, as one string, so the list re-renders when one of
+ * those flags changes and not when a draft somewhere gains a letter.
+ */
+const flagsOf = (conversations: Record<string, { pinned?: boolean; archived?: boolean }>): string =>
+  Object.entries(conversations)
+    .filter(([, preference]) => preference.pinned || preference.archived)
+    .map(([key, preference]) => `${key}\u0000${preference.pinned ? 'p' : ''}${preference.archived ? 'a' : ''}`)
+    .join('\n')
+
+/**
  * The left-hand column: one list across every project, newest first.
  *
  * Flat by default, because this is a chat list and a chat list has one column. The project
  * is the secondary line, the way a group chat names itself under the message. But a flat
  * list cannot answer "what have I been doing in *this* checkout" without typing the project
- * name, so the toggle beside the filter box gathers the same rows under headings instead.
+ * name, so View options can gather the same rows under headings instead.
  *
  * Both are rendering decisions over what is already here rather than questions for the
  * bridge: `session.list` hands over every session at once, with the directory on each, so a
@@ -70,23 +98,29 @@ export function Sessions({
   collapsed,
   onCollapse,
 }: Props): React.JSX.Element {
-  // Local rather than lifted into `App`. The convention there is that state lives in `App`,
-  // but the reason given for the composer's draft is that the menu has to read it; nothing
-  // outside this column reads the query, and — more to the point — `App` looks a right-
-  // clicked session up in `sessions` by id. Filtering a copy it holds would make a menu item
-  // fail on a row that is hidden a moment later.
+  // Local rather than lifted into `App`: nothing outside this column reads the query, and `App`
+  // looks a right-clicked session up in `sessions` by id. Filtering a copy it holds would make a
+  // menu item fail on a row that is hidden a moment later.
   const [query, setQuery] = useState('')
-  const preferences = useExperience()
-  const [archive, setArchive] = useState(false)
-  const shown = useMemo(() => matching(sessions, query).filter((session) =>
-    !!preferences.conversations[conversationKey(session.directory, session.id)]?.archived === archive
-  ).sort((a, b) => Number(!!preferences.conversations[conversationKey(b.directory, b.id)]?.pinned) - Number(!!preferences.conversations[conversationKey(a.directory, a.id)]?.pinned)), [sessions, query, preferences, archive])
+  const flags = useExperienceValue((experience) => flagsOf(experience.conversations))
+  const [showArchived, setShowArchived] = useState(false)
+  const [archiveOpen, setArchiveOpen] = useState(true)
 
-  // Unlike the query, this is remembered between launches: which way somebody likes their
-  // list is not a per-run thought. The stored value arrives asynchronously and so cannot
-  // seed `useState` — the same dance `columns.ts` documents — which is why the column
-  // renders flat for a frame before adopting it. `ready` keeps that first frame from
-  // writing the default back over what is on disk.
+  const { active, archived } = useMemo(() => {
+    const marks = new Map(flags.split('\n').filter(Boolean).map((line) => {
+      const [key, mark] = line.split('\u0000')
+      return [key!, mark!] as const
+    }))
+    const mark = (session: SessionSummary) => marks.get(conversationKey(session.directory, session.id)) ?? ''
+    const found = matching(sessions, query)
+    const pinnedFirst = (list: SessionSummary[]) =>
+      list.sort((a, b) => Number(mark(b).includes('p')) - Number(mark(a).includes('p')))
+    return {
+      active: pinnedFirst(found.filter((session) => !mark(session).includes('a'))),
+      archived: found.filter((session) => mark(session).includes('a')),
+    }
+  }, [sessions, query, flags])
+
   const toggleGroup = useCallback(
     (directory: string) => {
       const next = new Set(collapsed)
@@ -96,52 +130,59 @@ export function Sessions({
     [collapsed, onCollapse],
   )
 
-  const groups = useMemo(() => (grouped ? grouping(shown) : []), [grouped, shown])
+  const groups = useMemo(() => (grouped ? grouping(active) : []), [grouped, active])
 
   // A live query opens every group for as long as it runs. A person who typed something and
   // got a heading with nothing under it has been shown the opposite of what they asked for,
   // and quietly reopening beats making them undo a fold they set days ago — which is why
   // this reads through `collapsed` rather than clearing it.
   const searching = query.trim().length > 0
+  const archivedShown = (showArchived || searching) && archived.length > 0
 
   return (
     <>
-      <header className="sessions-head">
-        <SidebarTools query={query} onQuery={setQuery} label="Filter sessions" action={<NewSession onNew={onNew} />}>
-          {/* The label stays put and `aria-pressed` carries the state, with the verb in the
-              tooltip — the same disclosure discipline the column folds follow. A control
-              that renamed itself would be one the reader has to re-find after every press. */}
-          <button
-            className="session-group"
-            aria-pressed={grouped}
-            aria-label="Group by project"
-            title={grouped ? 'Show one flat list' : 'Group by project'}
-            onClick={() => onGroup(!grouped)}
-          >
-            <span aria-hidden="true">▤</span>
-          </button>
-        </SidebarTools>
-        <div className="session-scope"><button aria-pressed={!archive} onClick={() => setArchive(false)}>Conversations</button><button aria-pressed={archive} onClick={() => setArchive(true)}>Archived</button></div>
+      <header className="sidebar-head">
+        <NewSession onNew={onNew} />
+        <SidebarSearch query={query} onQuery={setQuery} label="Filter sessions" placeholder="Search sessions">
+          <IconMenu icon="filter" label="View options" className="view-options" data-test="view-options">
+            <leo-menu-item data-role="menuitemcheckbox" aria-checked={grouped ? 'true' : 'false'} onClick={() => onGroup(!grouped)}>
+              <span className="menu-icon-row">
+                <Icon name="tabs-vertical-tree" />
+                Group by project
+                <span className="menu-check" aria-hidden="true">{grouped && <Icon name="check-normal" />}</span>
+              </span>
+            </leo-menu-item>
+            <leo-menu-item data-role="menuitemcheckbox" aria-checked={showArchived ? 'true' : 'false'} onClick={() => setShowArchived(!showArchived)}>
+              <span className="menu-icon-row">
+                <Icon name="inbox" />
+                Show archived
+                <span className="menu-check" aria-hidden="true">{showArchived && <Icon name="check-normal" />}</span>
+              </span>
+            </leo-menu-item>
+          </IconMenu>
+        </SidebarSearch>
       </header>
 
       <div className="session-list">
         {sessions.length === 0 && (
-          <p className="empty">
-            No sessions yet. Open a project to begin — or start one in a terminal with{' '}
+          <p className="sidebar-empty">
+            No sessions yet. Open a project to begin, or start one in a terminal with{' '}
             <code>bravebot</code> and it will appear here.
           </p>
         )}
         {/* Said separately, because the message above is a fact about the machine and would
             be a lie about a list that is merely filtered down to nothing. */}
-        {sessions.length > 0 && shown.length === 0 && (
-          <p className="empty">{query.trim() ? `No conversation matches “${query}”.` : archive ? 'No archived conversations.' : 'No active conversations. Start a new session or restore one from Archived.'}</p>
+        {sessions.length > 0 && active.length === 0 && !archivedShown && (
+          <p className="sidebar-empty">
+            {searching ? `No conversation matches “${query}”.` : 'No active conversations. Start a new session, or show archived ones from View options.'}
+          </p>
         )}
         {!grouped &&
-          shown.map((session) => (
+          active.map((session) => (
             <Session
               key={`${session.directory}/${session.id}`}
               session={session}
-              openId={openId}
+              current={session.id === openId}
               forked={forked.has(keyOf(session.directory, session.id))}
               onOpen={onOpen}
             />
@@ -159,6 +200,28 @@ export function Sessions({
               onNew={onNew}
             />
           ))}
+        {archivedShown && (
+          <section className="session-group-section session-archive" data-test="session-archive">
+            <div className="session-group-head">
+              <button type="button" className="session-group-fold" aria-expanded={archiveOpen || searching} onClick={() => setArchiveOpen(!archiveOpen)}>
+                <Icon className={`chevron ${archiveOpen || searching ? 'open' : ''}`} name="carat-right" />
+                <span className="session-group-name">Archived</span>
+                <span className="count num">{archived.length}</span>
+              </button>
+            </div>
+            <Fold open={archiveOpen || searching}>
+              {archived.map((session) => (
+                <Session
+                  key={`${session.directory}/${session.id}`}
+                  session={session}
+                  current={session.id === openId}
+                  forked={forked.has(keyOf(session.directory, session.id))}
+                  onOpen={onOpen}
+                />
+              ))}
+            </Fold>
+          </section>
+        )}
       </div>
     </>
   )
@@ -169,17 +232,14 @@ export function Sessions({
  *
  * Most of the heading is the disclosure control rather than a chevron beside it: the name is
  * the biggest thing in reach, and a group that can be folded should not ask for a 10px arrow
- * to be hit. `aria-expanded` carries the state and the name stays put — the disclosure
- * discipline the column folds and the context panels already follow.
+ * to be hit. `aria-expanded` carries the state and the name stays put.
  *
  * The heading is a row of two buttons rather than one, because the second one starts a
- * session here and a button cannot be nested inside a button. That is also why the fold is
- * the *inner* control: making the row itself clickable and the plus a child would have been
- * the nesting problem wearing a different hat.
+ * session here and a button cannot be nested inside a button.
  *
  * The rows stay mounted while shut, because that is how [`Fold`] has something to animate
- * away from; it hides them from the reader and from the tab order in CSS once the collapse
- * has finished.
+ * away from; it hides them from the reader and from the tab order once the collapse has
+ * finished.
  */
 function Group({
   group,
@@ -201,41 +261,37 @@ function Group({
   return (
     <section className="session-group-section">
       {/* The full path in the tooltip, because two checkouts of one project share a basename
-          and picking the wrong one is a mistake nothing later announces — the same trap the
-          recents menu guards against. On both buttons: the one that starts a session here is
-          exactly where that mistake would cost something. */}
+          and picking the wrong one is a mistake nothing later announces. On both buttons: the
+          one that starts a session here is exactly where that mistake would cost something. */}
       <div className="session-group-head">
         <button
+          type="button"
           className="session-group-fold"
           aria-expanded={open}
-          title={group.directory}
+          data-tooltip={group.directory}
           onClick={() => onToggle(group.directory)}
         >
-          <span className={`chevron ${open ? 'open' : ''}`} aria-hidden="true">
-            ›
-          </span>
+          <Icon className={`chevron ${open ? 'open' : ''}`} name="carat-right" />
           <span className="session-group-name">{group.project}</span>
-          <span className="count">{group.sessions.length}</span>
+          <span className="count num">{group.sessions.length}</span>
         </button>
-        {/* The same thing **New session** does, minus the folder picker — the directory is
-            already known, and the picker's whole job is to find one out. Named for the
-            project rather than "New session" so that a reader of the button list is told
-            which of a dozen identical-looking pluses they have landed on. */}
-        <button
+        {/* Named for the project rather than "New session", so a reader of the button list is
+            told which of a dozen identical-looking pluses they have landed on. */}
+        <IconButton
+          icon="plus-add"
+          size="tiny"
           className="session-group-new"
-          aria-label={`New session in ${group.project}`}
-          title={`New session in ${group.directory}`}
+          label={`New session in ${group.project}`}
+          tooltip={`New session in ${group.directory}`}
           onClick={() => onNew(group.directory)}
-        >
-          <span aria-hidden="true">+</span>
-        </button>
+        />
       </div>
       <Fold open={open}>
         {group.sessions.map((session) => (
           <Session
             key={`${session.directory}/${session.id}`}
             session={session}
-            openId={openId}
+            current={session.id === openId}
             forked={forked.has(keyOf(session.directory, session.id))}
             onOpen={onOpen}
           />
@@ -250,100 +306,201 @@ function Group({
  *
  * The same component under a heading as in the flat list, so the two paths cannot drift into
  * showing different things about a session. The project stays on the row even when the
- * heading above already says it: the row is what a person reads, and a row that means
- * something different depending on how far up the list they last looked is worse than a
- * word repeated.
+ * heading above already says it: the row is what a person reads.
+ *
+ * The leading slot says only what asks something of the reader — working, waiting, failed — or
+ * whose conversation this is. A row with nothing to say leaves it empty, so the few that do
+ * stand out down the column.
  */
-function Session({
+const Session = memo(function Session({
   session,
-  openId,
+  current,
   forked,
   onOpen,
 }: {
   session: SessionSummary
-  openId: string | undefined
+  current: boolean
   forked: boolean
   onOpen: (summary: SessionSummary) => void
 }): React.JSX.Element {
   const key = conversationKey(session.directory, session.id)
-  const preferences = useExperience().conversations[key]
+  const preferences = useConversationPreferences(key)
   const info = useContext(SessionInfo)[key]
   const [menu, setMenu] = useState(false)
-  const anchor = useRef<HTMLButtonElement>(null)
-  return <div className={`session-row ${session.id === openId ? 'current' : ''}`}>
-    <button className={`session ${session.id === openId ? 'current' : ''}`} onClick={() => onOpen(session)} onContextMenu={contextMenu('session', session.id)}>
-      <span className="session-title" title={session.title}>
-        {preferences?.pinned && <svg className="session-pin" width="13" height="15" viewBox="0 0 16 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="Pinned" focusable="false">
-          <path d="M5 2h6M6 2v6l-3 4h10l-3-4V2M8 12v4" />
-        </svg>}
-        {forked && <span className="fork-mark"><ForkIcon size={11} /></span>}{session.title}
+  const anchor = useRef<HTMLElement>(null)
+  const shutReason = useRef('explicit')
+  const choose = (id: 'pin' | 'archive') => {
+    setMenu(false)
+    anchor.current?.focus()
+    setConversation(key, id === 'pin' ? { pinned: !preferences?.pinned } : { archived: !preferences?.archived })
+  }
+  const status = info?.status
+  return <div className={`session-row${current ? ' current' : ''}${menu ? ' menu-open' : ''}`}>
+    <button type="button" className={`session${current ? ' current' : ''}`} aria-current={current ? 'true' : undefined}
+      onClick={() => onOpen(session)} onContextMenu={contextMenu('session', session.id)}>
+      <span className="session-status" data-status={status} data-tooltip={status ? STATUS_WORDS[status] : info?.bot?.name}>
+        {status === 'working' ? <ProgressRing className="session-spinner" />
+          : status ? <Icon name="dot" className={`status-dot ${status === 'failed' ? 'error' : 'warning'}`} />
+            : info?.bot ? <BotFace seed={info.bot.avatar} size={16} /> : null}
       </span>
-      <span className="session-where">{session.project}{session.branch && <span className="branch"> · {session.branch}</span>} · {ago(session.updated)}</span>
-      {(session.manifest || info?.bot || info?.state) && <span className="session-badges">{session.manifest && <span className="plan-run" title="A plan run. It can be read and not continued.">Plan run</span>}{info?.bot && <span>{info.bot}</span>}{info?.state && <span className={`session-state ${info.state.toLowerCase().replaceAll(' ', '-')}`}>{info.state}</span>}</span>}
+      <span className="session-text">
+        <span className="session-title">
+          {preferences?.pinned && <span className="session-pin" role="img" aria-label="Pinned"><Icon name="pin" /></span>}
+          {forked && <span className="fork-mark"><ForkIcon /></span>}
+          <span className="session-name">{session.title}</span>
+        </span>
+        <span className="session-where">
+          {session.manifest && <><span className="plan-run" data-tooltip="A plan run. It can be read and not continued.">Plan run</span> · </>}
+          {info?.bot && <>{info.bot.name} · </>}
+          {session.project}{session.branch && <span className="branch"> · {session.branch}</span>}
+        </span>
+      </span>
+      <time className="session-time num" dateTime={new Date(session.updated * 1000).toISOString()}>{shortAgo(session.updated)}</time>
+      {forked && <span className="offscreen">Forked.</span>}
+      {status && <span className="offscreen">, {STATUS_WORDS[status]}</span>}
     </button>
-    <button ref={anchor} className="session-more" aria-label={`Actions for ${session.title}`} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>⋯</button>
-    <PopMenu open={menu} anchor={anchor} label="Conversation actions" onClose={() => setMenu(false)}
-      items={[{ id: 'pin', label: preferences?.pinned ? 'Unpin conversation' : 'Pin conversation' }, { id: 'archive', label: preferences?.archived ? 'Restore conversation' : 'Archive conversation' }]}
-      onChoose={(id) => setConversation(key, id === 'pin' ? { pinned: !preferences?.pinned } : { archived: !preferences?.archived })} />
+    <ButtonMenu className="session-more-menu" isOpen={menu} placement="bottom-end" positionStrategy="fixed"
+      onClose={(detail) => { shutReason.current = detail.reason }}
+      onChange={({ isOpen }) => {
+        setMenu(isOpen)
+        // Escape returns focus to the button that opened the menu; a click elsewhere leaves it
+        // where the pointer landed.
+        if (!isOpen && shutReason.current !== 'blur') anchor.current?.focus()
+        if (!isOpen) shutReason.current = 'explicit'
+      }}>
+      <IconButton ref={anchor} slot="anchor-content" icon="more-horizontal" size="tiny" className="session-more"
+        label={`Actions for ${session.title}`} tooltip={false} hasPopup="menu" expanded={menu} />
+      <leo-menu-item onClick={() => choose('pin')}>
+        <span className="menu-icon-row"><Icon name="pin" />{preferences?.pinned ? 'Unpin conversation' : 'Pin conversation'}</span>
+      </leo-menu-item>
+      <leo-menu-item onClick={() => choose('archive')}>
+        <span className="menu-icon-row"><Icon name="inbox" />{preferences?.archived ? 'Restore conversation' : 'Archive conversation'}</span>
+      </leo-menu-item>
+    </ButtonMenu>
   </div>
-
-}
+})
 
 /**
  * The button that starts a session, and the list of places to start one in.
  *
- * A split control: the button itself does exactly what it always did — opens the folder
- * picker — and the chevron beside it offers the projects opened before. Anything else would
- * have made the common case slower to reach in order to make the second case possible.
+ * A split control: the row itself does exactly what it always did — opens the folder picker —
+ * and the chevron beside it offers the projects opened before. Anything else would have made
+ * the common case slower to reach in order to make the second case possible.
  */
 function NewSession({ onNew }: { onNew: (directory?: string) => void }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [directories, setDirectories] = useState<string[]>([])
-  const chevron = useRef<HTMLButtonElement>(null)
+  const menu = useRef<HTMLElement>(null)
+  const trigger = useRef<HTMLElement>(null)
+  // A load that returns after the menu was shut must not open it again.
+  const opening = useRef(0)
 
   // Read when the menu is opened rather than held and kept in step: the list changes in the
   // main process, and a copy up here would be one more thing that can be stale.
   const show = useCallback(() => {
+    const ticket = ++opening.current
     void window.bravebot.readRecents().then((found) => {
+      if (ticket !== opening.current) return
       setDirectories(found)
       setOpen(true)
     })
   }, [])
 
-  const items: PopItem[] = directories.length
-    ? directories.map((directory) => ({
-        id: directory,
-        label: projectLabel(directory),
-        // Two checkouts of one project share a basename, and picking the wrong one is a
-        // mistake nothing later would announce.
-        detail: directory,
-      }))
-    : [{ id: 'none', label: 'No projects opened yet', enabled: false }]
+  // The column clips overflow so a fold can slide under it. This menu has to paint past that
+  // edge, over the transcript, for as long as it is open.
+  useEffect(() => {
+    const column = menu.current?.closest('.sessions')
+    column?.classList.toggle('recents-open', open)
+    return () => column?.classList.remove('recents-open')
+  }, [open])
+
+  const choose = useCallback((event: Event) => {
+    const item = event.composedPath().find(
+      (node): node is HTMLElement => node instanceof HTMLElement && node.tagName === 'LEO-MENU-ITEM',
+    )
+    const directory = item?.dataset.directory
+    if (directory) onNew(directory)
+  }, [onNew])
+
+  useEffect(() => {
+    const host = menu.current
+    if (!host) return
+    host.addEventListener('click', choose)
+    return () => host.removeEventListener('click', choose)
+  }, [choose])
+
+  useEffect(() => {
+    const host = menu.current
+    if (!host || !open) return
+    const keys = (event: KeyboardEvent): void => {
+      const items = [...host.querySelectorAll<HTMLElement>('leo-menu-item:not([aria-disabled="true"])')]
+      let target: HTMLElement | undefined
+      if (event.key === 'Home') target = items[0]
+      else if (event.key === 'End') target = items.at(-1)
+      else if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        const letter = event.key.toLocaleLowerCase()
+        target = items.find((item) => item.textContent?.trim().toLocaleLowerCase().startsWith(letter))
+      }
+      if (!target) return
+      event.preventDefault()
+      event.stopPropagation()
+      target.focus()
+    }
+    host.addEventListener('keydown', keys)
+    return () => host.removeEventListener('keydown', keys)
+  }, [open, directories])
+
+  const shut = (detail: { reason: string }): void => {
+    if (detail.reason === 'cancel' || detail.reason === 'select') {
+      trigger.current?.focus()
+    }
+  }
 
   return (
     <div className="new-split">
-      <button className="new" onClick={() => onNew()} title="Open a project">
-        <span className="plus">+</span> New session
-      </button>
-      <button
-        ref={chevron}
-        className="new-recent"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label="Projects opened before"
-        title="Projects opened before"
-        onClick={() => (open ? setOpen(false) : show())}
+      <SidebarRow icon="plus-add" label="New session" hint="⌘N" className="new" onClick={() => onNew()} data-test="new-session" />
+      <ButtonMenu
+        ref={menu}
+        className="new-recent recent-menu"
+        isOpen={open}
+        placement="bottom-end"
+        positionStrategy="fixed"
+        onChange={({ isOpen: next }) => {
+          if (next) show()
+          else {
+            opening.current += 1
+            setOpen(false)
+          }
+        }}
+        onClose={shut}
       >
-        <span aria-hidden="true">⌄</span>
-      </button>
-      <PopMenu
-        open={open}
-        anchor={chevron}
-        items={items}
-        label="Projects opened before"
-        onChoose={(id) => onNew(id)}
-        onClose={() => setOpen(false)}
-      />
+        <IconButton
+          ref={trigger}
+          slot="anchor-content"
+          icon="carat-down"
+          label="Projects opened before"
+          tooltip="Start in a recent project"
+          hasPopup="menu"
+          expanded={open}
+        />
+        {directories.length === 0 ? (
+          <leo-menu-item aria-disabled="true">No projects opened yet</leo-menu-item>
+        ) : (
+          directories.map((directory) => (
+            <leo-menu-item key={directory} data-directory={directory}>
+              <span className="menu-icon-row recent-row">
+                <Icon name="folder" />
+                <span className="recent-text">
+                  <span className="recent-name">{projectLabel(directory)}</span>
+                  {/* Two checkouts of one project share a basename, and picking the wrong one
+                      is a mistake nothing later would announce. */}
+                  <span className="recent-path">{directory}</span>
+                </span>
+              </span>
+            </leo-menu-item>
+          ))
+        )}
+      </ButtonMenu>
     </div>
   )
 }
@@ -362,7 +519,7 @@ function NewSession({ onNew }: { onNew: (directory?: string) => void }): React.J
  */
 function matching(sessions: SessionSummary[], query: string): SessionSummary[] {
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
-  if (terms.length === 0) return sessions
+  if (terms.length === 0) return [...sessions]
   return sessions.filter((session) => {
     const haystack = `${session.title} ${session.project} ${session.branch ?? ''}`.toLowerCase()
     return terms.every((term) => haystack.includes(term))
@@ -384,9 +541,7 @@ interface Group {
  *
  * Nothing is sorted. The list arrives newest-first across every project, so one pass in
  * order leaves the rows in each group newest-first and the groups themselves in the order
- * their newest session appeared — which is the ordering we want, arrived at by not
- * disturbing the one we were given. Imposing it separately would be a second opinion about
- * recency, free to disagree with the bridge's.
+ * their newest session appeared.
  *
  * Grouping happens after filtering, so a group whose every row was filtered away has no
  * heading left behind to say otherwise.
@@ -411,7 +566,8 @@ function grouping(sessions: SessionSummary[]): Group[] {
  * How long ago, in the words a person says it in.
  *
  * Deliberately the same thresholds as the agent's own `how_long_ago`, so a session does
- * not read as "2 hours ago" here and "1 hour ago" in the terminal.
+ * not read as "2 hours ago" here and "1 hour ago" in the terminal. For sentences; a row
+ * uses `shortAgo` from `../time`.
  */
 export function ago(then: number): string {
   const seconds = Math.max(0, Math.floor(Date.now() / 1000) - then)

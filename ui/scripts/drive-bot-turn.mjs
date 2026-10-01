@@ -94,7 +94,7 @@ await page.evaluate(
 )
 await page.reload()
 await page.waitForTimeout(2000)
-await page.locator('.sidebar-tab').nth(1).click()
+await page.locator('.sidebar-tabs [role="option"]').nth(1).click()
 await page.waitForTimeout(400)
 
 const mine = page
@@ -191,7 +191,7 @@ const { known, owned } = await page2.evaluate(async () => {
     owned: answer.ok.sessions.filter((s) => theirs.has(`${s.directory}/${s.id}`)).length,
   }
 })
-await page2.locator('.sidebar-tab').nth(0).click()
+await page2.locator('.sidebar-tabs [role="option"]').nth(0).click()
 await page2.waitForTimeout(400)
 const drawn = await page2.locator('.session').count()
 check(

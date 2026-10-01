@@ -21,6 +21,27 @@ advice, and write approvals show the processor's remark beside the diff.
 
 ## Current regression checks
 
+### Writing selectors for Leo controls
+
+Most controls are Leo custom elements whose real `<button>`, `<input>` or `<textarea>` sits
+in a shadow root. Playwright's role, label and CSS locators pierce it, but a few habits
+matter:
+
+- Find controls by role and accessible name (`getByRole('button', { name: 'Close audit
+  inspector' })`) or by `data-test`, not by tag. A class lands on the host, so
+  `.tree-tool.dotfiles` names the host and `.tree-find input` names the field inside it.
+- `fill` and `press` need the field, not the host: `.composer textarea` works; a bare
+  `.session-find` does not.
+- A focused Leo control is reported as its host by `document.activeElement`. Compare the
+  host as well as the element (`el === document.activeElement ||
+  el.getRootNode().host === document.activeElement`).
+- Selected and open state is on the element Leo draws: a segmented control's items are
+  `[role="option"]` with an `aria-selected` attribute, and a collapse's state is the `open`
+  property of the `<details>` in its shadow root.
+- A dialog is `getByRole('dialog', { name })`; Leo draws its box in the top layer, so measure
+  it through `shadowRoot.querySelector('dialog')`.
+
+
 - `npm run drive:manual-walkthrough`: the manual 0.9 verification through the real app
   and backend, with a local model fixture. Runs in CI; detailed coverage is below.
 - After building, `node scripts/drive-agent-settings.mjs`: 0.9 settings, hook forms and
@@ -113,11 +134,13 @@ at, that a control keeps keyboard focus through an animation.
 | `npm run drive:export` | Exporting a conversation to text, Markdown and PDF — with and without the tool calls, and what the file leaves out either way |
 | `npm run drive:fork` | Cutting a session in two: that the fork holds the right half and the session it came from is untouched |
 | `npm run drive:tree` | The file tree: listing, expanding, the dotfile toggle, the name filter, and that a session with no root and a symlink out of the project both list nothing |
-| `npm run drive:theme` | Themes: that previewing repaints before anything is written down, that Escape restores exactly, that every derived token survives a palette, that editing a palette repaints without a relaunch, and that a PDF stays white regardless |
+| `npm run drive:theme` | Appearance: System / Light / Dark painting and persistence, legacy palette fallback, and the export renderer's light-only guarantee |
 | `npm run drive:bots` | Bots: that the column has two lists and remembers which, that a bot survives a relaunch with what was typed into it, and that two bots have different faces while one bot keeps its own across a rename — asserted on the *form* the seed built, since the face is turning while it is looked at. Also the archive: that a bot put away survives field-for-field and comes back as itself, and that deleting one asks before it does anything |
 | `npm run drive:packaged` | A built `.app`: that a release hides the developer items and finds its agent |
 | `npm run drive:bot-turn` | A live turn as a bot: that a purpose nobody typed reaches the model, that the memory file is real and in the checkout, and that reopening the bot resumes the same session |
 | `npm run drive:bot-memory` | That a bot is asked to keep its memory current without anybody asking it to: that one which has gone quiet is handed its briefing again with a line saying so, that the count resets on the nudge rather than on every turn, and that a prompt somebody typed to read like the app's own house-keeping is drawn as a prompt in a reopened transcript, with its words and the cut that is taken on its ordinal |
+| `npm run drive:visual` | The gallery: every surface as screenshots, in light and dark, with a hit-target audit and forced-colours captures; see [below](#the-visual-gallery) |
+| `npm run drive:perf` | The performance budgets on a 500-entry transcript; see [below](#performance-budgets) |
 | `node scripts/drive-turn.mjs` | A live inference request through the window, to prove the binary carries its credentials rather than inheriting them |
 | `node scripts/drive-models-live.mjs` | Live inference before and after changing the conversation model, checking which model the agent actually used |
 | `scripts/smoke-turn.sh` | A live turn straight through `bravebot-rpc`, no app |
@@ -145,9 +168,97 @@ on before it tests it. Anything new in this
 area should do the same, and a driver that seeds a fixture should replace its own key rather than
 the file: the other keys are somebody's arrangement of this window.
 
-`drive-theme.mjs` does the same for the `theme` key, and has one duty beyond the file: it writes
-palettes into `themes/` beside it, so it removes the ones it wrote on the way out however it exits,
-and removes the directory too if it was the one that made it.
+`drive-theme.mjs` does the same for the `theme` key. It also verifies that the export document is
+pinned to light and that its renderer bundle cannot switch appearance at runtime.
+
+### Which drivers touch your real profile
+
+**Many drivers run against the real user profile.** A driver that launches Electron without
+`--user-data-dir` uses the app's real `userData`, so it reads and writes your `bravebot-ui.json`
+(columns, bots, recents, theme) and `experience.json`, and the agent it starts uses your `HOME`,
+which means your real `~/.bravebot` sessions, history and configuration. Read a driver before
+running it, and do not run one you have not read on a machine whose bots or sessions you care
+about. These launch without `--user-data-dir`:
+
+`drive`, `drive-ask`, `drive-bot-memory`, `drive-bot-turn`, `drive-bots`, `drive-columns`,
+`drive-export`, `drive-fork`, `drive-markdown`, `drive-menu`, `drive-packaged`, `drive-panels`,
+`drive-resize`, `drive-run`, `drive-smoke`, `drive-theme`, `drive-tree` and `drive-turn`.
+
+Of those, **`drive-run`, `drive-ask` and `drive-markdown` send live model turns** against the
+real profile (and so do `drive-bot-turn`, `drive-bot-memory` and `drive-turn`), which spends
+credits from whatever backend is configured. `drive-columns`, `drive-panels`, `drive-tree` and
+`drive-theme` put back the key they change; do not assume any of the others do.
+
+These pass `--user-data-dir` with a temporary profile, so the app's own state is isolated:
+
+`drive-about`, `drive-agent-settings`, `drive-bot-history`, `drive-conversation-workflow`,
+`drive-manual-walkthrough`, `drive-models`, `drive-models-live`, `drive-remembered-trust`,
+`drive-secure-files`, `drive-turn-details`, `drive-ux-acceptance`, `drive-vetting`,
+`drive-visual` and `drive-perf`.
+
+The flag isolates only the app's own state. Most of these also replace the bridge with IPC
+fixtures, so they need no credentials and make no requests; `drive-models-live` does not, and
+sends a live turn through the isolated profile using your real credentials.
+`drive-manual-walkthrough` also sets a disposable `HOME`. `drive-agent-rpc` never opens a window:
+it spawns the bridge on its own with a temporary `HOME`. When you write a new driver, launch with
+a temporary `--user-data-dir` and mock or isolate whatever the bridge would reach.
+
+### The visual gallery
+
+`scripts/drive-visual.mjs` is the tool for looking at the interface rather than asserting on it.
+It launches the built app with a temporary profile and a mocked bridge (IPC fixtures, like
+`drive-models.mjs`), so it is deterministic and makes no requests:
+
+```bash
+npx electron-vite build && node scripts/drive-visual.mjs
+```
+
+Screenshots go to `VISUAL_OUTPUT`, or `bravebot-visual/` under the system temp folder when it is
+unset, as `<scene>-light.png` and `<scene>-dark.png`, plus `<scene>-compact.png` for the scenes
+that vary by density. The scenes are numbered, and cover the welcome screen, a conversation with
+markdown, tables and code, a running turn with tool calls, each decision card (trusted and
+untrusted), a command's output and the vouch question, a series of questions, a finished and a
+failed turn, the inspector's file tree, the model and export menus, the find bar, Permissions,
+File watches, Appearance, About, Agent settings, Bots, the queue with attachments, and the
+minimum-size window (900×560; the others use 1440×900).
+
+Two things make it more than a folder of images:
+
+- **Stress fixtures.** One scene loads 80 sessions across six projects, one with a 120-character
+  title and one in a path twelve levels deep, and shows the list flat and grouped at the minimum
+  window size. The queue scene shows five attachments and four queued messages there too. (The
+  400-line diff, 3,000-line code block and 500-entry transcript in the plan are not in the
+  gallery; the 500-entry transcript is the perf driver's fixture.)
+- **Forced colours.** The last scene turns on `emulateMedia({ forcedColors: 'active' })` and
+  captures the quarantine and the untrusted card, so the security markings are seen without their
+  colour.
+
+Every scene also audits interactive targets, piercing shadow roots, and the run fails if any is
+under 28px (set `VISUAL_ALLOW_SMALL=1` to list them without failing), if a scene throws, or if the
+renderer reports an error. `VISUAL_PROBE` takes a JavaScript expression evaluated in the page with
+the conversation open and prints the result as JSON, and `VISUAL_ONLY_CONVERSATION=1` stops the
+run there; both are for layout work. Use the gallery for side-by-side review before and after a
+change to styles: it is the check for the [quality bar](development.md#the-quality-bar).
+
+### Performance budgets
+
+`scripts/drive-perf.mjs` enforces the budgets on a long conversation. It is new alongside the
+redesign; this describes the plan it implements, so read the script for the exact thresholds and
+methods. Like the gallery it uses a temporary profile and a mocked bridge, and loads a
+deterministic **500-entry** transcript, then measures in the page from `requestAnimationFrame`
+timing and Chrome DevTools Protocol `Performance` metrics:
+
+| Budget | Measured |
+| --- | --- |
+| Keystroke to next paint in the composer under **16ms** | Typing into the message box; also checks that typing does not re-render the transcript |
+| Scrolling holds **60fps** | Frame times while scrolling the transcript |
+| Streaming a long answer drops no frames | Frame times while a reply arrives |
+| Menus open in under **100ms** | The model menu, the header's More menu and the find bar |
+
+It exits non-zero when a measurement is over its budget. Software rendering or a busy machine
+inflates frame times, so `PERF_TOLERANCE=2` scales the time budgets rather than editing the
+script. The budgets exist because of [render isolation](development.md#render-isolation): a change
+that makes a keystroke re-render the transcript is the regression this catches.
 
 ## Automated 0.9 manual walkthrough
 

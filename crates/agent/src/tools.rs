@@ -996,6 +996,17 @@ fn table(
                                         to say it, and the delegates cannot start until you \
                                         have.",
                         "items": {"type": "string"}
+                    },
+                    "isolation": {
+                        "type": "string",
+                        "description": "Optional. \"checkout\" gives each delegate a new \
+                                        checkout of the last commit to work in, so that \
+                                        delegates writing at the same time do not edit or \
+                                        build in one working tree. Changes not yet committed \
+                                        are not in it, and what it changes stays there until \
+                                        it is brought back. Not for a \"reader\", and not for \
+                                        a delegate that is already in one.",
+                        "enum": ["checkout"]
                     }
                 },
                 "required": ["kind", "task"]
@@ -6752,8 +6763,9 @@ fn spawn_agent<S: Sink, R: Reporter>(
         String::new(),
     );
     let mut started = Vec::new();
+    let mut commits: Vec<String> = Vec::new();
     let mut kind_name = String::new();
-    let mut rest_refused = None;
+    let mut rest_refused: Option<String> = None;
 
     for task in &tasks {
         // Numbered by the kernel, beneath this run's own number in the order this run spawned
@@ -6778,11 +6790,33 @@ fn spawn_agent<S: Sink, R: Reporter>(
             // The ones before it are started and on the screen, so they run and the planner is
             // told the rest did not.
             Err(denial) => {
-                rest_refused = Some(denial);
+                rest_refused = Some(denial.to_string());
                 break;
             }
         };
         let id = spec.id();
+
+        // Compared only once the gate above has passed, which is when this run has met nothing a
+        // name could be steered by (CHECKOUT-1).
+        let state = match wants_checkout(arguments, spec.kind(), tools) {
+            Ok(state) => state,
+            Err(refusal) if started.is_empty() => return Produced::problem(refusal),
+            Err(refusal) => {
+                rest_refused = Some(refusal);
+                break;
+            }
+        };
+        let made = match state {
+            None => None,
+            Some(state) => match tools.workspace.checkout_for(policy, state) {
+                Ok(made) => Some(made),
+                Err(refusal) if started.is_empty() => return Produced::problem(refusal),
+                Err(refusal) => {
+                    rest_refused = Some(refusal);
+                    break;
+                }
+            },
+        };
 
         // The task is released for a screen the way the target of any other call is. A person
         // watching several delegates has nothing else to tell them apart by.
@@ -6806,7 +6840,15 @@ fn spawn_agent<S: Sink, R: Reporter>(
         // Everything the kernel settled, taken off the policy here on the turn's own thread. From
         // this point the delegate needs nothing further from the run that spawned it, which is
         // what lets the two run at the same time.
-        let seeded = crate::delegate::seed(policy, spec, tools.remembering);
+        let mut seeded =
+            crate::delegate::seed(policy, spec, tools.remembering.filter(|_| made.is_none()));
+        if let Some(made) = made {
+            if let Some(checkout) = made.checkout() {
+                seeded.file_authority = seeded.file_authority.rooted_at(checkout.key());
+                commits.push(checkout.commit().to_string());
+            }
+            seeded.workspace = Some(made);
+        }
         produced = produced.delegating(id, seeded);
     }
 
@@ -6828,6 +6870,19 @@ fn spawn_agent<S: Sink, R: Reporter>(
             started.len()
         )
     };
+    let body = match commits.first() {
+        Some(commit) if started.len() == 1 => format!(
+            "{body} It works in a checkout of commit {commit}, which has no changes that are not \
+             committed and is not your working directory. It keeps no memory between \
+             conversations and is not offered lsp."
+        ),
+        Some(commit) => format!(
+            "{body} Each works in a checkout of its own of commit {commit}, which has no changes \
+             that are not committed and is not your working directory. None keeps memory between \
+             conversations or is offered lsp."
+        ),
+        None => body,
+    };
     let body = match (rest_refused, tasks.len() - started.len()) {
         (Some(denial), 1) => format!("{body} The last one was not started, refused: {denial}"),
         (Some(denial), left) => {
@@ -6845,6 +6900,45 @@ fn spawn_agent<S: Sink, R: Reporter>(
     produced.origin = format!("a {kind_name} delegate");
     produced.note = note;
     produced
+}
+
+/// Whether this call asks for a checkout for each delegate, or why it may not have one
+/// (CHECKOUT-1, CHECKOUT-3, CHECKOUT-6).
+fn wants_checkout<'a>(
+    arguments: &Value,
+    kind: bravebot_core::delegate::Kind,
+    tools: &Tools<'a>,
+) -> Result<Option<&'a std::path::Path>, String> {
+    match arguments.get("isolation") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::String(value)) if value == "checkout" => {}
+        Some(_) => {
+            return Err(
+                "error: 'isolation' may only be \"checkout\"; leave it out for a delegate that \
+                 works in your working directory"
+                    .to_string(),
+            );
+        }
+    }
+    if kind == bravebot_core::delegate::Kind::Reader {
+        return Err(
+            "refused: a reader writes nothing, so a checkout separates it from nobody and would \
+             show it the last commit in place of your working tree"
+                .to_string(),
+        );
+    }
+    if tools.workspace.checkout().is_some() {
+        return Err(
+            "refused: you already work in a checkout, which the delegates you start share"
+                .to_string(),
+        );
+    }
+    match tools.home {
+        Some(state) if !bravebot_core::incognito::engaged() => Ok(Some(state)),
+        _ => {
+            Err("refused: this session keeps no state directory to make a checkout in".to_string())
+        }
+    }
 }
 
 /// The most delegates one call may fan a task out over.

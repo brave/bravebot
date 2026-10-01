@@ -427,7 +427,8 @@ under another name.
 it.** Searching upward would make what configures a session depend on which directory you happened to
 change into, and the file it found could sit above the thing you are working on.
 
-These keys are read, and anything else in the file is ignored rather than refused:
+These keys are read, and anything else in the file is ignored rather than refused, and named by
+`bravebot doctor` with the file that set it:
 
 | Key | What it holds |
 |---|---|
@@ -447,6 +448,10 @@ These keys are read, and anything else in the file is ignored rather than refuse
 
 In `env`, only string values: a number or a boolean is skipped rather than coerced, so write `"1"` and
 `"true"`. Every name in the block is read rather than a chosen subset.
+
+A key beside those configures nothing and restricts nothing, which is worth saying plainly for
+`sandbox` and `hooks`: a block pasted from another tool's file reads as a restriction in force and is
+not one here. `doctor` names the key and the file, and never what the key was set to.
 
 **The file is the same shape as Claude Code's `~/.claude/settings.json`**, so a block that configures
 one largely configures the other unedited. The three files resolve in the same order Claude Code's do,
