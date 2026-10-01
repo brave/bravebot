@@ -179,8 +179,9 @@ A branch push, a pull request, and a tag push do not publish to the registry. So
 `publish-npm.yml` with the version tag after Jenkins has created the GitHub release of that name.
 What is published is the tree that tag names, and a branch of the same name does not supply it. A
 dispatch whose tag is not `v` plus the version in the tree, or whose GitHub release is missing any
-platform asset, any checksum, or the signature beside a Linux checksum, is refused rather than
-publishing a wrapper whose installer has nothing to fetch.
+platform asset, any checksum, or the signature beside a Linux checksum, or whose Linux signature
+does not verify against the key the tree carries, is refused rather than publishing a wrapper whose
+installer has nothing to fetch or refuses what it fetches.
 
 **Why.** The installer derives the download from the version it was published with. Publishing
 the wrapper first makes every install fail until the assets exist, which reads as the tool being
@@ -188,7 +189,7 @@ broken. Jenkins is started by hand, days later if need be, so npm publish is the
 step: it happens when somebody chooses, not when the tag lands. Publishing from a branch puts
 an unreviewed version on the registry.
 
-`verified-by: by-construction (publish-npm.yml runs only on workflow_dispatch, checks out refs/tags/ the given tag so a branch of that name cannot supply the tree and a tag that does not exist fails the run, refuses unless that tag is v plus the version in both files, and refuses unless each named asset and its checksum, and each Linux checksum's signature, are on the GitHub release; make check-security faults a checkout of a bare name)`
+`verified-by: by-construction (publish-npm.yml runs only on workflow_dispatch, checks out refs/tags/ the given tag so a branch of that name cannot supply the tree and a tag that does not exist fails the run, refuses unless that tag is v plus the version in both files, and refuses unless each named asset and its checksum, and each Linux checksum's signature, are on the GitHub release and each of those signatures verifies against the key in npm/scripts/postinstall.js; make check-security faults a checkout of a bare name)`
 
 <a id="RELEASE-11"></a>
 ### RELEASE-11: the registry authenticates the workflow, not a stored token
@@ -263,7 +264,9 @@ changing a release controls, and requiring it would fail an install for a reason
 to do with what was downloaded.
 
 **Note.** The check runs in a keyring made for it and removed afterwards, so nothing is read from
-or added to the person's own.
+or added to the person's own. The signature covers the checksum and nothing else, so it shows who
+produced that checksum and not which release it belongs to: whoever can replace release assets can
+serve an older release's binary, checksum and signature together, and they verify.
 
 `verified-by: bravebot_cli::installer_signature::both_installers_embed_the_release_key_they_name`
 `verified-by: bravebot_cli::installer_signature::a_linux_checksum_signed_by_the_release_key_installs`
@@ -298,11 +301,11 @@ or added to the person's own.
   noticing. RELEASE-9 is the installer in this repository: a checksum Jenkins ships in the
   wrong form is refused here, not accepted.
 
-- **Only the npm publish refuses a release whose Linux checksums carry no signature.** The publish
-  job in devops checks for each binary but not for a signature. The install script fetches the
-  newest GitHub release whether or not npm has been published, so a release Jenkins publishes
-  without them is refused by every Linux install that has `gpg` from the moment it exists, and the
-  npm check comes too late to prevent that.
+- **Only the npm publish refuses a release whose Linux checksums carry no signature that verifies.**
+  The publish job in devops checks for each binary but not for a signature. The install script
+  fetches the newest GitHub release whether or not npm has been published, so a release Jenkins
+  publishes without them is refused by every Linux install that has `gpg` from the moment it
+  exists, and the npm check comes too late to prevent that.
 
 - **Changing the signing key breaks every installer that carries the old one.** Each npm version
   carries the key it was published with and installs its own version's release, so it keeps
@@ -310,10 +313,7 @@ or added to the person's own.
   the newest release, so the key it carries has to change at the moment the first release signed
   by the new key is published, and either order leaves a window in which Linux installs with `gpg`
   are refused. An embedded key cannot be revoked or updated after it is published: a revocation or
-  a new signing subkey reaches only the installers shipped after it, where a fetched key file
-  would have carried it to every installer that pinned the fingerprint. npm versions published
-  before the key was embedded still fetch it, so Brave's download host has to go on serving the
-  key those versions name.
+  a new signing subkey reaches only the installers shipped after it.
 
 - **The refusals before a tag guard the tag, not the branch.** Tagging checks the branch, the
   remote, and the agreement among the files that state a version. The publish job builds the tip of a
