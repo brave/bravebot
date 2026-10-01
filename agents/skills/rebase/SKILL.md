@@ -22,10 +22,12 @@ rebases, and pushes over only the head it fetched. Spend tokens on the conflicts
    label: read [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-the-rule.md)
    first.
 3. `python3 agents/skills/rebase/rebase.py continue <pr>`, repeating 2 until it prints `next: push`.
-4. If a conflict was resolved: `python3 agents/skills/rebase/rebase.py check <pr> [target ...]`
-   with the targets covering the resolved files, per
-   [checks.md](../../../docs/development/checks.md); it defaults to `check-all-local`. A clean
-   rebase skips this and leaves the checks to CI.
+4. `python3 agents/skills/rebase/rebase.py check <pr>` runs only what the files resolved in step 2
+   call for: for Rust, `cargo fmt --check`, clippy on the crates touched and any resolved test
+   binary; `check-spec`, `check-locales`, `check-security` or `check-versions` where a spec, catalog,
+   workflow or manifest was resolved. A clean rebase, or a resolved file no rule names (`ui/`,
+   website, prose), runs nothing and leaves the checks to CI. Pass make targets to run those
+   instead; do not widen it to `check-all-local`, which CI repeats.
 5. `python3 agents/skills/rebase/rebase.py push <pr>`
 
 Report the old and new head, one line per resolved conflict on how both sides were kept, and which
