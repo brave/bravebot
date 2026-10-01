@@ -15,7 +15,9 @@ is, what it may do and how long it may live is [delegation.md](../delegation.md)
 call surface.
 
 [CHECKOUT-1](../checkouts.md#CHECKOUT-1) adds a routing field, `isolation`, whose one value,
-`checkout`, asks for a checkout of the delegate's own.
+`checkout`, asks for a checkout of the delegate's own. A definition `kind` names may ask for one
+itself ([CHECKOUT-2](../checkouts.md#CHECKOUT-2)), and its delegate then has one whether or not the
+call asks.
 
 ## Clauses
 

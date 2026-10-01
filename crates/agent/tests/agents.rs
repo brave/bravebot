@@ -502,6 +502,72 @@ fn a_project_replacement_is_held_to_the_ceiling_of_the_kind_it_is_loaded_as() {
     );
 }
 
+/// CHECKOUT-2. A project's file keeps the checkout the person's own of the same name asked for,
+/// and is told so. Where it makes the name a reader, the checkout is held to the kind and that is
+/// said instead, so neither line reads to its author as the one in force.
+#[test]
+fn a_project_replacement_keeps_the_checkout_and_a_reader_is_told_it_has_none() {
+    let scratch = Scratch::new("replacement-checkout");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    for name in ["migrator", "rule-reviewer"] {
+        write_definition(
+            &home,
+            name,
+            &format!(
+                "{}\nisolation: checkout",
+                frontmatter(name, "works apart", "worker")
+            ),
+            "work apart",
+        );
+    }
+    write_definition(
+        &project.join(".bravebot"),
+        "migrator",
+        &frontmatter("migrator", "works apart", "worker"),
+        "work here",
+    );
+    write_definition(
+        &project.join(".bravebot"),
+        "rule-reviewer",
+        &frontmatter("rule-reviewer", "reads a diff", "reader"),
+        "read the diff",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (definitions, notices) = {
+        let mut policy = policy(&mut sink, &["."]);
+        agents::discover(&mut policy, &workspace, Some(&home))
+    };
+
+    assert!(
+        definitions
+            .get("migrator")
+            .expect("selectable")
+            .asks_for_checkout()
+    );
+    assert!(
+        !definitions
+            .get("rule-reviewer")
+            .expect("selectable")
+            .asks_for_checkout()
+    );
+    let said: Vec<&str> = notices
+        .iter()
+        .map(|notice| notice.message.as_str())
+        .collect();
+    assert_eq!(
+        said,
+        [
+            ".bravebot/agents/migrator.md does not widen ~/.bravebot/agents/migrator.md: its \
+             delegate is given a checkout of its own",
+            ".bravebot/agents/rule-reviewer.md is loaded without a checkout: it is a reader, and \
+             a reader is never given one",
+        ]
+    );
+}
+
 /// A file resolves against another the same way on every machine. An order that came from the
 /// filesystem would make which of two definitions is live differ between machines, which is a
 /// difference nobody can see in the files.
@@ -737,5 +803,54 @@ fn a_memory_that_would_sit_inside_the_state_directory_is_not_kept_and_is_said() 
                     .to_string()
             ]
         )
+    );
+}
+
+/// CHECKOUT-2, CHECKOUT-9: a definition keeping a memory and asking for a checkout says, when it
+/// loads, that only an addressed turn keeps the memory. Where the memory is not kept at all, as
+/// inside the state directory, that is the only thing said.
+#[test]
+fn a_definition_keeping_a_memory_and_asking_for_a_checkout_says_so_when_it_loads() {
+    let scratch = Scratch::new("memory-in-checkout");
+    let project = scratch.workspace();
+    let elsewhere = scratch.home();
+    let inside = project.join(".bravebot");
+    for home in [&inside, &elsewhere] {
+        write_definition(
+            home,
+            "migrator",
+            &format!(
+                "{}\nmemory: project\nisolation: checkout",
+                frontmatter("migrator", "moves a module", "worker")
+            ),
+            "body",
+        );
+    }
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let said = |home: &Path, sink: &mut RecordingSink| {
+        let mut policy = policy(sink, &[]);
+        let (_, notices) = agents::discover(&mut policy, &workspace, Some(home));
+        notices.into_iter().map(|n| n.message).collect::<Vec<_>>()
+    };
+
+    let counted =
+        "1 delegate definition in .bravebot/agents was not loaded: this directory is not trusted";
+    assert_eq!(
+        said(&elsewhere, &mut sink),
+        [
+            counted,
+            "~/.bravebot/agents/migrator.md keeps its memory only in a turn you run with /agent: \
+             each of its delegates works in a checkout, which keeps none",
+        ]
+    );
+    assert_eq!(
+        said(&inside, &mut sink),
+        [
+            counted,
+            "~/.bravebot/agents/migrator.md keeps no memory here: in this directory its memory \
+             would be inside ~/.bravebot, which no write can leave untrusted",
+        ]
     );
 }

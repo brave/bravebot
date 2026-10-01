@@ -7,7 +7,6 @@
 # where the lists themselves merge cleanly, and a count nothing reads is wrong quietly. Count the
 # lines, or read the warnings check-spec prints.
 
-docs/specs/checkouts.md:CHECKOUT-2: a definition may ask for a checkout, and a later definition cannot take one away
 docs/specs/checkouts.md:CHECKOUT-10: a command vouched for in the working directory is asked about again in a checkout
 docs/specs/checkouts.md:CHECKOUT-11: a write in a checkout asks what the same write in the working directory asks
 docs/specs/checkouts.md:CHECKOUT-13: the paths that can come back are the ones the driver recorded, and the ones a trusted status lists

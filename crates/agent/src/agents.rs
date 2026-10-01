@@ -58,6 +58,8 @@ enum Read {
         definition: Box<Definition>,
         declares_servers: bool,
         no_memory: Option<NoMemory>,
+        /// An `isolation:` value asking for nothing here, as the file wrote it.
+        no_checkout: Option<String>,
     },
     /// Not a definition at all: no `name`, so nothing claimed to be one.
     ///
@@ -176,10 +178,26 @@ fn read_definition(text: &str, origin: &str) -> Read {
         }
     }
 
+    // `worktree` is the value Claude Code reads for the same request, so a definition written for
+    // it keeps its work out of the working directory here too. Any other value loads it without a
+    // checkout, and is said, because its author believes the work is kept apart.
+    let mut no_checkout = None;
+    if let Some(value) = declared
+        .get("isolation")
+        .map(String::as_str)
+        .filter(|i| !i.is_empty())
+    {
+        match value {
+            "checkout" | "worktree" => definition = definition.with_checkout(),
+            other => no_checkout = Some(other.to_string()),
+        }
+    }
+
     Read::Definition {
         definition: Box::new(definition),
         declares_servers,
         no_memory,
+        no_checkout,
     }
 }
 
@@ -290,6 +308,7 @@ pub fn discover<S: Sink>(
     }
     discover_workspace(policy, workspace, &mut definitions, &mut notices);
     notices.extend(rounds_held_to_their_kind(&definitions));
+    notices.extend(checkouts_held_to_their_kind(&definitions));
     // Asked once every file is in, since a later definition of a name takes its key over. A
     // memory inside the person's own directory is one the map does not govern, so no write and no
     // record could leave it untrusted.
@@ -302,6 +321,7 @@ pub fn discover<S: Sink>(
         }
         definitions.keep_no_memory();
     }
+    notices.extend(memories_kept_only_when_addressed(&definitions));
 
     (definitions, notices)
 }
@@ -452,6 +472,7 @@ fn admit(read: Read, origin: &str, definitions: &mut Definitions, notices: &mut 
             definition,
             declares_servers,
             no_memory,
+            no_checkout,
         } => {
             if declares_servers {
                 notices.push(Notice::from_message(t!(
@@ -470,6 +491,13 @@ fn admit(read: Read, origin: &str, definitions: &mut Definitions, notices: &mut 
                     definition = origin
                 ))),
                 None => {}
+            }
+            if let Some(value) = no_checkout {
+                notices.push(Notice::from_message(t!(
+                    delegate_isolation_not_read,
+                    definition = origin,
+                    value = value
+                )));
             }
             match definitions.insert(*definition) {
                 Admitted::AsWritten => return,
@@ -518,10 +546,44 @@ fn rounds_held_to_their_kind(definitions: &Definitions) -> Vec<Notice> {
         .collect()
 }
 
+/// What to tell whoever wrote a definition asking for a checkout that is loaded as a `reader`.
+///
+/// Asked once every file is in, because a later definition can make a name a reader, and the
+/// checkout an earlier one asked for still stands in the set.
+fn checkouts_held_to_their_kind(definitions: &Definitions) -> Vec<Notice> {
+    definitions
+        .iter()
+        .filter(|definition| definition.checkout_beyond_its_kind())
+        .map(|definition| {
+            Notice::from_message(t!(
+                delegate_checkout_reader,
+                definition = definition.origin()
+            ))
+        })
+        .collect()
+}
+
+/// What to tell whoever wrote a definition keeping a memory and asking for a checkout.
+///
+/// A delegate in a checkout keeps no memory (CHECKOUT-9), so only a turn addressed to the
+/// definition keeps one, and its author believes every run does.
+fn memories_kept_only_when_addressed(definitions: &Definitions) -> Vec<Notice> {
+    definitions
+        .iter()
+        .filter(|definition| definition.keeps_memory() && definition.asks_for_checkout())
+        .map(|definition| {
+            Notice::from_message(t!(
+                delegate_memory_in_checkout,
+                definition = definition.origin()
+            ))
+        })
+        .collect()
+}
+
 /// What to tell whoever wrote a definition that the one of the same name before it cut down.
 ///
-/// The words are here rather than in the kernel, which hands over which of the three axes moved
-/// and nothing about how to say it. Every one that moved, because a person told only about the
+/// The words are here rather than in the kernel, which hands over which of its parts moved and
+/// nothing about how to say it. Every one that moved, because a person told only about the
 /// kind would go on believing their `tools:` line was the one in force.
 fn narrowed(origin: &str, narrowing: &Narrowing) -> String {
     let mut said = Vec::new();
@@ -546,6 +608,9 @@ fn narrowed(origin: &str, narrowing: &Narrowing) -> String {
                 servers.join(", ")
             ),
         });
+    }
+    if narrowing.given_a_checkout {
+        said.push("its delegate is given a checkout of its own".to_string());
     }
     format!(
         "{origin} does not widen {}: {}",
@@ -960,6 +1025,7 @@ mod tests {
                     loaded: Kind::Worker,
                     confined_to: None,
                     servers_confined_to: Some(servers.iter().map(|s| s.to_string()).collect()),
+                    given_a_checkout: false,
                     replaced: "home.md".to_string(),
                 },
             )
@@ -1176,6 +1242,168 @@ mod tests {
                 "{value}"
             );
         }
+    }
+
+    /// What a worker's file with one `isolation:` line is admitted as, and what its author is
+    /// told of it.
+    fn admitted_with_isolation(line: &str) -> (Option<bool>, Vec<String>) {
+        let origin = ".bravebot/agents/migrator.md";
+        let mut definitions = Definitions::default();
+        let mut notices = Vec::new();
+        admit(
+            read_definition(
+                &format!("---\nname: migrator\ndescription: d\nkind: worker\n{line}---\n\nbody\n"),
+                origin,
+            ),
+            origin,
+            &mut definitions,
+            &mut notices,
+        );
+        (
+            definitions
+                .get("migrator")
+                .map(Definition::asks_for_checkout),
+            notices.into_iter().map(|notice| notice.message).collect(),
+        )
+    }
+
+    /// CHECKOUT-2: `checkout` asks for one, and so does `worktree`, the value another agent reads
+    /// for the same request. An empty or absent line asks for none and says nothing.
+    #[test]
+    fn a_definition_asking_for_a_checkout_or_a_worktree_is_given_one() {
+        for line in [
+            "isolation: checkout\n",
+            "isolation: worktree\n",
+            "isolation:   checkout  \n",
+        ] {
+            assert_eq!(
+                admitted_with_isolation(line),
+                (Some(true), vec![]),
+                "{line}"
+            );
+        }
+        for line in ["isolation:\n", ""] {
+            assert_eq!(
+                admitted_with_isolation(line),
+                (Some(false), vec![]),
+                "{line:?}"
+            );
+        }
+    }
+
+    /// CHECKOUT-2: any other value loads the definition without a checkout, so one written for
+    /// another agent still runs, and says so, since its author believes the work is kept apart.
+    /// The value is said as written, so a case slip is visible.
+    #[test]
+    fn an_isolation_value_asking_for_nothing_here_loads_without_a_checkout_and_says_so() {
+        for value in ["none", "Checkout", "true", "remote", "checkout worktree"] {
+            assert_eq!(
+                admitted_with_isolation(&format!("isolation: {value}\n")),
+                (
+                    Some(false),
+                    vec![format!(
+                        ".bravebot/agents/migrator.md is loaded without a checkout: its isolation \
+                         line says {value}, and only checkout and worktree ask for one"
+                    )]
+                ),
+                "{value}"
+            );
+        }
+    }
+
+    /// CHECKOUT-2: a reader asking for a checkout is told it has none, whether its own file made
+    /// it a reader or a later one did, and a worker asking for one says nothing.
+    #[test]
+    fn a_reader_asking_for_a_checkout_is_told_it_has_none() {
+        let mut definitions = Definitions::default();
+        definitions.insert(definition_of(
+            "---\nname: reviewer\ndescription: d\nkind: reader\nisolation: checkout\n---\n",
+        ));
+        definitions.insert(definition_of(
+            "---\nname: migrator\ndescription: d\nkind: worker\nisolation: checkout\n---\n",
+        ));
+        definitions.insert(
+            Definition::from_file("tester", "d", Kind::Worker, None, "", "home.md").with_checkout(),
+        );
+        definitions.insert(Definition::from_file(
+            "tester",
+            "d",
+            Kind::Reader,
+            None,
+            "",
+            "project.md",
+        ));
+
+        let said: Vec<String> = checkouts_held_to_their_kind(&definitions)
+            .into_iter()
+            .map(|notice| notice.message)
+            .collect();
+        assert_eq!(
+            said,
+            [
+                "test is loaded without a checkout: it is a reader, and a reader is never given one",
+                "project.md is loaded without a checkout: it is a reader, and a reader is never \
+                 given one",
+            ]
+        );
+    }
+
+    /// CHECKOUT-2, CHECKOUT-9: a definition keeping a memory and asking for a checkout is told its
+    /// delegates keep none of it, and a reader, which is given no checkout, keeps its memory.
+    #[test]
+    fn a_definition_keeping_a_memory_in_a_checkout_is_told_only_an_addressed_turn_keeps_it() {
+        let mut definitions = Definitions::default();
+        let file = |name: &str, kind: Kind| {
+            Definition::from_file(name, "d", kind, None, "", format!("{name}.md"))
+        };
+        definitions.insert(file("both", Kind::Worker).with_memory().with_checkout());
+        definitions.insert(file("tests", Kind::Checker).with_memory().with_checkout());
+        definitions.insert(file("remembers", Kind::Worker).with_memory());
+        definitions.insert(file("apart", Kind::Worker).with_checkout());
+        definitions.insert(file("reads", Kind::Reader).with_memory().with_checkout());
+
+        let said: Vec<String> = memories_kept_only_when_addressed(&definitions)
+            .into_iter()
+            .map(|notice| notice.message)
+            .collect();
+        assert_eq!(
+            said,
+            [
+                "both.md keeps its memory only in a turn you run with /agent: each of its \
+                 delegates works in a checkout, which keeps none",
+                "tests.md keeps its memory only in a turn you run with /agent: each of its \
+                 delegates works in a checkout, which keeps none",
+            ]
+        );
+    }
+
+    /// CHECKOUT-2: a replacement that asked for no checkout and is given one is told, beside any
+    /// other narrowing, so its author does not read its delegate as working in their tree.
+    #[test]
+    fn a_replacement_given_a_checkout_is_told_so() {
+        let said = |named: Kind, loaded: Kind| {
+            narrowed(
+                "project.md",
+                &Narrowing {
+                    named,
+                    loaded,
+                    confined_to: None,
+                    servers_confined_to: None,
+                    given_a_checkout: true,
+                    replaced: "home.md".to_string(),
+                },
+            )
+        };
+
+        assert_eq!(
+            said(Kind::Worker, Kind::Worker),
+            "project.md does not widen home.md: its delegate is given a checkout of its own"
+        );
+        assert_eq!(
+            said(Kind::Worker, Kind::Checker),
+            "project.md does not widen home.md: it names kind worker and is loaded as a checker, \
+             and its delegate is given a checkout of its own"
+        );
     }
 
     /// MEMORY-3: the name becomes the memory's file name, so a definition whose name is no slug

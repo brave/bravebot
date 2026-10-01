@@ -41,11 +41,13 @@ before that work starts.
 
 ## What exists today
 
-A definition is read for its name, description, kind, tools, model, skills, rounds and memory, and
-every other key is ignored. One whose `memory:` is `project` or `local` keeps a memory in the
+A definition is read for its name, description, kind, tools, model, skills, rounds, memory and
+isolation, and every other key is ignored. One whose `memory:` is `project` or `local` keeps a memory in the
 working directory ([MEMORY-2](#MEMORY-2)), and every other definition keeps nothing between runs: a
 delegate begins with the task it was given, and a run a person addresses begins with the session's
-conversation. It works in whichever directory the session is in.
+conversation. It works in whichever directory the session is in, except that a delegate of one
+whose `isolation:` asks for a checkout works in a checkout of it
+([CHECKOUT-2](checkouts.md#CHECKOUT-2)).
 
 The desktop front end's bots are a format of their own. A bot is a row in the desktop's store: a
 name, a purpose, a model, a folder chosen when it was made, and a history of conversations. Its
@@ -84,7 +86,7 @@ and `local` values, and one memory per definition name.
 
 | Kept in | What | Why there |
 |---|---|---|
-| the definition file | its name, description, kind, tools, model, skills, rounds and `memory:`, and the purpose as its body | each says what the bot is for or narrows what it may reach, and each means the same on every machine |
+| the definition file | its name, description, kind, tools, model, skills, rounds, `memory:` and `isolation:`, and the purpose as its body | each says what the bot is for or narrows what it may reach, and each means the same on every machine |
 | the desktop's store | the name it is shown under, its folder, its avatar, its session and every conversation, how much compaction has taken from that session, and when it was archived, made and last changed | each is a fact about one machine or a record of what happened |
 
 The memory itself is in neither. It is a file in the checkout ([MEMORY-2](#MEMORY-2)).
@@ -349,10 +351,11 @@ gate a memory needs.
 ## The checkout
 
 <a id="MEMORY-7"></a>
-### MEMORY-7: a definition works in the checkout its session is in, and no file names one
+### MEMORY-7: no file names the directory a definition works in
 
-A definition works in the session's working directory, as every run does. No `directory:` key is
-read, and no key starts a run anywhere else. The desktop keeps the folder a bot was made for in its
+A definition works in the session's working directory, as every run does, except where its
+`isolation:` key asks for a checkout the driver makes of it for its delegates
+([CHECKOUT-2](checkouts.md#CHECKOUT-2)). No `directory:` key is read, and no key names a directory. The desktop keeps the folder a bot was made for in its
 own store ([MEMORY-1](#MEMORY-1)), and a bot's conversation is a session in that folder
 ([SESSION-1](sessions.md#SESSION-1)).
 
@@ -367,12 +370,14 @@ own store ([MEMORY-1](#MEMORY-1)), and a bot's conversation is a session in that
   ([TRUST-10](trust-map.md#TRUST-10)). A checkout named in a file is reachable only once somebody
   opens it, and that is a person's act and not a file's.
 
-`isolation:` is not read either. [CHECKOUT-2](checkouts.md#CHECKOUT-2), which nothing yet builds,
-would read it as a request for a checkout the driver makes, so that key would start a run somewhere
-other than the working directory. The file still names no path, and a delegate in a checkout keeps
-no memory ([CHECKOUT-9](checkouts.md#CHECKOUT-9)).
+`isolation:` is read as a request for a checkout the driver makes
+([CHECKOUT-2](checkouts.md#CHECKOUT-2)), so that key starts a delegate somewhere other than the
+working directory. The file still names no path, a turn a person addresses to the definition still
+works in the working directory, and a delegate in a checkout keeps no memory
+([CHECKOUT-9](checkouts.md#CHECKOUT-9)). A definition keeping a memory and asking for a checkout
+says so when it loads, so its author learns that only an addressed turn keeps one.
 
-`verified-by: by-construction (a definition is read for its named keys alone, none of which is a directory, and every run works in the session's workspace)`
+`verified-by: by-construction (a definition is read for its named keys alone, none of which is a directory, and every run works in the session's workspace or in a checkout the driver made of it)`
 
 ## The desktop's bots
 
@@ -506,13 +511,6 @@ Nothing builds this yet.
 `verified-by: none`
 
 ## Open questions
-
-- **Whether a definition may ask for a checkout of its own.** Claude Code's `isolation: worktree`
-  gives a subagent a fresh worktree. Here that would be a run writing outside its working directory
-  ([TRUST-10](trust-map.md#TRUST-10)), into a path nobody vouched for whose first write asks, after
-  a `git` command no person chose to run. The directory would outlive the turn that made it, so
-  removing it is either a question for a person or a deletion nobody approved.
-  [checkouts.md](checkouts.md) proposes an answer to each, which nothing yet builds.
 
 - **Whether a memory may live in the person's own directory.** `memory: user` needs a run to write
   into `~/.bravebot` without a person opening it, which no tool does. It also needs a record of what
