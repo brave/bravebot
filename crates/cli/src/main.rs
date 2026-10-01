@@ -2291,6 +2291,23 @@ fn doctor() -> ExitCode {
                 );
             }
 
+            // A key beside the ones this build reads, which the lines above cannot cover: those name
+            // a key that was recognised and not obeyed, and this one was never read at all. The file
+            // is documented as largely another tool's shape, so a pasted block holds `sandbox` or
+            // `hooks`, and nothing else would tell whoever wrote one that the restriction they
+            // believe is in force was never read. A note rather than a failure, on BACKEND-36's
+            // reasoning: a key written for a later release must not stop this binary.
+            for (path, key) in settings.unread_keys() {
+                fact(
+                    t!(doctor_settings_unread),
+                    t!(
+                        doctor_settings_unread_key,
+                        key = key,
+                        path = path.display().to_string()
+                    ),
+                );
+            }
+
             // The same, for a key that only refuses and was spelled as something other than a
             // boolean: it is read as absence (PERM-16, PERM-17), so somebody who quoted `"true"`
             // has a session as permissive as one that named nothing, and nothing else would say so.
