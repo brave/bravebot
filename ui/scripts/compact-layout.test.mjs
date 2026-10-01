@@ -38,3 +38,8 @@ test('the drawer styles switch on at the same width the layout code does', () =>
   const css = readFileSync('src/renderer/styles/shell.css', 'utf8')
   assert.match(css, new RegExp(`@media \\(max-width: ${COMPACT}px\\)`))
 })
+
+test('a dialog becomes a bottom sheet at the same width', () => {
+  const modal = readFileSync('src/renderer/components/Modal.tsx', 'utf8')
+  assert.match(modal, new RegExp(`@media \\(max-width: ${COMPACT}px\\)`))
+})

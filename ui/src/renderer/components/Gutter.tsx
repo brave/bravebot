@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  COMPACT,
   FOLD_MS,
   INITIAL,
   INITIAL_LAYOUT,
@@ -21,6 +22,24 @@ import {
  * appearance identical to the fixed layout it replaces — a seam, not a control — while a
  * transparent pad either side gives the pointer something realistic to catch.
  */
+
+/**
+ * Whether the window is compact now, following it as it changes.
+ *
+ * For what is drawn differently in a drawer layout rather than merely laid out differently: CSS
+ * moves the columns, but a glyph is chosen in markup.
+ */
+export function useCompact(): boolean {
+  const query = `(max-width: ${COMPACT}px)`
+  const [compact, setCompact] = useState(() => window.matchMedia(query).matches)
+  useEffect(() => {
+    const list = window.matchMedia(query)
+    const update = (): void => setCompact(list.matches)
+    list.addEventListener('change', update)
+    return () => list.removeEventListener('change', update)
+  }, [query])
+  return compact
+}
 
 /**
  * Live column widths, clamped to the window, and which columns are folded shut.

@@ -216,6 +216,13 @@
 
   /* The context panel already overlays below 1120px; here it is sized against a phone. */
   .app .context { width: min(90vw, 340px); }
+
+  /* A fresh session keeps its composer at the bottom edge, beside the keyboard, as every other
+     conversation does; the greeting sits in the space above, and the suggestions above the box
+     they fill, within reach of the thumb that is about to type. */
+  .app .transcript.fresh .composer-spacer { flex-grow: 0; }
+  .app .transcript.fresh .entries { justify-content: center; }
+  .app .transcript.fresh .composer-dock .suggestions { order: -1; margin-bottom: var(--leo-spacing-m); }
 }
 
 @keyframes drawer-scrim-in {
@@ -235,4 +242,20 @@
   .sidebar-row-hint,
   .welcome-shortcut,
   .tooltip-shortcut { display: none; }
+
+  /* A finger needs a bigger target than a pointer, and the head that holds the toggles grows to
+     match, as an app bar does. */
+  :root { --hit: 44px; --titlebar: 56px; }
+
+  /* The browser's grey flash on tap is not how anything else on the phone answers a touch;
+     controls show their own pressed state. */
+  * { -webkit-tap-highlight-color: transparent; }
+
+  /* What a desktop reveals under the pointer has no pointer to reveal it here, so it stays shown.
+     A row's menu takes the place of its time, as it does under a hovering pointer. */
+  .app .session-more-menu,
+  .app .session-group-new,
+  .app .bot-edit { opacity: 1; }
+  .app .session-row .session-time,
+  .app .session-group-head .count { opacity: 0; }
 }

@@ -9,6 +9,7 @@ import { CopyButton } from './CopyButton'
 import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import type { Side } from '../columns'
+import { useCompact } from './Gutter'
 import type { Asked } from '../App'
 import type { ExportFormat } from '../../shared/export'
 import { Diff } from './Diff'
@@ -205,8 +206,12 @@ function ColumnToggle({
   const what = side === 'left' ? 'the session list' : 'the context panel'
   const label = side === 'left' ? 'Session list' : 'Context panel'
   const controls = side === 'left' ? 'sessions-column' : 'context-column'
-  const icon: IconName =
-    side === 'left'
+  // In a compact window the list is a drawer and the panel a sheet over the conversation, so the
+  // toggles take the glyphs a phone uses for those rather than a desktop's split-view ones.
+  const compact = useCompact()
+  const icon: IconName = compact
+    ? side === 'left' ? 'hamburger-menu' : 'info-outline'
+    : side === 'left'
       ? collapsed
         ? 'sidepanel-retract'
         : 'browser-split-view-left'
@@ -293,6 +298,9 @@ export function Transcript({
   }, [])
   const [unseen, setUnseen] = useState(false)
   const [searching, setSearching] = useState(false)
+  // A phone's app bar holds the drawer, the title and an overflow menu; Find moves into the
+  // menu, and Export, which the Android app cannot do yet, is not offered there.
+  const compact = useCompact()
   const [query, setQuery] = useState('')
   const [match, setMatch] = useState(0)
   const [recents, setRecents] = useState<string[]>([])
@@ -502,10 +510,17 @@ export function Transcript({
           )}
         </div>
         {live && <div className="conversation-toolbar">
-          <IconButton icon="search" label="Find" tooltip="Find in conversation" shortcut="⌘F" pressed={searching}
-            className="find-open" onClick={() => setSearching((value) => !value)} />
-          <ExportMenu canExport={canExport} includeTools={includeTools} onToggleTools={onToggleTools} onExport={onExport} />
-          <IconMenu icon="more-horizontal" label="More" tooltip={false} className="conversation-more" data-test="conversation-more">
+          {!compact && <>
+            <IconButton icon="search" label="Find" tooltip="Find in conversation" shortcut="⌘F" pressed={searching}
+              className="find-open" onClick={() => setSearching((value) => !value)} />
+            <ExportMenu canExport={canExport} includeTools={includeTools} onToggleTools={onToggleTools} onExport={onExport} />
+          </>}
+          <IconMenu icon={compact ? 'more-vertical' : 'more-horizontal'} label="More" tooltip={false} className="conversation-more" data-test="conversation-more">
+            {compact && (
+              <leo-menu-item onClick={() => afterMenu(() => setSearching(true))}>
+                <span className="menu-icon-row"><Icon name="search" />Find in conversation</span>
+              </leo-menu-item>
+            )}
             <leo-menu-item onClick={() => afterMenu(() => setPermissions(true))}>
               <span className="menu-icon-row"><Icon name="shield-done" />Permissions…</span>
             </leo-menu-item>

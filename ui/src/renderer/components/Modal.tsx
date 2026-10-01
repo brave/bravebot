@@ -3,6 +3,33 @@ import { createPortal } from 'react-dom'
 import { useBack } from '../back'
 import { Dialog } from '../nala'
 
+/**
+ * A dialog on a phone is a sheet from the bottom edge, where a thumb is, rather than a box in the
+ * middle of the screen. Leo draws the box inside its shadow root and offers no part to style it
+ * by, so this is adopted into each dialog's root. Keep the width in step with `COMPACT`.
+ */
+const sheet = (() => {
+  if (typeof CSSStyleSheet === 'undefined') return null
+  const css = new CSSStyleSheet()
+  css.replaceSync(`
+    @media (max-width: 720px) {
+      /* Element, class and state, to outrank Leo's own rule, which Svelte scopes with a second
+         class. */
+      dialog.leo-dialog[open] {
+        width: 100%;
+        max-width: none;
+        max-height: 92vh;
+        margin: auto 0 0;
+        border-radius: var(--leo-radius-xl) var(--leo-radius-xl) 0 0;
+        animation: sheet-up var(--leo-duration-m) var(--leo-easing-out);
+      }
+      @media (prefers-reduced-motion: reduce) { dialog.leo-dialog[open] { animation: none; } }
+    }
+    @keyframes sheet-up { from { transform: translateY(100%); } }
+  `)
+  return css
+})()
+
 const focusableControls = (dialog: HTMLElement): HTMLElement[] => {
   const selector = 'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled)'
   const found: HTMLElement[] = []
@@ -119,7 +146,9 @@ export function Modal({
       if (root.getAttribute('aria-modal') !== 'true') root.setAttribute('aria-modal', 'true')
       if (root.getAttribute('aria-label') !== title) root.setAttribute('aria-label', title)
       if (subtitleId && root.getAttribute('aria-describedby') !== subtitleId) root.setAttribute('aria-describedby', subtitleId)
-      const dialog = root.shadowRoot?.querySelector('dialog')
+      const own = root.shadowRoot
+      if (own && sheet && !own.adoptedStyleSheets.includes(sheet)) own.adoptedStyleSheets = [...own.adoptedStyleSheets, sheet]
+      const dialog = own?.querySelector('dialog')
       if (!dialog) return
       // Leo's own close button is an icon with no name. Name it for what it closes.
       const close = dialog.querySelector<HTMLElement>('.close-button button')
