@@ -22701,7 +22701,7 @@ fn a_spawn_asking_for_a_checkout_it_may_not_have_starts_nothing() {
         (
             "other",
             r#"{"kind":"worker","task":"NEVER-RUNS","isolation":"copy"}"#,
-            "may only be",
+            "works in your working directory, unless its definition asks for one",
         ),
         (
             "reader",
@@ -22987,6 +22987,57 @@ fn a_definition_asking_for_a_checkout_with_no_state_directory_is_refused() {
     assert!(
         asked.iter().all(|body| !body.contains("\"ran\"")),
         "the definition's delegate started in the working directory"
+    );
+}
+
+/// CHECKOUT-2. A definition asking for a checkout in a directory no checkout can be made of starts
+/// nothing, and the refusal names the definition, since the call that met it did not ask.
+#[test]
+fn a_definition_asking_for_a_checkout_outside_a_repository_is_refused_by_name() {
+    let scratch = Scratch::new("checkout-definition-no-repository");
+    let home = Scratch::new("checkout-definition-no-repository-home");
+    define(
+        &home,
+        "migrator",
+        "kind: worker\nisolation: checkout\n",
+        "MIGRATE-WITH-CARE",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "START-THE-MIGRATOR",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"migrator","task":"UNROOTED-MIGRATION"}"#,
+                ),
+                reply_with("done"),
+                reply_with("done"),
+            ],
+        ),
+        ("UNROOTED-MIGRATION", vec![reply_with("ran")]),
+    ]);
+    let (asked, _) = run_in_a_repository(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "START-THE-MIGRATOR",
+    );
+
+    assert!(
+        asked.iter().any(|body| body.contains(
+            "The migrator definition asks for a checkout of its own. No checkout was made"
+        )),
+        "the refusal did not name the definition that asked"
+    );
+    assert!(
+        asked.iter().all(|body| !body.contains("\"ran\"")),
+        "the definition's delegate started in the working directory"
+    );
+    assert!(
+        checkouts_under(&home.path).is_empty(),
+        "a checkout was made"
     );
 }
 

@@ -472,8 +472,8 @@ They share live file authority because their effects touch the same filesystem. 
 spans one operation, so a large listing or search can delay other captures until it finishes.
 Reservations are per path, so writes to other paths proceed.
 
-[checkouts.md](checkouts.md), which nothing yet builds, proposes a delegate that works in a checkout
-of its own, so that two workers stop building each other's edits. Its writes still go through the
+[checkouts.md](checkouts.md) gives a delegate a checkout of its own where its spawn or its
+definition asks, so that two workers stop building each other's edits. Its writes still go through the
 one live file authority, under the checkout's paths.
 
 **Why.** A turn that asked three questions waits on the slowest and not on the sum. Running them

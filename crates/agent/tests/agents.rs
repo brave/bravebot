@@ -805,3 +805,52 @@ fn a_memory_that_would_sit_inside_the_state_directory_is_not_kept_and_is_said() 
         )
     );
 }
+
+/// CHECKOUT-2, CHECKOUT-9: a definition keeping a memory and asking for a checkout says, when it
+/// loads, that only an addressed turn keeps the memory. Where the memory is not kept at all, as
+/// inside the state directory, that is the only thing said.
+#[test]
+fn a_definition_keeping_a_memory_and_asking_for_a_checkout_says_so_when_it_loads() {
+    let scratch = Scratch::new("memory-in-checkout");
+    let project = scratch.workspace();
+    let elsewhere = scratch.home();
+    let inside = project.join(".bravebot");
+    for home in [&inside, &elsewhere] {
+        write_definition(
+            home,
+            "migrator",
+            &format!(
+                "{}\nmemory: project\nisolation: checkout",
+                frontmatter("migrator", "moves a module", "worker")
+            ),
+            "body",
+        );
+    }
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let said = |home: &Path, sink: &mut RecordingSink| {
+        let mut policy = policy(sink, &[]);
+        let (_, notices) = agents::discover(&mut policy, &workspace, Some(home));
+        notices.into_iter().map(|n| n.message).collect::<Vec<_>>()
+    };
+
+    let counted =
+        "1 delegate definition in .bravebot/agents was not loaded: this directory is not trusted";
+    assert_eq!(
+        said(&elsewhere, &mut sink),
+        [
+            counted,
+            "~/.bravebot/agents/migrator.md keeps its memory only in a turn you run with /agent: \
+             each of its delegates works in a checkout, which keeps none",
+        ]
+    );
+    assert_eq!(
+        said(&inside, &mut sink),
+        [
+            counted,
+            "~/.bravebot/agents/migrator.md keeps no memory here: in this directory its memory \
+             would be inside ~/.bravebot, which no write can leave untrusted",
+        ]
+    );
+}

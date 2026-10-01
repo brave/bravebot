@@ -351,7 +351,7 @@ gate a memory needs.
 ## The checkout
 
 <a id="MEMORY-7"></a>
-### MEMORY-7: a definition works in the checkout its session is in, and no file names one
+### MEMORY-7: no file names the directory a definition works in
 
 A definition works in the session's working directory, as every run does, except where its
 `isolation:` key asks for a checkout the driver makes of it for its delegates
@@ -374,7 +374,8 @@ own store ([MEMORY-1](#MEMORY-1)), and a bot's conversation is a session in that
 ([CHECKOUT-2](checkouts.md#CHECKOUT-2)), so that key starts a delegate somewhere other than the
 working directory. The file still names no path, a turn a person addresses to the definition still
 works in the working directory, and a delegate in a checkout keeps no memory
-([CHECKOUT-9](checkouts.md#CHECKOUT-9)).
+([CHECKOUT-9](checkouts.md#CHECKOUT-9)). A definition keeping a memory and asking for a checkout
+says so when it loads, so its author learns that only an addressed turn keeps one.
 
 `verified-by: by-construction (a definition is read for its named keys alone, none of which is a directory, and every run works in the session's workspace or in a checkout the driver made of it)`
 

@@ -612,9 +612,9 @@ pub enum Admitted {
 
 /// What a replacement asked for and did not get, for whoever wrote it to be told.
 ///
-/// The words are the loader's: this is the kernel, and what it has to hand over is which of the
-/// three axes moved rather than a sentence about it. [`Admitted::Narrowed`] is answered only where
-/// one of them did, so a value of this always has something to say.
+/// The words are the loader's: this is the kernel, and what it has to hand over is which of its
+/// parts moved rather than a sentence about it. [`Admitted::Narrowed`] is answered only where one
+/// of them did, so a value of this always has something to say.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Narrowing {
     /// The kind the file named.

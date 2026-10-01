@@ -321,6 +321,7 @@ pub fn discover<S: Sink>(
         }
         definitions.keep_no_memory();
     }
+    notices.extend(memories_kept_only_when_addressed(&definitions));
 
     (definitions, notices)
 }
@@ -562,10 +563,27 @@ fn checkouts_held_to_their_kind(definitions: &Definitions) -> Vec<Notice> {
         .collect()
 }
 
+/// What to tell whoever wrote a definition keeping a memory and asking for a checkout.
+///
+/// A delegate in a checkout keeps no memory (CHECKOUT-9), so only a turn addressed to the
+/// definition keeps one, and its author believes every run does.
+fn memories_kept_only_when_addressed(definitions: &Definitions) -> Vec<Notice> {
+    definitions
+        .iter()
+        .filter(|definition| definition.keeps_memory() && definition.asks_for_checkout())
+        .map(|definition| {
+            Notice::from_message(t!(
+                delegate_memory_in_checkout,
+                definition = definition.origin()
+            ))
+        })
+        .collect()
+}
+
 /// What to tell whoever wrote a definition that the one of the same name before it cut down.
 ///
-/// The words are here rather than in the kernel, which hands over which of the three axes moved
-/// and nothing about how to say it. Every one that moved, because a person told only about the
+/// The words are here rather than in the kernel, which hands over which of its parts moved and
+/// nothing about how to say it. Every one that moved, because a person told only about the
 /// kind would go on believing their `tools:` line was the one in force.
 fn narrowed(origin: &str, narrowing: &Narrowing) -> String {
     let mut said = Vec::new();
@@ -1326,6 +1344,35 @@ mod tests {
                 "test is loaded without a checkout: it is a reader, and a reader is never given one",
                 "project.md is loaded without a checkout: it is a reader, and a reader is never \
                  given one",
+            ]
+        );
+    }
+
+    /// CHECKOUT-2, CHECKOUT-9: a definition keeping a memory and asking for a checkout is told its
+    /// delegates keep none of it, and a reader, which is given no checkout, keeps its memory.
+    #[test]
+    fn a_definition_keeping_a_memory_in_a_checkout_is_told_only_an_addressed_turn_keeps_it() {
+        let mut definitions = Definitions::default();
+        let file = |name: &str, kind: Kind| {
+            Definition::from_file(name, "d", kind, None, "", format!("{name}.md"))
+        };
+        definitions.insert(file("both", Kind::Worker).with_memory().with_checkout());
+        definitions.insert(file("tests", Kind::Checker).with_memory().with_checkout());
+        definitions.insert(file("remembers", Kind::Worker).with_memory());
+        definitions.insert(file("apart", Kind::Worker).with_checkout());
+        definitions.insert(file("reads", Kind::Reader).with_memory().with_checkout());
+
+        let said: Vec<String> = memories_kept_only_when_addressed(&definitions)
+            .into_iter()
+            .map(|notice| notice.message)
+            .collect();
+        assert_eq!(
+            said,
+            [
+                "both.md keeps its memory only in a turn you run with /agent: each of its \
+                 delegates works in a checkout, which keeps none",
+                "tests.md keeps its memory only in a turn you run with /agent: each of its \
+                 delegates works in a checkout, which keeps none",
             ]
         );
     }

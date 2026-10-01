@@ -204,9 +204,12 @@ Any other value loads the definition working in your working tree, and the turn 
 ```
 
 A `reader` is never given one, since it writes nothing, and the turn says that too. Where a
-checkout cannot be made, because the delegate starting it already works in one or the session keeps
-no state directory, the delegate does not start, and the planner is told why. A turn you run
-yourself with `/agent` is yours, so it works in your working tree and says so.
+checkout cannot be made, as when the delegate starting it already works in one, the session keeps
+no state directory or the working directory is not in a git repository, the delegate does not
+start, and the planner is told why. A turn you run
+yourself with `/agent` is yours, so it works in your working tree and says so. A delegate in a
+checkout keeps no [memory](#memory), so a definition with both keeps its memory only in a `/agent`
+turn, and bravebot says so when it loads the definition.
 
 The commands that bring a checkout's work back into your tree are not built yet. A checkout a
 delegate wrote in stays where it is until you remove it.

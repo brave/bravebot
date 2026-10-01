@@ -2196,6 +2196,10 @@ delegate-isolation-not-read = { $definition } is loaded without a checkout: its 
 # because a definition of the same name narrowed it. A reader is never given a checkout. The
 # definition is its file's path.
 delegate-checkout-reader = { $definition } is loaded without a checkout: it is a reader, and a reader is never given one
+# A definition keeps a memory and asks for a checkout. Each of its delegates works in a checkout,
+# which keeps no memory, so only a turn addressed to it keeps one. The definition is its file's
+# path, and /agent is the command, which stays as it is.
+delegate-memory-in-checkout = { $definition } keeps its memory only in a turn you run with /agent: each of its delegates works in a checkout, which keeps none
 
 # What a skill file named beyond its name and description. The skill is its file's path and the
 # model and the effort are that file's own words, all three from a source somebody vouched for.

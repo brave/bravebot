@@ -1904,6 +1904,8 @@ delegate-isolation-not-read =
     { $definition } est chargé sans copie de travail à part : sa ligne isolation indique { $value }, et seuls checkout et worktree en demandent une
 delegate-checkout-reader =
     { $definition } est chargé sans copie de travail à part : c'est un reader, et un reader n'en reçoit jamais
+delegate-memory-in-checkout =
+    { $definition } ne garde sa mémoire que dans un tour lancé avec /agent : chacun de ses délégués travaille dans une copie de travail à part, qui n'en garde aucune
 
 ## Regarder ce que fait un delegue
 

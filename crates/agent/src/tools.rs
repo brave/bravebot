@@ -1006,8 +1006,8 @@ fn table(
                                         are not in it, and what it changes stays there until \
                                         it is brought back. Not for a \"reader\", and not for \
                                         a delegate that is already in one. A definition may \
-                                        ask for one itself, and its delegates then get one \
-                                        whether or not this is set.",
+                                        ask for one itself, and its delegates are then started \
+                                        as if this were set.",
                         "enum": ["checkout"]
                     }
                 },
@@ -1249,10 +1249,24 @@ fn offer_kinds(tools: &mut [Tool], delegates: &bravebot_core::delegate::Definiti
 
     // Name and description together, because a name on its own says nothing about when to pick
     // it. Both are the definition's own words, from a file that passed the trusted-content gate
-    // or from this program: a name nobody vouched for never entered the set.
+    // or from this program: a name nobody vouched for never entered the set. A checkout is said
+    // beside them, since it decides which tree the delegate's report is about.
     let described = delegates
         .iter()
-        .map(|definition| format!("\n- {}: {}", definition.name(), definition.description()))
+        .map(|definition| {
+            let apart = match definition.asks_for_checkout() {
+                true => {
+                    " Its delegates work in a checkout of the last commit, which holds no change \
+                     not yet committed."
+                }
+                false => "",
+            };
+            format!(
+                "\n- {}: {}{apart}",
+                definition.name(),
+                definition.description()
+            )
+        })
         .collect::<String>();
     kind["description"] = json!(format!(
         "Which kind of agent. Pick the narrowest one that can do the job; they are listed \
@@ -6812,8 +6826,19 @@ fn spawn_agent<S: Sink, R: Reporter>(
             None => None,
             Some(state) => match tools.workspace.checkout_for(policy, state) {
                 Ok(made) => Some(made),
-                Err(refusal) if started.is_empty() => return Produced::problem(refusal),
                 Err(refusal) => {
+                    // Said as the definition's, since the call that met the refusal may not have
+                    // asked.
+                    let refusal = match spec.asks_for_checkout() {
+                        true => format!(
+                            "The {} definition asks for a checkout of its own. {refusal}",
+                            spec.definition()
+                        ),
+                        false => refusal,
+                    };
+                    if started.is_empty() {
+                        return Produced::problem(refusal);
+                    }
                     rest_refused = Some(refusal);
                     break;
                 }
@@ -6920,7 +6945,7 @@ fn wants_checkout<'a>(
         Some(_) => {
             return Err(
                 "error: 'isolation' may only be \"checkout\"; leave it out for a delegate that \
-                 works in your working directory"
+                 works in your working directory, unless its definition asks for one"
                     .to_string(),
             );
         }
@@ -8575,6 +8600,55 @@ mod tests {
             ),
             "the planner was given no reason to pick the definition: {described}"
         );
+    }
+
+    /// CHECKOUT-2: the planner is told which definitions work in a checkout, since their report is
+    /// about the last commit and not the tree it may have just edited. A reader is given none.
+    #[test]
+    fn a_definition_asking_for_a_checkout_is_offered_as_working_in_one() {
+        use bravebot_core::delegate::{Definition, Definitions, Kind};
+
+        let mut delegates = Definitions::default();
+        for (name, kind) in [("migrator", Kind::Worker), ("reviewer", Kind::Reader)] {
+            delegates.insert(
+                Definition::from_file(name, "Does it.", kind, None, "", "a.md").with_checkout(),
+            );
+        }
+        delegates.insert(Definition::from_file(
+            "tester",
+            "Does it.",
+            Kind::Checker,
+            None,
+            "",
+            "a.md",
+        ));
+
+        let tools = for_planner(
+            Scheduling::ArrangingALook,
+            crate::watch::Arming::Unavailable,
+            &delegates,
+            Deadlines::BUILT_IN,
+        );
+        let spawn = tools
+            .iter()
+            .find(|tool| tool.function.name == "spawn_agent")
+            .expect("a planner is offered a way to delegate");
+        let described = spawn.function.parameters["properties"]["kind"]["description"]
+            .as_str()
+            .expect("a description");
+        let line = |name: &str| {
+            described
+                .lines()
+                .find(|line| line.starts_with(&format!("- {name}: ")))
+                .unwrap_or_else(|| panic!("{name} was not offered: {described}"))
+        };
+        assert_eq!(
+            line("migrator"),
+            "- migrator: Does it. Its delegates work in a checkout of the last commit, which \
+             holds no change not yet committed."
+        );
+        assert_eq!(line("reviewer"), "- reviewer: Does it.");
+        assert_eq!(line("tester"), "- tester: Does it.");
     }
 
     /// A **shell** stays absent, and this is the distinction the whole tool turns on. A shell

@@ -15,7 +15,9 @@ governs:
   - crates/core/src/file_authority.rs
   - crates/core/src/policy.rs
   - crates/core/src/trust.rs
-documented-by: none (gap: a page on giving a delegate a checkout, owed until the design is built)
+documented-by:
+  - docs/website/docs/customize/agents.md
+  - none (gap: a page on a spawn asking for a checkout, bringing its work back and removing it, owed until the design is built)
 ---
 
 ## Scope
@@ -88,8 +90,11 @@ asks or the call asks, so the planner cannot drop one a definition asked for. `w
 Claude Code reads, asks for one too. Any other value loads the definition without a checkout, and
 says so, as a `memory:` value nothing here reads does ([MEMORY-2](definition-memory.md#MEMORY-2)).
 A definition asking is refused where a call asking would be, in a checkout
-([CHECKOUT-3](#CHECKOUT-3)) or with no state directory ([CHECKOUT-6](#CHECKOUT-6)), and no delegate
-starts. The refusal names the definition, since the call that met it may not have asked.
+([CHECKOUT-3](#CHECKOUT-3)), with no state directory ([CHECKOUT-6](#CHECKOUT-6)) or where no
+checkout can be made of the working directory, and no delegate starts. The refusal names the
+definition, since the call that met it may not have asked. The planner is told, beside each
+definition's description, which ones work in a checkout, since such a delegate's report is about
+the last commit and not the tree the planner may have just edited.
 
 Where a later definition of the same name replaces an earlier one
 ([DELEGATE-20](delegation.md#DELEGATE-20)), the key is met as the kind is: either one asking gives
@@ -99,7 +104,9 @@ results is a `reader`, it loads without a checkout and says so, so a project's f
 person's reader one that is refused at every spawn ([CHECKOUT-3](#CHECKOUT-3)).
 
 On a turn a person addresses to a definition ([ADDRESS-1](addressing-a-definition.md#ADDRESS-1)),
-the key is not applied, and the turn says so.
+the key is not applied, and the turn says so. That turn is then the only run of the definition to
+keep its memory, since a delegate in a checkout keeps none ([CHECKOUT-9](#CHECKOUT-9)), and a
+definition keeping one and asking for a checkout says so when it loads.
 
 **Why a file may ask.** A definition may choose what a run is for and never what it may reach
 ([ADDRESS-7](addressing-a-definition.md#ADDRESS-7)). This key names no path. The checkout holds
@@ -128,7 +135,11 @@ Built.
 `verified-by: bravebot_agent::turn::a_definition_asking_for_a_checkout_gives_its_delegate_one_the_spawn_did_not_ask_for`
 `verified-by: bravebot_agent::turn::a_definition_asking_for_a_checkout_inside_one_is_refused`
 `verified-by: bravebot_agent::turn::a_definition_asking_for_a_checkout_with_no_state_directory_is_refused`
+`verified-by: bravebot_agent::turn::a_definition_asking_for_a_checkout_outside_a_repository_is_refused_by_name`
+`verified-by: bravebot_agent::tools::a_definition_asking_for_a_checkout_is_offered_as_working_in_one`
 `verified-by: bravebot_agent::turn::an_addressed_turn_works_in_the_working_directory_and_says_its_checkout_is_not_applied`
+`verified-by: bravebot_agent::agents::a_definition_keeping_a_memory_in_a_checkout_is_told_only_an_addressed_turn_keeps_it`
+`verified-by: bravebot_agent::agents::a_definition_keeping_a_memory_and_asking_for_a_checkout_says_so_when_it_loads`
 
 <a id="CHECKOUT-3"></a>
 ### CHECKOUT-3: a checker or a worker may have a checkout, a reader may not, and a delegate's own delegates share it
