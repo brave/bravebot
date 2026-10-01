@@ -3363,9 +3363,7 @@ fn loop_part(until: Option<std::time::Duration>) -> String {
 }
 
 fn cache_hit_rate(session: &Session) -> Option<String> {
-    let cached = session
-        .cached()
-        .filter(bravebot_aichat::protocol::Cached::any)?;
+    let cached = session.cached().filter(|cached| cached.read_tokens > 0)?;
     let prompt_tokens = session
         .cached_prompt_tokens()
         .filter(|tokens| *tokens > 0)?;
@@ -7755,6 +7753,24 @@ mod tests {
 
         let hint = hint_row_at(&session, 120, 24);
         assert!(hint.contains("cache 82.4%"), "{hint}");
+    }
+
+    /// A turn that only writes a cache entry has no read hit to report. The status panel still
+    /// reports the write, while a zero-percent footer rate would claim the read was measured as a
+    /// miss.
+    #[test]
+    fn the_hint_line_says_nothing_for_a_write_only_cache_turn() {
+        let mut session = Session::new("none");
+        session.served_from_cache(
+            bravebot_aichat::protocol::Cached {
+                read_tokens: 0,
+                written_tokens: 1_800,
+            },
+            50_000,
+        );
+
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(!hint.contains("cache "), "{hint}");
     }
 
     /// A backend saying nothing about its cache supplies two zeroes. Drawing a zero-percent hit
