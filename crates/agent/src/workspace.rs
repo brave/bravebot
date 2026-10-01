@@ -1483,11 +1483,12 @@ impl Workspace {
     ) -> Result<PathBuf, WorkspaceError> {
         let resolved = self.resolve(&relative)?;
         let written = policy.file_authority().key(&self.trust_key(&relative));
+        let folds = volume_folds_case(&self.root);
         // Before the capture rather than inside it, so no other write waits on the record's sync.
         // A write refused after this leaves a line distrusting a path it did not change, which
         // is the direction that trusts nothing.
         if contents.label().integrity == bravebot_core::label::Integrity::Untrusted {
-            crate::memory::record_before_write(self.memories(), &written).map_err(|e| {
+            crate::memory::record_before_write(self.memories(), &written, folds).map_err(|e| {
                 WorkspaceError::Io {
                     path: relative.clone(),
                     detail: e.to_string(),
@@ -1534,7 +1535,7 @@ impl Workspace {
         #[cfg(test)]
         self.interrupt_after_write()?;
         effect.complete(contents.label().integrity);
-        crate::memory::after_write(policy, self.memories(), &written);
+        crate::memory::after_write(policy, self.memories(), &written, folds);
         Ok(resolved)
     }
 
@@ -2914,6 +2915,31 @@ pub const BACKSLASH_SEPARATES: bool = cfg!(windows);
 /// directory under ([`refuse_unkeyable`]), which is the direction that trusts nothing.
 pub fn key_of(resolved: &Path) -> String {
     to_key(&resolved.to_string_lossy(), BACKSLASH_SEPARATES).into_owned()
+}
+
+/// The path the map key `key` names on this host, where it is a full one.
+fn host_path(key: &str) -> Option<&Path> {
+    let path = match BACKSLASH_SEPARATES {
+        true => key.strip_prefix('/').filter(|rest| {
+            matches!(rest.as_bytes(), [letter, b':', b'/', ..] if letter.is_ascii_alphabetic())
+        })?,
+        false => Some(key).filter(|key| key.starts_with('/'))?,
+    };
+    Some(Path::new(path))
+}
+
+/// The map key `key`, spelled as the volume spells each part of it that exists and through every
+/// link, which is how [`key_of`] spells a working directory there.
+///
+/// `None` for a key that names no full path on this host, or one that does not resolve.
+pub(crate) fn on_disk(key: &str) -> Option<String> {
+    destination(host_path(key)?).map(|resolved| key_of(&resolved))
+}
+
+/// Whether the map keys `one` and `other` name one file that is there now, as the volume says.
+pub(crate) fn one_file(one: &str, other: &str) -> bool {
+    let id = |key| host_path(key).map(file_id);
+    matches!((id(one), id(other)), (Some(Ok(one)), Some(Ok(other))) if one == other)
 }
 
 /// An empty trust map for the workspace at `root`, comparing names the way the volume it is on

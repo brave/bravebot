@@ -407,7 +407,7 @@ pub(crate) fn normalise(path: &str) -> String {
 ///
 /// Upper case first, so a letter whose lower case is itself still meets the letter a volume folds
 /// it to: APFS opens `src` as `\u{17f}rc`, and `\u{17f}` lowercases to itself.
-pub(crate) fn fold_case(key: &str) -> String {
+pub fn fold_case(key: &str) -> String {
     key.chars()
         .flat_map(char::to_uppercase)
         .flat_map(char::to_lowercase)

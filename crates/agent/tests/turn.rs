@@ -32544,6 +32544,54 @@ fn a_redirection_into_a_memory_is_recorded_before_it_opens_it() {
     );
 }
 
+/// MEMORY-5 for a redirection on a volume that folds case, where `.Bravebot/memory/NOTES-KEEPER.md`
+/// opens the memory `notes-keeper`. The line is recorded under the key a later session asks about
+/// before it opens the memory, and with nowhere to record it the line does not open it. A volume
+/// that holds the spellings apart has no such memory to record.
+#[test]
+fn a_redirection_into_a_memory_in_another_case_is_recorded_before_it_opens_it() {
+    let scratch = Scratch::new("memory-redirect-folded");
+    let home = Scratch::new("memory-redirect-folded-home");
+    std::fs::create_dir_all(scratch.path.join(".bravebot/memory")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    if !bravebot_agent::workspace::volume_folds_case(workspace.root()) {
+        return;
+    }
+    let memory = scratch.path.join(".bravebot/memory/notes-keeper.md");
+    let line = "echo FROM-A-PAGE > .Bravebot/memory/NOTES-KEEPER.md";
+
+    a_run_writing_a_memory(
+        &workspace,
+        None,
+        line,
+        bravebot_agent::RunDecision::approve(),
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+    assert!(
+        !memory.exists(),
+        "a line wrote a memory nothing could record"
+    );
+
+    let outcome = a_run_writing_a_memory(
+        &workspace,
+        Some(&home),
+        line,
+        bravebot_agent::RunDecision::approve(),
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+    assert_eq!(
+        std::fs::read_to_string(&memory).unwrap(),
+        "FROM-A-PAGE\n",
+        "the redirection did not write the memory"
+    );
+    assert!(!outcome.trust.is_trusted(".Bravebot/memory/NOTES-KEEPER.md"));
+    assert_eq!(
+        memories_recorded(&home, &workspace),
+        vec![memory_key(&workspace, "notes-keeper")],
+        "a memory a line left untrusted under another spelling was not recorded"
+    );
+}
+
 /// Write a project skill whose frontmatter carries the lines given, so a test can say what the file
 /// declares beyond its name and description.
 fn write_project_skill_declaring(root: &std::path::Path, name: &str, lines: &str) {

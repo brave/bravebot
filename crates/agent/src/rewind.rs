@@ -130,6 +130,7 @@ fn restore_with(
     mut write: impl FnMut(&Path, &Before) -> Result<(), WorkspaceError>,
 ) -> Vec<PathBuf> {
     *current = current.meet(target);
+    let folds = current.folds_case();
     let mut refused = Vec::new();
     let mut restored = Vec::new();
     for backup in backups {
@@ -143,7 +144,8 @@ fn restore_with(
         current.distrust(&path);
         let bytes = matches!(backup.was, Before::Bytes(_));
         let ends_trusted = backup.captured_trust == Integrity::Trusted && target.is_trusted(&path);
-        if bytes && !ends_trusted && crate::memory::record_before_write(home, &path).is_err() {
+        if bytes && !ends_trusted && crate::memory::record_before_write(home, &path, folds).is_err()
+        {
             refused.push(backup.path);
             continue;
         }
@@ -161,7 +163,7 @@ fn restore_with(
         }
         // A restored absence stays distrusted; it cannot vouch for future contents.
     }
-    crate::memory::after_rewind(home, current, &restored);
+    crate::memory::after_rewind(home, current, &restored, folds);
     refused
 }
 
@@ -344,6 +346,34 @@ mod tests {
             record.paths(),
             [memory],
             "a rewind that undid a yes left the memory out of the record"
+        );
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// MEMORY-5 for a rewind on a volume that folds case. Old bytes put back into a memory under
+    /// another spelling are recorded as a session asks about that memory.
+    #[test]
+    fn a_rewind_into_a_memory_in_another_case_is_recorded_as_a_session_asks_about_it() {
+        let home = crate::testutil::scratch_dir("rewind-memory-folded-home");
+        let _ = std::fs::remove_dir_all(&home);
+        let mut trusting = TrustStore::new("/work").folding_case(true);
+        trusting.trust(".");
+        let mut current = trusting.clone();
+        let refused = restore_with(
+            vec![Backup {
+                path: "/work/.Bravebot/memory/NOTES.md".into(),
+                was: Before::Bytes(b"old notes".to_vec()),
+                captured_trust: Integrity::Untrusted,
+            }],
+            &mut current,
+            &trusting,
+            Some(&home),
+            |_, _| Ok(()),
+        );
+        assert!(refused.is_empty());
+        assert_eq!(
+            crate::memory::Record::new(&home, "/work").paths(),
+            ["/work/.bravebot/memory/notes.md"]
         );
         let _ = std::fs::remove_dir_all(home);
     }
