@@ -1551,6 +1551,7 @@ fn work(work: Work) {
                 "turn.error",
                 &session,
                 json!({ "turn": turn, "kind": kind, "message": category.unwrap_or("cancelled"), "category": category, "attempts": attempts, "status": diagnosis.and_then(|d| d.status),
+                    "cutOff": wire::cut_off(error.cut_off()),
                     "contextTokens": state.conversation.last_request_tokens(),
                     // What the turn said about itself before it failed, as `turn.done` carries for a
                     // turn that answered. There is no outcome here to take them from, and a hook

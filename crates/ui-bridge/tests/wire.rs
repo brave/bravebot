@@ -803,6 +803,53 @@ fn a_command_that_spends_an_ambient_authority_says_so_across_the_bridge() {
     );
 }
 
+/// A turn the output ceiling ended crosses with the ceiling and what the reply was doing, since the
+/// remedies differ: a reply that spent it on one call's arguments is asked for in parts, and one
+/// that spent it thinking is not. Without these the window can only say the reply was too long.
+///
+/// Whole and equal rather than read a key at a time: the byte count is the trail's, and a field
+/// added here is one more thing a front end could start drawing.
+#[test]
+fn a_reply_stopped_at_the_ceiling_crosses_with_the_ceiling_and_what_it_was_writing() {
+    use bravebot_aichat::{CutOff, OpenCall};
+    let stopped = |call: Option<OpenCall>, thought| CutOff {
+        ceiling: 8192,
+        call,
+        thought,
+    };
+
+    assert_eq!(
+        wire::cut_off(Some(&stopped(
+            Some(OpenCall {
+                tool: Some("write_file".into()),
+                arguments: 30_000,
+            }),
+            true,
+        ))),
+        json!({ "ceiling": 8192, "call": { "tool": "write_file" }, "thought": true })
+    );
+    assert_eq!(
+        wire::cut_off(Some(&stopped(
+            Some(OpenCall {
+                tool: None,
+                arguments: 12,
+            }),
+            false,
+        ))),
+        json!({ "ceiling": 8192, "call": { "tool": null }, "thought": false }),
+        "a call to a tool nobody offered crossed as no call at all"
+    );
+    assert_eq!(
+        wire::cut_off(Some(&stopped(None, true))),
+        json!({ "ceiling": 8192, "call": null, "thought": true })
+    );
+    assert_eq!(
+        wire::cut_off(Some(&stopped(None, false))),
+        json!({ "ceiling": 8192, "call": null, "thought": false })
+    );
+    assert_eq!(wire::cut_off(None), Value::Null);
+}
+
 #[test]
 fn approval_evidence_is_kept_beside_the_decision() {
     use bravebot_agent::confirm::{OutputRequest, Remark, VetRequest, VouchRequest};

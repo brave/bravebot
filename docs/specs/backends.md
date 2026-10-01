@@ -1758,6 +1758,7 @@ it and was writing the text when the ceiling fell.
 `verified-by: bravebot_bedrock::lib::a_call_followed_by_text_is_not_the_one_the_ceiling_stopped`
 `verified-by: bravebot_agent::backend::a_reply_stopped_at_the_ceiling_reports_which_ceiling`
 `verified-by: bravebot_tui::state::a_reply_stopped_at_the_ceiling_says_what_it_was_writing`
+`verified-by: bravebot_ui_bridge::wire::a_reply_stopped_at_the_ceiling_crosses_with_the_ceiling_and_what_it_was_writing`
 
 <a id="BACKEND-43"></a>
 ### BACKEND-43: a settings file names the effort level, and a checkout's outranks a pick

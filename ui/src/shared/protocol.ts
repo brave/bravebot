@@ -286,12 +286,24 @@ export interface TurnDone {
   archived: number
 }
 
+/**
+ * What a reply the output ceiling stopped was doing. `tool` is the request's own name for a tool
+ * it offered, and `null` for a call to one it did not.
+ */
+export interface CutOff {
+  ceiling: number
+  call: { tool: string | null } | null
+  thought: boolean
+}
+
 export interface TurnError {
   /** As on `TurnDone`. */
   prompt?: number | null
   category?: string | null
   attempts?: number | null
   status?: number | null
+  /** Where the output ceiling ended the turn, and `null` otherwise. */
+  cutOff?: CutOff | null
   contextTokens?: number
   /** A failed turn may still have saved a recoverable conversation. */
   id?: string | null
