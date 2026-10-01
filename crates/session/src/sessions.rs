@@ -1013,8 +1013,7 @@ pub struct StoredCommand {
     /// where it is not, or absent in a record written before entries held one.
     ///
     /// Relative because the project is what the entry was granted against, so a checkout that is
-    /// moved or renamed keeps its entries and an unrelated checkout standing where it used to be
-    /// inherits none of them. The empty string is the project root, which is what
+    /// moved or renamed keeps its entries. The empty string is the project root, which is what
     /// `strip_prefix` leaves of it.
     ///
     /// Absent reads as the workspace root, which is what such an entry meant when it was written:
@@ -2357,9 +2356,9 @@ mod tests {
     }
 
     /// A tree written down relative comes back under the directory the resumed session works in,
-    /// so a checkout that was moved or renamed keeps its entries and a different checkout standing
-    /// where it used to be inherits none of them. A tree written down in full comes back as it was
-    /// written, which is the tree outside the project and the record an older build wrote alike.
+    /// so a checkout that was moved or renamed keeps its entries. A tree written down in full comes
+    /// back as it was written, which is the tree outside the project and the record an older build
+    /// wrote alike.
     #[test]
     fn a_tree_written_down_relative_comes_back_under_the_resumed_root() {
         let mut record = a_record();
