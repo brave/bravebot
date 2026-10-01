@@ -1062,8 +1062,11 @@ and no other. Every call after it passes the same gate. The gate allows or refus
 so a hop that leaves the declared destination, whether a call's or the handshake's, is refused there
 and nothing is sent. The policy keeps where it pointed, as the server's bytes, for the prompt.
 
-The prompt draws the declared url, where the reply pointed, and the host that reaches, with the
-port where the url names one. A
+The prompt draws the declared url, where the reply pointed, and the host that reaches, with the port
+where the url names one. In the full-screen interface, that host and what a yes does are drawn under
+the destination in rows the destination cannot take, and a destination longer than the box scrolls
+above them ([PROMPT-4](prompting.md#PROMPT-4)). `y` is not taken at a draw that cuts off the
+declared url, that host, what a yes does or the keys, or that draws none of the destination's url. A
 call's hop is asked during the turn, in the full-screen interface and in lines alike; a handshake's
 is asked at the terminal as the session opens, and `y` is the only yes. Until the yes, the
 destination decides nothing. After it, the url is read as a declaration like any other, so one that
@@ -1106,6 +1109,9 @@ session with nobody at the terminal and the mode that skips prompts refuse it un
 `verified-by: bravebot_cli::servers::a_project_that_answers_for_its_servers_does_not_answer_a_move`
 `verified-by: bravebot_cli::plain::a_move_is_asked_in_lines_and_only_a_yes_moves_the_server`
 `verified-by: bravebot_tui::confirm::a_move_prompt_shows_the_declaration_the_destination_and_what_it_reaches`
+`verified-by: bravebot_tui::confirm::a_destination_longer_than_the_move_box_leaves_the_host_and_what_a_yes_does_on_screen`
+`verified-by: bravebot_tui::confirm::the_end_of_a_long_destination_can_be_scrolled_to_with_the_host_still_shown`
+`verified-by: bravebot_tui::confirm::a_move_question_takes_a_yes_only_from_a_draw_showing_the_host_and_the_keys`
 
 <a id="SERVERS-12"></a>
 ### SERVERS-12: the managed layer may keep a server from starting and never add one
