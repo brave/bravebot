@@ -95,10 +95,12 @@ check(
 // Measured rather than assumed: this app remembers its layout between runs, so the width
 // the window opens at is whatever the last driver left behind.
 const started = await width(page, '.sessions')
-await drag(page, 0, 60)
+// Away from whichever end the last run left it at, so the drag always has room to happen.
+const delta = started + 60 <= 400 ? 60 : -60
+await drag(page, 0, delta)
 const dragged = await width(page, '.sessions')
 check(
-  Math.abs(dragged - (started + 60)) <= 4,
+  Math.abs(dragged - (started + delta)) <= 4,
   `the session list was dragged somewhere non-default (${Math.round(started)} -> ${Math.round(dragged)}px)`,
 )
 
@@ -120,7 +122,8 @@ check(
   'a folded column leaves the tab order and the accessibility tree',
 )
 check(
-  Math.abs((await width(page, '.transcript')) - (centreBefore + dragged)) <= 3,
+  // Less the ground the card keeps on its left once nothing is beside it.
+  Math.abs((await width(page, '.transcript')) - (centreBefore + dragged - 8)) <= 3,
   'the transcript took exactly the space that was freed',
 )
 

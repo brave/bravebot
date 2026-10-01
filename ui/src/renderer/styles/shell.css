@@ -1,0 +1,169 @@
+/* ------------------------------------------------------------------ window
+
+   The sidebar sits flush on the app ground; the conversation and the inspector share one raised
+   card inset from the window's edges. The side widths are set from JS and the conversation takes
+   what is left — `minmax(0, 1fr)` rather than a pixel minimum, because the minimum is enforced in
+   columns.ts against the window, and a floor declared here as well would fight it. */
+
+.app {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--col-left) 1px minmax(0, 1fr) 1px var(--col-right);
+  box-sizing: border-box;
+  height: 100vh;
+  /* The ground around the card is the grid's padding rather than the card's margin, so the side
+     tracks stay the widths columns.ts gave them and only the flexible middle gives way. */
+  padding: var(--card-gap) var(--card-gap) var(--card-gap) 0;
+  background: var(--surface-app);
+}
+/* The strip of ground above the card still moves the window. */
+.app::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: var(--card-gap);
+  -webkit-app-region: drag;
+}
+.app.no-session { grid-template-columns: var(--col-left) 1px minmax(0, 1fr) 0 0; }
+
+/* A side column folds away rather than blinking out. The track list itself is animated, so
+   nothing here has to know how wide the column was. Armed only while something is folding: a
+   drag, an arrow key and a window resize move the same tracks and must land on the frame. */
+.app.folding { transition: grid-template-columns var(--motion-panel); }
+
+/* While a drag is live the pointer is often over the transcript, not the divider: no text gets
+   selected on the way past, and the cursor does not flicker to a text caret. */
+.app.resizing { cursor: col-resize; user-select: none; transition: none; }
+
+/* The card. A subgrid spanning the last three tracks, so its columns are still the window's and a
+   fold slides them without the card knowing. */
+.workspace {
+  grid-column: 3 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-card);
+  background: var(--surface-panel);
+  overflow: hidden;
+  transition: margin-left var(--motion-panel);
+}
+/* With the sidebar away the card needs ground on its left as well, or its corners meet the
+   window's edge. */
+.app.left-folded .workspace { margin-left: var(--card-gap); }
+
+.transcript,
+.context { min-width: 0; min-height: 0; }
+
+/* A folded column must not be tabbable or read out, and a zero-width track does neither on its
+   own. Hiding waits for the fold to finish so there is something to watch on the way out; on the
+   way back it lifts at once. */
+.app.left-folded .sessions,
+.app.right-folded .context,
+.app.no-session .context {
+  visibility: hidden;
+  transition: visibility 0s var(--panel-duration);
+}
+
+/* The contents keep the width the column will come back at, so a fold slides them under a clip
+   instead of reflowing session titles into narrower and narrower shapes on the way out. */
+.sessions > * { min-width: var(--col-left-open); }
+.context > * { min-width: calc(var(--col-right-open) - 1px); }
+
+/* ------------------------------------------------------------------ gutters
+
+   A divider is a seam, not a control beside one. The one between the sidebar and the card is
+   invisible; the one inside the card is the hairline between conversation and inspector. Both
+   show a 2px accent line under the pointer or while dragged, and keep a 9px catch pad either
+   side of the 1px track. */
+.gutter {
+  position: relative;
+  z-index: 3;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+}
+.gutter.right { background: var(--border-hairline); }
+.app.no-session .gutter.right { visibility: hidden; }
+
+.gutter::after {
+  content: '';
+  position: absolute;
+  inset: 0 -4px;
+  z-index: 2;
+}
+.gutter::before {
+  content: '';
+  position: absolute;
+  inset: 0 -1px;
+  background: var(--ink-accent);
+  opacity: 0;
+  transition: opacity var(--motion-fast);
+}
+.gutter:hover::before,
+.gutter.dragging::before { opacity: 1; transition-delay: 0s; }
+.gutter:hover::before { transition-delay: 150ms; }
+/* Keyboard focus has to be visible on a 1px element, so the line shows rather than an outline. */
+.gutter:focus-visible { outline: none; }
+.gutter:focus-visible::before { opacity: 1; }
+
+/* Beside a folded column there is nothing to resize, so the seam stops behaving like a handle.
+   The catch pad in particular has to go: with the left column folded it would reach past the
+   window's own edge, where macOS wants its own resize cursor. */
+.gutter.inert { cursor: default; }
+.gutter.inert::after,
+.gutter.inert::before { display: none; }
+.app.right-folded .gutter.right { background: transparent; }
+
+/* ------------------------------------------------------------------ narrow windows
+
+   Below this the inspector overlays the conversation inside the card and takes no grid width. */
+@media (max-width: 1120px) {
+  .app,
+  .app.no-session { grid-template-columns: var(--col-left) 1px minmax(0, 1fr) 0 0; }
+  /* Under the conversation's head rather than over it, so the toggle that put it there is
+     still the one that takes it away. */
+  .app .context {
+    position: absolute;
+    top: var(--titlebar);
+    right: 0;
+    bottom: 0;
+    z-index: 35;
+    width: 310px;
+    border-left: 1px solid var(--border-hairline);
+    background: var(--surface-panel);
+    box-shadow: var(--shadow-floating);
+  }
+  .app.right-folded .context { pointer-events: none; }
+  .app .gutter.right { display: none; }
+}
+
+/* ------------------------------------------------------------------ fold toggles
+
+   Both live in the conversation's head. The left one carries a count of background sessions
+   waiting on the reader while the session list is folded, since nothing else on screen can. */
+.fold-toggle-slot {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  display: inline-flex;
+  -webkit-app-region: no-drag;
+}
+.attention-badge {
+  position: absolute;
+  top: calc(var(--leo-spacing-xs) * -1);
+  right: calc(var(--leo-spacing-xs) * -1);
+  display: grid;
+  place-items: center;
+  min-width: var(--icon-meta);
+  height: var(--icon-meta);
+  padding: 0 var(--leo-spacing-xs);
+  box-sizing: border-box;
+  border-radius: var(--radius-pill);
+  background: var(--leo-color-systemfeedback-warning-icon);
+  color: var(--leo-color-white);
+  font: var(--type-caption-strong);
+  pointer-events: none;
+}

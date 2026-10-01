@@ -40,6 +40,18 @@ await page.waitForLoadState('domcontentloaded')
 page.on('pageerror', (e) => console.log('PAGE ERROR:', e.message))
 page.on('console', (m) => m.type() === 'error' && console.log('CONSOLE ERROR:', m.text()))
 await page.waitForTimeout(1500)
+// The layout is remembered between launches and shared with the other drivers, so start with both columns open.
+for (const side of ['left', 'right']) {
+  const toggle = page.locator(`.fold-toggle.${side}`)
+  if ((await toggle.getAttribute('aria-expanded')) === 'false') {
+    await toggle.click()
+    await page.waitForTimeout(300)
+  }
+}
+if (await page.locator('.session').first().isVisible().catch(() => false)) {
+  await page.locator('.session').first().click()
+  await page.waitForTimeout(1200)
+}
 
 check((await page.locator('.gutter').count()) === 2, 'two dividers are present')
 
@@ -59,7 +71,7 @@ check(Math.abs(after.right - (now.right + 60)) <= 2, `right divider widened the 
 // --- the clamps ----------------------------------------------------------------------
 await drag(page, 0, -900)
 const squashed = await widths(page)
-check(squashed.left >= 200, `the session list stops at its minimum (${squashed.left} >= 200)`)
+check(squashed.left >= 220, `the session list stops at its minimum (${squashed.left} >= 220)`)
 
 await drag(page, 0, 1600)
 const stretched = await widths(page)
@@ -70,14 +82,14 @@ check(stretched.centre >= 380, `the transcript never drops below its floor (${st
 const gutter = page.locator('.gutter').first()
 await gutter.dblclick()
 await page.waitForTimeout(150)
-check(Math.abs((await widths(page)).left - 280) <= 2, 'double click restores the default width')
+check(Math.abs((await widths(page)).left - 260) <= 2, 'double click restores the default width')
 
 // --- keyboard ------------------------------------------------------------------------
 await gutter.focus()
 await page.keyboard.press('ArrowRight')
 await page.keyboard.press('ArrowRight')
 await page.waitForTimeout(120)
-check(Math.abs((await widths(page)).left - 296) <= 2, 'arrow keys move the divider 8px at a time')
+check(Math.abs((await widths(page)).left - 276) <= 2, 'arrow keys move the divider 8px at a time')
 
 // --- what gets remembered ------------------------------------------------------------
 await drag(page, 0, 60)

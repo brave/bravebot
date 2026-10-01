@@ -162,6 +162,8 @@ pub struct BridgeReporter {
     last_tokens: Option<u64>,
     /// What the turn said about itself as it ran. See [`BridgeReporter::notices`].
     notices: Vec<String>,
+    /// The delegate the next report belongs to, or `None` for the turn's own.
+    reporting_for: Option<DelegateId>,
 }
 
 impl BridgeReporter {
@@ -171,6 +173,7 @@ impl BridgeReporter {
             session: session.into(),
             last_tokens: None,
             notices: Vec::new(),
+            reporting_for: None,
         }
     }
 
@@ -213,6 +216,22 @@ impl Reporter for BridgeReporter {
 
     fn phase(&mut self, phase: Phase) {
         self.say("phase", json!({ "phase": wire::phase(phase) }));
+    }
+
+    fn reporting_for(&mut self, delegate: Option<DelegateId>) {
+        self.reporting_for = delegate;
+    }
+
+    /// The call the model is writing, as the word its row will start with, or `null` once
+    /// there is none.
+    ///
+    /// A delegate's is dropped: one model writes at a time, and a call named beside the turn's
+    /// working line would read as the planner's.
+    fn composing(&mut self, call: Option<&'static str>) {
+        if self.reporting_for.is_some() {
+            return;
+        }
+        self.say("composing", json!({ "call": call }));
     }
 
     /// What the model said between tool calls.

@@ -28,25 +28,29 @@ export default {
     const project = where.split(' · ')[0] ?? ''
 
     await s.say('Find one', 'The box above the list filters as you type.')
-    await s.slowType('.session-find', word)
+    await s.slowType('.sidebar-search input', word)
     await s.say('Find one', `"${word}" — ${await rows.count()} of ${total} left.`, 1.6)
 
     // The same box against the second line: a session you remember by *where* it was, not by
     // what it was called, still has to be findable.
     if (project) {
-      await page.locator('.session-find').fill('')
+      await page.locator('.sidebar-search input').fill('')
       await s.beat(0.4)
-      await s.slowType('.session-find', project)
+      await s.slowType('.sidebar-search input', project)
       await s.say('…or by project', `"${project}" — the checkout is searchable too.`, 1.6)
     }
 
-    await s.pointAt('.session-find')
-    await page.locator('.session-find').press('Escape')
+    await s.pointAt('.sidebar-search input')
+    await page.locator('.sidebar-search input').press('Escape')
     await s.say('Escape', 'Clears it, and the whole list is back.', 1.4)
     await s.beat(0.6)
 
-    await s.say('Group by checkout', 'The toggle beside the box gathers sessions by project.')
-    await s.click('.session-group')
+    const groupByProject = async () => {
+      await s.click('[data-test="view-options"]')
+      await s.click(page.getByRole('menuitemcheckbox', { name: 'Group by project' }))
+    }
+    await s.say('Group by checkout', 'View options beside the box can gather sessions by project.')
+    await groupByProject()
     await s.beat(0.8)
     const heads = page.locator('.session-group-head')
     await s.say('Group by checkout', `${await heads.count()} checkouts, each with its count.`, 1.6)
@@ -70,23 +74,23 @@ export default {
     // bridge rightly refuses those — a real answer, but not the one this shot is about.
     const paths = await page
       .locator('.session-group-fold')
-      .evaluateAll((all) => all.map((h) => h.getAttribute('title') ?? ''))
+      .evaluateAll((all) => all.map((h) => h.getAttribute('data-tooltip') ?? ''))
     const live = paths.find((p) => p && existsSync(p))
     if (live) {
       const owner = page
         .locator('.session-group-head')
-        .filter({ has: page.locator(`.session-group-fold[title="${live}"]`) })
+        .filter({ has: page.locator(`.session-group-fold[data-tooltip="${live}"]`) })
       await s.say('Start one here', 'The + beside a heading opens a session in that checkout.')
       await s.click(owner.locator('.session-group-new'))
       await s.beat(1.2)
       if (await page.locator('.trust').isVisible().catch(() => false)) {
         await s.say('Trust the directory', 'It asks before it works anywhere — once, per checkout.', 2.2)
         await s.shot('01-trust')
-        await s.click('.trust-actions .decline')
+        await s.click('[data-test="trust-decline"]')
       }
     }
 
     await s.say('Group by checkout', 'Back to a flat list.')
-    await s.click('.session-group')
+    await groupByProject()
   },
 }

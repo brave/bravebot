@@ -16,6 +16,7 @@ checks is a bug against this directory rather than an entry in it.
 | [best-practices/tests.md](best-practices/tests.md) | what a test is named, what it covers, and proving it fails first |
 | [best-practices/writing.md](best-practices/writing.md) | what a comment is for |
 | [best-practices/dependencies.md](best-practices/dependencies.md) | what a new crate has to be worth |
+| [best-practices/ui.md](best-practices/ui.md) | what a change to the desktop UI is held to before it lands |
 
 The review pass over the rule this repository exists for is
 [development/reviewing-for-the-rule.md](development/reviewing-for-the-rule.md): the four

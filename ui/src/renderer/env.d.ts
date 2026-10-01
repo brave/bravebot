@@ -12,3 +12,24 @@ declare global {
     bravebotExport?: BravebotExportApi
   }
 }
+
+declare module 'react' {
+  namespace JSX {
+    interface IntrinsicElements {
+      'leo-option': React.DetailedHTMLProps<
+        React.HTMLAttributes<HTMLElement> & { value?: string },
+        HTMLElement
+      >
+      'leo-menu-item': React.DetailedHTMLProps<
+        React.HTMLAttributes<HTMLElement> & { value?: string },
+        HTMLElement
+      >
+      'leo-menu-section': React.DetailedHTMLProps<
+        React.HTMLAttributes<HTMLElement>,
+        HTMLElement
+      >
+    }
+  }
+}
+
+export {}

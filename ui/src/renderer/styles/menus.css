@@ -1,0 +1,27 @@
+/* ------------------------------------------------------------------ menus
+
+   Leo ButtonMenu owns the popup, the focus handling and the item chrome. What is here arranges
+   what goes inside an item: a leading icon, or a leading check column for checkable items so
+   ticked and unticked rows keep their labels aligned. */
+
+.icon-menu { flex: none; }
+
+.menu-icon-row,
+.menu-check-row {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  min-width: 0;
+  --leo-icon-size: var(--icon-control);
+  --leo-icon-color: var(--ink-secondary);
+}
+.menu-check {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--icon-control);
+  height: var(--icon-control);
+  --leo-icon-color: var(--ink-accent);
+}
+.menu-icon-row .menu-check { margin-inline-start: auto; }
+.menu-detail { color: var(--ink-tertiary); }

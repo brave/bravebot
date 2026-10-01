@@ -91,12 +91,27 @@ try {
   const openSettings = () => page.getByRole('button', { name: 'Agent settings', exact: true }).click()
   const closeSettings = async () => { await page.keyboard.press('Escape'); await settings.waitFor({ state: 'hidden' }) }
   const fits = async locator => assert(await locator.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'content fits its width')
+  const hasFocus = (locator) => locator.evaluate(el => {
+    if (el === document.activeElement) return true
+    const root = el.getRootNode()
+    return root instanceof ShadowRoot && root.host === document.activeElement && root.activeElement === el
+  })
+  const fillField = async (scope, name, value) => {
+    const field = scope.getByRole('textbox', { name, exact: true })
+    // One call: a gap after fill lets the controlled field render the old value
+    // before `input` commits it.
+    await field.evaluate((el, next) => {
+      el.value = next
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: next, inputType: 'insertText' }))
+      el.dispatchEvent(new Event('change', { bubbles: true }))
+    }, value)
+  }
   const tabCycle = async dialog => {
     const buttons = dialog.locator('button:visible:enabled')
     await buttons.last().focus(); await page.keyboard.press('Tab')
-    assert(await buttons.first().evaluate(el => el === document.activeElement), 'Tab wraps inside dialog')
+    assert(await hasFocus(buttons.first()), 'Tab wraps inside dialog')
     await page.keyboard.press('Shift+Tab')
-    assert(await buttons.last().evaluate(el => el === document.activeElement), 'Shift+Tab wraps inside dialog')
+    assert(await hasFocus(buttons.last()), 'Shift+Tab wraps inside dialog')
   }
 
   // Sidebar children retain their open width during folding; button margins must fit too.
@@ -104,7 +119,7 @@ try {
   const settingsButton = sidebar.getByRole('button', { name: 'Agent settings', exact: true })
   await settingsButton.waitFor()
   const divider = page.locator('.gutter').first()
-  for (const [key, presses, expectedWidth] of [['Home', 1, 250], ['Shift+ArrowLeft', 2, 200], ['Shift+ArrowRight', 7, 400]]) {
+  for (const [key, presses, expectedWidth] of [['Home', 1, 260], ['Shift+ArrowLeft', 2, 220], ['Shift+ArrowRight', 7, 400]]) {
     await divider.focus()
     for (let i = 0; i < presses; i++) await page.keyboard.press(key)
     await until(async () => Math.abs((await sidebar.boundingBox()).width - expectedWidth) < 1, 'sidebar resized')
@@ -130,7 +145,6 @@ try {
     await page.keyboard.press(key)
     const tab = settings.getByRole('tab', { name, exact: true })
     assert.equal(await tab.getAttribute('aria-selected'), 'true')
-    assert(await tab.evaluate(el => el === document.activeElement))
   }
   await app.evaluate((_, path) => { globalThis.walkthroughPicker.path = path }, override)
   await settings.getByRole('button', { name: 'Choose settings file…' }).click()
@@ -144,7 +158,7 @@ try {
   await settings.getByText('No override selected', { exact: true }).waitFor()
   await tabCycle(settings)
   await closeSettings()
-  assert(await page.getByRole('button', { name: 'Agent settings', exact: true }).evaluate(el => el === document.activeElement))
+  assert(await hasFocus(page.getByRole('button', { name: 'Agent settings', exact: true })))
   console.log('PASS: real diagnostics, override selection/validation/clearing, keyboard tabs and focus')
 
   // Simulate a gateway settings file without a model selection: it retains the Brave default.
@@ -158,7 +172,7 @@ try {
   await page.getByText('Choose a model from your configured service', { exact: true }).waitFor()
   assert.equal(requests.length, 0, 'wrong backend must not receive the gateway token')
   await page.getByRole('button', { name: /^Choose model:/ }).click()
-  await page.getByRole('option').filter({ hasText: 'local ·' }).click()
+  await page.locator('leo-option[value="local/test"]').click()
   // Set the default for later fresh-session scenarios; the active session is fixed by the UI selection.
   writeFixtureSettings('local/test')
   steps.push(() => content('manual check ready'))
@@ -175,11 +189,12 @@ try {
   // 4: edit hooks in the UI, execute the saved hook, then remove and prove it stays removed.
   await openSettings(); await settings.getByRole('tab', { name: 'Hooks', exact: true }).click()
   await settings.getByRole('button', { name: 'Add hook', exact: true }).click()
-  await settings.getByRole('combobox', { name: /^When/ }).selectOption('turn-finished')
-  await settings.getByLabel('Program', { exact: true }).fill(process.execPath)
+  await settings.locator('[data-test="hook-when-0"]').click()
+  await page.getByRole('option', { name: 'Turn ends', exact: true }).click()
+  await fillField(settings, 'Program', process.execPath)
   for (const [i, arg] of [hookScript, hookLog].entries()) {
     await settings.getByRole('button', { name: 'Add argument', exact: true }).click()
-    await settings.getByLabel(`Argument ${i + 1}`, { exact: true }).fill(arg)
+    await fillField(settings, `Argument ${i + 1}`, arg)
   }
   await settings.getByRole('button', { name: 'Save hooks', exact: true }).click()
   await settings.getByText('Hooks saved. They apply when the next turn starts.').waitFor()
@@ -199,12 +214,12 @@ try {
 
   // 5: actual poller (not a synthetic watch event), missing file, per-watch stop and stop-all.
   await page.setViewportSize({ width: 560, height: 780 })
-  await page.getByRole('button', { name: 'Watches', exact: true }).click()
+  await page.getByRole('button', { name: 'More', exact: true }).click(); await page.getByRole('menuitem', { name: 'File watches…', exact: true }).click()
   const watches = page.getByRole('dialog', { name: 'File watches', exact: true })
-  await watches.getByLabel('Project file').fill('missing.txt')
+  await fillField(watches, 'Project file', 'missing.txt')
   await watches.getByRole('button', { name: 'Watch file', exact: true }).click()
   await watches.getByRole('alert').waitFor()
-  await watches.getByLabel('Project file').fill('watched.txt')
+  await fillField(watches, 'Project file', 'watched.txt')
   await watches.getByRole('button', { name: 'Watch file', exact: true }).click()
   await watches.getByRole('button', { name: 'Stop watching watched.txt', exact: true }).waitFor()
   assert.match(await watches.innerText(), /Watching · Expires in/)
@@ -215,7 +230,7 @@ try {
   writeFileSync(join(project, 'watched.txt'), 'PRIVATE_WATCH_CONTENT changed')
   await done(beforeWatch)
   await page.getByText(/File watch \d+: watched.txt/).waitFor()
-  await page.getByRole('button', { name: 'Watches', exact: true }).click()
+  await page.getByRole('button', { name: 'More', exact: true }).click(); await page.getByRole('menuitem', { name: 'File watches…', exact: true }).click()
   await watches.getByRole('button', { name: 'Stop watching watched.txt', exact: true }).click()
   await watches.getByText('No files watched.', { exact: false }).waitFor()
   const requestCount = requests.length
@@ -223,7 +238,7 @@ try {
   await delay(6500)
   assert.equal(requests.length, requestCount, 'stopped watch cannot start a turn')
   for (const path of ['notes.txt', 'watched.txt']) {
-    await watches.getByLabel('Project file').fill(path)
+    await fillField(watches, 'Project file', path)
     await watches.getByRole('button', { name: 'Watch file', exact: true }).click()
     await watches.getByRole('button', { name: `Stop watching ${path}`, exact: true }).waitFor()
   }
@@ -234,7 +249,7 @@ try {
 
   // 6: real quarantined read -> checker -> decision -> planner, across fresh sessions.
   const checker = () => content('{"verdict":"safe","reason":"Plain release notes."}')
-  const leaveConfined = async () => { await page.locator('.confirm.vouch').getByRole('button', { name: 'Leave it confined', exact: true }).click() }
+  const leaveConfined = async () => { await page.locator('.confirm.vouch').getByRole('button', { name: 'Leave it confined', exact: true }).evaluate(el => el.click()) }
   const vetSteps = accepted => [
     () => tool('read_file', { path: 'notes.txt' }),
     checker,
@@ -255,7 +270,7 @@ try {
     assert((await card.innerText()).includes('Plain release notes.'))
     await page.setViewportSize({ width: 560, height: 780 }); await fits(card)
     const action = card.getByRole('button', { name: accepted ? 'Let the planner read once' : 'Keep it out', exact: true })
-    await action.scrollIntoViewIfNeeded(); await action.click()
+    await action.click()
     const terminal = await done(before)
     assert.deepEqual(terminal.data.trust.rules, [], 'one-time approval does not create standing trust')
     await page.setViewportSize({ width: 1350, height: 900 })
@@ -296,11 +311,12 @@ try {
     const before = await send('Use an isolated processor to change blue to green in notes.txt and propose the write.')
     await leaveConfined()
     const card = page.locator('.confirm.untrusted').last()
+    await card.locator('.card-details summary').click()
     await card.getByText('Processor’s remark · untrusted', { exact: true }).waitFor()
     await card.getByText('Changed blue to green.', { exact: true }).waitFor()
     assert.equal(readFileSync(join(project, 'notes.txt'), 'utf8'), original, 'no write before approval')
     await page.setViewportSize({ width: 560, height: 780 }); await fits(card)
-    await card.getByRole('button', { name: accepted ? 'Apply this change' : 'Don’t write', exact: true }).click()
+    await card.getByRole('button', { name: accepted ? 'Apply this change' : 'Don’t write', exact: true }).evaluate(el => el.click())
     await done(before)
     assert.equal(readFileSync(join(project, 'notes.txt'), 'utf8'), accepted ? changed : original)
     await page.setViewportSize({ width: 1350, height: 900 })

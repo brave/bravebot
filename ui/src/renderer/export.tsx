@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ExportView } from './components/ExportView'
 import type { ExportDocument } from '../shared/export'
+import './nala-setup'
 import './styles.css'
 import './export.css'
 

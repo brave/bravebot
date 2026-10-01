@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Modal } from './Modal'
 import type { KeptTrust, SettingsRules } from '../../shared/protocol'
+import { Alert, Button, Icon } from '../nala'
+import { IconButton } from './IconButton'
 
 interface Grants {
   paths: { path: string; integrity: string }[]
@@ -27,33 +29,52 @@ export function Permissions({ session, onClose, onRemembered }: { session: strin
     finally { setBusy(false) }
   }
   useEffect(() => { void request('permissions.list') }, [session])
-  return <Modal title="Conversation permissions" onClose={onClose}>
-    <h2>Conversation permissions</h2>
-    <p>These grants are saved with this conversation. Revocation affects future actions; it cannot remove content already read by the model.</p>
-    {problem && <p role="alert">{problem}</p>}
-    <button disabled={busy} onClick={() => void request('permissions.list')}>{busy ? 'Loading…' : 'Refresh'}</button>
+  return <Modal title="Conversation permissions" size="md" onClose={onClose}
+    subtitle="Grants saved with this conversation. Revoking one affects future actions only."
+    headerAction={<IconButton icon="refresh" label="Refresh" tooltip={busy ? 'Loading…' : 'Refresh permissions'} disabled={busy}
+      onClick={() => void request('permissions.list')} data-test="permissions-refresh" />}
+    actions={<Button size="small" kind="filled" onClick={onClose} data-test="permissions-done">Done</Button>}>
+    <p className="grant-lede">Revocation cannot remove content already read by the model.</p>
+    {problem && <Alert type="error" data-test="permissions-error">{problem}</Alert>}
     <PathPermissions paths={grants?.paths ?? []} busy={busy} onRevoke={(path) => void request('permissions.revoke', { kind: 'path', path })} />
-    <h3>Remembered commands</h3>
-    <p className="bot-note">Each grant covers the resolved program and its exact arguments, including trust in its output.</p>
-    {grants?.commands.map((command) => <div className="permission-row" key={JSON.stringify(command)}><code>{command.display}</code><button disabled={busy} onClick={() => void request('permissions.revoke', { kind: 'command', command: { program: command.program, startedAs: command.startedAs, args: command.args } })}>Revoke</button></div>)}
-    {grants?.commands.length === 0 && <p>No remembered command grants.</p>}
-    <h3>Remembered for this directory</h3>
-    <p className="bot-note">Kept outside this conversation: sessions started in exactly this directory are trusted without asking. Forgetting it makes the next one ask; this conversation keeps its own grants.</p>
-    {grants?.remembered && <div className="permission-row"><code>{grants.remembered.path}</code><button disabled={busy} onClick={() => void request('permissions.revoke', { kind: 'remembered' })}>Forget</button></div>}
-    {grants && !grants.remembered && <p>No answer is remembered for this directory.</p>}
+    <section className="grant-section">
+      <h3>Remembered commands</h3>
+      <p className="grant-note">Each grant covers the resolved program and its exact arguments, including trust in its output.</p>
+      {grants && grants.commands.length > 0 && <ul className="grant-list">{grants.commands.map((command) => <li className="grant-row" key={JSON.stringify(command)}>
+        <Icon name="window-console" /><code>{command.display}</code>
+        <Button size="small" kind="plain-faint" isDisabled={busy} onClick={() => void request('permissions.revoke', { kind: 'command', command: { program: command.program, startedAs: command.startedAs, args: command.args } })}>Revoke</Button>
+      </li>)}</ul>}
+      {grants?.commands.length === 0 && <p className="grant-empty"><Icon name="window-console" />No remembered command grants.</p>}
+    </section>
+    <section className="grant-section">
+      <h3>Remembered for this directory</h3>
+      <p className="grant-note">Kept outside this conversation: sessions started in exactly this directory are trusted without asking. Forgetting it makes the next one ask; this conversation keeps its own grants.</p>
+      {grants?.remembered && <ul className="grant-list"><li className="grant-row"><Icon name="pin" /><code>{grants.remembered.path}</code>
+        <Button size="small" kind="plain-faint" isDisabled={busy} onClick={() => void request('permissions.revoke', { kind: 'remembered' })}>Forget</Button></li></ul>}
+      {grants && !grants.remembered && <p className="grant-empty"><Icon name="pin" />No answer is remembered for this directory.</p>}
+    </section>
     <RulesInForce rules={grants?.settingsRules ?? null} />
-    <button onClick={onClose}>Done</button>
   </Modal>
 }
 
 export function PathPermissions({ paths, busy, onRevoke }: { paths: Grants['paths']; busy: boolean; onRevoke: (path: string) => void }): React.JSX.Element {
+  const trusted = paths.filter((grant) => grant.integrity === 'trusted')
+  const refused = paths.filter((grant) => grant.integrity !== 'trusted' && grant.integrity !== 'undecided')
+  const undecided = paths.filter((grant) => grant.integrity === 'undecided')
   return <>
-    <h3>Trusted paths</h3>
-    <p className="bot-note">A parent grant covers its descendants unless a more specific rule overrides it. Revoking a parent keeps any separately listed child grants.</p>
-    {paths.filter((grant) => grant.integrity === 'trusted').map((grant) => <div className="permission-row" key={grant.path}><code>{grant.path || 'Project root'}</code><button disabled={busy} onClick={() => onRevoke(grant.path)}>Revoke</button></div>)}
-    {!paths.some((grant) => grant.integrity === 'trusted') && <p>No trusted path grants.</p>}
-    {paths.some((grant) => grant.integrity !== 'trusted' && grant.integrity !== 'undecided') && <><h3>Untrusted path exceptions</h3><p className="bot-note">These paths remain untrusted even when a parent is trusted.</p>{paths.filter((grant) => grant.integrity !== 'trusted' && grant.integrity !== 'undecided').map((grant) => <div className="permission-row" key={grant.path}><code>{grant.path || 'Project root'}</code><span>Untrusted</span></div>)}</>}
-    {paths.some((grant) => grant.integrity === 'undecided') && <><h3>Paths awaiting a decision</h3><p className="bot-note">These paths require write approval and their contents remain untrusted until you grant trust.</p>{paths.filter((grant) => grant.integrity === 'undecided').map((grant) => <div className="permission-row" key={grant.path}><code>{grant.path || 'Project root'}</code><span>Not decided</span></div>)}</>}
+    <section className="grant-section">
+      <h3>Trusted paths</h3>
+      <p className="grant-note">A parent grant covers its descendants unless a more specific rule overrides it. Revoking a parent keeps any separately listed child grants.</p>
+      {trusted.length > 0 && <ul className="grant-list">{trusted.map((grant) => <li className="grant-row" key={grant.path}>
+        <Icon name="shield-done" /><code>{grant.path || 'Project root'}</code>
+        <Button size="small" kind="plain-faint" isDisabled={busy} onClick={() => onRevoke(grant.path)}>Revoke</Button>
+      </li>)}</ul>}
+      {trusted.length === 0 && <p className="grant-empty"><Icon name="shield-done" />No trusted path grants.</p>}
+    </section>
+    {refused.length > 0 && <section className="grant-section"><h3>Untrusted path exceptions</h3><p className="grant-note">These paths remain untrusted even when a parent is trusted.</p>
+      <ul className="grant-list">{refused.map((grant) => <li className="grant-row" key={grant.path}><Icon name="warning-triangle-outline" /><code>{grant.path || 'Project root'}</code><span className="grant-state">Untrusted</span></li>)}</ul></section>}
+    {undecided.length > 0 && <section className="grant-section"><h3>Paths awaiting a decision</h3><p className="grant-note">These paths require write approval and their contents remain untrusted until you grant trust.</p>
+      <ul className="grant-list">{undecided.map((grant) => <li className="grant-row" key={grant.path}><Icon name="radio-unchecked" /><code>{grant.path || 'Project root'}</code><span className="grant-state">Not decided</span></li>)}</ul></section>}
   </>
 }
 
@@ -70,14 +91,14 @@ export function RulesInForce({ rules }: { rules: SettingsRules | null }): React.
     ['Not asked', 'The question is answered for you. What a command prints is not trusted because of it.', rules?.allow ?? []],
   ]
   const none = lists.every(([, , held]) => held.length === 0)
-  return <>
+  return <section className="grant-section settings-rules">
     <h3>Rules from settings files</h3>
-    <p className="bot-note">Read when this conversation opened. Edit the settings file to change them; the change applies to the next conversation. Refused comes first, then always asked, then not asked. These rules are not applied to a plan run.</p>
-    {none && <p>No permission rules are in force.</p>}
-    {lists.filter(([, , held]) => held.length > 0).map(([name, meaning, held]) => <div className="settings-rules" key={name}>
+    <p className="grant-note">Read when this conversation opened. Edit the settings file to change them; the change applies to the next conversation. Refused comes first, then always asked, then not asked. These rules are not applied to a plan run.</p>
+    {none && <p className="grant-empty"><Icon name="settings" />No permission rules are in force.</p>}
+    {lists.filter(([, , held]) => held.length > 0).map(([name, meaning, held]) => <div key={name}>
       <h4>{name}</h4>
-      <p className="bot-note">{meaning}</p>
-      {held.map((rule, index) => <div className="permission-row" key={index}><code>{rule}</code></div>)}
+      <p className="grant-note">{meaning}</p>
+      <ul className="grant-list">{held.map((rule, index) => <li className="grant-row" key={index}><code>{rule}</code></li>)}</ul>
     </div>)}
-  </>
+  </section>
 }

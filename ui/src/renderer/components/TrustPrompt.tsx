@@ -1,4 +1,6 @@
 import { Modal } from './Modal'
+import { Alert, Button, Icon } from '../nala'
+
 interface Props {
   directory: string
   /** Where remembering the answer would write it, or null where remembering is not offered (TRUST-23). */
@@ -18,47 +20,50 @@ interface Props {
  */
 export function TrustPrompt({ directory, keeping, onAnswer }: Props): React.JSX.Element {
   return (
-    <Modal title="Project trust" className="trust">
-        <h2 id="trust-title">Do you trust this directory?</h2>
-        <code className="path">{directory}</code>
-        <p>
-          <strong>Trust it</strong> and files here are read normally, so ordinary work
-          proceeds without a prompt for every edit.
-        </p>
-        <p>
-          <strong>Decline</strong> and nothing here is trusted. The agent can still work on
-          these files, but it never reads them: they go to an isolated processor, and you
-          see every change before it is applied.
-        </p>
+    <Modal title="Project trust" size="sm" className="trust" subtitle="Do you trust this directory?" subtitleId="trust-title" actions={<>
+      <Button kind="plain-faint" size="small" className="modal-leading" onClick={() => onAnswer(false)} data-test="trust-decline">
+        Don't trust
+      </Button>
+      {keeping && (
+        <Button kind="outline" size="small" onClick={() => onAnswer(true, true)} data-test="trust-remember">
+          Trust and remember
+        </Button>
+      )}
+      <Button kind="filled" size="small" onClick={() => onAnswer(true)} data-test="trust-approve">
+        Trust this directory
+      </Button>
+    </>}>
+      <code className="path">{directory}</code>
+      <ul className="trust-options">
+        <li>
+          <Icon name="shield-done" />
+          <p><strong>Trust it</strong> and files here are read normally, so ordinary work
+            proceeds without a prompt for every edit.</p>
+        </li>
+        <li>
+          <Icon name="eye-off" />
+          <p><strong>Decline</strong> and nothing here is trusted. The agent can still work on
+            these files, but it never reads them: they go to an isolated processor, and you
+            see every change before it is applied.</p>
+        </li>
         {keeping && (
-          <>
-            <p>
-              <strong>Trust and remember</strong> also skips this question in later sessions
+          <li>
+            <Icon name="pin" />
+            <p><strong>Trust and remember</strong> also skips this question in later sessions
               started in exactly this directory. A session started inside or above this
               directory is still asked, and so is one started in a directory deleted and made
-              again here.
-            </p>
-            <p className="aside">
-              Permissions takes it back, and it is written down here: <code>{keeping}</code>
-            </p>
-          </>
+              again here.</p>
+          </li>
         )}
+      </ul>
+      {keeping && (
         <p className="aside">
-          Trusted writes may apply directly. Changes involving untrusted content require review. This conversation keeps your answer{keeping ? ', and later sessions keep it only if you remember it' : ''}.
+          Permissions takes it back, and it is written down here: <code>{keeping}</code>
         </p>
-        <div className="trust-actions">
-          <button className="decline" onClick={() => onAnswer(false)}>
-            Don't trust
-          </button>
-          {keeping && (
-            <button onClick={() => onAnswer(true, true)}>
-              Trust and remember
-            </button>
-          )}
-          <button className="approve" onClick={() => onAnswer(true)}>
-            Trust this directory
-          </button>
-        </div>
+      )}
+      <Alert type="info" size="small" className="trust-aside">
+        Trusted writes may apply directly. Changes involving untrusted content require review. This conversation keeps your answer{keeping ? ', and later sessions keep it only if you remember it' : ''}.
+      </Alert>
     </Modal>
   )
 }

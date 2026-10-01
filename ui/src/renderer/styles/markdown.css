@@ -1,0 +1,167 @@
+/* ---------------------------------------------------------------- markdown, in a reply only
+
+   Scoped to `.bubble.assistant` throughout. These rules must never reproduce the app's own
+   trust signals (the hatched confine border, the warn bar, the confined badge), or a reply
+   could draw something the reader is meant to read as chrome. */
+
+/* A one-paragraph reply is exactly one paragraph tall. */
+.bubble.assistant > :first-child { margin-top: 0; }
+.bubble.assistant > :last-child { margin-bottom: 0; }
+.bubble.assistant p { margin: 0 0 var(--leo-spacing-l); }
+
+.bubble.assistant :is(h1, h2, h3, h4, h5, h6) {
+  margin: var(--leo-spacing-2xl) 0 var(--leo-spacing-m);
+  color: var(--ink-primary);
+}
+.bubble.assistant h1 { font: var(--type-title); }
+.bubble.assistant h2 { font: var(--type-body-strong); }
+.bubble.assistant :is(h3, h4, h5, h6) { font: var(--type-meta-strong); }
+
+.bubble.assistant :is(ul, ol) {
+  margin: 0 0 var(--leo-spacing-l);
+  padding-left: calc(var(--leo-spacing-xl) + var(--leo-spacing-s));
+}
+.bubble.assistant li { margin: var(--leo-spacing-xs) 0; }
+.bubble.assistant li > :is(p, ul, ol) { margin-bottom: var(--leo-spacing-s); }
+.bubble.assistant ul.contains-task-list { list-style: none; padding-left: var(--leo-spacing-s); }
+
+.bubble.assistant blockquote {
+  margin: 0 0 var(--leo-spacing-l);
+  padding-left: var(--leo-spacing-l);
+  border-left: 2px solid var(--border-subtle);
+  color: var(--ink-secondary);
+}
+.bubble.assistant hr {
+  margin: var(--leo-spacing-xl) 0;
+  border: 0;
+  border-top: 1px solid var(--border-hairline);
+}
+
+.bubble.assistant :not(pre) > code {
+  padding: var(--leo-spacing-xs) var(--leo-spacing-s);
+  border-radius: var(--radius-chip);
+  background: var(--surface-sunken);
+  font-family: var(--mono);
+  font-size: 0.88em;
+}
+
+/* ---- tables: hairline rules, no zebra */
+
+.md-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0 0 var(--leo-spacing-l);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+}
+.bubble.assistant table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font: var(--type-meta);
+}
+.bubble.assistant :is(th, td) {
+  padding: var(--leo-spacing-s) var(--leo-spacing-l);
+  border-bottom: 1px solid var(--border-hairline);
+  text-align: left;
+  vertical-align: top;
+}
+.bubble.assistant th {
+  font: var(--type-meta-strong);
+  color: var(--ink-secondary);
+  background: var(--surface-sunken);
+}
+.bubble.assistant tr:last-child td { border-bottom: 0; }
+
+/* ---- links */
+
+.bubble.assistant a {
+  color: var(--ink-link);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+/* A link that will not open is the text it wraps, marked but not clickable. */
+.md-dead-link { text-decoration: underline dotted var(--ink-tertiary); }
+.md-image {
+  padding: 0 var(--leo-spacing-s);
+  border-radius: var(--radius-chip);
+  background: var(--surface-sunken);
+  font: var(--type-caption);
+  color: var(--ink-secondary);
+}
+
+/* A path in the project, which previews the file here rather than opening anything. */
+.local-file-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--leo-spacing-xs);
+  max-width: 100%;
+  padding: 0 var(--leo-spacing-s);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-chip);
+  background: var(--surface-sunken);
+  font-family: var(--mono);
+  font-size: 0.88em;
+  line-height: 1.6;
+  color: var(--ink-link);
+  vertical-align: baseline;
+  cursor: pointer;
+  --leo-icon-size: var(--icon-meta);
+  --leo-icon-color: var(--ink-tertiary);
+}
+.local-file-link:hover { border-color: var(--border-strong); }
+.local-file-link:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.local-file-link > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- code blocks: a card with its language, Wrap and Copy */
+
+.code-block {
+  margin: 0 0 var(--leo-spacing-l);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+/* The head of anything that shows a file or a snippet: code blocks, diffs, the file preview. */
+.code-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-xs);
+  height: var(--row-h);
+  padding: 0 var(--leo-spacing-s) 0 var(--leo-spacing-l);
+  border-bottom: 1px solid var(--border-hairline);
+  background: transparent;
+  font: var(--type-caption);
+}
+.code-language {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-tertiary);
+}
+.code-wrap { border-radius: var(--radius-control); --leo-button-color: var(--ink-tertiary); }
+.code-wrap[aria-pressed='true'] { background: var(--surface-selected); --leo-button-color: var(--ink-primary); }
+
+/* Code scrolls rather than wraps unless asked: a wrapped line misrepresents what is actually in
+   the file, which is the one thing this app does not do to a reader. */
+.bubble.assistant .code-block pre {
+  margin: 0;
+  padding: var(--leo-spacing-l);
+  overflow-x: auto;
+  background: transparent;
+  border-radius: 0;
+  font: var(--type-code);
+  tab-size: 4;
+}
+.bubble.assistant pre code {
+  padding: 0;
+  background: none;
+  font: inherit;
+  white-space: pre;
+  word-break: normal;
+}
+.code-block .code-wrapped,
+.code-block .code-wrapped code { white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -387,6 +387,11 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
+      # Leo's prepare step runs `pnpm run build`. Corepack ships with Node and
+      # activates the pnpm version Leo's packageManager field asks for.
+      - name: Enable corepack for Leo's prepare
+        run: corepack enable
+
       - name: Install desktop test dependencies
         run: |
           sudo apt-get update
@@ -432,6 +437,9 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: ui/package-lock.json
+
+      - name: Enable corepack for Leo's prepare
+        run: corepack enable
 
       - name: Test the file helper on NTFS
         run: cargo test -p bravebot-ui-files --locked

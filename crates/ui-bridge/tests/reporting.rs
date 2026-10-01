@@ -205,3 +205,35 @@ fn what_a_call_spent_at_a_model_reaches_a_front_end() {
         "a call that asked no model was credited with one"
     );
 }
+
+/// The word a call is being written under, and its end, reach a front-end so it can say what a
+/// long wait is for. A delegate's own call is not the turn's, so it is not sent.
+#[test]
+fn the_call_being_written_is_reported_and_a_delegates_is_not() {
+    use bravebot_core::delegate::DelegateId;
+
+    let (mut reporter, events) = harness();
+
+    reporter.composing(Some("Write"));
+    reporter.composing(None);
+    reporter.reporting_for(Some(DelegateId::nth(1)));
+    reporter.composing(Some("Read"));
+    reporter.reporting_for(None);
+    reporter.composing(Some("Edit"));
+
+    let events = events.lock().expect("not poisoned");
+    let said: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|e| e.name == "composing")
+        .map(|e| &e.data["call"])
+        .collect();
+    assert_eq!(
+        said,
+        vec![
+            &serde_json::json!("Write"),
+            &serde_json::json!(null),
+            &serde_json::json!("Edit")
+        ],
+        "a delegate's call was drawn as the planner's, or the end of a call was lost"
+    );
+}

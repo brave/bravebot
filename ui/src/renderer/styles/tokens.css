@@ -1,0 +1,140 @@
+/* The semantic layer. Every name here aliases a Leo token; nothing below this file reaches
+   for a Leo colour, font or radius by its raw name when a role here says what it is for.
+   Light and dark come from Leo's own prefers-color-scheme and data-theme rules. */
+
+:root {
+  color-scheme: light dark;
+
+  /* Surfaces. The window ground, the card the conversation sits on, and the two shades a row
+     takes when it is hovered or chosen. */
+  --surface-app: var(--leo-color-page-background);
+  --surface-panel: var(--leo-color-container-background);
+  --surface-raised: var(--leo-color-container-background);
+  --surface-sunken: var(--leo-color-container-highlight);
+  --surface-hover: var(--leo-color-container-highlight);
+  --surface-selected: var(--leo-color-container-interactive);
+  --surface-scrim: var(--leo-color-dialogs-scrim-background);
+
+  /* Borders. */
+  --border-hairline: var(--leo-color-divider-faint);
+  --border-subtle: var(--leo-color-divider-subtle);
+  --border-strong: var(--leo-color-divider-strong);
+  --border-focus: var(--leo-color-divider-interactive);
+
+  /* Ink. Three levels and disabled; no ad-hoc opacity for text. */
+  --ink-primary: var(--leo-color-text-primary);
+  --ink-secondary: var(--leo-color-text-secondary);
+  --ink-tertiary: var(--leo-color-text-tertiary);
+  --ink-disabled: var(--leo-color-text-disabled);
+  --ink-link: var(--leo-color-text-interactive);
+  --ink-accent: var(--leo-color-icon-interactive);
+  --accent-fill: var(--leo-color-button-background);
+  --accent-on: var(--leo-color-schemes-on-primary);
+
+  /* Status. Only ever systemfeedback. */
+  --status-success: var(--leo-color-systemfeedback-success-icon);
+  --status-success-bg: var(--leo-color-systemfeedback-success-background);
+  --status-warning: var(--leo-color-systemfeedback-warning-icon);
+  --status-warning-bg: var(--leo-color-systemfeedback-warning-background);
+  --status-error: var(--leo-color-systemfeedback-error-icon);
+  --status-error-ink: var(--leo-color-systemfeedback-error-text);
+  --status-error-bg: var(--leo-color-systemfeedback-error-background);
+  --status-info: var(--leo-color-systemfeedback-info-icon);
+  --status-info-bg: var(--leo-color-systemfeedback-info-background);
+
+  /* Type roles, as font shorthands. */
+  --type-heading: var(--leo-font-heading-h3);
+  --type-title: var(--leo-font-heading-h4);
+  --type-body: var(--leo-font-default-regular);
+  --type-body-strong: var(--leo-font-default-semibold);
+  --type-meta: var(--leo-font-small-regular);
+  --type-meta-strong: var(--leo-font-small-semibold);
+  --type-caption: var(--leo-font-x-small-regular);
+  --type-caption-strong: var(--leo-font-x-small-semibold);
+  --type-code: var(--leo-font-monospace-small);
+  --type-code-body: var(--leo-font-monospace-default);
+  --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* Radius roles. */
+  --radius-chip: var(--leo-radius-s);
+  --radius-control: var(--leo-radius-m);
+  --radius-card: var(--leo-radius-l);
+  --radius-field: var(--leo-radius-xl);
+  --radius-pill: var(--leo-radius-full);
+
+  /* Elevation. The only shadows in the app; check-nala fails on any other. */
+  --shadow-raised: var(--leo-effect-elevation-01);
+  --shadow-floating: var(--leo-effect-elevation-03);
+  --shadow-focus: var(--leo-effect-focus-state);
+
+  /* Layout. The titlebar height is shared by the three column heads so they line up across
+     the window; the lights are where the inset traffic lights stop. */
+  --titlebar: 44px;
+  --lights: 78px;
+  /* The ground showing around the content card. */
+  --card-gap: 8px;
+  --session-row-h: 44px;
+  /* Between turns, and between the parts of one: prompt, reply, activity, footer. */
+  --turn-gap: calc(var(--leo-spacing-xl) + var(--leo-spacing-s));
+  --part-gap: var(--leo-spacing-m);
+  --reading-width: 760px;
+  --row-h: 32px;
+  --hit: 28px;
+  --icon-caption: 12px;
+  --icon-meta: 14px;
+  --icon-control: 16px;
+  --icon-hero: 20px;
+
+  /* Motion. FOLD_MS in columns.ts must match --leo-duration-m. */
+  --motion-fast: var(--leo-duration-s) var(--leo-easing-out);
+  --motion-panel: var(--leo-duration-m) var(--leo-easing-out);
+  --panel-duration: var(--leo-duration-m);
+
+  /* Legacy aliases, mapped onto the roles above until the last rule that uses them is gone. */
+  --bg: var(--surface-app);
+  --bg-main: var(--surface-panel);
+  --ink: var(--ink-primary);
+  --ink-dim: var(--ink-secondary);
+  --ink-faint: var(--ink-tertiary);
+  --line: var(--border-subtle);
+  --accent: var(--accent-fill);
+  --accent-ink: var(--accent-on);
+  --accent-quiet: var(--ink-link);
+  --accent-text: var(--ink-link);
+  --added: var(--status-success);
+  --added-bg: var(--status-success-bg);
+  --removed: var(--status-error);
+  --removed-bg: var(--status-error-bg);
+  --warn: var(--status-warning);
+  --warn-bg: var(--status-warning-bg);
+  --confine: var(--status-info);
+  --confine-bg: var(--status-info-bg);
+  --radius: var(--radius-control);
+  --code-bg: var(--surface-sunken);
+  --mono: var(--leo-font-monospace-default);
+  --scrim: var(--surface-scrim);
+  --hover-wash: var(--surface-selected);
+  --panel-motion: var(--motion-panel);
+}
+
+/* A forced appearance must also flip native parts (scrollbars, form controls). */
+/* Only macOS draws its window controls over the content; elsewhere the frame is the system's. */
+:root[data-platform='other'] { --lights: 0px; }
+
+:root[data-theme='light'] { color-scheme: light; }
+:root[data-theme='dark'] { color-scheme: dark; }
+
+.app.compact {
+  --row-h: 28px;
+  --session-row-h: 36px;
+  --turn-gap: var(--leo-spacing-l);
+  --part-gap: var(--leo-spacing-s);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0s linear;
+    --motion-panel: 0s linear;
+    --panel-duration: 0s;
+  }
+}

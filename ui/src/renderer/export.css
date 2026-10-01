@@ -4,38 +4,10 @@
  * Loaded after `styles.css`, and every rule here is an override with a reason. The window's
  * stylesheet is written for a scrolling three-column app on a screen that might be dark;
  * none of those four things is true of a page.
+ *
+ * Light is pinned by `data-theme="light"` on `export.html`, so Leo's tokens resolve to the
+ * light palette regardless of the OS. No source-order re-declaration of colours is needed.
  */
-
-/* ---------------------------------------------------------------- the palette
-
-   Pinned light, unconditionally.
-
-   The window that draws this is offscreen but it is still a window, so it follows the
-   system theme — and a session exported at night would otherwise come out near-black:
-   wrong on paper, wrong as an attachment, and expensive in a way nobody asked for. This
-   works by source order alone. The dark block in `styles.css` is a `@media` rule of the
-   same specificity, and this sheet is loaded after it.
-
-   Deliberately not `nativeTheme.themeSource`, which is process-global: it would flip the
-   window the user is actually looking at, mid-export.
-
-   The same source-order argument is why themes must never reach this page. A chosen palette is
-   applied as `:root[data-theme]` in `styles.css`, and an attribute selector outranks the plain
-   `:root` below however late this sheet is loaded. It never matches here because `export.tsx` is
-   a separate entry point that does not import `renderer/theme.ts` — the print window is always
-   `brave`. That is load-bearing rather than incidental: adding theming to `export.tsx` would make
-   a session exported at night in a dark palette come out black on paper, and nothing else would
-   go wrong first. */
-:root {
-  --bg: #ffffff;
-  --bg-side: #ffffff;
-  --ink: #1d1d1f;
-  --ink-dim: #55555a;
-  --ink-faint: #86868b;
-  --line: rgba(0, 0, 0, 0.14);
-  --bubble-agent: #f2f2f4;
-  --code-bg: #f4f4f6;
-}
 
 /* ---------------------------------------------------------------- the page */
 
@@ -46,15 +18,16 @@
 
 html,
 body {
+  color-scheme: light;
   /* The app shell hides overflow to keep the columns still. A document has to be allowed
      to be taller than the window that measured it. */
   overflow: visible;
   height: auto;
-  background: #ffffff;
+  background: var(--leo-color-page-background);
 }
 
 .export {
-  background: #ffffff;
+  background: var(--leo-color-page-background);
   color: var(--ink);
   /* Chromium drops background fills on the print path unless told otherwise, and without
      them the bubbles are outlines — which is most of what "looks like the app" meant. */
@@ -71,17 +44,17 @@ body {
 }
 .export-head h1 {
   margin: 0 0 4px;
-  font-size: 20px;
+  font-size: var(--leo-typography-heading-h3-font-size);
 }
 .export-head .where {
   margin: 0;
   color: var(--ink-dim);
-  font-size: 12px;
+  font-size: var(--leo-typography-small-regular-font-size);
 }
 .export-head .exported-at {
   margin: 2px 0 0;
   color: var(--ink-faint);
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
 }
 
 /* ---------------------------------------------------------------- the turns */
@@ -92,7 +65,7 @@ body {
 .export-turn .role {
   margin: 0 0 3px;
   color: var(--ink-faint);
-  font-size: 10px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -132,7 +105,7 @@ body {
   margin: 0 0 6px 18px;
   color: var(--ink-faint);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   break-inside: avoid;
   page-break-inside: avoid;
 }
@@ -182,5 +155,5 @@ body {
   padding-top: 10px;
   border-top: 1px solid var(--line);
   color: var(--ink-faint);
-  font-size: 10px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
 }
