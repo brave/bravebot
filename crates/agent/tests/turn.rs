@@ -9239,6 +9239,53 @@ fn a_write_with_blank_references_beside_its_path_and_contents_goes_through() {
     );
 }
 
+/// A watch on a path arms with a blank `path_ref` beside it, and a real `path_ref` is still
+/// refused.
+///
+/// The blank one is a field the planner filled without meaning it. A reference stays refused
+/// because the name behind one came out of a directory nobody vouched for, and a watch reports the
+/// path it was armed on.
+#[test]
+fn a_watch_with_a_blank_path_reference_arms_and_a_real_reference_is_refused() {
+    let scratch = Scratch::new("watch-blank-path-reference");
+    std::fs::write(scratch.path.join("notes.txt"), "one\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("watch_file", r#"{"path":"notes.txt","path_ref":""}"#),
+        tool_request("watch_file", r#"{"path_ref":"ref:1"}"#),
+        reply_with("watching"),
+    ]);
+    let config = config_for(&endpoint);
+    let free = bravebot_agent::watch::Arming::Allowed { free: 8 };
+
+    let outcome = turn::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("watch the notes")
+            .looking_again(true)
+            .arming(free),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        outcome.watches,
+        vec!["notes.txt".to_string()],
+        "the blank reference stopped the watch from arming, or the real one armed another"
+    );
+    let bodies: Vec<String> = received.try_iter().collect();
+    let last = bodies.last().expect("a last round");
+    assert!(
+        last.contains("watch_file takes 'path' and no reference"),
+        "a real reference was not refused: {last}"
+    );
+}
+
 /// A turn that changed files and ran nothing is asked about it, once, and the person is told.
 ///
 /// The turn this is for edited eighteen files, ran no command at all, and was stopped with none of
@@ -13485,6 +13532,65 @@ fn a_line_naming_a_file_for_standard_input_cannot_also_name_a_reference() {
     assert!(
         third.contains("give 'stdin_ref' or a '<' redirection"),
         "a line with two sources for one descriptor was not refused before it ran: {third}"
+    );
+}
+
+/// A blank `stdin_ref` beside a redirection is one source for standard input, not two.
+///
+/// Planners given a schema of optional strings send the ones they are not using as `""`. Counted as
+/// a reference, the blank one refused a line that only redirected a file, and a reference that
+/// names nothing was never going to be the one the planner meant.
+#[test]
+fn a_line_with_a_blank_stdin_reference_beside_a_redirection_still_runs() {
+    let scratch = Scratch::new("run-blank-stdin-reference");
+    std::fs::write(scratch.path.join("other.txt"), "one\ntwo\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "run",
+            r#"{"command":"sed -n 2p < other.txt","stdin_ref":""}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("print the second line"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("give 'stdin_ref' or a '<' redirection")),
+        "a blank stdin_ref was counted as a second source: {bodies:?}"
+    );
+    let asked = seen.lock().unwrap();
+    assert_eq!(
+        asked.len(),
+        1,
+        "the line was refused before anyone was asked"
+    );
+    assert_eq!(
+        asked[0].stdin, None,
+        "a blank reference was taken for something to feed in"
     );
 }
 

@@ -2228,8 +2228,9 @@ fn target_of<S: Sink>(
     // searched them afterwards would be inspecting content under a witness minted to put it on a
     // screen, which LABEL-6 refuses. Text with no reference in it comes back as it went in, so
     // there is nothing left here to test it for.
-    let names = policy.names_for_display(slots);
-    let shaped = policy.render_in_place(tool, &named, |text| name_references(&text, &names));
+    let display_names = policy.names_for_display(slots);
+    let shaped =
+        policy.render_in_place(tool, &named, |text| name_references(&text, &display_names));
     let proof = policy.authorise_display_release("what a tool is working on");
     shaped.declassify(&proof)
 }
@@ -5581,7 +5582,8 @@ fn run<S: Sink, C: Confirmer>(
     // The reference whose contents go to the first program's standard input, where the call named
     // one. Present but not a string is refused rather than dropped, for the reason a directory is:
     // a field the driver quietly ignored would run a line over nothing, and a planner that asked
-    // for a document to be filtered would be handed the filter's answer about an empty one.
+    // for a document to be filtered would be handed the filter's answer about an empty one. A
+    // blank string names no document, so it is the field left out, as for every other reference.
     let named_stdin = match arguments.get("stdin_ref") {
         None | Some(Value::Null) => None,
         Some(Value::String(_)) => named_argument(arguments, "stdin_ref"),
