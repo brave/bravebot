@@ -873,6 +873,18 @@ impl Workspace {
         (!Path::new(&landed).components().eq(typed)).then_some(landed)
     }
 
+    /// Whether a `deny` rule covers reading `named`, under that name or the one it lands on
+    /// (PERM-7), asked without refusing anything.
+    ///
+    /// For a file the driver looks for itself rather than one a call named, which is left out
+    /// rather than failed, as a walk leaves out an entry a rule covers.
+    pub(crate) fn rule_denies_reading<S: Sink>(&self, policy: &Policy<'_, S>, named: &str) -> bool {
+        policy.read_is_denied(named)
+            || self
+                .landing(named)
+                .is_some_and(|landed| policy.read_is_denied(&landed))
+    }
+
     /// Where an attachment's bytes are.
     ///
     /// Confined resolution is the ordinary one: a relative path against the root, an absolute one

@@ -10998,6 +10998,87 @@ fn a_trusted_workspace_agents_file_reaches_the_system_prompt() {
     );
 }
 
+/// An instructions file is read by the driver before anything is asked, so it is a read nobody
+/// named, and a link from it to a denied file would put that file in the system prompt of a
+/// workspace the person trusted. The rule is asked about the file the name lands on.
+#[cfg(unix)]
+#[test]
+fn a_denied_file_does_not_reach_the_system_prompt_through_an_agents_file_linking_to_it() {
+    let scratch = Scratch::new("agents-links-to-a-denied-file");
+    std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=hunter2").unwrap();
+    std::os::unix::fs::symlink(".env", scratch.path.join("AGENTS.md")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(&reply_with("the answer"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let outcome = turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("do the work").with_permissions(rules(&["Read(./.env)"], &[], &[])),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let body = received.recv().expect("request body");
+    assert!(
+        !body.contains("hunter2"),
+        "a denied file reached the system prompt through AGENTS.md: {body}"
+    );
+    assert_eq!(
+        outcome.notices,
+        ["AGENTS.md was not loaded: a deny rule in your settings covers it"],
+        "the person was not told why their AGENTS.md is not in force"
+    );
+}
+
+/// The file a pointer names is a second read nobody named, so a rule covering it keeps it out too.
+/// The pointer stands as itself, as it does when the file it names cannot be read, and the person is
+/// told why the instructions it names are not in force.
+#[test]
+fn a_denied_file_an_agents_file_points_at_does_not_reach_the_system_prompt() {
+    let scratch = Scratch::new("agents-points-at-a-denied-file");
+    std::fs::write(scratch.path.join("AGENTS.md"), "See notes.md.").unwrap();
+    std::fs::write(scratch.path.join("notes.md"), "SECRET_TOKEN=hunter2").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(&reply_with("the answer"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let outcome = turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("do the work").with_permissions(rules(&["Read(./notes.md)"], &[], &[])),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let body = received.recv().expect("request body");
+    assert!(
+        !body.contains("hunter2"),
+        "a denied file reached the system prompt through a pointer to it: {body}"
+    );
+    assert!(
+        body.contains("See notes.md."),
+        "the pointer did not stand as itself, so this proves nothing about the rule: {body}"
+    );
+    assert_eq!(
+        outcome.notices,
+        ["notes.md was not loaded: a deny rule in your settings covers it"],
+        "the person was not told why the instructions AGENTS.md names are not in force"
+    );
+}
+
 /// The environment block states whether the GitHub CLI is installed, and what to do about it is a
 /// separate piece the person's own prompt carries. Composed and never appended is the way that goes
 /// wrong silently, so what is asserted is that the two agree: a machine whose probe found the CLI

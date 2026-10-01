@@ -168,7 +168,8 @@ longer is read as itself and its citations are left alone.
 The pointer is resolved by the same `workspace.read` that governs every other path, so confinement
 and the trust map decide whether the named file may be opened. A pointer naming something outside
 the workspace is refused there, and an untrusted directory's instructions never reach this rule at
-all: they are a notice and no text.
+all: they are a notice and no text. A pointer naming a file a `deny` rule covers is read as itself,
+the file it names is not read, and the person is told why ([PERM-7](permissions.md#PERM-7)).
 
 **Why.** Repositories that support several agents keep one real document and point the other names
 at it. Handed the pointer, a planner spends a call reading what it was about to be given anyway:
@@ -184,6 +185,7 @@ exactly that.
 `verified-by: bravebot_agent::preamble::a_file_pointing_at_itself_is_not_followed`
 `verified-by: bravebot_agent::preamble::punctuation_around_the_name_is_not_part_of_it`
 `verified-by: bravebot_agent::preamble::a_short_file_naming_nothing_is_not_a_pointer`
+`verified-by: bravebot_agent::turn::a_denied_file_an_agents_file_points_at_does_not_reach_the_system_prompt`
 
 <a id="INSTR-9"></a>
 ### INSTR-9: where the planner is working is stated, and is not read through the trust gate

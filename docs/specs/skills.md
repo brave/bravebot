@@ -213,10 +213,10 @@ settled here.
 ### SKILL-14: an interface listing skills is shown the set a turn would advertise, read the same way
 
 Where the interface lists skills for a person, it reads them through the same gate a turn does,
-under the session's trust map, so a skill a turn would drop is never listed and one a turn would
-offer is. Each skill records whether it was found in the project, in the person's own directory or
-in this program, and one that shadowed another records where it was found, not where the one it
-shadowed was.
+under the session's trust map and its rules, so a skill a turn would drop is never listed and one a
+turn would offer is. Each skill records whether it was found in the project, in the person's own
+directory or in this program, and one that shadowed another records where it was found, not where
+the one it shadowed was.
 
 **Why.** A list that found skills its own way would sooner or later name one the planner is never
 shown, and a skill in a project nobody trusts is exactly the one [SKILL-6](#SKILL-6) counts rather
@@ -225,6 +225,7 @@ brought with it.
 
 `verified-by: bravebot_agent::skills::the_set_an_interface_resolves_is_the_one_a_turn_would`
 `verified-by: bravebot_agent::skills::each_skill_records_which_of_the_three_places_it_came_from`
+`verified-by: bravebot_agent::skills::a_skill_a_deny_rule_covers_is_offered_nowhere_through_a_link_to_it`
 
 <a id="SKILL-15"></a>
 ### SKILL-15: a skill may name the model its rounds are asked of and the effort they carry

@@ -186,6 +186,7 @@ pub fn session(skip_permissions: bool, agent: Option<String>) -> ExitCode {
                 &workspace,
                 home.as_deref(),
                 trust.clone(),
+                permissions.clone(),
                 &mut RecordingSink::new(),
             );
             bravebot_tui::app::definition_named(&config, &definitions, &name)

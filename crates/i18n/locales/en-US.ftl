@@ -2189,6 +2189,11 @@ skill-model-kept-for-definition = { $skill } asks for { $model }, but this turn 
 # The endpoint answered the rounds after a skill's switch with another model, which it does rather
 # than refuse a name it will not serve. The model is the skill file's own word for it.
 skill-model-substituted = { $skill } asked for { $model } and was answered by a different model
+# A project file this program would have read on its own account (AGENTS.md, CLAUDE.md,
+# .claude/CLAUDE.md, the file one of those points at, a skill or a definition) that the person's own
+# settings deny reading, so it was left out of the turn. The source is its workspace-relative path
+# and stays as it is. "deny" is the name of the settings list the rule sits in.
+source-denied-by-rule = { $source } was not loaded: a deny rule in your settings covers it
 
 # Advisory checks shown only in a Bravebot source checkout.
 doctor-development = development environment { $path }
