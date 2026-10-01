@@ -15,8 +15,8 @@ use gix_object::tree::EntryKind;
 use super::{Declined, Out, Repository, in_scope, join, parse_config, read_if_present};
 
 const FLAG_ASSUME_VALID: u16 = 0x8000;
-const FLAG_EXTENDED: u16 = 0x4000;
-const EXTENDED_SKIP_WORKTREE: u16 = 0x4000;
+pub(super) const FLAG_EXTENDED: u16 = 0x4000;
+pub(super) const EXTENDED_SKIP_WORKTREE: u16 = 0x4000;
 const EXTENDED_INTENT_TO_ADD: u16 = 0x2000;
 
 const MODE_FILE: u32 = 0o100644;
@@ -37,7 +37,7 @@ const CONVERTING: [&str; 6] = [
 
 /// The stat data git records for an entry, each field as the index stores it: the low 32 bits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-struct Stat {
+pub(super) struct Stat {
     ctime: (u32, u32),
     mtime: (u32, u32),
     ino: u32,
@@ -48,7 +48,7 @@ struct Stat {
 
 impl Stat {
     #[cfg(unix)]
-    fn of(meta: &std::fs::Metadata) -> Stat {
+    pub(super) fn of(meta: &std::fs::Metadata) -> Stat {
         use std::os::unix::fs::MetadataExt;
         Stat {
             ctime: (meta.ctime() as u32, meta.ctime_nsec() as u32),
@@ -61,17 +61,37 @@ impl Stat {
     }
 
     #[cfg(not(unix))]
-    fn of(meta: &std::fs::Metadata) -> Stat {
+    pub(super) fn of(meta: &std::fs::Metadata) -> Stat {
         Stat {
+            // Git for Windows records a file's creation time as its ctime.
+            ctime: since_epoch(meta.created()),
             mtime: modified(meta),
             size: meta.len() as u32,
             ..Stat::default()
         }
     }
 
+    /// The ten stat words of an index entry with `mode`, in git's order. The device is left zero,
+    /// as git compares it only when built to.
+    pub(super) fn words(&self, mode: u32) -> [u32; 10] {
+        [
+            self.ctime.0,
+            self.ctime.1,
+            self.mtime.0,
+            self.mtime.1,
+            0,
+            self.ino,
+            mode,
+            self.uid,
+            self.gid,
+            self.size,
+        ]
+    }
+
     /// Whether `now` shows no change from what the index recorded. Where this platform has no
-    /// such field, it is not compared, as git for that platform leaves it zero.
-    fn unchanged(&self, now: &Stat) -> bool {
+    /// such field, it is not compared, as git for that platform leaves it zero. Off unix the
+    /// creation time is not compared either.
+    pub(super) fn unchanged(&self, now: &Stat) -> bool {
         if cfg!(unix) {
             self == now
         } else {
@@ -80,22 +100,25 @@ impl Stat {
     }
 }
 
-fn modified(meta: &std::fs::Metadata) -> (u32, u32) {
-    meta.modified()
-        .ok()
+pub(super) fn modified(meta: &std::fs::Metadata) -> (u32, u32) {
+    since_epoch(meta.modified())
+}
+
+fn since_epoch(time: std::io::Result<std::time::SystemTime>) -> (u32, u32) {
+    time.ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map_or((0, 0), |d| (d.as_secs() as u32, d.subsec_nanos()))
 }
 
 #[derive(Debug, Clone)]
-struct IndexEntry {
-    path: Vec<u8>,
-    stat: Stat,
-    mode: u32,
-    id: ObjectId,
+pub(super) struct IndexEntry {
+    pub(super) path: Vec<u8>,
+    pub(super) stat: Stat,
+    pub(super) mode: u32,
+    pub(super) id: ObjectId,
     stage: u8,
     assume_valid: bool,
-    skip_worktree: bool,
+    pub(super) skip_worktree: bool,
     intent_to_add: bool,
 }
 
@@ -135,7 +158,7 @@ fn safe_path(path: &[u8]) -> bool {
 
 /// Parse `.git/index`, versions 2 to 4, declining the split and sparse layouts and any required
 /// extension this reader does not know.
-fn parse_index(bytes: &[u8]) -> Result<Vec<IndexEntry>, Declined> {
+pub(super) fn parse_index(bytes: &[u8]) -> Result<Vec<IndexEntry>, Declined> {
     let bad = || Declined::Unreadable;
     if bytes.len() < 12 + 20 || &bytes[..4] != b"DIRC" {
         return Err(bad());
@@ -255,7 +278,7 @@ enum Untracked {
     All,
 }
 
-fn boolean(value: Option<&[u8]>) -> Option<bool> {
+pub(super) fn boolean(value: Option<&[u8]>) -> Option<bool> {
     let Some(value) = value else {
         return Some(true);
     };

@@ -121,6 +121,11 @@ pub enum WorkspaceError {
         path: String,
         declined: crate::git::Declined,
     },
+    /// No checkout was made, for the reason carried.
+    Checkout {
+        path: String,
+        refused: crate::git::checkout::Refused,
+    },
 }
 
 impl WorkspaceError {
@@ -165,6 +170,7 @@ impl WorkspaceError {
             ),
             Self::Pattern { detail } => format!("the search pattern is not usable: {detail}"),
             Self::Git { declined, .. } => declined.describe(named),
+            Self::Checkout { refused, .. } => refused.describe(named),
         }
     }
 
@@ -185,7 +191,8 @@ impl WorkspaceError {
             | Self::Contended { path }
             | Self::Binary { path }
             | Self::TooLarge { path, .. }
-            | Self::Git { path, .. } => path,
+            | Self::Git { path, .. }
+            | Self::Checkout { path, .. } => path,
         }
     }
 }
@@ -2583,13 +2590,7 @@ impl Workspace {
             let root = self.resolve(&named)?;
             let git_dir = root.join(".git");
             let spelled = |inside: &str| in_repository(&named, inside);
-            let git_key = self.git_dir_key(&named);
-            if !policy.trusts_beneath(&git_key) {
-                return Err(declined(crate::git::Declined::Untrusted));
-            }
-            if policy.read_is_denied(&git_key) {
-                return Err(declined(crate::git::Declined::Fenced));
-            }
+            let git_key = self.trusted_git_dir(policy, &named).map_err(declined)?;
             // Status compares every file in the working tree, so all of it is its read set.
             let read_set = if query == crate::git::Query::Status {
                 let tree_key = self.trust_key(&named);
@@ -2601,19 +2602,8 @@ impl Workspace {
                 git_key.clone()
             };
             let deadline = Instant::now() + self.search_time;
-            let files = crate::git::survey(&git_dir, query, deadline).map_err(declined)?;
-            let fenced = files.iter().any(|file| {
-                let below = file.strip_prefix(&root).unwrap_or(file);
-                let below = bravebot_core::spelling::to_slash(
-                    &below.to_string_lossy(),
-                    BACKSLASH_SEPARATES,
-                )
-                .into_owned();
-                policy.read_is_denied(&self.trust_key(&spelled(&below)))
-            });
-            if fenced {
-                return Err(declined(crate::git::Declined::Fenced));
-            }
+            self.surveyed(policy, &named, &root, query, deadline)
+                .map_err(declined)?;
 
             let opened = crate::git::Repository::open(&git_dir).map_err(declined)?;
             let request = crate::git::Request {
@@ -2642,6 +2632,93 @@ impl Workspace {
             )?;
             Ok(Labelled::new(answer, label))
         })
+    }
+
+    /// The trust map's name for `.git` in the repository the planner called `named`, where the map
+    /// trusts all of it and no deny rule covers it, decided before anything there is listed.
+    fn trusted_git_dir<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        named: &str,
+    ) -> Result<String, crate::git::Declined> {
+        let git_key = self.git_dir_key(named);
+        if !policy.trusts_beneath(&git_key) {
+            return Err(crate::git::Declined::Untrusted);
+        }
+        if policy.read_is_denied(&git_key) {
+            return Err(crate::git::Declined::Fenced);
+        }
+        Ok(git_key)
+    }
+
+    /// Refuse the repository at `root`, which the planner called `named`, unless `query` could
+    /// read every file [`crate::git::survey`] lists under its `.git` with no deny rule covering
+    /// one.
+    fn surveyed<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        named: &str,
+        root: &Path,
+        query: crate::git::Query,
+        deadline: Instant,
+    ) -> Result<(), crate::git::Declined> {
+        let files = crate::git::survey(&root.join(".git"), query, deadline)?;
+        let fenced = files.iter().any(|file| {
+            let below = file.strip_prefix(root).unwrap_or(file);
+            let below =
+                bravebot_core::spelling::to_slash(&below.to_string_lossy(), BACKSLASH_SEPARATES)
+                    .into_owned();
+            policy.read_is_denied(&self.trust_key(&in_repository(named, &below)))
+        });
+        if fenced {
+            return Err(crate::git::Declined::Fenced);
+        }
+        Ok(())
+    }
+
+    /// Make a checkout of the repository at the workspace's root at `target`, registered in its
+    /// `.git` as `worktrees/<id>` ([CHECKOUT-4], [CHECKOUT-5]). Nothing calls this yet.
+    ///
+    /// Refused unless `read_git` would open the repository: the map has to trust `.git` and
+    /// everything beneath it, and no deny rule may cover a file there that a status reads, which
+    /// includes `info/attributes`. A path in the tree a deny rule covers is not written, and the
+    /// answer lists it. A `.gitattributes` file the map does not trust refuses the checkout unread,
+    /// since its contents are labelled by its own path's rule.
+    ///
+    /// [CHECKOUT-4]: ../../../docs/specs/checkouts.md#CHECKOUT-4
+    /// [CHECKOUT-5]: ../../../docs/specs/checkouts.md#CHECKOUT-5
+    pub fn make_checkout<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        target: &Path,
+        id: &str,
+        bound: crate::git::checkout::Bound,
+    ) -> Result<crate::git::checkout::Made, WorkspaceError> {
+        use crate::git::Declined;
+        let named = ".";
+        let refused = |refused| WorkspaceError::Checkout {
+            path: named.to_owned(),
+            refused,
+        };
+        let declined = |declined: Declined| refused(declined.into());
+        self.trusted_git_dir(policy, named).map_err(declined)?;
+        let deadline = Instant::now() + self.search_time;
+        self.surveyed(
+            policy,
+            named,
+            &self.root,
+            crate::git::Query::Status,
+            deadline,
+        )
+        .map_err(declined)?;
+        let git_dir = self.root.join(".git");
+        let withheld =
+            |inside: &str| policy.read_is_denied(&self.trust_key(&in_repository(named, inside)));
+        let trusted = |inside: &str| {
+            !policy.read_is_quarantined(&self.trust_key(&in_repository(named, inside)))
+        };
+        crate::git::checkout::make(&git_dir, target, id, &withheld, &trusted, bound)
+            .map_err(refused)
     }
 
     /// Collect workspace-relative paths of regular files beneath `directory`.

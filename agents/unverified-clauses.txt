@@ -10,8 +10,6 @@
 docs/specs/checkouts.md:CHECKOUT-1: `isolation` on a spawn is routing, with one value
 docs/specs/checkouts.md:CHECKOUT-2: a definition may ask for a checkout, and a later definition cannot take one away
 docs/specs/checkouts.md:CHECKOUT-3: a checker or a worker may have a checkout, a reader may not, and a delegate's own delegates share it
-docs/specs/checkouts.md:CHECKOUT-4: a checkout is made only where `read_git` would open the repository, and git would write every file as it is stored
-docs/specs/checkouts.md:CHECKOUT-5: a checkout is HEAD's tree written by the driver, and nothing is started to write it
 docs/specs/checkouts.md:CHECKOUT-6: a checkout lives under the state directory, keyed by the workspace
 docs/specs/checkouts.md:CHECKOUT-7: a delegate's workspace is its checkout
 docs/specs/checkouts.md:CHECKOUT-8: a file in a checkout is labelled as the same path in the working directory is
