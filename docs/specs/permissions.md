@@ -288,6 +288,18 @@ question and never removes one. On Windows a name that reads as something other 
 spells (a stream, a device, a trailing dot or space, an 8.3 short name) is refused outright, since
 the rules cannot be matched against a spelling that is not the file's.
 
+The same holds for the spelling a rule is written in. A `deny` or `ask` path rule whose segments
+before the first `*` pass through a symbolic link also covers the place the link reaches, under the
+name a gate holds that place by ([PERM-3](#PERM-3)): with `linked` a link to `real`,
+`Read(linked/**)` refuses `real/secret.txt` asked for by that name, in a call or in a walk, and a
+`//` rule written through a link to an added directory covers the files in it. A name is a place
+at the top of the workspace too, so with `.env` a link, `Read(.env)` covers the file it reaches. A
+rule whose spelling passes through no link is left as written, so a full path to a project file
+still says nothing about the name the project holds it by. The rule stays one rule, and the name it
+reaches is covered at that place only, not wherever it appears as the written pattern may be
+([PERM-4](#PERM-4)). An `allow` rule is matched as written, so a grant does not reach further than
+the spelling the person approved.
+
 Nor is it about the directory a call happened to name, so it holds whichever way a walk arrives at
 the file. A listing or a search consults the rules for every entry its walk reaches as well as for
 the directory it was asked for, and an entry a rule covers is left out before the file is opened or
@@ -344,6 +356,20 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::turn::a_denied_file_an_agents_file_points_at_does_not_reach_the_system_prompt`
 `verified-by: bravebot_agent::skills::a_skill_a_deny_rule_covers_is_offered_nowhere_through_a_link_to_it`
 `verified-by: bravebot_agent::agents::a_definition_a_deny_rule_covers_is_selectable_nowhere_through_a_link_to_it`
+`verified-by: bravebot_agent::turn::a_file_a_rule_names_through_a_link_is_not_read_or_written_by_its_own_name`
+`verified-by: bravebot_agent::turn::a_file_a_rule_names_through_a_link_is_not_listed_or_searched`
+`verified-by: bravebot_agent::turn::a_full_path_rule_through_a_link_to_an_added_directory_covers_its_files`
+`verified-by: bravebot_agent::turn::an_ask_rule_spelled_through_a_link_still_prompts_for_a_write_to_its_target`
+`verified-by: bravebot_agent::permissions::a_restricting_rule_spelled_through_a_link_covers_the_file_it_reaches`
+`verified-by: bravebot_agent::permissions::an_unattended_run_follows_a_rule_spelled_through_a_link_too`
+`verified-by: bravebot_agent::permissions::the_name_a_link_reaches_is_covered_at_that_place_only`
+`verified-by: bravebot_agent::permissions::an_allow_rule_spelled_through_a_link_grants_only_the_spelling_it_names`
+`verified-by: bravebot_agent::permissions::a_rule_through_a_link_covers_its_target_on_whichever_side_of_the_root_it_is`
+`verified-by: bravebot_agent::permissions::a_rule_under_a_linked_home_directory_covers_the_directory_it_reaches`
+`verified-by: bravebot_agent::permissions::a_rule_naming_a_link_covers_the_file_it_reaches`
+`verified-by: bravebot_agent::permissions::a_full_path_rule_with_no_link_in_it_says_nothing_about_a_project_file`
+`verified-by: bravebot_core::permissions::a_restricting_path_rule_is_followed_from_the_segments_before_its_first_star`
+`verified-by: bravebot_core::permissions::a_landing_is_read_in_the_spelling_a_path_is_matched_in`
 `verified-by: bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only`
 `verified-by: bravebot_agent::turn::a_denied_host_is_refused_without_asking`
 `verified-by: bravebot_agent::turn::a_deny_rule_holds_against_a_trusted_workspace`
@@ -858,6 +884,17 @@ have made each of those three depend on nobody else having spoken.
   checkout asking for it is confined from the next session there rather than from that turn. Closing
   it would mean the restriction arriving partway through a session, and the file the session started
   under is the one its author read.
+- **A link in a rule's spelling is followed when the rules are read.** [PERM-7](#PERM-7) has a rule
+  written through a link cover the place the link reached then, and the rules are read once per
+  session ([PERM-12](#PERM-12)). A link made, removed or repointed later is followed again only when
+  the rules are read again, at the next session or a `/cd`; until then the rule covers the place the
+  link used to reach as well as its own spelling, and a call through the link is still checked under
+  the name it reaches. Following the rule's links at every call would put I/O in every match. Only
+  the place a rule names is followed, not the nested copies a restricting pattern floats to
+  ([PERM-4](#PERM-4)): with `vendor/secrets` a link to `vault`, `Read(secrets/**)` covers
+  `vendor/secrets/key` and not `vault/key`, since finding every copy is a walk of the tree. And
+  the place is looked up in the spelling the rule is stored in, folded where the volume folds case,
+  so a link behind a name the volume does not open in its folded spelling is not followed.
 - **`readsStayInWorkspace` does not confine a program a `run` starts.** It governs the file tools, as
   the path rules do, and the known cost above about a path rule not reaching a program's own file
   access holds here word for word: `run cat ~/.ssh/id_rsa` is judged against the `Bash` rules and the

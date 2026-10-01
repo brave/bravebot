@@ -427,7 +427,7 @@ fn refuse_misleading_names(
 ///
 /// Says where an operation goes now, not where it goes when it happens; the window between the
 /// two is a known cost against the clause this serves.
-fn destination(path: &Path) -> Option<PathBuf> {
+pub(crate) fn destination(path: &Path) -> Option<PathBuf> {
     let mut missing: Vec<OsString> = Vec::new();
     let mut existing = path.to_path_buf();
     let mut followed = 0usize;

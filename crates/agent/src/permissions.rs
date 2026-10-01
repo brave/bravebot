@@ -127,7 +127,9 @@ pub fn for_an_unattended_run(
 ) -> (Permissions, Vec<Rejected>) {
     let lists = settings.permissions();
     let anchors = anchors(profile, crate::workspace::volume_folds_case(workspace));
-    let (permissions, mut rejected) = Permissions::parse(&lists.deny, &lists.ask, &[], &anchors);
+    let (mut permissions, mut rejected) =
+        Permissions::parse(&lists.deny, &lists.ask, &[], &anchors);
+    follow_links(&mut permissions, workspace);
     // Read for its rejects and then dropped, rather than not read at all. A line the person
     // believes is in force and that nothing can act on is worth saying out loud wherever it was
     // written, and an allow rule that is silently unreadable here reads to them as one that holds.
@@ -160,6 +162,54 @@ fn anchors(profile: Option<&std::path::Path>, folds_case: bool) -> Anchors {
         // Asked of the workspace's volume by the caller and false where that could not be told, so
         // a failed probe compares bytes and never widens a rule.
         folds_case,
+    }
+}
+
+/// Have the `deny` and `ask` path rules cover the file each one's spelling reaches (PERM-7).
+///
+/// The links are followed as the rules are read, so a link made or repointed later in the session
+/// is not followed until they are read again (PERM-12). Where `workspace` cannot be resolved, a
+/// rule about the workspace is left as written. So is a rule whose spelling passes through no link:
+/// a full path to a project file names it in the other namespace, which PERM-3 keeps apart.
+fn follow_links(permissions: &mut Permissions, workspace: &std::path::Path) {
+    let root = workspace.canonicalize().ok();
+    permissions.follow_links(|prefix| {
+        let named = match bravebot_core::trust::is_absolute_key(prefix) {
+            true => std::path::PathBuf::from(
+                host_spelling(prefix, crate::workspace::BACKSLASH_SEPARATES).as_ref(),
+            ),
+            false => root.as_ref()?.join(prefix),
+        };
+        let through_a_link = named.ancestors().any(|place| {
+            place
+                .symlink_metadata()
+                .is_ok_and(|entry| entry.is_symlink())
+        });
+        if !through_a_link {
+            return None;
+        }
+        let reached = crate::workspace::destination(&named)?;
+        // Named as a gate holds it: relative to the root for a file in the project, in full for one
+        // outside (PERM-3).
+        let held = match root.as_ref().map(|root| reached.strip_prefix(root)) {
+            Some(Ok(relative)) => relative.to_path_buf(),
+            _ => reached,
+        };
+        Some(held.to_string_lossy().into_owned())
+    });
+}
+
+/// A full path keyed from `/` spelled as the host opens it: `/C:/x` is `C:/x` where a backslash
+/// separates, and every other key is already a name the host opens. `/C:` is `C:/`, since `C:` alone
+/// is wherever the process last was on that drive.
+fn host_spelling(key: &str, backslash_separates: bool) -> std::borrow::Cow<'_, str> {
+    let from_the_drive = key.strip_prefix('/').filter(
+        |rest| matches!(rest.as_bytes(), [letter, b':', ..] if letter.is_ascii_alphabetic()),
+    );
+    match from_the_drive {
+        Some(drive) if backslash_separates && drive.len() == 2 => format!("{drive}/").into(),
+        Some(rest) if backslash_separates => rest.into(),
+        _ => key.into(),
     }
 }
 
@@ -197,7 +247,9 @@ pub fn with_granted(
     // were proposed in, which is the order to report a bad one in.
     let allow: Vec<String> = lists.allow.iter().chain(granted).cloned().collect();
     let anchors = anchors(profile, crate::workspace::volume_folds_case(workspace));
-    let (permissions, mut rejected) = Permissions::parse(&lists.deny, &lists.ask, &allow, &anchors);
+    let (mut permissions, mut rejected) =
+        Permissions::parse(&lists.deny, &lists.ask, &allow, &anchors);
+    follow_links(&mut permissions, workspace);
     rejected.extend(entries_that_are_not_lines(lists));
     rejected.extend(values_that_are_not_lists(settings));
     let (_, unreadable) = dropped_allow_entries(settings, &anchors);
@@ -752,6 +804,245 @@ mod tests {
             permissions.for_path(Subject::Read, "/secrets/key"),
             Decision::Unmatched
         );
+    }
+
+    /// A scratch directory holding a project with `real/secret.txt` and `real/notes.md` in it and a
+    /// `linked` link to `real`, canonicalized as a session's root is.
+    #[cfg(unix)]
+    fn project_with_a_linked_directory(name: &str) -> PathBuf {
+        let scratch = crate::testutil::scratch_dir(name);
+        let _ = std::fs::remove_dir_all(&scratch);
+        let root = scratch.join("project");
+        std::fs::create_dir_all(root.join("real")).unwrap();
+        std::fs::write(root.join("real").join("secret.txt"), "hunter2").unwrap();
+        std::fs::write(root.join("real").join("notes.md"), "notes").unwrap();
+        std::os::unix::fs::symlink("real", root.join("linked")).unwrap();
+        root.canonicalize().unwrap()
+    }
+
+    /// PERM-7: a `deny` or `ask` rule spelled through a link covers the file the link reaches, under
+    /// the name a gate holds it by, and still covers the spelling it was written with.
+    #[cfg(unix)]
+    #[test]
+    fn a_restricting_rule_spelled_through_a_link_covers_the_file_it_reaches() {
+        let root = project_with_a_linked_directory("permissions-rule-through-a-link");
+        let settings = Settings::parse(
+            r#"{"permissions": {"deny": ["Read(linked/**)"], "ask": ["Edit(linked/notes.md)"]}}"#,
+        );
+        let (permissions, rejected) = from_settings(&settings, None, &root);
+        assert!(rejected.is_empty(), "{rejected:?}");
+
+        assert_eq!(
+            permissions.for_path(Subject::Read, "real/secret.txt"),
+            Decision::Ruled(Ruling::Deny),
+            "a deny rule spelled through a link missed the file it names"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "real/notes.md"),
+            Decision::Ruled(Ruling::Ask),
+            "an ask rule spelled through a link missed the file it names"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "linked/secret.txt"),
+            Decision::Ruled(Ruling::Deny),
+            "the spelling the rule was written with stopped being covered"
+        );
+        assert_eq!(
+            permissions.len(),
+            2,
+            "a followed link was counted as a rule"
+        );
+    }
+
+    /// A run nobody is watching reads the same `deny` and `ask` rules, so it follows them the same way.
+    #[cfg(unix)]
+    #[test]
+    fn an_unattended_run_follows_a_rule_spelled_through_a_link_too() {
+        let root = project_with_a_linked_directory("permissions-unattended-rule-through-a-link");
+        let settings = Settings::parse(
+            r#"{"permissions": {"deny": ["Read(linked/**)"], "ask": ["Edit(linked/notes.md)"]}}"#,
+        );
+        let (permissions, rejected) = for_an_unattended_run(&settings, None, &root);
+        assert!(rejected.is_empty(), "{rejected:?}");
+
+        assert_eq!(
+            permissions.for_path(Subject::Read, "real/secret.txt"),
+            Decision::Ruled(Ruling::Deny),
+            "a run nobody is watching read a file a deny rule names through a link"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "real/notes.md"),
+            Decision::Ruled(Ruling::Ask),
+            "a run nobody is watching wrote a file an ask rule names through a link"
+        );
+    }
+
+    /// The name a link reaches is one place, so the rule added under it does not float the way the
+    /// written one does (PERM-4): a link to `real` is not a rule about every `real` in the tree.
+    #[cfg(unix)]
+    #[test]
+    fn the_name_a_link_reaches_is_covered_at_that_place_only() {
+        let root = project_with_a_linked_directory("permissions-link-landing-does-not-float");
+        let settings = Settings::parse(r#"{"permissions": {"deny": ["Read(linked/**)"]}}"#);
+        let (permissions, _) = from_settings(&settings, None, &root);
+
+        assert_eq!(
+            permissions.for_path(Subject::Read, "vendor/real/secret.txt"),
+            Decision::Unmatched,
+            "a rule about one linked directory covered every directory of its target's name"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "vendor/linked/secret.txt"),
+            Decision::Ruled(Ruling::Deny),
+            "the written spelling stopped floating"
+        );
+    }
+
+    /// A full path key is opened from its drive where a backslash separates, a bare drive from its
+    /// root, and as written on every other host, where `/C:` is a directory like any other.
+    #[test]
+    fn a_full_path_key_is_opened_from_its_drive_only_where_a_backslash_separates() {
+        assert_eq!(host_spelling("/C:/x", true), "C:/x");
+        assert_eq!(
+            host_spelling("/C:", true),
+            "C:/",
+            "a bare drive was opened as wherever the process last was on it"
+        );
+        assert_eq!(host_spelling("/C:/x", false), "/C:/x");
+        assert_eq!(host_spelling("/C:", false), "/C:");
+        assert_eq!(host_spelling("/home/x", true), "/home/x");
+    }
+
+    /// PERM-7: a name is a place at the top of the workspace as well as at any depth, so a rule
+    /// naming one that is a link covers the file the link reaches.
+    #[cfg(unix)]
+    #[test]
+    fn a_rule_naming_a_link_covers_the_file_it_reaches() {
+        let root = project_with_a_linked_directory("permissions-name-that-is-a-link");
+        std::os::unix::fs::symlink("real/secret.txt", root.join(".env")).unwrap();
+        let settings = Settings::parse(r#"{"permissions": {"deny": ["Read(.env)"]}}"#);
+        let (permissions, _) = from_settings(&settings, None, &root);
+
+        assert_eq!(
+            permissions.for_path(Subject::Read, "real/secret.txt"),
+            Decision::Ruled(Ruling::Deny),
+            "a rule naming a link missed the file the link reaches"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "sub/.env"),
+            Decision::Ruled(Ruling::Deny),
+            "the name stopped matching at any depth"
+        );
+    }
+
+    /// PERM-3: a full path with no link in it names a project file in the other namespace, so it is
+    /// not added under the name the project holds the file by.
+    #[cfg(unix)]
+    #[test]
+    fn a_full_path_rule_with_no_link_in_it_says_nothing_about_a_project_file() {
+        let root = project_with_a_linked_directory("permissions-full-path-without-a-link");
+        let settings = Settings::parse(&format!(
+            r#"{{"permissions": {{"deny": ["Read(/{}/real/**)"]}}}}"#,
+            root.display()
+        ));
+        let (permissions, rejected) = from_settings(&settings, None, &root);
+        assert!(rejected.is_empty(), "{rejected:?}");
+
+        assert_eq!(
+            permissions.for_path(Subject::Read, "real/secret.txt"),
+            Decision::Unmatched,
+            "a full path with no link in it reached into the project's namespace"
+        );
+        assert_eq!(
+            permissions.for_path(
+                Subject::Read,
+                &root.join("real").join("secret.txt").display().to_string()
+            ),
+            Decision::Ruled(Ruling::Deny)
+        );
+    }
+
+    /// An `allow` rule grants only the spelling the person approved, so a link in it is not a
+    /// second place it grants (PERM-7).
+    #[cfg(unix)]
+    #[test]
+    fn an_allow_rule_spelled_through_a_link_grants_only_the_spelling_it_names() {
+        let root = project_with_a_linked_directory("permissions-allow-through-a-link");
+        let settings = layered_settings(
+            "allow-through-a-link",
+            None,
+            Some(r#"{"permissions": {"allow": ["Edit(linked/**)"]}}"#),
+        );
+        let (permissions, _) = from_settings(&settings, None, &root);
+
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "real/notes.md"),
+            Decision::Unmatched,
+            "an allow rule was followed through a link"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "linked/notes.md"),
+            Decision::Ruled(Ruling::Allow)
+        );
+    }
+
+    /// A link that leaves the project reaches a file a gate holds in full, so that is the name the
+    /// rule covers it by. The same holds the other way: a full path spelled through a link into the
+    /// project covers the file by its name in the project.
+    #[cfg(unix)]
+    #[test]
+    fn a_rule_through_a_link_covers_its_target_on_whichever_side_of_the_root_it_is() {
+        let root = project_with_a_linked_directory("permissions-link-across-the-root");
+        let scratch = root.parent().unwrap();
+        std::fs::create_dir_all(scratch.join("outside")).unwrap();
+        std::os::unix::fs::symlink(scratch.join("outside"), root.join("out")).unwrap();
+        std::os::unix::fs::symlink(&root, scratch.join("project-link")).unwrap();
+        let into_the_project = format!("Read(/{}/project-link/real/**)", scratch.display());
+        let settings = Settings::parse(&format!(
+            r#"{{"permissions": {{"deny": ["Read(out/**)", "{into_the_project}"]}}}}"#
+        ));
+        let (permissions, rejected) = from_settings(&settings, None, &root);
+        assert!(rejected.is_empty(), "{rejected:?}");
+
+        let outside = scratch.join("outside").join("key");
+        assert_eq!(
+            permissions.for_path(Subject::Read, &outside.display().to_string()),
+            Decision::Ruled(Ruling::Deny),
+            "a rule through a link out of the project missed the full path it reaches"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "real/secret.txt"),
+            Decision::Ruled(Ruling::Deny),
+            "a full path through a link into the project missed the file it reaches"
+        );
+    }
+
+    /// The home and settings directories a `~/` and a `/` rule start at are followed the same way,
+    /// so a home directory reached through a link is not a way round a rule written under it.
+    #[cfg(unix)]
+    #[test]
+    fn a_rule_under_a_linked_home_directory_covers_the_directory_it_reaches() {
+        let root = project_with_a_linked_directory("permissions-linked-home");
+        let scratch = root.parent().unwrap();
+        let home = scratch.join("home");
+        std::fs::create_dir_all(home.join(".bravebot")).unwrap();
+        std::os::unix::fs::symlink(&home, scratch.join("home-link")).unwrap();
+        let settings = Settings::parse(
+            r#"{"permissions": {"deny": ["Read(~/secrets/**)", "Read(/keys/**)"]}}"#,
+        );
+        let (permissions, _) = from_settings(&settings, Some(&scratch.join("home-link")), &root);
+
+        for path in [
+            home.join("secrets").join("key"),
+            home.join(".bravebot").join("keys").join("key"),
+        ] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, &path.display().to_string()),
+                Decision::Ruled(Ruling::Deny),
+                "{} was not covered through the linked home directory",
+                path.display()
+            );
+        }
     }
 
     /// The directories a file asked for come back in the order it named them, since a caller
