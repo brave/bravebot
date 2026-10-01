@@ -1434,6 +1434,8 @@ status-time-overhead = unaccounted for
 status-cache = Prompt cache, last turn
 status-cache-read = served from the cache
 status-cache-written = written to it for the next turn
+# The latest turn's cache read as a share of its prompt tokens, on the footer.
+hint-cache-hit-rate = cache { $rate }%
 status-trust = Trust
 status-nothing-vouched-for = nothing vouched for
 status-trusted = trusted

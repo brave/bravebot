@@ -94,6 +94,8 @@ pub struct TurnSnapshot {
     /// must not leave the panel reporting the cache that turn hit. `None` for the first turn of a
     /// session, and for every point a resume brought back, [`StoredRewind`] keeping no figure.
     pub cached: Option<bravebot_aichat::protocol::Cached>,
+    /// Prompt tokens behind [`TurnSnapshot::cached`], for its hit rate.
+    pub cached_prompt_tokens: Option<u64>,
     /// Trust map rules before this turn.
     pub trust: bravebot_core::trust::TrustStore,
     /// Trusted programs before this turn.
@@ -652,6 +654,7 @@ impl StoredRewind {
                 spend: self.spend,
                 timing: self.timing,
                 cached: None,
+                cached_prompt_tokens: None,
                 trust,
                 programs: restored_programs(&self.programs, root),
                 transcript_len: 0,
