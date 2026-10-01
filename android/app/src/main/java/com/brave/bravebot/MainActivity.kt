@@ -4,9 +4,12 @@ import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.content.res.Configuration
+import android.graphics.Color
 import android.os.Bundle
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -26,6 +29,7 @@ import androidx.webkit.WebViewFeature
  */
 class MainActivity : Activity() {
     private var webView: WebView? = null
+    private var frame: FrameLayout? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -52,6 +56,7 @@ class MainActivity : Activity() {
             domStorageEnabled = true
             allowFileAccess = false
             allowContentAccess = false
+            textZoom = textZoomFor(resources.configuration)
         }
         view.webViewClient = object : WebViewClientCompat() {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
@@ -69,7 +74,7 @@ class MainActivity : Activity() {
                 return true
             }
         }
-        WebViewCompat.addWebMessageListener(view, "BravebotHost", setOf(ORIGIN), Host(app.agent, app.workspace))
+        WebViewCompat.addWebMessageListener(view, "BravebotHost", setOf(ORIGIN), Host(app.agent, app.workspace, ::paintBars))
 
         // Edge to edge is the default from Android 15, so the page is kept clear of the status bar,
         // the navigation bar and the keyboard rather than drawn under them. The padding goes on a
@@ -83,6 +88,7 @@ class MainActivity : Activity() {
         }
 
         setContentView(frame)
+        this.frame = frame
         webView = view
         view.loadUrl("$ORIGIN/assets/renderer/index.html")
     }
@@ -106,6 +112,27 @@ class MainActivity : Activity() {
             @Suppress("DEPRECATION")
             if (handled != "true") super.onBackPressed()
         }
+    }
+
+    /**
+     * The system bars sit over the frame around the page, so the frame takes the page's colour and
+     * the bars' icons go dark on a light page and light on a dark one.
+     */
+    private fun paintBars(color: Int) {
+        frame?.setBackgroundColor(color)
+        window.decorView.setBackgroundColor(color)
+        val light = Color.luminance(color) > 0.5f
+        val flags = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+            WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+        window.insetsController?.setSystemBarsAppearance(if (light) flags else 0, flags)
+    }
+
+    /** The system's font size, which a WebView does not follow by itself. */
+    private fun textZoomFor(configuration: Configuration): Int = (configuration.fontScale * 100).toInt()
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        webView?.settings?.textZoom = textZoomFor(newConfig)
     }
 
     override fun onDestroy() {

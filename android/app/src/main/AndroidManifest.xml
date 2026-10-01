@@ -9,6 +9,8 @@
         android:name=".BravebotApp"
         android:allowBackup="false"
         android:fullBackupContent="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:label="Brave Bot"
         android:supportsRtl="true"
         android:theme="@style/Theme.Bravebot">
@@ -16,7 +18,7 @@
              the renderer's state mid-turn. The page lays itself out again on its own. -->
         <activity
             android:name=".MainActivity"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|fontScale|density"
             android:exported="true"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

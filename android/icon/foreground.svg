@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- The launcher icon's foreground layer: the mascot from ui/build/icon.svg without its tile,
+       sized for the adaptive icon's safe zone. The tile's colours are the background layer,
+       app/src/main/res/drawable/ic_launcher_background.xml. The body runs off the bottom edge so
+       the launcher's mask cuts it, as the tile's edge does on the desktop icon. Remake the PNGs
+       with icon/render.sh after changing this. -->
+  <defs>
+    <linearGradient id="head" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="55%" stop-color="#ff5601"/>
+      <stop offset="100%" stop-color="#ff1f01"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(192 186) scale(6.4)" stroke="#a33400" stroke-width="1.4" stroke-linejoin="round">
+    <rect x="30" y="70" width="40" height="90" rx="18" fill="#ff1f01"/>
+    <ellipse cx="50" cy="74" rx="20" ry="5" fill="#a33400" opacity="0.15" stroke="none"/>
+    <ellipse cx="16" cy="45" rx="5" ry="7" fill="#fcb69f"/>
+    <ellipse cx="84" cy="45" rx="5" ry="7" fill="#fcb69f"/>
+    <rect x="16" y="17" width="68" height="56" rx="12" fill="url(#head)"/>
+    <rect x="48.2" y="9" width="3.6" height="10" fill="#fcb69f"/>
+    <circle cx="50" cy="9" r="4.5" fill="#fcb69f"/>
+    <g stroke="none">
+      <circle cx="36" cy="50" r="5.2" fill="#20222b"/>
+      <circle cx="37.768" cy="48.128" r="2.184" fill="#ffffff"/>
+      <circle cx="64" cy="50" r="5.2" fill="#20222b"/>
+      <circle cx="65.768" cy="48.128" r="2.184" fill="#ffffff"/>
+    </g>
+  </g>
+</svg>

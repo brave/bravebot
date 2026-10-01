@@ -20,7 +20,12 @@ import java.io.File
  *
  * Only registered for the app's own asset origin, and answers only the main frame.
  */
-class Host(private val agent: Agent, private val workspace: File) : WebViewCompat.WebMessageListener {
+class Host(
+    private val agent: Agent,
+    private val workspace: File,
+    /** The colour the page is painted in, for the system bars around it. */
+    private val onChrome: (Int) -> Unit,
+) : WebViewCompat.WebMessageListener {
     private var page: JavaScriptReplyProxy? = null
 
     override fun onPostMessage(
@@ -42,7 +47,7 @@ class Host(private val agent: Agent, private val workspace: File) : WebViewCompa
         }
         val id = (body.opt("id") as? Number)?.toLong() ?: return
         when {
-            body.has("local") -> replyProxy.postMessage(local(id, body.optString("local")).toString())
+            body.has("local") -> replyProxy.postMessage(local(id, body.optString("local"), body.optJSONArray("args")).toString())
             body.has("method") -> request(id, body.optString("method"), body.optJSONObject("params") ?: JSONObject(), replyProxy)
         }
     }
@@ -63,10 +68,15 @@ class Host(private val agent: Agent, private val workspace: File) : WebViewCompa
     }
 
     /** Calls that the app answers itself rather than the agent. */
-    private fun local(id: Long, name: String): JSONObject = when (name) {
+    private fun local(id: Long, name: String, args: JSONArray?): JSONObject = when (name) {
         // One project for now, so choosing a directory and the recents both name it.
         "directory.choose" -> answer(id, workspace.absolutePath)
         "recents.read" -> answer(id, JSONArray().put(workspace.absolutePath))
+        "chrome" -> {
+            val color = cssColor(args?.optString(0).orEmpty())
+            if (color != null) onChrome(color)
+            answer(id, color != null)
+        }
         else -> failure(id, "bad_request", "not a permitted call: $name")
     }
 
@@ -99,6 +109,13 @@ class Host(private val agent: Agent, private val workspace: File) : WebViewCompa
                 put("files", JSONArray())
             }
             else -> params
+        }
+
+        /** `rgb(r, g, b)` or `rgba(r, g, b, a)` as computed style writes it, opaque; null for anything else. */
+        fun cssColor(text: String): Int? {
+            val parts = Regex("""^rgba?\((\d+),\s*(\d+),\s*(\d+)""").find(text)?.groupValues ?: return null
+            val (r, g, b) = parts.drop(1).map { it.toInt().coerceIn(0, 255) }
+            return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
         }
 
         fun answer(id: Long, ok: Any): JSONObject = JSONObject().put("id", id).put("ok", ok)

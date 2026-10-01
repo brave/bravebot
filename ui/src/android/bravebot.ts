@@ -211,3 +211,27 @@ const api: BravebotApi = {
 
 Object.defineProperty(window, 'bravebot', { value: Object.freeze(api), writable: false })
 window.bravebotBack = goBack
+
+/**
+ * Tell the app what colour the page is, so the status and navigation bars around it match.
+ *
+ * Read off the conversation card, which is what meets both bars on a phone, once it is first
+ * drawn and again whenever the appearance changes: System following the phone, or a choice of
+ * Light or Dark made in the page. The second read waits out the change settling.
+ */
+function reportChrome(): void {
+  const surface = document.querySelector('.workspace') ?? document.body
+  void post({ local: 'chrome', args: [getComputedStyle(surface).backgroundColor] })
+}
+function reportChromeSoon(): void {
+  reportChrome()
+  setTimeout(reportChrome, 300)
+}
+const drawn = new MutationObserver(() => {
+  if (!document.querySelector('.workspace')) return
+  drawn.disconnect()
+  reportChromeSoon()
+})
+drawn.observe(document.documentElement, { childList: true, subtree: true })
+new MutationObserver(reportChromeSoon).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', reportChromeSoon)
