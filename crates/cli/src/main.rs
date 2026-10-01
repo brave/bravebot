@@ -817,11 +817,20 @@ fn run_task(args: &[String], skip_permissions: bool, agent: Option<String>) -> E
             bravebot_session::store::model(bravebot_session::store::load_model(), &settings),
         ),
     };
-    if let bravebot_agent::backend::Pick::SetAside(model) = &pick {
-        eprintln!(
+    match &pick {
+        bravebot_agent::backend::Pick::SetAside(model) => eprintln!(
             "{}",
             t!(session_model_pick_set_aside, model = model.as_str())
-        );
+        ),
+        bravebot_agent::backend::Pick::Refused { recorded, reason } => eprintln!(
+            "{}",
+            t!(
+                session_model_pick_refused,
+                model = recorded.as_str(),
+                reason = reason.as_str()
+            )
+        ),
+        bravebot_agent::backend::Pick::Absent | bravebot_agent::backend::Pick::InForce(_) => {}
     }
     let mut task = Task::new(prompt)
         .with_home(bravebot_agent::home::directory())
@@ -1344,6 +1353,10 @@ fn definition_for_a_run(
 
 /// How to configure a service, where nothing configured serves `model`, or `None` where something
 /// does.
+///
+/// A model the machine-level layer refuses answers here too, and says something else: there is no
+/// service to configure, so what it names is the file that refused and which of its lists did
+/// (BACKEND-48).
 fn nothing_serves(config: &Config, model: &str) -> Option<String> {
     match bravebot_agent::backend::serving(config, &bravebot_net::Egress::new(), model) {
         bravebot_agent::backend::Serving::NothingConfigured {
@@ -1354,7 +1367,15 @@ fn nothing_serves(config: &Config, model: &str) -> Option<String> {
             a_service_is_configured,
             &import::looked(a_service_is_configured),
         )),
-        _ => None,
+        bravebot_agent::backend::Serving::Refused { file, why } => Some(
+            t!(
+                managed_model_refused,
+                model = model,
+                reason = bravebot_agent::backend::refusal_reason(&file, why)
+            )
+            .to_string(),
+        ),
+        bravebot_agent::backend::Serving::Configured => None,
     }
 }
 
@@ -2471,6 +2492,28 @@ fn doctor() -> ExitCode {
                         pick = pick
                     ),
                 ),
+                // The same line, and then the reason: the configured model answers either way, and
+                // this is the one case where the report has a file to name. Nothing at the end of
+                // this section names it, that being asked about the model a run would request, which
+                // is the configured one by then (BACKEND-48).
+                bravebot_agent::backend::Pick::Refused { recorded, reason } => {
+                    fact(
+                        t!(doctor_model),
+                        t!(
+                            doctor_model_set_aside,
+                            model = &config.default_model,
+                            pick = &recorded
+                        ),
+                    );
+                    fact(
+                        t!(doctor_settings_ignored),
+                        t!(
+                            session_model_pick_refused,
+                            model = &recorded,
+                            reason = reason
+                        ),
+                    );
+                }
                 bravebot_agent::backend::Pick::Absent => fact(
                     t!(doctor_model),
                     t!(doctor_model_default, model = &config.default_model),
@@ -2486,24 +2529,39 @@ fn doctor() -> ExitCode {
             // Last of the configuration section, and a failure, because a report that said
             // "configuration OK" about a machine where a session refuses to start is the one
             // thing a person in that position is certain to read first.
-            if let bravebot_agent::backend::Serving::NothingConfigured {
-                subscription,
-                a_service_is_configured,
-            } = bravebot_agent::backend::serving(
-                &config,
-                &bravebot_net::Egress::new(),
-                &model_for_this_run(None, &config),
-            ) {
-                ending = ends_on(ending, Ending::Configuration);
-                println!();
-                println!(
-                    "{}",
-                    how_to_configure_a_model(
-                        subscription.as_deref(),
-                        a_service_is_configured,
-                        &import::looked(a_service_is_configured),
-                    )
-                );
+            //
+            // A model the machine-level layer refuses is the same failure read by the same person,
+            // and the one case where what they have to do is ask somebody else (BACKEND-48).
+            let model = model_for_this_run(None, &config);
+            match bravebot_agent::backend::serving(&config, &bravebot_net::Egress::new(), &model) {
+                bravebot_agent::backend::Serving::NothingConfigured {
+                    subscription,
+                    a_service_is_configured,
+                } => {
+                    ending = ends_on(ending, Ending::Configuration);
+                    println!();
+                    println!(
+                        "{}",
+                        how_to_configure_a_model(
+                            subscription.as_deref(),
+                            a_service_is_configured,
+                            &import::looked(a_service_is_configured),
+                        )
+                    );
+                }
+                bravebot_agent::backend::Serving::Refused { file, why } => {
+                    ending = ends_on(ending, Ending::Configuration);
+                    println!();
+                    println!(
+                        "{}",
+                        t!(
+                            managed_model_refused,
+                            model = &model,
+                            reason = bravebot_agent::backend::refusal_reason(&file, why)
+                        )
+                    );
+                }
+                bravebot_agent::backend::Serving::Configured => {}
             }
         }
         Err(err) => {

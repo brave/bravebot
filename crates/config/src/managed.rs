@@ -22,6 +22,11 @@
 //! never add one (SERVERS-12). A layer that could declare a server would install a program on every
 //! machine it reaches.
 //!
+//! It may also say which models a machine may request, and which it may not, by the name a request
+//! would carry (BACKEND-48). That fits the same reading: a list of models can only refuse one, and
+//! pinning the account a request is billed to while leaving every model name free to reach it answers
+//! where the traffic goes and not what it spends.
+//!
 //! And it may pin the two `permissions` keys that only refuse: that the file tools stay inside the
 //! workspace, and that the mode asking about nothing is unreachable here (PERM-16, PERM-17). Both fit
 //! the reading the server lists fit, since a name that can only remove capability is one two parties
@@ -83,6 +88,13 @@ const SERVER_ALLOW: &str = "mcp.allow";
 /// Where the servers it may not start are listed, and the name `doctor` reports that list by.
 const SERVER_DENY: &str = "mcp.deny";
 
+/// Where the models a machine may request are listed, and the name `doctor` reports the list by
+/// (BACKEND-48).
+const MODEL_ALLOW: &str = "models.allow";
+
+/// Where the models it may not request are listed, and the name `doctor` reports that list by.
+const MODEL_DENY: &str = "models.deny";
+
 /// A server as the managed layer compares it with an entry (SERVERS-12).
 #[derive(Debug, Clone, Copy)]
 pub enum Server<'a> {
@@ -134,6 +146,65 @@ pub enum Refusal<'a> {
     HostUnread,
 }
 
+/// Why the managed layer refuses a model (BACKEND-48).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelRefusal {
+    /// `models.allow` is in force and no entry in it names the model.
+    NotAllowed,
+    /// `models.deny` names it.
+    Denied,
+}
+
+/// Which models the managed layer lets a machine request, and the file that said so (BACKEND-48).
+///
+/// Its own type rather than two more fields on [`Managed`], because [`crate::Config`] keeps the
+/// answer: a configuration holds resolved values, and the thing a model has to be checked against is
+/// this pair of lists together with the file to name in a refusal.
+///
+/// Nothing said refuses nothing, which is the state on every machine with no such file. Neither list
+/// can make a model reachable that was not already, for the reason `allowed` cannot declare a server:
+/// a name here is compared with the model a request would carry and adds nothing to any roster.
+#[derive(Debug, Clone, Default)]
+pub struct Models {
+    /// The models it allows, or `None` where it wrote no such list.
+    ///
+    /// `Some` of an empty list allows none, for the reason an empty gateway block names none.
+    allowed: Option<Vec<String>>,
+    /// The models it denies, which no allow entry brings back.
+    denied: Vec<String>,
+    /// The file to name in a refusal, where there is one.
+    path: Option<PathBuf>,
+}
+
+impl Models {
+    /// Why this layer refuses `model`, and the file that refuses it, where it refuses it.
+    ///
+    /// `model` is a name a request would carry, which is a name after a tier word has been resolved
+    /// ([`crate::Config::model_named`]): `opus` is not a model, so a list matched before that
+    /// resolution would let `{"model": "opus"}` through whatever either list said.
+    ///
+    /// A deny entry is read before the allow list, so a model both name is denied. Compared exactly,
+    /// trimmed: an inference-profile ARN and a roster slug are both names a service either knows or
+    /// does not, and a pattern language here would be a second place to get a near-match wrong.
+    pub fn refuses(&self, model: &str) -> Option<(&Path, ModelRefusal)> {
+        let model = model.trim();
+        let refusal = match self.denied.iter().any(|denied| denied == model) {
+            true => Some(ModelRefusal::Denied),
+            false => self
+                .allowed
+                .as_ref()
+                .filter(|allowed| !allowed.iter().any(|allowed| allowed == model))
+                .map(|_| ModelRefusal::NotAllowed),
+        };
+        Some((self.path.as_deref()?, refusal?))
+    }
+
+    /// Whether either list was written at all.
+    pub fn is_empty(&self) -> bool {
+        self.allowed.is_none() && self.denied.is_empty()
+    }
+}
+
 /// What the managed layer pinned, or nothing where there is no such file.
 ///
 /// Not comparable, because a gateway it pinned may carry a token and [`crate::Secret`] refuses
@@ -156,6 +227,13 @@ pub struct Managed {
     allowed: Option<Vec<Rule>>,
     /// The servers it denies, which no allow entry brings back.
     denied: Vec<Rule>,
+    /// Which models a machine may request (BACKEND-48).
+    ///
+    /// Read from this layer for the reason the server lists are: a list of models can only refuse
+    /// one, so an administrator naming the approved set takes nothing from the person at the machine
+    /// that the pinned account had not taken already. Pinning the three tier words constrains those
+    /// three names and no other, which is the gap this closes.
+    models: Models,
     /// What it said about the two `permissions` keys that only refuse (PERM-16, PERM-17).
     ///
     /// Read from this layer for the reason the server lists are: neither key can add anything, so an
@@ -227,6 +305,11 @@ impl Managed {
                 .then(|| approved(layer.providers())),
             allowed: server_list(&root, "allow").map(rules),
             denied: server_list(&root, "deny").map(rules).unwrap_or_default(),
+            models: Models {
+                allowed: named_list(&root, "allow").map(names),
+                denied: named_list(&root, "deny").map(names).unwrap_or_default(),
+                path: Some(path.to_path_buf()),
+            },
             // Read, so there, whatever `exists` said a moment ago: a refusal always has a file to
             // name.
             path: Some(path.to_path_buf()),
@@ -244,6 +327,15 @@ impl Managed {
     /// The gateways in force, or `None` where the managed layer said nothing about them.
     pub fn gateways(&self) -> Option<&[Provider]> {
         self.gateways.as_deref()
+    }
+
+    /// Which models this layer lets a machine request (BACKEND-48).
+    ///
+    /// Handed on whole rather than asked a model at a time, because the caller that has to answer is
+    /// [`crate::Config`]: this layer is read once at startup and the question is asked of every model
+    /// a run settles on afterwards.
+    pub fn models(&self) -> &Models {
+        &self.models
     }
 
     /// The file that keeps `server` from starting and why, where this layer keeps it from starting
@@ -307,6 +399,8 @@ impl Managed {
             .chain(self.gateways.is_some().then_some(PROVIDER_BLOCK))
             .chain(self.allowed.is_some().then_some(SERVER_ALLOW))
             .chain((!self.denied.is_empty()).then_some(SERVER_DENY))
+            .chain(self.models.allowed.is_some().then_some(MODEL_ALLOW))
+            .chain((!self.models.denied.is_empty()).then_some(MODEL_DENY))
             .chain(self.narrowing.named())
     }
 
@@ -353,6 +447,37 @@ fn server_list<'a>(
         Some(serde_json::Value::Array(entries)) => Some(entries),
         _ => None,
     }
+}
+
+/// The entries of `models.allow` or `models.deny`, where that key holds a list.
+///
+/// Anything else there is a mistyped file rather than a decision, on the footing [`server_list`]
+/// reads its own keys: a stray `null` under `models` must not take every model on the machine away.
+fn named_list<'a>(
+    root: &'a serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<&'a [serde_json::Value]> {
+    match root.get("models").and_then(|block| block.get(key)) {
+        Some(serde_json::Value::Array(entries)) => Some(entries),
+        _ => None,
+    }
+}
+
+/// The entries of a model list that are names, and nothing else.
+///
+/// A name is a non-blank string, trimmed. Anything else is skipped rather than spoiling the list, on
+/// the footing [`rules`] skips an entry in neither form: in an allow list that allows less, and in a
+/// deny list it denies nothing.
+fn names(entries: &[serde_json::Value]) -> Vec<String> {
+    entries
+        .iter()
+        .filter_map(|entry| match entry {
+            serde_json::Value::String(name) if !name.trim().is_empty() => {
+                Some(name.trim().to_string())
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// The entries of a list that are one of the two forms, and nothing else.
@@ -985,5 +1110,125 @@ mod tests {
         assert!(managed.is_empty(), "a server was read out of the file");
         let started = argv(&["/usr/local/bin/weather-mcp", "--stdio"]);
         assert_eq!(refusal(&managed, Server::Local(&started)), None);
+    }
+
+    /// What the layer says about a model, without the file it says it from.
+    fn model_refusal(managed: &Managed, model: &str) -> Option<ModelRefusal> {
+        managed.models().refuses(model).map(|(path, refusal)| {
+            assert_eq!(Some(path), managed.path(), "a refusal names its file");
+            refusal
+        })
+    }
+
+    /// BACKEND-48: an allow list is the form that bounds the roster, the account being pinned
+    /// already. A model it does not name is not requested whatever named it.
+    #[test]
+    fn a_model_allow_list_requests_only_what_it_names() {
+        let managed = scratch(
+            "managed-models-allow",
+            r#"{"models": {"allow": ["arn:aws:bedrock:::approved-opus", " claude-sonnet "]}}"#,
+        );
+        assert_eq!(
+            model_refusal(&managed, "arn:aws:bedrock:::approved-opus"),
+            None
+        );
+        // Trimmed where it was written with spaces, which is the reading every other name in this
+        // configuration gets.
+        assert_eq!(model_refusal(&managed, "claude-sonnet"), None);
+        for other in [
+            "arn:aws:bedrock:::some-other-model",
+            "arn:aws:bedrock:::approved-opus-v2",
+            "automatic-bravebot",
+            "",
+        ] {
+            assert_eq!(
+                model_refusal(&managed, other),
+                Some(ModelRefusal::NotAllowed),
+                "{other:?}"
+            );
+        }
+        assert_eq!(managed.pinned().collect::<Vec<_>>(), vec![MODEL_ALLOW]);
+    }
+
+    /// An empty allow list requests nothing, which is how a machine says no model may be asked for
+    /// at all. Reported, because it decides something.
+    #[test]
+    fn an_empty_model_allow_list_requests_nothing() {
+        let managed = scratch("managed-models-none", r#"{"models": {"allow": []}}"#);
+        assert_eq!(
+            model_refusal(&managed, "arn:aws:bedrock:::any-model"),
+            Some(ModelRefusal::NotAllowed)
+        );
+        assert_eq!(managed.pinned().collect::<Vec<_>>(), vec![MODEL_ALLOW]);
+    }
+
+    /// A deny entry wins over an allow entry naming the same model, so one model can be taken out
+    /// of a set the list otherwise allows.
+    #[test]
+    fn a_denied_model_is_refused_even_where_the_allow_list_names_it() {
+        let managed = scratch(
+            "managed-models-deny-wins",
+            r#"{"models": {
+                "allow": ["approved-opus", "expensive-opus"],
+                "deny": ["expensive-opus"]
+            }}"#,
+        );
+        assert_eq!(model_refusal(&managed, "approved-opus"), None);
+        assert_eq!(
+            model_refusal(&managed, "expensive-opus"),
+            Some(ModelRefusal::Denied)
+        );
+        assert_eq!(
+            managed.pinned().collect::<Vec<_>>(),
+            vec![MODEL_ALLOW, MODEL_DENY]
+        );
+    }
+
+    /// Without an allow list the file refuses what it denies and nothing else, so a machine that
+    /// denies one model leaves every other the person's to choose.
+    #[test]
+    fn without_a_model_allow_list_only_what_is_denied_is_refused() {
+        let managed = scratch(
+            "managed-models-deny-only",
+            r#"{"models": {"deny": ["expensive-opus"]}}"#,
+        );
+        assert_eq!(
+            model_refusal(&managed, "expensive-opus"),
+            Some(ModelRefusal::Denied)
+        );
+        assert_eq!(model_refusal(&managed, "anything-else"), None);
+        assert_eq!(managed.pinned().collect::<Vec<_>>(), vec![MODEL_DENY]);
+    }
+
+    /// Only a list counts, on the footing a stray value under `provider` decides nothing: a
+    /// mistyped block must not take every model on the machine away. An entry that is not a name is
+    /// skipped, so a deny list of nothing else denies nothing and is not reported as a pin.
+    #[test]
+    fn a_models_block_that_is_not_a_pair_of_lists_decides_nothing() {
+        for text in [
+            r#"{"models": null}"#,
+            r#"{"models": "approved-opus"}"#,
+            r#"{"models": {}}"#,
+            r#"{"models": {"allow": "approved-opus"}}"#,
+            r#"{"models": {"allow": null, "deny": {}}}"#,
+            r#"{"models": {"deny": [7, {"name": "opus"}, "   "]}}"#,
+        ] {
+            let managed = scratch("managed-models-misshapen", text);
+            assert_eq!(model_refusal(&managed, "anything"), None, "{text}");
+            assert!(managed.is_empty(), "{text} was reported as a pin");
+        }
+    }
+
+    /// Neither list can make a model reachable that was not already: there is nowhere in [`Managed`]
+    /// to hold a roster, so an allow entry permits a name some service already offers rather than
+    /// adding one.
+    #[test]
+    fn a_model_allow_entry_adds_nothing_to_any_roster() {
+        let managed = scratch(
+            "managed-models-adds-nothing",
+            r#"{"models": {"allow": ["a-model-no-service-offers"]}}"#,
+        );
+        assert!(managed.gateways().is_none());
+        assert_eq!(managed.get(env_var::BEDROCK_OPUS_MODEL), None);
     }
 }

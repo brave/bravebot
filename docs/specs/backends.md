@@ -21,6 +21,7 @@ governs:
   - crates/aichat/src/models.rs
   - crates/config/src/provider.rs
   - crates/config/src/settings.rs
+  - crates/ui-bridge/src/models.rs
 documented-by:
   - docs/website/docs/customize/configuration.md
   - docs/website/docs/customize/providers/bedrock.md
@@ -1957,6 +1958,75 @@ BACKEND-39 because importing it again is what serves the pick, and the refusal s
 `verified-by: bravebot_cli::running::doctor_names_a_pick_it_sets_aside`
 `verified-by: bravebot_cli::running::a_session_in_lines_sets_aside_a_pick_nothing_serves`
 
+<a id="BACKEND-48"></a>
+### BACKEND-48: the managed layer may say which models a machine requests and never add one
+
+An administrator's layer may list the models a machine may request and the models it may not, by the
+name a request would carry. It may not add a model to any roster, make one reachable, or name which
+model is the default.
+
+A model it refuses is not requested by any route: the `model` key, an exported
+`BRAVE_AI_CHAT_DEFAULT_MODEL`, the baked-in default, a recorded `/model` pick, `--model`, and a
+delegate definition alike. The name is matched after a tier word is resolved
+([BACKEND-12](#BACKEND-12)), so `opus` is checked as the model that tier names. `/model` does not
+offer a refused model, and neither does the desktop window's roster, the configured model included; a
+turn that window is asked to start on one is refused with the file that refused it. A refused delegate
+definition is refused where it is read, naming the model and the file, and nothing is started for it.
+`doctor` names `models.allow` and `models.deny` among the names the layer pins.
+
+A recorded pick the layer refuses is set aside for the configured model, as a pick nothing serves is
+under [BACKEND-47](#BACKEND-47), and the record is left as it is. The interface, a session in lines
+and a one-shot run open on the configured model and say which pick they set aside and why. Where the
+configured model is refused as well there is nothing to fall to: nothing is set aside, and the start
+is refused with the file that refused and which of its lists did. A run whose model is refused for any
+other reason is refused the same way.
+
+**Why.** The names this layer may pin decide where a request goes, and after it has pinned the
+endpoint, the AWS switch, the region, the profile and the three tiers, every other model name still
+reaches the pinned account and is billed to it. So the layer answers where the traffic goes and not
+what it spends, which is half of the case `managed.rs` exists for: an organisation that will not have
+models reached through somebody's personal cloud account has nothing to say which models its own
+account may serve.
+
+A list of models can only remove capability, which is the test this layer's keys are already admitted
+by ([SERVERS-12](mcp-servers.md#SERVERS-12)): there is nowhere in the layer to hold a roster, so an
+entry permits a name some service already offers rather than making one reachable, and neither list is
+a preference.
+
+Not offering a refused model rather than refusing a chosen one, because a list holding a name that
+cannot be asked for misdescribes the machine, and being refused after reading a row and choosing it is
+a worse answer than the row not being there.
+
+A refused pick falls to the configured model rather than stopping the session, for the reason
+BACKEND-47 sets a pick aside: an administrator's list changes, the configuration that served the pick
+can return, and a session that refused to open would leave somebody with no way to work while the
+model under their pick is one the layer allows.
+
+**How it is built.** The keys are `"models": { "allow": [...], "deny": [...] }` in `managed.json`,
+the file [BACKEND-38](#BACKEND-38) reads. An entry is the model's name as a request carries it,
+compared exactly once trimmed: an inference-profile ARN, or a roster slug such as `z-ai/glm-4.6`.
+
+Without an `allow` list, every model not denied is requested as before. With one, a model no entry
+names is refused, and `"allow": []` refuses every model. A deny entry wins over an allow entry naming
+the same model. Only a list counts: a string, an object, `null` or anything else under either key
+decides nothing, and an empty `deny` denies nothing, which `doctor` does not report either. An entry
+that is not a name is skipped. In a deny list it denies nothing; in an allow list it allows nothing,
+which is one fewer model requested rather than a list that decides nothing.
+
+`verified-by: bravebot_config::managed::a_model_allow_list_requests_only_what_it_names`
+`verified-by: bravebot_config::managed::an_empty_model_allow_list_requests_nothing`
+`verified-by: bravebot_config::managed::a_denied_model_is_refused_even_where_the_allow_list_names_it`
+`verified-by: bravebot_config::managed::without_a_model_allow_list_only_what_is_denied_is_refused`
+`verified-by: bravebot_config::managed::a_models_block_that_is_not_a_pair_of_lists_decides_nothing`
+`verified-by: bravebot_config::managed::a_model_allow_entry_adds_nothing_to_any_roster`
+`verified-by: bravebot_config::lib::a_tier_word_is_checked_as_the_model_it_names`
+`verified-by: bravebot_config::lib::a_managed_layer_silent_on_models_refuses_none`
+`verified-by: bravebot_agent::backend::a_model_the_managed_layer_refuses_is_served_by_nothing`
+`verified-by: bravebot_agent::backend::a_pick_the_managed_layer_refuses_is_set_aside_with_the_file_that_refused_it`
+`verified-by: bravebot_tui::app::the_picker_does_not_offer_a_model_this_machine_may_not_request`
+`verified-by: bravebot_tui::app::a_definition_naming_a_model_this_machine_may_not_request_is_refused`
+`verified-by: bravebot_ui_bridge::models::the_window_neither_offers_nor_requests_a_model_this_machine_refuses`
+
 ## Known costs
 
 - **The refusal is made at startup, and a model chosen mid-session is not checked again.**
@@ -1977,11 +2047,24 @@ BACKEND-39 because importing it again is what serves the pick, and the refusal s
   start says it set the pick aside until another model is picked with `/model`. Somebody who only
   makes one-shot runs has no `/model`, and sees the line until they remove `~/.bravebot/model`.
 
-- **Which model answers is the individual's, and a managed layer cannot pin it.** A pinned default
+- **Which model answers is the individual's, and a managed layer cannot pin one.** A pinned default
   model would lose to a `/model` choice wherever one is in force, so it would pin nothing, and
   making that choice unavailable is a change to what a person is offered rather than to where a
-  request goes. An organisation with a reason to care, a cost or a data-handling consequence
-  attached to one model, has the endpoint and the account to say it with and not the name.
+  request goes. An organisation with a reason to care, a cost or a data-handling consequence attached
+  to one model, bounds the set with BACKEND-48 and chooses out of it with nothing: the person at the
+  machine picks any model the lists allow.
+
+- **A refused model is named exactly, so a renamed one is requested again.** BACKEND-48 compares a
+  name and holds no pattern language, which is the reading [SERVERS-12](mcp-servers.md#SERVERS-12)
+  gives a command: a near-match is a thing to get wrong in the direction of allowing what was meant
+  to be refused. So a deny list is only as good as the names in it, and an organisation that wants a
+  bounded set writes the allow list, which is the half that cannot be got around by a name nobody
+  thought of. A gateway whose roster grows is the case this costs most: a new slug reaches a machine
+  whose file only denies.
+
+- **The refusal is made where a model is settled, and a model picked mid-session is not checked
+  again.** The same cost BACKEND-39 carries and for the same reason: `/model` offers only what the
+  machine may request, so the only way to a refused model mid-session is a build that listed one.
 
 - **Asking for no level does not outlive the session against a file that names one.**
   [SESSION-15](sessions.md#SESSION-15) removes the record rather than writing an empty one, because

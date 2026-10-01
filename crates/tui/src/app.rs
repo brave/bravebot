@@ -1617,6 +1617,20 @@ pub fn definition_named(
         )
         .to_string());
     };
+    // The machine-level layer first: a model this machine does not request is refused whatever the
+    // credentials for it are, and asking about a sign-in would send somebody to fix the wrong thing
+    // (BACKEND-48).
+    if let Some(written) = definition.model()
+        && let Some((file, why)) = config.model_refused(written)
+    {
+        return Err(t!(
+            delegate_model_refused,
+            definition = name,
+            model = written,
+            reason = bravebot_agent::backend::refusal_reason(file, why)
+        )
+        .to_string());
+    }
     if let Some(written) = definition.model()
         && bravebot_agent::backend::Backend::needs_sign_in(config, &config.model_named(written))
     {
@@ -3959,10 +3973,32 @@ fn list_models(
     // A build from source pointed only at Bedrock has blank Brave credentials, and asking with them
     // would list a roster whose every request then fails unsigned.
     if !config.serves_aichat() {
-        return Ok(configured);
+        return Ok(requestable(config, configured));
     }
 
-    combined(configured, fetch_models(config))
+    combined(configured, fetch_models(config)).map(|models| requestable(config, models))
+}
+
+/// The roster without the models the machine-level layer refuses (BACKEND-48).
+///
+/// Here rather than at the moment a pick is recorded, because refusing after somebody has read a row
+/// and chosen it is a worse answer than not offering the row: the choice is theirs to make off a list,
+/// and a list holding a name that cannot be asked for is a list that misdescribes the machine.
+///
+/// The names are compared as a request would carry them, which is what a roster row holds. A tier the
+/// configured account named is listed by its own name rather than by the word, so nothing here needs
+/// the tier resolution [`Config::model_named`] does.
+fn requestable(
+    config: &Config,
+    models: Vec<bravebot_aichat::models::Model>,
+) -> Vec<bravebot_aichat::models::Model> {
+    if config.models.is_empty() {
+        return models;
+    }
+    models
+        .into_iter()
+        .filter(|model| config.model_refused(&model.key).is_none())
+        .collect()
 }
 
 /// The tiers and the listing as one roster.
@@ -7518,6 +7554,54 @@ mod tests {
             .expect("the tiers survive");
         assert_eq!(roster.len(), 1);
         assert_eq!(roster[0].key, "opus-arn");
+    }
+
+    /// BACKEND-48: the picker does not offer a model this machine may not request, so a person reads
+    /// a list of what they can actually ask for rather than being refused after choosing.
+    ///
+    /// Both lists in one file, because a build that honoured one and not the other would pass a test
+    /// of either half: a deny entry has to take a row out of a list an allow entry let through.
+    #[test]
+    fn the_picker_does_not_offer_a_model_this_machine_may_not_request() {
+        let scratch = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join("tui-models-picker");
+        std::fs::create_dir_all(&scratch).expect("a scratch directory");
+        let path = scratch.join("managed.json");
+        std::fs::write(
+            &path,
+            r#"{"models": {
+                "allow": ["approved-opus", "expensive-opus"],
+                "deny": ["expensive-opus"]
+            }}"#,
+        )
+        .expect("a managed file");
+
+        let mut config = Config::from_lookup(|name| match name {
+            bravebot_config::env_var::ENDPOINT => Some("https://example.invalid".into()),
+            bravebot_config::env_var::KEY_ID => Some("a-key-id".into()),
+            bravebot_config::env_var::SIGNING_KEY => Some("a-signing-key".into()),
+            _ => None,
+        })
+        .expect("configured");
+
+        let roster = vec![
+            listed("approved-opus", None),
+            listed("expensive-opus", None),
+            listed("some-other-model", None),
+        ];
+        let offered = |config: &Config, roster: &[bravebot_aichat::models::Model]| -> Vec<String> {
+            requestable(config, roster.to_vec())
+                .into_iter()
+                .map(|model| model.key)
+                .collect()
+        };
+
+        // With no managed file the roster is offered whole, which is every machine today.
+        assert_eq!(offered(&config, &roster).len(), 3);
+
+        config.models = bravebot_config::Managed::at(&path).models().clone();
+        assert_eq!(offered(&config, &roster), vec!["approved-opus".to_string()]);
     }
 
     /// With nothing configured there is nothing to fall back to, and a picker showing an empty list
@@ -13255,6 +13339,39 @@ mod tests {
             "a definition naming no model did not run on the session's"
         );
         assert_eq!(line(None).model(&session, &config), "the-sessions-model");
+    }
+
+    /// BACKEND-48: a definition naming a model this machine may not request is refused where the
+    /// definition is read, so nothing is addressed to it and nothing is started for it.
+    ///
+    /// A delegate definition is the one route to a model that no picker and no prompt stands in
+    /// front of: it is loaded from a vouched-for file, and a build that only checked the model a
+    /// session settles on would let this one through.
+    #[test]
+    fn a_definition_naming_a_model_this_machine_may_not_request_is_refused() {
+        let scratch = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join("tui-models-delegate");
+        std::fs::create_dir_all(&scratch).expect("a scratch directory");
+        let path = scratch.join("managed.json");
+        std::fs::write(&path, r#"{"models": {"deny": ["an-expensive-model"]}}"#)
+            .expect("a managed file");
+
+        let definitions = a_resolved_set(Some("an-expensive-model"));
+        let mut config = a_config_needing_no_sign_in();
+
+        assert!(
+            definition_named(&config, &definitions, "rule-reviewer").is_ok(),
+            "a machine with no managed file refused a definition"
+        );
+
+        config.models = bravebot_config::Managed::at(&path).models().clone();
+        let refused = definition_named(&config, &definitions, "rule-reviewer")
+            .expect_err("the definition was addressed");
+        assert!(
+            refused.contains("an-expensive-model") && refused.contains(&path.display().to_string()),
+            "the refusal named neither the model nor the file that refused it: {refused}"
+        );
     }
 
     /// `/agent` settles the model with the name, resolved as the driver resolves it, so what the

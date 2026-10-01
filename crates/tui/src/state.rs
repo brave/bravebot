@@ -3158,8 +3158,18 @@ impl Session {
             config,
             bravebot_session::store::model(recorded, settings),
         );
-        if let bravebot_agent::backend::Pick::SetAside(model) = &pick {
-            self.note(t!(session_model_pick_set_aside, model = model.as_str()));
+        match &pick {
+            bravebot_agent::backend::Pick::SetAside(model) => {
+                self.note(t!(session_model_pick_set_aside, model = model.as_str()));
+            }
+            bravebot_agent::backend::Pick::Refused { recorded, reason } => {
+                self.note(t!(
+                    session_model_pick_refused,
+                    model = recorded.as_str(),
+                    reason = reason.as_str()
+                ));
+            }
+            bravebot_agent::backend::Pick::Absent | bravebot_agent::backend::Pick::InForce(_) => {}
         }
         self.model = pick.into_model();
     }

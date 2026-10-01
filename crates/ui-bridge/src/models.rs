@@ -1,8 +1,8 @@
 //! Model discovery uses the agent's clients and egress policy, never renderer-supplied URLs.
 
 use bravebot_aichat::models::{self, Advertised, Model};
-use bravebot_config::Config;
 use bravebot_config::provider::Credential;
+use bravebot_config::{Config, ModelRefusal};
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
 use bravebot_net::Egress;
@@ -91,7 +91,7 @@ pub fn list(config: &Config) -> Value {
             None => warnings.push("Could not load Brave models. Try again.".into()),
         }
     }
-    catalogue(rows, &config.default_model, warnings)
+    catalogue(config, rows, warnings)
 }
 
 /// The token a roster request is made with, where the block named one.
@@ -138,8 +138,35 @@ fn badges(advertised: &Advertised) -> Vec<&'static str> {
     .collect()
 }
 
-fn catalogue(mut rows: Vec<Model>, default: &str, warnings: Vec<String>) -> Value {
-    if !rows.iter().any(|row| row.key == default) {
+/// What the machine-level layer says about a model this window asked for, where it refuses it
+/// (BACKEND-48).
+///
+/// `None` for the model means the configured one, which is what a request naming none asks for. In
+/// English here rather than through a catalog, as every string in this crate is. The file is the only
+/// actionable thing in the sentence: nobody using this window can write it.
+pub fn refused(config: &Config, model: Option<&str>) -> Option<String> {
+    let asked = model.unwrap_or(&config.default_model);
+    let (file, why) = config.model_refused(asked)?;
+    let reason = match why {
+        ModelRefusal::NotAllowed => "allows only the models its models.allow names",
+        ModelRefusal::Denied => "denies it with a models.deny entry",
+    };
+    Some(format!(
+        "{asked} is not requested on this machine: {}, which this machine's administrator \
+         manages, {reason}.",
+        file.display()
+    ))
+}
+
+fn catalogue(config: &Config, rows: Vec<Model>, warnings: Vec<String>) -> Value {
+    let default = config.default_model.as_str();
+    // Dropped before the default is put back, so a refused configured model is not offered either: a
+    // row this window cannot start a turn on is a row that fails on being picked (BACKEND-48).
+    let mut rows: Vec<Model> = rows
+        .into_iter()
+        .filter(|row| config.model_refused(&row.key).is_none())
+        .collect();
+    if config.model_refused(default).is_none() && !rows.iter().any(|row| row.key == default) {
         rows.push(Model {
             key: default.into(),
             display_name: default.into(),
@@ -264,15 +291,82 @@ mod tests {
         );
     }
 
+    /// A configuration whose model this window asks for, with whatever a managed file states over it.
+    fn configured(default: &str, managed: Option<&str>) -> Config {
+        let mut config = Config::from_lookup(|key| match key {
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("https://example.invalid".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("a-key-id".into()),
+            "SERVICES_KEY_AICHAT" => Some("a-signing-key".into()),
+            "BRAVE_AI_CHAT_DEFAULT_MODEL" => Some(default.into()),
+            _ => None,
+        })
+        .expect("configured");
+        if let Some(text) = managed {
+            let scratch = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/test-scratch")
+                .join("ui-bridge-models");
+            std::fs::create_dir_all(&scratch).expect("a scratch directory");
+            let path = scratch.join("managed.json");
+            std::fs::write(&path, text).expect("a managed file");
+            config.models = bravebot_config::Managed::at(&path).models().clone();
+        }
+        config
+    }
+
     #[test]
     fn an_unavailable_listing_keeps_the_configured_default() {
         let result = catalogue(
+            &configured("openrouter/anthropic/claude-haiku-4.5", None),
             Vec::new(),
-            "openrouter/anthropic/claude-haiku-4.5",
             vec!["offline".into()],
         );
         assert_eq!(result["models"][0]["id"], result["defaultModel"]);
         assert_eq!(result["warnings"][0], "offline");
+    }
+
+    /// BACKEND-48 in the window: the roster leaves out a model this machine may not request, the
+    /// configured one included, and a turn asked for one is refused with the file that refused it.
+    ///
+    /// The configured model among them because `catalogue` puts it back when no listing described
+    /// it, so a build that filtered only the listed rows would offer the one row that is certain to
+    /// be there. A turn is checked as well as the roster, the window being able to name a model the
+    /// roster never offered.
+    #[test]
+    fn the_window_neither_offers_nor_requests_a_model_this_machine_refuses() {
+        let managed = r#"{"models": {"deny": ["denied-model", "the-configured-model"]}}"#;
+        let config = configured("the-configured-model", Some(managed));
+        let listed = |key: &str| Model {
+            key: key.to_string(),
+            display_name: key.to_string(),
+            premium: false,
+            reads_effort: true,
+            provider: None,
+            conversation_tokens: None,
+            advertised: Advertised::default(),
+        };
+
+        let result = catalogue(
+            &config,
+            vec![listed("an-allowed-model"), listed("denied-model")],
+            Vec::new(),
+        );
+        let offered: Vec<&str> = result["models"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|row| row["id"].as_str().expect("an id"))
+            .collect();
+        assert_eq!(offered, ["an-allowed-model"]);
+
+        // A turn naming one, and a turn naming none, which asks for the configured model.
+        for asked in [Some("denied-model"), None] {
+            let refused = refused(&config, asked).expect("the turn was not refused");
+            assert!(
+                refused.contains("models.deny"),
+                "the refusal did not say which list refused it: {refused}"
+            );
+        }
+        assert_eq!(refused(&config, Some("an-allowed-model")), None);
     }
 
     #[test]

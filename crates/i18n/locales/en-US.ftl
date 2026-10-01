@@ -807,6 +807,22 @@ servers-no-home =
 servers-no-handshake = { $alias } was started and did not complete its handshake: { $reason }
 servers-too-slow = { $alias } did not complete its handshake within { $seconds } seconds
 
+## A model this machine's administrator does not let it ask for
+
+# Said where a run or a session settles on the model, rather than when a request would go out: the
+# person reading it cannot write the file that refused, so the file is the only actionable thing in
+# it, and a refusal at the moment of the request says nothing about where to look.
+managed-model-refused = no request is made for { $model }: { $reason }
+managed-model-not-allowed =
+    { $path }, which this machine's administrator manages, allows only the models its models.allow
+    names
+managed-model-denied =
+    { $path }, which this machine's administrator manages, denies it with a models.deny entry
+# A delegate definition naming a model the layer refuses. Refused where the definition is read, so
+# nothing is started for it.
+delegate-model-refused =
+    { $definition } asks for { $model }, which this machine does not request: { $reason }
+
 ## The tools an MCP server offers, read by the person before any of them is offered to the model
 
 mcp-tools-title = offer these tools to the model?
@@ -1721,6 +1737,9 @@ session-directory-closed = closed { $directory }; open it again with /add-dir { 
 session-directory-not-changed = could not move to { $directory }: { $problem }
 session-permission-rule-ignored = ignoring a permission rule in settings.json: { $problem }
 session-model-pick-set-aside = ignoring { $model }, picked with /model, because no configured service serves it
+# The other way a pick is set aside: the machine-level layer does not request it. The configured
+# model answers and the record is left as it is, for the reason the line above leaves one.
+session-model-pick-refused = ignoring { $model }, picked with /model: { $reason }
 # An allow rule written in a checkout's settings file. It answers an approval prompt, which is a
 # capability rather than a narrowing, so it is read from the person's own file only. Named rather
 # than counted: whoever wrote it is looking for their own line.
