@@ -5689,6 +5689,151 @@ fn a_repository_a_deny_rule_names_is_not_opened() {
     );
 }
 
+/// The policy a checkout is asked under: `trusted` given to the map, `denied` as deny rules.
+fn checkout_policy<'a>(
+    workspace: &Workspace,
+    sink: &'a mut RecordingSink,
+    trusted: &[&str],
+    denied: &[&str],
+) -> Policy<'a, RecordingSink> {
+    let mut trust = TrustStore::new(workspace.root());
+    for path in trusted {
+        trust.trust(path);
+    }
+    Policy::begin(routing(), ReleasePlan::new(), all_file_capabilities(), sink)
+        .expect("policy")
+        .with_trust(trust)
+        .with_permissions(denying(denied))
+}
+
+/// CHECKOUT-4. A checkout is made only of a repository read_git would open, so a repository the
+/// map does not trust, or whose `.git` a deny rule covers, or that sends a read elsewhere, gets
+/// none, and nothing is written.
+#[test]
+fn a_checkout_is_made_only_of_a_repository_read_git_would_open() {
+    use bravebot_agent::git::Declined;
+    use bravebot_agent::git::checkout::{Bound, Refused};
+    let cases: [(&str, &[&str], &[&str], Declined); 4] = [
+        ("untrusted", &["README"], &[], Declined::Untrusted),
+        ("fenced", &["."], &["Read(./.git)"], Declined::Fenced),
+        (
+            "fenced-file",
+            &["."],
+            &["Read(./.git/config)"],
+            Declined::Fenced,
+        ),
+        ("linked", &["."], &[], Declined::LinkedGitDir),
+    ];
+    for (name, trusted, denied, expected) in cases {
+        let scratch = Scratch::new(&format!("checkout-declined-{name}"));
+        let elsewhere = Scratch::new(&format!("checkout-declined-{name}-target"));
+        if expected == Declined::LinkedGitDir {
+            let real = elsewhere.path.join("real");
+            std::fs::create_dir(&real).expect("real repository");
+            repository::commit_files(&real, &[("README", "hello\n")], "first");
+            std::fs::write(
+                scratch.path.join(".git"),
+                format!("gitdir: {}\n", real.join(".git").display()),
+            )
+            .expect(".git file");
+        } else {
+            repository::commit_files(&scratch.path, &[("README", "hello\n")], "first");
+        }
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut sink = RecordingSink::new();
+        let policy = checkout_policy(&workspace, &mut sink, trusted, denied);
+        let target = elsewhere.path.join("checkout");
+
+        let refused = workspace.make_checkout(&policy, &target, "c1", Bound::FIXED);
+        match refused {
+            Err(WorkspaceError::Checkout {
+                refused: Refused::Declined(declined),
+                ..
+            }) => assert_eq!(declined, expected, "{name}"),
+            other => panic!("{name}: a checkout was not declined: {other:?}"),
+        }
+        assert!(!target.exists(), "{name}: a declined checkout was written");
+    }
+}
+
+/// CHECKOUT-5. A file a deny rule covers is not written into the checkout, and the answer names
+/// it, while every other file is written as HEAD holds it.
+#[test]
+fn a_file_a_deny_rule_covers_is_left_out_of_a_checkout() {
+    use bravebot_agent::git::checkout::Bound;
+    let scratch = Scratch::new("checkout-left-out");
+    let elsewhere = Scratch::new("checkout-left-out-target");
+    repository::commit_files(
+        &scratch.path,
+        &[("README", "hello\n"), ("secret.txt", "token\n")],
+        "first",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &["Read(./secret.txt)"]);
+    let target = elsewhere.path.join("checkout");
+
+    let made = workspace
+        .make_checkout(&policy, &target, "c1", Bound::FIXED)
+        .expect("made");
+    assert_eq!(made.left_out, ["secret.txt"]);
+    assert_eq!(
+        std::fs::read_to_string(target.join("README")).expect("README"),
+        "hello\n"
+    );
+    assert!(
+        !target.join("secret.txt").exists(),
+        "a file a deny rule covers was written"
+    );
+    assert!(scratch.path.join(".git/worktrees/c1/index").exists());
+}
+
+/// CHECKOUT-4. A `.gitattributes` file the map does not trust refuses the checkout without being
+/// read, keyed by its path in the workspace, where one the map trusts is read.
+#[test]
+fn an_attributes_file_the_map_does_not_trust_refuses_a_checkout() {
+    use bravebot_agent::git::checkout::{Bound, Conversion, Refused};
+    let scratch = Scratch::new("checkout-attributes-untrusted");
+    let elsewhere = Scratch::new("checkout-attributes-untrusted-target");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            ("README", "hello\n"),
+            ("docs/.gitattributes", "* filter=x\n"),
+        ],
+        "first",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    for (name, distrusted, expected) in [
+        ("untrusted", Some("docs"), Refused::AttributesUntrusted),
+        ("trusted", None, Refused::Converts(Conversion::Filter)),
+    ] {
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        if let Some(path) = distrusted {
+            trust.distrust(path);
+        }
+        let mut sink = RecordingSink::new();
+        let policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(trust);
+        let target = elsewhere.path.join(name);
+
+        match workspace.make_checkout(&policy, &target, name, Bound::FIXED) {
+            Err(WorkspaceError::Checkout { refused, .. }) => {
+                assert_eq!(refused, expected, "{name}")
+            }
+            other => panic!("{name}: the checkout was not refused: {other:?}"),
+        }
+        assert!(!target.exists(), "{name}: a refused checkout was written");
+    }
+}
+
 /// GIT-14. A search's pattern decides which lines of which files the answer prints, so it is a
 /// routing field held to (T,pub) like the path beside it. A private one would carry what it holds
 /// into an answer the planner reads, however trusted its author.

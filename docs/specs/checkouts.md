@@ -6,12 +6,13 @@ governs:
   - crates/agent/src/agents.rs
   - crates/agent/src/delegate.rs
   - crates/agent/src/git.rs
+  - crates/agent/src/git/checkout.rs
   - crates/agent/src/scratch.rs
   - crates/agent/src/tools.rs
   - crates/agent/src/workspace.rs
   - crates/core/src/delegate.rs
   - crates/core/src/trust.rs
-documented-by: none (gap: a page on giving a delegate a checkout, owed once one can be made)
+documented-by: none (gap: a page on giving a delegate a checkout, owed once a spawn can ask for one)
 ---
 
 ## Scope
@@ -25,8 +26,9 @@ the commit the repository has checked out (HEAD), which the driver makes for one
 specs use the word for the person's own clone of a project. Here that is always called the
 working directory, and a checkout is always one a delegate was given.
 
-Nothing in this file is built. It is a design, written to be agreed before the work starts, and
-every clause says so.
+Most of this file is not built. It is a design, written to be agreed before the work starts, and
+each clause says how much of it is built. The driver can make a checkout
+([CHECKOUT-4](#CHECKOUT-4), [CHECKOUT-5](#CHECKOUT-5)), and nothing asks it for one yet.
 
 **A checkout is not a sandbox.** It moves where a delegate's file tools reach and where its
 programs start. A program it runs is as unconfined as any other ([sandboxing.md](sandboxing.md)),
@@ -134,19 +136,33 @@ worktree is one of those.
 It is also refused where git would write a file differently from the stored blob: a `filter`,
 `ident` or `working-tree-encoding` attribute, `eol=crlf`, `core.autocrlf=true` or `core.eol=crlf`,
 and on Windows a `text` attribute unless `core.eol=lf`. These are read from the `.gitattributes`
-files in HEAD's tree, from `info/attributes` and from the repository's own configuration, and they
-decide only whether a checkout is refused. The global and system configuration are not read, as a
-status does not read them ([GIT-10](tools/read-git.md#GIT-10)), so on Windows, where Git for
-Windows sets `core.autocrlf` in the system file, a checkout is refused unless the repository's own
-configuration sets it to `false`.
+files in HEAD's tree, in whatever case each is named, as a file system that ignores case opens it,
+from `info/attributes` and from the repository's own `config`, and they decide only whether a
+checkout is refused. `config.worktree` is not read: it is the main worktree's, and git in a linked
+worktree reads that worktree's own. Every line of an attributes file counts, whichever paths
+its pattern matches. A `.gitattributes` file a deny rule covers, or one the map does not trust,
+refuses the checkout without being read. Its contents carry its path's label
+([GIT-3](tools/read-git.md#GIT-3)), so deciding from them where that label is not trusted would be
+the driver branching on untrusted content. Configuration naming an attributes file elsewhere
+through `core.attributesFile` or `attr.tree` refuses it too, as a status declines it. The global
+and system configuration are not read, as a status does not read them
+([GIT-10](tools/read-git.md#GIT-10)), so on Windows, where Git for Windows sets `core.autocrlf` in
+the system file, a checkout is refused unless the repository's own configuration sets it to
+`false`.
 
-It is refused where HEAD's tree holds more files or more bytes than a fixed bound the driver sets.
-The sizes are read from the object store's own headers, before any file is written.
+It is refused where HEAD's tree holds more than 100,000 files, more than 100,000 directories or
+more than 2 GiB, a bound the driver fixes. Directories count because a tree may name one subtree
+many times, and each name is walked. The sizes are read from the object store's own headers, before
+any file is written and before an attributes file is read.
 
 It is refused where the tree holds an entry named `.` or `..`, an entry whose name holds a
 separator, an entry git's own checks take for `.git` (in any case, as NTFS reads `git~1` or a name
-ending in a dot or a space, or as HFS+ reads one holding a character it ignores), or two paths the
-file system would take for one.
+ending in a dot or a space, or as HFS+ reads one holding a character it ignores), a path that is
+not UTF-8, which no permission rule can be held against, or two paths the file system would take
+for one, which takes in a tree naming one entry twice. On Windows it is also refused for a name
+Git for Windows refuses: one holding a control character or one of `<>:"|?*`, which takes in a
+drive prefix such as `C:x`, one ending in a dot or a space, or a device name such as `CON` or
+`LPT1`.
 
 Each refusal says which of these it was.
 
@@ -160,11 +176,27 @@ git would not have written. A repository using LFS therefore gets no checkout.
 
 **Why the entry names.** git refuses to check out a tree holding these. A nested `.git` would be a
 repository whose configuration the person's own git reads, and two paths folded to one name would
-leave one file written over another and two rules for one path ([CHECKOUT-8](#CHECKOUT-8)).
+leave one file written over another and two rules for one path ([CHECKOUT-8](#CHECKOUT-8)). On
+Windows a path joined onto a drive prefix replaces the checkout's own path.
 
-Nothing builds this yet.
+Built. Nothing asks for a checkout yet, since no spawn takes `isolation`
+([CHECKOUT-1](#CHECKOUT-1)).
 
-`verified-by: none`
+`verified-by: bravebot_agent::workspace::a_checkout_is_made_only_of_a_repository_read_git_would_open`
+`verified-by: bravebot_agent::git::an_attribute_or_setting_git_converts_by_refuses_the_checkout`
+`verified-by: bravebot_agent::git::an_attribute_git_writes_a_file_as_stored_by_is_accepted`
+`verified-by: bravebot_agent::git::an_attributes_file_a_deny_rule_covers_refuses_the_checkout`
+`verified-by: bravebot_agent::git::an_attributes_file_the_map_does_not_trust_refuses_the_checkout_unread`
+`verified-by: bravebot_agent::workspace::an_attributes_file_the_map_does_not_trust_refuses_a_checkout`
+`verified-by: bravebot_agent::git::a_tree_past_the_bound_refuses_the_checkout`
+`verified-by: bravebot_agent::git::a_name_git_refuses_to_check_out_refuses_the_checkout`
+`verified-by: bravebot_agent::git::two_paths_the_file_system_takes_for_one_refuse_the_checkout`
+`verified-by: bravebot_agent::git::a_tree_naming_an_entry_twice_refuses_the_checkout`
+`verified-by: bravebot_agent::git::a_name_windows_cannot_hold_is_refused_on_windows_alone`
+`verified-by: bravebot_agent::git::directories_count_against_the_file_bound`
+`verified-by: bravebot_agent::git::an_attributes_file_past_the_byte_bound_is_not_read`
+`verified-by: bravebot_agent::git::an_attributes_file_named_in_another_case_is_taken_for_one`
+`verified-by: bravebot_agent::git::a_setting_in_config_worktree_does_not_refuse_the_checkout`
 
 <a id="CHECKOUT-5"></a>
 ### CHECKOUT-5: a checkout is HEAD's tree written by the driver, and nothing is started to write it
@@ -172,7 +204,9 @@ Nothing builds this yet.
 No program is started to make a checkout: not git, and nothing a hook, `core.fsmonitor` or the
 configuration names. The driver writes HEAD's tree file by file. A file keeps mode `100644` or
 `100755`. A symbolic link is written as one where `core.symlinks` would have git write one, and as
-a file holding its target otherwise. A submodule's entry becomes an empty directory, as git leaves
+a file holding its target otherwise. A link's target carries its own path's label, so whether the
+link can be written does not rest on it: a NUL, which no link holds, is written as `_`, and on
+Windows bytes that are not UTF-8 as U+FFFD. A submodule's entry becomes an empty directory, as git leaves
 a submodule nobody initialised.
 
 A path a deny rule covers ([PERM-7](permissions.md#PERM-7), [GIT-4](tools/read-git.md#GIT-4)) is
@@ -186,6 +220,11 @@ in the checkout neither reports it removed nor commits its removal. Every byte o
 driver's own: two paths, a commit id, and the index of a tree the map trusts. No branch is made and
 no ref under `refs/` changes. A person's own git, and a line a person approved running git, work in
 the checkout as in any worktree, and `git worktree list` shows it.
+
+A checkout whose directory or `worktrees/<id>/` entry already exists is refused, and what is there
+is left as it was. A `worktrees` directory that is a link is refused before anything is written,
+as the entry would be written wherever the link points. Two paths the file system takes for one are
+found as the second is written, and a checkout refused while writing is removed with its entry.
 
 Each checkout takes a number of its own, `c1`, `c2` and on through the session, which a resume
 keeps. A delegate's number will not do: it is a path from the turn
@@ -202,9 +241,19 @@ never reads a ref under `worktrees/`, and the entry changes nothing a read of th
 opens. What a program in a checkout later commits is in the repository the two share, and
 [CHECKOUT-12](#CHECKOUT-12) labels it.
 
-Nothing builds this yet.
+The writing is built, and returns the paths it left out. Numbering checkouts through the session
+and telling the delegate are not, since nothing asks for a checkout yet
+([CHECKOUT-1](#CHECKOUT-1)).
 
-`verified-by: none`
+`verified-by: bravebot_agent::git::a_checkout_writes_heads_tree_as_a_detached_linked_worktree`
+`verified-by: bravebot_agent::git::git_reads_the_checkout_as_a_clean_detached_worktree`
+`verified-by: bravebot_agent::git::a_path_a_deny_rule_covers_is_left_out_and_marked_skip_worktree`
+`verified-by: bravebot_agent::workspace::a_file_a_deny_rule_covers_is_left_out_of_a_checkout`
+`verified-by: bravebot_agent::git::a_checkout_starts_no_program_the_repository_names`
+`verified-by: bravebot_agent::git::a_checkout_where_one_exists_is_refused_and_leaves_it_alone`
+`verified-by: bravebot_agent::git::a_refusal_while_writing_removes_only_what_the_checkout_made`
+`verified-by: bravebot_agent::git::a_worktrees_link_declines_the_checkout`
+`verified-by: bravebot_agent::git::a_link_target_holding_a_nul_is_written_with_an_underscore`
 
 <a id="CHECKOUT-6"></a>
 ### CHECKOUT-6: a checkout lives under the state directory, keyed by the workspace
@@ -234,7 +283,8 @@ distrust a path inside `.git` and close `read_git` for the whole repository
 search and `git status` of the person's has to skip, and build tools in it walking up the tree
 would find the person's own configuration.
 
-Nothing builds this yet.
+The modes are the ones [CHECKOUT-5](#CHECKOUT-5)'s writing uses. Where a checkout is made is not
+built: its caller names the directory, and nothing asks for a checkout yet.
 
 `verified-by: none`
 
