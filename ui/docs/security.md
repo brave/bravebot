@@ -64,6 +64,12 @@ write is still asked about when its step is reached. What a run releases for a s
 a file's text, so the window draws it as plain text in a marked container and never formats
 it. A run is not part of the conversation and is left out of an export.
 
+Permission rules from settings files decide whether a card appears at all. A `deny` rule
+refuses before any card, and an `allow` rule in the person's own file answers one. An
+`allow` rule a project's file wrote answers nothing, since it arrived with the project. The
+window lists the rules in force and says which settings are not. Rules are not applied to a
+plan run, and the plan card says so where the conversation holds a rule that narrows.
+
 A credential-exposure approval is asked when the planner reads a trusted file that the scan
 found a credential in. The card names the file and each finding, which is a kind, a place
 and a mask. The value is not sent to the window, so it is never drawn. An approval sends the

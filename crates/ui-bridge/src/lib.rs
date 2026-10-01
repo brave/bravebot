@@ -25,6 +25,7 @@ pub mod hooks;
 pub mod manifest;
 pub mod models;
 pub mod protocol;
+pub mod rules;
 pub mod running;
 pub mod settings;
 pub mod store;

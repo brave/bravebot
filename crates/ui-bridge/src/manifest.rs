@@ -94,7 +94,11 @@ pub(crate) fn walk(walk: Walk) {
         .with_model(model)
         .with_attribution(attribution)
         .with_output_cap(output_cap)
-        .with_deadlines(deadlines);
+        .with_deadlines(deadlines)
+        // The rules the session opened under, as the terminal passes them. The agent's manifest
+        // runner does not read them today, so no rule holds in a run. A front end says so on the
+        // plan it puts to the person.
+        .with_permissions(state.rules.permissions.clone());
 
     let mut reporter = BridgeReporter::new(emitter.clone(), &session);
     let mut confirmer =

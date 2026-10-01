@@ -665,6 +665,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .fork-banner .link:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
 .vetting-banner { border-left: 3px solid var(--accent); }
 .vetting-banner strong { color: var(--ink); }
+/* What a settings file wrote that is not in force. Folded, so a long list does not push the
+   conversation down. */
+.rules-banner { border-left: 3px solid var(--warn); }
+.rules-banner summary { cursor: pointer; }
+.rules-banner strong { color: var(--ink); }
+.rules-banner p { margin: 6px 0 2px; }
+.rules-banner ul { margin: 2px 0; padding-left: 18px; }
+.rules-banner code { font-family: var(--mono); font-size: 11px; overflow-wrap: anywhere; }
+.settings-rules h4 { margin: 10px 0 0; font-size: 12px; }
 
 /* Where a fork's link landed. `display: contents` on `.entry-hit` means the wrapper cannot be
    painted, so the mark is drawn on the row inside it — and it fades, because it answers "which

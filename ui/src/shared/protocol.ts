@@ -104,6 +104,26 @@ export interface TodoRow {
   status: TodoStatus
 }
 
+/**
+ * The permission rules a session opened under, read from the settings files when it opened.
+ *
+ * `deny`, `ask` and `allow` are the rules in force, as the files spelled them. The rest is what
+ * a file wrote that is not in force: an entry that is not a rule, an `allow` rule a project's
+ * file wrote, and a directory a file asked to have opened. Rule text is what a person wrote in a
+ * settings file.
+ */
+export interface SettingsRules {
+  deny: string[]
+  ask: string[]
+  allow: string[]
+  /** An entry nothing could read as a rule, and the agent's sentence about why. */
+  unreadable: { rule: string; said: string }[]
+  /** An `allow` rule a project's settings file wrote. It answers no question here. */
+  proposed: { rule: string; file: string }[]
+  /** A directory a settings file asked to have opened. This app opens none of them. */
+  directories: string[]
+}
+
 export interface SessionSummary {
   id: string
   directory: string
@@ -173,6 +193,8 @@ export interface OpenedSession {
    * says it once at the top of the transcript and goes on showing it (CHECK-11).
    */
   autoVetting: boolean
+  /** Absent from an older bridge, which read no rules. */
+  settingsRules?: SettingsRules | null
 }
 
 export interface ModelOption {
@@ -216,6 +238,8 @@ export interface ForkedSession {
   keeping?: string | null
   /** The parent's, as it opened: the child carries on its conversation. */
   autoVetting: boolean
+  /** Absent from an older bridge, which read no rules. */
+  settingsRules?: SettingsRules | null
   /** As on `OpenedSession`, read again for the child. */
   serversNote: string | null
   parent: {
