@@ -354,9 +354,6 @@ started answers the session's next turn, and a start a delegate causes is put to
 the one confirmer every run shares ([DELEGATE-16](../delegation.md#DELEGATE-16)). What it may ask
 is still decided by its own capability set ([LSP-9](#LSP-9)).
 
-[CHECKOUT-20](../checkouts.md#CHECKOUT-20), which nothing yet builds, offers a delegate working in a
-checkout of its own no `lsp`, since these servers are rooted at the working directory.
-
 **Why shared with delegates.** A set of its own would ask the person about a language they already
 approved, and index the same tree a second time beside the server already doing it.
 
@@ -384,6 +381,10 @@ granted a language server. A delegate gets it only where its capability set says
 The `checker` and `worker` kinds hold it ([DELEGATE-4](../delegation.md#DELEGATE-4)), so a delegate
 of either kind, or a turn addressed to one, is offered `lsp` wherever the session holds it. A
 `reader` does not.
+
+[CHECKOUT-20](../checkouts.md#CHECKOUT-20), which nothing yet builds, offers no `lsp` to a checker
+or a worker working in a checkout of its own, since the session's servers are rooted at the working
+directory.
 
 **Why separate from `FileRead`.** They are not the same act. A read opens one named file inside the
 tree; a server reads the whole tree and the dependency sources beside it, and keeps a process alive

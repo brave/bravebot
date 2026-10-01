@@ -33,8 +33,8 @@ somebody asked to be kept all live here, and so does the record of the definitio
 session left untrusted, `untrusted/` ([MEMORY-5](definition-memory.md#MEMORY-5)).
 [definition-memory.md](definition-memory.md) proposes one more, which nothing yet builds: the
 definition a desktop bot is made as. [checkouts.md](checkouts.md) proposes another, which nothing
-yet builds either: the checkouts delegates are given, `checkouts/`, which hold a project's files and
-are read through the trust map.
+yet builds either: the checkouts delegates are given, `checkouts/`, which hold a project's files
+written readable by their owner alone and are read through the trust map.
 
 What each of those files means belongs to the spec for that subject:
 [sessions.md](sessions.md) for a session record, [tools/run.md](tools/run.md) for the remembered

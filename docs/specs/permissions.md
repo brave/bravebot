@@ -684,6 +684,10 @@ No directory may be opened beside the workspace: `/add-dir` and `--add-dir` are 
 when the key was read is not reachable either, which is what a resume reopening the directories its
 own record holds arrives as ([PERM-10](#PERM-10)).
 
+[CHECKOUT-7](checkouts.md#CHECKOUT-7), which nothing yet builds, makes a delegate's checkout its
+workspace, so for that delegate this key refuses every path outside the checkout, the working
+directory among them.
+
 **Where the refusal is made.** In the workspace, at the two places the reach exists: the one function
 every door onto a directory by name resolves through, and the test of where a path lands that every
 read, write, listing and search already goes through ([TRUST-10](trust-map.md#TRUST-10)). Not in the

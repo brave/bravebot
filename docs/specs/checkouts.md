@@ -59,8 +59,8 @@ A definition's `isolation:` key is not read ([MEMORY-7](definition-memory.md#MEM
 `spawn_agent` takes `isolation`, whose one value is `checkout`. Any other value is refused, and no
 delegate starts. It is routing for the reason `kind` is ([AGENT-1](tools/spawn-agent.md#AGENT-1)):
 it is a name from a list the driver wrote, and it decides where the delegate's effects land. A
-person could approve it on its own: "this delegate works in a new checkout of commit `abc1234` and
-writes nothing into your working directory until you apply it".
+person could approve it on its own: "this delegate's file tools work in a new checkout of commit
+`abc1234`, and what they write reaches your working directory only as you bring it back".
 
 Under `each`, every delegate the call starts is given a checkout of its own.
 
@@ -79,6 +79,9 @@ says so, as a `memory:` value nothing here reads does ([MEMORY-2](definition-mem
 Where a later definition of the same name replaces an earlier one
 ([DELEGATE-20](delegation.md#DELEGATE-20)), the key is met as the kind is: either one asking gives
 a checkout. A project's definition can add a checkout to a person's own and cannot remove one.
+Where the definition that results is a `reader`, it loads without a checkout and says so, so a
+project's file cannot make a person's reader one that is refused at every spawn
+([CHECKOUT-3](#CHECKOUT-3)).
 
 On a turn a person addresses to a definition ([ADDRESS-1](addressing-a-definition.md#ADDRESS-1)),
 the key is not applied, and the turn says so.
@@ -92,7 +95,8 @@ repository ([CHECKOUT-5](#CHECKOUT-5)), and whether that should ask is an open q
 
 **Why `worktree` too.** A definition written for Claude Code with that value asks for the same
 separation. Loading it without one would put work its author meant to keep apart in the person's
-tree. Its checkout holds HEAD, where Claude Code's is branched from the default branch.
+tree. Its checkout holds HEAD, where Claude Code's is branched, by default, from the default
+branch.
 
 Nothing builds this yet.
 
@@ -101,11 +105,13 @@ Nothing builds this yet.
 <a id="CHECKOUT-3"></a>
 ### CHECKOUT-3: a checker or a worker may have a checkout, a reader may not, and a delegate's own delegates share it
 
-A `reader` asking for a checkout is refused, and no delegate starts. A delegate in a checkout
-starts its own delegates in that checkout, and asking for another checkout there is refused.
+A spawn asking for a `reader` in a checkout is refused, and no delegate starts. A delegate in a
+checkout starts its own delegates in that checkout, readers among them, and asking for another
+checkout there is refused.
 
-**Why not a reader.** A reader writes nothing, so a checkout separates it from nobody, and it
-would be shown HEAD's tree in place of the tree the person has.
+**Why not a reader.** A reader writes nothing, so a checkout of its own separates it from nobody,
+and it would be shown HEAD's tree in place of the tree the person has. A reader a delegate in a
+checkout starts reads that checkout, which is the tree the delegate that started it is working in.
 
 **Why one level.** A checkout made from a checkout would need its repository opened through a
 linked worktree, which [GIT-8](tools/read-git.md#GIT-8) declines in the person's tree and which
@@ -126,15 +132,21 @@ repository: the map trusts all of its `.git` ([GIT-2](tools/read-git.md#GIT-2)) 
 worktree is one of those.
 
 It is also refused where git would write a file differently from the stored blob: a `filter`,
-`ident` or `working-tree-encoding` attribute, `eol=crlf`, `core.autocrlf=true` or `core.eol=crlf`.
-These are read from the `.gitattributes` files in HEAD's tree, from `info/attributes` and from the
-configuration, and they decide only whether a checkout is refused.
+`ident` or `working-tree-encoding` attribute, `eol=crlf`, `core.autocrlf=true` or `core.eol=crlf`,
+and on Windows a `text` attribute unless `core.eol=lf`. These are read from the `.gitattributes`
+files in HEAD's tree, from `info/attributes` and from the repository's own configuration, and they
+decide only whether a checkout is refused. The global and system configuration are not read, as a
+status does not read them ([GIT-10](tools/read-git.md#GIT-10)), so on Windows, where Git for
+Windows sets `core.autocrlf` in the system file, a checkout is refused unless the repository's own
+configuration sets it to `false`.
 
 It is refused where HEAD's tree holds more files or more bytes than a fixed bound the driver sets.
 The sizes are read from the object store's own headers, before any file is written.
 
-It is refused where the tree holds an entry named `.`, `..` or `.git` in any case, an entry whose
-name holds a separator, or two paths the file system would take for one.
+It is refused where the tree holds an entry named `.` or `..`, an entry whose name holds a
+separator, an entry git's own checks take for `.git` (in any case, as NTFS reads `git~1` or a name
+ending in a dot or a space, or as HFS+ reads one holding a character it ignores), or two paths the
+file system would take for one.
 
 Each refusal says which of these it was.
 
@@ -169,9 +181,15 @@ not written, and the delegate is told which paths were left out.
 The driver then writes what git needs to know the checkout for a detached linked worktree:
 `worktrees/<id>/` under the person's `.git`, holding the checkout's HEAD, the path back to the
 common directory and the path to the checkout; a `.git` file in the checkout naming that entry;
-and an index of HEAD's tree. Every byte of these is the driver's own: two paths and a commit id. No
-branch is made and no ref under `refs/` changes. A person's own git, and a line a person approved
-running git, work in the checkout as in any worktree, and `git worktree list` shows it.
+and an index of HEAD's tree, in which each path left out carries git's skip-worktree flag, so git
+in the checkout neither reports it removed nor commits its removal. Every byte of these is the
+driver's own: two paths, a commit id, and the index of a tree the map trusts. No branch is made and
+no ref under `refs/` changes. A person's own git, and a line a person approved running git, work in
+the checkout as in any worktree, and `git worktree list` shows it.
+
+Each checkout takes a number of its own, `c1`, `c2` and on through the session, which a resume
+keeps. A delegate's number will not do: it is a path from the turn
+([DELEGATE-13](delegation.md#DELEGATE-13)), so every turn has its own `d1`.
 
 Making a checkout asks nobody, and writes nothing into the working tree.
 
@@ -179,8 +197,10 @@ Making a checkout asks nobody, and writes nothing into the working tree.
 `post-checkout` hook, a `core.fsmonitor` program, a filter driver. `read_git` starts no program for
 the same reason ([GIT-1](tools/read-git.md#GIT-1)).
 
-**Why the person's `read_git` is unaffected.** [GIT-8](tools/read-git.md#GIT-8) never reads a ref
-under `worktrees/`, and the entry changes nothing a read of the working directory opens.
+**Why the entry leaves the person's `read_git` as it was.** [GIT-8](tools/read-git.md#GIT-8)
+never reads a ref under `worktrees/`, and the entry changes nothing a read of the working directory
+opens. What a program in a checkout later commits is in the repository the two share, and
+[CHECKOUT-12](#CHECKOUT-12) labels it.
 
 Nothing builds this yet.
 
@@ -190,16 +210,19 @@ Nothing builds this yet.
 ### CHECKOUT-6: a checkout lives under the state directory, keyed by the workspace
 
 A checkout is made at `~/.bravebot/checkouts/<workspace key>/<id>`, keyed by the workspace as a
-language server's cache is ([LSP-10](tools/lsp.md#LSP-10)). Each directory on the way is created at
-the modes [STATE-1](state-directory.md#STATE-1) gives, and the checkout's own directory is created
-rather than adopted: a name something already holds is refused, as the session's own directory
-refuses one ([TRUST-14](trust-map.md#TRUST-14)).
+language server's cache is ([LSP-10](tools/lsp.md#LSP-10)). Each directory on the way, and every
+directory in the checkout, is created at the mode [STATE-1](state-directory.md#STATE-1) gives, and
+the checkout's own directory is created rather than adopted: a name something already holds is
+refused, as the session's own directory refuses one ([TRUST-14](trust-map.md#TRUST-14)). A file is
+written readable by its owner alone, `0600`, or `0700` where the tree marks it executable, since the
+owner's execute bit is the one git compares.
 
 A session that keeps no record ([incognito.md](incognito.md)), or a machine with no state
 directory ([STATE-2](state-directory.md#STATE-2)), makes its checkouts in the system temporary
 directory instead, on the terms the session's own directory is made there, under a name of a third
 kind beside the session's and a local server's. They go when the session ends
-([TRUST-15](trust-map.md#TRUST-15)).
+([TRUST-15](trust-map.md#TRUST-15)), with their `worktrees/<id>/` entries. A session killed
+outright leaves its entries in the person's `.git`, naming a checkout that is gone.
 
 **Why not the system temporary directory everywhere.** A checkout holding work nobody has applied
 has to last through a reboot and a few idle days. macOS removes files there that go unused for
@@ -226,6 +249,10 @@ as they were, and so does the rule holding the file tools to the workspace
 ([PERM-16](permissions.md#PERM-16)). The working directory is not reachable from it, and the
 checkout is reachable from no run but that delegate and the delegates it starts.
 
+Where that cannot hold, a checkout is refused and no delegate starts: where a directory the parent
+opened ([TRUST-9](trust-map.md#TRUST-9)) holds the working directory or the checkout, or where the
+working directory holds the checkout, as it does for a session in the home directory.
+
 What follows from the root follows unchanged. A command line starts at the checkout's root
 ([CMDLINE-12](tools/command-line.md#CMDLINE-12)), a hook runs there
 ([HOOK-4](hooks.md#HOOK-4)), and a relative path means a path in the checkout.
@@ -233,9 +260,12 @@ What follows from the root follows unchanged. A command line starts at the check
 The delegate is told, in the driver's words, which commit the checkout holds, that changes the
 person has not committed are not in it, and which paths a deny rule left out.
 
-**Why reach without a person opening it.** On the grounds the session's own directory is reached
-([TRUST-16](trust-map.md#TRUST-16)): it was created here, owned by this account, and holds only
-what the driver wrote into it from a `.git` the map trusts in full.
+**Why reach without a person opening it.** On grounds like those the session's own directory is
+reached on ([TRUST-16](trust-map.md#TRUST-16)): it was created here and is owned by this account.
+That directory is also empty, and a checkout is not. What stands in for that is that a checkout
+holds only what the driver wrote into it from a `.git` the map trusts in full, and each file in it
+carries the label the same path has in the working directory ([CHECKOUT-8](#CHECKOUT-8)), so the
+reach brings no file into the session that nobody has an answer about.
 
 Nothing builds this yet.
 
@@ -245,7 +275,7 @@ Nothing builds this yet.
 ### CHECKOUT-8: a file in a checkout is labelled as the same path in the working directory is
 
 As a checkout is made, each rule the map holds under the working directory is copied to the same
-relative path under the checkout, and the answer the workspace was given at startup
+relative path under the checkout, and what was said about the workspace
 ([TRUST-7](trust-map.md#TRUST-7)) answers for every path no copied rule names. Re-spelling the map
 for a new root, as `/cd` does ([TRUST-13](trust-map.md#TRUST-13)), is not that: every rule would
 still name the file it named, and none would answer for a path in the checkout.
@@ -255,7 +285,7 @@ the checkout is then recorded under the checkout's path ([TRUST-4](trust-map.md#
 [TRUST-5](trust-map.md#TRUST-5)), comes back to the session as any delegate's decision does
 ([DELEGATE-11](delegation.md#DELEGATE-11)), and is kept in the session record in full, as a rule
 outside the project is ([TRUST-6](trust-map.md#TRUST-6)). A checkout's rules go when it is
-removed.
+removed, except those that distrust a path, which [CHECKOUT-12](#CHECKOUT-12) keeps.
 
 `~/.bravebot` is read as trusted by provenance ([TRUST-11](trust-map.md#TRUST-11)). A checkout is
 not: it holds a project's files, and is read through the map whatever directory it is in.
@@ -284,9 +314,16 @@ Nothing in a checkout is read as a source: not its `.bravebot/settings.json`
 ([DELEGATE-20](delegation.md#DELEGATE-20)) and not its `AGENTS.md`. The delegate has the
 working directory's, as they were resolved before the turn.
 
+A delegate in a checkout keeps no definition memory ([MEMORY-2](definition-memory.md#MEMORY-2)),
+and the answer to the spawn says so.
+
 **Why.** A checkout is the same tree at HEAD, and a rule written about the project is a rule about
 it. A source read from it would be a second copy of the project's configuration, which a delegate
 writing there could change for the delegates it starts.
+
+**Why no memory.** The memory file is in the working directory, which the delegate does not
+reach. The checkout's copy is HEAD's, and what the delegate wrote to it would stay in the checkout
+until a person brought it back.
 
 Nothing builds this yet.
 
@@ -295,9 +332,11 @@ Nothing builds this yet.
 <a id="CHECKOUT-10"></a>
 ### CHECKOUT-10: a command vouched for in the working directory is asked about again in a checkout
 
-A line remembered as vouched for is keyed by the tree it was given in
-([RUN-8](tools/run.md#RUN-8)), and a checkout is not that tree. A run in a checkout is asked about
-unless an entry names the checkout.
+An entry a person vouched for this session names the tree it was given in
+([RUN-8](tools/run.md#RUN-8)), and a checkout is not that tree. A line remembered past the session
+([RUN-19](tools/run.md#RUN-19)) names no tree and is spelled against the workspace root, which in a
+checkout would be the checkout's, so in a checkout it is not honoured. A run in a checkout is asked
+about unless an entry made this session names the checkout.
 
 **Why.** `sh check.sh` vouched for at the root is a statement about the file the root holds, and
 the checkout's file at that path may differ.
@@ -321,7 +360,7 @@ Nothing builds this yet.
 `verified-by: none`
 
 <a id="CHECKOUT-12"></a>
-### CHECKOUT-12: `read_git` in a checkout is routed by the driver's record, never by the checkout's `.git`
+### CHECKOUT-12: `read_git` in a checkout is routed by the driver's record, and history anywhere in the session meets the checkouts' rules
 
 A question about the checkout's repository is answered from the common directory and the
 `worktrees/<id>/` entry the driver recorded when it made the checkout. `<checkout>/.git` is never
@@ -329,8 +368,20 @@ read. The files a read opens are the entry's HEAD and index beside the common di
 [GIT-2](tools/read-git.md#GIT-2)'s rules are held against that list. A status
 ([GIT-11](tools/read-git.md#GIT-11)) is then answered in the checkout on its usual terms.
 
+An answer about the repository's history, in the working directory or in any checkout, is labelled
+by the rule over each path it showed there and by the rule over the same path in every checkout of
+that repository the session has made ([GIT-3](tools/read-git.md#GIT-3)). A rule that distrusts a
+path in a checkout is kept for this after the checkout is removed, for as long as the session
+lasts.
+
 **Why not the file.** A delegate can overwrite it, and what it names would then choose which
 repository is read.
+
+**Why the checkouts' rules.** The checkouts and the working directory share one repository, so a
+commit or a branch a program made in a checkout is history the working directory reads. Labelled by
+the working directory's rule alone, a file a write left untrusted in the checkout would reach the
+planner as trusted through that history. The meet is taken over the paths
+[GIT-3](tools/read-git.md#GIT-3) already labels an answer by, so it adds no decision of its own.
 
 Nothing builds this yet.
 
@@ -358,17 +409,17 @@ Nothing builds this yet.
 <a id="CHECKOUT-14"></a>
 ### CHECKOUT-14: a file comes back as a write through the gate, one path at a time
 
-`apply_checkout` takes two routing fields: `delegate`, the number of a checkout the session keeps,
-and an optional `paths`, a subset of that checkout's candidates. Without `paths` it takes every
-candidate. A number the session keeps no checkout for, or a path that is not a candidate, is
-refused.
+`apply_checkout` takes two routing fields: `checkout`, the number of a checkout the session keeps
+([CHECKOUT-5](#CHECKOUT-5)), and an optional `paths`, a subset of that checkout's candidates.
+Without `paths` it takes every candidate. A number the session keeps no checkout for, or a path that
+is not a candidate, is refused.
 
 Each path is a write of the checkout file's bytes to the same path in the working directory,
-through the gate a `write_file` with `contents_ref` takes ([tools/write-file.md](tools/write-file.md)):
-it is always shown ([WRITE-4](tools/write-file.md#WRITE-4)), a person's yes is bound to that path
-alone ([WRITE-3](tools/write-file.md#WRITE-3)), and the map, the permission rules, the permission
-mode and a rewind treat it as any write. The bytes keep the label the checkout's path gives them,
-so a file a write left untrusted there is still untrusted once it has come back, and the
+through the gate a `write_file` with `contents_ref` takes ([tools/write-file.md](tools/write-file.md)).
+Each is put to the person, even where [TRUST-4](trust-map.md#TRUST-4)'s table would ask nothing, a
+yes is bound to that path alone ([WRITE-3](tools/write-file.md#WRITE-3)), and the map, the
+permission rules and a rewind treat it as any write. The bytes keep the label the checkout's path
+gives them, so a file a write left untrusted there is still untrusted once it has come back, and the
 destination is recorded as [TRUST-4](trust-map.md#TRUST-4)'s table says.
 
 The person is shown the difference between their file as it is and the checkout's. Where the
@@ -391,15 +442,20 @@ Nothing builds this yet.
 ## How long one lasts
 
 <a id="CHECKOUT-15"></a>
-### CHECKOUT-15: a checkout nothing was done in goes with its delegate, and any other is kept until a person removes it
+### CHECKOUT-15: a checkout nothing was done in goes with its delegate, and any other is kept until a person removes it or the session that keeps nothing ends
 
 Whether a checkout is kept is decided from the driver's record, never by comparing its files with
-HEAD. Where the delegate recorded no file effect there and started no program there, a hook among
-them, the checkout is removed as the delegate ends, with its `worktrees/<id>/` entry and its rules,
-and nobody is asked: the record says it holds only what the driver wrote.
+HEAD. Where neither the delegate given it nor any delegate that one started recorded a file effect
+there or started a program there, a hook among them, the checkout is removed as the delegate given
+it ends, with its `worktrees/<id>/` entry and its rules, save those
+[CHECKOUT-12](#CHECKOUT-12) keeps, and nobody is asked: the record says it holds only what the
+driver wrote.
 
-Any other checkout is kept. The session record holds its path, its commit and its delegate's
-number ([SESSION-3](sessions.md#SESSION-3)), and leaving the session names each one kept
+Any other checkout is kept, in a session that keeps no record only until the session ends
+([CHECKOUT-6](#CHECKOUT-6)). The session record holds its path, its commit, its number, the number
+of the delegate given it, and the paths the driver recorded a file effect on in it
+([SESSION-3](sessions.md#SESSION-3)), so a resume has the candidates
+[CHECKOUT-13](#CHECKOUT-13) names. Leaving the session names each one kept
 ([SESSION-8](sessions.md#SESSION-8)).
 
 `/checkouts` lists the checkouts the session keeps, shows one's candidates against the working
@@ -412,20 +468,24 @@ Nothing builds this yet.
 <a id="CHECKOUT-16"></a>
 ### CHECKOUT-16: a resume brings kept checkouts back, a fork does not, and an opening session removes what no session lists
 
-`--resume` brings back the checkouts the record kept, with their rules. A fork does not carry them
-([SESSION-18](sessions.md#SESSION-18)), so no two records list one directory. `/cd` is refused
+`--resume` brings back the checkouts the record kept, with their rules. A fork carries neither the
+checkouts nor the rules copied for them ([SESSION-18](sessions.md#SESSION-18)), so no two records
+list one directory. `/cd` is refused
 while the session keeps a checkout, and names it, since the record that lists it would move with
 the session ([SESSION-13](sessions.md#SESSION-13)) and the checkout would stay keyed under the
 directory it left.
 
-On Unix a session holds a lock on each checkout it keeps for as long as it runs. Opening a session
-removes a checkout under its workspace's key that no session record there lists and no running
-session holds, with its `worktrees/<id>/` entry, on the terms the session's own directories are
-swept ([TRUST-25](trust-map.md#TRUST-25)). On Windows nothing is removed, and `/checkouts` names a
-checkout no record lists and leaves it to the person.
+On Unix a session takes a lock on a checkout's directory as it creates it, before anything is
+written there, and holds it for as long as the session runs. Opening a session removes a directory
+under its workspace's key in `checkouts/` that no session record for that workspace lists and no
+running session holds, with its `worktrees/<id>/` entry. As [TRUST-25](trust-map.md#TRUST-25)'s
+sweep does, it takes only what is this account's, and judges a link there as a link rather than as
+what it points at. On Windows nothing is removed, and `/checkouts` names a checkout no record lists
+and leaves it to the person.
 
 **Why a lock as well as the record.** A session opening beside one that is running would otherwise
-take a checkout made since that session last wrote its record for a leftover.
+take a checkout that session is still making, or made since it last wrote its record, for a
+leftover.
 
 Nothing builds this yet.
 
@@ -452,7 +512,7 @@ Nothing builds this yet.
 
 Beside a delegate's report ([DELEGATE-8](delegation.md#DELEGATE-8)), the driver says in its own
 words where the delegate's checkout is, the commit it holds, and its candidate paths, or that it was
-removed. This is the one thing other than the report that crosses back
+removed. It is one more item the driver writes beside the report
 ([DELEGATE-9](delegation.md#DELEGATE-9)), and all of it is the driver's record.
 
 Nothing builds this yet.
@@ -462,9 +522,10 @@ Nothing builds this yet.
 <a id="CHECKOUT-19"></a>
 ### CHECKOUT-19: the trail records each checkout made, applied from and removed
 
-Each is an event with the checkout's path and the delegate's number. The commit is not in it, since
-the trail's fields are gate names, capabilities, labels, paths, hosts and slot ids
-([TRACE-2](trace.md#TRACE-2)). The session record holds the commit.
+Each is an event with the checkout's path, and one a delegate's run took keeps that run's number
+([TRACE-4](trace.md#TRACE-4)). The commit and the checkout's number are not in it, since the
+trail's fields are gate names, capabilities, labels, paths, hosts and slot ids
+([TRACE-2](trace.md#TRACE-2)). The session record holds both against the path.
 
 Nothing builds this yet.
 
@@ -474,7 +535,7 @@ Nothing builds this yet.
 ### CHECKOUT-20: a delegate in a checkout is offered no `lsp`
 
 The session's language servers are rooted at the working directory and shared with its delegates
-([LSP-8](tools/lsp.md#LSP-8)), so a path in a checkout is outside the workspace for them
+([LSP-9](tools/lsp.md#LSP-9)), so a path in a checkout is outside the workspace for them
 ([LSP-4](tools/lsp.md#LSP-4)). A delegate in a checkout is not offered `lsp`, and the answer to the
 spawn says so.
 
@@ -488,7 +549,8 @@ Nothing builds this yet.
 <a id="CHECKOUT-21"></a>
 ### CHECKOUT-21: `/status` lists the session's checkouts
 
-Each kept checkout is a line of its own, with its path, its commit and its delegate's number, as
+Each kept checkout is a line of its own, with its number, its path, its commit and the number of
+the delegate given it, as
 the session's own directory has one ([TRUST-14](trust-map.md#TRUST-14)). A checkout carries rules,
 so it is in the rules in force as well ([TRUST-12](trust-map.md#TRUST-12)).
 
@@ -546,8 +608,15 @@ Nothing builds this yet.
 - **A worker's first build is asked about.** A command vouched for in the working directory is not
   vouched for in a checkout ([CHECKOUT-10](#CHECKOUT-10)).
 - **A write is asked about twice**, once in the checkout and once as it comes back.
-- **git in a checkout reports a path a deny rule left out as removed.** The index holds HEAD's tree
-  and the file is not there. Such a path is never a candidate, so nothing reaches the person's file.
+- **A global or system `core.autocrlf` on Unix goes unseen.** It is not read
+  ([CHECKOUT-4](#CHECKOUT-4)), so where one is set the checkout holds a file's bytes as stored where
+  the person's own git would have written them converted.
+- **No definition memory in a checkout** ([CHECKOUT-9](#CHECKOUT-9)). A definition that asks for a
+  checkout forgets between conversations.
+- **A session whose added directory holds the working directory gets no checkout**, nor one in the
+  home directory ([CHECKOUT-7](#CHECKOUT-7)).
+- **A killed session that kept nothing leaves `worktrees/<id>/` entries** in the person's `.git`
+  ([CHECKOUT-6](#CHECKOUT-6)). `git worktree prune` removes them.
 - **A file a program wrote is not found where a status is not answered.** The driver's record holds
   only what the file tools and redirections wrote ([CHECKOUT-13](#CHECKOUT-13)).
 - **No `lsp` in a checkout** ([CHECKOUT-20](#CHECKOUT-20)).

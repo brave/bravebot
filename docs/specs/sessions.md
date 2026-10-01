@@ -84,7 +84,8 @@ empty name is refused.
 What the record says about each individual turn is SESSION-23.
 
 [CHECKOUT-15](checkouts.md#CHECKOUT-15), which nothing yet builds, adds the checkouts a session's
-delegates were given and it keeps: each one's path, its commit and its delegate's number.
+delegates were given and it keeps: each one's path, its commit, its number, the number of the
+delegate given it, and the paths the driver recorded a file effect on in it.
 
 `verified-by: bravebot_tui::sessions::renaming_a_session_rewrites_the_record_immediately`
 `verified-by: bravebot_tui::sessions::a_chosen_name_survives_the_next_turn`
@@ -466,7 +467,7 @@ the continuation rule in SESSION-10.
 Both full-record and mid-history forks keep the source's current file decisions and inherit no
 rewind points. Forking does not rewind disk. The source record stays unchanged.
 [CHECKOUT-16](checkouts.md#CHECKOUT-16), which nothing yet builds, keeps a fork from carrying the
-source's checkouts.
+source's checkouts or the rules copied for them.
 
 **Why.** Exploring an alternative technical path from a shared prefix preserves the expensive
 context already built up without polluting the original session. Refusing manifest runs maintains

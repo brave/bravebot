@@ -219,7 +219,8 @@ more than what it leaves behind:
   what this one left untrusted as trusted. [MEMORY-5](definition-memory.md#MEMORY-5) governs it.
 
 [CHECKOUT-6](checkouts.md#CHECKOUT-6), which nothing yet builds, would add a tenth: a delegate's
-checkout, made in the system temporary directory and gone with the session.
+checkout, made in the system temporary directory and gone with the session, and its entry under
+the person's `.git/worktrees/`, which goes with it and which a session killed outright leaves.
 
 **Why.** A stated limit is worth more than an unstated one. Someone who knows the third of these
 can decide not to open an editor; someone who assumed the mode covered it has been misled by their
