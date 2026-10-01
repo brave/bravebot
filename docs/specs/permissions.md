@@ -720,7 +720,7 @@ given during the session would otherwise open: `/add-dir` and `--add-dir` are re
 when the key was read is not reachable either, which is what a resume reopening the directories its
 own record holds arrives as ([PERM-10](#PERM-10)).
 
-[CHECKOUT-7](checkouts.md#CHECKOUT-7), which nothing yet builds, makes a delegate's checkout its
+[CHECKOUT-7](checkouts.md#CHECKOUT-7) makes a delegate's checkout its
 workspace, so for that delegate this key refuses every path outside the checkout, the working
 directory among them.
 

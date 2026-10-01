@@ -476,6 +476,26 @@ pub fn make(
     })
 }
 
+/// Remove a checkout [`make`] made: its directory and its `worktrees/<id>` entry, and nothing else.
+///
+/// A link is never followed. A `worktrees` directory that is one is left alone, as [`make`] would
+/// not have written through it, and so is an `id` that is not a plain name.
+pub fn remove(git_dir: &Path, target: &Path, id: &str) -> Result<(), Refused> {
+    let plain = !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric());
+    let worktrees = git_dir.join("worktrees");
+    if !plain
+        || std::fs::symlink_metadata(&worktrees).is_ok_and(|meta| meta.file_type().is_symlink())
+    {
+        return Err(Declined::Linked.into());
+    }
+    let gone = |path: &Path| match std::fs::remove_dir_all(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(Refused::Unwritable),
+        _ => Ok(()),
+    };
+    gone(target)?;
+    gone(&worktrees.join(id))
+}
+
 fn taken_or(error: std::io::Error, taken: Refused) -> Refused {
     if error.kind() == std::io::ErrorKind::AlreadyExists {
         taken

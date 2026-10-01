@@ -22452,6 +22452,357 @@ fn a_delegates_write_is_approved_on_its_own() {
     );
 }
 
+/// The directories a session made checkouts in, under its state directory.
+fn checkouts_under(home: &std::path::Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let Ok(per_project) = std::fs::read_dir(home.join("checkouts")) else {
+        return found;
+    };
+    for project in per_project.flatten() {
+        for checkout in std::fs::read_dir(project.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            found.push(checkout.path());
+        }
+    }
+    found.sort();
+    found
+}
+
+/// Runs one turn over a repository whose working directory is trusted, with a state directory of
+/// its own, and returns the requests the model saw.
+fn run_in_a_repository(
+    workspace: &Workspace,
+    home: &std::path::Path,
+    endpoint: &str,
+    received: &MockRequests,
+    prompt: &str,
+) -> (Vec<String>, RecordingConfirmer) {
+    let config = config_for(endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    turn::run_with_trust(
+        &config,
+        &egress,
+        workspace,
+        &Task::new(prompt).with_home(Some(home.to_path_buf())),
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+    (every_request(received), confirmer)
+}
+
+/// CHECKOUT-1, CHECKOUT-7. A delegate asked to work in a checkout writes there, the working
+/// directory is left as it was, and the delegate is told which commit it holds.
+#[test]
+fn a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory() {
+    let scratch = Scratch::new("checkout-delegate-writes");
+    let home = Scratch::new("checkout-delegate-writes-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    std::fs::write(scratch.path.join("notes.txt"), "not committed\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAVE-A-DELEGATE-WRITE-APART",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"WRITE-OUT-APART","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("the delegate wrote it"),
+            ],
+        ),
+        (
+            "WRITE-OUT-APART",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"out.txt","contents":"from the delegate"}"#,
+                ),
+                reply_with("wrote it"),
+            ],
+        ),
+    ]);
+    let (asked, _) = run_in_a_repository(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "HAVE-A-DELEGATE-WRITE-APART",
+    );
+
+    assert!(
+        !scratch.path.join("out.txt").exists(),
+        "the delegate wrote in the working directory"
+    );
+    let made = checkouts_under(&home.path);
+    assert_eq!(
+        made.len(),
+        1,
+        "a delegate that wrote in its checkout keeps it"
+    );
+    assert_eq!(
+        std::fs::read_to_string(made[0].join("out.txt")).expect("written in the checkout"),
+        "from the delegate"
+    );
+    assert_eq!(
+        std::fs::read_to_string(made[0].join("README")).expect("committed file"),
+        "committed\n"
+    );
+    assert!(
+        !made[0].join("notes.txt").exists(),
+        "a change nobody committed reached the checkout"
+    );
+    assert!(
+        asked
+            .iter()
+            .any(|body| !body.contains("HAVE-A-DELEGATE-WRITE-APART")
+                && body.contains("working in a checkout of commit")
+                && body.contains("not committed are not in it")),
+        "the delegate was not told it works in a checkout"
+    );
+    assert!(
+        asked.iter().any(
+            |body| body.contains("HAVE-A-DELEGATE-WRITE-APART") && body.contains("was kept at")
+        ),
+        "the planner was not told the checkout was kept"
+    );
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("HAVE-A-DELEGATE-WRITE-APART")
+                && body.contains("keeps no memory between conversations and is not offered lsp")),
+        "the planner was not told the delegate has no memory and no lsp"
+    );
+}
+
+/// CHECKOUT-15. A checkout its delegate did nothing in goes with the delegate, directory and
+/// `worktrees` entry both.
+#[test]
+fn a_checkout_nothing_was_done_in_is_removed_when_its_delegate_ends() {
+    let scratch = Scratch::new("checkout-delegate-removed");
+    let home = Scratch::new("checkout-delegate-removed-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAVE-A-DELEGATE-LOOK-APART",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"LOOK-APART","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "LOOK-APART",
+            vec![
+                tool_request("read_file", r#"{"path":"README"}"#),
+                reply_with("saw it"),
+            ],
+        ),
+    ]);
+    let (asked, _) = run_in_a_repository(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "HAVE-A-DELEGATE-LOOK-APART",
+    );
+
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("HAVE-A-DELEGATE-LOOK-APART")
+                && body.contains("saw it")
+                && body.contains("was removed")),
+        "the delegate never read its checkout, or the planner was not told it was removed"
+    );
+    assert!(
+        checkouts_under(&home.path).is_empty(),
+        "the checkout is still there"
+    );
+    let entries = std::fs::read_dir(scratch.path.join(".git/worktrees"))
+        .map(|entries| entries.count())
+        .unwrap_or(0);
+    assert_eq!(entries, 0, "the repository still lists the checkout");
+}
+
+/// CHECKOUT-9. A delegate in a checkout reads the working directory's standing instructions, as
+/// they are there, including those nobody has committed.
+#[test]
+fn a_delegate_in_a_checkout_reads_the_working_directorys_instructions() {
+    let scratch = Scratch::new("checkout-delegate-instructions");
+    let home = Scratch::new("checkout-delegate-instructions-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    std::fs::write(scratch.path.join("AGENTS.md"), "STANDING-RULE-SEVEN\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAVE-A-DELEGATE-FOLLOW-RULES",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"FOLLOW-RULES","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        ("FOLLOW-RULES", vec![reply_with("followed")]),
+    ]);
+    let (asked, _) = run_in_a_repository(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "HAVE-A-DELEGATE-FOLLOW-RULES",
+    );
+
+    assert!(
+        asked
+            .iter()
+            .any(|body| !body.contains("HAVE-A-DELEGATE-FOLLOW-RULES")
+                && body.contains("working in a checkout of commit")
+                && body.contains("STANDING-RULE-SEVEN")),
+        "the delegate in the checkout was not given the working directory's instructions"
+    );
+    let mut told = asked.iter().filter(|body| {
+        !body.contains("HAVE-A-DELEGATE-FOLLOW-RULES")
+            && body.contains("working in a checkout of commit")
+    });
+    assert!(
+        told.all(|body| body.contains(&format!(
+            "Working directory: {}/checkouts/",
+            home.path.canonicalize().unwrap().display()
+        ))),
+        "the delegate in the checkout was not told its own working directory"
+    );
+}
+
+/// CHECKOUT-1, CHECKOUT-3, CHECKOUT-6. A spawn that asks for a checkout it may not have starts no
+/// delegate, makes no checkout, and says why.
+#[test]
+fn a_spawn_asking_for_a_checkout_it_may_not_have_starts_nothing() {
+    let cases = [
+        (
+            "other",
+            r#"{"kind":"worker","task":"NEVER-RUNS","isolation":"copy"}"#,
+            "may only be",
+        ),
+        (
+            "reader",
+            r#"{"kind":"reader","task":"NEVER-RUNS","isolation":"checkout"}"#,
+            "a reader writes nothing",
+        ),
+    ];
+    for (name, arguments, said) in cases {
+        let scratch = Scratch::new(&format!("checkout-refused-{name}"));
+        let home = Scratch::new(&format!("checkout-refused-{name}-home"));
+        repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let (endpoint, received) = serve_by_marker(vec![
+            (
+                "ASK-FOR-A-CHECKOUT",
+                vec![
+                    tool_request("spawn_agent", arguments),
+                    reply_with("done"),
+                    reply_with("done"),
+                ],
+            ),
+            ("NEVER-RUNS", vec![reply_with("ran")]),
+        ]);
+        let (asked, _) = run_in_a_repository(
+            &workspace,
+            &home.path,
+            &endpoint,
+            &received,
+            "ASK-FOR-A-CHECKOUT",
+        );
+
+        assert!(
+            asked.iter().any(|body| body.contains(said)),
+            "{name}: the planner was not told why"
+        );
+        assert!(
+            asked
+                .iter()
+                .all(|body| !body.contains("\"ran\"") && !body.contains("has started")),
+            "{name}: a delegate started"
+        );
+        assert!(
+            checkouts_under(&home.path).is_empty(),
+            "{name}: a checkout was made"
+        );
+    }
+}
+
+/// CHECKOUT-3. A delegate in a checkout cannot ask for another.
+#[test]
+fn a_delegate_in_a_checkout_is_refused_another() {
+    let scratch = Scratch::new("checkout-nested");
+    let home = Scratch::new("checkout-nested-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "START-A-NESTED-ONE",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"MIDDLE-ONE","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "MIDDLE-ONE",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"INNER-ONE","isolation":"checkout"}"#,
+                ),
+                reply_with("asked"),
+            ],
+        ),
+        ("INNER-ONE", vec![reply_with("ran")]),
+    ]);
+    let (asked, _) = run_in_a_repository(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "START-A-NESTED-ONE",
+    );
+
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("you already work in a checkout")),
+        "the delegate was not refused a checkout of its own"
+    );
+    assert!(
+        asked.iter().all(|body| !body.contains("\"ran\"")),
+        "the inner delegate started"
+    );
+}
+
 /// A refused write inside a delegate is refused, and nothing about being one round further in
 /// changes that. The endorsement is minted from the person's answer, so there is nothing for the
 /// delegate to hold instead.
