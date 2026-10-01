@@ -37,7 +37,8 @@ advice, and write approvals show the processor's remark beside the diff.
 - `npm run drive:plan`: a manifest run started from the composer, through the real app and
   bridge, against a model service the script serves itself. The plan writes one file, so
   whether it ran is read off the disk. Covers an approved plan, a declined plan, and a turn
-  taken afterwards, which is sent nothing the run said. No paid inference.
+  taken afterwards, which is sent nothing the run said. Then reads both runs' records from
+  the session list, and checks that a record has no message box. No paid inference.
 - After building, `node scripts/drive-agent-rpc.mjs`: an actual automatic watch turn against
   a local fake gateway, real lifecycle hook subprocesses, context measurements and stop/close.
   Uses an isolated agent home; no paid inference or real credentials.
@@ -96,7 +97,7 @@ at, that a control keeps keyboard focus through an animation.
 | `npm run drive:run` | Approving a command from the window, end to end through a live turn |
 | `npm run drive:fetch` | Approving and refusing a fetch from the window, end to end, against a local model service and website |
 | `npm run drive:language-server` | Starting a language server from the window, that it is kept for the conversation, and that it ends with the app |
-| `npm run drive:plan` | Starting a manifest run from the composer, approving and declining its plan, and that the run stays out of the conversation |
+| `npm run drive:plan` | Starting a manifest run from the composer, approving and declining its plan, that the run stays out of the conversation, and that its record is read and cannot be typed into |
 | `npm run drive:ask` | Answering a series of questions the planner asks, likewise live |
 | `npm run drive:menu` | The application menu: what it offers, what it greys, and what it refuses to offer |
 | `npm run drive:export` | Exporting a conversation to text, Markdown and PDF — with and without the tool calls, and what the file leaves out either way |

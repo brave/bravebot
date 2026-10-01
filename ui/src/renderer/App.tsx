@@ -8,6 +8,7 @@ import type {
   ForkedSession,
   KeptTrust,
   OpenedSession,
+  RunRecord,
   Phase,
   SessionSummary,
   Shown,
@@ -200,6 +201,8 @@ export function App(): React.JSX.Element {
   const [agentSettings, setAgentSettings] = useState(false)
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [live, renderLive] = useState<Live | null>(null)
+  /** A saved manifest run being read. Shown in place of a session, and only while none is. */
+  const [reading, setReading] = useState<RunRecord | null>(null)
   const liveRef = useRef<Live | null>(null)
   const handleRef = useRef<string | null>(null)
   const openedLives = useRef(new Map<string, Live>())
@@ -217,6 +220,8 @@ export function App(): React.JSX.Element {
     liveRef.current = next
     handleRef.current = next?.handle ?? null
     if (next) openedLives.current.set(next.handle, next)
+    // A session on screen takes the place of a run being read.
+    if (next) setReading(null)
     renderLive(next)
   }, [])
   const updateSession = useCallback((handle: string, action: React.SetStateAction<Live | null>) => {
@@ -467,6 +472,15 @@ export function App(): React.JSX.Element {
   const showSession = useCallback(
     async (summary: SessionSummary, focus?: number, bot?: { slug: string; model: string | null }) => {
     try {
+      // A plan run has no conversation, so it is read and not opened. No session is made for
+      // it. Sessions already open stay open behind it.
+      if (summary.manifest) {
+        const run = await call<RunRecord>('manifest.read', { directory: summary.directory, id: summary.id })
+        setLive(null)
+        setReading(run)
+        setProblem(null)
+        return
+      }
       if (summary.id.startsWith('draft:')) {
         const cached = [...openedLives.current.values()].find((item) => item.draftId === summary.id)
         if (cached) setLive(cached)
@@ -1267,7 +1281,7 @@ export function App(): React.JSX.Element {
         sessions={ownSessions}
         onNewBotConversation={(bot) => { void create(bot.directory, { slug: bot.slug, model: bot.model }) }}
         onBotConversation={(bot, summary) => { void showSession(summary, undefined, { slug: bot.slug, model: bot.model }) }}
-        openId={live?.summary.id ?? live?.draftId ?? undefined}
+        openId={live?.summary.id ?? live?.draftId ?? reading?.record.id ?? undefined}
         forked={forked}
         onOpen={showSession}
         onNew={create}
@@ -1328,6 +1342,7 @@ export function App(): React.JSX.Element {
         onModel={(model) => void chooseModel(model)}
         onSubmit={submit}
         onPlan={submitPlan}
+        reading={reading}
         onCancel={cancel}
         canExport={canExport}
         includeTools={includeTools}

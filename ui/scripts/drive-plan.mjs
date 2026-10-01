@@ -1,5 +1,5 @@
 // That a manifest run can be started from the window, that its plan is put there and answered
-// there, and that the run stays out of the conversation.
+// there, that the run stays out of the conversation, and that its record is read and not opened.
 //
 // The real app and the real bridge, against a model service this script serves itself. Nothing
 // is paid for. The plan writes one file, so whether a plan ran is read off the disk.
@@ -155,8 +155,61 @@ try {
   assert.equal(rounds.length, 5, 'and asked no model after it was declined')
   await page.screenshot({ path: join(output, 'plan-declined.png') })
 
+  // ---- the runs' records, which are read and not opened ------------------------------------------
+  const runs = page.locator('.session-row').filter({ has: page.locator('.plan-run') })
+  const conversations = page.locator('.session-row').filter({ hasNot: page.locator('.plan-run') })
+  await runs.nth(1).waitFor()
+  assert.equal(await runs.count(), 2, 'each run that was not stopped is listed, and marked as a run')
+  assert.equal(await conversations.count(), 1, 'the conversation is listed and not marked')
+
+  // Read both. Which row is which is told by what each holds and not by its place in the list:
+  // records are ordered by the second they were saved in, and two runs can share one.
+  const record = page.locator('.run-record-body')
+  const read = []
+  for (const index of [0, 1]) {
+    await runs.nth(index).locator('.session').click()
+    await page.locator('.session-row.current').filter({ has: page.locator('.plan-run') }).waitFor()
+    await record.waitFor()
+    // The view is replaced by the next record, so wait until it names a run not yet read.
+    await page.waitForFunction((seen) => {
+      const meta = document.querySelector('.run-record-meta')?.textContent ?? ''
+      return meta.startsWith('Run ') && !seen.some((id) => meta.includes(id))
+    }, read.map((entry) => entry.id))
+    const text = await record.innerText()
+    const id = (await page.locator('.run-record-meta').innerText()).split(' ')[1]
+    assert.match(text, /Plan run · read only/)
+    assert.equal(await page.locator('.composer').count(), 0, 'there is nothing to type into')
+    assert.equal(await page.locator('.error-card').count(), 0, 'reading a run reports no failure')
+    read.push({ id, text, index })
+  }
+  const declined = read.find((entry) => entry.text.includes('The run stopped.'))
+  const finished = read.find((entry) => entry.text.includes('The run finished.'))
+  assert.ok(declined && finished && declined !== finished, 'one record is the declined run and the other the finished one')
+  assert.match(declined.text, /No step ran\./)
+  assert.ok(declined.text.includes('2. [act] write notes.md'), 'the declined plan can still be read')
+  assert.ok(finished.text.includes('write notes.md: new file'), 'the steps that ran are read back')
+  await page.screenshot({ path: join(output, 'plan-record.png') })
+
+  // The conversation is still open behind the record, as it was left.
+  await conversations.first().locator('.session').click()
+  await composer.waitFor()
+  assert.equal(await page.locator('.run-record-body').count(), 0)
+  assert.equal(await page.locator('.bubble.assistant').count(), 1)
+  assert.equal(await cards.count(), 2, 'with both plans it was asked about')
+
+  // Starting again from a record makes a session in the record's project.
+  await runs.first().locator('.session').click()
+  await record.getByRole('button', { name: 'New session here', exact: true }).click()
+  await composer.waitFor()
+  if (await trust.isVisible().catch(() => false)) {
+    await trust.getByRole('button', { name: 'Trust this directory' }).click()
+    await trust.waitFor({ state: 'hidden' })
+  }
+  assert.equal(await page.locator('.bubble').count(), 0, 'the new session holds nothing the run said')
+  assert.ok((await page.locator('.transcript-head .where').innerText()).includes(project))
+
   assert.deepEqual(errors, [])
-  console.log(`PASS: a run is started from the composer, its plan is put to the window with every step, a yes runs it and a no runs nothing, what it releases stays in a marked container, and the conversation holds none of it. Screenshots in ${output}/plan-*.png`)
+  console.log(`PASS: a run is started from the composer, its plan is put to the window with every step, a yes runs it and a no runs nothing, what it releases stays in a marked container, the conversation holds none of it, and a run's record is read and cannot be typed into. Screenshots in ${output}/plan-*.png`)
 } catch (error) {
   if (page) await page.screenshot({ path: join(output, 'plan-failure.png') }).catch(() => undefined)
   throw error

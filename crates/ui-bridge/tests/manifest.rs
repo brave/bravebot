@@ -278,6 +278,40 @@ impl FrontEnd {
         )
     }
 
+    /// Every record listed for the project: its id, and whether it is listed as a run.
+    fn listed(&mut self, scratch: &Scratch) -> Vec<(String, bool)> {
+        let listed = self.call(
+            "session.list",
+            json!({"directory": scratch.project().display().to_string()}),
+        );
+        listed["sessions"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .map(|row| {
+                (
+                    row["id"].as_str().expect("an id").to_string(),
+                    row["manifest"].as_bool().expect("whether it is a run"),
+                )
+            })
+            .collect()
+    }
+
+    /// Read or open a record of the project, and return the whole of what answered.
+    fn record(&mut self, method: &str, scratch: &Scratch, id: &str) -> Value {
+        self.answered(
+            method,
+            json!({"directory": scratch.project().display().to_string(), "id": id}),
+        )
+    }
+
+    /// Run the plan to its end with `decision`, and return the event that ended it.
+    fn run_to_the_end(&mut self, session: &str, decision: &str) -> Value {
+        let question = self.plan(session);
+        self.reply("manifest.reply", session, &question, decision);
+        self.question_or_the_end()
+    }
+
     /// The ids of the manifest runs recorded for the project.
     fn recorded_runs(&mut self, scratch: &Scratch) -> Vec<String> {
         let listed = self.call(
@@ -619,4 +653,179 @@ fn a_run_that_cannot_be_what_was_asked_for_is_refused() {
     assert_eq!(refused["error"]["code"], "bad_request", "{refused}");
 
     assert_eq!(rounds.try_iter().count(), 0, "a refused run asked a model");
+}
+
+/// A run's record is listed as a run and a session's is not, so a front end can tell which rows
+/// can be continued.
+#[test]
+fn a_run_is_listed_as_a_run_and_a_session_is_not() {
+    let scratch = Scratch::new("bridge-manifest-listed");
+    let (endpoint, _rounds) = a_planner_with_one_write();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    let ended = front.run_to_the_end(&session, "approve");
+    assert_eq!(ended["event"], "manifest.done", "{ended}");
+    let run = ended["data"]["record"]
+        .as_str()
+        .expect("a record")
+        .to_string();
+    front.send(
+        "turn.send",
+        json!({"session": session, "prompt": "say done"}),
+    );
+    let turn = front.question_or_the_end();
+    assert_eq!(turn["event"], "turn.done", "{turn}");
+    let conversation = turn["data"]["id"].as_str().expect("a record").to_string();
+
+    let mut listed = front.listed(&scratch);
+    listed.sort();
+    let mut expected = vec![(run, true), (conversation, false)];
+    expected.sort();
+    assert_eq!(listed, expected);
+}
+
+/// A run that finished is read back with its plan and the steps that ran, and no failure.
+#[test]
+fn a_finished_run_is_read_back_with_what_it_did() {
+    let scratch = Scratch::new("bridge-manifest-read-finished");
+    let (endpoint, _rounds) = a_planner_with_one_write();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    let ended = front.run_to_the_end(&session, "approve");
+    let run = ended["data"]["record"]
+        .as_str()
+        .expect("a record")
+        .to_string();
+
+    let read = front.record("manifest.read", &scratch, &run);
+    let read = read
+        .get("ok")
+        .unwrap_or_else(|| panic!("the run was not read: {read}"));
+    assert_eq!(read["record"]["id"], run.as_str(), "{read}");
+    assert_eq!(read["record"]["title"], TASK, "{read}");
+    assert_eq!(read["record"]["front"], "desktop", "{read}");
+    assert_eq!(read["manifest"]["failure"], Value::Null, "{read}");
+    assert!(
+        read["manifest"]["plan"]
+            .as_str()
+            .is_some_and(|plan| plan.contains(TARGET)),
+        "{read}"
+    );
+    let steps = read["manifest"]["steps"].as_array().expect("the steps");
+    let [step] = steps.as_slice() else {
+        panic!("one step ran and the record holds {steps:?}");
+    };
+    assert!(
+        step.as_str().is_some_and(|step| step.contains(TARGET)),
+        "{step}"
+    );
+    // What was read back is what the run reported as it ended.
+    assert_eq!(read["manifest"]["plan"], ended["data"]["attempt"]["plan"]);
+    assert_eq!(read["manifest"]["steps"], ended["data"]["attempt"]["steps"]);
+}
+
+/// A declined run is read back with the plan that was declined and why it stopped, and with no
+/// step, since none ran (MANIFEST-10).
+#[test]
+fn a_declined_run_is_read_back_with_the_plan_and_the_reason() {
+    let scratch = Scratch::new("bridge-manifest-read-declined");
+    let (endpoint, _rounds) = a_planner_with_one_write();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    let ended = front.run_to_the_end(&session, "reject");
+    let run = ended["data"]["record"]
+        .as_str()
+        .expect("a record")
+        .to_string();
+
+    let read = front.record("manifest.read", &scratch, &run);
+    let read = read
+        .get("ok")
+        .unwrap_or_else(|| panic!("the run was not read: {read}"));
+    assert!(
+        read["manifest"]["plan"]
+            .as_str()
+            .is_some_and(|plan| plan.contains(TARGET)),
+        "{read}"
+    );
+    assert_eq!(read["manifest"]["steps"], json!([]), "{read}");
+    assert_eq!(
+        read["manifest"]["failure"], ended["data"]["problem"],
+        "{read}"
+    );
+}
+
+/// A run has no conversation, so it cannot be opened as a session (MANIFEST-11). The refusal
+/// opens nothing: no session is made that a turn could then be sent to.
+#[test]
+fn a_run_cannot_be_opened_as_a_session() {
+    let scratch = Scratch::new("bridge-manifest-not-a-session");
+    let (endpoint, rounds) = a_planner_with_one_write();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    let ended = front.run_to_the_end(&session, "approve");
+    let run = ended["data"]["record"]
+        .as_str()
+        .expect("a record")
+        .to_string();
+    front.call("session.close", json!({"session": session}));
+    let asked = rounds.try_iter().count();
+
+    let opened = front.record("session.open", &scratch, &run);
+    assert_eq!(
+        opened["error"]["code"], "bad_request",
+        "a run was opened as a session: {opened}"
+    );
+    assert!(
+        opened.get("ok").is_none(),
+        "the refusal came with a session: {opened}"
+    );
+    // Nothing the window was told could be a handle for it. The handles a bridge mints are
+    // `s1`, `s2` and so on, so the next one is tried, and it names no session.
+    for handle in ["s2", "s3"] {
+        let sent = front.answered(
+            "turn.send",
+            json!({"session": handle, "prompt": "carry on"}),
+        );
+        assert_eq!(sent["error"]["code"], "no_such_session", "{sent}");
+    }
+    assert_eq!(
+        rounds.try_iter().count(),
+        0,
+        "a model was asked after {asked} requests, by a session the refusal made"
+    );
+}
+
+/// A session is not read as a run, and a record that does not exist is not read at all.
+#[test]
+fn only_a_run_is_read_as_a_run() {
+    let scratch = Scratch::new("bridge-manifest-read-other");
+    let (endpoint, _rounds) = a_planner_with_one_write();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    front.send(
+        "turn.send",
+        json!({"session": session, "prompt": "say done"}),
+    );
+    // The stub answers its first two requests as a run's planning calls, which a turn takes as
+    // its reply. Any reply ends the turn, and a record is all this test needs of it.
+    let turn = front.question_or_the_end();
+    assert_eq!(turn["event"], "turn.done", "{turn}");
+    let conversation = turn["data"]["id"].as_str().expect("a record").to_string();
+
+    let read = front.record("manifest.read", &scratch, &conversation);
+    assert_eq!(read["error"]["code"], "bad_request", "{read}");
+    let opened = front.record("session.open", &scratch, &conversation);
+    assert!(
+        opened.get("ok").is_some(),
+        "a session could not be opened: {opened}"
+    );
+
+    let missing = front.record("manifest.read", &scratch, "no-such-record");
+    assert_eq!(missing["error"]["code"], "no_such_session", "{missing}");
 }

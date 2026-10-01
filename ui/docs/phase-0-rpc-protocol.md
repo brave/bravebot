@@ -983,7 +983,7 @@ the directory was made.
 - Credential-exposure and MCP approval requests are refused until their UI is implemented.
   Command, output, vouch, fetch, language-server, plan and question approvals are implemented.
 - A manifest run's audit events carry `run` and no `turn`. The window does not show them yet.
-- A manifest run's record is listed like a session's. Opening one shows an empty conversation.
+- What a manifest run released for a screen is not saved, so a run read back does not show it.
 - Replies arrive whole in `turn.done`; output-token events report counts, not text.
 - MCP configuration, subscription import and skills authoring have no dedicated UI.
 - File browsing, previews and attachments are Electron IPC features, not RPC methods.
@@ -1189,4 +1189,12 @@ Still open:
 - `manifest.done` carries `reply`, which is what the plan's last step released for a screen.
   It can be the text of a file nobody vouched for. A front end draws it as plain text in a
   marked container, and does not add it to the conversation.
+- Every row of `session.list` carries `manifest`, which is true for a manifest run's record.
+  A run has no conversation, so `session.open` refuses one with `bad_request` and makes no
+  session. The terminal's picker refuses one in the same way.
+- `manifest.read` takes `directory` and `id` and returns `{ record, model, manifest }`. It
+  opens no session, so there is nothing to close afterwards. `manifest` holds `goal`,
+  `proposed`, `plan` and `steps`, as `attempt` does, and `failure`, which is the agent's
+  sentence about why the run stopped and is null for a run that finished. It is refused with
+  `bad_request` for a session's record, and with `no_such_session` for an id that names none.
 

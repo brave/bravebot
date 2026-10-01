@@ -412,6 +412,7 @@ const ALLOWED = new Set([
   'fetch.reply',
   'server.reply',
   'manifest.run',
+  'manifest.read',
   'manifest.reply',
   'ask.reply',
   'trust.reply',

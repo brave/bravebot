@@ -279,7 +279,7 @@ function Session({
         {forked && <span className="fork-mark"><ForkIcon size={11} /></span>}{session.title}
       </span>
       <span className="session-where">{session.project}{session.branch && <span className="branch"> · {session.branch}</span>} · {ago(session.updated)}</span>
-      {(info?.bot || info?.state) && <span className="session-badges">{info.bot && <span>{info.bot}</span>}{info.state && <span className={`session-state ${info.state.toLowerCase().replaceAll(' ', '-')}`}>{info.state}</span>}</span>}
+      {(session.manifest || info?.bot || info?.state) && <span className="session-badges">{session.manifest && <span className="plan-run" title="A plan run. It can be read and not continued.">Plan run</span>}{info?.bot && <span>{info.bot}</span>}{info?.state && <span className={`session-state ${info.state.toLowerCase().replaceAll(' ', '-')}`}>{info.state}</span>}</span>}
     </button>
     <button ref={anchor} className="session-more" aria-label={`Actions for ${session.title}`} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>⋯</button>
     <PopMenu open={menu} anchor={anchor} label="Conversation actions" onClose={() => setMenu(false)}
