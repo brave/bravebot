@@ -863,11 +863,19 @@ impl Tree {
     /// Take one place, or nothing where the tree is full.
     pub(crate) fn claim(&self) -> bool {
         use std::sync::atomic::Ordering;
-        self.0
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |held| {
-                (held < MAX_DELEGATES).then_some(held + 1)
-            })
-            .is_ok()
+        let mut held = self.0.load(Ordering::SeqCst);
+        loop {
+            if held >= MAX_DELEGATES {
+                return false;
+            }
+            match self
+                .0
+                .compare_exchange_weak(held, held + 1, Ordering::SeqCst, Ordering::SeqCst)
+            {
+                Ok(_) => return true,
+                Err(now) => held = now,
+            }
+        }
     }
 }
 
