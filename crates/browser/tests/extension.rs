@@ -21,6 +21,10 @@ fn extension_file(name: &str) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
 }
 
+fn extension_manifest() -> Value {
+    serde_json::from_str(&extension_file("manifest.json")).unwrap()
+}
+
 /// The names inside `export const <name> = {` ... `};` in tools.js, each being the word before a
 /// `:` or a `(`, one member to a line.
 fn members(source: &str, object: &str) -> Vec<String> {
@@ -66,7 +70,7 @@ fn an_objects_members_end_where_the_object_does() {
 /// is given none, so that id has to be the one this key gives, or the host refuses the extension.
 #[test]
 fn the_id_install_records_is_the_one_the_extensions_key_gives() {
-    let manifest: Value = serde_json::from_str(&extension_file("manifest.json")).unwrap();
+    let manifest = extension_manifest();
     let key = manifest["key"].as_str().expect("the manifest pins a key");
     let der = base64::engine::general_purpose::STANDARD
         .decode(key)
@@ -88,6 +92,26 @@ fn the_extension_answers_every_tool_the_server_offers_and_no_other() {
     let offered: Vec<&str> = TOOLS.iter().map(|tool| tool.name).collect();
     assert_eq!(members(&source, "TOOLS"), offered);
     assert_eq!(members(&source, "DEFAULT_SETTINGS"), offered);
+}
+
+/// A tool that lists frames needs the browser's frame-navigation records, so the extension asks for
+/// that capability alongside the capabilities its other tools use.
+#[test]
+fn the_extension_has_each_permission_its_tools_require() {
+    let manifest = extension_manifest();
+    let permissions = manifest["permissions"].as_array().unwrap();
+    for permission in [
+        "nativeMessaging",
+        "tabs",
+        "scripting",
+        "history",
+        "bookmarks",
+        "storage",
+        "alarms",
+        "webNavigation",
+    ] {
+        assert!(permissions.contains(&Value::String(permission.into())));
+    }
 }
 
 /// The extension asks the browser for the host by the name install gives its manifest.

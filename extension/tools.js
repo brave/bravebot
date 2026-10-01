@@ -27,6 +27,7 @@ export const SETTINGS_KEY = "tools";
 export const DEFAULT_SETTINGS = Object.freeze({
   get_platform_info: true,
   list_tabs: false,
+  list_frames: false,
   read_page: false,
   search_history: false,
   search_bookmarks: false,
@@ -65,6 +66,38 @@ function text(params, name) {
     );
   }
   return value;
+}
+
+// Whether a frame URL names web content a person can judge in a question.
+// Opaque and browser-owned URLs do not say what a later read would expose.
+function webUrl(value) {
+  try {
+    return ["http:", "https:"].includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}
+
+// The tab at exactly `url`, which is the tab a person approved.
+async function tabAt(chrome, url) {
+  const tabs = await chrome.tabs.query({});
+  const tab = tabs.find((candidate) => candidate.url === url);
+  if (!tab) {
+    throw new ToolError(`no open tab is at ${url}`);
+  }
+  return tab;
+}
+
+// The frames in the approved tab, followed by a check that the tab did not
+// navigate while Brave found them.
+async function framesAt(chrome, tab, url) {
+  const frames =
+    (await chrome.webNavigation.getAllFrames({ tabId: tab.id })) ?? [];
+  const current = await chrome.tabs.get(tab.id);
+  if (current?.url !== url) {
+    throw new ToolError(`the tab left ${url} before its frames were read`);
+  }
+  return frames;
 }
 
 // The first `limit` UTF-16 code units of `text`, one fewer where the last of
@@ -122,45 +155,93 @@ export const TOOLS = {
     }));
   },
 
+  async list_frames(chrome, params) {
+    const url = text(params, "url");
+    const tab = await tabAt(chrome, url);
+    const frames = await framesAt(chrome, tab, url);
+    return frames
+      .filter((frame) => webUrl(frame.url))
+      .map((frame) => ({ url: frame.url, top: frame.frameId === 0 }));
+  },
+
   // The tab is found by its URL exactly, since the URL is what a person saw in
   // the question before the call. A tab whose URL only resembles it is a
   // different page.
   //
-  // The script says which document it read. The tab can move to another
-  // page between being found and being read, and that page is one nobody
-  // approved, so what was read is refused unless it is at the same URL.
+  // A frame is likewise found by the exact web URL list_frames returned. Two
+  // frames at that URL are refused because the question cannot distinguish
+  // them. The script says which document it read, and a framed read also checks
+  // that its outer tab did not move while the script ran.
   async read_page(chrome, params) {
     const url = text(params, "url");
-    const tabs = await chrome.tabs.query({});
-    const tab = tabs.find((tab) => tab.url === url);
-    if (!tab) {
-      throw new ToolError(`no open tab is at ${url}`);
+    const frameUrl =
+      params?.frame_url === undefined ? undefined : text(params, "frame_url");
+    const tab = await tabAt(chrome, url);
+    let frame;
+    if (frameUrl !== undefined) {
+      if (!webUrl(frameUrl)) {
+        throw new ToolError(
+          "frame_url must be an HTTP or HTTPS URL from list_frames",
+          INVALID_PARAMS,
+        );
+      }
+      const matches = (await framesAt(chrome, tab, url)).filter(
+        (candidate) => candidate.url === frameUrl,
+      );
+      if (matches.length === 0) {
+        throw new ToolError(`no frame in ${url} is at ${frameUrl}`);
+      }
+      if (matches.length > 1) {
+        throw new ToolError(`more than one frame is at ${frameUrl} in ${url}`);
+      }
+      [frame] = matches;
     }
     let injected;
     try {
       injected = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: () => ({
-          url: location.href,
-          title: document.title,
-          text: document.body?.innerText ?? "",
-        }),
+        target: {
+          tabId: tab.id,
+          ...(frame ? { documentIds: [frame.documentId] } : {}),
+        },
+        func: (expectedUrl) => {
+          if (location.href !== expectedUrl) {
+            return { url: location.href };
+          }
+          return {
+            url: location.href,
+            title: document.title,
+            text: document.body?.innerText ?? "",
+          };
+        },
+        args: [frameUrl ?? url],
       });
     } catch (error) {
       throw new ToolError(
-        `the page at ${url} cannot be read: ${error.message}`,
+        `the page at ${frameUrl ?? url} cannot be read: ${error.message}`,
       );
     }
     const page = injected?.[0]?.result;
     if (!page) {
-      throw new ToolError(`the page at ${url} returned nothing when read`);
+      throw new ToolError(
+        `the page at ${frameUrl ?? url} returned nothing when read`,
+      );
     }
-    if (page.url !== url) {
-      throw new ToolError(`the tab left ${url} before it was read`);
+    if (page.url !== (frameUrl ?? url)) {
+      const subject = frame ? "the frame" : "the tab";
+      throw new ToolError(
+        `${subject} left ${frameUrl ?? url} before it was read`,
+      );
+    }
+    if (frame) {
+      const current = await chrome.tabs.get(tab.id);
+      if (current?.url !== url) {
+        throw new ToolError(`the tab left ${url} before its frame was read`);
+      }
     }
     const truncated = page.text.length > PAGE_TEXT_LIMIT;
     return {
       url,
+      ...(frame ? { frame_url: frameUrl } : {}),
       title: page.title,
       text: truncated ? cut(page.text, PAGE_TEXT_LIMIT) : page.text,
       truncated,

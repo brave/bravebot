@@ -38,20 +38,24 @@ On macOS or Linux, from the repository root:
 5. Turn on the tools you want. In `brave://extensions`, choose **Details** on BraveBot, then
    **Extension options**. A switch saves as soon as it changes, and the next call uses it.
 
-A session offers `brave:get_platform_info`, `brave:list_tabs`, `brave:read_page`,
-`brave:search_history` and `brave:search_bookmarks`. It asks you to accept that list the first time,
-and again whenever the list changes, then asks you before each call, as it does for any server.
+A session offers `brave:get_platform_info`, `brave:list_tabs`, `brave:list_frames`,
+`brave:read_page`, `brave:search_history` and `brave:search_bookmarks`. It asks you to accept that
+list the first time, and again whenever the list changes, then asks you before each call, as it does
+for any server.
 
 ## What it may do
 
 The extension's options page has a switch for each tool. Only the platform check starts on. Listing
-and reading open tabs, and searching history and bookmarks, start off, since they reach what you
-have open, have visited and have saved. A tool that is off is refused before the browser is asked
-anything.
+tabs and their frames, reading a page or frame, and searching history and bookmarks start off,
+since they reach what you have open, have visited and have saved. A tool that is off is refused
+before the browser is asked anything.
 
-`read_page` finds the tab whose URL is exactly the one asked for, and returns up to 100,000
-characters of its text, saying when it cut a page short. Brave's own pages, such as settings, and
-the Web Store cannot be read.
+`list_frames` finds the tab whose URL is exactly the one asked for, and returns the HTTP and HTTPS
+URLs of its frames. Its result is shown to you and kept out of the session's planner: choose one URL
+and provide it in your next message. `read_page` reads the top page, or the exact `frame_url` you
+provided after `list_frames`, and returns up to 100,000 characters of its text, saying when it cut
+the text short. A duplicate frame URL is refused because it does not identify one frame. Brave's
+own pages, such as settings, and the Web Store cannot be read.
 
 What the extension returns reaches the session as any server's result does: untrusted, and private.
 

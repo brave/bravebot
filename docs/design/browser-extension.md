@@ -68,8 +68,10 @@ JSON-RPC between the MCP server and the extension:
 - request `{id, method, params}`
 - reply `{id, result}` or `{id, error}`, matched by `id`
 
-Initial tools: `list_tabs`, `navigate`, `read_page`, `search_history`,
-`search_bookmarks`, `semantic_search_history`.
+Initial tools: `get_platform_info`, `list_tabs`, `list_frames`, `read_page`,
+`search_history` and `search_bookmarks`. `read_page` can read the top page or one exact HTTP or
+HTTPS frame URL a person chose from `list_frames` and supplied in a later message; the planner does
+not read the untrusted list itself.
 
 ## Constraints
 
@@ -78,6 +80,6 @@ Initial tools: `list_tabs`, `navigate`, `read_page`, `search_history`,
   HTML, so a page fits the model's context.
 - **Availability:** if the extension isn't connected, fail tool calls
   with a clear error instead of hanging.
-- **Consent:** the extension's own UI gates sensitive tools (history,
-  bookmarks, semantic search) with a confirmation step or an allow-list.
-  The MCP layer doesn't enforce this.
+- **Consent:** the extension's own UI gates every tool that reaches tabs, frames, history or
+  bookmarks. A frame read names both its outer tab URL and its exact frame URL; one approval never
+  widens to every embedded origin. The MCP layer doesn't enforce this.
