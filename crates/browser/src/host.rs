@@ -402,8 +402,17 @@ struct RequestId {
     waiting_for_colon: bool,
     capturing: bool,
     capture_started: bool,
+    /// Whitespace seen between the id's tokens and not yet kept. A run of it is kept as one space,
+    /// and only where another token follows, so padding is not counted as part of the id while
+    /// `1 2` still does not read as `12`.
+    space_held: bool,
     captured: Vec<u8>,
     complete: bool,
+}
+
+/// Whitespace JSON allows between tokens, which Rust's ASCII whitespace widens with form feed.
+fn json_whitespace(byte: u8) -> bool {
+    matches!(byte, b' ' | b'\t' | b'\n' | b'\r')
 }
 
 impl RequestId {
@@ -419,13 +428,16 @@ impl RequestId {
                 self.capturing = false;
             }
 
-            if self.capturing
-                && !self.complete
-                && (self.capture_started || !byte.is_ascii_whitespace())
-            {
-                self.capture_started = true;
-                if self.captured.len() < framing::TO_EXTENSION_LIMIT {
-                    self.captured.push(byte);
+            if self.capturing && !self.complete {
+                if !self.in_string && json_whitespace(byte) {
+                    self.space_held = self.capture_started;
+                } else {
+                    if self.space_held {
+                        self.keep(b' ');
+                        self.space_held = false;
+                    }
+                    self.capture_started = true;
+                    self.keep(byte);
                 }
             }
 
@@ -475,6 +487,12 @@ impl RequestId {
                 b',' if self.depth == 1 => self.expecting_key = true,
                 _ => {}
             }
+        }
+    }
+
+    fn keep(&mut self, byte: u8) {
+        if self.captured.len() < framing::TO_EXTENSION_LIMIT {
+            self.captured.push(byte);
         }
     }
 
@@ -555,6 +573,11 @@ mod tests {
         assert_eq!(read(br#"{"nested":{"id":99},"id":"ours"}"#), "ours");
         assert_eq!(read(br#"{"padding":0,"\u0069d":7}"#), 7);
         assert_eq!(read(br#"{"identity":1}"#), Value::Null);
+        assert_eq!(read(b"{\"id\": \t5 \r\n,\"method\":\"x\"}"), 5);
+        assert_eq!(read(br#"{"id":[1 ,  2]}"#), json!([1, 2]));
+        assert_eq!(read(br#"{"id":"a  b"}"#), "a  b");
+        assert_eq!(read(br#"{"id":1 2}"#), Value::Null);
+        assert_eq!(read(b"{\"id\":\x0c5}"), Value::Null);
     }
 
     /// The bounds on a connection that has not presented the secret are the ones the spec states,

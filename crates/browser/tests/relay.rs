@@ -733,7 +733,36 @@ fn a_request_whose_id_is_too_long_to_keep_is_refused_under_no_id() {
     assert_eq!(extension.request()["params"], json!({"after": true}));
 }
 
-/// Installing writes one manifest naming this program and our extension alone, leaves any other
+/// Whitespace around an id is not part of it, so a line pushed over the limit by spaces after a short
+/// id is refused under that id, and the next request still reaches the extension.
+#[test]
+fn a_request_padded_after_its_id_is_refused_under_that_id() {
+    let directory = installed_for(OURS);
+    let extension = Extension::connect(directory.path(), OURS);
+    let mut peer = Peer::connect(directory.path(), &secret(directory.path()));
+
+    let padding = " ".repeat(framing::TO_EXTENSION_LIMIT + 8192);
+    for (id, line) in [
+        (
+            json!(5),
+            format!(r#"{{"id":5{padding},"method":"list_tabs"}}"#),
+        ),
+        (json!("a b"), format!(r#"{{"id":{padding}"a b"{padding}}}"#)),
+    ] {
+        writeln!(peer.writer, "{line}").unwrap();
+        let refused = peer.receive().unwrap();
+        assert_eq!(refused["id"], id);
+        assert!(
+            refused["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("limit")
+        );
+    }
+
+    peer.send(&json!({"id": 7, "method": "list_tabs", "params": {"after": true}}));
+    assert_eq!(extension.request()["params"], json!({"after": true}));
+}
 /// host's manifest as it was, and records the extension the host checks origins against.
 #[test]
 fn installing_writes_one_manifest_for_our_extension_alone() {

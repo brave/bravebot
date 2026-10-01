@@ -215,6 +215,7 @@ the rest of it is drained unread; JSON-RPC answers a request whose id it could n
 `verified-by: bravebot_browser::relay::a_request_over_the_limit_is_refused_and_never_reaches_the_extension`
 `verified-by: bravebot_browser::relay::a_request_far_over_the_limit_keeps_its_id_and_the_next_request`
 `verified-by: bravebot_browser::relay::a_request_whose_id_is_too_long_to_keep_is_refused_under_no_id`
+`verified-by: bravebot_browser::relay::a_request_padded_after_its_id_is_refused_under_that_id`
 `verified-by: bravebot_browser::relay::a_message_over_the_limit_from_the_extension_ends_the_host`
 `verified-by: bravebot_browser::framing::the_limits_are_one_megabyte_out_and_sixty_four_in`
 `verified-by: bravebot_browser::framing::a_message_over_the_limit_to_the_extension_is_refused_and_nothing_is_written`
