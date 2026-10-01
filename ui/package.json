@@ -26,6 +26,7 @@
     "drive:columns": "npm run bridge && electron-vite build && node scripts/drive-columns.mjs",
     "drive:vetting": "npm run bridge && electron-vite build && node scripts/drive-vetting.mjs",
     "drive:fetch": "npm run bridge && electron-vite build && node scripts/drive-fetch.mjs",
+    "drive:language-server": "npm run bridge && electron-vite build && node scripts/drive-language-server.mjs",
     "drive:remembered-trust": "npm run bridge && electron-vite build && node scripts/drive-remembered-trust.mjs",
     "drive:run": "npm run bridge && electron-vite build && node scripts/drive-run.mjs",
     "drive:ask": "npm run bridge && electron-vite build && node scripts/drive-ask.mjs",

@@ -148,9 +148,9 @@ Honest limits. Two things could eventually want an upstream change, and neither 
 - **Structured `doctor` output.** The checks live in `crates/cli/src/main.rs`, a binary,
   so they cannot be called as a library. v1 shells out to `bravebot doctor` and shows its text
   (§7.3). A small upstream extraction would be nicer and is optional.
-- **New approval types.** Command and fetch approval are implemented. The language-server
-  and manifest-plan requests are currently refused; adding UI support requires adapting
-  the bridge, not editing upstream.
+- **New approval types.** Command, fetch and language-server approval are implemented. The
+  manifest-plan request is currently refused; adding UI support requires adapting the
+  bridge, not editing upstream.
 
 If anything else appears to need an upstream edit, that is a signal the bridge is
 reaching for something it should not, and it should be raised rather than patched.
@@ -616,11 +616,12 @@ See §8. Returns `{}`. An unknown or already-answered `request` errors
 
 #### Other decision replies
 
-`run.reply`, `output.reply`, `vouch.reply`, `fetch.reply` and `ask.reply` all require
-`session` and `request`, and must match the pending question's kind as well as its ID.
-`run.reply` accepts `decision` and `remember`; only an approval with literal
-`remember: true` records a command grant. Output, vouch and fetch replies accept `decision`.
-A fetch reply has no `remember`: an approval covers the one URL it was given for.
+`run.reply`, `output.reply`, `vouch.reply`, `fetch.reply`, `server.reply` and `ask.reply`
+all require `session` and `request`, and must match the pending question's kind as well as
+its ID. `run.reply` accepts `decision` and `remember`; only an approval with literal
+`remember: true` records a command grant. Output, vouch, fetch and server replies accept
+`decision`. A fetch reply has no `remember`: an approval covers the one URL it was given
+for. A server reply has none either: an approval lasts as long as the session does.
 `ask.reply` accepts an `answers` array, whose entries contain `typed` text or `chosen`
 indices; unreadable entries decline. Choices are fitted to the question before use.
 
@@ -727,6 +728,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `output.request` | `{ request, command, reference, lines, output, summary }` | admit command output |
 | `vouch.request` | preview and label fields from `wire::vouch_request` | trust a quarantined path |
 | `fetch.request` | `{ request, url, host, ambient, summary }` | fetch one URL; `host` is the agent's reading of `url` and is drawn as sent |
+| `server.request` | `{ request, language, program, workspace, runsBuildTooling, summary }` | start a language server for the session |
 | `ask.request` | `{ request, prompts }` | user questions |
 | `trust.request` | `{ directory, keeping }` | initial project trust; `keeping` as §9 |
 | `turn.done` | see §8.2 | `Ok(Outcome)` |
@@ -974,8 +976,8 @@ the directory was made.
 
 ## 11. Current limits
 
-- Language-server and manifest-plan approval requests are refused until their UI is
-  implemented. Command, output, vouch, fetch and question approvals are implemented.
+- Manifest-plan approval requests are refused until their UI is implemented. Command,
+  output, vouch, fetch, language-server and question approvals are implemented.
 - Replies arrive whole in `turn.done`; output-token events report counts, not text.
 - MCP configuration, subscription import and skills authoring have no dedicated UI.
 - File browsing, previews and attachments are Electron IPC features, not RPC methods.
@@ -1153,3 +1155,14 @@ Still open:
   projection in `wire.rs`; a row in `Bridge::dispatch`; and, in the window, a row in `REPLY`
   in `src/renderer/transcript.ts` with its entry, its card and its line in the main process's
   allow-list, which `scripts/fetch-card.test.mjs` holds to each other.
+- `server.request` carries `request`, `language`, `program`, `workspace`, `runsBuildTooling`
+  and `summary`. `program` is the absolute path the server's name resolved to. The name comes
+  from a table in the agent, so nothing a turn read chooses what runs. `runsBuildTooling` is
+  sent as the fact, and a front end says what it means: code from the dependency tree runs
+  with the person's own access. `server.reply` carries the session, request and explicit
+  decision, and its kind is distinct from every other reply's.
+- The servers a session started are held by the session in the bridge, taken by each turn and
+  put back after it, so a language approved on one message is not asked about on the next and
+  its index is built once. They are never written to a record: a reopened or forked session
+  starts with none and asks. Closing the session stops them, and so does the process ending.
+

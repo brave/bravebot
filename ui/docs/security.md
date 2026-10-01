@@ -36,8 +36,8 @@ it under whatever the trust map says about that path. See
 
 ## Decisions and refusal
 
-The transcript presents write, command, command-output, path-vouch, fetch and user-question
-requests. Replies must match both the pending request ID and its kind. Within a turn, an unknown
+The transcript presents write, command, command-output, path-vouch, fetch, language-server
+and user-question requests. Replies must match both the pending request ID and its kind. Within a turn, an unknown
 or consumed ID cannot approve another request. Clients discard pending questions
 when a turn ends because IDs may recur in later turns. Malformed decisions decline;
 question answers are checked against the offered choices.
@@ -51,9 +51,15 @@ A fetch approval is consent to one request to the host shown, which the card dra
 line of its own as the agent read it out of the address. It trusts nothing that comes
 back, which stays confined, and it is not remembered: the next fetch asks again.
 
-The agent also has language-server and manifest-plan approvals. The UI does not present
-those requests yet; the bridge refuses them without taking an answer intended for another
-pending question.
+A language-server approval starts one process for the conversation, with the person's own
+access and unconfined. The card names the binary the server's name resolved to and the tree
+it would index, and says so where starting it runs build tooling, since that is code from
+the dependency tree running as the person. The bridge holds the servers a conversation
+started and stops them when it closes. An approval is no claim about what a server reports:
+a place in a file reaches the model and the text at it stays confined.
+
+The agent also has a manifest-plan approval. The UI does not present that request yet; the
+bridge refuses it without taking an answer intended for another pending question.
 
 Vetted-content approval releases only the displayed bytes once; it does not create a trust
 rule for future reads. Checker verdicts are advisory. Checking already sends the content

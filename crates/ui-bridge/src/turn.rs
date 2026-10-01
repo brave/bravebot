@@ -43,6 +43,8 @@ pub enum Kind {
     Vet,
     /// Whether to fetch one URL, which is consent to talk to its host and to nothing it sends back.
     Fetch,
+    /// Whether to start a language server for the session.
+    Server,
     Ask,
 }
 
@@ -76,6 +78,7 @@ pub enum Reply {
     Vouch(Decision),
     Vet(Decision),
     Fetch(Decision),
+    Server(Decision),
     /// One answer per question, in the order they were asked. Empty means nobody could be
     /// asked — see [`Confirmer::ask_user`].
     Ask(Vec<Answer>),
@@ -90,6 +93,7 @@ impl Reply {
             Reply::Vouch(_) => Kind::Vouch,
             Reply::Vet(_) => Kind::Vet,
             Reply::Fetch(_) => Kind::Fetch,
+            Reply::Server(_) => Kind::Server,
             Reply::Ask(_) => Kind::Ask,
         }
     }
@@ -105,7 +109,8 @@ impl Reply {
             | Reply::Output(decision)
             | Reply::Vouch(decision)
             | Reply::Vet(decision)
-            | Reply::Fetch(decision) => Some(*decision),
+            | Reply::Fetch(decision)
+            | Reply::Server(decision) => Some(*decision),
             Reply::Run(_) | Reply::Ask(_) => None,
         }
     }
@@ -128,6 +133,7 @@ impl Kind {
             Kind::Vouch => Reply::Vouch(Decision::Reject),
             Kind::Vet => Reply::Vet(Decision::Reject),
             Kind::Fetch => Reply::Fetch(Decision::Reject),
+            Kind::Server => Reply::Server(Decision::Reject),
             // No answers at all, which is how this question says nobody was asked.
             Kind::Ask => Reply::Ask(Vec::new()),
         }
@@ -470,8 +476,18 @@ impl Confirmer for BridgeConfirmer {
         Decision::Reject
     }
 
-    fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
-        Decision::Reject
+    /// Ask whether to start a language server.
+    ///
+    /// The request names the language, the resolved binary, the tree it would index, and whether
+    /// starting it runs build tooling. Build tooling runs code from the dependency tree with the
+    /// person's own access (LSP-5).
+    ///
+    /// An approval starts one process for the session and is not remembered after it. It does
+    /// not change how the server's answers are labelled.
+    fn confirm_server(&mut self, request: &ServerRequest) -> Decision {
+        self.yes_or_no(Kind::Server, "server.request", |id| {
+            wire::server_request(id, request)
+        })
     }
 
     fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {

@@ -1421,6 +1421,8 @@ export function apply(
         return { ...old, entries: [...old.entries, t.askedVet(message.data)] }
       case 'fetch.request':
         return { ...old, entries: [...old.entries, t.askedFetch(message.data)] }
+      case 'server.request':
+        return { ...old, entries: [...old.entries, t.askedServer(message.data)] }
       case 'vouch.request':
         return { ...old, entries: [...old.entries, t.askedVouch(message.data)] }
       case 'ask.request':

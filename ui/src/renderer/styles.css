@@ -935,6 +935,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .confirm.fetch .confirm-head .path { overflow-wrap: anywhere; }
 .confirm.fetch .fetch-host { border-top: 0; color: var(--ink); }
 .confirm.fetch .fetch-host code { font-family: var(--mono); font-weight: 600; }
+/* A server that runs build tooling gets the warning border a command releasing private data gets. */
+.confirm.server.builds { border-color: var(--warn); border-width: 2px; }
+.confirm.server .confirm-head .server-language { font-family: inherit; }
+.confirm.server .permission-scope code { overflow-wrap: anywhere; }
 .confirm.output .confirm-head .intent,
 .confirm.vouch .confirm-head .intent { color: var(--confine); }
 

@@ -23,8 +23,8 @@
 //! typed.
 
 use bravebot_agent::confirm::{
-    Decision, FetchRequest, Intent, OutputRequest, RunDecision, RunRequest, VetRequest,
-    VouchRequest, WriteRequest,
+    Decision, FetchRequest, Intent, OutputRequest, RunDecision, RunRequest, ServerRequest,
+    VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::conversation::{Composed, Said};
 use bravebot_agent::diff::Change;
@@ -454,6 +454,25 @@ pub fn fetch_request(id: u64, request: &FetchRequest) -> Value {
             .iter()
             .map(|spent| json!({ "authority": spent.authority.name(), "named": spent.named }))
             .collect::<Vec<_>>(),
+        "summary": request.summary(),
+    })
+}
+
+/// A language server the planner would like started.
+///
+/// `program` is the absolute path the server's name resolved to. The agent picks the name from
+/// its own table, so nothing a turn read chooses what runs. A front end draws the path as sent.
+///
+/// `runsBuildTooling` is sent as a boolean and the front end writes the sentence. When it is
+/// true, starting the server runs code from the dependency tree with the person's own access,
+/// as a build does. The card must say so (LSP-5).
+pub fn server_request(id: u64, request: &ServerRequest) -> Value {
+    json!({
+        "request": id,
+        "language": request.language,
+        "program": request.program,
+        "workspace": request.workspace,
+        "runsBuildTooling": request.runs_build_tooling,
         "summary": request.summary(),
     })
 }

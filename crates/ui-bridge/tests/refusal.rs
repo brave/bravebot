@@ -485,21 +485,12 @@ fn cancelling_before_a_question_cannot_leave_it_waiting() {
 /// Newly added upstream powers stay denied until the window can present their consent.
 #[test]
 fn unsupported_approvals_refuse_without_consuming_other_answers() {
-    use bravebot_agent::confirm::{ManifestRequest, ServerRequest};
+    use bravebot_agent::confirm::ManifestRequest;
     let mut h = harness();
     h.running
         .answers
         .send(Reply::Write(Decision::Approve))
         .unwrap();
-    assert_eq!(
-        h.confirmer.confirm_server(&ServerRequest {
-            language: "Rust",
-            program: "/usr/bin/rust-analyzer".into(),
-            workspace: "/project".into(),
-            runs_build_tooling: true,
-        }),
-        Decision::Reject
-    );
     assert_eq!(
         h.confirmer.confirm_manifest(&ManifestRequest {
             task: "work".into(),
@@ -602,6 +593,7 @@ fn a_fetch_is_put_to_the_window_and_takes_no_answer_but_its_own() {
         Reply::Output(Decision::Approve),
         Reply::Vouch(Decision::Approve),
         Reply::Vet(Decision::Approve),
+        Reply::Server(Decision::Approve),
     ] {
         let mut h = harness();
         h.running.answers.send(other.clone()).unwrap();
@@ -635,7 +627,14 @@ fn an_approved_fetch_answers_no_other_question() {
     let harness = harness();
     let running = harness.running;
 
-    for kind in [Kind::Write, Kind::Run, Kind::Output, Kind::Vouch, Kind::Vet] {
+    for kind in [
+        Kind::Write,
+        Kind::Run,
+        Kind::Output,
+        Kind::Vouch,
+        Kind::Vet,
+        Kind::Server,
+    ] {
         *running.pending.lock().expect("not poisoned") = Some(Question { id: 1, kind });
         assert!(
             !running.answer(1, Reply::Fetch(Decision::Approve)),
@@ -682,6 +681,7 @@ fn every_kind_of_question_is_refused_in_its_own_shape() {
         Kind::Vouch,
         Kind::Vet,
         Kind::Fetch,
+        Kind::Server,
         Kind::Ask,
     ] {
         let refusal = kind.refusal();
@@ -695,4 +695,121 @@ fn every_kind_of_question_is_refused_in_its_own_shape() {
             other => assert_eq!(other.decision(), Some(Decision::Reject), "{kind:?}"),
         }
     }
+}
+
+fn a_server() -> bravebot_agent::confirm::ServerRequest {
+    bravebot_agent::confirm::ServerRequest {
+        language: "Rust",
+        program: "/home/someone/.cargo/bin/rust-analyzer".into(),
+        workspace: "/home/someone/project".into(),
+        runs_build_tooling: true,
+    }
+}
+
+/// A server nobody could be asked about is one that does not start.
+#[test]
+fn an_unanswerable_server_refuses() {
+    let mut harness = harness();
+    drop(harness.running);
+
+    assert_eq!(
+        harness.confirmer.confirm_server(&a_server()),
+        Decision::Reject,
+        "a process with a person's own access started on nobody's word"
+    );
+}
+
+/// The question goes out under its own name, carrying what would run and what running it means,
+/// and only an answer to a server answers it.
+///
+/// A yes here starts a process that outlives the question and, for some languages, runs code out
+/// of the dependency tree. Every other approval waiting is a yes of the same shape about
+/// something narrower, so one read as this would be that grant made on a person's word about one
+/// write, one command's output, one file or one URL.
+#[test]
+fn a_server_is_put_to_the_window_and_takes_no_answer_but_its_own() {
+    for other in [
+        Reply::Write(Decision::Approve),
+        Reply::Run(RunDecision::approve_always()),
+        Reply::Output(Decision::Approve),
+        Reply::Vouch(Decision::Approve),
+        Reply::Vet(Decision::Approve),
+        Reply::Fetch(Decision::Approve),
+    ] {
+        let mut h = harness();
+        h.running.answers.send(other.clone()).unwrap();
+        assert_eq!(
+            h.confirmer.confirm_server(&a_server()),
+            Decision::Reject,
+            "{other:?} started a language server"
+        );
+        assert!(h.running.pending.lock().unwrap().is_none());
+    }
+
+    let mut h = harness();
+    h.running
+        .answers
+        .send(Reply::Server(Decision::Approve))
+        .unwrap();
+    assert_eq!(h.confirmer.confirm_server(&a_server()), Decision::Approve);
+
+    let events = h.events.lock().unwrap();
+    let [asked] = events.as_slice() else {
+        panic!("one question was expected, and the window was sent {events:?}");
+    };
+    assert_eq!(asked.name, "server.request");
+    assert_eq!(asked.data["language"], "Rust");
+    assert_eq!(
+        asked.data["program"],
+        "/home/someone/.cargo/bin/rust-analyzer"
+    );
+    assert_eq!(asked.data["workspace"], "/home/someone/project");
+    assert_eq!(asked.data["runsBuildTooling"], true);
+}
+
+/// An approval of a server is an answer to a server and to nothing else that is waiting.
+#[test]
+fn an_approved_server_answers_no_other_question() {
+    let harness = harness();
+    let running = harness.running;
+
+    for kind in [
+        Kind::Write,
+        Kind::Run,
+        Kind::Output,
+        Kind::Vouch,
+        Kind::Vet,
+        Kind::Fetch,
+    ] {
+        *running.pending.lock().expect("not poisoned") = Some(Question { id: 1, kind });
+        assert!(
+            !running.answer(1, Reply::Server(Decision::Approve)),
+            "a server approval answered a waiting {kind:?}"
+        );
+    }
+}
+
+/// Refused in its own shape, for the reason a run is: a refusal of another kind is discarded by the
+/// kind check, and the turn would wait on a channel nothing else writes to.
+#[test]
+fn refusing_a_pending_server_reaches_the_turn_as_a_server() {
+    let mut harness = harness();
+    let running = harness.running;
+    let pending = Arc::clone(&running.pending);
+
+    let answerer = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            if pending.lock().expect("not poisoned").is_some() {
+                running.refuse_pending();
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("the server was never registered as pending");
+    });
+
+    let decision = harness.confirmer.confirm_server(&a_server());
+    answerer.join().expect("the answerer should not panic");
+    assert_eq!(decision, Decision::Reject);
 }

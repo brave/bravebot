@@ -182,6 +182,13 @@ const CARDS = {
     // question is put before anything is fetched, so no byte of a reply is on the card.
     why: 'the address the planner wrote and the host the agent read out of it, asked about before any reply exists',
   },
+  server: {
+    entry: () => t.askedServer({ request: 1, language: FORGED_CHROME, program: FORGED_CHROME, workspace: FORGED_CHROME, runsBuildTooling: true, summary: 'start a language server' }),
+    marks: null,
+    // docs/specs/tools/lsp.md: the language and the program come from a table in the agent, the
+    // path is what `$PATH` resolved that name to, and the workspace is the session's own root.
+    why: 'a language and a program out of the agent’s own table, the path that name resolved to, and the project’s root, asked about before any server has answered',
+  },
   ask: {
     entry: () => t.askedQuestions({
       request: 1,
