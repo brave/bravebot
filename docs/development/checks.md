@@ -28,9 +28,9 @@ Choose how much to run:
 
 | Command | Coverage |
 |---|---|
-| `make check-all-local` | Script selftests, host formatting, Clippy and Rust tests, specs, security rules, locales, versions, toolchain age, docs, npm lockfiles, dependency policy, desktop UI and reviewdog. No Docker. |
+| `make check-all-local` | Script selftests, host formatting, Clippy and Rust tests, specs, security rules, locales, versions, narration, toolchain age, docs, npm lockfiles, dependency policy, desktop UI and reviewdog. No Docker. |
 | `make check-all` | Everything in `check-all-local`, plus Docker checks for minimum Rust, Windows Clippy and Linux. |
-| `make check-affected` | Script selftests, specs, security rules, locales, versions and reviewdog, plus each host check this branch's changes need, chosen the way CI chooses its jobs. No Docker. |
+| `make check-affected` | Script selftests, specs, security rules, locales, versions, narration and reviewdog, plus each host check this branch's changes need, chosen the way CI chooses its jobs. No Docker. |
 | `make check-affected-containers` | The Docker checks this branch's changes need: minimum Rust, Windows Clippy and Linux for a change to Rust, and none otherwise. |
 
 Before a PR, run the checks relevant to your change and state which command passed.
@@ -46,8 +46,8 @@ the Rust build.
 CI runs its heavier jobs only where a change could fail them.
 [contrib/affected-checks.py](../../contrib/affected-checks.py) reads the paths a pull request
 touches and says which of Rust, the desktop app, the cross-builds, the website, the npm lockfiles
-and the dependency policy they could affect. The specs, security, locales and versions jobs take
-seconds and run on every change. A change to a crate needs the desktop jobs when the desktop app
+and the dependency policy they could affect. The specs, security, locales, versions and narration
+jobs take seconds and run on every change. A change to a crate needs the desktop jobs when the desktop app
 builds that crate, which is any crate the two bridge crates name, however far down. A job skipped
 by its condition reports success, and branch protection counts that as passing, so every doubt runs
 the job: a path no rule names runs everything, and so do a change to the workflows, the Makefile or
@@ -189,15 +189,28 @@ check` runs it and so does CI, because the tagging path's own refusal fires on r
 is long after the pull request that moved one file and not the others. It carries a `--selftest`,
 which `make check-versions` runs first.
 
+`make check-narration` fails a pull request whose commit messages, title, body or added lines
+contain a first-person phrase from a fixed list, which is the rule in [commits.md](commits.md)
+against writing about your own process. The list is in
+[../../contrib/check-narration.py](../../contrib/check-narration.py). CI runs it on every pull
+request and again when the title or body is edited, which is why it is its own workflow,
+`.github/workflows/narration.yml`. The fix for a hit is to reword it, since nothing allows one.
+Locally it reads this branch's commits, uncommitted edits and untracked files against the merge
+base with `upstream/main`, or `origin/main` without one, or `BASE=<ref>`, and reads a title and body
+only where `PR_TITLE` and `PR_BODY` are set. It carries a `--selftest`, which `make check-narration`
+runs first.
+
 `make check-npm` installs from the lockfile and lints it, as CI does, and runs the installer test
 under `npm/tests`, which holds the release origin the published package downloads from to this
 repository whatever the environment says. That test is the one thing in the tree that runs a
 clause of [../specs/releases.md](../specs/releases.md) as code, so run this target for a change to
 the published wrapper as well as to a lockfile. `make check-deps` decides
 `deny.toml`: an advisory against anything in the tree, a licence the binary cannot ship, a crate the
-build compiles at two versions without a recorded reason, and a dependency from anywhere but
-crates.io. CI runs this same target on a pull request that touches a manifest, the lockfile or
-`deny.toml`, on main, and once a day, since an advisory arrives without a commit.
+build compiles at two versions without a recorded reason, a dependency from anywhere but
+crates.io, and a regex engine. It also fails an exception in `deny.toml` that has no `reason`,
+which [../../contrib/check-deny-reasons.py](../../contrib/check-deny-reasons.py) decides before
+cargo-deny is built. CI runs this same target on a pull request that touches a manifest, the
+lockfile or `deny.toml`, on main, and once a day, since an advisory arrives without a commit.
 `make check-reviewdog` is the [security scan](security-scan.md).
 
 `make check-windows` lints the target that ships to Windows, `x86_64-pc-windows-gnu`, over every
