@@ -39,3 +39,11 @@ test('the Android host forwards only the fields manifest.run reads', () => {
   const android = new Set([...block(host, '"manifest.run" ->', '"turn.send"').matchAll(/put\("(\w+)"/g)].map(m => m[1]))
   assert.deepEqual([...android].sort(), [...desktop].sort())
 })
+
+test('the app asks the page about Back by the name the page answers to', () => {
+  const activity = readFileSync('../android/app/src/main/java/com/brave/bravebot/MainActivity.kt', 'utf8')
+  const shim = readFileSync('src/android/bravebot.ts', 'utf8')
+  const called = activity.match(/BACK_SCRIPT = "window\.(\w+)\?\.\(\) === true"/)?.[1]
+  assert.ok(called, 'MainActivity names no Back function')
+  assert.match(shim, new RegExp(`window\\.${called} = goBack`))
+})

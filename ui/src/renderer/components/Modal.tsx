@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
+import { useBack } from '../back'
 import { Dialog } from '../nala'
 
 const focusableControls = (dialog: HTMLElement): HTMLElement[] => {
@@ -79,6 +80,9 @@ export function Modal({
   const previousFocus = useRef<HTMLElement | null>(returnTarget())
 
   const host = useRef<HTMLElement>(null)
+  // A dialog with no way to close it is a question that must be answered: Back is consumed, not
+  // passed on to leave the app behind it.
+  useBack(true, () => onClose?.())
 
   // Leo closes on any click whose coordinates fall outside the dialog, and a click made from the
   // keyboard (Space or Enter on a button) carries none, so it would close the dialog it is in.

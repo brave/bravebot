@@ -20,6 +20,7 @@ import { SessionInfo, type SessionInfoValue, type SessionStatus } from './compon
 import { FIND_EVENT, FOCUS_COMPOSER_EVENT, Transcript } from './components/Transcript'
 import { Context } from './components/Context'
 import { Gutter, useColumns } from './components/Gutter'
+import { useBack } from './back'
 import { isCompact, shown } from './columns'
 import { TrustPrompt } from './components/TrustPrompt'
 import { Unconfigured } from './components/Unconfigured'
@@ -1248,6 +1249,10 @@ export function App(): React.JSX.Element {
     closeDrawer()
     return stableShowSession(...args)
   })
+  // Back puts away the drawer, and the context panel where it lies over the conversation; beside
+  // it, on a wide window, the panel is a column and nothing to go back from.
+  useBack(isCompact() && !collapsed.left, () => toggle('left'))
+  useBack(isCompact() && !collapsed.right, () => toggle('right'))
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Escape' && isCompact() && !collapsed.left) {

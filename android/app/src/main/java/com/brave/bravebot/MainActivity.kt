@@ -90,10 +90,9 @@ class MainActivity : Activity() {
     /**
      * Back closes whatever the page has open before it leaves the app.
      *
-     * The page is asked first, as an Escape key: the drawer, a dialog and the context panel all
-     * already close on Escape, and say so by preventing its default. Only a press nothing in the
-     * page claimed goes on to the system. The agent belongs to the process, so leaving the
-     * window does not end a turn.
+     * The page keeps a stack of what is open (a dialog, a menu, the drawer) and closes the newest
+     * when asked; only a press it had nothing to close for goes on to the system. The agent
+     * belongs to the process, so leaving the window does not end a turn.
      */
     @Deprecated("Still delivered to apps that have not opted into predictive back")
     override fun onBackPressed() {
@@ -118,10 +117,6 @@ class MainActivity : Activity() {
     private companion object {
         const val ORIGIN_HOST = WebViewAssetLoader.DEFAULT_DOMAIN
         const val ORIGIN = "https://$ORIGIN_HOST"
-        const val BACK_SCRIPT = """(() => {
-            const press = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
-            ;(document.activeElement ?? document.body).dispatchEvent(press)
-            return press.defaultPrevented
-        })()"""
+        const val BACK_SCRIPT = "window.bravebotBack?.() === true"
     }
 }

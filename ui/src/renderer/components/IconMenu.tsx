@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useBack } from '../back'
 import { ButtonMenu, type IconName } from '../nala'
 import { IconButton } from './IconButton'
 
@@ -26,6 +27,7 @@ export function IconMenu({ icon, label, tooltip, shortcut, disabled, className, 
   'data-test'?: string
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
+  useBack(open, () => setOpen(false))
   const trigger = useRef<HTMLElement>(null)
   const reason = useRef('explicit')
   useEffect(() => {

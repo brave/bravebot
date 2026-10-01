@@ -26,6 +26,7 @@ import { parseExperience, type Experience } from '../shared/experience'
 import { parseLayout } from '../shared/layout'
 import { parseView } from '../shared/view'
 import { parseAppearance, type Appearance } from '../shared/theme'
+import { goBack } from '../renderer/back'
 
 interface HostChannel {
   postMessage(message: string): void
@@ -35,6 +36,8 @@ interface HostChannel {
 declare global {
   interface Window {
     BravebotHost?: HostChannel
+    /** Called by the app for each system Back press; false lets the press leave the app. */
+    bravebotBack?: () => boolean
   }
 }
 
@@ -207,3 +210,4 @@ const api: BravebotApi = {
 }
 
 Object.defineProperty(window, 'bravebot', { value: Object.freeze(api), writable: false })
+window.bravebotBack = goBack

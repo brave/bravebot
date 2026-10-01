@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ModelCatalogue, ModelOption } from '../../shared/protocol'
+import { useBack } from '../back'
 import { setExperience, useExperience } from '../experience'
 import { rememberCatalogue } from '../context-window'
 import { Alert, Button, ButtonMenu, Hr, Icon, Input, Label, ProgressRing, type IconName } from '../nala'
@@ -60,6 +61,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
     setOpen(false)
     trigger.current?.focus()
   }
+  useBack(open, close)
 
   useEffect(() => {
     if (!open) return
