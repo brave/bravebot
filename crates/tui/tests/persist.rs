@@ -485,6 +485,69 @@ fn a_pick_nothing_serves_is_set_aside_and_named() {
     });
 }
 
+/// BACKEND-48. A recorded pick the machine's managed layer refuses is set aside for the configured
+/// model, the transcript says which pick and names the file that refused it, and the record is left
+/// as it is.
+///
+/// The session rather than `pick` alone, because what a person in this case sees is the transcript
+/// line at the top of a session they did not expect to be on another model, and the sentence has to
+/// say an administrator's file refused it rather than that nothing serves it. The sibling test above
+/// pins the other reason a pick is set aside, and the two must not come to say the same thing.
+#[test]
+fn a_pick_the_managed_layer_refuses_is_set_aside_and_names_the_file() {
+    with_temp_home("model-refused", || {
+        // A gateway serving the configured model, so there is something for the pick to be set aside
+        // for: a default nothing serves is the other clause's case and would leave the pick in force.
+        let serde_json::Value::Object(block) = serde_json::json!({"provider": {"openrouter": {
+            "env": ["A_TOKEN_VARIABLE"],
+            "options": {"baseURL": "https://openrouter.example.invalid/api/v1"},
+            "models": {"an-allowed-model": {}}
+        }}}) else {
+            panic!("not an object");
+        };
+        let mut config = a_config(|key| match key {
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("https://ai-chat.bsg.brave.com"),
+            _ => None,
+        });
+        config.providers = bravebot_config::provider::Provider::all(&block);
+        config.default_model = "an-allowed-model".to_string();
+
+        // Through the layer that parses one, so the test cannot agree with the implementation about
+        // a shape the file never had.
+        let managed_file = store::directory()
+            .expect("a home")
+            .parent()
+            .expect("the scratch home")
+            .join("managed.json");
+        std::fs::write(
+            &managed_file,
+            r#"{"models": {"deny": ["an-expensive-arn"]}}"#,
+        )
+        .expect("a managed file");
+        config.models = bravebot_config::Managed::at(&managed_file).models().clone();
+
+        store::save_model("an-expensive-arn");
+        let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+        session.adopt_model(&settings("{}", "{}"), &config);
+
+        assert_eq!(session.model(), None, "the refused pick stayed in force");
+        let said = session
+            .transcript
+            .last()
+            .map(|entry| entry.text.clone())
+            .expect("a line about the pick");
+        assert!(
+            said.contains("an-expensive-arn") && said.contains(&managed_file.display().to_string()),
+            "the line named neither the pick nor the file that refused it: {said}"
+        );
+        assert!(
+            !said.contains("no configured service"),
+            "the refusal was reported as nothing serving the model: {said}"
+        );
+        assert_eq!(store::load_model().as_deref(), Some("an-expensive-arn"));
+    });
+}
+
 /// The effort choice outlives the session that made it, the same way the model choice does.
 #[test]
 fn a_chosen_effort_is_read_back_next_session() {

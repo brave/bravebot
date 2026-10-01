@@ -133,8 +133,11 @@ pub fn session(skip_permissions: bool, agent: Option<String>) -> ExitCode {
         bravebot_session::store::model(bravebot_session::store::load_model(), &settings),
     );
     let set_aside = match &pick {
-        bravebot_agent::backend::Pick::SetAside(recorded) => Some(recorded.clone()),
-        _ => None,
+        bravebot_agent::backend::Pick::SetAside(recorded) => Some((recorded.clone(), None)),
+        bravebot_agent::backend::Pick::Refused { recorded, reason } => {
+            Some((recorded.clone(), Some(reason.clone())))
+        }
+        bravebot_agent::backend::Pick::Absent | bravebot_agent::backend::Pick::InForce(_) => None,
     };
     let model = pick.into_model();
     let mut asking = Prompting::new(std::io::BufReader::new(std::io::stdin()), std::io::stderr());
@@ -146,8 +149,15 @@ pub fn session(skip_permissions: bool, agent: Option<String>) -> ExitCode {
             .clone()
             .unwrap_or_else(|| config.default_model.clone())
     ));
-    if let Some(recorded) = set_aside {
-        asking.say(&t!(session_model_pick_set_aside, model = recorded));
+    if let Some((recorded, refused)) = set_aside {
+        asking.say(&match refused {
+            Some(reason) => t!(
+                session_model_pick_refused,
+                model = recorded,
+                reason = reason
+            ),
+            None => t!(session_model_pick_set_aside, model = recorded),
+        });
     }
     for problem in &rejected {
         asking.say(&t!(

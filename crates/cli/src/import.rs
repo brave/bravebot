@@ -60,18 +60,26 @@ impl Looked {
 
 /// Where a start would be refused for naming no model service, offer the import first, and end the
 /// start unless a service answers after it. Both front ends open their session through this.
+///
+/// A model the machine-level layer refuses ends the start here instead, and no import is offered. No
+/// service these sources configure would make the request, so every answer to the question would be
+/// refused, and the file that refused is not this person's to write (BACKEND-48).
 pub(crate) fn before_the_session(config: &mut Config) -> Option<ExitCode> {
-    let bravebot_agent::backend::Serving::NothingConfigured {
-        subscription,
-        a_service_is_configured,
-    } = bravebot_agent::backend::serving(
-        config,
-        &bravebot_net::Egress::new(),
-        &crate::model_for_this_run(None, config),
-    )
-    else {
-        return None;
-    };
+    let model = crate::model_for_this_run(None, config);
+    let (subscription, a_service_is_configured) =
+        match bravebot_agent::backend::serving(config, &bravebot_net::Egress::new(), &model) {
+            bravebot_agent::backend::Serving::Configured => return None,
+            bravebot_agent::backend::Serving::Refused { file, why } => {
+                return Some(fail(
+                    Ending::Configuration,
+                    crate::managed_refusal(&model, &file, why),
+                ));
+            }
+            bravebot_agent::backend::Serving::NothingConfigured {
+                subscription,
+                a_service_is_configured,
+            } => (subscription, a_service_is_configured),
+        };
     match at_the_start(a_service_is_configured) {
         Start::Serving(imported) => {
             *config = *imported;
@@ -175,11 +183,8 @@ fn at_the_start(a_service_is_configured: bool) -> Start {
     for provider in &unset {
         asking.say(&unset_line(provider, &file, true));
     }
-    match bravebot_agent::backend::serving(
-        &config,
-        &bravebot_net::Egress::new(),
-        &crate::model_for_this_run(None, &config),
-    ) {
+    let model = crate::model_for_this_run(None, &config);
+    match bravebot_agent::backend::serving(&config, &bravebot_net::Egress::new(), &model) {
         bravebot_agent::backend::Serving::NothingConfigured {
             subscription,
             a_service_is_configured,
@@ -191,7 +196,14 @@ fn at_the_start(a_service_is_configured: bool) -> Start {
                 &Looked::default(),
             ),
         )),
-        _ => Start::Serving(Box::new(config)),
+        // An import can put a model in force that the layer refuses, the entry it wrote naming one,
+        // so the answer is read again here rather than taken from the start of this function
+        // (BACKEND-48).
+        bravebot_agent::backend::Serving::Refused { file, why } => Start::Ended(fail(
+            Ending::Configuration,
+            crate::managed_refusal(&model, &file, why),
+        )),
+        bravebot_agent::backend::Serving::Configured => Start::Serving(Box::new(config)),
     }
 }
 
@@ -1302,6 +1314,58 @@ mod tests {
         let file = written(&scratch);
         assert!(!file.contains("AWS_REGION"), "{file}");
         assert!(!file.contains("provider"), "{file}");
+    }
+
+    /// BACKEND-48: an interactive start whose model the machine-level layer refuses is ended rather
+    /// than opened, and says which file refused it.
+    ///
+    /// The interface and a session in lines both open through [`before_the_session`], and nothing
+    /// after it asks about the model again. A refusal made only by the one-shot run would leave both
+    /// of them sending the request this clause exists to stop.
+    ///
+    /// The same configuration is asked without the layer first, since a fixture with nothing
+    /// configured ends a start as well, and that is the end a broken implementation would pass on.
+    /// The allow list is empty rather than naming models, so the refusal does not depend on which
+    /// model this machine has recorded; the record is read from the real home directory, which no
+    /// test can move. The sentence is read through [`crate::managed_refusal`], the function the start
+    /// ends with, because `fail` writes to the process's own stderr and no test can read that.
+    #[test]
+    fn a_start_on_a_model_the_managed_layer_refuses_is_ended() {
+        let scratch = Scratch::new("cli-import-models-refused");
+        let refusing = scratch.write("managed.json", r#"{"models": {"allow": []}}"#);
+
+        let mut config = Config::from_lookup(|name| match name {
+            bravebot_config::env_var::ENDPOINT => Some("https://example.invalid".into()),
+            bravebot_config::env_var::KEY_ID => Some("a-key-id".into()),
+            bravebot_config::env_var::SIGNING_KEY => Some("a-signing-key".into()),
+            _ => None,
+        })
+        .expect("a configured gateway");
+
+        assert!(
+            before_the_session(&mut config).is_none(),
+            "the start was ended with a service configured and no managed layer"
+        );
+
+        config.models = Managed::at(&refusing).models().clone();
+        assert!(
+            before_the_session(&mut config).is_some(),
+            "the start opened on a model the managed layer refuses"
+        );
+
+        let model = crate::model_for_this_run(None, &config);
+        let (file, why) = config
+            .model_refused(&model)
+            .expect("the layer refuses the model in force");
+        let said = crate::managed_refusal(&model, file, why);
+        assert!(
+            said.contains(&refusing.display().to_string()),
+            "the end did not name the file that refused: {said}"
+        );
+        assert!(
+            said.contains(&model),
+            "the end did not name the model that was refused: {said}"
+        );
     }
 
     /// What a running Ollama at the default address serves, one model that can call tools.

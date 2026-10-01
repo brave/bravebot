@@ -14,12 +14,15 @@ use bravebot_aichat::protocol::{ChatRequest, Usage};
 use bravebot_aichat::{AichatClient, ChatError, Completion, CutOff, Progress, Subscription};
 use bravebot_bedrock::{BedrockClient, BedrockError};
 use bravebot_config::Config;
+use bravebot_config::ModelRefusal;
 use bravebot_config::provider::Credential;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
+use bravebot_i18n::t;
 use bravebot_net::Egress;
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 /// A failure from whichever backend was asked.
 ///
@@ -400,6 +403,17 @@ pub enum Serving {
         /// is name one of their own models rather than set a service up.
         a_service_is_configured: bool,
     },
+    /// The machine-level layer does not let this machine request the model (BACKEND-48).
+    ///
+    /// Separate from [`Serving::NothingConfigured`] because the remedy is not a configuration: the
+    /// person at the machine cannot write the file that refused it, so what they are told is which
+    /// file refused and why, and nothing about setting a service up.
+    Refused {
+        /// The file that refused it, which is the only actionable thing in the answer.
+        file: PathBuf,
+        /// Which of the two lists refused it.
+        why: ModelRefusal,
+    },
 }
 
 /// What the model in force would be served by, reading the credential store to find out.
@@ -413,6 +427,16 @@ pub enum Serving {
 /// The store is read only where nothing before it has answered, since it is a file in somebody's
 /// home directory and a read that cannot change the answer is a read for nothing.
 pub fn serving(config: &Config, egress: &Egress, model: &str) -> Serving {
+    // First, because it is the one answer no configuration changes: a model the machine-level layer
+    // refuses is refused whichever service would have answered for it, and asking which service that
+    // is would report a working Bedrock account for a request that is never sent (BACKEND-48).
+    if let Some((file, why)) = config.model_refused(model) {
+        return Serving::Refused {
+            file: file.to_path_buf(),
+            why,
+        };
+    }
+
     if !Backend::select(config, egress, model).spends_a_subscription() {
         return Serving::Configured;
     }
@@ -444,6 +468,20 @@ pub fn serving(config: &Config, egress: &Egress, model: &str) -> Serving {
     }
 }
 
+/// What the machine-level layer's refusal of a model says, naming the file that refused it.
+///
+/// Here rather than in each interface because three of them say it: a run that settles on the model,
+/// a session that sets a recorded pick aside, and a delegate definition that names one. A copy per
+/// caller would be three places for the two reasons to drift apart. Read by a person and never by the
+/// planner, which is why this module may look a message up at all.
+pub fn refusal_reason(file: &Path, why: ModelRefusal) -> String {
+    let path = file.display().to_string();
+    match why {
+        ModelRefusal::NotAllowed => t!(managed_model_not_allowed, path = path).to_string(),
+        ModelRefusal::Denied => t!(managed_model_denied, path = path).to_string(),
+    }
+}
+
 /// What a recorded `/model` pick puts in force.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Pick {
@@ -453,6 +491,17 @@ pub enum Pick {
     InForce(String),
     /// The pick as it was recorded, which nothing configured serves.
     SetAside(String),
+    /// The pick as it was recorded, which the machine-level layer refuses, and why (BACKEND-48).
+    ///
+    /// Apart from [`Pick::SetAside`] because the sentence differs and nothing else does: the model
+    /// beneath it answers either way and the record is left alone either way, and what somebody in
+    /// this case has to be told is which file refused rather than what to configure.
+    Refused {
+        /// The pick as it was recorded.
+        recorded: String,
+        /// What the refusal says, naming the file that refused.
+        reason: String,
+    },
 }
 
 impl Pick {
@@ -460,7 +509,7 @@ impl Pick {
     pub fn into_model(self) -> Option<String> {
         match self {
             Pick::InForce(model) => Some(model),
-            Pick::Absent | Pick::SetAside(_) => None,
+            Pick::Absent | Pick::SetAside(_) | Pick::Refused { .. } => None,
         }
     }
 }
@@ -475,10 +524,19 @@ pub fn pick(config: &Config, recorded: Option<String>) -> Pick {
     };
     let model = config.model_named(&recorded);
     let egress = Egress::new();
-    match sets_aside(serving(config, &egress, &model), || {
-        serving(config, &egress, &config.default_model)
-    }) {
-        true => Pick::SetAside(recorded),
+    let answered = serving(config, &egress, &model);
+    // Worded before the answer is spent, which is the only place the file that refused is in hand.
+    let refused = match &answered {
+        Serving::Refused { file, why } => Some(refusal_reason(file, *why)),
+        Serving::Configured | Serving::NothingConfigured { .. } => None,
+    };
+    match sets_aside(answered, || serving(config, &egress, &config.default_model)) {
+        // A refused pick with a refused model under it is not set aside, so this is reached only
+        // where something will answer, and the refusal a run would report is BACKEND-39's.
+        true => match refused {
+            Some(reason) => Pick::Refused { recorded, reason },
+            None => Pick::SetAside(recorded),
+        },
         false => Pick::InForce(model),
     }
 }
@@ -487,14 +545,20 @@ pub fn pick(config: &Config, recorded: Option<String>) -> Pick {
 ///
 /// Not where a stored Leo Premium batch was refused: that pick is served once the batch is imported
 /// again, and the refusal is what says so.
+///
+/// A pick the machine-level layer refuses gives way on the same terms as one nothing serves
+/// (BACKEND-48). Both are a recorded name that cannot be asked for today while a configured model
+/// beneath it can, and the record is left as it is either way: an administrator's list changes, and a
+/// pick deleted on the strength of one is a choice somebody has to make again.
 fn sets_aside(pick: Serving, default: impl FnOnce() -> Serving) -> bool {
-    matches!(
+    let gives_way = matches!(
         pick,
         Serving::NothingConfigured {
             subscription: None,
             ..
-        }
-    ) && default() == Serving::Configured
+        } | Serving::Refused { .. }
+    );
+    gives_way && default() == Serving::Configured
 }
 
 impl<'a> Backend<'a> {
@@ -1025,6 +1089,107 @@ mod tests {
             "set aside for a default that is refused too"
         );
         assert_eq!(pick(&served_default, None), Pick::Absent);
+    }
+
+    /// BACKEND-48: a model the machine-level layer refuses is served by nothing, whichever service
+    /// would have answered for it, and the answer names the file that refused and which list did.
+    ///
+    /// Asked of a model a configured gateway does serve, which is the case the whole clause is for:
+    /// a build that only refused what nothing served would let every approved-account request
+    /// through, since the account is pinned and is reachable.
+    #[test]
+    fn a_model_the_managed_layer_refuses_is_served_by_nothing() {
+        let egress = Egress::new();
+        let refusing = |name: &str, text: &str| {
+            let (models, path) = models_from(name, text);
+            let mut config = braves_endpoint_with_a_gateway();
+            config.models = models;
+            (config, path)
+        };
+
+        let (denied, path) = refusing(
+            "backend-models-denied",
+            r#"{"models": {"deny": ["z-ai/glm-4.6"]}}"#,
+        );
+        assert_eq!(
+            serving(&denied, &egress, "z-ai/glm-4.6"),
+            Serving::Refused {
+                file: path,
+                why: ModelRefusal::Denied,
+            }
+        );
+
+        let (allowing, path) = refusing(
+            "backend-models-allowed",
+            r#"{"models": {"allow": ["z-ai/glm-4.6"]}}"#,
+        );
+        assert_eq!(
+            serving(&allowing, &egress, "z-ai/glm-4.6"),
+            Serving::Configured,
+            "a model the allow list names is served as it was"
+        );
+        assert_eq!(
+            serving(&allowing, &egress, "z-ai/some-other-model"),
+            Serving::Refused {
+                file: path,
+                why: ModelRefusal::NotAllowed,
+            }
+        );
+    }
+
+    /// BACKEND-48: a recorded pick the layer refuses is set aside for the configured model, and says
+    /// why, which is the one thing it has that a pick nothing serves does not: a file to name.
+    ///
+    /// Told apart from [`Pick::SetAside`] because the two remedies are opposite. A pick nothing
+    /// serves is configuration the person owns; this one they cannot change at all.
+    #[test]
+    fn a_pick_the_managed_layer_refuses_is_set_aside_with_the_file_that_refused_it() {
+        let (models, file) = models_from(
+            "backend-models-pick",
+            r#"{"models": {"deny": ["an-expensive-arn"]}}"#,
+        );
+        let mut config = braves_endpoint_with_a_gateway();
+        config.default_model = "z-ai/glm-4.6".to_string();
+        config.models = models;
+
+        let Pick::Refused { recorded, reason } =
+            pick(&config, Some("an-expensive-arn".to_string()))
+        else {
+            panic!("a refused pick was not set aside");
+        };
+        assert_eq!(recorded, "an-expensive-arn");
+        assert!(
+            reason.contains(&file.display().to_string()),
+            "the reason did not name the file that refused: {reason}"
+        );
+
+        // And with the configured model refused as well there is nothing to fall to, so the pick
+        // stays in force and the refusal a run reports is the one it would make anyway.
+        config.models = models_from(
+            "backend-models-pick-and-default",
+            r#"{"models": {"deny": ["an-expensive-arn", "z-ai/glm-4.6"]}}"#,
+        )
+        .0;
+        assert_eq!(
+            pick(&config, Some("an-expensive-arn".to_string())),
+            Pick::InForce("an-expensive-arn".to_string())
+        );
+    }
+
+    /// The lists as a managed file states them, with the path they were read from.
+    ///
+    /// Through the layer that parses one rather than built by hand, so a test cannot agree with the
+    /// implementation about a shape the file never had. One directory per name, since the tests run
+    /// at once and a shared file is a test reading another's.
+    fn models_from(name: &str, text: &str) -> (bravebot_config::Models, PathBuf) {
+        let scratch = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(name);
+        std::fs::create_dir_all(&scratch).expect("a scratch directory");
+        let path = scratch.join("managed.json");
+        std::fs::write(&path, text).expect("a managed file");
+        let managed = bravebot_config::Managed::at(&path);
+        (managed.models().clone(), path)
     }
 
     /// BACKEND-47: a pick refused because a stored Leo Premium batch could not be used stays in

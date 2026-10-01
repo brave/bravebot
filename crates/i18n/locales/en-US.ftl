@@ -219,6 +219,10 @@ doctor-model = model
 doctor-model-chosen = { $model } (chosen with /model)
 doctor-model-default = { $model } (default)
 doctor-model-set-aside = { $model } (default, since { $pick }, chosen with /model, is not served by any configured service)
+# The other reason a pick is not in force. Not the line above: a model the machine's layer refuses is
+# one a configured service would have served, so saying nothing serves it would name the wrong fault.
+# The line under this one names the file that refused.
+doctor-model-refused = { $model } (default, since { $pick }, chosen with /model, is not requested on this machine)
 doctor-key-name = key
 doctor-key = { $key } (never transmitted)
 # What would end each credential this build holds for itself: who issued it, the surface that
@@ -812,6 +816,22 @@ servers-no-home =
     { $alias } was not started: a directory of its own could not be made in { $path }: { $reason }
 servers-no-handshake = { $alias } was started and did not complete its handshake: { $reason }
 servers-too-slow = { $alias } did not complete its handshake within { $seconds } seconds
+
+## A model this machine's administrator does not let it ask for
+
+# Said where a run or a session settles on the model, rather than when a request would go out: the
+# person reading it cannot write the file that refused, so the file is the only actionable thing in
+# it, and a refusal at the moment of the request says nothing about where to look.
+managed-model-refused = no request is made for { $model }: { $reason }
+managed-model-not-allowed =
+    { $path }, which this machine's administrator manages, allows only the models its models.allow
+    names
+managed-model-denied =
+    { $path }, which this machine's administrator manages, denies it with a models.deny entry
+# A delegate definition naming a model the layer refuses. Refused where the definition is read, so
+# nothing is started for it.
+delegate-model-refused =
+    { $definition } asks for { $model }, which this machine does not request: { $reason }
 
 ## The tools an MCP server offers, read by the person before any of them is offered to the model
 
@@ -1729,6 +1749,9 @@ session-directory-closed = closed { $directory }; open it again with /add-dir { 
 session-directory-not-changed = could not move to { $directory }: { $problem }
 session-permission-rule-ignored = ignoring a permission rule in settings.json: { $problem }
 session-model-pick-set-aside = ignoring { $model }, picked with /model, because no configured service serves it
+# The other way a pick is set aside: the machine-level layer does not request it. The configured
+# model answers and the record is left as it is, for the reason the line above leaves one.
+session-model-pick-refused = ignoring { $model }, picked with /model: { $reason }
 # An allow rule written in a checkout's settings file. It answers an approval prompt, which is a
 # capability rather than a narrowing, so it is read from the person's own file only. Named rather
 # than counted: whoever wrote it is looking for their own line.

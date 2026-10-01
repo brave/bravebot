@@ -943,12 +943,41 @@ to say so.
 **Only these names may be pinned**, being the ones that decide where a request goes:
 `BRAVE_AI_CHAT_ENDPOINT`, `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`,
 `AWS_PROFILE`, the three `ANTHROPIC_DEFAULT_*_MODEL` tiers, and the `provider` block. Every other name
-in the file decides nothing, the signing key and key id included, save the server lists and the two
-refusals: `"mcp": { "allow": [...], "deny": [...] }` name the
+in the file decides nothing, the signing key and key id included, save the two pairs of lists and the
+two refusals: `"mcp": { "allow": [...], "deny": [...] }` name the
 [MCP servers](mcp-servers.md#refused-by-an-administrator)
 a session on the machine may start and may not, by host or by command. The file can keep a server
 from starting and never add one. A name it does not pin resolves exactly as it would with no such
 file.
+
+`"models": { "allow": [...], "deny": [...] }` name the models a machine may request and may not, read
+on the same footing:
+
+```json
+{
+  "env": { "BRAVEBOT_USE_BEDROCK": "1", "AWS_PROFILE": "the-org-account" },
+  "models": {
+    "allow": [
+      "arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/approved-opus",
+      "arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/approved-sonnet"
+    ]
+  }
+}
+```
+
+Pinning the account without this says where the traffic goes and not what it spends: every other model
+name still reaches the pinned account and is billed to it. A name here is the model as a request
+carries it, an inference-profile ARN or a gateway slug such as `z-ai/glm-4.6`, compared exactly, and a
+tier word is checked as the model that tier names. Without an `allow` list every model not denied is
+requested as before; with one, a model no entry names is refused, and `"allow": []` refuses every
+model. A deny entry wins over an allow entry naming the same model.
+
+This can only refuse. There is nowhere in the file to hold a roster, so an entry permits a name some
+service already offers rather than adding one, and the file cannot say which model is the default.
+`/model` lists only what the machine may request. A model you had picked that the lists refuse is
+ignored, your `~/.bravebot/model` is left as it is, and the session opens on the configured model and
+says so; where that model is refused too the start is refused and names the file. An `AGENTS.md`
+definition naming a refused model is refused when it is read.
 
 `"permissions": { "readsStayInWorkspace": true, "bypassUnreachable": true }` are read here on the same
 reasoning: each can only take capability away, never add any, so keeping the file tools inside the
