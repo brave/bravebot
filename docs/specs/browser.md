@@ -256,10 +256,12 @@ Brave's own profile directory, and a channel other than stable has its own.
 <a id="BROWSER-10"></a>
 ### BROWSER-10: the tool list is fixed, and a tool not on it is refused
 
-The MCP server offers the same list whether or not the extension is connected: `list_tabs`,
-`read_page`, `search_history` and `search_bookmarks`. Each calls the extension method of the same
-name with the tool's arguments. A call naming any other tool is refused by the server and nothing
-is sent to the extension. `read_page` names the page by its URL.
+The MCP server offers the same list whether or not the extension is connected:
+`get_platform_info`, `list_tabs`, `read_page`, `search_history` and `search_bookmarks`. Each calls
+the extension method of the same name with the tool's arguments. A call naming any other tool is
+refused by the server and nothing is sent to the extension. `read_page` names the page by its URL.
+`get_platform_info` returns the operating system and architecture Brave runs on, and nothing else,
+so a person can see the extension answer without it telling anything about them.
 
 **Why.** A person vouches for a server's tool list once and BraveBot records a digest of it. A list
 that changed with whether the extension was connected would be put to them again each time it did.
@@ -272,6 +274,7 @@ each call shows its arguments, and a URL is one a person can judge there where a
 `verified-by: bravebot_browser::tools::a_tool_is_found_by_its_exact_name`
 `verified-by: bravebot_browser::tools::every_tool_takes_an_object`
 `verified-by: bravebot_browser::tools::a_page_is_asked_for_by_its_url`
+`verified-by: by-construction (extension/tests/tools.test.mjs asserts that get_platform_info answers with the operating system and architecture alone, a field the browser adds besides them left out, and reaches no API but the platform's; it runs where the test under BROWSER-13 runs)`
 
 <a id="BROWSER-11"></a>
 ### BROWSER-11: a socket that exists is one that accepts
@@ -320,10 +323,10 @@ resembles it is a different page, which could be one they would have said no to.
 <a id="BROWSER-14"></a>
 ### BROWSER-14: the searches start off, and a tool that is off touches nothing
 
-History and bookmark search start off, and listing and reading open tabs start on, until a person
-changes them in the extension's options. A call to a tool that is off is refused before the
-browser is asked anything. A history search covers all of history, and a search returns at most 100
-results.
+History and bookmark search start off, and the platform check, listing and reading open tabs start
+on, until a person changes them in the extension's options. A call to a tool that is off is refused
+before the browser is asked anything. A history search covers all of history, and a search returns
+at most 100 results.
 
 **Why.** History and bookmarks reach everything a person has visited and saved, which is more than
 what they have open. The browser's history search covers the last day unless it is given a start

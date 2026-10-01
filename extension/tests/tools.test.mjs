@@ -40,6 +40,14 @@ function browser({
         return tabs;
       },
     },
+    runtime: {
+      // With a field of its own besides the three the tool passes on, as a
+      // later browser could add one.
+      async getPlatformInfo() {
+        calls.push(["runtime.getPlatformInfo"]);
+        return { os: "mac", arch: "arm64", nacl_arch: "arm64", added: "x" };
+      },
+    },
     scripting: {
       // Runs the function the extension injects, in the page the test gives
       // that tab: at the tab's own URL unless the page says it moved.
@@ -140,6 +148,21 @@ test("inherited object names are not methods", async () => {
     const reply = await handle({ id: 1, method, params: {} }, browser());
     assert.equal(reply.error?.code, -32601, method);
   }
+});
+
+// The platform check is what a person runs to see the extension answer, so it
+// says what Brave runs on and nothing else: none of the browser's other fields,
+// and nothing from a tab, a page, history or bookmarks.
+test("get_platform_info says only what Brave runs on", async () => {
+  const chrome = browser({ tabs });
+  const reply = await handle({ id: 1, method: "get_platform_info" }, chrome);
+  assert.deepEqual(reply.result, {
+    os: "mac",
+    arch: "arm64",
+    nacl_arch: "arm64",
+  });
+  const reached = chrome.calls.map(([name]) => name);
+  assert.deepEqual(reached, ["storage.get", "runtime.getPlatformInfo"]);
 });
 
 test("list_tabs gives each tab's id, window, title and URL", async () => {

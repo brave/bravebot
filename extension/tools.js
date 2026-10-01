@@ -24,6 +24,7 @@ export const SETTINGS_KEY = "tools";
 // searches reach the whole of a person's past rather than what is open now, so
 // they start off.
 export const DEFAULT_SETTINGS = Object.freeze({
+  get_platform_info: true,
   list_tabs: true,
   read_page: true,
   search_history: false,
@@ -102,6 +103,14 @@ function count(params) {
 }
 
 export const TOOLS = {
+  // What Brave runs on, which is enough to show the extension is installed and
+  // answering, and nothing about the person. Only these fields are passed on,
+  // whatever else the browser adds to its answer.
+  async get_platform_info(chrome) {
+    const { os, arch, nacl_arch } = await chrome.runtime.getPlatformInfo();
+    return { os, arch, nacl_arch };
+  },
+
   async list_tabs(chrome) {
     const tabs = await chrome.tabs.query({});
     return tabs.map((tab) => ({

@@ -33,6 +33,12 @@ impl Tool {
 /// Every tool, in the order `tools/list` gives them.
 pub const TOOLS: &[Tool] = &[
     Tool {
+        name: "get_platform_info",
+        description: "Say the operating system and architecture Brave runs on, which shows the \
+            extension is installed and answering. It tells nothing about the person.",
+        schema: || json!({"type": "object", "properties": {}}),
+    },
+    Tool {
         name: "list_tabs",
         description: "List the tabs open in Brave: each tab's id, window id, title and URL.",
         schema: || json!({"type": "object", "properties": {}}),

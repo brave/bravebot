@@ -868,6 +868,7 @@ fn the_tool_list_is_the_same_whether_or_not_the_extension_is_connected() {
     assert_eq!(
         names,
         [
+            "get_platform_info",
             "list_tabs",
             "read_page",
             "search_history",
