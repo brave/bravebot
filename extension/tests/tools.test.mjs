@@ -21,7 +21,7 @@ function browser({
   pages = {},
   history = [],
   bookmarks = [],
-  stored = {},
+  stored = tabsOn,
 } = {}) {
   const calls = [];
   return {
@@ -96,6 +96,12 @@ function inPage(href, page, run) {
 function reached(chrome, api) {
   return chrome.calls.some(([name]) => name === api);
 }
+
+// The tab tools turned on, as a person turns them on in the options page. The
+// fake browser starts with them so, and a test of the defaults stores nothing.
+const tabsOn = {
+  [SETTINGS_KEY]: { list_tabs: true, read_page: true },
+};
 
 const allowEverything = {
   [SETTINGS_KEY]: { search_history: true, search_bookmarks: true },
@@ -374,32 +380,50 @@ test("bookmarks leave folders out and keep the result bound", async () => {
   assert.ok(reply.result.every((bookmark) => "url" in bookmark));
 });
 
-// History and bookmarks reach a person's whole past, so they start off. A
+// Only the platform check starts on. Every other tool reaches what a person
+// has open, visited or saved, so each is refused until they turn it on, and a
 // tool that is off is refused before the browser is asked anything.
-test("searches start off, and an off tool touches nothing", async () => {
-  for (const [method, api] of [
-    ["search_history", "history.search"],
-    ["search_bookmarks", "bookmarks.search"],
+test("only the platform check starts on", async () => {
+  const nothingStored = browser({ tabs, stored: {} });
+  const check = await handle(
+    { id: 1, method: "get_platform_info" },
+    nothingStored,
+  );
+  assert.ok("result" in check);
+
+  for (const [method, params, api] of [
+    ["list_tabs", {}, "tabs.query"],
+    ["read_page", { url: tabs[0].url }, "scripting.executeScript"],
+    ["search_history", { query: "bank" }, "history.search"],
+    ["search_bookmarks", { query: "bank" }, "bookmarks.search"],
   ]) {
-    const off = browser();
-    const refused = await handle(
-      { id: 1, method, params: { query: "bank" } },
-      off,
-    );
+    const off = browser({ tabs, stored: {} });
+    const refused = await handle({ id: 1, method, params }, off);
     assert.match(refused.error.message, /turned off/, method);
     assert.ok(!reached(off, api), method);
+    assert.ok(!reached(off, "tabs.query"), method);
 
-    const on = browser({ stored: { [SETTINGS_KEY]: { [method]: true } } });
-    const answered = await handle(
-      { id: 1, method, params: { query: "bank" } },
-      on,
-    );
+    const on = browser({
+      tabs,
+      pages: { 1: { title: "Brave", text: "home" } },
+      stored: { [SETTINGS_KEY]: { [method]: true } },
+    });
+    const answered = await handle({ id: 1, method, params }, on);
     assert.ok("result" in answered, method);
     assert.ok(reached(on, api), method);
   }
 });
 
-test("open tabs work until a person turns them off", async () => {
+test("the platform check can be turned off too", async () => {
+  const chrome = browser({
+    stored: { [SETTINGS_KEY]: { get_platform_info: false } },
+  });
+  const off = await handle({ id: 1, method: "get_platform_info" }, chrome);
+  assert.match(off.error.message, /turned off/);
+  assert.ok(!reached(chrome, "runtime.getPlatformInfo"));
+});
+
+test("open tabs are refused once a person turns them off again", async () => {
   const on = await handle({ id: 1, method: "list_tabs" }, browser({ tabs }));
   assert.ok("result" in on);
 

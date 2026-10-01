@@ -321,16 +321,18 @@ resembles it is a different page, which could be one they would have said no to.
 `verified-by: by-construction (extension/tests/tools.test.mjs asserts each of the four against a fake chrome object that records every call, including that a URL no tab is at reaches no script; make check-extension runs it, and check-ui-build depends on that target, so the Front end CI job runs it on every change the classifier gives the ui area, which a change under extension/ is)`
 
 <a id="BROWSER-14"></a>
-### BROWSER-14: the searches start off, and a tool that is off touches nothing
+### BROWSER-14: only the platform check starts on, and a tool that is off touches nothing
 
-History and bookmark search start off, and the platform check, listing and reading open tabs start
-on, until a person changes them in the extension's options. A call to a tool that is off is refused
-before the browser is asked anything. A history search covers all of history, and a search returns
-at most 100 results.
+Only the platform check starts on. Listing and reading open tabs, and searching history and
+bookmarks, start off until a person turns them on in the extension's options. A call to a tool that
+is off is refused before the browser is asked anything. A history search covers all of history, and
+a search returns at most 100 results.
 
-**Why.** History and bookmarks reach everything a person has visited and saved, which is more than
-what they have open. The browser's history search covers the last day unless it is given a start
-time, which would answer a search of all of history with a day of it.
+**Why.** Every tool but the platform check reaches what a person has open, has visited or has
+saved, so none of them reads anything before the person has said it may. The platform check tells
+nothing about them, and is how they see the extension answer before turning anything on. The
+browser's history search covers the last day unless it is given a start time, which would answer a
+search of all of history with a day of it.
 
 `verified-by: by-construction (extension/tests/tools.test.mjs asserts the defaults, that a tool turned off reaches none of the browser's APIs, the start time and the bound on results; it runs where the test under BROWSER-13 runs)`
 

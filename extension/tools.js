@@ -20,13 +20,14 @@ export const DEFAULT_RESULTS = 20;
 // Where the settings are kept in chrome.storage.local.
 export const SETTINGS_KEY = "tools";
 
-// Which tools may run until a person changes it in the options page. The two
-// searches reach the whole of a person's past rather than what is open now, so
-// they start off.
+// Which tools may run until a person changes it in the options page. Only the
+// platform check starts on: it tells nothing about the person. Every other tool
+// reaches what they have open, visited or saved, so it reads nothing until they
+// turn it on.
 export const DEFAULT_SETTINGS = Object.freeze({
   get_platform_info: true,
-  list_tabs: true,
-  read_page: true,
+  list_tabs: false,
+  read_page: false,
   search_history: false,
   search_bookmarks: false,
 });
