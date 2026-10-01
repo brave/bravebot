@@ -2081,6 +2081,12 @@ session-model-is-the-definitions =
 agent-model-outranked =
     { $definition } asked for { $model }, and --model outranks it, so this run asked for the model
     the command line named
+# Said where a turn is addressed to a definition whose isolation line asks for a checkout of its
+# own. Only a delegate is given one, so the person's own turn works in their working directory. The
+# definition's name is the word of a vouched-for file.
+agent-checkout-not-applied =
+    { $definition } asks for a checkout of its own, which only its delegates are given, so this turn
+    works in your working directory
 
 
 ## The opening screen
@@ -2181,6 +2187,15 @@ delegate-memory-not-a-slug = { $definition } keeps no memory: a definition keepi
 # person's own ~/.bravebot, as it does for a session in the home directory. The definition is its
 # file's path, and ~/.bravebot stays as it is.
 delegate-memory-in-home = { $definition } keeps no memory here: in this directory its memory would be inside ~/.bravebot, which no write can leave untrusted
+# A definition's isolation line named a value other than checkout or worktree, so the definition
+# loads and its delegate works in the working directory. The definition is its file's path and the
+# value is that file's own words, both from a vouched-for file. "isolation", "checkout" and
+# "worktree" are the key and its values, and stay as they are.
+delegate-isolation-not-read = { $definition } is loaded without a checkout: its isolation line says { $value }, and only checkout and worktree ask for one
+# A definition asks for a checkout and is loaded as a reader, either as its own kind line says or
+# because a definition of the same name narrowed it. A reader is never given a checkout. The
+# definition is its file's path.
+delegate-checkout-reader = { $definition } is loaded without a checkout: it is a reader, and a reader is never given one
 
 # What a skill file named beyond its name and description. The skill is its file's path and the
 # model and the effort are that file's own words, all three from a source somebody vouched for.

@@ -1828,6 +1828,9 @@ session-model-is-the-definitions =
 agent-model-outranked =
     { $definition } a demandé { $model }, et --model l'emporte, donc cette exécution a demandé le
     modèle nommé par la ligne de commande
+agent-checkout-not-applied =
+    { $definition } demande une copie de travail à part, que seuls ses délégués reçoivent, donc ce
+    tour travaille dans votre répertoire de travail
 
 
 ## L'écran d'accueil
@@ -1897,6 +1900,10 @@ delegate-memory-not-a-slug =
     { $definition } ne garde aucune mémoire : une définition qui en garde une doit avoir un nom fait de lettres minuscules et de chiffres, en suites reliées par des tirets simples, de 64 caractères au plus
 delegate-memory-in-home =
     { $definition } ne garde aucune mémoire ici : dans ce répertoire, sa mémoire serait dans ~/.bravebot, qu'aucune écriture ne peut laisser non fiable
+delegate-isolation-not-read =
+    { $definition } est chargé sans copie de travail à part : sa ligne isolation indique { $value }, et seuls checkout et worktree en demandent une
+delegate-checkout-reader =
+    { $definition } est chargé sans copie de travail à part : c'est un reader, et un reader n'en reçoit jamais
 
 ## Regarder ce que fait un delegue
 

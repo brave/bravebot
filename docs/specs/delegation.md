@@ -677,9 +677,9 @@ person wrote gets a `reader`'s ceiling, and is told so ([DELEGATE-6](#DELEGATE-6
 The `memory:` key is taken over as the body is, because a memory changes what a run knows and
 never what it may do. [MEMORY-2](definition-memory.md#MEMORY-2) specifies that key.
 
-[CHECKOUT-2](checkouts.md#CHECKOUT-2), which nothing yet builds, adds an `isolation:` key met as the
-kind is: either definition asking gives a checkout, so a later one can add it and cannot take it
-away.
+The `isolation:` key is met as the kind is: either definition asking gives a checkout, so a later
+one can add it and cannot take it away, and one given a checkout it did not ask for is told so.
+[CHECKOUT-2](checkouts.md#CHECKOUT-2) specifies that key.
 
 DELEGATE-19 says a checked-in file granting a capability would make the file the author of
 authority rather than the person who vouched for it, and a wider `kind:` for a name that person
@@ -721,6 +721,7 @@ each came from a source somebody vouched for, which is what separates this from 
 `verified-by: bravebot_core::delegate::a_later_definition_cannot_hand_back_a_server_the_one_it_replaces_left_off`
 `verified-by: bravebot_agent::agents::a_project_cannot_hand_back_a_server_a_persons_own_definition_left_off`
 `verified-by: bravebot_agent::agents::a_server_narrowing_is_said_in_the_number_it_leaves`
+`verified-by: bravebot_core::delegate::a_later_definition_can_give_a_checkout_and_cannot_take_one_away`
 
 <a id="DELEGATE-21"></a>
 ### DELEGATE-21: a definition's name may not open with `-` or carry a colon

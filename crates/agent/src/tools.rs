@@ -1005,7 +1005,9 @@ fn table(
                                         build in one working tree. Changes not yet committed \
                                         are not in it, and what it changes stays there until \
                                         it is brought back. Not for a \"reader\", and not for \
-                                        a delegate that is already in one.",
+                                        a delegate that is already in one. A definition may \
+                                        ask for one itself, and its delegates then get one \
+                                        whether or not this is set.",
                         "enum": ["checkout"]
                     }
                 },
@@ -6798,7 +6800,7 @@ fn spawn_agent<S: Sink, R: Reporter>(
 
         // Compared only once the gate above has passed, which is when this run has met nothing a
         // name could be steered by (CHECKOUT-1).
-        let state = match wants_checkout(arguments, spec.kind(), tools) {
+        let state = match wants_checkout(arguments, &spec, tools) {
             Ok(state) => state,
             Err(refusal) if started.is_empty() => return Produced::problem(refusal),
             Err(refusal) => {
@@ -6902,16 +6904,19 @@ fn spawn_agent<S: Sink, R: Reporter>(
     produced
 }
 
-/// Whether this call asks for a checkout for each delegate, or why it may not have one
-/// (CHECKOUT-1, CHECKOUT-3, CHECKOUT-6).
+/// Whether a delegate is given a checkout, because the call or its definition asks, or why it may
+/// not have one (CHECKOUT-1, CHECKOUT-2, CHECKOUT-3, CHECKOUT-6).
+///
+/// A definition's request is refused where the call's would be, rather than dropped, so the
+/// planner cannot start that definition's delegate in the working directory.
 fn wants_checkout<'a>(
     arguments: &Value,
-    kind: bravebot_core::delegate::Kind,
+    spec: &bravebot_core::delegate::DelegateSpec,
     tools: &Tools<'a>,
 ) -> Result<Option<&'a std::path::Path>, String> {
-    match arguments.get("isolation") {
-        None | Some(Value::Null) => return Ok(None),
-        Some(Value::String(value)) if value == "checkout" => {}
+    let called = match arguments.get("isolation") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(value)) if value == "checkout" => true,
         Some(_) => {
             return Err(
                 "error: 'isolation' may only be \"checkout\"; leave it out for a delegate that \
@@ -6919,25 +6924,35 @@ fn wants_checkout<'a>(
                     .to_string(),
             );
         }
+    };
+    if !called && !spec.asks_for_checkout() {
+        return Ok(None);
     }
-    if kind == bravebot_core::delegate::Kind::Reader {
+    if spec.kind() == bravebot_core::delegate::Kind::Reader {
         return Err(
             "refused: a reader writes nothing, so a checkout separates it from nobody and would \
              show it the last commit in place of your working tree"
                 .to_string(),
         );
     }
+    // Said as the definition's, since the call that met the refusal may not have asked.
+    let whose = match spec.asks_for_checkout() {
+        true => format!(
+            "the {} definition asks for a checkout of its own, and ",
+            spec.definition()
+        ),
+        false => String::new(),
+    };
     if tools.workspace.checkout().is_some() {
-        return Err(
-            "refused: you already work in a checkout, which the delegates you start share"
-                .to_string(),
-        );
+        return Err(format!(
+            "refused: {whose}you already work in a checkout, which the delegates you start share"
+        ));
     }
     match tools.home {
         Some(state) if !bravebot_core::incognito::engaged() => Ok(Some(state)),
-        _ => {
-            Err("refused: this session keeps no state directory to make a checkout in".to_string())
-        }
+        _ => Err(format!(
+            "refused: {whose}this session keeps no state directory to make a checkout in"
+        )),
     }
 }
 

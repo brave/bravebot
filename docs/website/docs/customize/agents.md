@@ -55,6 +55,7 @@ does not ask whether to trust the checkout, so it reads only the definitions in
 | `mcpServers` | no | the [MCP servers](mcp-servers.md) a `worker` calls, by alias, out of the ones the turn may; absent means all of them unless `tools` is written, and an empty line none |
 | `rounds` | no | how many rounds of tools this delegate may take before it has to answer, up to its kind's ceiling; absent or empty means the kind's own |
 | `memory` | no | `project` or `local` keeps [a memory](#memory), a file its runs read and write themselves; absent or empty means none |
+| `isolation` | no | `checkout` or `worktree` gives each of its delegates [a checkout of its own](#a-checkout-of-its-own) to work in; absent or empty means none |
 | body | no | the standing instruction |
 
 Keys other than these are ignored rather than refused, so a definition written for another agent
@@ -179,6 +180,37 @@ memory too. Saying yes when a read of it is quarantined, naming it with `@`, dro
 it, or a later write that leaves it trusted, takes it out of that record. A write that cannot be
 recorded there is refused.
 
+## A checkout of its own
+
+A `checker` or `worker` definition with `isolation: checkout` has each of its delegates work in a
+checkout bravebot makes for it under `~/.bravebot/checkouts`, holding the last commit of the
+repository the session is in. Its writes land there and not in your working tree, and changes you
+have not committed are not in it. `worktree`, the value Claude Code reads, asks for the same thing.
+The planner cannot start the delegate without one.
+
+```markdown
+---
+name: migrator
+description: Moves one module to the new API. Use for a staged refactor.
+kind: worker
+isolation: checkout
+---
+```
+
+Any other value loads the definition working in your working tree, and the turn says so:
+
+```
+.bravebot/agents/migrator.md is loaded without a checkout: its isolation line says none, and only checkout and worktree ask for one
+```
+
+A `reader` is never given one, since it writes nothing, and the turn says that too. Where a
+checkout cannot be made, because the delegate starting it already works in one or the session keeps
+no state directory, the delegate does not start, and the planner is told why. A turn you run
+yourself with `/agent` is yours, so it works in your working tree and says so.
+
+The commands that bring a checkout's work back into your tree are not built yet. A checkout a
+delegate wrote in stays where it is until you remove it.
+
 ## Which one wins
 
 Your own directory is read first and the project second, so a project definition of the same name
@@ -189,7 +221,8 @@ directory resolve by file name, so which is live is the same on every machine.
 takes over the description, the body, the model, the skills, the rounds and the memory, the rounds
 held to the ceiling of the kind it is loaded as. The kind is the narrower of the two, and the `tools` and `mcpServers`
 lists are met name by name, so a checkout you vouched for cannot turn a `reader` you wrote into a
-`worker`, and cannot hand back a tool or a server your own lines took away.
+`worker`, and cannot hand back a tool or a server your own lines took away. A checkout is met the
+same way: either file asking gives one, so the project's can add one and cannot take yours away.
 Vouching for a project is a decision about the project, not one about a name you had already
 defined. The same holds for two files of one name in one directory, since which of those is live
 is only a matter of file name. Whatever the later file asked for and did not get is said, with the

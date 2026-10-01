@@ -2961,6 +2961,14 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             reporter.notice(said.clone());
             notices.push(crate::skills::Notice::from_message(said));
         }
+        // A checkout is a delegate's, and this turn is the person's own, so it works in their
+        // working directory and says so rather than leave the definition's line reading as applied
+        // (CHECKOUT-2).
+        if let Some(addressed) = addressed.as_ref().filter(|a| a.asks_for_checkout()) {
+            let said = t!(agent_checkout_not_applied, definition = addressed.name());
+            reporter.notice(said.clone());
+            notices.push(crate::skills::Notice::from_message(said));
+        }
         let definition_model = named
             .filter(|_| !task.model_outranks_a_definition)
             .map(|(_, written)| (written.to_string(), config.model_named(written)));

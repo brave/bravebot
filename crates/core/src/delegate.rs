@@ -312,6 +312,12 @@ pub struct Definition {
     /// Taken over with the body by a later definition of the same name, since a memory changes
     /// what a run knows and never what it may do.
     memory: bool,
+    /// Whether it asked for a delegate of it to be given a checkout of its own.
+    ///
+    /// Met with the one it replaced, as the kind is, so a later definition can add one and cannot
+    /// take one away. Held to the kind where it is read rather than where it is set, so one met
+    /// down to a `reader` has none.
+    checkout: bool,
     /// The standing part of what a delegate of this name is told about itself.
     ///
     /// Empty where the file had no body. Carried rather than read: the kernel never branches on
@@ -335,6 +341,7 @@ impl Definition {
             servers: None,
             rounds: None,
             memory: false,
+            checkout: false,
             prompt: String::new(),
             origin: "built-in".to_string(),
         }
@@ -359,6 +366,7 @@ impl Definition {
             servers: None,
             rounds: None,
             memory: false,
+            checkout: false,
             prompt: prompt.into(),
             origin: origin.into(),
         }
@@ -446,6 +454,23 @@ impl Definition {
     /// Keep a memory for runs under it. The caller has held the name to a slug.
     pub fn with_memory(mut self) -> Self {
         self.memory = true;
+        self
+    }
+
+    /// Whether a delegate of it is given a checkout of its own, which a `reader` never is.
+    pub fn asks_for_checkout(&self) -> bool {
+        self.checkout && self.kind != Kind::Reader
+    }
+
+    /// Whether it asked for a checkout and is a `reader`, for whoever wrote it to be told it
+    /// loads without one.
+    pub fn checkout_beyond_its_kind(&self) -> bool {
+        self.checkout && self.kind == Kind::Reader
+    }
+
+    /// Give a delegate of it a checkout of its own.
+    pub fn with_checkout(mut self) -> Self {
+        self.checkout = true;
         self
     }
 
@@ -606,6 +631,9 @@ pub struct Narrowing {
     /// `None` where what it selected stands, and wherever it is loaded as a kind that calls no
     /// server, since the kind has already said that. An empty list is no server at all.
     pub servers_confined_to: Option<Vec<String>>,
+    /// Whether its delegate is given a checkout it did not ask for, because the one it replaced
+    /// asked. Never where it is loaded as a `reader`, which is given none.
+    pub given_a_checkout: bool,
     /// Where the definition that cut it down came from.
     pub replaced: String,
 }
@@ -659,6 +687,9 @@ impl Definitions {
     /// The memory is taken over for the same reason as the body: it changes what a run knows and
     /// never what it may do, since keeping one adds no tool.
     ///
+    /// A checkout is met as the kind is: either asking gives one, so a later definition can add
+    /// one and cannot take one away (CHECKOUT-2).
+    ///
     /// The rounds are taken over because a bound is not authority: a gate refuses on the last
     /// round what it refuses on the first. They are still held to the ceiling of the kind the
     /// replacement is loaded as, so a narrower kind brings its lower ceiling with it.
@@ -703,14 +734,20 @@ impl Definitions {
         // that named no tools and inherited one has been confined as surely as one whose own
         // list was cut down.
         let confined_to = (tools != asked).then(|| tools.clone().unwrap_or_default());
+        let given_a_checkout = existing.checkout && !definition.checkout && loaded != Kind::Reader;
         let replaced = existing.origin.clone();
 
         definition.kind = loaded;
         definition.tools = tools;
         definition.servers = servers;
+        definition.checkout |= existing.checkout;
         *existing = definition;
 
-        if named == loaded && confined_to.is_none() && servers_confined_to.is_none() {
+        if named == loaded
+            && confined_to.is_none()
+            && servers_confined_to.is_none()
+            && !given_a_checkout
+        {
             return Admitted::AsWritten;
         }
         Admitted::Narrowed(Narrowing {
@@ -718,6 +755,7 @@ impl Definitions {
             loaded,
             confined_to,
             servers_confined_to,
+            given_a_checkout,
             replaced,
         })
     }
@@ -920,6 +958,9 @@ pub struct DelegateSpec {
     prompt: String,
     /// Whether the definition that selected it keeps a memory.
     memory: bool,
+    /// Whether the definition that selected it gives it a checkout of its own, whatever the call
+    /// asked.
+    checkout: bool,
     task: String,
     capabilities: CapabilitySet,
     rounds: usize,
@@ -958,6 +999,7 @@ impl DelegateSpec {
             skills: definition.skills().map(<[String]>::to_vec),
             prompt: definition.prompt().to_string(),
             memory: definition.keeps_memory(),
+            checkout: definition.asks_for_checkout(),
             task: task.into(),
             capabilities,
             rounds,
@@ -1036,6 +1078,12 @@ impl DelegateSpec {
         self.memory
     }
 
+    /// Whether its definition gives it a checkout of its own, so the planner cannot start it
+    /// without one.
+    pub fn asks_for_checkout(&self) -> bool {
+        self.checkout
+    }
+
     /// The delegate's name in the audit trail. Driver-minted, never derived from content.
     pub fn id(&self) -> DelegateId {
         self.id
@@ -1110,6 +1158,7 @@ pub struct Addressed {
     model: Option<String>,
     prompt: String,
     memory: bool,
+    checkout: bool,
     held: CapabilitySet,
     tools: Vec<String>,
 }
@@ -1122,6 +1171,7 @@ impl Addressed {
             model: definition.model().map(str::to_string),
             prompt: definition.prompt().to_string(),
             memory: definition.keeps_memory(),
+            checkout: definition.asks_for_checkout(),
             held,
             tools,
         }
@@ -1154,6 +1204,12 @@ impl Addressed {
     /// Whether the definition keeps a memory, which the file of [`Self::name`]'s name is.
     pub fn keeps_memory(&self) -> bool {
         self.memory
+    }
+
+    /// Whether the definition asks for a checkout, which this turn does not apply: it is the
+    /// person's own, in their working directory (CHECKOUT-2).
+    pub fn asks_for_checkout(&self) -> bool {
+        self.checkout
     }
 
     /// Every tool this turn is offered, already narrowed by what it holds and by what the
@@ -1467,6 +1523,7 @@ mod tests {
                 loaded: Kind::Worker,
                 confined_to: None,
                 servers_confined_to: Some(vec!["notes".to_string()]),
+                given_a_checkout: false,
                 replaced: "~/a.md".to_string(),
             })
         );
@@ -1494,6 +1551,7 @@ mod tests {
                 loaded: Kind::Worker,
                 confined_to: Some(vec!["read_file".to_string()]),
                 servers_confined_to: Some(Vec::new()),
+                given_a_checkout: false,
                 replaced: "~/a.md".to_string(),
             })
         );
@@ -1859,6 +1917,7 @@ mod tests {
                 loaded: Kind::Reader,
                 confined_to: None,
                 servers_confined_to: None,
+                given_a_checkout: false,
                 replaced: "~/.bravebot/agents/rule-reviewer.md".to_string(),
             })
         );
@@ -1908,6 +1967,7 @@ mod tests {
                 loaded: Kind::Worker,
                 confined_to: Some(vec!["read_file".to_string()]),
                 servers_confined_to: Some(Vec::new()),
+                given_a_checkout: false,
                 replaced: "~/.bravebot/agents/rule-reviewer.md".to_string(),
             })
         );
@@ -1954,6 +2014,7 @@ mod tests {
                 loaded: Kind::Reader,
                 confined_to: Some(vec!["read_file".to_string()]),
                 servers_confined_to: None,
+                given_a_checkout: false,
                 replaced: "~/.bravebot/agents/rule-reviewer.md".to_string(),
             })
         );
@@ -1995,6 +2056,7 @@ mod tests {
                 loaded: Kind::Worker,
                 confined_to: Some(Vec::new()),
                 servers_confined_to: None,
+                given_a_checkout: false,
                 replaced: "~/.bravebot/agents/rule-reviewer.md".to_string(),
             })
         );
@@ -2360,6 +2422,125 @@ mod tests {
                 .get("reviewer")
                 .expect("selectable")
                 .keeps_memory()
+        );
+    }
+
+    /// CHECKOUT-2: a checkout is met as the kind is. A replacement asking for none keeps the one
+    /// the definition it replaced asked for, and is reported as narrowed, and one asking for a
+    /// checkout its replaced definition did not is admitted as written, because a checkout gives
+    /// a delegate nothing more it may do.
+    #[test]
+    fn a_later_definition_can_give_a_checkout_and_cannot_take_one_away() {
+        let mut definitions = Definitions::default();
+        definitions.insert(
+            Definition::from_file("migrator", "home", Kind::Worker, None, "", "~/a.md")
+                .with_checkout(),
+        );
+        let admitted = definitions.insert(Definition::from_file(
+            "migrator",
+            "project",
+            Kind::Worker,
+            None,
+            "",
+            ".b.md",
+        ));
+        assert!(
+            definitions
+                .get("migrator")
+                .expect("selectable")
+                .asks_for_checkout(),
+            "a later definition took a checkout away"
+        );
+        assert_eq!(
+            admitted,
+            Admitted::Narrowed(Narrowing {
+                named: Kind::Worker,
+                loaded: Kind::Worker,
+                confined_to: None,
+                servers_confined_to: None,
+                given_a_checkout: true,
+                replaced: "~/a.md".to_string(),
+            })
+        );
+
+        let mut definitions = Definitions::default();
+        definitions.insert(Definition::from_file(
+            "migrator",
+            "home",
+            Kind::Worker,
+            None,
+            "",
+            "~/a.md",
+        ));
+        let admitted = definitions.insert(
+            Definition::from_file("migrator", "project", Kind::Worker, None, "", ".b.md")
+                .with_checkout(),
+        );
+        assert_eq!(
+            admitted,
+            Admitted::AsWritten,
+            "asking for one widens nothing"
+        );
+        let found = definitions.get("migrator").expect("selectable");
+        assert!(found.asks_for_checkout());
+        assert!(
+            DelegateSpec::new(
+                DelegateId::nth(1),
+                found,
+                "migrate",
+                Kind::Worker.capabilities(),
+                60,
+                Tree::default(),
+            )
+            .asks_for_checkout()
+        );
+    }
+
+    /// CHECKOUT-2: a reader is never given a checkout, whether its own file asked for one or it
+    /// was met down to a reader from a worker that did, and a replacement is not told it was
+    /// given one it will not have.
+    #[test]
+    fn a_reader_is_given_no_checkout_whatever_a_definition_asks() {
+        let mut definitions = Definitions::default();
+        definitions.insert(
+            Definition::from_file("reviewer", "d", Kind::Reader, None, "", "home").with_checkout(),
+        );
+        let found = definitions.get("reviewer").expect("selectable");
+        assert!(!found.asks_for_checkout());
+        assert!(found.checkout_beyond_its_kind());
+        assert!(
+            !DelegateSpec::new(
+                DelegateId::nth(1),
+                found,
+                "review",
+                Kind::Reader.capabilities(),
+                60,
+                Tree::default(),
+            )
+            .asks_for_checkout()
+        );
+
+        let mut definitions = Definitions::default();
+        definitions.insert(
+            Definition::from_file("migrator", "home", Kind::Worker, None, "", "~/a.md")
+                .with_checkout(),
+        );
+        let admitted = definitions.insert(Definition::from_file(
+            "migrator",
+            "project",
+            Kind::Reader,
+            None,
+            "",
+            ".b.md",
+        ));
+        let found = definitions.get("migrator").expect("selectable");
+        assert_eq!(found.kind(), Kind::Reader);
+        assert!(!found.asks_for_checkout());
+        assert!(found.checkout_beyond_its_kind());
+        assert_eq!(
+            admitted,
+            Admitted::AsWritten,
+            "a reader was told it is given a checkout"
         );
     }
 

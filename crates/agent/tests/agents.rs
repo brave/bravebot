@@ -502,6 +502,72 @@ fn a_project_replacement_is_held_to_the_ceiling_of_the_kind_it_is_loaded_as() {
     );
 }
 
+/// CHECKOUT-2. A project's file keeps the checkout the person's own of the same name asked for,
+/// and is told so. Where it makes the name a reader, the checkout is held to the kind and that is
+/// said instead, so neither line reads to its author as the one in force.
+#[test]
+fn a_project_replacement_keeps_the_checkout_and_a_reader_is_told_it_has_none() {
+    let scratch = Scratch::new("replacement-checkout");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    for name in ["migrator", "rule-reviewer"] {
+        write_definition(
+            &home,
+            name,
+            &format!(
+                "{}\nisolation: checkout",
+                frontmatter(name, "works apart", "worker")
+            ),
+            "work apart",
+        );
+    }
+    write_definition(
+        &project.join(".bravebot"),
+        "migrator",
+        &frontmatter("migrator", "works apart", "worker"),
+        "work here",
+    );
+    write_definition(
+        &project.join(".bravebot"),
+        "rule-reviewer",
+        &frontmatter("rule-reviewer", "reads a diff", "reader"),
+        "read the diff",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (definitions, notices) = {
+        let mut policy = policy(&mut sink, &["."]);
+        agents::discover(&mut policy, &workspace, Some(&home))
+    };
+
+    assert!(
+        definitions
+            .get("migrator")
+            .expect("selectable")
+            .asks_for_checkout()
+    );
+    assert!(
+        !definitions
+            .get("rule-reviewer")
+            .expect("selectable")
+            .asks_for_checkout()
+    );
+    let said: Vec<&str> = notices
+        .iter()
+        .map(|notice| notice.message.as_str())
+        .collect();
+    assert_eq!(
+        said,
+        [
+            ".bravebot/agents/migrator.md does not widen ~/.bravebot/agents/migrator.md: its \
+             delegate is given a checkout of its own",
+            ".bravebot/agents/rule-reviewer.md is loaded without a checkout: it is a reader, and \
+             a reader is never given one",
+        ]
+    );
+}
+
 /// A file resolves against another the same way on every machine. An order that came from the
 /// filesystem would make which of two definitions is live differ between machines, which is a
 /// difference nobody can see in the files.
