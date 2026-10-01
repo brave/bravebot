@@ -30,3 +30,14 @@ body.
 **Never use an em-dash.** Not in documentation, commit messages, the README, code comments, pull
 requests, or anywhere else. Reword instead: a comma, a colon, a semicolon, parentheses, or two
 sentences will always do the job.
+
+**Never write about your own process.** Not in a commit message, a pull request, a spec, a comment
+or a reply. A correction of an earlier claim, or an account of what was guessed, assumed or
+checked, tells a later reader nothing about the code, because they did not see the conversation it
+came from. State what is true about the code in the present tense, as though for the first time.
+Where a correction matters, the corrected fact is all of it: write "an absent store reports
+nothing and the turn spends no subscription", and leave out that an earlier claim said otherwise.
+
+`make check-narration` fails a pull request whose commit messages, title, body or added lines
+contain one of a fixed list of first-person phrases. It does not catch a paraphrase, so the rule
+applies past the list.

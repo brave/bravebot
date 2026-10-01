@@ -1000,3 +1000,56 @@ fn a_server_prompt_carries_what_would_run_and_whether_it_builds() {
         "a server that builds nothing was said to build"
     );
 }
+
+/// Every step crosses, in order and unshortened, because the answer covers the whole plan
+/// (MANIFEST-10). The question carries no answer of its own.
+#[test]
+fn a_plan_prompt_carries_the_task_and_every_step() {
+    use bravebot_agent::confirm::ManifestRequest;
+    let steps: Vec<String> = (1..=40)
+        .map(|number| format!("{number}. [read] read file-{number}.md into `slot{number}`"))
+        .collect();
+    let value = wire::manifest_request(
+        8,
+        &ManifestRequest {
+            task: "summarise every file".into(),
+            steps: steps.clone(),
+        },
+    );
+
+    assert_eq!(
+        value,
+        json!({ "request": 8, "task": "summarise every file", "steps": steps })
+    );
+}
+
+/// The file and each finding cross, and nothing else: no text of the file, and no answer. A
+/// finding is a kind, a location and a mask, so no line of it holds any part of a value
+/// (CRED-19).
+#[test]
+fn an_exposure_prompt_carries_the_file_and_the_findings_and_no_text_of_the_file() {
+    use bravebot_agent::confirm::ExposureRequest;
+    let value = wire::exposure_request(
+        9,
+        &ExposureRequest {
+            path: "config/.env".into(),
+            credentials: vec![
+                "an AWS access key id at config/.env:1, AKIA…MPLE".into(),
+                "a private key at config/.env:4, ----…----".into(),
+            ],
+        },
+    );
+
+    assert_eq!(
+        value,
+        json!({
+            "request": 9,
+            "path": "config/.env",
+            "credentials": [
+                "an AWS access key id at config/.env:1, AKIA…MPLE",
+                "a private key at config/.env:4, ----…----",
+            ],
+            "summary": "let the model read config/.env, which holds 2 credentials",
+        })
+    );
+}

@@ -189,6 +189,26 @@ const CARDS = {
     // path is what `$PATH` resolved that name to, and the workspace is the session's own root.
     why: 'a language and a program out of the agent’s own table, the path that name resolved to, and the project’s root, asked about before any server has answered',
   },
+  manifest: {
+    entry: () => t.askedManifest({ request: 1, task: FORGED_CHROME, steps: [FORGED_CHROME] }),
+    marks: null,
+    // docs/specs/manifest.md MANIFEST-1: the plan is made from the task and nothing else.
+    why: 'the task the person typed, and the agent’s rendering of a plan made from that task alone before anything was read',
+  },
+  exposure: {
+    entry: () => t.askedExposure({ request: 1, path: FORGED_CHROME, credentials: [FORGED_CHROME], summary: 'let the model read a file' }),
+    marks: null,
+    // docs/specs/credential-protection.md CRED-19: a finding is a kind, a location and a mask.
+    why: 'the path the planner named, and the agent’s own line about each finding, which holds no text of the file',
+  },
+  'plan-task': { entry: () => t.planAsked(FORGED_CHROME), marks: null, why: 'what the person typed themselves, as the task of a run' },
+  // What a run releases can be a file's text, so it is held to the container released content gets.
+  'plan-reply': { entry: () => t.planReplied(FORGED_CHROME, 'a-record'), marks: '<pre class="preview">' },
+  'plan-ended': {
+    entry: () => t.planEnded({ run: 1, kind: 'precommit', message: 'internal', category: 'internal', stopped: false, declined: false, problem: FORGED_CHROME, attempt: { goal: FORGED_CHROME, proposed: FORGED_CHROME, plan: FORGED_CHROME, steps: [FORGED_CHROME] }, record: 'a-record' }),
+    marks: null,
+    why: 'the agent’s own sentence about why a run stopped, a plan made from the task alone, and the agent’s account of the steps that ran',
+  },
   ask: {
     entry: () => t.askedQuestions({
       request: 1,

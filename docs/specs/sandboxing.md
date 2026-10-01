@@ -182,7 +182,8 @@ asked for, or names the directory holding it, on the platform where neither was 
 <a id="SANDBOX-6"></a>
 ### SANDBOX-6: every path a policy names is granted, or the policy is refused
 
-A policy is granted as written. A backend that cannot install a grant for one of the paths refuses
+A policy is granted as written, apart from the `.git` writes [SANDBOX-14](#SANDBOX-14) withholds
+on macOS. A backend that cannot install a grant for one of the paths refuses
 the policy and names that path, rather than confining the process to the rest of them. Where a
 backend can grant a path that does not exist yet, the profile carries that grant as named; where it
 cannot, the refusal arrives before the process starts, and again where a path goes away between
@@ -428,6 +429,25 @@ shape of what is at a name a process had to know already; what it withholds is e
 holds and every name a directory lists, which is where a credential is.
 
 `verified-by: bravebot_sandbox::macos::a_confined_process_can_look_at_any_path_and_read_or_list_only_its_grants`
+
+<a id="SANDBOX-14"></a>
+### SANDBOX-14: on macOS a write row does not reach a `.git` beneath it
+
+On macOS a policy that grants any write refuses a write to every path with a `.git` component, in
+any case: creating, changing, renaming into or removing a file or directory named `.git` or inside
+one, under a row the policy writes as under any other. Every other write a row grants is granted.
+On Linux Landlock grants a directory with everything beneath it and has no way to hold one
+subdirectory back, so this clause does not hold there, which is
+[mcp-servers.md](mcp-servers.md)'s known cost. The Windows backend withholds nothing of the kind,
+and no server is started there ([SERVERS-10](mcp-servers.md#SERVERS-10)).
+
+**Why.** git runs the commands a repository's configuration and hooks name, with nothing confining
+them, the next time anybody runs git in it. A confined process that may write a `.git` may
+therefore run code outside its confinement. Seatbelt lets the last rule matching a path decide, so
+the refusal follows the rows it narrows. The default macOS volume opens `.GIT` when git asks for `.git`, which is why
+the case of the name does not matter.
+
+`verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_a_git_directory_beneath_it`
 
 ## Programs a person asked for
 

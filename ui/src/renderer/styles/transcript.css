@@ -397,3 +397,41 @@
   .turn-footer { opacity: 1; }
 }
 
+
+/* ---- what a settings file wrote that is not in force. Folded, so a long list does not push the
+   conversation down. */
+
+.rules-banner summary { cursor: pointer; list-style: none; --leo-icon-color: var(--warn); }
+.rules-banner summary::-webkit-details-marker { display: none; }
+.rules-banner strong { color: var(--ink-primary); font-weight: 600; }
+.rules-banner p { margin: var(--leo-spacing-s) 0 var(--leo-spacing-xs); font: var(--type-caption); color: var(--ink-secondary); }
+.rules-banner ul { margin: var(--leo-spacing-xs) 0; padding-left: var(--leo-spacing-2xl); font: var(--type-caption); }
+.rules-banner code { font-family: var(--mono); overflow-wrap: anywhere; }
+
+/* ---- plan runs */
+
+/* The task of a manifest run. Drawn where a prompt is, and marked so it is not taken for one. */
+.bubble.user.plan-task { border: 1px dashed var(--accent-quiet); }
+.plan-task-mark { display: block; font: var(--type-caption-strong); text-transform: uppercase; opacity: 0.75; margin-bottom: 2px; }
+
+/* What a run released for a screen. Bordered as confined content is, since it can be a file's text. */
+.plan-reply { border: 1px solid var(--confine); border-radius: var(--radius-card); margin: var(--leo-spacing-m) 0; overflow: hidden; }
+.plan-reply-head { display: flex; gap: var(--leo-spacing-m); align-items: baseline; padding: 6px 12px; border-bottom: 1px solid var(--border-hairline); font: var(--type-caption); color: var(--ink-secondary); }
+.plan-reply-head .mark { text-transform: uppercase; font: var(--type-caption-strong); color: var(--confine); }
+.plan-reply-foot { padding: 6px 12px; border-top: 1px solid var(--border-hairline); font: var(--type-caption); color: var(--ink-secondary); }
+
+.plan-ended { border: 1px solid var(--border-subtle); border-radius: var(--radius-card); margin: var(--leo-spacing-m) 0; padding: 10px 12px; }
+.plan-ended.failed { border-color: var(--removed); }
+.plan-ended p { margin: var(--leo-spacing-xs) 0; color: var(--ink-secondary); font: var(--type-caption); }
+.plan-ended summary { cursor: pointer; font: var(--type-caption); margin-top: 6px; }
+.plan-text { margin: var(--leo-spacing-xs) 0 0; font: var(--type-code); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+
+/* A saved plan run, read only. */
+.run-record-body { padding: 12px 2px 24px; }
+.run-record-body h2 { font: var(--type-caption-strong); text-transform: uppercase; color: var(--ink-secondary); margin: var(--leo-spacing-xl) 0 var(--leo-spacing-xs); }
+.run-record-body section p { margin: var(--leo-spacing-xs) 0; font: var(--type-caption); }
+.run-record-notice { border: 1px solid var(--border-subtle); border-radius: var(--radius-card); padding: 10px 12px; background: var(--surface-sunken); }
+.run-record-notice p { margin: var(--leo-spacing-xs) 0 var(--leo-spacing-m); font: var(--type-caption); color: var(--ink-secondary); }
+.run-record-outcome.stopped strong { color: var(--removed); }
+.run-record-outcome.finished strong { color: var(--added); }
+.run-record-meta { margin-top: 18px; font: var(--type-caption); color: var(--ink-tertiary); overflow-wrap: anywhere; }

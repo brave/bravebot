@@ -419,6 +419,10 @@ const ALLOWED = new Set([
   'vet.reply',
   'fetch.reply',
   'server.reply',
+  'manifest.run',
+  'manifest.read',
+  'manifest.reply',
+  'exposure.reply',
   'ask.reply',
   'trust.reply',
   'permissions.list',
@@ -486,6 +490,11 @@ function noteOpenedRoot(method: string, params: unknown, ok: unknown): void {
  */
 function sanitised(method: string, params: unknown): Record<string, unknown> {
   const held = (params ?? {}) as Record<string, unknown>
+  // A manifest run takes a task and no files. Only the three fields it reads are forwarded, so
+  // a window cannot name a file to it under any key.
+  if (method === 'manifest.run') {
+    return { session: held.session, task: held.task, model: held.model }
+  }
   if (method !== 'turn.send') return held
   // `recall` joins the two lists for a smaller reason than theirs. It decides whether a prompt is
   // one a person can find again, and that is a claim about who asked — which this process makes

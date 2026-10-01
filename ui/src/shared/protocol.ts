@@ -104,6 +104,26 @@ export interface TodoRow {
   status: TodoStatus
 }
 
+/**
+ * The permission rules a session opened under, read from the settings files when it opened.
+ *
+ * `deny`, `ask` and `allow` are the rules in force, as the files spelled them. The rest is what
+ * a file wrote that is not in force: an entry that is not a rule, an `allow` rule a project's
+ * file wrote, and a directory a file asked to have opened. Rule text is what a person wrote in a
+ * settings file.
+ */
+export interface SettingsRules {
+  deny: string[]
+  ask: string[]
+  allow: string[]
+  /** An entry nothing could read as a rule, and the agent's sentence about why. */
+  unreadable: { rule: string; said: string }[]
+  /** An `allow` rule a project's settings file wrote. It answers no question here. */
+  proposed: { rule: string; file: string }[]
+  /** A directory a settings file asked to have opened. This app opens none of them. */
+  directories: string[]
+}
+
 export interface SessionSummary {
   id: string
   directory: string
@@ -112,6 +132,11 @@ export interface SessionSummary {
   title: string
   updated: number
   bytes: number
+  /**
+   * Whether the record is a manifest run. A run has no conversation, so it is read with
+   * `manifest.read` and cannot be opened or continued. Absent from an older bridge.
+   */
+  manifest?: boolean
 }
 
 export interface SessionRecord {
@@ -168,6 +193,8 @@ export interface OpenedSession {
    * says it once at the top of the transcript and goes on showing it (CHECK-11).
    */
   autoVetting: boolean
+  /** Absent from an older bridge, which read no rules. */
+  settingsRules?: SettingsRules | null
 }
 
 export interface ModelOption {
@@ -211,6 +238,8 @@ export interface ForkedSession {
   keeping?: string | null
   /** The parent's, as it opened: the child carries on its conversation. */
   autoVetting: boolean
+  /** Absent from an older bridge, which read no rules. */
+  settingsRules?: SettingsRules | null
   /** As on `OpenedSession`, read again for the child. */
   serversNote: string | null
   parent: {
@@ -380,6 +409,94 @@ export interface ServerRequest {
   summary: string
 }
 
+/**
+ * A frozen plan a manifest run is about to walk.
+ *
+ * `task` is what the person typed. `steps` has one line per step, in order, as the agent
+ * rendered it. Every line is drawn, because the answer covers the whole plan.
+ */
+export interface ManifestRequest {
+  request: number
+  task: string
+  steps: string[]
+}
+
+/**
+ * What a manifest run produced, whether or not it finished.
+ *
+ * All of it came from a planner that was shown the task and nothing else, or from the agent's
+ * own account of what it did. `proposed` is the planner's manifest verbatim, which is all there
+ * is to read when it could not be made into a plan.
+ */
+export interface PlanAttempt {
+  goal: string | null
+  proposed: string | null
+  plan: string | null
+  steps: string[]
+}
+
+/**
+ * A saved manifest run, read back with `manifest.read`.
+ *
+ * `failure` is the agent's sentence about why the run stopped, and is null for a run that
+ * finished. What the run released for a screen is not saved, so it is not here.
+ */
+export interface RunRecord {
+  record: SessionRecord
+  model: string | null
+  manifest: PlanAttempt & { failure: string | null }
+}
+
+/** A manifest run that finished. `record` names the run's own record, where one was written. */
+export interface ManifestDone {
+  run: number
+  /**
+   * What the plan's last step released for a screen. This can be the text of a file nobody
+   * vouched for, so it is drawn as plain text in a marked container and never formatted.
+   */
+  reply: string
+  model: string
+  steps: number
+  clean: boolean
+  tokens: number
+  outputTokens: number
+  notices?: string[]
+  attempt: PlanAttempt | null
+  record: string | null
+}
+
+/** A manifest run that stopped: declined, stopped by the person, or failed. */
+export interface ManifestError {
+  run: number
+  kind: string
+  message: string
+  category: string | null
+  attempts?: number | null
+  status?: number | null
+  /** Whether the person stopped it. A stopped run is not recorded. */
+  stopped: boolean
+  /** Whether the plan was put to the person and declined. Read this, not the wording of `problem`. */
+  declined: boolean
+  /** The agent's own sentence about why, where it wrote one. Absent for a service failure. */
+  problem: string | null
+  attempt: PlanAttempt | null
+  record: string | null
+  notices?: string[]
+}
+
+/**
+ * A vouched file the planner asked to read, which the scan found a credential in.
+ *
+ * `credentials` has one line per finding, as the agent wrote it: the kind, where it is, and a
+ * mask of the value. No line holds any part of a value, and the file's text is not sent.
+ */
+export interface ExposureRequest {
+  request: number
+  path: string
+  credentials: string[]
+  summary: string
+}
+
 /** A pipeline the planner wants to run. */
 export interface RunRequest {
   request: number
@@ -514,7 +631,8 @@ export interface EventMap {
   quarantined: Shown
   todos: { rows: TodoRow[] }
   tokens: { written: number }
-  audit: { turn: number; event: Record<string, unknown> }
+  /** Numbered by `turn`, or by `run` for a manifest run, which is not one of the turns. */
+  audit: { turn?: number; run?: number; event: Record<string, unknown> }
   'confirm.request': ConfirmRequest
   'run.request': RunRequest
   'output.request': OutputRequest
@@ -522,6 +640,11 @@ export interface EventMap {
   'vet.request': VetRequest
   'fetch.request': FetchRequest
   'server.request': ServerRequest
+  'manifest.request': ManifestRequest
+  'exposure.request': ExposureRequest
+  'manifest.started': { run: number }
+  'manifest.done': ManifestDone
+  'manifest.error': ManifestError
   'ask.request': AskRequest
   'turn.done': TurnDone
   'turn.error': TurnError

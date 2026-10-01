@@ -350,6 +350,7 @@ const Session = memo(function Session({
           <span className="session-name">{session.title}</span>
         </span>
         <span className="session-where">
+          {session.manifest && <><span className="plan-run" data-tooltip="A plan run. It can be read and not continued.">Plan run</span> · </>}
           {info?.bot && <>{info.bot.name} · </>}
           {session.project}{session.branch && <span className="branch"> · {session.branch}</span>}
         </span>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Modal } from './Modal'
-import type { KeptTrust } from '../../shared/protocol'
+import type { KeptTrust, SettingsRules } from '../../shared/protocol'
 import { Alert, Button, Icon } from '../nala'
 import { IconButton } from './IconButton'
 
@@ -9,6 +9,8 @@ interface Grants {
   commands: { program: string; startedAs: string; args: string[]; display: string }[]
   /** The yes kept about this directory for later sessions (TRUST-23), read when this was asked. */
   remembered?: KeptTrust | null
+  /** The rules this conversation opened under. Absent from an older bridge. */
+  settingsRules?: SettingsRules | null
 }
 export function Permissions({ session, onClose, onRemembered }: { session: string; onClose: () => void; onRemembered?: (kept: KeptTrust | null) => void }): React.JSX.Element {
   const [grants, setGrants] = useState<Grants | null>(null)
@@ -51,6 +53,7 @@ export function Permissions({ session, onClose, onRemembered }: { session: strin
         <Button size="small" kind="plain-faint" isDisabled={busy} onClick={() => void request('permissions.revoke', { kind: 'remembered' })}>Forget</Button></li></ul>}
       {grants && !grants.remembered && <p className="grant-empty"><Icon name="pin" />No answer is remembered for this directory.</p>}
     </section>
+    <RulesInForce rules={grants?.settingsRules ?? null} />
   </Modal>
 }
 
@@ -73,4 +76,29 @@ export function PathPermissions({ paths, busy, onRevoke }: { paths: Grants['path
     {undecided.length > 0 && <section className="grant-section"><h3>Paths awaiting a decision</h3><p className="grant-note">These paths require write approval and their contents remain untrusted until you grant trust.</p>
       <ul className="grant-list">{undecided.map((grant) => <li className="grant-row" key={grant.path}><Icon name="radio-unchecked" /><code>{grant.path || 'Project root'}</code><span className="grant-state">Not decided</span></li>)}</ul></section>}
   </>
+}
+
+/**
+ * The permission rules a conversation opened under, read only.
+ *
+ * They come from settings files and were read when the conversation opened, so there is nothing
+ * here to revoke. Editing the file changes them for the next conversation.
+ */
+export function RulesInForce({ rules }: { rules: SettingsRules | null }): React.JSX.Element {
+  const lists: [string, string, string[]][] = [
+    ['Refused', 'Refused before anything is asked or started.', rules?.deny ?? []],
+    ['Always asked', 'You are asked, whatever else would have answered.', rules?.ask ?? []],
+    ['Not asked', 'The question is answered for you. What a command prints is not trusted because of it.', rules?.allow ?? []],
+  ]
+  const none = lists.every(([, , held]) => held.length === 0)
+  return <section className="grant-section settings-rules">
+    <h3>Rules from settings files</h3>
+    <p className="grant-note">Read when this conversation opened. Edit the settings file to change them; the change applies to the next conversation. Refused comes first, then always asked, then not asked. These rules are not applied to a plan run.</p>
+    {none && <p className="grant-empty"><Icon name="settings" />No permission rules are in force.</p>}
+    {lists.filter(([, , held]) => held.length > 0).map(([name, meaning, held]) => <div key={name}>
+      <h4>{name}</h4>
+      <p className="grant-note">{meaning}</p>
+      <ul className="grant-list">{held.map((rule, index) => <li className="grant-row" key={index}><code>{rule}</code></li>)}</ul>
+    </div>)}
+  </section>
 }

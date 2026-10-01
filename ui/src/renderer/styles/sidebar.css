@@ -375,3 +375,6 @@
   color: var(--ink-tertiary);
 }
 .recent-menu leo-menu-item[aria-disabled='true'] { color: var(--ink-disabled); cursor: default; }
+
+/* A plan run can be read and not continued, which its row says before it is opened. */
+.session-where .plan-run { color: var(--ink-accent); }

@@ -1195,12 +1195,6 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   of it already. Until those are settled a credential in a file reaches the planner through any of
   the three, and the disclosure is the same one CRED-15 is about.
 
-- **The desktop application declines rather than asking.** Its protocol has no question of this
-  shape and its front end draws no screen for one, so a file the scan objects to is held back from
-  the planner there whatever the person would have said. It is the same answer that application
-  gives a fetch, a language server and a manifest plan, and it is the safe direction: what it costs
-  is the text of one file, and the planner is told why it did not get it.
-
 - **An answer lasts the session and no longer.** Agreeing that a file may be read is remembered per
   path while the session lives and is written nowhere, so the next session asks about the same
   `.env` again. Carrying it forward needs a name an answer can be filed under across runs, which is

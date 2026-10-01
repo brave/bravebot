@@ -408,3 +408,5 @@
 @media (forced-colors: active) {
   .grant-list, .bot-conversations, .bot-memory-panel, .bot-overview-card { border-color: CanvasText; }
 }
+
+.settings-rules h4 { margin: var(--leo-spacing-l) 0 var(--leo-spacing-xs); font: var(--type-meta-strong); }

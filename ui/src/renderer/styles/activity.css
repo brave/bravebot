@@ -178,7 +178,8 @@
 .narration leo-icon,
 .attached leo-icon,
 .watch-turn leo-icon { flex: none; align-self: center; }
-.narration { font-style: italic; }
+/* Line breaks are kept: a manifest run narrates its goal and its plan as several lines. */
+.narration { font-style: italic; white-space: pre-wrap; }
 .attached {
   overflow: hidden;
   white-space: nowrap;

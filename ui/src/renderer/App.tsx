@@ -8,6 +8,8 @@ import type {
   ForkedSession,
   KeptTrust,
   OpenedSession,
+  RunRecord,
+  SettingsRules,
   Phase,
   SessionSummary,
   Shown,
@@ -114,6 +116,8 @@ interface Live {
   archived: number
   /** Whether the session opened with auto-vetting on, as the agent settled it then. */
   autoVetting: boolean
+  /** The permission rules this session opened under. Null where the bridge reported none. */
+  rules?: SettingsRules | null
   /**
    * The entry id of a prompt this window has sent and not yet been told the ordinal of.
    *
@@ -205,6 +209,8 @@ export function App(): React.JSX.Element {
   const [agentSettings, setAgentSettings] = useState(false)
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [live, renderLive] = useState<Live | null>(null)
+  /** A saved manifest run being read. Shown in place of a session, and only while none is. */
+  const [reading, setReading] = useState<RunRecord | null>(null)
   const liveRef = useRef<Live | null>(null)
   const handleRef = useRef<string | null>(null)
   const openedLives = useRef(new Map<string, Live>())
@@ -222,6 +228,8 @@ export function App(): React.JSX.Element {
     liveRef.current = next
     handleRef.current = next?.handle ?? null
     if (next) openedLives.current.set(next.handle, next)
+    // A session on screen takes the place of a run being read.
+    if (next) setReading(null)
     renderLive(next)
   }, [])
   const updateSession = useCallback((handle: string, action: React.SetStateAction<Live | null>) => {
@@ -416,6 +424,15 @@ export function App(): React.JSX.Element {
   const showSession = useCallback(
     async (summary: SessionSummary, focus?: number, bot?: { slug: string; model: string | null }) => {
     try {
+      // A plan run has no conversation, so it is read and not opened. No session is made for
+      // it. Sessions already open stay open behind it.
+      if (summary.manifest) {
+        const run = await call<RunRecord>('manifest.read', { directory: summary.directory, id: summary.id })
+        setLive(null)
+        setReading(run)
+        setProblem(null)
+        return
+      }
       if (summary.id.startsWith('draft:')) {
         const cached = [...openedLives.current.values()].find((item) => item.draftId === summary.id)
         if (cached) setLive(cached)
@@ -477,6 +494,7 @@ export function App(): React.JSX.Element {
         bot: bot ? { slug: bot.slug, grounded: false } : null,
         archived: opened.archived,
         autoVetting: opened.autoVetting,
+        rules: opened.settingsRules ?? null,
       })
       const notes = [opened.branchNote, opened.buildNote, opened.frontNote, opened.serversNote].filter(Boolean) as string[]
       setProblem(notes.length ? notes.join(' · ') : null)
@@ -501,6 +519,7 @@ export function App(): React.JSX.Element {
         branch: string | null
         model: string | null
         autoVetting: boolean
+        settingsRules?: SettingsRules | null
         serversNote: string | null
         remembered?: KeptTrust | null
         keeping?: string | null
@@ -537,6 +556,7 @@ export function App(): React.JSX.Element {
         bot: bot ? { slug: bot.slug, grounded: false } : null,
         archived: 0,
         autoVetting: made.autoVetting,
+        rules: made.settingsRules ?? null,
       })
       setProblem(made.serversNote)
     } catch (error) {
@@ -858,6 +878,36 @@ export function App(): React.JSX.Element {
     [readBots],
   )
 
+  /**
+   * Start a manifest run for a task: plan all of it, ask once, then walk the plan.
+   *
+   * One run per press. The session does not hold this as a mode, so the next message is an
+   * ordinary turn unless the button is pressed again.
+   */
+  const plan = useCallback(async (task: string) => {
+    const handle = handleRef.current
+    if (!handle) return
+    const model = openedLives.current.get(handle)?.model ?? null
+    updateSession(handle, (old) => old ? { ...old, running: true, entries: [...old.entries, t.planAsked(task)] } : old)
+    try {
+      await call('manifest.run', { session: handle, task, model })
+    } catch (error) {
+      if (error instanceof Unconfigurable) setUnconfigured(error.message)
+      updateSession(handle, (old) => old ? { ...old, running: false, queuePaused: true, entries: [...old.entries, t.errored(error instanceof Unconfigurable ? error.message : String(error))] } : old)
+    }
+  }, [])
+
+  /** Start a run from whatever is in the composer, where a run can take it. */
+  const submitPlan = useCallback(() => {
+    const task = draft.trim()
+    if (!task || !handleRef.current || live?.running || live?.askingTrust || backendReady === false) return
+    // A run reads nothing before it plans, so it cannot take attached files, and a bot's turn
+    // carries a briefing a run has no place for.
+    if (live?.attachments?.length || live?.bot) return
+    setDraft('')
+    void plan(task)
+  }, [draft, live?.running, live?.askingTrust, live?.attachments, live?.bot, plan, backendReady])
+
   /** Send whatever is in the composer, on the same terms the Send button uses. */
   const submit = useCallback(() => {
     const prompt = draft.trim()
@@ -1092,6 +1142,7 @@ export function App(): React.JSX.Element {
         // in this build it asks for nothing at all.
         archived: 0,
         autoVetting: forked.autoVetting,
+        rules: forked.settingsRules ?? null,
         forkedFrom: {
             directory: forked.parent.directory,
             id: forked.parent.id,
@@ -1219,7 +1270,7 @@ export function App(): React.JSX.Element {
         sessions={ownSessions}
         onNewBotConversation={newBotConversation}
         onBotConversation={botConversation}
-        openId={live?.summary.id ?? live?.draftId ?? undefined}
+        openId={live?.summary.id ?? live?.draftId ?? reading?.record.id ?? undefined}
         forked={forked}
         onOpen={stableShowSession}
         onNew={stableCreate}
@@ -1283,6 +1334,8 @@ export function App(): React.JSX.Element {
         onDraft={setDraft}
         onModel={(model) => void chooseModel(model)}
         onSubmit={submit}
+        onPlan={submitPlan}
+        reading={reading}
         onCancel={cancel}
         canExport={canExport}
         includeTools={includeTools}
@@ -1398,6 +1451,21 @@ export function apply(
         return { ...old, entries: [...old.entries, t.askedFetch(message.data)] }
       case 'server.request':
         return { ...old, entries: [...old.entries, t.askedServer(message.data)] }
+      case 'manifest.request':
+        return { ...old, entries: [...old.entries, t.askedManifest(message.data, t.narrowing(old.rules))] }
+      case 'exposure.request':
+        return { ...old, entries: [...old.entries, t.askedExposure(message.data)] }
+      // A run is not a turn, so it adds no turn marker and no reply to the conversation.
+      case 'manifest.started':
+        return { ...old, running: true, phase: null, checking: null, tokens: 0 }
+      case 'manifest.done':
+        refresh()
+        return { ...old, running: false, phase: null, checking: null, outcome: 'complete',
+          entries: [...old.entries, t.planReplied(message.data.reply, message.data.record)] }
+      case 'manifest.error':
+        refresh()
+        return { ...old, running: false, phase: null, checking: null, queuePaused: true,
+          entries: [...t.interruptPending(old.entries), t.planEnded(message.data)] }
       case 'vouch.request':
         return { ...old, entries: [...old.entries, t.askedVouch(message.data)] }
       case 'ask.request':

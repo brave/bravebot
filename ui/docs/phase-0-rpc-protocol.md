@@ -148,9 +148,9 @@ Honest limits. Two things could eventually want an upstream change, and neither 
 - **Structured `doctor` output.** The checks live in `crates/cli/src/main.rs`, a binary,
   so they cannot be called as a library. v1 shells out to `bravebot doctor` and shows its text
   (§7.3). A small upstream extraction would be nicer and is optional.
-- **New approval types.** Command, fetch and language-server approval are implemented. The
-  manifest-plan request is currently refused; adding UI support requires adapting the
-  bridge, not editing upstream.
+- **New approval types.** Command, fetch, language-server, plan and credential-exposure
+  approval are implemented. MCP requests are currently refused; adding UI support requires
+  adapting the bridge, not editing upstream.
 
 If anything else appears to need an upstream edit, that is a signal the bridge is
 reaching for something it should not, and it should be raised rather than patched.
@@ -616,11 +616,11 @@ See §8. Returns `{}`. An unknown or already-answered `request` errors
 
 #### Other decision replies
 
-`run.reply`, `output.reply`, `vouch.reply`, `fetch.reply`, `server.reply` and `ask.reply`
-all require `session` and `request`, and must match the pending question's kind as well as
-its ID. `run.reply` accepts `decision` and `remember`; only an approval with literal
-`remember: true` records a command grant. Output, vouch, fetch and server replies accept
-`decision`. A fetch reply has no `remember`: an approval covers the one URL it was given
+`run.reply`, `output.reply`, `vouch.reply`, `fetch.reply`, `server.reply`,
+`manifest.reply`, `exposure.reply` and `ask.reply` all require `session` and `request`, and
+must match the pending question's kind as well as its ID. `run.reply` accepts `decision` and `remember`; only an approval with literal
+`remember: true` records a command grant. Output, vouch, fetch, server, manifest and
+exposure replies accept `decision`. A fetch reply has no `remember`: an approval covers the one URL it was given
 for. A server reply has none either: an approval lasts as long as the session does.
 `ask.reply` accepts an `answers` array, whose entries contain `typed` text or `chosen`
 indices; unreadable entries decline. Choices are fitted to the question before use.
@@ -730,6 +730,11 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `vouch.request` | preview and label fields from `wire::vouch_request` | trust a quarantined path |
 | `fetch.request` | `{ request, url, host, ambient, summary }` | fetch one URL; `host` is the agent's reading of `url` and is drawn as sent |
 | `server.request` | `{ request, language, program, workspace, runsBuildTooling, summary }` | start a language server for the session |
+| `manifest.request` | `{ request, task, steps }` | run a frozen plan; one line per step |
+| `manifest.started` | `{ run }` | a manifest run began; `run` counts runs in this open session |
+| `manifest.done` | `{ run, reply, model, steps, clean, tokens, outputTokens, notices, attempt, record, trust }` | a run finished |
+| `manifest.error` | `{ run, kind, message, category, attempts, status, stopped, declined, problem, attempt, record, notices }` | a run stopped |
+| `exposure.request` | `{ request, path, credentials, summary }` | let the planner read a file holding a credential |
 | `ask.request` | `{ request, prompts }` | user questions |
 | `trust.request` | `{ directory, keeping }` | initial project trust; `keeping` as §9 |
 | `turn.done` | see §8.2 | `Ok(Outcome)` |
@@ -977,8 +982,10 @@ the directory was made.
 
 ## 11. Current limits
 
-- Manifest-plan approval requests are refused until their UI is implemented. Command,
-  output, vouch, fetch, language-server and question approvals are implemented.
+- MCP approval requests are refused until their UI is implemented. Command, output, vouch,
+  fetch, language-server, plan, credential-exposure and question approvals are implemented.
+- A manifest run's audit events carry `run` and no `turn`. The window does not show them yet.
+- What a manifest run released for a screen is not saved, so a run read back does not show it.
 - Replies arrive whole in `turn.done`; output-token events report counts, not text.
 - MCP configuration, subscription import and skills authoring have no dedicated UI.
 - File browsing, previews and attachments are Electron IPC features, not RPC methods.
@@ -1173,4 +1180,45 @@ Still open:
   put back after it, so a language approved on one message is not asked about on the next and
   its index is built once. They are never written to a record: a reopened or forked session
   starts with none and asks. Closing the session stops them, and so does the process ending.
+- `manifest.run` takes `session`, `task` and an optional `model`, and answers `{ run }` once the
+  run has begun. It is refused with `bad_request` for an empty task, for any `files`, `dropped`
+  or `attachments`, and before `trust.reply`. It is refused with `turn_in_flight` while a turn
+  or another run is in flight. `turn.cancel` stops a run.
+- A run is not a turn. The conversation is not sent to the planner and nothing is added to it,
+  the session's turn count does not change, and the session's record is not written. The run
+  is saved as its own record by `bravebot_session::sessions::record_manifest_run`, and
+  `record` names it. A run the person stopped is not saved, and `record` is null.
+- `manifest.request` carries `request`, `task` and `steps`. `manifest.reply` carries the
+  session, request and explicit decision. An approval covers that plan and does not approve its
+  writes, which arrive as `confirm.request` when their steps are reached.
+- `manifest.error` reports the cause of the failure in `kind` and `category`. `declined` says
+  the plan was put to the person and not approved. `stopped` says the person stopped the run.
+  `problem` is the agent's own sentence, and is null for a model service failure.
+  `attempt` holds `goal`, `proposed`, `plan` and `steps`, whatever the run got as far as making.
+- `manifest.done` carries `reply`, which is what the plan's last step released for a screen.
+  It can be the text of a file nobody vouched for. A front end draws it as plain text in a
+  marked container, and does not add it to the conversation.
+- Every row of `session.list` carries `manifest`, which is true for a manifest run's record.
+  A run has no conversation, so `session.open` refuses one with `bad_request` and makes no
+  session. The terminal's picker refuses one in the same way.
+- `manifest.read` takes `directory` and `id` and returns `{ record, model, manifest }`. It
+  opens no session, so there is nothing to close afterwards. `manifest` holds `goal`,
+  `proposed`, `plan` and `steps`, as `attempt` does, and `failure`, which is the agent's
+  sentence about why the run stopped and is null for a run that finished. It is refused with
+  `bad_request` for a session's record, and with `no_such_session` for an id that names none.
+- `exposure.request` carries `request`, `path`, `credentials` and `summary`. `credentials` has
+  one line per finding, as the agent wrote it: the kind, where it is, and a mask of the value.
+  No part of a value and no text of the file is sent. `exposure.reply` carries the session,
+  request and explicit decision, and its kind is distinct from every other reply's.
+- An approval covers the file for the session, as the agent keeps it. It is not written to the
+  record, so a reopened or new session asks again.
+- `session.new`, `session.open`, `session.fork` and `permissions.list` carry `settingsRules`:
+  `{ deny, ask, allow, unreadable, proposed, directories }`. The first three are the rules in
+  force, as the files spelled them. `unreadable` holds `{ rule, said }` for each entry that is
+  not a rule, where `said` is the agent's sentence about why. `proposed` holds `{ rule, file }`
+  for each `allow` rule a checkout wrote, which is not in force. `directories` holds the names
+  in `additionalDirectories`, none of which is opened.
+- The rules are read when a session opens and kept for its turns. A fork takes its parent's.
+  A settings file edited while a session is open governs the next one.
+- A manifest run is passed the session's rules, and the agent's runner does not read them.
 

@@ -58,7 +58,7 @@ its digest, so no package manager runs, and turns off everything except reading 
    ```
      gmail   stdio   node /Users/you/google-workspace-mcp/dist/index.js
              variables: BROWSER (stored), GEMINI_CLI_WORKSPACE_FORCE_FILE_STORAGE (stored), WORKSPACE_FEATURE_OVERRIDES (stored), PATH
-             directory: /Users/you/google-workspace-mcp
+             directory, which it may write: /Users/you/google-workspace-mcp
              digest: 40ec293a
    ```
 

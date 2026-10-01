@@ -550,3 +550,14 @@
 }
 .expanded-diff .diff { max-height: 65vh; }
 .expanded-diff .diff-review { margin-top: var(--leo-spacing-l); }
+
+/* A file that holds a credential is bordered as a warning, since a yes discloses the value. */
+.confirm.exposure { border-color: var(--warn); border-width: 2px; }
+.exposure-findings { margin: var(--leo-spacing-xs) 0 0; padding-left: var(--leo-spacing-2xl); }
+.exposure-findings code { font: var(--type-code); overflow-wrap: anywhere; }
+
+/* A plan to approve. The steps scroll inside the card so a long plan keeps its buttons in reach. */
+.confirm.manifest .confirm-head .manifest-count { font-family: inherit; color: var(--ink-secondary); }
+.manifest-steps { list-style: none; margin: 0; padding: var(--leo-spacing-m) 12px; max-height: 320px; overflow: auto; border-top: 1px solid var(--border-hairline); }
+.manifest-steps li { padding: 2px 0; }
+.manifest-steps code { font: var(--type-code); white-space: pre-wrap; overflow-wrap: anywhere; }

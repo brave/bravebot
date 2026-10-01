@@ -3011,6 +3011,134 @@ fn the_sessions_own_directory_stays_reachable_where_reads_stay_in_the_workspace(
         .expect("the session's own directory is still the session's");
 }
 
+/// PERM-16: the key holds the file tools to the working directory, so the working directory may not
+/// move outward. A parent holds whatever was refused beside the old root, so the move would reach by
+/// relocation what the key refuses by name.
+///
+/// The failure this rejects is `change_root` not consulting the key, which is what shipped: the move
+/// succeeded and a file refused a moment earlier read from the new root.
+#[test]
+fn a_move_outward_is_refused_where_reads_stay_in_the_workspace() {
+    let scratch = Scratch::new("inside-cd-outward");
+    let tree = scratch.path.canonicalize().expect("canonical scratch");
+    let root = tree.join("project");
+    let beside = tree.join("beside");
+    std::fs::create_dir_all(&root).expect("create the root");
+    std::fs::create_dir_all(&beside).expect("create the directory beside it");
+    std::fs::write(beside.join("outside.txt"), "not this session's").expect("write the file");
+
+    let mut workspace = Workspace::new(&root)
+        .expect("workspace")
+        .with_reads_kept_inside(true);
+
+    // Refused by name first, so the move is the only other way to that reach.
+    workspace
+        .resolve_directory(beside.to_str().expect("utf-8 path"))
+        .expect_err("a directory beside the root must not resolve");
+
+    let said = workspace
+        .change_root(tree.to_str().expect("utf-8 path"))
+        .expect_err("the working directory must not move outward")
+        .to_string();
+    assert!(
+        said.contains("permissions.readsStayInWorkspace"),
+        "the refusal did not name the key that made it: {said}"
+    );
+
+    // The root did not move, so the file the parent holds is unreachable still. Read through the
+    // ordinary path rather than the containment helper, since that is how a turn would reach it.
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    let path = Labelled::trusted(beside.join("outside.txt").display().to_string());
+    workspace
+        .read(&mut policy, &path)
+        .expect_err("a refused move left the parent's file readable");
+
+    // Without the key the same move is allowed, so the refusal is the setting and not the fixture.
+    let mut ordinary = Workspace::new(&root).expect("workspace");
+    ordinary
+        .change_root(tree.to_str().expect("utf-8 path"))
+        .expect("a move outward is ordinary where no layer asked for the key");
+}
+
+/// PERM-16: a move further into the tree is not refused. The key holds the tools to the working
+/// directory, and a directory inside it was reachable already, so moving there opens nothing.
+///
+/// Refusing it would make the key refuse navigation it has no reason to, and the clause claims only
+/// that reach does not grow.
+#[test]
+fn a_move_inward_is_allowed_where_reads_stay_in_the_workspace() {
+    let scratch = Scratch::new("inside-cd-inward");
+    let root = scratch.path.canonicalize().expect("canonical scratch");
+    let within = root.join("within");
+    std::fs::create_dir_all(&within).expect("create a directory inside the root");
+
+    let mut workspace = Workspace::new(&root)
+        .expect("workspace")
+        .with_reads_kept_inside(true);
+
+    let moved = workspace
+        .change_root(within.to_str().expect("utf-8 path"))
+        .expect("a move inside the working directory is not refused");
+    assert_eq!(moved.root, within, "the move did not land where it named");
+    assert!(
+        workspace.reads_stay_inside(),
+        "the key was dropped by the move"
+    );
+}
+
+/// PERM-16: a name inside the root that reaches outside it is a move outward, so the key refuses it.
+///
+/// The failure this rejects is a guard written against the name `change_root` was given rather than
+/// the path it canonicalizes to. `project/doorway` is inside the root by every spelling test, so such
+/// a guard allows this move and the key's reach grows through a link a turn could have written.
+#[cfg(unix)]
+#[test]
+fn a_move_through_a_link_out_of_the_tree_is_refused_where_reads_stay_in_the_workspace() {
+    let scratch = Scratch::new("inside-cd-through-a-link");
+    let tree = scratch.path.canonicalize().expect("canonical scratch");
+    let root = tree.join("project");
+    let beside = tree.join("beside");
+    std::fs::create_dir_all(&root).expect("create the root");
+    std::fs::create_dir_all(&beside).expect("create the directory beside it");
+    std::fs::write(beside.join("outside.txt"), "not this session's").expect("write the file");
+    let doorway = root.join("doorway");
+    std::os::unix::fs::symlink(&beside, &doorway).expect("link out of the root");
+
+    let mut workspace = Workspace::new(&root)
+        .expect("workspace")
+        .with_reads_kept_inside(true);
+
+    let said = workspace
+        .change_root(doorway.to_str().expect("utf-8 path"))
+        .expect_err("a move through a link out of the tree must be refused")
+        .to_string();
+    assert!(
+        said.contains("permissions.readsStayInWorkspace"),
+        "the refusal did not name the key that made it: {said}"
+    );
+
+    // The root did not move, so what the link reaches is unreachable still.
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    let path = Labelled::trusted(doorway.join("outside.txt").display().to_string());
+    workspace
+        .read(&mut policy, &path)
+        .expect_err("a refused move left the linked file readable");
+}
+
 /// The point of the attachment read: a binary file, which every other read here refuses.
 #[test]
 fn an_attachment_is_read_as_a_data_uri_though_it_is_binary() {
@@ -5559,6 +5687,151 @@ fn a_repository_a_deny_rule_names_is_not_opened() {
         "a repository whose .git a rule denies was read: {:?}",
         refused.map(|answer| answer.label())
     );
+}
+
+/// The policy a checkout is asked under: `trusted` given to the map, `denied` as deny rules.
+fn checkout_policy<'a>(
+    workspace: &Workspace,
+    sink: &'a mut RecordingSink,
+    trusted: &[&str],
+    denied: &[&str],
+) -> Policy<'a, RecordingSink> {
+    let mut trust = TrustStore::new(workspace.root());
+    for path in trusted {
+        trust.trust(path);
+    }
+    Policy::begin(routing(), ReleasePlan::new(), all_file_capabilities(), sink)
+        .expect("policy")
+        .with_trust(trust)
+        .with_permissions(denying(denied))
+}
+
+/// CHECKOUT-4. A checkout is made only of a repository read_git would open, so a repository the
+/// map does not trust, or whose `.git` a deny rule covers, or that sends a read elsewhere, gets
+/// none, and nothing is written.
+#[test]
+fn a_checkout_is_made_only_of_a_repository_read_git_would_open() {
+    use bravebot_agent::git::Declined;
+    use bravebot_agent::git::checkout::{Bound, Refused};
+    let cases: [(&str, &[&str], &[&str], Declined); 4] = [
+        ("untrusted", &["README"], &[], Declined::Untrusted),
+        ("fenced", &["."], &["Read(./.git)"], Declined::Fenced),
+        (
+            "fenced-file",
+            &["."],
+            &["Read(./.git/config)"],
+            Declined::Fenced,
+        ),
+        ("linked", &["."], &[], Declined::LinkedGitDir),
+    ];
+    for (name, trusted, denied, expected) in cases {
+        let scratch = Scratch::new(&format!("checkout-declined-{name}"));
+        let elsewhere = Scratch::new(&format!("checkout-declined-{name}-target"));
+        if expected == Declined::LinkedGitDir {
+            let real = elsewhere.path.join("real");
+            std::fs::create_dir(&real).expect("real repository");
+            repository::commit_files(&real, &[("README", "hello\n")], "first");
+            std::fs::write(
+                scratch.path.join(".git"),
+                format!("gitdir: {}\n", real.join(".git").display()),
+            )
+            .expect(".git file");
+        } else {
+            repository::commit_files(&scratch.path, &[("README", "hello\n")], "first");
+        }
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut sink = RecordingSink::new();
+        let policy = checkout_policy(&workspace, &mut sink, trusted, denied);
+        let target = elsewhere.path.join("checkout");
+
+        let refused = workspace.make_checkout(&policy, &target, "c1", Bound::FIXED);
+        match refused {
+            Err(WorkspaceError::Checkout {
+                refused: Refused::Declined(declined),
+                ..
+            }) => assert_eq!(declined, expected, "{name}"),
+            other => panic!("{name}: a checkout was not declined: {other:?}"),
+        }
+        assert!(!target.exists(), "{name}: a declined checkout was written");
+    }
+}
+
+/// CHECKOUT-5. A file a deny rule covers is not written into the checkout, and the answer names
+/// it, while every other file is written as HEAD holds it.
+#[test]
+fn a_file_a_deny_rule_covers_is_left_out_of_a_checkout() {
+    use bravebot_agent::git::checkout::Bound;
+    let scratch = Scratch::new("checkout-left-out");
+    let elsewhere = Scratch::new("checkout-left-out-target");
+    repository::commit_files(
+        &scratch.path,
+        &[("README", "hello\n"), ("secret.txt", "token\n")],
+        "first",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &["Read(./secret.txt)"]);
+    let target = elsewhere.path.join("checkout");
+
+    let made = workspace
+        .make_checkout(&policy, &target, "c1", Bound::FIXED)
+        .expect("made");
+    assert_eq!(made.left_out, ["secret.txt"]);
+    assert_eq!(
+        std::fs::read_to_string(target.join("README")).expect("README"),
+        "hello\n"
+    );
+    assert!(
+        !target.join("secret.txt").exists(),
+        "a file a deny rule covers was written"
+    );
+    assert!(scratch.path.join(".git/worktrees/c1/index").exists());
+}
+
+/// CHECKOUT-4. A `.gitattributes` file the map does not trust refuses the checkout without being
+/// read, keyed by its path in the workspace, where one the map trusts is read.
+#[test]
+fn an_attributes_file_the_map_does_not_trust_refuses_a_checkout() {
+    use bravebot_agent::git::checkout::{Bound, Conversion, Refused};
+    let scratch = Scratch::new("checkout-attributes-untrusted");
+    let elsewhere = Scratch::new("checkout-attributes-untrusted-target");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            ("README", "hello\n"),
+            ("docs/.gitattributes", "* filter=x\n"),
+        ],
+        "first",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    for (name, distrusted, expected) in [
+        ("untrusted", Some("docs"), Refused::AttributesUntrusted),
+        ("trusted", None, Refused::Converts(Conversion::Filter)),
+    ] {
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        if let Some(path) = distrusted {
+            trust.distrust(path);
+        }
+        let mut sink = RecordingSink::new();
+        let policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(trust);
+        let target = elsewhere.path.join(name);
+
+        match workspace.make_checkout(&policy, &target, name, Bound::FIXED) {
+            Err(WorkspaceError::Checkout { refused, .. }) => {
+                assert_eq!(refused, expected, "{name}")
+            }
+            other => panic!("{name}: the checkout was not refused: {other:?}"),
+        }
+        assert!(!target.exists(), "{name}: a refused checkout was written");
+    }
 }
 
 /// GIT-14. A search's pattern decides which lines of which files the answer prints, so it is a

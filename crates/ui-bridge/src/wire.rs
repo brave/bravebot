@@ -23,8 +23,8 @@
 //! typed.
 
 use bravebot_agent::confirm::{
-    Decision, FetchRequest, Intent, OutputRequest, RunDecision, RunRequest, ServerRequest,
-    VetRequest, VouchRequest, WriteRequest,
+    Decision, ExposureRequest, FetchRequest, Intent, ManifestRequest, OutputRequest, RunDecision,
+    RunRequest, ServerRequest, VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::conversation::{Composed, Said};
 use bravebot_agent::diff::Change;
@@ -473,6 +473,36 @@ pub fn server_request(id: u64, request: &ServerRequest) -> Value {
         "program": request.program,
         "workspace": request.workspace,
         "runsBuildTooling": request.runs_build_tooling,
+        "summary": request.summary(),
+    })
+}
+
+/// A frozen plan a manifest run is about to walk.
+///
+/// `steps` has one line per step, in order, as the agent rendered it: the tier, what the step
+/// does, and the routing it fixed. A front end draws every line and does not shorten the list,
+/// because the answer covers the whole plan (MANIFEST-10).
+///
+/// The task is the person's own words and the steps are the driver's rendering of a plan made
+/// from those words alone, so neither is untrusted content.
+pub fn manifest_request(id: u64, request: &ManifestRequest) -> Value {
+    json!({
+        "request": id,
+        "task": request.task,
+        "steps": request.steps,
+    })
+}
+
+/// A vouched file the planner asked to read, which the scan found a credential in.
+///
+/// `credentials` has one line per finding, as the agent wrote it: the kind, where it is, and a
+/// mask of the value. No line holds any part of a value, and the file's text is not sent
+/// (CRED-19). A front end draws the lines as sent.
+pub fn exposure_request(id: u64, request: &ExposureRequest) -> Value {
+    json!({
+        "request": id,
+        "path": request.path,
+        "credentials": request.credentials,
         "summary": request.summary(),
     })
 }

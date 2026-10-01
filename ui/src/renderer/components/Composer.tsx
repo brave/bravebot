@@ -28,6 +28,8 @@ export interface ComposerProps {
   onSend: () => void
   onQueue: () => void
   onCancel: () => void
+  /** Offered only where a plan run can start: a conversation, not a bot. */
+  onPlan?: () => void
   onModel: (model: string) => void
   attachments: FileAttachment[]
   onAttach: () => void
@@ -54,7 +56,7 @@ export interface ComposerProps {
 export const Composer = memo(function Composer(props: ComposerProps): React.JSX.Element {
   const {
     input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
-    draft, onDraft, onSend, onCancel, onModel, attachments, onAttach, onRemoveAttachment, onPreview,
+    draft, onDraft, onSend, onCancel, onPlan, onModel, attachments, onAttach, onRemoveAttachment, onPreview,
     queued, queuePaused, onResumeQueued, onRemoveQueued, backendReady, onSetup, onCheckBackend, onDiagnostics,
   } = props
   // Read by the key handler, which Leo may keep from the first render.
@@ -174,6 +176,21 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
             <span className="toolbar-spacer" />
             <ContextMeter session={session} model={model} tokens={contextTokens} archived={archived} compacting={compacting} />
             <ModelPicker compact session={session} scope={scope} key={session} model={model} disabled={running} onChoose={onModel} />
+            {/* One run per press, and no setting that stays on: a session starts a run and
+                comes back to ordinary turns (MANIFEST-9). */}
+            {onPlan && !running && (
+              <Button kind="outline" size="small" className="plan-first" onClick={onPlan} data-test="plan-first"
+                isDisabled={!canSend || attachments.length > 0 || scope === 'bot'}
+                data-tooltip={
+                  attachments.length > 0
+                    ? 'A plan is fixed before anything is read, so it cannot take attached files. Remove them, and name the file in the task.'
+                    : scope === 'bot'
+                      ? 'A bot answers in turns. Plan first is for a conversation.'
+                      : 'Plan the whole task, show you the plan, then run it with nothing re-planned'
+                }>
+                Plan first
+              </Button>
+            )}
             <IconButton icon={running ? 'stop-filled' : 'arrow-up'} label={running ? 'Stop' : 'Send'}
               shortcut={running ? '⌘.' : '⌘↩'}
               kind={running ? 'outline' : 'filled'} className={running ? 'send stop' : 'send'}

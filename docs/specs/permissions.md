@@ -714,8 +714,8 @@ about the first one's ([#843](https://github.com/brave/bravebot/issues/843)).
 ### PERM-16: `readsStayInWorkspace` holds the file tools to the workspace, whatever else is written
 
 `"permissions": { "readsStayInWorkspace": true }` refuses every path outside the working directory,
-in every mode, whatever a rule, a mode, or an answer given during the session would otherwise open.
-No directory may be opened beside the workspace: `/add-dir` and `--add-dir` are refused, a name in
+in every mode. No directory may be opened beside the workspace, whatever a rule, a mode, or an answer
+given during the session would otherwise open: `/add-dir` and `--add-dir` are refused, a name in
 `additionalDirectories` is refused rather than put to anybody, and a directory that was already open
 when the key was read is not reachable either, which is what a resume reopening the directories its
 own record holds arrives as ([PERM-10](#PERM-10)).
@@ -723,6 +723,12 @@ own record holds arrives as ([PERM-10](#PERM-10)).
 [CHECKOUT-7](checkouts.md#CHECKOUT-7), which nothing yet builds, makes a delegate's checkout its
 workspace, so for that delegate this key refuses every path outside the checkout, the working
 directory among them.
+
+The working directory may not move outward either. `/cd` into the tree is allowed, and `/cd` to a
+parent or a sibling is refused, because a parent holds whatever was refused beside the old root and
+the move would reach by relocation what the key refuses by name. The destination is judged by where
+it lands rather than by how it is spelled, so a name inside the root that reaches outside it, a link
+among them, is refused as a move outward.
 
 **Where the refusal is made.** In the workspace, at the two places the reach exists: the one function
 every door onto a directory by name resolves through, and the test of where a path lands that every
@@ -741,9 +747,10 @@ the key nor a file would send somebody looking for a fault in the program.
 
 **What it does not refuse.** The directory the session was given for itself stays reachable: nobody
 was asked for it, no rule opened it, and a session whose own directory went unreachable would fail
-every read and write it makes there ([TRUST-16](trust-map.md#TRUST-16)). `/cd` is not refused either:
-it replaces the workspace and closes what it left ([TRUST-13](trust-map.md#TRUST-13)), so nothing is
-open beside the workspace at any moment, which is the whole of what this clause promises. A file a
+every read and write it makes there ([TRUST-16](trust-map.md#TRUST-16)). `/cd` into the working
+directory is not refused: it replaces the workspace and closes what it left
+([TRUST-13](trust-map.md#TRUST-13)), and a directory inside the root was reachable already, so the
+move opens nothing. A file a
 person dropped on the window keeps the reach [dropping.md](dropping.md) gives it, for the reason
 stated there: the path is fixed into routing by a gesture before a turn starts, so it is not reach a
 rule, a mode or an answer opened.
@@ -758,6 +765,9 @@ which is [PERM-13](#PERM-13)'s reasoning about a question that changes nothing.
 `verified-by: bravebot_agent::workspace::a_directory_by_name_is_refused_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::a_directory_already_open_is_unreachable_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::the_sessions_own_directory_stays_reachable_where_reads_stay_in_the_workspace`
+`verified-by: bravebot_agent::workspace::a_move_outward_is_refused_where_reads_stay_in_the_workspace`
+`verified-by: bravebot_agent::workspace::a_move_inward_is_allowed_where_reads_stay_in_the_workspace`
+`verified-by: bravebot_agent::workspace::a_move_through_a_link_out_of_the_tree_is_refused_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_tui::app::a_named_directory_is_refused_rather_than_asked_about_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_tui::app::add_dir_is_refused_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_ui_bridge::workspace::a_turn_is_held_inside_the_project_where_its_settings_ask_for_it`
@@ -862,6 +872,18 @@ have made each of those three depend on nobody else having spoken.
   ([cli.md](cli.md)) asks nothing here, so a rule granted in the panel is a prompt again on either.
   Both fail closed, and putting the question on a surface is what would fix it rather than reading the
   record on one that cannot ask.
+- **The desktop application grants no rule a checkout proposes, and opens no directory a file
+  names.** It has neither the question [PERM-15](#PERM-15) puts nor the one
+  [PERM-10](#PERM-10) puts, so it reads no grant recorded at the terminal and opens nothing
+  `additionalDirectories` names. Both fail closed. Each rule and each directory passed over is
+  named as the session opens, with the file that wrote the rule, so a prompt the rule was written
+  to answer does not read as a second fault. `deny` and `ask` rules from every layer, and `allow`
+  rules from the person's own file, hold there as they do in the terminal.
+- **A manifest run reads no rule.** The runner builds its policy without the rules the session
+  holds, so a `deny` rule does not refuse a step of a plan and an `ask` rule puts no question
+  about one. What stands in a run is the plan question and the write question
+  ([manifest.md](manifest.md#MANIFEST-10)). The desktop application says so on the plan it puts
+  to the person, where the session holds a `deny` or an `ask` rule.
 - **Declining to trust the workspace still leads to the question.** The two are separate claims, so
   somebody who said the tree's content is not theirs is still offered its rules, and may grant them.
   That is the point of asking separately, and it is also the odd case: a person who has just said
@@ -879,11 +901,16 @@ have made each of those three depend on nobody else having spoken.
   expecting it to fence every subprocess would be believing something that is not true.
 - **`readsStayInWorkspace` is read when the session opens, so `/cd` does not read it again.** The two
   keys are read once per session with the rest of the block ([PERM-12](#PERM-12)), and `/cd` reads the
-  destination's rules again but not these. A session already confined stays confined wherever it
-  moves, which is the direction to be wrong in; a session that was not confined and moves into a
-  checkout asking for it is confined from the next session there rather than from that turn. Closing
-  it would mean the restriction arriving partway through a session, and the file the session started
-  under is the one its author read.
+  destination's rules again but not these. A session already confined keeps the key set wherever it
+  moves, and it may only move further in, so the reach never grows; a session that was not confined
+  and moves into a checkout asking for it is confined from the next session there rather than from
+  that turn. Closing it would mean the restriction arriving partway through a session, and the file
+  the session started under is the one its author read.
+- **`/cd` is one way under `readsStayInWorkspace`.** A session may move further into its tree and not
+  back out, so a person who moves into a subdirectory and then wants the directory above has to start
+  a session there. Allowing the move back would allow every move outward, since the key cannot tell a
+  return from a widening: both name a directory that holds the root. Starting again is the same answer
+  the key gives to a sibling checkout in the known cost below.
 - **A link in a rule's spelling is followed when the rules are read.** [PERM-7](#PERM-7) has a rule
   written through a link cover the place the link reached then, and the rules are read once per
   session ([PERM-12](#PERM-12)). A link made, removed or repointed later is followed again only when

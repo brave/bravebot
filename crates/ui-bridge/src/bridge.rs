@@ -138,6 +138,10 @@ impl Bridge {
             ),
             "fetch.reply" => self.reply_decision(request, Reply::Fetch),
             "server.reply" => self.reply_decision(request, Reply::Server),
+            "manifest.run" => self.start_manifest(request),
+            "manifest.read" => crate::manifest::read(request),
+            "manifest.reply" => self.reply_decision(request, Reply::Manifest),
+            "exposure.reply" => self.reply_decision(request, Reply::Exposure),
             "ask.reply" => self.reply_ask(request),
             "trust.reply" => self.reply_trust(request),
             "permissions.list" => self.permissions(request, false),
@@ -199,6 +203,9 @@ impl Bridge {
                     "title": entry.summary.title,
                     "updated": entry.summary.updated,
                     "bytes": entry.summary.bytes,
+                    // Whether the record is a manifest run. A run has no conversation, so it
+                    // is read with `manifest.read` and `session.open` refuses it.
+                    "manifest": entry.summary.manifest,
                 })
             })
             .collect();
@@ -216,6 +223,14 @@ impl Bridge {
                 format!("no session `{id}` in {}", directory.display()),
             )
         })?;
+        // A manifest run has no conversation to resume (MANIFEST-11). Opening one as a session
+        // would offer to continue a run that cannot be continued, so it is refused, as the
+        // terminal's picker refuses it.
+        if record.manifest.is_some() {
+            return Err(Failure::bad_request(format!(
+                "`{id}` is a manifest run, which cannot be continued. Read it with manifest.read"
+            )));
+        }
 
         // A record that recorded a trust map was answered for by the person now resuming
         // it, and inherits it. One that did not is asked again: nothing recorded is not
@@ -243,13 +258,41 @@ impl Bridge {
             auto_vetting,
         });
         self.ask_about_trust(&handle);
+        let rules = self.open_under_rules(&handle, None);
 
         let mut opened = self.recount(&handle, &directory, &record, auto_vetting);
+        opened["settingsRules"] = rules;
         if let Some(settled) = settled {
             opened["trust"] = settled;
         }
         merge(&mut opened, reported);
         Ok(opened)
+    }
+
+    /// Settle the permission rules the session opened as `handle` runs under, and return them
+    /// as a front end reads them.
+    ///
+    /// Read from the settings files once, here, and kept by the session (PERM-12). `inherited`
+    /// is a parent's rules, which a fork takes in place of reading the files again.
+    fn open_under_rules(
+        &self,
+        handle: &str,
+        inherited: Option<crate::rules::SettingsRules>,
+    ) -> Value {
+        let Some(open) = self.open.get(handle) else {
+            return Value::Null;
+        };
+        let rules = inherited.unwrap_or_else(|| {
+            crate::rules::SettingsRules::read(
+                &crate::settings::layers(Some(&open.project), self.settings.as_deref()),
+                &open.project,
+            )
+        });
+        let reported = rules.json();
+        if let Ok(mut state) = open.state.lock() {
+            state.rules = rules;
+        }
+        reported
     }
 
     /// Put the trust question to the window, where the session opened as `handle` is waiting on it.
@@ -387,9 +430,11 @@ impl Bridge {
         // Nothing is written until the first turn. An opened-and-abandoned window should
         // leave no trace, which is also how `bravebot` behaves.
         self.ask_about_trust(&handle);
+        let rules = self.open_under_rules(&handle, None);
 
         let mut made = json!({
             "session": handle,
+            "settingsRules": rules,
             "model": crate::settings::config(Some(&directory), self.settings.as_deref()).ok().map(|config| config.default_model),
             "directory": directory.display().to_string(),
             "branch": branch,
@@ -441,7 +486,7 @@ impl Bridge {
         // Everything needed is copied out under the lock and the lock is dropped before any of
         // it is used. A fork does no I/O and no thinking, but holding a session's state across
         // work is the habit that turns into a stall later.
-        let (snapshot, said, trust, programs, directories, todos, parent) = {
+        let (snapshot, said, trust, programs, directories, todos, parent, inherited) = {
             let state = open
                 .state
                 .lock()
@@ -459,6 +504,7 @@ impl Bridge {
                 state.directories.clone(),
                 state.todos.clone(),
                 parent.clone(),
+                state.rules.clone(),
             )
         };
 
@@ -528,6 +574,9 @@ impl Bridge {
             auto_vetting,
         });
         self.ask_about_trust(&child);
+        // The parent's, not read again, for the reason auto-vetting is: a fork carries on the
+        // session it was cut from.
+        let settings_rules = self.open_under_rules(&child, Some(inherited));
 
         let title = if parent_title.is_empty() {
             store::load(&project, &parent_id).map(|record| record.title)
@@ -548,6 +597,7 @@ impl Bridge {
             "todos": todos_json(&todos),
             "trust": { "known": known, "rules": if known { Value::from(rules) } else { Value::Null } },
             "autoVetting": auto_vetting,
+            "settingsRules": settings_rules,
             "serversNote": self.servers_note(&project),
             "parent": {
                 "id": parent_id,
@@ -757,6 +807,136 @@ impl Bridge {
         });
 
         Ok(json!({ "turn": turn_number }))
+    }
+
+    /// Start a manifest run, and return before it finishes (MANIFEST-11).
+    ///
+    /// A run plans the whole task, puts the frozen plan to the person, and walks it. It is not a
+    /// turn: the session's conversation is neither sent nor changed, and the run is saved as its
+    /// own record. The session is busy until the run ends, so a turn or a second run is refused.
+    ///
+    /// `turn.cancel` stops a run, and the reply methods answer its questions, as for a turn.
+    fn start_manifest(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let task = request.string("task")?;
+        if task.trim().is_empty() {
+            return Err(Failure::bad_request("a manifest run needs a task to plan"));
+        }
+        // A named file is context a turn reads before it decides. A run fixes its plan before
+        // anything is read (MANIFEST-9), so the file would be dropped. Refuse instead.
+        for named in ["files", "dropped", "attachments"] {
+            let given = request
+                .params
+                .get(named)
+                .and_then(Value::as_array)
+                .is_some_and(|entries| !entries.is_empty());
+            if given {
+                return Err(Failure::bad_request(format!(
+                    "a manifest run takes no `{named}`: its plan is fixed before anything is \
+                     read. Name the file in the task instead"
+                )));
+            }
+        }
+        let requested_model = crate::models::selection(request.params.get("model"))?;
+
+        self.reap(&handle);
+
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if !open.answered_trust {
+            return Err(Failure::bad_request(
+                "this session has not been asked whether the directory is trusted; \
+                 send trust.reply first",
+            ));
+        }
+        if open.running.is_some() {
+            return Err(Failure::new(
+                ErrorCode::TurnInFlight,
+                "a turn is already running in this session",
+            ));
+        }
+
+        let model = requested_model.or_else(|| open.model.clone());
+        let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
+        let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
+        let attribution = settings.attribution().clone();
+        let output_cap = settings.run_output_cap();
+        let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
+        let mut workspace = turn_workspace(
+            open.project.clone(),
+            &settings,
+            &bravebot_config::Managed::load(),
+        )
+        .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
+
+        let project = open.project.clone();
+        let state = Arc::clone(&open.state);
+        let (run, turns, directories) = state
+            .lock()
+            .map(|mut s| {
+                // A run writes files as a turn does, so the same coverage gap applies.
+                for point in &mut s.rewind {
+                    point
+                        .coverage
+                        .record([bravebot_agent::rewind::CoverageGap::Desktop]);
+                }
+                s.runs += 1;
+                (s.runs, s.turns, s.directories.clone())
+            })
+            .unwrap_or((1, 0, Vec::new()));
+        for directory in &directories {
+            let _ = workspace.add_directory(&directory.display().to_string());
+        }
+
+        let cancel = Cancel::new();
+        let (answers_tx, answers_rx) = mpsc::channel();
+        let pending: crate::turn::Pending = Arc::new(Mutex::new(None));
+        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let running = Running {
+            cancel: cancel.clone(),
+            answers: answers_tx,
+            pending: Arc::clone(&pending),
+            // The session's last turn. A run is not a turn and takes no number of its own.
+            turn: turns,
+            finished: Arc::clone(&finished),
+        };
+
+        self.emitter.send(Event::new(
+            "manifest.started",
+            &handle,
+            json!({ "run": run }),
+        ));
+
+        if let Some(open) = self.open.get_mut(&handle) {
+            open.running = Some(running);
+            open.model = model.clone();
+        }
+        let emitter = self.emitter.clone();
+        let session = handle.clone();
+        thread::spawn(move || {
+            crate::manifest::walk(crate::manifest::Walk {
+                emitter,
+                session,
+                project,
+                state,
+                config,
+                attribution,
+                output_cap,
+                deadlines,
+                model,
+                workspace,
+                task,
+                run,
+                cancel,
+                pending,
+                answers: answers_rx,
+                finished,
+            });
+        });
+
+        Ok(json!({ "run": run }))
     }
 
     /// Ask the turn to stop.
@@ -992,6 +1172,9 @@ impl Bridge {
             // Read now rather than when the session opened: the record belongs to every session
             // begun in the directory, and another may have kept or withdrawn the answer since.
             "remembered": remembered_json(&open.project),
+            // The rules this session opened under. They are read from settings files and
+            // cannot be revoked here: editing the file changes them for the next session.
+            "settingsRules": state.rules.json(),
         }))
     }
 
@@ -1383,7 +1566,9 @@ fn work(work: Work) {
         .with_attribution(attribution)
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
-        .with_auto_vetting(auto_vetting);
+        .with_auto_vetting(auto_vetting)
+        // The rules the session opened under, and not the files as they are now (PERM-12).
+        .with_permissions(state.rules.permissions.clone());
     if let Some(composed) = composed {
         task = task.composed_rather_than_typed(composed);
     }
@@ -1541,42 +1726,11 @@ fn work(work: Work) {
         Err(error) => {
             let _ = save(&project, &mut state, turn, sink.trail());
 
-            let ending = error.ending();
-            let diagnosis = ending.diagnosis();
-            let category = diagnosis.map(|d| d.category.name());
-            // A configured gateway does not serve the built-in Brave default. Keep this
-            // distinct from a missing token: re-entering the gateway key cannot fix routing.
             let chosen = task.model.as_deref().unwrap_or(&config.default_model);
-            let category = if category == Some("unconfigured")
-                && (!config.providers.is_empty() || config.bedrock.is_some())
-                && !config.serves_aichat()
-                && config.provider_for(chosen).is_none()
-                && config.bedrock_for(chosen).is_none()
-            {
-                Some("model-unconfigured")
-            } else {
-                category
-            };
-            let attempts = match ending {
-                bravebot_agent::outcome::Ending::Stopped { attempts } => attempts,
-                _ => diagnosis.and_then(|d| d.attempts),
-            };
-            let kind = match &error {
-                TurnError::Cancelled { .. } => "cancelled",
-                TurnError::Precommit(_) => "precommit",
-                TurnError::Workspace(_) => "workspace",
-                TurnError::Chat(_) => "chat",
-                // A manifest run is a plan frozen and then carried out unattended, and this
-                // window has no way to ask for one: `turn.send` builds a `Task`. So this arm
-                // is unreachable rather than unhandled, and it is named rather than swept into
-                // a wildcard, because the day the protocol grows a manifest the compiler
-                // should not stay quiet about the `attempt` this drops.
-                TurnError::Manifest { .. } => "manifest",
-            };
-            Event::new(
-                "turn.error",
-                &session,
-                json!({ "turn": turn, "kind": kind, "message": category.unwrap_or("cancelled"), "category": category, "attempts": attempts, "status": diagnosis.and_then(|d| d.status),
+            let mut data = failure_fields(&error, &config, chosen);
+            merge(
+                &mut data,
+                json!({ "turn": turn,
                     "cutOff": wire::cut_off(error.cut_off()),
                     "contextTokens": state.conversation.last_request_tokens(),
                     // What the turn said about itself before it failed, as `turn.done` carries for a
@@ -1587,7 +1741,8 @@ fn work(work: Work) {
                     // prompt is in the conversation and is still a place a fork can be cut at.
                     "prompt": prompt_ordinal(&state.conversation, &prompt),
                     "id": state.handle.as_ref().map(|handle| handle.id()) }),
-            )
+            );
+            Event::new("turn.error", &session, data)
         }
     };
 
@@ -1598,6 +1753,43 @@ fn work(work: Work) {
     drop(state);
     finished.store(true, std::sync::atomic::Ordering::Release);
     emitter.send(event);
+}
+
+/// How a failure is reported to a front end: `kind`, `message`, `category`, `attempts`, `status`.
+///
+/// The category and the counts come from the agent's diagnosis. Raw backend text is not sent.
+/// `chosen` is the model that was asked for, which decides one category below.
+pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -> Value {
+    let ending = error.ending();
+    let diagnosis = ending.diagnosis();
+    let category = diagnosis.map(|d| d.category.name());
+    // A configured gateway does not serve the built-in Brave default. Keep this
+    // distinct from a missing token: re-entering the gateway key cannot fix routing.
+    let category = if category == Some("unconfigured")
+        && (!config.providers.is_empty() || config.bedrock.is_some())
+        && !config.serves_aichat()
+        && config.provider_for(chosen).is_none()
+        && config.bedrock_for(chosen).is_none()
+    {
+        Some("model-unconfigured")
+    } else {
+        category
+    };
+    let attempts = match ending {
+        bravebot_agent::outcome::Ending::Stopped { attempts } => attempts,
+        _ => diagnosis.and_then(|d| d.attempts),
+    };
+    let kind = match error {
+        TurnError::Cancelled { .. } => "cancelled",
+        TurnError::Precommit(_) => "precommit",
+        TurnError::Workspace(_) => "workspace",
+        TurnError::Chat(_) => "chat",
+        // Only a manifest run fails this way, and `crate::manifest` reports the cause inside
+        // it, so a turn never sends this kind.
+        TurnError::Manifest { .. } => "manifest",
+    };
+    json!({ "kind": kind, "message": category.unwrap_or("cancelled"), "category": category,
+        "attempts": attempts, "status": diagnosis.and_then(|d| d.status) })
 }
 
 /// Write the session down, in the agent's own format.
@@ -1662,7 +1854,7 @@ fn todos_json(
 ///
 /// The same decisions the record is written with, so a rule reads the same whether it came off
 /// disk, out of a finished turn, or out of the session a fork inherited it from.
-fn rules_json(trust: &TrustStore) -> Vec<Value> {
+pub(crate) fn rules_json(trust: &TrustStore) -> Vec<Value> {
     trust
         .rules()
         .map(|(path, integrity)| {
@@ -1740,7 +1932,7 @@ impl Opening {
 }
 
 /// Add the fields of the object `extra` to the object `into`.
-fn merge(into: &mut Value, extra: Value) {
+pub(crate) fn merge(into: &mut Value, extra: Value) {
     if let (Some(into), Value::Object(extra)) = (into.as_object_mut(), extra) {
         into.extend(extra);
     }

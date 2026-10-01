@@ -354,3 +354,6 @@
   .suggestion { border: 1px solid CanvasText; }
   .composer-box:focus-within { outline: 2px solid Highlight; }
 }
+
+/* Beside Send, so it reads as the other way to send what is written. */
+.composer-toolbar .plan-first { flex: none; white-space: nowrap; }

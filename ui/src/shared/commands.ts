@@ -13,14 +13,14 @@
  *
  * ## What is deliberately absent
  *
- * There is no command that answers a question. The seven the agent can ask (a write, a
+ * There is no command that answers a question. The nine the agent can ask (a write, a
  * command to run, whether the planner may read output, whether to vouch, whether to fetch,
- * whether to start a language server, and a series of questions) are answered in the
- * transcript, beside the evidence they are about, and nowhere else. A keystroke that
- * approved a write from across the window would be a decision taken without looking at it,
- * which is the one thing this whole app is arranged to prevent. The absence is structural
- * rather than a rule somebody has to remember: no `CommandId` names an approval, so there is
- * nothing for the menu layer to dispatch.
+ * whether to start a language server, whether to run a plan, whether to send a file holding a
+ * credential, and a series of questions) are answered in the transcript, beside the evidence
+ * they are about, and nowhere else. A keystroke that approved a write from across the window
+ * would be a decision taken without looking at it, which is the one thing this whole app is
+ * arranged to prevent. The absence is structural rather than a rule somebody has to remember:
+ * no `CommandId` names an approval, so there is nothing for the menu layer to dispatch.
  */
 
 export type CommandId =

@@ -193,7 +193,7 @@ program a person named. `-e` or `--env` gives the server a variable
 environment at launch. It takes the words up to the next flag, as Claude Code's does, and may be
 given more than once. A program given by a bare name has `PATH` named for it where none was stored;
 `--dir <path>` is the directory it runs in, written into the file as the absolute path it resolves
-to.
+to. A directory git would open a repository from is refused, as [SERVERS-10](#SERVERS-10) says.
 
 `forget` takes one path at most, and the current directory without one. The path is read with its
 links followed, as answer 2 recorded it, and one that no longer resolves, a deleted checkout's, is
@@ -452,7 +452,8 @@ own layout, with the lines this question adds beneath the first:
 `runs` is the path a program named through `PATH` resolved to, and is drawn only where that differs
 from what was declared. A variable whose value is stored is drawn among the others as
 `BRAVE_API_KEY_FILE (stored)`, and each file the declaration may read is a line of its own,
-`may read: /Users/me/keys/brave-api-key`. Anything typed but 1 or 2, and the end of the input, is 3. The project answer
+`may read: /Users/me/keys/brave-api-key`. The directory it runs in is drawn as one it may write,
+`directory, which it may write: /Users/me/weather-mcp`. Anything typed but 1 or 2, and the end of the input, is 3. The project answer
 2 records is the workspace root with its links followed, and is matched as that path and no other.
 Answer 3 is a line saying the server is not used in this session.
 
@@ -934,6 +935,17 @@ The home these rows keep out is the person's profile directory, and not the stat
 it that bravebot keeps its own files in. It is compared with its links followed, as the rows are,
 so a home reached through a link is kept out as well.
 
+**A server is given no directory inside a git repository.** git runs the commands a repository's
+configuration and hooks name, unconfined, the next time anybody runs git there, and a relative
+`core.hooksPath` makes files of the work tree into hooks, so a server that may write a repository
+may run code outside its confinement. A declared directory git would open a repository from is
+refused: one with a `.git` in it or in a directory above it, or one laid out as a repository
+itself, a `HEAD` file beside `objects` and `refs` directories. `add` refuses it as an argument and
+writes nothing, and a session refuses a declaration that names one before anybody is asked, with a
+line naming the directory and the repository it is in. On macOS a row the server may write does
+not reach a `.git` beneath it either, whatever its case ([SANDBOX-14](sandboxing.md#SANDBOX-14)),
+so a server cannot make one in its own home or the temporary directory and write into it.
+
 **A server has a home directory of its own**, and `HOME` names it unless the declaration names
 `HOME`, in which case the person's value is handed over as any other named variable is. A runner
 keeps its cache and a server its settings under `HOME`, and with the person's own home out of reach
@@ -995,6 +1007,9 @@ not started either, and the line says why.
 `verified-by: bravebot_cli::servers::a_started_server_in_a_session_that_keeps_nothing_has_a_home_that_goes_with_it`
 `verified-by: bravebot_agent::mcp::a_servers_throwaway_home_lasts_as_long_as_the_session_holding_it`
 `verified-by: bravebot_mcp::stdio::a_server_receives_the_variables_it_was_handed_and_no_others`
+`verified-by: bravebot_cli::servers::a_declared_directory_holding_a_repository_is_refused`
+`verified-by: bravebot_cli::mcp::add_declares_no_directory_inside_a_repository`
+`verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_a_git_directory_beneath_it`
 
 <a id="SERVERS-11"></a>
 ### SERVERS-11: a remote server is an egress destination, and its host is approved as one
@@ -1531,6 +1546,20 @@ This spec cannot land without these. Each is named by what the clause says rathe
 - **No stdio server starts on Windows.** The sandbox there has no base rows to build a server's
   policy on, so the line says the platform has no confinement for one yet, which is
   [MCP-3](mcp.md#MCP-3) holding rather than failing.
+- **Only the directories above a server's directory are searched for a repository.** A directory
+  holding checkouts is not refused, so the server may write their work trees, a hook a relative
+  `core.hooksPath` points at among them, on every platform.
+- **On Linux a server may still write a repository it can reach.** Landlock grants a directory with
+  everything beneath it and cannot hold one subdirectory back, so a `.git` beneath the server's
+  directory, its own home or the temporary directory is one it may write, whether it was there
+  before the server started or the server made it, and git run there later runs what the server
+  wrote. On every platform a directory a server lays out as a repository itself, with no `.git` in
+  its path, is not refused once the server is running.
+- **On macOS a server cannot make a work tree.** No `.git` is writable to it, so a server or a
+  runner that clones a repository into its home or the temporary directory fails there, and on
+  every platform a server meant to work on a git repository cannot be given one.
+- **A person whose home directory is a git work tree** has every directory in it refused as a
+  server's, on every platform.
 - **An administrator's deny list names a spelling.** A command entry binds a path and a host entry
   a name, so a link, a copy or another name for the same machine is not denied, and a command match
   leaves out the variables a server starts with. The allow list is the form that holds

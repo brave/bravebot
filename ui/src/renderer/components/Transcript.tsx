@@ -6,7 +6,7 @@ import { useEvent } from '../hooks'
 import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
 import { CopyButton } from './CopyButton'
-import { isConfined, type Ambient, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
+import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import type { Side } from '../columns'
 import type { Asked } from '../App'
@@ -22,6 +22,8 @@ import type { Bot } from '../../shared/bots'
 import { projectLabel } from '../../shared/recents'
 import { conversationPreferences, setConversation } from '../experience'
 import { ErrorCard } from './ErrorCard'
+import { RunRecord } from './RunRecord'
+import { failureSummary } from '../failure'
 import { FilePreview } from './FilePreview'
 import { TurnFooter, TurnNotices, type OpenAudit } from './TurnDetails'
 import type { Turns, TurnDisclosure } from '../turn-details'
@@ -48,6 +50,7 @@ interface Live {
   focus: number | null
   autoVetting?: boolean
   trustRemembered?: KeptTrust | null
+  rules?: SettingsRules | null
 }
 
 /**
@@ -84,6 +87,8 @@ interface Props {
   onResumeQueued: () => void
   onRemoveQueued: (index: number) => void
   live: Live | null
+  /** A saved manifest run being read. Drawn in place of a session, which it is not. */
+  reading?: SavedRun | null
   /** The bot whose session this is, if one is. Its name is what the header says instead of a title. */
   bot: Bot | null
   /** What that bot is doing, for its face in the header. Derived in `App`, where the turn is known. */
@@ -99,6 +104,8 @@ interface Props {
   onDraft: (draft: string) => void
   onModel: (model: string) => void
   onSubmit: () => void
+  /** Start a manifest run from the draft. Absent where the window cannot start one. */
+  onPlan?: () => void
   onCancel: () => void
   onDecide: Answer
   onAnswer: AnswerQuestions
@@ -255,6 +262,8 @@ export function Transcript({
   onDraft,
   onModel,
   onSubmit,
+  onPlan,
+  reading,
   onCancel,
   onDecide,
   onAnswer,
@@ -389,6 +398,7 @@ export function Transcript({
   const send = useEvent(() => { latest(); onSubmit(); toComposer() })
   const queue = useEvent(onQueue)
   const cancel = useEvent(onCancel)
+  const plan = useEvent(() => { latest(); onPlan?.() })
   const draftChanged = useEvent(onDraft)
   const chooseModelFor = useEvent(onModel)
   const attach = useEvent(onAttach)
@@ -455,6 +465,15 @@ export function Transcript({
         {/* Rendered even with nothing to name: it is what holds the two toggles at
             opposite ends of the header, and without it they collect in the corner. */}
         <div className="head-titles">
+          {!live && reading && (
+            <>
+              <h1>{reading.record.title}</h1>
+              <span className="where" title={reading.record.directory}>
+                Plan run · {reading.record.directory}
+                {reading.record.branch && ` · ${reading.record.branch}`}
+              </span>
+            </>
+          )}
           {live && (
             <>
               {/* A bot's session is titled by whatever was asked first, like every session — but a
@@ -521,6 +540,18 @@ export function Transcript({
     </Alert>
   )
 
+  if (!live && reading) {
+    return (
+      <main className="transcript run-record">
+        {head}
+        <div className="toast-stack">{toast}<Toasts /></div>
+        <div className="entries">
+          <RunRecord run={reading} onNew={onNew} />
+        </div>
+      </main>
+    )
+  }
+
 
   if (!live) {
     return (
@@ -585,6 +616,7 @@ export function Transcript({
           forkedFrom={live.forkedFrom}
           kept={live.trustRemembered ?? null}
           vetting={live.autoVetting === true}
+          rules={live.rules ?? null}
           onOpenParent={onOpenParent}
           onManage={() => setPermissions(true)}
         />
@@ -651,6 +683,7 @@ export function Transcript({
           onSend={send}
           onQueue={queue}
           onCancel={cancel}
+          onPlan={onPlan ? plan : undefined}
           onModel={chooseModelFor}
           attachments={attachments}
           onAttach={attach}
@@ -1133,20 +1166,23 @@ function Questions({
  * Three notes, each one sentence and at most one link: that this session was cut out of another
  * (history, so it is the first thing in the transcript), that a kept yes about this directory is
  * why nothing asked (TRUST-23), and that auto-vetting was on when it opened (CHECK-11, which the
- * header chip keeps saying for as long as the session is open).
+ * header chip keeps saying for as long as the session is open). A fourth, folded, lists what a
+ * settings file wrote that is not in force, since its list can run long.
  *
  * None of them is a `t.Entry`, which is what keeps them out of `t.conversation` and therefore out
  * of every export: a note this window wrote about a session is not something the session said.
  * The fork link is a button and not a link, because nothing in this window navigates.
  */
-function SessionNotices({ forkedFrom, kept, vetting, onOpenParent, onManage }: {
+function SessionNotices({ forkedFrom, kept, vetting, rules, onOpenParent, onManage }: {
   forkedFrom: { title: string; prompt: number } | null
   kept: KeptTrust | null
   vetting: boolean
+  rules: SettingsRules | null
   onOpenParent: () => void
   onManage: () => void
 }): React.JSX.Element | null {
-  if (!forkedFrom && !kept && !vetting) return null
+  const unheld = t.notInForce(rules)
+  if (!forkedFrom && !kept && !vetting && !unheld) return null
   return (
     <div className="session-notices">
       {forkedFrom && (
@@ -1176,7 +1212,70 @@ function SessionNotices({ forkedFrom, kept, vetting, onOpenParent, onManage }: {
           </span>
         </p>
       )}
+      {unheld && rules && <RulesBanner rules={rules} />}
     </div>
+  )
+}
+
+/**
+ * What a settings file wrote that is not in force in this conversation.
+ *
+ * Drawn only where there is something to say. A rule that reads as protection and is not in
+ * force is worth telling the person about, and so is an allow rule that will not stop a question
+ * it was written to stop.
+ */
+export function RulesBanner({ rules }: { rules: SettingsRules }): React.JSX.Element {
+  const count = rules.unreadable.length + rules.proposed.length + rules.directories.length
+  return (
+    <details className="rules-banner" role="note">
+      <summary className="session-notice">
+        <Icon name="warning-triangle-outline" />
+        <span className="notice-text">
+          <strong>
+            {count} permission {count === 1 ? 'setting is' : 'settings are'} not in force.
+          </strong>{' '}
+          Details
+        </span>
+      </summary>
+      {rules.unreadable.length > 0 && (
+        <>
+          <p>These entries could not be read as rules, so they decide nothing:</p>
+          <ul>
+            {rules.unreadable.map((entry, index) => (
+              <li key={index}>{entry.said}</li>
+            ))}
+          </ul>
+        </>
+      )}
+      {rules.proposed.length > 0 && (
+        <>
+          <p>
+            These allow rules were written by this project’s settings file. An allow rule
+            answers a question for you, so only your own settings file may write one. You will
+            still be asked:
+          </p>
+          <ul>
+            {rules.proposed.map((entry, index) => (
+              <li key={index}>
+                <code>{entry.rule}</code> from <code>{entry.file}</code>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {rules.directories.length > 0 && (
+        <>
+          <p>A settings file asked for these directories to be opened. This app opens none:</p>
+          <ul>
+            {rules.directories.map((directory, index) => (
+              <li key={index}>
+                <code>{directory}</code>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </details>
   )
 }
 
@@ -1238,6 +1337,55 @@ function YesOrNo({
       <button className="approve" onClick={() => onDecide(kind, request, true)}>
         {approve}
       </button>
+    </div>
+  )
+}
+
+/**
+ * A manifest run that stopped, with what it produced.
+ *
+ * Three cases read differently. The person stopped it, the agent refused or failed it and said
+ * why, or the model service failed. The plan and the steps that ran are shown in every case
+ * where they exist, because the run somebody needs to read is the one that stopped.
+ */
+function PlanEnded({ ended }: { ended: ManifestError }): React.JSX.Element {
+  const declined = ended.declined === true
+  const title = ended.stopped
+    ? 'You stopped this run'
+    : declined
+      ? 'The plan was declined, so nothing ran'
+      : ended.problem
+        ? 'The run stopped'
+        : failureSummary(ended.category ?? ended.kind).title
+  const detail = ended.stopped
+    ? 'Steps that finished before the stop remain in the project. The run was not saved.'
+    : declined
+      ? 'Nothing was read or written.'
+      : ended.problem ?? failureSummary(ended.category ?? ended.kind).description
+  const attempt = ended.attempt
+  return (
+    <div className={`plan-ended ${ended.stopped || declined ? 'quiet' : 'failed'}`}>
+      <strong>{title}</strong>
+      <p>{detail}</p>
+      {attempt?.plan && (
+        <details>
+          <summary>The plan</summary>
+          <pre className="plan-text">{attempt.plan}</pre>
+        </details>
+      )}
+      {!attempt?.plan && attempt?.proposed && (
+        <details>
+          <summary>What the planner proposed, which could not be used</summary>
+          <pre className="plan-text">{attempt.proposed}</pre>
+        </details>
+      )}
+      {!!attempt?.steps.length && (
+        <details open>
+          <summary>Steps that ran</summary>
+          <pre className="plan-text">{attempt.steps.join('\n')}</pre>
+        </details>
+      )}
+      {ended.record && <p className="plan-record">Saved as run <code>{ended.record}</code>.</p>}
     </div>
   )
 }
@@ -1799,6 +1947,147 @@ function Card({
       )
     }
 
+    case 'manifest': {
+      const { request, decision } = entry
+      return (
+        <div className="confirm manifest">
+          <div className="confirm-head">
+            <span className="intent">run plan</span>
+            <span className="path manifest-count">
+              {request.steps.length} step{request.steps.length === 1 ? '' : 's'}
+            </span>
+          </div>
+
+          <p className="permission-scope">
+            <strong>You asked:</strong> {request.task}
+          </p>
+
+          {/* Every step, in order and unshortened. The answer covers the whole plan. The agent
+              numbers each line, so the list draws no numbers of its own. */}
+          <ol className="manifest-steps">
+            {request.steps.map((step, index) => (
+              <li key={index}>
+                <code>{step}</code>
+              </li>
+            ))}
+          </ol>
+
+          <p className="permission-scope">
+            These steps run in this order, and nothing re-plans once the run starts. Approving
+            the plan does not approve its writes: each write is still put to you when its step
+            is reached. This answer covers this plan only.
+          </p>
+
+          {!!entry.unheld?.length && (
+            <div className="warn">
+              Permission rules are not applied to a plan run. Check the steps against the
+              rules this conversation refuses or asks about:
+              <ul>
+                {entry.unheld.map((rule, index) => (
+                  <li key={index}>
+                    <code>{rule}</code>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <YesOrNo
+            kind="manifest"
+            request={request.request}
+            answerable={answerable}
+            decision={decision}
+            onDecide={onDecide}
+            reject="Don’t run"
+            approve="Run this plan"
+            approved="You approved this plan"
+            rejected="You declined this plan"
+          />
+        </div>
+      )
+    }
+
+    case 'exposure': {
+      const { request, decision } = entry
+      const found = request.credentials.length
+      return (
+        <div className="confirm exposure">
+          <div className="confirm-head">
+            <span className="intent">send file</span>
+            <code className="path">{request.path}</code>
+            <span className="counts">
+              {found} finding{found === 1 ? '' : 's'}
+            </span>
+          </div>
+
+          <p className="warn">
+            The model asked to read this file, and what it reads goes to whoever performs
+            inference. The scan found something in it that looks like a credential. Sending
+            the file discloses that value.
+          </p>
+
+          {/* Each finding as the agent wrote it: a kind, a place and a mask. The value is
+              not sent to this window, so there is none here to draw. */}
+          <div className="permission-scope">
+            <strong>What the scan found, without any of the value:</strong>
+            <ul className="exposure-findings">
+              {request.credentials.map((finding, index) => (
+                <li key={index}>
+                  <code>{finding}</code>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <p className="permission-scope">
+            Keeping it back keeps this file’s text from the model and changes nothing else.
+            Your answer covers this file until this conversation closes. It is not saved, and
+            it does not change whether the file is trusted.
+          </p>
+
+          <YesOrNo
+            kind="exposure"
+            request={request.request}
+            answerable={answerable}
+            decision={decision}
+            onDecide={onDecide}
+            reject="Keep it back"
+            approve="Send it anyway"
+            approved="You sent this file to the model"
+            rejected="You kept this file back"
+          />
+        </div>
+      )
+    }
+
+    case 'plan-task':
+      return (
+        <div className="bubble user plan-task">
+          <span className="plan-task-mark">Plan first</span>
+          {entry.text}
+        </div>
+      )
+
+    case 'plan-reply':
+      // Plain text in a marked container, and never formatted. What a run releases can be the
+      // text of a file nobody vouched for, so it is not drawn as the agent's own words.
+      return (
+        <div className="plan-reply">
+          <div className="plan-reply-head">
+            <span className="mark">run result</span>
+            <span>what the plan’s last step released</span>
+          </div>
+          <pre className="preview">{entry.text}</pre>
+          <div className="plan-reply-foot">
+            Shown to you and to no model. It is not part of this conversation.
+            {entry.record && <> Saved as run <code>{entry.record}</code>.</>}
+          </div>
+        </div>
+      )
+
+    case 'plan-ended':
+      return <PlanEnded ended={entry.ended} />
+
     case 'ask':
       return <Questions request={entry} answers={entry.answers} onAnswer={onAnswer} />
 
@@ -1934,6 +2223,10 @@ function waitingOn(kind: t.Asking['kind']): string {
       return 'Answer the fetch'
     case 'server':
       return 'Answer the language server'
+    case 'manifest':
+      return 'Answer the plan'
+    case 'exposure':
+      return 'Answer the file with a credential'
     case 'vouch':
       return 'Answer the vouch'
     case 'ask':
