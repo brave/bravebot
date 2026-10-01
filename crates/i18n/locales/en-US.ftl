@@ -370,6 +370,12 @@ doctor-settings-allow-ignored =
 doctor-settings-granted = granted
 doctor-settings-allow-granted =
     the allow rule { $rule } in { $path } is granted for this directory
+# A top-level key beside the ones this build reads. The file is largely another tool's shape, so a
+# pasted block holds keys written for that one, and a key that reads as a restriction and is never
+# read is the one worth saying out loud. The key and the file, never the value.
+doctor-settings-unread = unread key
+doctor-settings-unread-key =
+    { $key } in { $path } is not read by this build: it configures nothing and restricts nothing
 # A settings layer that tried to declare an MCP server. Named by key and file only, since the entry
 # may hold an argv and the values of variables.
 doctor-settings-mcp-declared =

@@ -120,6 +120,27 @@ const PROVIDER_BLOCK: &str = "provider";
 /// both look inside it, and a second spelling would be a key read out of a block nothing writes.
 const PERMISSIONS_BLOCK: &str = "permissions";
 
+/// The top-level keys this build reads, for naming the ones a layer wrote beside them (BACKEND-36).
+///
+/// `mcpServers` is among them and configures nothing: a layer that names it is already reported as a
+/// file that tried to declare a server ([`Settings::mcp_declared`]), and a key named twice in one
+/// report is one mistake somebody has to work out is not two.
+const READ_KEYS: &[&str] = &[
+    "attribution",
+    "editorMode",
+    "effort",
+    "env",
+    "keybindings",
+    "mcp",
+    "mcpServers",
+    "model",
+    PERMISSIONS_BLOCK,
+    PROVIDER_BLOCK,
+    "run",
+    "search",
+    VETTING_BLOCK,
+];
+
 /// The most of it worth reading.
 ///
 /// A settings file is a handful of short strings. Bounded so a file that grew by accident, or was
@@ -267,6 +288,19 @@ pub struct Settings {
     /// to be declared and approved in the person's own directory, so no layer's entry widens what
     /// another's allowed.
     mcp_requested: Vec<(PathBuf, String)>,
+    /// The top-level keys a layer set that nothing here reads, with the file each came from, weakest
+    /// first (BACKEND-36).
+    ///
+    /// Kept for the reason `vetting_ignored` is kept, by a shorter route than any of the keys above:
+    /// this file is documented as largely the shape of another tool's, so a pasted block arrives
+    /// holding `sandbox` or `hooks`, and both read to whoever wrote them as a restriction in force.
+    /// Nothing else would say the key was not read, so a typo and an entry written for a later
+    /// release look the same from here.
+    ///
+    /// The children of `env` stay out of it, BACKEND-36 already naming each among the names the file
+    /// set. Names only, for the reason [`Settings::names`] carries names: a value here may be a
+    /// credential.
+    unread: Vec<(PathBuf, String)>,
     keybindings: BTreeMap<String, String>,
     attribution: Attribution,
     search: SearchCaps,
@@ -492,6 +526,9 @@ impl Settings {
         let mut misshapen = Vec::new();
         let mut mcp_declared = Vec::new();
         let mut mcp_requested: Vec<(PathBuf, String)> = Vec::new();
+        // Settled per layer because the merge cannot say which file a key came from, and a key
+        // nothing reads is only worth reporting against the file somebody has to edit to remove it.
+        let mut unread: Vec<(PathBuf, String)> = Vec::new();
         // Which kind of layer spelled `effort` last, which is the layer the merge lets answer for
         // it. The merged root cannot say, and it decides whether a saved pick outranks the answer.
         // The named file is read after all three and is the one layer above the home one that may
@@ -580,6 +617,12 @@ impl Settings {
                     contested.insert(name, path.clone());
                 }
             }
+            // Read off this layer's own root rather than the merged one: the merge keeps every key a
+            // layer set, so a key two files wrote would be reported once against whichever of them
+            // spoke last, and the other file would go unnamed.
+            for key in unread_keys(&root) {
+                unread.push((path.clone(), key));
+            }
             found.push(path);
             merge(&mut merged, root.take());
         }
@@ -605,6 +648,7 @@ impl Settings {
         settings.misshapen = misshapen;
         settings.mcp_declared = mcp_declared;
         settings.mcp_requested = mcp_requested;
+        settings.unread = unread;
         // Overwritten rather than merged in, for the reason `provider_ignored` is kept: what every
         // layer but the named one stated has been dropped above, so what stands here is the home
         // layer's own or the file the person named, and a saved pick cannot be outranked by a file
@@ -686,6 +730,7 @@ impl Settings {
             misshapen: Vec::new(),
             mcp_declared: Vec::new(),
             mcp_requested: Vec::new(),
+            unread: Vec::new(),
             keybindings: keybindings_block(root),
             attribution: attribution_block(root),
             search: search_caps(root),
@@ -852,6 +897,17 @@ impl Settings {
             .map(|(path, alias)| (path.as_path(), alias.as_str()))
     }
 
+    /// The top-level keys the layers set that nothing here reads, with their files, weakest first.
+    ///
+    /// Names only, for the reason [`Settings::names`] reports names: a value here may be a
+    /// credential, and a diagnostic that prints one is a diagnostic people paste into issues. The
+    /// file still applies, as it does for every other key reported this way.
+    pub fn unread_keys(&self) -> impl Iterator<Item = (&Path, &str)> {
+        self.unread
+            .iter()
+            .map(|(path, key)| (path.as_path(), key.as_str()))
+    }
+
     /// What the settings in force say a commit message and a pull request may carry.
     ///
     /// A name the block set is an answer even when it is empty, empty being how a file says to
@@ -921,6 +977,9 @@ impl Settings {
             // And a file that only tried to declare a server, which `doctor` names too.
             && self.mcp_declared.is_empty()
             && self.mcp_requested.is_empty()
+            // And a file whose only key is one nothing here reads: `doctor` names that file, so
+            // reporting it as no settings at all would contradict the line under it.
+            && self.unread.is_empty()
             // And a file that named a backend or a model from a layer not entitled to, which
             // `doctor` names for the reason it names the two above.
             && self.provider_ignored.is_empty()
@@ -1429,6 +1488,21 @@ fn env_names(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
             .collect(),
         _ => Vec::new(),
     }
+}
+
+/// The top-level keys one layer set that nothing here reads (BACKEND-36).
+///
+/// Names only, whatever each holds: the value may be a credential, and the key is the whole of what
+/// somebody needs to find the line and decide whether they meant to write it.
+///
+/// Every key, however it is spelled. A block spelled as the wrong type is a key this build reads and
+/// is reported for that by [`Settings::misshapen_rule_lists`] instead, so the shape of a value never
+/// reaches this.
+fn unread_keys(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+    root.keys()
+        .filter(|key| !READ_KEYS.contains(&key.as_str()))
+        .cloned()
+        .collect()
 }
 
 /// Lay one settings root over another, a name at a time.
@@ -3651,6 +3725,96 @@ mod tests {
                 (layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE), "weather"),
             ]
         );
+        assert!(!settings.is_empty());
+    }
+
+    /// BACKEND-36 at the top level: a key beside the ones this build reads is named with the file
+    /// that set it, weakest first, and every file that set one is named.
+    ///
+    /// Two layers write the same key, which is the case a report assembled off the merged root
+    /// cannot answer: that root holds one `sandbox`, so the home file would go unnamed and whoever
+    /// wrote it would read the report as being about the checkout's copy alone.
+    ///
+    /// `hooks` and `sandbox` are the two keys a block pasted from the other tool's file carries that
+    /// read as a restriction in force, which is why they are the fixture rather than a made-up name.
+    #[test]
+    fn a_key_beside_the_ones_this_build_reads_is_named_with_the_file_that_set_it() {
+        let layers = Layers::new("unread-keys")
+            .global(r#"{"sandbox": {"enabled": true}, "env": {"AWS_REGION": "us-west-2"}}"#)
+            .project(r#"{"sandbox": {"enabled": true}, "hooks": {"PreToolUse": []}}"#);
+        let settings = layers.read();
+        let unread: Vec<(PathBuf, &str)> = settings
+            .unread_keys()
+            .map(|(path, key)| (path.to_path_buf(), key))
+            .collect();
+        assert_eq!(
+            unread,
+            [
+                (layers.home.join(SETTINGS_FILE), "sandbox"),
+                (layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE), "hooks"),
+                (layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE), "sandbox"),
+            ]
+        );
+        // The key is reported and the file still applies, which is every other key reported this
+        // way and is what keeps an older binary starting on a newer release's file.
+        assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
+    }
+
+    /// Every key this build reads, in one file, reported as unread: none.
+    ///
+    /// The list of them is written down in one place and a key dropped from it would be reported as
+    /// unread while something still reads it, which is a report naming a key that works. Each is
+    /// spelled here as a file spells it, so a renamed key fails this rather than passing by reading
+    /// the constant back.
+    #[test]
+    fn a_key_this_build_reads_is_never_reported_as_unread() {
+        let settings = Layers::new("unread-none")
+            .global(
+                r#"{
+                    "model": "opus",
+                    "effort": "high",
+                    "editorMode": "vim",
+                    "env": {"AWS_REGION": "us-west-2"},
+                    "permissions": {"deny": ["Read(./.env)"]},
+                    "provider": {"gw": {"options": {"baseURL": "https://example.invalid/v1"}}},
+                    "run": {"maxOutput": 2048},
+                    "attribution": {"commit": ""},
+                    "keybindings": {"submit": "ctrl+s"},
+                    "search": {"maxFiles": 100},
+                    "vetting": {"auto": true},
+                    "mcp": {"request": ["docs"]},
+                    "mcpServers": {"weather": {"command": "npx"}}
+                }"#,
+            )
+            .read();
+        assert_eq!(settings.unread_keys().count(), 0);
+    }
+
+    /// The half of BACKEND-36 that was already honoured stays where it was: a variable nothing
+    /// consults is a name the file set, reported among them, and not a key beside the twelve.
+    ///
+    /// Reporting an `env` child twice would put one mistake in two places in one report, and the
+    /// name there is not a key somebody can delete to fix anything.
+    #[test]
+    fn a_variable_nothing_consults_is_named_among_the_names_and_not_as_an_unread_key() {
+        let settings = Layers::new("unread-env-child")
+            .global(r#"{"env": {"CLAUDE_CODE_SOMETHING": "1"}}"#)
+            .read();
+        assert_eq!(settings.unread_keys().count(), 0);
+        assert_eq!(
+            settings.names().collect::<Vec<_>>(),
+            vec!["CLAUDE_CODE_SOMETHING"]
+        );
+    }
+
+    /// A file holding nothing but an unread key still said something, so reading it as absence
+    /// would have `doctor` print "no settings.json" one line above the path of the file.
+    #[test]
+    fn a_file_whose_only_key_is_unread_is_not_read_as_no_settings() {
+        let settings = Layers::new("unread-only")
+            .global(r#"{"cleanupPeriodDays": 30}"#)
+            .read();
+        assert_eq!(settings.unread_keys().count(), 1);
         assert!(!settings.is_empty());
     }
 
