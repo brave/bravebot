@@ -197,6 +197,10 @@ struct PathPattern {
 pub struct Rule {
     subject: Subject,
     pattern: Pattern,
+    /// The path pattern again under each other name its literal prefix reaches once the links in
+    /// it are followed ([`Permissions::follow_links`]). Part of this rule rather than rules of
+    /// their own, since they are one rule about one file and a report counts what was written.
+    landed: Vec<Pattern>,
 }
 
 impl Rule {
@@ -253,11 +257,79 @@ impl Rule {
             Some(specifier) => Pattern::Command(command_pattern(specifier)),
         };
 
-        Ok(Self { subject, pattern })
+        Ok(Self {
+            subject,
+            pattern,
+            landed: Vec::new(),
+        })
     }
 
     pub fn subject(&self) -> Subject {
         self.subject
+    }
+
+    /// Add the spelling this rule's literal prefix lands on, where `land` names one that differs.
+    ///
+    /// The literal prefix is every segment before the first one holding a `*`, keyed as a gate holds
+    /// a path: relative for a pattern about the workspace and in full for any other. A leading `**`
+    /// also matches no segment, so the segments after it name a place at the anchor too: a bare
+    /// name, read as `**/name`, is followed at the top of the workspace. A pattern that starts with
+    /// any other star names no place. A prefix holding `..` is left as written, as a path holding one
+    /// is (TRUST-10).
+    ///
+    /// The spelling added is rooted where it landed and never floats: the name a link reaches is one
+    /// place. Only the place the prefix names is followed, not the nested copies PERM-4 floats a
+    /// written pattern to, since finding those is a walk of the tree.
+    fn follow_links(
+        &mut self,
+        land: &impl Fn(&str) -> Option<String>,
+        backslash_separates: bool,
+        folds_case: bool,
+    ) {
+        let (pattern, absolute) = match &self.pattern {
+            Pattern::Relative(pattern) => (pattern, false),
+            Pattern::Absolute(pattern) => (pattern, true),
+            Pattern::Everything
+            | Pattern::Command(_)
+            | Pattern::Domain(_)
+            | Pattern::Server(_)
+            | Pattern::Tool(..) => return,
+        };
+        let from = usize::from(pattern.segments.first().is_some_and(|first| first == "**"));
+        let literal = from
+            + pattern.segments[from..]
+                .iter()
+                .take_while(|segment| !segment.contains('*'))
+                .count();
+        let prefix = &pattern.segments[from..literal];
+        if prefix.is_empty() || prefix.iter().any(|segment| segment == "..") {
+            return;
+        }
+        let key = match absolute {
+            true => format!("/{}", prefix.join("/")),
+            false => prefix.join("/"),
+        };
+        let Some(landing) = land(&key) else {
+            return;
+        };
+        let landing = key_of(&landing, backslash_separates, folds_case);
+        let lands_absolute = is_absolute_key(&landing);
+        let mut segments = split(&landing);
+        if lands_absolute == absolute && segments == prefix {
+            return;
+        }
+        segments.extend_from_slice(&pattern.segments[literal..]);
+        let respelled = PathPattern {
+            segments,
+            floats_when_restricting: false,
+        };
+        let respelled = match lands_absolute {
+            true => Pattern::Absolute(respelled),
+            false => Pattern::Relative(respelled),
+        };
+        if !self.landed.contains(&respelled) {
+            self.landed.push(respelled);
+        }
     }
 
     /// Whether this rule covers reading or editing `path`.
@@ -268,18 +340,19 @@ impl Rule {
     /// `path` arrives already folded where the volume folds case, and the pattern was stored folded
     /// the same way, so the comparison here is byte-exact either way.
     fn covers_path(&self, path: &str, restricting: bool) -> bool {
-        match &self.pattern {
-            Pattern::Everything => true,
-            Pattern::Command(_) | Pattern::Domain(_) | Pattern::Server(_) | Pattern::Tool(..) => {
-                false
-            }
-            Pattern::Relative(pattern) => {
-                !is_absolute_key(path) && pattern.matches(&segments_of(path), restricting)
-            }
-            Pattern::Absolute(pattern) => {
-                is_absolute_key(path) && pattern.matches(&segments_of(path), restricting)
-            }
-        }
+        let absolute = is_absolute_key(path);
+        let segments = segments_of(path);
+        std::iter::once(&self.pattern)
+            .chain(&self.landed)
+            .any(|pattern| match pattern {
+                Pattern::Everything => true,
+                Pattern::Command(_)
+                | Pattern::Domain(_)
+                | Pattern::Server(_)
+                | Pattern::Tool(..) => false,
+                Pattern::Relative(pattern) => !absolute && pattern.matches(&segments, restricting),
+                Pattern::Absolute(pattern) => absolute && pattern.matches(&segments, restricting),
+            })
     }
 
     /// Whether this rule covers running one stage, `argv` its program word and arguments.
@@ -478,6 +551,23 @@ impl Permissions {
         self.deny.len() + self.ask.len() + self.allow.len()
     }
 
+    /// Have every `deny` and `ask` path rule cover the name its literal prefix reaches as well as
+    /// the name it was written with (PERM-7).
+    ///
+    /// `land` is given that prefix as a gate holds a path, relative for a rule about the workspace
+    /// and in full for any other, and answers with the name a gate would hold the place it reaches
+    /// by once every link on the way is followed, or `None` where no link is on the way or where
+    /// that cannot be told. Asked of the
+    /// caller because following a link is I/O and this crate does none.
+    ///
+    /// `allow` rules are left as written, since a grant covers only the spelling approved (PERM-7).
+    pub fn follow_links(&mut self, land: impl Fn(&str) -> Option<String>) {
+        let (backslash_separates, folds_case) = (self.backslash_separates, self.folds_case);
+        for rule in self.deny.iter_mut().chain(self.ask.iter_mut()) {
+            rule.follow_links(&land, backslash_separates, folds_case);
+        }
+    }
+
     /// What the rules say about reading or editing `path`.
     ///
     /// Spelled from `/` before anything is matched against it, which is how the patterns were read,
@@ -486,11 +576,7 @@ impl Permissions {
     /// rather than at each gate, so a path reaches the rules one way whichever gate it came through
     /// and a gate added later cannot be the one that forgot.
     pub fn for_path(&self, subject: Subject, path: &str) -> Decision {
-        let keyed = crate::spelling::to_key(path, self.backslash_separates);
-        let path = fold(
-            &drive_in_upper_case(&keyed, self.backslash_separates),
-            self.folds_case,
-        );
+        let path = key_of(path, self.backslash_separates, self.folds_case);
         self.decide(|rule, restricting| {
             rule.subject == subject && rule.covers_path(&path, restricting)
         })
@@ -652,6 +738,16 @@ fn path_pattern(specifier: &str, anchors: &Anchors) -> Option<Pattern> {
         rest,
         anchors.folds_case,
     ))))
+}
+
+/// `path` spelled as the rules match one: `/`-separated, its drive letter in upper case, and folded
+/// where the volume folds case. One spelling for a path a gate asks about and a name a link lands on.
+fn key_of(path: &str, backslash_separates: bool, folds_case: bool) -> String {
+    let keyed = crate::spelling::to_key(path, backslash_separates);
+    fold(
+        &drive_in_upper_case(&keyed, backslash_separates),
+        folds_case,
+    )
 }
 
 /// `key` with the drive letter it is rooted at in upper case, where a backslash separates.
@@ -1440,6 +1536,67 @@ mod tests {
         assert_eq!(
             permissions.for_path(Subject::Read, "/secrets/key"),
             Decision::Unmatched
+        );
+    }
+
+    /// PERM-7: a `deny` or `ask` path rule is followed from the segments before its first `*`, keyed
+    /// as a gate holds a path, and a name or a leading `**` from the segments after it. A pattern
+    /// that starts with any other star, a prefix holding `..`, a rule that is not about a path and an
+    /// `allow` rule have nothing to follow.
+    #[test]
+    fn a_restricting_path_rule_is_followed_from_the_segments_before_its_first_star() {
+        let mut permissions = rules(
+            &[
+                "Read(linked/*/key)",
+                "Read(.env)",
+                "Read(*.log)",
+                "Read(**/x)",
+                "Read(../up/**)",
+                "Read(//abs/dir/**)",
+                "Read(~/notes.md)",
+                "Bash(ls)",
+            ],
+            &["Edit(a/b.md)"],
+            &["Read(granted/**)"],
+        );
+        let asked = std::cell::RefCell::new(Vec::new());
+        permissions.follow_links(|prefix| {
+            asked.borrow_mut().push(prefix.to_string());
+            None
+        });
+        assert_eq!(
+            asked.into_inner(),
+            [
+                "linked",
+                ".env",
+                "x",
+                "/abs/dir",
+                "/home/someone/notes.md",
+                "a/b.md"
+            ],
+            "a rule was followed from the wrong segments, or one with nothing to follow was asked about"
+        );
+    }
+
+    /// The name a prefix lands on is spelled the way the path it is matched against is, so a
+    /// canonical name with backslashes and a drive prefix, or in the case a folding volume stores,
+    /// reaches the same file as the spelling a gate asks about.
+    #[test]
+    fn a_landing_is_read_in_the_spelling_a_path_is_matched_in() {
+        let mut on_a_drive = rules_where_a_backslash_separates(&["Read(//D:/linked/**)"], &[], &[]);
+        on_a_drive.follow_links(|_| Some(r"\\?\d:\real".to_string()));
+        assert_eq!(
+            on_a_drive.for_path(Subject::Read, r"D:\real\secret"),
+            Decision::Ruled(Ruling::Deny),
+            "a landing named with backslashes and a lower-case drive missed the file it names"
+        );
+
+        let mut folding = rules_on_a_volume_that_folds_case(true, &["Read(linked/**)"], &[], &[]);
+        folding.follow_links(|_| Some("Real".to_string()));
+        assert_eq!(
+            folding.for_path(Subject::Read, "REAL/secret"),
+            Decision::Ruled(Ruling::Deny),
+            "a landing on a volume that folds case missed another case of the name it reaches"
         );
     }
 
