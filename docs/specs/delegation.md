@@ -125,7 +125,7 @@ The three kinds are ordered, so choosing a wider one never costs a narrower one'
 A language server goes with running programs and never without it, because starting one runs the
 project's build tooling ([LSP-9](tools/lsp.md#LSP-9)).
 
-[CHECKOUT-3](checkouts.md#CHECKOUT-3), which nothing yet builds, lets a checker or a worker work in
+[CHECKOUT-3](checkouts.md#CHECKOUT-3) lets a checker or a worker work in
 a checkout of its own, and refuses one to a reader.
 
 A reader and a checker hold no MCP server's grant ([SERVERS-9](mcp-servers.md#SERVERS-9)). What a
@@ -331,9 +331,9 @@ round. A parent shown a private report holds it from then on.
 The exchange, the tool results, the narration and the quarantine all end with the delegate. A
 reference minted inside one names nothing afterwards, and none of it can be asked for later.
 
-[CHECKOUT-18](checkouts.md#CHECKOUT-18), which nothing yet builds, has the driver say one more
-thing beside the report, from its own record: where a delegate's checkout is, the commit it holds,
-and the paths that could come back from it.
+[CHECKOUT-18](checkouts.md#CHECKOUT-18) has the driver say one more thing beside the report, from
+its own record: where a delegate's checkout is and the commit it holds, or that it was removed. The
+paths that could come back from it are not built.
 
 **Why.** This is the feature rather than a restriction on it. A delegate whose reading reached
 its parent's context would have moved the log rather than absorbed it.

@@ -88,6 +88,30 @@ pub fn compose<S: Sink>(
     goal: Option<&str>,
     attribution: &Attribution,
 ) -> Preamble {
+    compose_in(
+        policy,
+        workspace,
+        workspace,
+        home,
+        skills,
+        tick,
+        goal,
+        attribution,
+    )
+}
+
+/// `compose` for a turn that works in `workspace` but reads its instructions from `sources`.
+#[allow(clippy::too_many_arguments)]
+pub fn compose_in<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    sources: &Workspace,
+    workspace: &Workspace,
+    home: Option<&Path>,
+    skills: &Catalogue,
+    tick: Option<crate::turn::Tick>,
+    goal: Option<&str>,
+    attribution: &Attribution,
+) -> Preamble {
     let mut preamble = Preamble::default();
 
     // One walk of `$PATH`, read by the fact and by the imperative that rests on it, so the two
@@ -107,7 +131,7 @@ pub fn compose<S: Sink>(
             text.trim()
         ));
     }
-    match read_workspace_agents(policy, workspace, &mut preamble.notices) {
+    match read_workspace_agents(policy, sources, &mut preamble.notices) {
         Ok(Some(found)) => {
             standing.push_str(&format!(
                 "From {}:\n\n{}\n\n",

@@ -211,6 +211,46 @@ fn listed(items: &[&str]) -> String {
     }
 }
 
+/// What the driver tells a delegate working in a checkout (CHECKOUT-7).
+///
+/// The commit is a hash the driver read. A left-out path is named only where it is short and made
+/// of plain characters; the rest are counted, so a file name cannot carry a sentence into the
+/// prompt.
+pub(crate) fn checkout_notice(checkout: &crate::workspace::CheckoutInfo) -> String {
+    const SHOWN: usize = 10;
+    let plain = |path: &&String| {
+        path.len() <= 200
+            && path
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-/+@=,~".contains(&b))
+    };
+    let named: Vec<&String> = checkout
+        .left_out()
+        .iter()
+        .filter(plain)
+        .take(SHOWN)
+        .collect();
+    let unnamed = checkout.left_out().len() - named.len();
+    let mut notice = format!(
+        "\n\nYou are working in a checkout of commit {} of the project, at {}. Changes the person \
+         has not committed are not in it. You have no memory and no language servers here.",
+        checkout.commit(),
+        checkout.path().display()
+    );
+    if !named.is_empty() || unnamed > 0 {
+        notice.push_str(" A deny rule kept these paths out of it:");
+        for path in &named {
+            notice.push_str(&format!(" {path}"));
+        }
+        if unnamed > 0 {
+            notice.push_str(&format!(" and {unnamed} more"));
+        }
+        notice.push('.');
+    }
+    notice.push('\n');
+    notice
+}
+
 /// The whole of what a delegate is told.
 ///
 /// Its own introduction, including whether it sits where it may delegate again, then the
@@ -321,6 +361,9 @@ pub struct Seeded {
     /// prompt, so a line recorded inside a delegate holds for the turn that spawned it with nothing
     /// collected.
     pub remembering: Option<String>,
+    /// The workspace it runs in where that is a checkout of its own (CHECKOUT-7), and the
+    /// spawning turn's own where it is not.
+    pub workspace: Option<crate::workspace::Workspace>,
 }
 
 /// Names what it holds and never the task.
@@ -376,6 +419,7 @@ pub fn seed<S: Sink>(
         vouched: policy.vouched(),
         permissions: policy.permissions().clone(),
         remembering: remembering.map(str::to_string),
+        workspace: None,
     }
 }
 

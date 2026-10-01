@@ -2042,6 +2042,8 @@ struct Working<'scope> {
     id: DelegateId,
     /// What it started from, so only what a person answered inside it is taken back.
     seeded: Vouched,
+    /// The checkout it works in, where it was given one (CHECKOUT-15).
+    checkout: Option<std::sync::Arc<crate::workspace::CheckoutInfo>>,
     handle: std::thread::ScopedJoinHandle<
         'scope,
         (
@@ -2242,7 +2244,14 @@ fn collect_delegates<S: Sink, R: Reporter>(
 
         spent.inference += waits.collected(crate::timing::Interval::since(joined_at), requests);
 
-        let (note, body, failed, reported) = match delegated {
+        // After the decisions it made are taken back, so a rule that distrusts a path survives the
+        // withdrawal of the rest (CHECKOUT-12).
+        let retired = working
+            .checkout
+            .as_ref()
+            .map(|checkout| (checkout.retire(&policy.file_authority()), checkout.clone()));
+
+        let (mut note, mut body, failed, reported) = match delegated {
             Ok(delegated) => {
                 *tokens += delegated.usage.total();
                 *output_tokens += delegated.usage.completion_tokens;
@@ -2313,6 +2322,39 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 (note, body, true, None)
             }
         };
+
+        if let Some((retired, checkout)) = retired {
+            use crate::workspace::Retired;
+            let (said, mark) = match retired {
+                Retired::Removed => (
+                    format!(
+                        "Its checkout {} was removed, since nothing was done in it.",
+                        checkout.id()
+                    ),
+                    "its checkout was removed",
+                ),
+                Retired::Kept => (
+                    format!(
+                        "Its checkout {} of commit {} was kept at {}, since something was done in it.",
+                        checkout.id(),
+                        checkout.commit(),
+                        checkout.path().display()
+                    ),
+                    "its checkout was kept",
+                ),
+                Retired::Stuck => (
+                    format!(
+                        "Its checkout {} could not be removed and is at {}.",
+                        checkout.id(),
+                        checkout.path().display()
+                    ),
+                    "its checkout could not be removed",
+                ),
+            };
+            body.push_str("\n\n");
+            body.push_str(&said);
+            note = format!("{note}; {mark}");
+        }
 
         reporter.delegate_finished(id, note, failed, reported);
         conversation.push(Message::user(body));
@@ -2491,6 +2533,9 @@ fn fire_hooks<R: Reporter + ?Sized>(
     // Hook programs can write files outside the backup journal, regardless of their outcome.
     if hooks.firing(moment, tool).next().is_some() {
         workspace.mark_rewind_gap(crate::rewind::CoverageGap::Hook);
+        if let Some(checkout) = workspace.checkout() {
+            checkout.mark_worked_in();
+        }
     }
     let mut said = Vec::new();
     for fired in crate::hooks::fire(hooks, moment, tool, workspace.root()) {
@@ -2665,7 +2710,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
 
     // Every route into a file this turn takes goes through this copy, so a write that leaves a
     // definition's memory untrusted is recorded wherever it comes from (MEMORY-5).
-    let workspace = &workspace.clone().keeping_memories(task.home.clone());
+    let workspace = &match workspace.checkout() {
+        Some(_) => workspace.clone(),
+        None => workspace.clone().keeping_memories(task.home.clone()),
+    };
 
     let mut routing = Routing::new();
     routing.insert_trusted("task", task.prompt.clone());
@@ -2721,7 +2769,16 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
 
     // Before every turn rather than as a session opens, since a session's map is made at a start,
     // a clear and a resume and moved by `/cd` (MEMORY-5).
-    crate::memory::distrust_recorded(&mut policy, workspace, task.home.as_deref());
+    // A checkout reads what it is told from the working directory it was made from, by the names
+    // that directory's rules are spelled in (CHECKOUT-9).
+    let sources = workspace.sources();
+    let checkout_authority = workspace
+        .checkout()
+        .map(|_| policy.exchange_file_authority(policy.file_authority().unrooted()));
+    crate::memory::distrust_recorded(&mut policy, sources, task.home.as_deref());
+    if let Some(rooted) = checkout_authority {
+        policy.exchange_file_authority(rooted);
+    }
 
     // Keep the policy outside all fallible context loading and execution. Locals in this
     // closure, including child scopes and jobs, are cleaned up before decisions are copied.
@@ -2753,8 +2810,11 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // Found once per turn and reused for every round. Per turn rather than per session so a
         // skill written or edited while the session is open takes effect on the next one, including
         // one this agent wrote itself.
+        let rooted = workspace
+            .checkout()
+            .map(|_| policy.exchange_file_authority(policy.file_authority().unrooted()));
         let (catalogue, mut notices) =
-            crate::skills::discover(&mut policy, workspace, task.home.as_deref());
+            crate::skills::discover(&mut policy, sources, task.home.as_deref());
 
         // The kinds of delegate this turn can select from, resolved from the same two roots and for
         // the same reason: a definition names a kind, so a file can say what a delegate is for and
@@ -2762,7 +2822,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // instruction is, and installed into the kernel, which is what a planner's name is compared
         // against.
         let (delegates, delegate_notices) =
-            crate::agents::discover(&mut policy, workspace, task.home.as_deref());
+            crate::agents::discover(&mut policy, sources, task.home.as_deref());
         notices.extend(delegate_notices);
         notices.extend(crate::agents::skills_not_found(&delegates, &catalogue));
         let reached = task
@@ -2790,7 +2850,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // it, so the next message would ask the same person about the same language and wait for a
         // second index of the same tree. A caller that hands none over is one whose session is this
         // turn, so what is built for it is still the session's.
-        let mut owned = servers.is_none().then(|| {
+        let mut owned = (servers.is_none() && workspace.checkout().is_none()).then(|| {
             crate::lsp::LanguageServers::new(workspace.root().to_path_buf(), task.home.clone())
         });
         let mut servers = servers.or(owned.as_mut());
@@ -2798,8 +2858,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // Built once and put in front of every round of this turn. Nothing here is stored in the
         // conversation, so a session running many turns holds one copy of AGENTS.md rather than one
         // per turn.
-        let preamble = crate::preamble::compose(
+        let preamble = crate::preamble::compose_in(
             &mut policy,
+            sources,
             workspace,
             task.home.as_deref(),
             &catalogue,
@@ -2807,6 +2868,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             task.working_towards.as_deref(),
             &task.attribution,
         );
+        if let Some(rooted) = rooted {
+            policy.exchange_file_authority(rooted);
+        }
         notices.extend(preamble.notices.iter().cloned());
 
         // Said here rather than only on the outcome. These describe what the turn is about to work
@@ -2944,13 +3008,17 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // nobody is watching the writes. Only plan mode says anything: see
         // `PermissionMode::instruction`.
         let mode = task.permission_mode.instruction().unwrap_or_default();
-        let memory = |keeps: bool, name: &str| match keeps {
+        let memory = |keeps: bool, name: &str| match keeps && workspace.checkout().is_none() {
             true => crate::memory::told(&policy, workspace, name),
             false => String::new(),
         };
+        let checkout_notice = workspace
+            .checkout()
+            .map(crate::delegate::checkout_notice)
+            .unwrap_or_default();
         let system = match &task.delegate {
             Some(spec) => format!(
-                "{}{}{mode}",
+                "{}{checkout_notice}{}{mode}",
                 crate::delegate::prompt_for(
                     spec.capabilities(),
                     spec.prompt(),
@@ -3848,6 +3916,11 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             changed_at.get_or_insert(steps);
                         }
                         ran_a_program = ran_a_program || output.ran_a_program;
+                        if (output.changed_a_file || output.ran_a_program)
+                            && let Some(checkout) = workspace.checkout()
+                        {
+                            checkout.mark_worked_in();
+                        }
                         attached.extend(output.attached.take());
 
                         // The call is over, whatever came of it. Fired here rather than on a successful
@@ -3878,7 +3951,14 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         let spawning_model = turn_model.clone();
                         for (id, seeded) in std::mem::take(&mut output.delegate) {
                             let vouched = seeded.vouched.clone();
-                            let shared = servers.as_deref().map(crate::lsp::LanguageServers::share);
+                            let checkout = seeded
+                                .workspace
+                                .as_ref()
+                                .and_then(crate::workspace::Workspace::checkout_handle);
+                            let shared = match checkout {
+                                Some(_) => None,
+                                None => servers.as_deref().map(crate::lsp::LanguageServers::share),
+                            };
                             let spawning_model = spawning_model.clone();
                             let handle = scope.spawn(move || {
                                 let mut confirmer = confirming.delegate(id);
@@ -3888,7 +3968,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     &seeded,
                                     config,
                                     egress,
-                                    workspace,
+                                    seeded.workspace.as_ref().unwrap_or(workspace),
                                     task.home.as_deref(),
                                     task.profile.as_deref(),
                                     spawning_model.as_deref(),
@@ -3912,6 +3992,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 join_started: None,
                                 id,
                                 seeded: vouched,
+                                checkout,
                                 handle,
                             });
                         }
@@ -4896,6 +4977,7 @@ mod tests {
                 join_started: Some(joining_tx),
                 id: DelegateId::nth(1),
                 seeded,
+                checkout: None,
                 handle: worker,
             }];
             let mut tokens = 0;

@@ -368,7 +368,7 @@ own store ([MEMORY-1](#MEMORY-1)), and a bot's conversation is a session in that
   opens it, and that is a person's act and not a file's.
 
 `isolation:` is not read either. [CHECKOUT-2](checkouts.md#CHECKOUT-2), which nothing yet builds,
-reads it as a request for a checkout the driver makes, so that key would start a run somewhere
+would read it as a request for a checkout the driver makes, so that key would start a run somewhere
 other than the working directory. The file still names no path, and a delegate in a checkout keeps
 no memory ([CHECKOUT-9](checkouts.md#CHECKOUT-9)).
 

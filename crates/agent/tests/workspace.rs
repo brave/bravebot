@@ -6295,3 +6295,248 @@ fn a_trusted_write_to_a_memory_takes_it_out_of_the_record() {
         .write(&mut policy, &path, &Labelled::trusted("MORE".to_string()))
         .expect("trusted bytes need no record");
 }
+
+/// A repository of `files` in a scratch directory, a workspace over it, and a state directory
+/// beside it, which is where [`Workspace::checkout_for`] makes checkouts.
+fn repository_with_a_state_directory(
+    name: &str,
+    files: &[(&str, &str)],
+) -> (Scratch, Scratch, Workspace) {
+    let scratch = Scratch::new(name);
+    let state = Scratch::new(&format!("{name}-state"));
+    repository::commit_files(&scratch.path, files, "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    (scratch, state, workspace)
+}
+
+/// CHECKOUT-1, CHECKOUT-7. Each checkout is a workspace of its own under the state directory,
+/// numbered in the order they are made, holding the committed tree.
+#[test]
+fn each_checkout_is_a_numbered_workspace_under_the_state_directory() {
+    let (scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-for-numbers", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+
+    let first = workspace
+        .checkout_for(&policy, &state.path)
+        .expect("a checkout");
+    let second = workspace
+        .checkout_for(&policy, &state.path)
+        .expect("a second checkout");
+
+    let ids: Vec<&str> = [&first, &second]
+        .iter()
+        .map(|made| made.checkout().expect("a checkout").id())
+        .collect();
+    assert_eq!(ids, ["c1", "c2"]);
+    assert_ne!(first.root(), second.root());
+    let under = state.path.canonicalize().unwrap().join("checkouts");
+    for made in [&first, &second] {
+        assert!(made.root().starts_with(&under), "{:?}", made.root());
+        assert_eq!(
+            std::fs::read_to_string(made.root().join("README")).expect("README"),
+            "hello\n"
+        );
+    }
+    assert!(!first.root().starts_with(&scratch.path));
+    assert_eq!(workspace.checkout().map(|c| c.id().to_string()), None);
+}
+
+/// CHECKOUT-7. A checkout is refused, and nothing is written, where it would sit in the working
+/// directory, where a directory opened beside the working directory holds it, and where the
+/// workspace is itself a checkout.
+#[test]
+fn a_checkout_is_refused_where_it_would_overlap_a_tree_the_session_opened() {
+    let (scratch, state, mut workspace) =
+        repository_with_a_state_directory("checkout-for-overlap", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+
+    let inside = scratch.path.join("state");
+    std::fs::create_dir_all(&inside).unwrap();
+    let refused = workspace
+        .checkout_for(&policy, &inside)
+        .expect_err("inside the working directory");
+    assert!(
+        refused.contains("inside the working directory"),
+        "{refused}"
+    );
+    assert!(
+        !inside.join("checkouts").exists(),
+        "a directory was made in the working directory before the refusal"
+    );
+
+    workspace
+        .add_directory(&state.path.to_string_lossy())
+        .unwrap();
+    let refused = workspace
+        .checkout_for(&policy, &state.path)
+        .expect_err("inside an opened directory");
+    assert!(
+        refused.contains("holds the working directory or the checkout"),
+        "{refused}"
+    );
+    assert!(!state.path.join("checkouts").exists());
+    assert!(!scratch.path.join(".git/worktrees").exists());
+}
+
+/// CHECKOUT-3. A workspace that is a checkout makes no checkout of its own.
+#[test]
+fn a_checkout_is_not_made_from_a_checkout() {
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-for-nested", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let first = workspace
+        .checkout_for(&policy, &state.path)
+        .expect("a checkout");
+
+    let refused = first
+        .checkout_for(&policy, &state.path)
+        .expect_err("a checkout of a checkout");
+    assert!(refused.contains("already works in a checkout"), "{refused}");
+    assert_eq!(checkout_directories(&state.path).len(), 1);
+}
+
+fn checkout_directories(state: &std::path::Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for project in std::fs::read_dir(state.join("checkouts"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        for one in std::fs::read_dir(project.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            found.push(one.path());
+        }
+    }
+    found
+}
+
+/// CHECKOUT-8. The rules the map holds under the working directory answer for the same paths
+/// under the checkout, and a file the working directory distrusts is distrusted there.
+#[test]
+fn a_checkout_is_labelled_as_the_working_directory_is() {
+    let (_scratch, state, workspace) = repository_with_a_state_directory(
+        "checkout-for-rules",
+        &[("README", "hello\n"), ("vendor/b.js", "theirs\n")],
+    );
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust("vendor");
+    let mut sink = RecordingSink::new();
+    let policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    let made = workspace
+        .checkout_for(&policy, &state.path)
+        .expect("a checkout");
+    let key = made.checkout().expect("a checkout").key().to_string();
+    let authority = policy.file_authority();
+    assert!(authority.is_trusted(&format!("{key}/README")));
+    assert!(!authority.is_trusted(&format!("{key}/vendor/b.js")));
+    assert!(authority.is_trusted(&format!("{}/README", workspace.root().display())));
+}
+
+/// CHECKOUT-15. A checkout nothing was done in is removed with its `worktrees` entry and its
+/// rules, and one something was done in is kept.
+#[test]
+fn a_checkout_is_removed_unless_something_was_done_in_it() {
+    use bravebot_agent::workspace::Retired;
+    let (scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-retire", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let authority = policy.file_authority();
+    let idle = workspace.checkout_for(&policy, &state.path).expect("idle");
+    let busy = workspace.checkout_for(&policy, &state.path).expect("busy");
+    let idle_key = idle.checkout().unwrap().key().to_string();
+    assert!(authority.is_trusted(&format!("{idle_key}/README")));
+
+    busy.checkout().unwrap().mark_worked_in();
+    assert_eq!(busy.checkout().unwrap().retire(&authority), Retired::Kept);
+    assert!(busy.root().join("README").exists());
+    assert!(scratch.path.join(".git/worktrees/c2").exists());
+
+    assert_eq!(
+        idle.checkout().unwrap().retire(&authority),
+        Retired::Removed
+    );
+    assert!(!idle.root().exists(), "the directory was left");
+    assert!(
+        !scratch.path.join(".git/worktrees/c1").exists(),
+        "the entry was left"
+    );
+    assert!(
+        !authority.is_trusted(&format!("{idle_key}/README")),
+        "the rules were left"
+    );
+}
+
+/// CHECKOUT-12. A rule that distrusts a path in a checkout outlives the checkout, and a history
+/// answer that shows the path is labelled by it, kept or removed.
+#[test]
+fn a_distrusted_path_in_a_checkout_labels_history_that_shows_it() {
+    use bravebot_agent::workspace::Retired;
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-distrust", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let authority = policy.file_authority();
+    let made = workspace
+        .checkout_for(&policy, &state.path)
+        .expect("a checkout");
+    let info = made.checkout().unwrap();
+
+    let repository = Labelled::trusted(".".to_string());
+    let show = bravebot_agent::workspace::GitQuestion {
+        query: bravebot_agent::git::Query::Show,
+        ..log_of(&repository)
+    };
+    let before = workspace.read_git(&mut policy, &show).expect("shown");
+    assert_eq!(before.label(), Label::trusted_private());
+
+    assert!(authority.publish(&format!("{}/README", info.key()), Integrity::Untrusted));
+    let after = workspace.read_git(&mut policy, &show).expect("shown");
+    assert_eq!(
+        after.label(),
+        Label::untrusted_private(),
+        "history showing a path distrusted in a checkout kept its label"
+    );
+
+    assert_eq!(info.retire(&authority), Retired::Removed);
+    let removed = workspace.read_git(&mut policy, &show).expect("shown");
+    assert_eq!(removed.label(), Label::untrusted_private());
+    assert!(!made.root().exists());
+}
+
+/// GIT-8. A repository is not opened through a linked worktree, so read_git in a checkout
+/// declines.
+#[test]
+fn read_git_declines_in_a_checkout() {
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-read-git", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path)
+        .expect("a checkout");
+    let repository = Labelled::trusted(".".to_string());
+
+    let refused = made.read_git(&mut policy, &log_of(&repository));
+    assert!(
+        matches!(refused, Err(WorkspaceError::Git { .. })),
+        "read_git opened a repository through a checkout: {:?}",
+        refused.map(|answer| answer.label())
+    );
+}

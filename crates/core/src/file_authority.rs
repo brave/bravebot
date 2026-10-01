@@ -51,25 +51,93 @@ struct Shared {
 }
 
 /// Live authority. Cloning shares decisions; `snapshot` makes an independent record.
+///
+/// A handle may be rooted elsewhere than the map is ([`FileAuthority::rooted_at`]): a relative name
+/// is then a path beneath that root, and every decision is still filed under the full path.
 #[derive(Debug, Clone)]
-pub struct FileAuthority(Arc<Shared>);
+pub struct FileAuthority {
+    shared: Arc<Shared>,
+    root: Option<Arc<str>>,
+}
 
 impl FileAuthority {
     pub fn new(trust: TrustStore) -> Self {
-        Self(Arc::new(Shared {
-            access: Mutex::new(()),
-            state: Mutex::new(State {
-                trust,
-                active: BTreeSet::new(),
-                revision: 0,
-                versions: BTreeMap::new(),
+        Self {
+            shared: Arc::new(Shared {
+                access: Mutex::new(()),
+                state: Mutex::new(State {
+                    trust,
+                    active: BTreeSet::new(),
+                    revision: 0,
+                    versions: BTreeMap::new(),
+                }),
             }),
-        }))
+            root: None,
+        }
+    }
+
+    /// This authority, with a relative name read beneath `root` instead of the map's own root.
+    ///
+    /// For a delegate working in a checkout (CHECKOUT-7): its gates name a file as the checkout's
+    /// root-relative path, and the decision has to be filed under the checkout's full path, where
+    /// the rules copied there are. The decisions are the same ones, shared; only the spelling of a
+    /// relative name differs. `root` is absolute.
+    #[must_use]
+    pub fn rooted_at(&self, root: &str) -> Self {
+        Self {
+            shared: self.shared.clone(),
+            root: Some(Arc::from(crate::trust::normalise(root))),
+        }
+    }
+
+    /// This authority spelling relative names as the map does, whatever root it was given.
+    #[must_use]
+    pub fn unrooted(&self) -> Self {
+        Self {
+            shared: self.shared.clone(),
+            root: None,
+        }
+    }
+
+    /// `path` as this handle reads it: a relative name under the handle's root, and anything else as
+    /// it stands.
+    fn spelled<'a>(&self, path: &'a str) -> std::borrow::Cow<'a, str> {
+        let Some(root) = &self.root else {
+            return std::borrow::Cow::Borrowed(path);
+        };
+        let named = crate::trust::normalise(path);
+        if crate::trust::is_absolute_key(&named) {
+            return std::borrow::Cow::Owned(named);
+        }
+        std::borrow::Cow::Owned(match (root.as_ref(), named.as_str()) {
+            (root, "") => root.to_string(),
+            ("/", below) => format!("/{below}"),
+            (root, below) => format!("{root}/{below}"),
+        })
+    }
+
+    /// Say of `to` and everything beneath it what is said of `from` and everything beneath it.
+    ///
+    /// Moves no revision: no path beneath `to` has been read or written before this, so no earlier
+    /// answer or approval is about one, and moving it would quarantine the output of a command a
+    /// sibling delegate is running on a decision that changed nothing for it.
+    pub fn copy_beneath(&self, from: &str, to: &str) {
+        let mut state = self.state();
+        let (from, to) = (self.spelled(from), self.spelled(to));
+        state.trust.copy_beneath(&from, &to);
+    }
+
+    /// Drop the rules at or beneath `under`, keeping those that distrust a path, and say whether
+    /// any were kept.
+    pub fn withdraw_beneath(&self, under: &str) -> bool {
+        let mut state = self.state();
+        let under = self.spelled(under);
+        state.trust.withdraw_beneath(&under)
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
-        let (mut state, poisoned) = match self.0.state.lock() {
-            Ok(state) => (state, self.0.access.is_poisoned()),
+        let (mut state, poisoned) = match self.shared.state.lock() {
+            Ok(state) => (state, self.shared.access.is_poisoned()),
             Err(error) => (error.into_inner(), true),
         };
         if poisoned {
@@ -92,7 +160,7 @@ impl FileAuthority {
         FileCapture {
             authority: self,
             _guard: self
-                .0
+                .shared
                 .access
                 .lock()
                 .unwrap_or_else(|error| error.into_inner()),
@@ -109,23 +177,27 @@ impl FileAuthority {
     /// several times in a row would take one copy per question. See [`TrustStore::integrity_of`]
     /// for what the answer means.
     pub fn integrity_of(&self, path: &str) -> Option<Integrity> {
-        self.state().trust.integrity_of(path)
+        self.state().trust.integrity_of(&self.spelled(path))
     }
 
     pub fn integrity_of_or(&self, path: &str, assumed: Option<Integrity>) -> Option<Integrity> {
-        self.state().trust.integrity_of_or(path, assumed)
+        self.state()
+            .trust
+            .integrity_of_or(&self.spelled(path), assumed)
     }
 
     pub fn integrity_beneath(&self, path: &str) -> Option<Integrity> {
-        self.state().trust.integrity_beneath(path)
+        self.state().trust.integrity_beneath(&self.spelled(path))
     }
 
     pub fn integrity_beneath_or(&self, path: &str, assumed: Integrity) -> Integrity {
-        self.state().trust.integrity_beneath_or(path, assumed)
+        self.state()
+            .trust
+            .integrity_beneath_or(&self.spelled(path), assumed)
     }
 
     pub fn is_trusted(&self, path: &str) -> bool {
-        self.state().trust.is_trusted(path)
+        self.state().trust.is_trusted(&self.spelled(path))
     }
 
     /// The key `begin` and `publish` will file `path` under.
@@ -134,7 +206,7 @@ impl FileAuthority {
     /// one key, so a caller comparing the names it was handed would enter a second effect on a path
     /// it is already writing and be refused by its own reservation.
     pub fn key(&self, path: &str) -> String {
-        self.state().trust.key(path)
+        self.state().trust.key(&self.spelled(path))
     }
 
     /// Changes even when a write leaves the effective label unchanged.
@@ -144,16 +216,20 @@ impl FileAuthority {
 
     /// A poisoned boundary cannot validate an earlier command proof.
     pub fn is_current(&self, revision: u64) -> bool {
-        !self.0.access.is_poisoned() && !self.0.state.is_poisoned() && self.revision() == revision
+        !self.shared.access.is_poisoned()
+            && !self.shared.state.is_poisoned()
+            && self.revision() == revision
     }
 
     pub fn revision_of(&self, path: &str) -> u64 {
         let state = self.state();
-        let key = state.trust.key(path);
+        let key = state.trust.key(&self.spelled(path));
         state.revision_of(&key)
     }
 
     pub fn publish(&self, path: &str, integrity: Integrity) -> bool {
+        let path = self.spelled(path);
+        let path = path.as_ref();
         let mut state = self.state();
         let key = state.trust.key(path);
         if integrity == Integrity::Trusted && state.active.contains(&key) {
@@ -173,6 +249,8 @@ impl FileAuthority {
     /// move the revision, and a command whose output is labelled by the revision it started at
     /// would have that output quarantined by a decision that changed nothing.
     pub fn distrust_unless_distrusted(&self, path: &str) -> bool {
+        let path = self.spelled(path);
+        let path = path.as_ref();
         let mut state = self.state();
         let key = state.trust.key(path);
         if state
@@ -191,7 +269,7 @@ impl FileAuthority {
     /// Refuses overlapping writers; no approval is held while waiting on another effect.
     fn begin(&self, path: &str) -> Option<FileEffect> {
         let mut state = self.state();
-        let key = state.trust.key(path);
+        let key = state.trust.key(&self.spelled(path));
         if !state.active.insert(key.clone()) {
             return None;
         }
@@ -348,5 +426,45 @@ mod tests {
                 "{changed}"
             );
         }
+    }
+
+    /// A handle rooted in a checkout files a relative name under the checkout and leaves the
+    /// working directory's own rule for the same name as it was (CHECKOUT-7, CHECKOUT-8).
+    #[test]
+    fn a_rooted_handle_files_a_relative_name_under_its_root() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        authority.publish(".", Integrity::Trusted);
+        authority.copy_beneath("", "/state/c1");
+        let rooted = authority.rooted_at("/state/c1");
+
+        rooted.publish("src/a.rs", Integrity::Untrusted);
+
+        assert_eq!(rooted.integrity_of("src/a.rs"), Some(Integrity::Untrusted));
+        assert_eq!(rooted.key("src/a.rs"), "/state/c1/src/a.rs");
+        assert_eq!(rooted.key(""), "/state/c1");
+        assert_eq!(rooted.key("/work/src/a.rs"), "/work/src/a.rs");
+        assert_eq!(
+            authority.integrity_of("src/a.rs"),
+            Some(Integrity::Trusted),
+            "a write in the checkout distrusted the working directory's file"
+        );
+        assert_eq!(
+            authority.integrity_of("/state/c1/src/a.rs"),
+            Some(Integrity::Untrusted),
+            "the decision was not filed under the checkout's full path"
+        );
+        assert_eq!(rooted.unrooted().key("src/a.rs"), "/work/src/a.rs");
+    }
+
+    /// Making the copy moves no revision, since nothing beneath the checkout has been read.
+    #[test]
+    fn copying_a_subtree_moves_no_revision() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        authority.publish(".", Integrity::Trusted);
+        let before = authority.revision();
+        authority.copy_beneath("", "/state/c1");
+        assert_eq!(authority.revision(), before);
+        assert!(!authority.withdraw_beneath("/state/c1"));
+        assert_eq!(authority.revision(), before);
     }
 }

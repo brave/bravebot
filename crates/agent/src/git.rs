@@ -6402,6 +6402,55 @@ mod tests {
             );
         }
 
+        /// Removing a checkout takes its directory and its entry and no other entry, and goes
+        /// through no link.
+        #[test]
+        fn removing_a_checkout_takes_its_directory_and_its_entry_alone() {
+            use crate::git::checkout::remove;
+            let repo = Repo::new("checkout-removed");
+            let readme = repo.blob("hello\n");
+            committed(&repo, &[("100644", "README", readme)]);
+            repo.put("worktrees/other/gitdir", "/elsewhere/.git\n");
+            made(&repo).expect("made");
+            assert!(target(&repo).join("README").exists());
+
+            remove(&repo.git, &target(&repo), "c1").expect("removed");
+            assert!(!target(&repo).exists());
+            assert!(!admin(&repo).exists());
+            assert!(repo.git.join("worktrees/other/gitdir").exists());
+            remove(&repo.git, &target(&repo), "c1").expect("already gone");
+
+            made(&repo).expect("made again");
+            for id in ["", "../c1", "c1/x", "c 1"] {
+                assert!(
+                    remove(&repo.git, &target(&repo), id).is_err(),
+                    "removed with the id {id:?}"
+                );
+            }
+            assert!(target(&repo).join("README").exists());
+            assert!(admin(&repo).exists());
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn removing_a_checkout_leaves_everything_where_worktrees_is_a_link() {
+            use crate::git::checkout::remove;
+            let repo = Repo::new("checkout-removed-linked");
+            let readme = repo.blob("hello\n");
+            committed(&repo, &[("100644", "README", readme)]);
+            made(&repo).expect("made");
+            let elsewhere = repo.root.join("elsewhere");
+            std::fs::rename(repo.git.join("worktrees"), &elsewhere).expect("moved");
+            std::os::unix::fs::symlink(&elsewhere, repo.git.join("worktrees")).expect("link");
+
+            assert_eq!(
+                remove(&repo.git, &target(&repo), "c1").expect_err("linked"),
+                Refused::Declined(Declined::Linked)
+            );
+            assert!(target(&repo).join("README").exists());
+            assert!(elsewhere.join("c1").exists());
+        }
+
         /// Making a checkout starts no program the repository names: no hook and no
         /// fsmonitor runs, as they would under `git worktree add`.
         #[cfg(unix)]

@@ -167,6 +167,42 @@ impl TrustStore {
         self.rules.insert(key, None);
     }
 
+    /// Say about `to`, and everything beneath it, what this map says about `from` and everything
+    /// beneath it (CHECKOUT-8).
+    ///
+    /// Each rule under `from` is copied to the same relative path under `to`, and `to` itself is
+    /// given the decision in force at `from`, or an undecided boundary where no rule covers `from`,
+    /// so a broader rule over `to` does not answer for a path nobody has said anything about. A
+    /// rule already under `to` is replaced by its copy.
+    pub fn copy_beneath(&mut self, from: &str, to: &str) {
+        let from = self.key(from);
+        let to = self.key(to);
+        let at_root = self.decision_at_key(&from).flatten();
+        let copies: Vec<(String, Option<Integrity>)> = self
+            .rules
+            .iter()
+            .filter(|(key, _)| **key != from && covers(&from, key, self.folds_case))
+            .map(|(key, decision)| {
+                let tail = key[from.len()..].trim_start_matches('/');
+                (format!("{to}/{tail}"), *decision)
+            })
+            .collect();
+        self.rules.insert(to, at_root);
+        self.rules.extend(copies);
+    }
+
+    /// Drop every rule at or beneath `under` except those that distrust a path (CHECKOUT-8).
+    ///
+    /// Whether any rule was kept.
+    pub fn withdraw_beneath(&mut self, under: &str) -> bool {
+        let under = self.key(under);
+        let folds = self.folds_case;
+        self.rules.retain(|key, decision| {
+            !covers(&under, key, folds) || *decision == Some(Integrity::Untrusted)
+        });
+        self.rules.keys().any(|key| covers(&under, key, folds))
+    }
+
     /// The lower effective decision at every path. Explicit distrust survives either map;
     /// an absent decision stays absent unless the other map explicitly distrusts it.
     /// Evaluate inherited rules at every boundary, including nested exceptions.
@@ -1124,5 +1160,69 @@ mod tests {
             Some(Integrity::Untrusted)
         );
         assert!(moved.is_trusted("/Users/me/notes/todo.md"));
+    }
+
+    /// A checkout answers for a path as the working directory does, rule by rule (CHECKOUT-8).
+    #[test]
+    fn a_copied_subtree_answers_as_the_original_does() {
+        let mut map = TrustStore::new("/work");
+        map.trust("");
+        map.distrust("vendor");
+        map.trust("vendor/ours");
+        map.copy_beneath("", "/state/c1");
+
+        for (path, expected) in [
+            ("/state/c1", Some(Integrity::Trusted)),
+            ("/state/c1/src/a.rs", Some(Integrity::Trusted)),
+            ("/state/c1/vendor/x.rs", Some(Integrity::Untrusted)),
+            ("/state/c1/vendor/ours/x.rs", Some(Integrity::Trusted)),
+            ("src/a.rs", Some(Integrity::Trusted)),
+            ("vendor/x.rs", Some(Integrity::Untrusted)),
+        ] {
+            assert_eq!(map.integrity_of(path), expected, "{path}");
+        }
+    }
+
+    /// A path the working directory has no rule for is not vouched for by a rule over the place the
+    /// checkout happens to be made.
+    #[test]
+    fn a_copy_of_an_undecided_root_is_not_answered_by_a_broader_rule() {
+        let mut map = TrustStore::new("/work");
+        map.trust("/state");
+        map.copy_beneath("", "/state/c1");
+
+        assert_eq!(map.integrity_of("/state/c1/a.rs"), None);
+        assert_eq!(
+            map.integrity_of("/state/other/a.rs"),
+            Some(Integrity::Trusted)
+        );
+    }
+
+    /// Only a rule that distrusts a path outlives the checkout it was made for (CHECKOUT-8).
+    #[test]
+    fn withdrawing_a_subtree_keeps_what_distrusts_a_path() {
+        let mut map = TrustStore::new("/work");
+        map.trust("");
+        map.copy_beneath("", "/state/c1");
+        map.copy_beneath("", "/state/c10");
+        map.distrust("/state/c1/built.rs");
+        map.trust("/state/c1/src");
+
+        assert!(map.withdraw_beneath("/state/c1"));
+        assert_eq!(
+            map.keyed()
+                .filter(|(key, _)| key.starts_with("/state/c1/") || *key == "/state/c1")
+                .collect::<Vec<_>>(),
+            vec![("/state/c1/built.rs", Some(Integrity::Untrusted))]
+        );
+        assert_eq!(
+            map.integrity_of("/state/c10/a.rs"),
+            Some(Integrity::Trusted),
+            "a sibling whose name starts the same was withdrawn with it"
+        );
+
+        map.copy_beneath("", "/state/c2");
+        assert!(!map.withdraw_beneath("/state/c2"));
+        assert_eq!(map.integrity_of("/state/c2/a.rs"), None);
     }
 }
