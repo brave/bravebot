@@ -12,7 +12,7 @@ checks is a bug against this directory rather than an entry in it.
 
 | Read | For |
 |---|---|
-| [best-practices/specs.md](best-practices/specs.md) | prose a clause is allowed to be |
+| [best-practices/specs.md](best-practices/specs.md) | prose a clause is allowed to be, and a change agreeing with the specs that govern it |
 | [best-practices/tests.md](best-practices/tests.md) | what a test is named, what it covers, and proving it fails first |
 | [best-practices/writing.md](best-practices/writing.md) | what a comment is for |
 | [best-practices/dependencies.md](best-practices/dependencies.md) | what a new crate has to be worth |
