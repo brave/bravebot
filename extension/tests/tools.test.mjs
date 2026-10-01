@@ -19,11 +19,14 @@ import {
 function browser({
   tabs = [],
   pages = {},
+  frames = {},
+  tabsAfterRead = {},
   history = [],
   bookmarks = [],
   stored = tabsOn,
 } = {}) {
   const calls = [];
+  const tabReads = new Map();
   return {
     calls,
     storage: {
@@ -39,6 +42,22 @@ function browser({
         calls.push(["tabs.query", filter]);
         return tabs;
       },
+      async get(tabId) {
+        calls.push(["tabs.get", tabId]);
+        const replacements = tabsAfterRead[tabId];
+        if (Array.isArray(replacements)) {
+          const at = tabReads.get(tabId) ?? 0;
+          tabReads.set(tabId, at + 1);
+          return replacements[Math.min(at, replacements.length - 1)];
+        }
+        return replacements ?? tabs.find((tab) => tab.id === tabId);
+      },
+    },
+    webNavigation: {
+      async getAllFrames({ tabId }) {
+        calls.push(["webNavigation.getAllFrames", tabId]);
+        return frames[tabId] ?? [];
+      },
     },
     runtime: {
       // With a field of its own besides the three the tool passes on, as a
@@ -52,17 +71,24 @@ function browser({
       // Runs the function the extension injects, in the page the test gives
       // that tab: at the tab's own URL unless the page says it moved.
       async executeScript(options) {
-        const id = options.target.tabId;
-        calls.push(["scripting.executeScript", id]);
-        const page = pages[id];
+        const tabId = options.target.tabId;
+        const frameId = options.target.frameIds?.[0] ?? 0;
+        calls.push(["scripting.executeScript", tabId, frameId]);
+        const page = pages[`${tabId}:${frameId}`] ?? pages[tabId];
         if (page instanceof Error) {
           throw page;
         }
         if (page === null) {
-          return [{ frameId: 0 }];
+          return [{ frameId }];
         }
-        const at = page.href ?? tabs.find((tab) => tab.id === id)?.url;
-        return inPage(at, page, () => [{ frameId: 0, result: options.func() }]);
+        const frame = (frames[tabId] ?? []).find(
+          (candidate) => candidate.frameId === frameId,
+        );
+        const at =
+          page.href ?? frame?.url ?? tabs.find((tab) => tab.id === tabId)?.url;
+        return inPage(at, page, calls, () => [
+          { frameId, result: options.func(...(options.args ?? [])) },
+        ]);
       },
     },
     history: {
@@ -82,10 +108,18 @@ function browser({
 
 // Calls `run` with the page's `location` and `document` as the globals an
 // injected function reads, and puts back what was there.
-function inPage(href, page, run) {
+function inPage(href, page, calls, run) {
   const { location, document } = globalThis;
   globalThis.location = { href };
-  globalThis.document = { title: page.title, body: { innerText: page.text } };
+  globalThis.document = {
+    title: page.title,
+    body: {
+      get innerText() {
+        calls.push(["document.body.innerText", href]);
+        return page.text;
+      },
+    },
+  };
   try {
     return run();
   } finally {
@@ -100,7 +134,11 @@ function reached(chrome, api) {
 // The tab tools turned on, as a person turns them on in the options page. The
 // fake browser starts with them so, and a test of the defaults stores nothing.
 const tabsOn = {
-  [SETTINGS_KEY]: { list_tabs: true, read_page: true },
+  [SETTINGS_KEY]: {
+    list_tabs: true,
+    list_frames: true,
+    read_page: true,
+  },
 };
 
 const allowEverything = {
@@ -184,6 +222,210 @@ test("list_tabs gives each tab's id, window, title and URL", async () => {
   ]);
 });
 
+// A frame is identified by an exact web URL a person can judge. Browser-owned
+// and opaque URLs cannot name what a later read would expose.
+test("list_frames gives web URLs in exactly the tab asked for", async () => {
+  const chrome = browser({
+    tabs,
+    frames: {
+      1: [
+        { frameId: 0, parentFrameId: -1, url: "https://brave.com/" },
+        { frameId: 7, parentFrameId: 0, url: "https://child.example/app" },
+        { frameId: 8, parentFrameId: 0, url: "about:blank" },
+        { frameId: 9, parentFrameId: 0, url: "blob:https://brave.com/id" },
+      ],
+      2: [
+        { frameId: 0, parentFrameId: -1, url: "https://brave.com/search" },
+        { frameId: 3, parentFrameId: 0, url: "https://other.example/" },
+      ],
+    },
+  });
+  const reply = await handle(
+    {
+      id: 1,
+      method: "list_frames",
+      params: { url: "https://brave.com/search" },
+    },
+    chrome,
+  );
+  assert.deepEqual(reply.result, [
+    { url: "https://brave.com/search", top: true },
+    { url: "https://other.example/", top: false },
+  ]);
+  assert.deepEqual(
+    chrome.calls.filter(([name]) => name === "webNavigation.getAllFrames"),
+    [["webNavigation.getAllFrames", 2]],
+  );
+
+  const near = browser({ tabs, frames: { 1: [] } });
+  const missed = await handle(
+    { id: 2, method: "list_frames", params: { url: "https://brave.com" } },
+    near,
+  );
+  assert.match(missed.error.message, /no open tab is at https:\/\/brave\.com/);
+  assert.ok(!reached(near, "webNavigation.getAllFrames"));
+});
+
+// The outer tab URL is what the person approved. A tab that moved while its
+// frames were listed cannot return the new page's frame URLs.
+test("list_frames refuses a tab that moved", async () => {
+  const chrome = browser({
+    tabs,
+    tabsAfterRead: { 1: { id: 1, url: "https://elsewhere.example/" } },
+    frames: {
+      1: [{ frameId: 4, url: "https://private.example/" }],
+    },
+  });
+  const reply = await handle(
+    { id: 1, method: "list_frames", params: { url: "https://brave.com/" } },
+    chrome,
+  );
+  assert.match(reply.error.message, /left https:\/\/brave\.com\/ before/);
+  assert.ok(!JSON.stringify(reply).includes("private.example"));
+});
+
+// The outer and frame URLs together route one read. Two frames at the same URL
+// cannot be told apart in the approval question, so neither is silently chosen.
+test("read_page selects one frame and refuses ambiguity", async () => {
+  const child = "https://child.example/app";
+  const chrome = browser({
+    tabs,
+    frames: {
+      1: [
+        { frameId: 0, url: "https://brave.com/" },
+        { frameId: 7, url: child },
+      ],
+    },
+    pages: {
+      "1:0": { title: "Brave", text: "outer" },
+      "1:7": { title: "Child", text: "inside the child" },
+    },
+  });
+  const reply = await handle(
+    {
+      id: 1,
+      method: "read_page",
+      params: { url: "https://brave.com/", frame_url: child },
+    },
+    chrome,
+  );
+  assert.deepEqual(reply.result, {
+    url: "https://brave.com/",
+    frame_url: child,
+    title: "Child",
+    text: "inside the child",
+    truncated: false,
+  });
+  assert.deepEqual(
+    chrome.calls.filter(([name]) => name === "scripting.executeScript"),
+    [["scripting.executeScript", 1, 7]],
+  );
+
+  const ambiguous = browser({
+    tabs,
+    frames: {
+      1: [
+        { frameId: 7, url: child },
+        { frameId: 8, url: child },
+      ],
+    },
+    pages: {
+      "1:7": { title: "First", text: "first duplicate" },
+      "1:8": { title: "Second", text: "second duplicate" },
+    },
+  });
+  const refused = await handle(
+    {
+      id: 2,
+      method: "read_page",
+      params: { url: "https://brave.com/", frame_url: child },
+    },
+    ambiguous,
+  );
+  assert.match(refused.error.message, /more than one frame is at/);
+  assert.ok(!reached(ambiguous, "scripting.executeScript"));
+});
+
+// The requested frame can disappear or navigate after it is listed. Its text
+// is returned only when the document read still has the approved frame URL.
+test("read_page refuses a missing or moved frame", async () => {
+  const child = "https://child.example/app";
+  const missing = browser({ tabs, frames: { 1: [] } });
+  const absent = await handle(
+    {
+      id: 1,
+      method: "read_page",
+      params: { url: "https://brave.com/", frame_url: child },
+    },
+    missing,
+  );
+  assert.match(absent.error.message, /no frame in .* is at/);
+  assert.ok(!reached(missing, "scripting.executeScript"));
+
+  const opaque = browser({ tabs });
+  const unnamed = await handle(
+    {
+      id: 2,
+      method: "read_page",
+      params: { url: "https://brave.com/", frame_url: "about:blank" },
+    },
+    opaque,
+  );
+  assert.equal(unnamed.error.code, -32602);
+  assert.ok(!reached(opaque, "webNavigation.getAllFrames"));
+
+  const moved = browser({
+    tabs,
+    frames: { 1: [{ frameId: 7, url: child }] },
+    pages: {
+      "1:7": {
+        href: "https://elsewhere.example/",
+        title: "Elsewhere",
+        text: "not approved",
+      },
+    },
+  });
+  const left = await handle(
+    {
+      id: 2,
+      method: "read_page",
+      params: { url: "https://brave.com/", frame_url: child },
+    },
+    moved,
+  );
+  assert.match(left.error.message, /frame left .* before it was read/);
+  assert.ok(!JSON.stringify(left).includes("not approved"));
+  assert.ok(!reached(moved, "document.body.innerText"));
+});
+
+// The outer tab can navigate after the frame was found and read. The frame's
+// text still cannot be returned under the URL the person approved.
+test("read_page refuses a framed read when its outer tab moved", async () => {
+  const outer = "https://brave.com/";
+  const child = "https://child.example/app";
+  const chrome = browser({
+    tabs,
+    tabsAfterRead: {
+      1: [
+        { id: 1, url: outer },
+        { id: 1, url: "https://elsewhere.example/" },
+      ],
+    },
+    frames: { 1: [{ frameId: 7, url: child }] },
+    pages: { "1:7": { title: "Child", text: "not returned" } },
+  });
+  const reply = await handle(
+    {
+      id: 1,
+      method: "read_page",
+      params: { url: outer, frame_url: child },
+    },
+    chrome,
+  );
+  assert.match(reply.error.message, /tab left .* before its frame was read/);
+  assert.ok(!JSON.stringify(reply).includes("not returned"));
+});
+
 // The URL is what a person approved. A tab whose URL only starts the same is a
 // different page and is not read.
 test("read_page reads the tab at exactly that URL and no other", async () => {
@@ -201,7 +443,7 @@ test("read_page reads the tab at exactly that URL and no other", async () => {
   assert.equal(reply.result.text, "search");
   assert.deepEqual(
     chrome.calls.filter(([name]) => name === "scripting.executeScript"),
-    [["scripting.executeScript", 2]],
+    [["scripting.executeScript", 2, 0]],
   );
 
   const near = browser({
@@ -237,10 +479,12 @@ test("an answer holds no unpaired surrogate", async () => {
   const broken = "a\ud800b";
   const chrome = browser({
     tabs: [{ id: 1, windowId: 10, title: broken, url: "https://brave.com/" }],
+    frames: { 1: [{ frameId: 4, url: `https://frame.example/${broken}` }] },
     pages: { 1: { title: broken, text: `text ${broken}` } },
   });
   for (const [method, params] of [
     ["list_tabs", {}],
+    ["list_frames", { url: "https://brave.com/" }],
     ["read_page", { url: "https://brave.com/" }],
   ]) {
     const reply = await handle({ id: 1, method, params }, chrome);
@@ -393,6 +637,7 @@ test("only the platform check starts on", async () => {
 
   for (const [method, params, api] of [
     ["list_tabs", {}, "tabs.query"],
+    ["list_frames", { url: tabs[0].url }, "webNavigation.getAllFrames"],
     ["read_page", { url: tabs[0].url }, "scripting.executeScript"],
     ["search_history", { query: "bank" }, "history.search"],
     ["search_bookmarks", { query: "bank" }, "bookmarks.search"],
@@ -427,12 +672,12 @@ test("open tabs are refused once a person turns them off again", async () => {
   const on = await handle({ id: 1, method: "list_tabs" }, browser({ tabs }));
   assert.ok("result" in on);
 
-  for (const method of ["list_tabs", "read_page"]) {
+  for (const method of ["list_tabs", "list_frames", "read_page"]) {
     const chrome = browser({
       tabs,
       stored: { [SETTINGS_KEY]: { [method]: false } },
     });
-    const params = method === "read_page" ? { url: tabs[0].url } : {};
+    const params = method === "list_tabs" ? {} : { url: tabs[0].url };
     const off = await handle({ id: 1, method, params }, chrome);
     assert.match(off.error.message, /turned off/);
     assert.ok(!reached(chrome, "tabs.query"));

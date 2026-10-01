@@ -899,6 +899,7 @@ fn the_tool_list_is_the_same_whether_or_not_the_extension_is_connected() {
         [
             "get_platform_info",
             "list_tabs",
+            "list_frames",
             "read_page",
             "search_history",
             "search_bookmarks"

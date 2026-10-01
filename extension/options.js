@@ -8,9 +8,13 @@ const LABELS = {
     "The operating system and architecture Brave runs on, and nothing else.",
   ],
   list_tabs: ["List open tabs", "The title and URL of every open tab."],
+  list_frames: [
+    "List frames in an open tab",
+    "The exact web URLs embedded in a tab, named by the tab's URL.",
+  ],
   read_page: [
-    "Read an open page",
-    "The text of a tab you have open, named by its URL.",
+    "Read an open page or frame",
+    "The text at a tab URL, or at one exact frame URL in that tab.",
   ],
   search_history: [
     "Search history",

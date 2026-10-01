@@ -258,11 +258,13 @@ Brave's own profile directory, and a channel other than stable has its own.
 ### BROWSER-10: the tool list is fixed, and a tool not on it is refused
 
 The MCP server offers the same list whether or not the extension is connected:
-`get_platform_info`, `list_tabs`, `read_page`, `search_history` and `search_bookmarks`. Each calls
-the extension method of the same name with the tool's arguments. A call naming any other tool is
-refused by the server and nothing is sent to the extension. `read_page` names the page by its URL.
-`get_platform_info` returns the operating system and architecture Brave runs on, and nothing else,
-so a person can see the extension answer without it telling anything about them.
+`get_platform_info`, `list_tabs`, `list_frames`, `read_page`, `search_history` and
+`search_bookmarks`. Each calls the extension method of the same name with the tool's arguments. A
+call naming any other tool is refused by the server and nothing is sent to the extension.
+`list_frames` names a tab by its exact URL, and `read_page` names that tab and, optionally, one
+frame by its exact URL. `get_platform_info` returns the operating system and architecture Brave
+runs on, and nothing else, so a person can see the extension answer without it telling anything
+about them.
 
 **Why.** A person vouches for a server's tool list once and BraveBot records a digest of it. A list
 that changed with whether the extension was connected would be put to them again each time it did.
@@ -274,7 +276,7 @@ each call shows its arguments, and a URL is one a person can judge there where a
 `verified-by: bravebot_browser::relay::a_tool_that_is_not_on_the_list_is_refused_without_asking_the_extension`
 `verified-by: bravebot_browser::tools::a_tool_is_found_by_its_exact_name`
 `verified-by: bravebot_browser::tools::every_tool_takes_an_object`
-`verified-by: bravebot_browser::tools::a_page_is_asked_for_by_its_url`
+`verified-by: bravebot_browser::tools::a_page_is_asked_for_by_its_url_and_optional_frame_url`
 `verified-by: by-construction (extension/tests/tools.test.mjs asserts that get_platform_info answers with the operating system and architecture alone, a field the browser adds besides them left out, and reaches no API but the platform's; it runs where the test under BROWSER-13 runs)`
 
 <a id="BROWSER-11"></a>
@@ -293,8 +295,9 @@ is refused, and would report that no extension is connected while one is.
 
 The extension asks Brave for the host by the name `install` gives its manifest, and answers exactly
 the methods the server's tools call, with one switch for each in its options. The `key` in its
-manifest fixes its id, and that id is the one `install` records given none. Every string in an answer
-is well formed: an unpaired surrogate is sent as U+FFFD.
+manifest fixes its id, and that id is the one `install` records given none. It has the permissions
+those methods use, including `webNavigation` to list a tab's frames. Every string in an answer is
+well formed: an unpaired surrogate is sent as U+FFFD.
 
 **Why.** The two halves are written in two languages and released together, and nothing at run time
 would say they disagreed: a tool the extension does not answer fails like a page that cannot be
@@ -304,30 +307,43 @@ would leave the call waiting out its timeout.
 
 `verified-by: bravebot_browser::extension::the_extension_answers_every_tool_the_server_offers_and_no_other`
 `verified-by: bravebot_browser::extension::the_extension_connects_to_the_host_install_names`
+`verified-by: bravebot_browser::extension::the_extension_has_each_permission_its_tools_require`
 `verified-by: bravebot_browser::extension::the_id_install_records_is_the_one_the_extensions_key_gives`
-`verified-by: by-construction (extension/tests/tools.test.mjs asserts that answers from list_tabs and read_page holding an unpaired surrogate reach JSON with no surrogate escape and with U+FFFD in its place; it runs where the test under BROWSER-13 runs)`
+`verified-by: by-construction (extension/tests/tools.test.mjs asserts that answers from list_tabs, list_frames and read_page holding an unpaired surrogate reach JSON with no surrogate escape and with U+FFFD in its place; it runs where the test under BROWSER-13 runs)`
 
 <a id="BROWSER-13"></a>
-### BROWSER-13: a page is read from the tab at exactly its URL
+### BROWSER-13: a page or frame is read at exactly the URLs asked for
 
-`read_page` reads the open tab whose URL is the one asked for, character for character, and no
-other. Where no tab is at that URL it fails without running anything in any tab. It returns at most
-100,000 characters of the page's text, never ending it on half a character, and says whether it
-cut the page short. A page the browser
-will not let an extension read, such as its own settings, is a failure saying so.
+`list_frames` returns only HTTP and HTTPS frame URLs from the open tab whose URL is the one asked
+for, character for character, and says which is the top frame. Where no tab is at that URL it fails
+without asking for frames. Where the tab leaves that URL before its frames are returned it fails
+without returning any frame URL.
 
-**Why.** The URL is what the person saw in the question before the call. A tab whose URL only
-resembles it is a different page, which could be one they would have said no to.
+`read_page` with no `frame_url` reads that tab's top page as before. With a `frame_url`, it reads
+only the one frame at that exact HTTP or HTTPS URL inside the tab at `url`. Where there is no such
+frame, or more than one, it fails without running a script. It also fails without returning any
+text if the frame leaves `frame_url`, or the outer tab leaves `url`, before the read completes.
 
-`verified-by: by-construction (extension/tests/tools.test.mjs asserts each of the four against a fake chrome object that records every call, including that a URL no tab is at reaches no script; make check-extension runs it, and check-ui-build depends on that target, so the Front end CI job runs it on every change the classifier gives the ui area, which a change under extension/ is)`
+A successful read returns at most 100,000 characters of the page's text, never ending it on half a
+character, and says whether it cut the page short. A page the browser will not let an extension
+read, such as its own settings, is a failure saying so.
+
+**Why.** Both URLs are what the person saw in the question before the call. A `list_frames` result
+is untrusted content, so the planner does not read it: the person chooses a URL from the result and
+supplies it in a later message. A tab or frame whose URL only resembles one is different content,
+which they could have refused. A non-web frame URL such as `about:blank` does not tell them which
+content it will expose. Two frames at the same URL cannot be told apart by the argument they
+approved.
+
+`verified-by: by-construction (extension/tests/tools.test.mjs uses tabs and frames with distinct ids, URLs and text to assert exact tab and frame selection, each navigation check and refusal, the text bound, and that a URL no tab or unique frame is at reaches no script; make check-extension runs it, and check-ui-build depends on that target, so the Front end CI job runs it on every change the classifier gives the ui area, which a change under extension/ is)`
 
 <a id="BROWSER-14"></a>
 ### BROWSER-14: only the platform check starts on, and a tool that is off touches nothing
 
-Only the platform check starts on. Listing and reading open tabs, and searching history and
-bookmarks, start off until a person turns them on in the extension's options. A call to a tool that
-is off is refused before the browser is asked anything. A history search covers all of history, and
-a search returns at most 100 results.
+Only the platform check starts on. Listing tabs and their frames, reading a page or frame, and
+searching history and bookmarks start off until a person turns them on in the extension's options.
+A call to a tool that is off is refused before the browser is asked anything. A history search
+covers all of history, and a search returns at most 100 results.
 
 **Why.** Every tool but the platform check reaches what a person has open, has visited or has
 saved, so none of them reads anything before the person has said it may. The platform check tells
