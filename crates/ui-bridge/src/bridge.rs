@@ -18,6 +18,7 @@ use crate::running::{Running, State};
 use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink, Reply};
 use crate::{store, wire};
 use bravebot_agent::Workspace;
+use bravebot_agent::confirm::Decision;
 use bravebot_agent::trusted;
 use bravebot_agent::turn::{self as agent_turn, Task, TurnError};
 use bravebot_agent::workspace::WorkspaceError;
@@ -135,6 +136,7 @@ impl Bridge {
                 request,
                 Reply::Vet(wire::decision(request.param("decision"))),
             ),
+            "fetch.reply" => self.reply_decision(request, Reply::Fetch),
             "ask.reply" => self.reply_ask(request),
             "trust.reply" => self.reply_trust(request),
             "permissions.list" => self.permissions(request, false),
@@ -803,6 +805,19 @@ impl Bridge {
     fn reply_vouch(&mut self, request: &Request) -> Result<Value, Failure> {
         let reply = Reply::Vouch(wire::decision(request.param("decision")));
         self.deliver(request, reply)
+    }
+
+    /// Answer a question that is a yes or a no and nothing besides.
+    ///
+    /// `asked` is the kind the method was called for, so which question a reply answers is
+    /// decided by the method a front end called and never by a field it sent. The decision is
+    /// read by [`wire::decision`], where only the exact word approves.
+    fn reply_decision(
+        &mut self,
+        request: &Request,
+        asked: fn(Decision) -> Reply,
+    ) -> Result<Value, Failure> {
+        self.deliver(request, asked(wire::decision(request.param("decision"))))
     }
 
     /// Answer a series of questions, one answer per question.

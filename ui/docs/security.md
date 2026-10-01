@@ -36,7 +36,7 @@ it under whatever the trust map says about that path. See
 
 ## Decisions and refusal
 
-The transcript presents write, command, command-output, path-vouch and user-question
+The transcript presents write, command, command-output, path-vouch, fetch and user-question
 requests. Replies must match both the pending request ID and its kind. Within a turn, an unknown
 or consumed ID cannot approve another request. Clients discard pending questions
 when a turn ends because IDs may recur in later turns. Malformed decisions decline;
@@ -47,9 +47,13 @@ shutdown also refuse outstanding questions. There is no timeout that grants appr
 These properties depend on both bridge refusal handling and Electron lifetime handling;
 they are covered by the Rust refusal suites and Electron tests in [testing](testing.md).
 
-The v0.9.0 agent also has fetch-host, language-server and manifest-plan approvals.
-The UI does not present those requests yet; the bridge refuses them without taking
-an answer intended for another pending question.
+A fetch approval is consent to one request to the host shown, which the card draws on a
+line of its own as the agent read it out of the address. It trusts nothing that comes
+back, which stays confined, and it is not remembered: the next fetch asks again.
+
+The agent also has language-server and manifest-plan approvals. The UI does not present
+those requests yet; the bridge refuses them without taking an answer intended for another
+pending question.
 
 Vetted-content approval releases only the displayed bytes once; it does not create a trust
 rule for future reads. Checker verdicts are advisory. Checking already sends the content

@@ -175,6 +175,13 @@ const CARDS = {
     // crates/agent/src/confirm.rs documents `stdin` as the reference name and never the bytes.
     why: 'the planner’s own argv, what $PATH resolved it to, and a reference name for any input',
   },
+  fetch: {
+    entry: () => t.askedFetch({ request: 1, url: FORGED_CHROME, host: FORGED_CHROME, ambient: [], summary: 'fetch from a host' }),
+    marks: null,
+    // docs/specs/tools/fetch-url.md: `url` is routing, which only the planner writes, and the
+    // question is put before anything is fetched, so no byte of a reply is on the card.
+    why: 'the address the planner wrote and the host the agent read out of it, asked about before any reply exists',
+  },
   ask: {
     entry: () => t.askedQuestions({
       request: 1,

@@ -332,6 +332,36 @@ export interface Stage {
   display: string
 }
 
+/**
+ * Access a request reaches that nothing in the agent holds: the kind, and the word that named it.
+ *
+ * `authority` is what to match on. The sentence a person reads is the front end's, because the
+ * words belong to the surface drawing them.
+ */
+export interface Ambient {
+  authority: string
+  named: string
+}
+
+/**
+ * A URL the planner wants fetched.
+ *
+ * `host` is the agent's own reading of the URL and is drawn as sent, never worked out here from
+ * `url`: `https://example.com@evil.test/` reads as one site and reaches the other, and the host
+ * is what a yes agrees to talk to. Nothing of a reply is here, since nothing has been fetched,
+ * and what comes back is confined whatever is answered.
+ *
+ * `ambient` is empty for every host but a machine's metadata service, which hands out the
+ * credentials of the role the machine runs as to whatever reaches it.
+ */
+export interface FetchRequest {
+  request: number
+  url: string
+  host: string
+  ambient?: Ambient[]
+  summary: string
+}
+
 /** A pipeline the planner wants to run. */
 export interface RunRequest {
   request: number
@@ -369,7 +399,7 @@ export interface RunRequest {
    * a program, an address, a socket or a variable. The sentence is the front end's, because the
    * words a person reads belong to the surface drawing them. Empty for nearly every command.
    */
-  ambient?: { authority: string; named: string }[]
+  ambient?: Ambient[]
   /** What approving *and remembering* would cover — the thing the second answer is about. */
   vouches: { program: string; args: string[]; display: string }[]
   summary: string
@@ -471,6 +501,7 @@ export interface EventMap {
   'output.request': OutputRequest
   'vouch.request': VouchRequest
   'vet.request': VetRequest
+  'fetch.request': FetchRequest
   'ask.request': AskRequest
   'turn.done': TurnDone
   'turn.error': TurnError

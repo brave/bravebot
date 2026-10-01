@@ -2,7 +2,7 @@ import { Watches } from './Watches'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
 import { useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
-import { isConfined, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
+import { isConfined, type Ambient, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import type { Side } from '../columns'
 import type { Asked } from '../App'
@@ -944,6 +944,81 @@ function Unanswered(): React.JSX.Element {
   return <div className="decided unanswered">Nobody answered this</div>
 }
 
+/**
+ * The foot of a question answered with a yes or a no: the two buttons while it waits, what was
+ * answered once it has been, and that nobody answered where its turn ended first.
+ *
+ * One component so that the three states are the same three on every card that uses it. The
+ * state that matters is the last: a card whose turn has ended draws no button, because the
+ * question it would answer is no longer waiting and a press would be an approval of nothing.
+ *
+ * The words are the card's own and are passed in whole. A button here says what pressing it
+ * does, in the words of the thing being decided, so there is no generic yes to press from habit.
+ *
+ * `kind` is a parameter and never worked out from anything drawn: it chooses the method the
+ * answer is sent through, and the agent checks that against the question actually waiting.
+ */
+function YesOrNo({
+  kind,
+  request,
+  answerable,
+  decision,
+  onDecide,
+  reject,
+  approve,
+  approved,
+  rejected,
+}: {
+  kind: Asked
+  request: number
+  answerable: boolean
+  decision: 'approve' | 'reject' | null
+  onDecide: Answer
+  reject: string
+  approve: string
+  approved: string
+  rejected: string
+}): React.JSX.Element {
+  if (!answerable) return <Unanswered />
+  if (decision !== null) {
+    return <div className={`decided ${decision}`}>{decision === 'approve' ? approved : rejected}</div>
+  }
+  return (
+    <div className="confirm-actions">
+      <button className="reject" onClick={() => onDecide(kind, request, false)}>
+        {reject}
+      </button>
+      <button className="approve" onClick={() => onDecide(kind, request, true)}>
+        {approve}
+      </button>
+    </div>
+  )
+}
+
+/**
+ * What a request reaches that nothing in the agent holds, where it reaches anything.
+ *
+ * Drawn by every card whose request can spend such access, in the same words, so that a
+ * metadata service reached by a command and one reached by a fetch read as the same grant.
+ * Nothing is drawn for a request that reaches none, which is nearly every one.
+ */
+function AmbientNotice({ ambient }: { ambient?: Ambient[] }): React.JSX.Element | null {
+  if (!ambient?.length) return null
+  return (
+    <div className="warn">
+      This spends access that is yours elsewhere. Nobody is asked for it at the moment it
+      is used, and nothing here takes it back afterwards.
+      <ul>
+        {ambient.map((spent) => (
+          <li key={`${spent.authority}:${spent.named}`}>
+            <code>{spent.named}</code>: {t.ambientSentence(spent.authority)}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 /** What somebody answered, in words, for the record left in the transcript. */
 function describe(prompt: AskPrompt, answer: AskAnswer | undefined): string {
   if (!answer) return 'Declined'
@@ -1238,19 +1313,7 @@ function Card({
 
           <p className="permission-scope">Run this command in the project folder shown above. “Run once” approves only this execution.</p>
           {answerable && decision === null && <p className="permission-scope"><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and trusts their output for this conversation, including after reopening it. Revoke through Permissions.</p>}
-          {!!request.ambient?.length && (
-            <div className="warn">
-              This spends access that is yours elsewhere. Nobody is asked for it at the moment it
-              is used, and nothing here takes it back afterwards.
-              <ul>
-                {request.ambient.map((spent) => (
-                  <li key={`${spent.authority}:${spent.named}`}>
-                    <code>{spent.named}</code>: {t.ambientSentence(spent.authority)}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+          <AmbientNotice ambient={request.ambient} />
           {request.releasesPrivate && (
             <p className="warn">
               This hands your own data to the program. Whatever it does with those bytes
@@ -1374,6 +1437,48 @@ function Card({
         </div> : <div className={`decided ${decision}`}>{decision === 'approve' ? 'You allowed this content once' : 'You kept this content out'}</div>}
       </div>
     }
+    case 'fetch': {
+      const { request, decision } = entry
+      return (
+        <div className={`confirm fetch ${request.ambient?.length ? 'spends' : ''}`}>
+          {/* The address as the planner wrote it, drawn as text and never as a link: nothing
+              in a question may be something a click follows. */}
+          <div className="confirm-head">
+            <span className="intent">fetch</span>
+            <code className="path">{request.url}</code>
+          </div>
+
+          {/* The host on a line of its own, as the agent read it out of the address. An
+              address can be written so that a reader takes one name from it and the request
+              goes to another, and the host is what a yes agrees to talk to. */}
+          <p className="permission-scope fetch-host">
+            <strong>Talking to:</strong> <code>{request.host}</code>
+          </p>
+
+          <AmbientNotice ambient={request.ambient} />
+
+          <p className="permission-scope">
+            What comes back stays confined however you answer: the model can pass it to a
+            processor or write it to a file, and cannot read it or be told what it says.
+            “Fetch once” covers this address only. Nothing is remembered, so the next fetch
+            asks again.
+          </p>
+
+          <YesOrNo
+            kind="fetch"
+            request={request.request}
+            answerable={answerable}
+            decision={decision}
+            onDecide={onDecide}
+            reject="Don’t fetch"
+            approve="Fetch once"
+            approved="You allowed this fetch"
+            rejected="You refused this fetch"
+          />
+        </div>
+      )
+    }
+
     case 'ask':
       return <Questions request={entry} answers={entry.answers} onAnswer={onAnswer} />
 
@@ -1446,6 +1551,8 @@ function waitingOn(kind: t.Asking['kind']): string {
       return 'Answer the output'
     case 'vet':
       return 'Review the checked content'
+    case 'fetch':
+      return 'Answer the fetch'
     case 'vouch':
       return 'Answer the vouch'
     case 'ask':

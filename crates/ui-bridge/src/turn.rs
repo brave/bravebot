@@ -41,6 +41,8 @@ pub enum Kind {
     Output,
     Vouch,
     Vet,
+    /// Whether to fetch one URL, which is consent to talk to its host and to nothing it sends back.
+    Fetch,
     Ask,
 }
 
@@ -73,6 +75,7 @@ pub enum Reply {
     Output(Decision),
     Vouch(Decision),
     Vet(Decision),
+    Fetch(Decision),
     /// One answer per question, in the order they were asked. Empty means nobody could be
     /// asked — see [`Confirmer::ask_user`].
     Ask(Vec<Answer>),
@@ -86,7 +89,47 @@ impl Reply {
             Reply::Output(_) => Kind::Output,
             Reply::Vouch(_) => Kind::Vouch,
             Reply::Vet(_) => Kind::Vet,
+            Reply::Fetch(_) => Kind::Fetch,
             Reply::Ask(_) => Kind::Ask,
+        }
+    }
+
+    /// The yes or no this reply carries, where a yes or a no is all it is.
+    ///
+    /// `None` for the two that carry more: a run's answer is a decision and whether to remember
+    /// it, and a series of questions has an answer per question. Reading either as a bare
+    /// decision would drop the half that makes it the answer it is, so neither has one here.
+    pub fn decision(&self) -> Option<Decision> {
+        match self {
+            Reply::Write(decision)
+            | Reply::Output(decision)
+            | Reply::Vouch(decision)
+            | Reply::Vet(decision)
+            | Reply::Fetch(decision) => Some(*decision),
+            Reply::Run(_) | Reply::Ask(_) => None,
+        }
+    }
+}
+
+impl Kind {
+    /// The refusal of a question of this kind, in the shape its own answer takes.
+    ///
+    /// What is sent when nobody is going to answer: a session closing, or the process ending. It
+    /// is the kind's own variant because the worker discards a reply of any other kind as an
+    /// answer to a different question, and would then wait on a channel nothing else writes to.
+    ///
+    /// Written as a match with no wildcard, so a kind added above does not build until somebody
+    /// has said what refusing it looks like.
+    pub fn refusal(self) -> Reply {
+        match self {
+            Kind::Write => Reply::Write(Decision::Reject),
+            Kind::Run => Reply::Run(RunDecision::reject()),
+            Kind::Output => Reply::Output(Decision::Reject),
+            Kind::Vouch => Reply::Vouch(Decision::Reject),
+            Kind::Vet => Reply::Vet(Decision::Reject),
+            Kind::Fetch => Reply::Fetch(Decision::Reject),
+            // No answers at all, which is how this question says nobody was asked.
+            Kind::Ask => Reply::Ask(Vec::new()),
         }
     }
 }
@@ -361,18 +404,49 @@ impl BridgeConfirmer {
         // question nobody was shown.
         reply.filter(|reply| reply.kind() == kind)
     }
+
+    /// Put a question whose answer is a yes or a no, and read anything but a yes as a no.
+    ///
+    /// The whole of what a new approval of that shape needs from this type. Nobody answering, an
+    /// answer to a different question and an answer that carries no decision all arrive at the
+    /// refusal, so a kind added through here cannot be approved by a reply that was not about it.
+    ///
+    /// The kind is compared here as well as in [`Self::ask`], for the reason every other question
+    /// in this file matches on its own variant: [`Reply::decision`] reads a yes out of any reply
+    /// that is one, so without this the check in `ask` would be the only thing between a yes
+    /// about a write and a request leaving the machine.
+    fn yes_or_no(
+        &mut self,
+        kind: Kind,
+        event: &'static str,
+        data: impl FnOnce(u64) -> Value,
+    ) -> Decision {
+        self.ask(kind, event, data)
+            .filter(|reply| reply.kind() == kind)
+            .and_then(|reply| reply.decision())
+            .unwrap_or(Decision::Reject)
+    }
 }
 
 impl Confirmer for BridgeConfirmer {
-    // These upstream capabilities have no approval UI yet. Never grant authority
-    // for a request the person could not review.
-    fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
-        Decision::Reject
+    /// Ask whether to fetch one URL.
+    ///
+    /// The host goes out beside the URL, taken from it by the agent's parser, because the host is
+    /// what a yes agrees to talk to and a URL can be written to read as another one. A yes is
+    /// consent to that one request: what comes back stays quarantined whatever is answered, and
+    /// nothing is remembered, so the next fetch asks again (FETCH-1, FETCH-3).
+    fn confirm_fetch(&mut self, request: &FetchRequest) -> Decision {
+        self.yes_or_no(Kind::Fetch, "fetch.request", |id| {
+            wire::fetch_request(id, request)
+        })
     }
 
-    /// Refuses, for the reason the three above do: this application draws no screen for it, and a
-    /// yes here would send a credential to a model on nobody's word. What it costs is the text of
-    /// one file, and the planner is told why it did not get it.
+    // The capabilities below have no approval UI yet. Never grant authority for a request the
+    // person could not review.
+
+    /// Refuses, for the reason the rest of these do: this application draws no screen for it, and
+    /// a yes here would send a credential to a model on nobody's word. What it costs is the text
+    /// of one file, and the planner is told why it did not get it.
     fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
         Decision::Reject
     }

@@ -485,19 +485,12 @@ fn cancelling_before_a_question_cannot_leave_it_waiting() {
 /// Newly added upstream powers stay denied until the window can present their consent.
 #[test]
 fn unsupported_approvals_refuse_without_consuming_other_answers() {
-    use bravebot_agent::confirm::{FetchRequest, ManifestRequest, ServerRequest};
+    use bravebot_agent::confirm::{ManifestRequest, ServerRequest};
     let mut h = harness();
     h.running
         .answers
         .send(Reply::Write(Decision::Approve))
         .unwrap();
-    assert_eq!(
-        h.confirmer.confirm_fetch(&FetchRequest {
-            url: "https://example.com".into(),
-            host: "example.com".into(),
-        }),
-        Decision::Reject
-    );
     assert_eq!(
         h.confirmer.confirm_server(&ServerRequest {
             language: "Rust",
@@ -572,4 +565,134 @@ fn vetted_content_requires_its_own_explicit_approval() {
         Decision::Approve
     );
     assert_eq!(h.events.lock().unwrap()[0].name, "vet.request");
+}
+
+fn a_fetch() -> bravebot_agent::confirm::FetchRequest {
+    bravebot_agent::confirm::FetchRequest {
+        url: "https://docs.example.com/api".into(),
+        host: "docs.example.com".into(),
+    }
+}
+
+/// A fetch nobody could be asked about is one no request goes out for.
+#[test]
+fn an_unanswerable_fetch_refuses() {
+    let mut harness = harness();
+    drop(harness.running);
+
+    assert_eq!(
+        harness.confirmer.confirm_fetch(&a_fetch()),
+        Decision::Reject,
+        "a channel that cannot carry the question cannot carry consent to leave this machine"
+    );
+}
+
+/// The question goes out under its own name, carrying the URL and the host beside it, and only an
+/// answer to a fetch answers it.
+///
+/// The first half is what the window draws from. The second is the kind check on the road a new
+/// question could most easily miss it: every approval already waiting is a yes of the same shape,
+/// so a fetch read out of any of them would be a request sent on a person's word about a write, a
+/// command's output, or a file.
+#[test]
+fn a_fetch_is_put_to_the_window_and_takes_no_answer_but_its_own() {
+    for other in [
+        Reply::Write(Decision::Approve),
+        Reply::Run(RunDecision::approve_always()),
+        Reply::Output(Decision::Approve),
+        Reply::Vouch(Decision::Approve),
+        Reply::Vet(Decision::Approve),
+    ] {
+        let mut h = harness();
+        h.running.answers.send(other.clone()).unwrap();
+        assert_eq!(
+            h.confirmer.confirm_fetch(&a_fetch()),
+            Decision::Reject,
+            "{other:?} approved a fetch"
+        );
+        assert!(h.running.pending.lock().unwrap().is_none());
+    }
+
+    let mut h = harness();
+    h.running
+        .answers
+        .send(Reply::Fetch(Decision::Approve))
+        .unwrap();
+    assert_eq!(h.confirmer.confirm_fetch(&a_fetch()), Decision::Approve);
+
+    let events = h.events.lock().unwrap();
+    let [asked] = events.as_slice() else {
+        panic!("one question was expected, and the window was sent {events:?}");
+    };
+    assert_eq!(asked.name, "fetch.request");
+    assert_eq!(asked.data["url"], "https://docs.example.com/api");
+    assert_eq!(asked.data["host"], "docs.example.com");
+}
+
+/// An approval of a fetch is an answer to a fetch and to nothing else that is waiting.
+#[test]
+fn an_approved_fetch_answers_no_other_question() {
+    let harness = harness();
+    let running = harness.running;
+
+    for kind in [Kind::Write, Kind::Run, Kind::Output, Kind::Vouch, Kind::Vet] {
+        *running.pending.lock().expect("not poisoned") = Some(Question { id: 1, kind });
+        assert!(
+            !running.answer(1, Reply::Fetch(Decision::Approve)),
+            "a fetch approval answered a waiting {kind:?}"
+        );
+    }
+}
+
+/// Refused in its own shape, for the reason a run is: a refusal of another kind is discarded by the
+/// kind check, and the turn would wait on a channel nothing else writes to.
+#[test]
+fn refusing_a_pending_fetch_reaches_the_turn_as_a_fetch() {
+    let mut harness = harness();
+    let running = harness.running;
+    let pending = Arc::clone(&running.pending);
+
+    let answerer = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            if pending.lock().expect("not poisoned").is_some() {
+                running.refuse_pending();
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("the fetch was never registered as pending");
+    });
+
+    let decision = harness.confirmer.confirm_fetch(&a_fetch());
+    answerer.join().expect("the answerer should not panic");
+    assert_eq!(decision, Decision::Reject);
+}
+
+/// Every kind of question is refused by a reply of that kind, and the reply approves nothing.
+///
+/// The property `refuse_pending` rests on, stated for all of them at once: a kind whose refusal
+/// came back as another kind would be one a closing session leaves waiting.
+#[test]
+fn every_kind_of_question_is_refused_in_its_own_shape() {
+    for kind in [
+        Kind::Write,
+        Kind::Run,
+        Kind::Output,
+        Kind::Vouch,
+        Kind::Vet,
+        Kind::Fetch,
+        Kind::Ask,
+    ] {
+        let refusal = kind.refusal();
+        assert_eq!(refusal.kind(), kind);
+        match refusal {
+            Reply::Run(decision) => {
+                assert_eq!(decision.decision, Decision::Reject);
+                assert!(!decision.remember, "a refusal vouched for a program");
+            }
+            Reply::Ask(answers) => assert!(answers.is_empty()),
+            other => assert_eq!(other.decision(), Some(Decision::Reject), "{kind:?}"),
+        }
+    }
 }

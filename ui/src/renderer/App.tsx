@@ -157,23 +157,11 @@ function cameFrom(
 /** Raised for the one failure that needs its own screen rather than a line of text. */
 class Unconfigurable extends Error {}
 
-/** Which kinds of question a person can be put. */
-export type Asked = 'confirm' | 'run' | 'output' | 'vouch' | 'vet'
+/** Which kinds of question a person can be put. Declared beside the method each is answered by. */
+export type Asked = t.Asked
 
-/**
- * Which method answers which question.
- *
- * Four methods rather than one taking a kind, so an answer cannot be delivered to the
- * wrong question by getting a field wrong: the agent derives the kind from the method it
- * was called on and checks it against what is actually waiting.
- */
-const METHOD: Record<Asked, string> = {
-  confirm: 'confirm.reply',
-  run: 'run.reply',
-  output: 'output.reply',
-  vouch: 'vouch.reply',
-  vet: 'vet.reply',
-}
+/** Which method answers which question. See [`t.REPLY`], which is where they are written down. */
+const METHOD: Record<Asked, string> = t.REPLY
 
 async function call<T>(method: string, params?: Record<string, unknown>): Promise<T> {
   const answer = await window.bravebot.request<T>(method, params)
@@ -714,9 +702,9 @@ export function App(): React.JSX.Element {
   /**
    * Answer whichever question is on screen.
    *
-   * One callback for all four, because the shape of the exchange is identical and the
-   * differences are entirely in which method carries it. `remember` is only ever sent for
-   * a run — it is the second answer that question has and the others do not.
+   * One callback for every kind in [`t.REPLY`], because the shape of the exchange is identical
+   * and the differences are entirely in which method carries it. `remember` is only ever true
+   * for a run: it is the second answer that question has and the others do not.
    *
    * The card is only marked once the agent has accepted the answer. Marking it first would
    * draw an approval the turn never received if the call failed, which is the one direction
@@ -1431,6 +1419,8 @@ export function apply(
         return { ...old, entries: [...old.entries, t.askedOutput(message.data)] }
       case 'vet.request':
         return { ...old, entries: [...old.entries, t.askedVet(message.data)] }
+      case 'fetch.request':
+        return { ...old, entries: [...old.entries, t.askedFetch(message.data)] }
       case 'vouch.request':
         return { ...old, entries: [...old.entries, t.askedVouch(message.data)] }
       case 'ask.request':

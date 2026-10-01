@@ -23,8 +23,8 @@
 //! typed.
 
 use bravebot_agent::confirm::{
-    Decision, Intent, OutputRequest, RunDecision, RunRequest, VetRequest, VouchRequest,
-    WriteRequest,
+    Decision, FetchRequest, Intent, OutputRequest, RunDecision, RunRequest, VetRequest,
+    VouchRequest, WriteRequest,
 };
 use bravebot_agent::conversation::{Composed, Said};
 use bravebot_agent::diff::Change;
@@ -427,6 +427,34 @@ pub fn vouch_request(id: u64, request: &VouchRequest) -> Value {
         "preview": request.preview,
         "truncated": request.truncated,
         "vetting": vetting(request.verdict, request.reason.as_deref()),
+    })
+}
+
+/// A URL the model has asked to fetch.
+///
+/// `host` is sent beside `url` and is never to be derived from it by whoever draws this: the
+/// agent's parser took it out of the URL, and `https://example.com@evil.test/` is a string whose
+/// host a reader, and a front end splitting on the first slash, both get wrong. What a yes agrees
+/// to is talking to that host, so it is the field the question is about.
+///
+/// Nothing of what would come back is here, because nothing has been fetched: the question is
+/// put before the request goes out, and the body is quarantined whatever is answered (FETCH-1).
+///
+/// `ambient` has the shape a run's has, so one drawing serves both: the kind of authority and the
+/// word that named it, and no sentence. It is empty for every host but a machine's metadata
+/// service, which hands the credentials of the role this machine runs as to whatever opens the
+/// socket, so a request to one is a grant of that and an address alone does not say so.
+pub fn fetch_request(id: u64, request: &FetchRequest) -> Value {
+    json!({
+        "request": id,
+        "url": request.url,
+        "host": request.host,
+        "ambient": request
+            .ambient_authority()
+            .iter()
+            .map(|spent| json!({ "authority": spent.authority.name(), "named": spent.named }))
+            .collect::<Vec<_>>(),
+        "summary": request.summary(),
     })
 }
 
