@@ -19,6 +19,8 @@ import type {
   CutOff,
   FetchRequest,
   Landing,
+  ManifestError,
+  ManifestRequest,
   OutputRequest,
   RunRequest,
   Said,
@@ -121,6 +123,26 @@ export type Entry = (
    * same language is not asked about again until the conversation closes.
    */
   | { kind: 'server'; id: string; request: ServerRequest; decision: 'approve' | 'reject' | null }
+  /**
+   * A frozen plan awaiting a decision about whether to run it, or the record of one already made.
+   *
+   * No `remember`. An approval covers this plan only, and does not approve the plan's writes.
+   */
+  | { kind: 'manifest'; id: string; request: ManifestRequest; decision: 'approve' | 'reject' | null }
+  /**
+   * The task a manifest run was asked to plan.
+   *
+   * Not a `user` entry. A run is not part of the conversation, so its task has no ordinal, cannot
+   * be forked from, and is left out of an export.
+   */
+  | { kind: 'plan-task'; id: string; text: string }
+  /**
+   * What a manifest run's last step released for a screen, and the run's record where one was
+   * written. The text can come from a file nobody vouched for.
+   */
+  | { kind: 'plan-reply'; id: string; text: string; record: string | null }
+  /** A manifest run that stopped: declined, stopped by the person, or failed. */
+  | { kind: 'plan-ended'; id: string; ended: ManifestError }
   | { kind: 'ask'; id: string; request: AskRequest; answers: AskAnswer[] | null }
   | { kind: 'error'; id: string; text: string; category?: string | null; attempts?: number | null; status?: number | null; cutOff?: CutOff | null }
   | { kind: 'watch'; id: string; text: string }
@@ -213,6 +235,10 @@ export const askedOutput = (request: OutputRequest): Entry => ({
 export const askedVet = (request: VetRequest): Entry => ({ kind: 'vet', id: nextId(), request, decision: null })
 export const askedFetch = (request: FetchRequest): Entry => ({ kind: 'fetch', id: nextId(), request, decision: null })
 export const askedServer = (request: ServerRequest): Entry => ({ kind: 'server', id: nextId(), request, decision: null })
+export const askedManifest = (request: ManifestRequest): Entry => ({ kind: 'manifest', id: nextId(), request, decision: null })
+export const planAsked = (text: string): Entry => ({ kind: 'plan-task', id: nextId(), text })
+export const planReplied = (text: string, record: string | null): Entry => ({ kind: 'plan-reply', id: nextId(), text, record })
+export const planEnded = (ended: ManifestError): Entry => ({ kind: 'plan-ended', id: nextId(), ended })
 export const askedVouch = (request: VouchRequest): Entry => ({
   kind: 'vouch',
   id: nextId(),
@@ -311,6 +337,7 @@ export const REPLY = {
   vet: 'vet.reply',
   fetch: 'fetch.reply',
   server: 'server.reply',
+  manifest: 'manifest.reply',
 } as const
 
 /** Which kinds of question a person can answer with a yes or a no. */
@@ -423,6 +450,8 @@ export function plainText(entry: Entry): string | null {
     case 'watch':
     case 'error':
     case 'replayed-tool':
+    case 'plan-task':
+    case 'plan-reply':
       return entry.text
     case 'quarantined':
       // The preview, which is all the interface ever had: the kernel trimmed it before it
@@ -490,6 +519,8 @@ export function searchableText(entry: Entry): string {
     case 'vet': return [entry.request.origin, entry.request.expects, entry.request.content].join(' ')
     case 'fetch': return [entry.request.url, entry.request.host].join(' ')
     case 'server': return [entry.request.language, entry.request.program, entry.request.workspace].join(' ')
+    case 'manifest': return [entry.request.task, ...entry.request.steps].join(' ')
+    case 'plan-ended': return [entry.ended.problem ?? '', entry.ended.attempt?.plan ?? '', ...(entry.ended.attempt?.steps ?? [])].join(' ')
     case 'vouch': return [entry.request.path, entry.request.preview].join(' ')
     case 'ask': return entry.request.prompts.map((prompt) => [prompt.header, prompt.question, ...prompt.rows.map((row) => `${row.label} ${row.detail ?? ''}`)].join(' ')).join(' ')
   }

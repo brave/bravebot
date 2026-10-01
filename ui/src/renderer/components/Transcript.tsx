@@ -2,7 +2,7 @@ import { Watches } from './Watches'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
 import { useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
-import { isConfined, type Ambient, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
+import { isConfined, type Ambient, type ManifestError, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import type { Side } from '../columns'
 import type { Asked } from '../App'
@@ -19,6 +19,7 @@ import type { Bot } from '../../shared/bots'
 import { projectLabel } from '../../shared/recents'
 import { conversationPreferences, setConversation, setExperience, useExperience } from '../experience'
 import { ErrorCard } from './ErrorCard'
+import { failureSummary } from '../failure'
 import { FilePreview } from './FilePreview'
 import { TurnFooter, TurnNotices, type OpenAudit } from './TurnDetails'
 import type { Turns, TurnDisclosure } from '../turn-details'
@@ -91,6 +92,8 @@ interface Props {
   onDraft: (draft: string) => void
   onModel: (model: string) => void
   onSubmit: () => void
+  /** Start a manifest run from the draft. Absent where the window cannot start one. */
+  onPlan?: () => void
   onCancel: () => void
   onDecide: Answer
   onAnswer: AnswerQuestions
@@ -179,6 +182,7 @@ export function Transcript({
   onDraft,
   onModel,
   onSubmit,
+  onPlan,
   onCancel,
   onDecide,
   onAnswer,
@@ -517,6 +521,24 @@ export function Transcript({
           <button className="attach-files" onClick={onAttach} disabled={attachments.length >= 5} title="Choose project files to share as trusted context">Attach files</button>
           <span className="composer-hint">Enter to send · Shift+Enter for newline</span>
           {live.running && <button className="stop" onClick={onCancel}>Stop</button>}
+          {/* One run per press, and no setting that stays on: a session starts a run and
+              comes back to ordinary turns (MANIFEST-9). */}
+          {onPlan && !live.running && (
+            <button
+              className="plan-first"
+              onClick={() => { latest(); onPlan() }}
+              disabled={!draft.trim() || !!live.askingTrust || backendReady === false || attachments.length > 0 || !!bot}
+              title={
+                attachments.length > 0
+                  ? 'A plan is fixed before anything is read, so it cannot take attached files. Remove them, and name the file in the task.'
+                  : bot
+                    ? 'A bot answers in turns. Plan first is for a conversation.'
+                    : 'Plan the whole task, show you the plan, then run it with nothing re-planned'
+              }
+            >
+              Plan first
+            </button>
+          )}
           <button className="send" onClick={() => { latest(); live.running ? onQueue() : onSubmit() }} disabled={!draft.trim() || !!live.askingTrust || backendReady === false}>
             {live.running ? 'Queue message' : 'Send'}
           </button>
@@ -991,6 +1013,55 @@ function YesOrNo({
       <button className="approve" onClick={() => onDecide(kind, request, true)}>
         {approve}
       </button>
+    </div>
+  )
+}
+
+/**
+ * A manifest run that stopped, with what it produced.
+ *
+ * Three cases read differently. The person stopped it, the agent refused or failed it and said
+ * why, or the model service failed. The plan and the steps that ran are shown in every case
+ * where they exist, because the run somebody needs to read is the one that stopped.
+ */
+function PlanEnded({ ended }: { ended: ManifestError }): React.JSX.Element {
+  const declined = ended.declined === true
+  const title = ended.stopped
+    ? 'You stopped this run'
+    : declined
+      ? 'The plan was declined, so nothing ran'
+      : ended.problem
+        ? 'The run stopped'
+        : failureSummary(ended.category ?? ended.kind).title
+  const detail = ended.stopped
+    ? 'Steps that finished before the stop remain in the project. The run was not saved.'
+    : declined
+      ? 'Nothing was read or written.'
+      : ended.problem ?? failureSummary(ended.category ?? ended.kind).description
+  const attempt = ended.attempt
+  return (
+    <div className={`plan-ended ${ended.stopped || declined ? 'quiet' : 'failed'}`}>
+      <strong>{title}</strong>
+      <p>{detail}</p>
+      {attempt?.plan && (
+        <details>
+          <summary>The plan</summary>
+          <pre className="plan-text">{attempt.plan}</pre>
+        </details>
+      )}
+      {!attempt?.plan && attempt?.proposed && (
+        <details>
+          <summary>What the planner proposed, which could not be used</summary>
+          <pre className="plan-text">{attempt.proposed}</pre>
+        </details>
+      )}
+      {!!attempt?.steps.length && (
+        <details open>
+          <summary>Steps that ran</summary>
+          <pre className="plan-text">{attempt.steps.join('\n')}</pre>
+        </details>
+      )}
+      {ended.record && <p className="plan-record">Saved as run <code>{ended.record}</code>.</p>}
     </div>
   )
 }
@@ -1532,6 +1603,80 @@ function Card({
       )
     }
 
+    case 'manifest': {
+      const { request, decision } = entry
+      return (
+        <div className="confirm manifest">
+          <div className="confirm-head">
+            <span className="intent">run plan</span>
+            <span className="path manifest-count">
+              {request.steps.length} step{request.steps.length === 1 ? '' : 's'}
+            </span>
+          </div>
+
+          <p className="permission-scope">
+            <strong>You asked:</strong> {request.task}
+          </p>
+
+          {/* Every step, in order and unshortened. The answer covers the whole plan. The agent
+              numbers each line, so the list draws no numbers of its own. */}
+          <ol className="manifest-steps">
+            {request.steps.map((step, index) => (
+              <li key={index}>
+                <code>{step}</code>
+              </li>
+            ))}
+          </ol>
+
+          <p className="permission-scope">
+            These steps run in this order, and nothing re-plans once the run starts. Approving
+            the plan does not approve its writes: each write is still put to you when its step
+            is reached. This answer covers this plan only.
+          </p>
+
+          <YesOrNo
+            kind="manifest"
+            request={request.request}
+            answerable={answerable}
+            decision={decision}
+            onDecide={onDecide}
+            reject="Don’t run"
+            approve="Run this plan"
+            approved="You approved this plan"
+            rejected="You declined this plan"
+          />
+        </div>
+      )
+    }
+
+    case 'plan-task':
+      return (
+        <div className="bubble user plan-task">
+          <span className="plan-task-mark">Plan first</span>
+          {entry.text}
+        </div>
+      )
+
+    case 'plan-reply':
+      // Plain text in a marked container, and never formatted. What a run releases can be the
+      // text of a file nobody vouched for, so it is not drawn as the agent's own words.
+      return (
+        <div className="plan-reply">
+          <div className="plan-reply-head">
+            <span className="mark">run result</span>
+            <span>what the plan’s last step released</span>
+          </div>
+          <pre className="preview">{entry.text}</pre>
+          <div className="plan-reply-foot">
+            Shown to you and to no model. It is not part of this conversation.
+            {entry.record && <> Saved as run <code>{entry.record}</code>.</>}
+          </div>
+        </div>
+      )
+
+    case 'plan-ended':
+      return <PlanEnded ended={entry.ended} />
+
     case 'ask':
       return <Questions request={entry} answers={entry.answers} onAnswer={onAnswer} />
 
@@ -1608,6 +1753,8 @@ function waitingOn(kind: t.Asking['kind']): string {
       return 'Answer the fetch'
     case 'server':
       return 'Answer the language server'
+    case 'manifest':
+      return 'Answer the plan'
     case 'vouch':
       return 'Answer the vouch'
     case 'ask':

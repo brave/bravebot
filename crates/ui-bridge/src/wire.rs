@@ -23,8 +23,8 @@
 //! typed.
 
 use bravebot_agent::confirm::{
-    Decision, FetchRequest, Intent, OutputRequest, RunDecision, RunRequest, ServerRequest,
-    VetRequest, VouchRequest, WriteRequest,
+    Decision, FetchRequest, Intent, ManifestRequest, OutputRequest, RunDecision, RunRequest,
+    ServerRequest, VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::conversation::{Composed, Said};
 use bravebot_agent::diff::Change;
@@ -474,6 +474,22 @@ pub fn server_request(id: u64, request: &ServerRequest) -> Value {
         "workspace": request.workspace,
         "runsBuildTooling": request.runs_build_tooling,
         "summary": request.summary(),
+    })
+}
+
+/// A frozen plan a manifest run is about to walk.
+///
+/// `steps` has one line per step, in order, as the agent rendered it: the tier, what the step
+/// does, and the routing it fixed. A front end draws every line and does not shorten the list,
+/// because the answer covers the whole plan (MANIFEST-10).
+///
+/// The task is the person's own words and the steps are the driver's rendering of a plan made
+/// from those words alone, so neither is untrusted content.
+pub fn manifest_request(id: u64, request: &ManifestRequest) -> Value {
+    json!({
+        "request": id,
+        "task": request.task,
+        "steps": request.steps,
     })
 }
 

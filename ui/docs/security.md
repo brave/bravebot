@@ -36,8 +36,8 @@ it under whatever the trust map says about that path. See
 
 ## Decisions and refusal
 
-The transcript presents write, command, command-output, path-vouch, fetch, language-server
-and user-question requests. Replies must match both the pending request ID and its kind. Within a turn, an unknown
+The transcript presents write, command, command-output, path-vouch, fetch, language-server,
+plan and user-question requests. Replies must match both the pending request ID and its kind. Within a turn, an unknown
 or consumed ID cannot approve another request. Clients discard pending questions
 when a turn ends because IDs may recur in later turns. Malformed decisions decline;
 question answers are checked against the offered choices.
@@ -58,8 +58,15 @@ the dependency tree running as the person. The bridge holds the servers a conver
 started and stops them when it closes. An approval is no claim about what a server reports:
 a place in a file reaches the model and the text at it stays confined.
 
-The agent also has a manifest-plan approval. The UI does not present that request yet; the
-bridge refuses it without taking an answer intended for another pending question.
+A plan approval is asked once per manifest run, before its first step. The card shows the
+task and every step. An approval covers that plan only and does not approve its writes: each
+write is still asked about when its step is reached. What a run releases for a screen can be
+a file's text, so the window draws it as plain text in a marked container and never formats
+it. A run is not part of the conversation and is left out of an export.
+
+The agent also asks before a read that would expose a credential, and before starting or
+calling an MCP server. The UI does not present those requests yet; the bridge refuses them
+without taking an answer intended for another pending question.
 
 Vetted-content approval releases only the displayed bytes once; it does not create a trust
 rule for future reads. Checker verdicts are advisory. Checking already sends the content

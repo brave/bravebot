@@ -380,6 +380,69 @@ export interface ServerRequest {
   summary: string
 }
 
+/**
+ * A frozen plan a manifest run is about to walk.
+ *
+ * `task` is what the person typed. `steps` has one line per step, in order, as the agent
+ * rendered it. Every line is drawn, because the answer covers the whole plan.
+ */
+export interface ManifestRequest {
+  request: number
+  task: string
+  steps: string[]
+}
+
+/**
+ * What a manifest run produced, whether or not it finished.
+ *
+ * All of it came from a planner that was shown the task and nothing else, or from the agent's
+ * own account of what it did. `proposed` is the planner's manifest verbatim, which is all there
+ * is to read when it could not be made into a plan.
+ */
+export interface PlanAttempt {
+  goal: string | null
+  proposed: string | null
+  plan: string | null
+  steps: string[]
+}
+
+/** A manifest run that finished. `record` names the run's own record, where one was written. */
+export interface ManifestDone {
+  run: number
+  /**
+   * What the plan's last step released for a screen. This can be the text of a file nobody
+   * vouched for, so it is drawn as plain text in a marked container and never formatted.
+   */
+  reply: string
+  model: string
+  steps: number
+  clean: boolean
+  tokens: number
+  outputTokens: number
+  notices?: string[]
+  attempt: PlanAttempt | null
+  record: string | null
+}
+
+/** A manifest run that stopped: declined, stopped by the person, or failed. */
+export interface ManifestError {
+  run: number
+  kind: string
+  message: string
+  category: string | null
+  attempts?: number | null
+  status?: number | null
+  /** Whether the person stopped it. A stopped run is not recorded. */
+  stopped: boolean
+  /** Whether the plan was put to the person and declined. Read this, not the wording of `problem`. */
+  declined: boolean
+  /** The agent's own sentence about why, where it wrote one. Absent for a service failure. */
+  problem: string | null
+  attempt: PlanAttempt | null
+  record: string | null
+  notices?: string[]
+}
+
 /** A pipeline the planner wants to run. */
 export interface RunRequest {
   request: number
@@ -513,7 +576,8 @@ export interface EventMap {
   quarantined: Shown
   todos: { rows: TodoRow[] }
   tokens: { written: number }
-  audit: { turn: number; event: Record<string, unknown> }
+  /** Numbered by `turn`, or by `run` for a manifest run, which is not one of the turns. */
+  audit: { turn?: number; run?: number; event: Record<string, unknown> }
   'confirm.request': ConfirmRequest
   'run.request': RunRequest
   'output.request': OutputRequest
@@ -521,6 +585,10 @@ export interface EventMap {
   'vet.request': VetRequest
   'fetch.request': FetchRequest
   'server.request': ServerRequest
+  'manifest.request': ManifestRequest
+  'manifest.started': { run: number }
+  'manifest.done': ManifestDone
+  'manifest.error': ManifestError
   'ask.request': AskRequest
   'turn.done': TurnDone
   'turn.error': TurnError
