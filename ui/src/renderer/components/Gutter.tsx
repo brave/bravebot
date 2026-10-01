@@ -8,6 +8,7 @@ import {
   type Side,
   type Widths,
   fit,
+  isCompact,
   remember,
   remembered,
 } from '../columns'
@@ -43,7 +44,8 @@ export function useColumns(): {
   nudge: (side: Side, by: number) => void
   toggle: (side: Side) => void
 } {
-  const [layout, setLayout] = useState<Layout>(() => ({ ...INITIAL_LAYOUT, collapsed: { left: false, right: window.innerWidth <= 1120 } }))
+  // A compact window starts with its drawer shut: the conversation is what it opens on.
+  const [layout, setLayout] = useState<Layout>(() => ({ ...INITIAL_LAYOUT, collapsed: { left: isCompact(), right: window.innerWidth <= 1120 } }))
   const [dragging, setDragging] = useState<Side | null>(null)
   // Armed by a fold and by nothing else. A drag, an arrow key and a window resize all
   // change the same widths and must all land instantly; only a fold is a movement anyone
@@ -61,7 +63,10 @@ export function useColumns(): {
       if (live && stored) {
         setLayout({
           widths: fit(stored.widths, window.innerWidth, stored.collapsed),
-          collapsed: window.innerWidth <= 1120 ? { ...stored.collapsed, right: true } : stored.collapsed,
+          collapsed: {
+            left: stored.collapsed.left || isCompact(),
+            right: stored.collapsed.right || window.innerWidth <= 1120,
+          },
         })
       }
       loaded.current = true
@@ -77,15 +82,22 @@ export function useColumns(): {
 
   useEffect(() => {
     let narrow = window.innerWidth <= 1120
+    let compact = isCompact()
     const onResize = (): void => {
       const nextNarrow = window.innerWidth <= 1120
-      // Capture the transition before React runs the updater; `narrow` changes below.
+      const nextCompact = isCompact()
+      // Capture the transitions before React runs the updater; `narrow` and `compact` change below.
       const enteringNarrow = nextNarrow && !narrow
+      const enteringCompact = nextCompact && !compact
       setLayout((old) => {
-        const collapsed = enteringNarrow ? { ...old.collapsed, right: true } : old.collapsed
+        const collapsed = {
+          left: old.collapsed.left || enteringCompact,
+          right: old.collapsed.right || enteringNarrow,
+        }
         return { ...old, collapsed, widths: fit(old.widths, window.innerWidth, collapsed) }
       })
       narrow = nextNarrow
+      compact = nextCompact
     }
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)

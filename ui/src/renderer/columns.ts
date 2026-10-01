@@ -16,6 +16,18 @@ export const SIDES = {
 export type Side = keyof typeof SIDES
 
 /**
+ * At or below this width the session list is a drawer over the conversation rather than a column
+ * beside it.
+ *
+ * A phone, in practice: the narrowest window Electron allows is 900px, so a desktop never gets
+ * here. At this size a 220px column beside the transcript leaves the transcript a word wide, and
+ * the list is somewhere a person goes to choose a conversation and then leaves.
+ */
+export const COMPACT = 720
+
+export const isCompact = (width: number = window.innerWidth): boolean => width <= COMPACT
+
+/**
  * The narrowest the transcript is allowed to get.
  *
  * The transcript is the reason the window is open; the other two columns are apparatus.
@@ -101,6 +113,8 @@ const clamp = (value: number, min: number, max: number): number =>
 export function fit(widths: Widths, available: number, collapsed: Record<Side, boolean>): Widths {
   // On small windows the inspector overlays the conversation and consumes no grid width.
   if (available <= 1120) collapsed = { ...collapsed, right: true }
+  // In compact windows the session list is a drawer and consumes no grid width either.
+  if (isCompact(available)) collapsed = { ...collapsed, left: true }
 
   let left = collapsed.left ? widths.left : clamp(widths.left, SIDES.left.min, SIDES.left.max)
   let right = collapsed.right ? widths.right : clamp(widths.right, SIDES.right.min, SIDES.right.max)

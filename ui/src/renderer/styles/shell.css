@@ -167,3 +167,72 @@
   font: var(--type-caption-strong);
   pointer-events: none;
 }
+
+/* ------------------------------------------------------------------ compact windows
+
+   A phone. The conversation card takes the whole window, and the session list becomes a drawer
+   that slides over it from the left. `left-folded` still means "the list is away", so the header
+   toggle that folds the column on a desktop is the one that opens the drawer here. Keep the
+   width in step with `COMPACT` in columns.ts. */
+.drawer-scrim { display: none; }
+
+@media (max-width: 720px) {
+  .app,
+  .app.no-session { grid-template-columns: 0 0 minmax(0, 1fr) 0 0; padding: 0; }
+  .app::before { display: none; }
+
+  .workspace,
+  .app.left-folded .workspace { margin-left: 0; border: 0; border-radius: 0; }
+
+  .app .sessions {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 41;
+    width: min(85vw, 320px);
+    background: var(--surface-app);
+    box-shadow: var(--shadow-floating);
+    transform: none;
+    transition: transform var(--motion-panel);
+  }
+  .app.left-folded .sessions {
+    transform: translateX(-100%);
+    box-shadow: none;
+    transition: transform var(--motion-panel), visibility 0s var(--panel-duration);
+  }
+  /* The drawer has a width of its own rather than the column's, so its contents follow it. */
+  .sessions > * { min-width: 0; }
+  .app .gutter.left { display: none; }
+
+  .drawer-scrim {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    background: var(--surface-scrim);
+    animation: drawer-scrim-in var(--motion-panel);
+  }
+
+  /* The context panel already overlays below 1120px; here it is sized against a phone. */
+  .app .context { width: min(90vw, 340px); }
+}
+
+@keyframes drawer-scrim-in {
+  from { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app .sessions,
+  .drawer-scrim { transition: none; animation: none; }
+}
+
+/* ------------------------------------------------------------------ touch only
+
+   Keyboard accelerators are noise on a device whose only pointer is a finger. Keyed on the input
+   rather than the width, so a tablet with a keyboard attached still shows them. */
+@media (hover: none) and (pointer: coarse) {
+  .sidebar-row-hint,
+  .welcome-shortcut,
+  .tooltip-shortcut { display: none; }
+}

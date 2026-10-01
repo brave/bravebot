@@ -20,7 +20,7 @@ import { SessionInfo, type SessionInfoValue, type SessionStatus } from './compon
 import { FIND_EVENT, FOCUS_COMPOSER_EVENT, Transcript } from './components/Transcript'
 import { Context } from './components/Context'
 import { Gutter, useColumns } from './components/Gutter'
-import { shown } from './columns'
+import { isCompact, shown } from './columns'
 import { TrustPrompt } from './components/TrustPrompt'
 import { Unconfigured } from './components/Unconfigured'
 import { Notice } from './components/Notice'
@@ -1234,6 +1234,30 @@ export function App(): React.JSX.Element {
   const stableCreate = useEvent(create)
   const openSettings = useEvent(() => setAgentSettings(true))
   const closeContext = useEvent(() => toggle('right'))
+
+  // In a compact window the session list is a drawer over the conversation, and choosing
+  // something from it is the end of the visit: whatever opens, the drawer gets out of its way.
+  // Keyed on what is open rather than on each way of opening it, so a new session, a bot and a
+  // row all close it alike. A row that is already open changes nothing, hence the tap handler too.
+  const openId = live?.summary.id ?? live?.draftId ?? reading?.record.id ?? undefined
+  const closeDrawer = useEvent(() => {
+    if (isCompact() && !collapsed.left) toggle('left')
+  })
+  useEffect(() => closeDrawer(), [openId, closeDrawer])
+  const openFromDrawer = useEvent((...args: Parameters<typeof stableShowSession>) => {
+    closeDrawer()
+    return stableShowSession(...args)
+  })
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape' && isCompact() && !collapsed.left) {
+        event.preventDefault()
+        toggle('left')
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [collapsed.left, toggle])
   const stableCloseAudit = useEvent(closeAudit)
   const auditTurn = selectedAudit && selectedAudit.turn !== null ? live?.turns[selectedAudit.turn] : undefined
   const auditPanel = useMemo(() => selectedAudit
@@ -1270,9 +1294,9 @@ export function App(): React.JSX.Element {
         sessions={ownSessions}
         onNewBotConversation={newBotConversation}
         onBotConversation={botConversation}
-        openId={live?.summary.id ?? live?.draftId ?? reading?.record.id ?? undefined}
+        openId={openId}
         forked={forked}
-        onOpen={stableShowSession}
+        onOpen={openFromDrawer}
         onNew={stableCreate}
         bots={bots}
         openSlug={live?.bot?.slug ?? null}
@@ -1283,6 +1307,10 @@ export function App(): React.JSX.Element {
         build={build}
         onSettings={openSettings}
       /></SessionInfo.Provider>
+      {/* Only drawn in a compact window, where the open drawer covers the conversation; a tap
+          beside it is how a drawer is put away. Not a control for anyone not pointing, so the
+          header's toggle and Escape remain the named ways. */}
+      {!collapsed.left && <div className="drawer-scrim" aria-hidden="true" onClick={() => toggle('left')} />}
       <Gutter
         side="left"
         width={shown({ widths, collapsed }, 'left')}
