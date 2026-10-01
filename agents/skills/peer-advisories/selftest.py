@@ -278,6 +278,29 @@ class Work(unittest.TestCase):
         self.assertEqual((entries[A]["verdict"], entries[A]["issue"], entries[A]["date"]), ("affected", "#99", "2026-09-30"))
         self.assertEqual(sorted(entries), [A, B, C])
 
+    def test_an_advisory_this_run_took_up_and_did_not_settle_loses_its_earlier_line(self):
+        """An earlier verdict left in place keeps an advisory marked as vetted after a run that tried to vet it again and failed."""
+        other = "GHSA-eeee-eeee-eeee"
+        ledger = self.root / pa.LEDGER
+        earlier = {"issue": "-", "commit": "fedcba987654", "date": "2026-01-01", "reason": "an earlier run"}
+        pa.write_ledger(ledger, {g: dict(earlier, verdict=v) for g, v in ((A, "known"), (B, "holds"), (C, "absent"), (D, "known"), (other, "absent"))})
+        self.vet(B, verdict="affected", issue=self.issue)
+        self.vet(C, verdict="affected", issue=self.issue)
+        self.check(C, verdict="confirmed")
+        self.vet(D, verdict="holds")
+        self.assertEqual({g: o["state"] for g, o in pa.outcomes(self.work)[1].items()}, {A: "pending", B: "verify", C: "file", D: "final"})
+
+        quiet(pa.record, self.args(dry_run=True), today="2026-09-30")
+        self.assertEqual(sorted(pa.read_ledger(ledger)), [A, B, C, D, other])
+
+        quiet(pa.record, self.args(), today="2026-09-30")
+        entries = pa.read_ledger(ledger)
+        self.assertEqual(sorted(entries), [D, other])
+        self.assertEqual((entries[D]["verdict"], entries[D]["commit"]), ("holds", "0123456789ab"))
+        self.assertEqual((entries[other]["verdict"], entries[other]["commit"]), ("absent", "fedcba987654"))
+        advisories = json.loads((self.work / "manifest.json").read_text())["advisories"]
+        self.assertEqual(sorted(a["ghsa_id"] for a in pa.select(advisories, entries, [], 10)), [A, B, C])
+
     def poster(self, cited=(), duplicate=None, labels=None):
         calls = []
 
