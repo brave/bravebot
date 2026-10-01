@@ -83,6 +83,9 @@ empty name is refused.
 
 What the record says about each individual turn is SESSION-23.
 
+[CHECKOUT-15](checkouts.md#CHECKOUT-15), which nothing yet builds, adds the checkouts a session's
+delegates were given and it keeps: each one's path, its commit and its delegate's number.
+
 `verified-by: bravebot_tui::sessions::renaming_a_session_rewrites_the_record_immediately`
 `verified-by: bravebot_tui::sessions::a_chosen_name_survives_the_next_turn`
 `verified-by: bravebot_tui::sessions::a_session_can_be_named_before_it_has_a_record`
@@ -190,6 +193,8 @@ writing.
 Leaving prints the command that resumes this session, and the id is the one that fetches it. It is
 printed after the terminal is handed back, so it stays on the screen the person is left looking at
 rather than going with the interface. A session that never wrote a record prints nothing.
+[CHECKOUT-15](checkouts.md#CHECKOUT-15), which nothing yet builds, also names each checkout the
+session keeps.
 
 A session that changed its working directory says where it went, because an id is looked up under
 the directory the command is run in and the shell reading this line never moved. Where the session
@@ -460,6 +465,8 @@ the continuation rule in SESSION-10.
 
 Both full-record and mid-history forks keep the source's current file decisions and inherit no
 rewind points. Forking does not rewind disk. The source record stays unchanged.
+[CHECKOUT-16](checkouts.md#CHECKOUT-16), which nothing yet builds, keeps a fork from carrying the
+source's checkouts.
 
 **Why.** Exploring an alternative technical path from a shared prefix preserves the expensive
 context already built up without polluting the original session. Refusing manifest runs maintains
@@ -489,6 +496,8 @@ leaving one with nothing in it. A rewind with incomplete coverage, failed restor
 it: the name was not the turn's to give, so it is not the rewind's to take. The directory the
 session was given of its own is not in the project: what a turn wrote there is neither put back nor
 counted against the budget below, for the reasons [trust-map.md](trust-map.md) gives.
+[CHECKOUT-17](checkouts.md#CHECKOUT-17), which nothing yet builds, leaves a delegate's checkout out
+of a rewind on the same terms.
 
 Program approvals return to the selected snapshot. File decisions use the lower effective trust
 at each path, including inherited prefix rules and nested exceptions:

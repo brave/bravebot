@@ -351,7 +351,8 @@ own store ([MEMORY-1](#MEMORY-1)), and a bot's conversation is a session in that
   ([TRUST-10](trust-map.md#TRUST-10)). A checkout named in a file is reachable only once somebody
   opens it, and that is a person's act and not a file's.
 
-`isolation:` is not read either, and is an open question below rather than a refusal.
+`isolation:` is not read either. [CHECKOUT-2](checkouts.md#CHECKOUT-2), which nothing yet builds,
+reads it as a request for a checkout the driver makes, and the file still names no path.
 
 `verified-by: by-construction (a definition is read for its named keys alone, none of which is a directory, and every run works in the session's workspace)`
 
@@ -492,8 +493,8 @@ Nothing builds this yet.
   gives a subagent a fresh worktree. Here that would be a run writing outside its working directory
   ([TRUST-10](trust-map.md#TRUST-10)), into a path nobody vouched for whose first write asks, after
   a `git` command no person chose to run. The directory would outlive the turn that made it, so
-  removing it is either a question for a person or a deletion nobody approved. Each of those has an
-  answer, and together they are a spec of their own.
+  removing it is either a question for a person or a deletion nobody approved.
+  [checkouts.md](checkouts.md) proposes an answer to each, which nothing yet builds.
 
 - **Whether a memory may live in the person's own directory.** `memory: user` needs a run to write
   into `~/.bravebot` without a person opening it, which no tool does. It also needs a record of what

@@ -354,6 +354,9 @@ started answers the session's next turn, and a start a delegate causes is put to
 the one confirmer every run shares ([DELEGATE-16](../delegation.md#DELEGATE-16)). What it may ask
 is still decided by its own capability set ([LSP-9](#LSP-9)).
 
+[CHECKOUT-20](../checkouts.md#CHECKOUT-20), which nothing yet builds, offers a delegate working in a
+checkout of its own no `lsp`, since these servers are rooted at the working directory.
+
 **Why shared with delegates.** A set of its own would ask the person about a language they already
 approved, and index the same tree a second time beside the server already doing it.
 
