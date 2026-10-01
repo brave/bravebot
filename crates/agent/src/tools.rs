@@ -2208,7 +2208,7 @@ fn target_of<S: Sink>(
 
         // A call that named a reference instead of a path says so with the reference, which is
         // then resolved below: it is the planner that cannot know the name, not the person.
-        let key = if arguments.get(key).is_none() && arguments.get("path_ref").is_some() {
+        let key = if !names(arguments, key) && names(arguments, "path_ref") {
             "path_ref"
         } else {
             key
@@ -2228,8 +2228,9 @@ fn target_of<S: Sink>(
     // searched them afterwards would be inspecting content under a witness minted to put it on a
     // screen, which LABEL-6 refuses. Text with no reference in it comes back as it went in, so
     // there is nothing left here to test it for.
-    let names = policy.names_for_display(slots);
-    let shaped = policy.render_in_place(tool, &named, |text| name_references(&text, &names));
+    let display_names = policy.names_for_display(slots);
+    let shaped =
+        policy.render_in_place(tool, &named, |text| name_references(&text, &display_names));
     let proof = policy.authorise_display_release("what a tool is working on");
     shaped.declassify(&proof)
 }
@@ -2882,6 +2883,35 @@ fn argument(arguments: &Value, key: &str) -> Option<Labelled<String>> {
     ))
 }
 
+/// An argument that names something, where a blank one names nothing.
+///
+/// A planner sent a schema whose optional fields are all strings will sometimes fill every one
+/// of them, and the ones it did not mean to use come back as `""`. For a path or a reference an
+/// empty string is never a choice anyone made, so it is the same as the field being left out.
+/// Counting it as given turned `{"path": "a.html", "path_ref": ""}` into "not both", every time,
+/// and a planner that could not see which half was wrong sent the same call again.
+///
+/// Not for `contents`, where an empty string is a request for an empty file.
+///
+/// Decided on the call as it arrived, before anything is labelled: whether a field was filled in
+/// is the shape of the call, the same thing asking whether the key is present is.
+fn named_argument(arguments: &Value, key: &str) -> Option<Labelled<String>> {
+    if names(arguments, key) {
+        argument(arguments, key)
+    } else {
+        None
+    }
+}
+
+/// Whether the call gave `key` a value that names something. See [`named_argument`].
+fn names(arguments: &Value, key: &str) -> bool {
+    match arguments.get(key) {
+        None | Some(Value::Null) => false,
+        Some(Value::String(given)) => !given.trim().is_empty(),
+        Some(_) => true,
+    }
+}
+
 /// The reference names in a `reads` argument, as one line.
 ///
 /// Wrapped like every other argument: what the planner asked for is model output, and the
@@ -3383,8 +3413,8 @@ fn path_argument<S: Sink>(
     slots: &SlotStore,
     arguments: &Value,
 ) -> Result<PathArgument, String> {
-    let named = argument(arguments, "path");
-    let referenced = argument(arguments, "path_ref");
+    let named = named_argument(arguments, "path");
+    let referenced = named_argument(arguments, "path_ref");
 
     match (named, referenced) {
         (Some(_), Some(_)) => Err(
@@ -3865,7 +3895,7 @@ fn write_file<S: Sink, C: Confirmer>(
         (found.path, found.destination, found.shown, found.released);
 
     let written = argument(arguments, "contents");
-    let named = argument(arguments, "contents_ref");
+    let named = named_argument(arguments, "contents_ref");
 
     // Two sources would leave the driver deciding which one was meant, and they say different
     // things about what lands in the file. Neither is a decision taken from content: both
@@ -4548,7 +4578,7 @@ fn watch_file<S: Sink>(
     // it here would put that name into the user's own role hours later, which is exactly what
     // the sentence is built to prevent. Refused before the argument is read, so nothing resolves
     // the reference on the way to saying no.
-    if arguments.get("path_ref").is_some() {
+    if names(arguments, "path_ref") {
         return Produced::problem(
             "refused: watch_file takes 'path' and no reference. A reference names a file this \
              conversation was never shown the name of, and a watch reports the path it was armed \
@@ -5553,10 +5583,11 @@ fn run<S: Sink, C: Confirmer>(
     // The reference whose contents go to the first program's standard input, where the call named
     // one. Present but not a string is refused rather than dropped, for the reason a directory is:
     // a field the driver quietly ignored would run a line over nothing, and a planner that asked
-    // for a document to be filtered would be handed the filter's answer about an empty one.
+    // for a document to be filtered would be handed the filter's answer about an empty one. A
+    // blank string names no document, so it is the field left out, as for every other reference.
     let named_stdin = match arguments.get("stdin_ref") {
         None | Some(Value::Null) => None,
-        Some(Value::String(_)) => argument(arguments, "stdin_ref"),
+        Some(Value::String(_)) => named_argument(arguments, "stdin_ref"),
         Some(_) => {
             return Produced::problem(
                 "error: 'stdin_ref' must be a string naming a reference, e.g. \"ref:1\"",
