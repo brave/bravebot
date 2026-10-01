@@ -206,6 +206,7 @@ doctor-model = modèle
 doctor-model-chosen = { $model } (choisi avec /model)
 doctor-model-default = { $model } (par défaut)
 doctor-model-set-aside = { $model } (par défaut, car { $pick }, choisi avec /model, n'est servi par aucun service configuré)
+doctor-model-refused = { $model } (par défaut, car { $pick }, choisi avec /model, n'est pas demandé sur cette machine)
 doctor-key-name = clé
 doctor-key = { $key } (jamais transmise)
 doctor-ends = fin

@@ -2492,15 +2492,17 @@ fn doctor() -> ExitCode {
                         pick = pick
                     ),
                 ),
-                // The same line, and then the reason: the configured model answers either way, and
-                // this is the one case where the report has a file to name. Nothing at the end of
-                // this section names it, that being asked about the model a run would request, which
-                // is the configured one by then (BACKEND-48).
+                // The configured model answers as it does above, and the reason differs: a model this
+                // machine does not request is one a configured service would have served, so the
+                // line above would name the wrong fault. Then the file, which is the one thing
+                // somebody in this case can act on, and which nothing at the end of this section
+                // names: that is asked about the model a run would request, the configured one by
+                // then (BACKEND-48).
                 bravebot_agent::backend::Pick::Refused { recorded, reason } => {
                     fact(
                         t!(doctor_model),
                         t!(
-                            doctor_model_set_aside,
+                            doctor_model_refused,
                             model = &config.default_model,
                             pick = &recorded
                         ),

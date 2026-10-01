@@ -219,6 +219,10 @@ doctor-model = model
 doctor-model-chosen = { $model } (chosen with /model)
 doctor-model-default = { $model } (default)
 doctor-model-set-aside = { $model } (default, since { $pick }, chosen with /model, is not served by any configured service)
+# The other reason a pick is not in force. Not the line above: a model the machine's layer refuses is
+# one a configured service would have served, so saying nothing serves it would name the wrong fault.
+# The line under this one names the file that refused.
+doctor-model-refused = { $model } (default, since { $pick }, chosen with /model, is not requested on this machine)
 doctor-key-name = key
 doctor-key = { $key } (never transmitted)
 # What would end each credential this build holds for itself: who issued it, the surface that
