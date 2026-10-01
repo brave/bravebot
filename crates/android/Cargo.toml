@@ -1,0 +1,23 @@
+[package]
+name = "bravebot-android"
+description = "Drives bravebot for the Android app, over JNI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "bravebot_android"
+# `cdylib` is what the app loads; `rlib` keeps `cargo test` and the workspace build on a desktop
+# host working, where nothing loads it.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# For `crash::disable_core_dumps`, called first for the reason `bravebot-rpc` calls it first.
+bravebot-agent = { path = "../agent" }
+bravebot-ui-bridge = { path = "../ui-bridge" }
+# The Java Native Interface, without the `invocation` feature: the app's runtime starts the VM
+# and hands this library one, so nothing here links libjvm.
+jni = "0.22"
+serde_json = { workspace = true }

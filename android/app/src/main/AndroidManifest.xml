@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- No backups: the state directory under filesDir holds session records and, once one is
+         configured, a gateway key. -->
+    <application
+        android:name=".BravebotApp"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:label="Brave Bot"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Bravebot">
+        <!-- configChanges: a rotation or a resize would otherwise rebuild the WebView and lose
+             the renderer's state mid-turn. The page lays itself out again on its own. -->
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

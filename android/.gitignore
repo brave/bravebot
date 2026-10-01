@@ -1,0 +1,8 @@
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+# Built from ui/ and crates/android by build-native.sh; never committed.
+app/src/main/assets/renderer/
+app/src/main/jniLibs/

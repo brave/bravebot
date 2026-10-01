@@ -16,5 +16,5 @@
     "isolatedModules": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "electron.vite.config.ts", "leo-icons.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "electron.vite.config.ts", "vite.android.config.ts", "leo-icons.ts"]
 }

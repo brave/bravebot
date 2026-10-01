@@ -51,7 +51,8 @@
     "prestart": "npm run deps && npm run setup:electron",
     "drive:manual-walkthrough": "npm run build && node scripts/drive-manual-walkthrough.mjs",
     "drive:agent-settings": "npm run build && node scripts/drive-agent-settings.mjs",
-    "drive:agent-rpc": "npm run bridge && node scripts/drive-agent-rpc.mjs"
+    "drive:agent-rpc": "npm run bridge && node scripts/drive-agent-rpc.mjs",
+    "build:android": "tsc --noEmit && vite build --config vite.android.config.ts"
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",
