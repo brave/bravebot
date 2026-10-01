@@ -61,14 +61,15 @@ asking.
 
 ```
 ╭ fetch this? ─────────────────────────────────────────────╮
-│Fetch https://docs.example.com/api                        │
 │  talking to docs.example.com                             │
 │                                                          │
+│Fetch https://docs.example.com/api                        │
+│                                                          │
 │  what comes back stays quarantined however you answer:   │
-│  the model can pass it to a processor or write it to a    │
+│  the model can pass it to a processor or write it to a   │
 │  file, and cannot read it or be told what it says.       │
 │                                                          │
-│  y fetch it    n don't    ctrl-c stop                    │
+│  y fetch it    n don't    ctrl-c stop the turn           │
 ╰──────────────────────────────────────────────────────────╯
 ```
 
@@ -76,6 +77,11 @@ The host is drawn on its own line rather than left inside the URL, and is taken 
 parser rather than from what the string looks like. `https://example.com@evil.test/` names one site
 to a person skimming it and reaches another, so what they are answering about is put where it cannot
 be misread.
+
+In the terminal, the host is drawn above the URL in rows the URL cannot take, and so is the
+metadata warning where the host is this machine's metadata service. A URL longer than the box
+scrolls under them ([PROMPT-4](../prompting.md#PROMPT-4)). `y` is not taken at a draw that cuts
+off the host, the warning or the keys, or that leaves the URL no row.
 
 **Why the host and not the URL.** A rule is a standing statement about who may be talked to, which
 is a thing a person can hold in their head. A path is where a URL carries the particular thing being
@@ -88,6 +94,11 @@ asked for, so a rule matching one would be answering a different question on eve
 `verified-by: bravebot_core::url::userinfo_is_not_mistaken_for_the_host`
 `verified-by: bravebot_agent::turn::a_domain_rule_lets_a_fetch_through_without_asking`
 `verified-by: bravebot_agent::turn::a_refused_fetch_sends_no_request`
+`verified-by: bravebot_tui::confirm::a_url_longer_than_the_fetch_box_keeps_the_host_above_it_and_says_how_much_is_below`
+`verified-by: bravebot_tui::confirm::a_userinfo_that_fills_the_fetch_box_leaves_the_host_and_what_it_is_on_screen`
+`verified-by: bravebot_tui::confirm::the_end_of_a_long_url_can_be_scrolled_to_with_the_host_still_shown`
+`verified-by: bravebot_tui::confirm::a_fetch_question_takes_a_yes_only_from_a_draw_showing_the_host_and_the_keys`
+`verified-by: bravebot_tui::confirm::a_fetch_scroll_moves_from_where_the_url_was_drawn`
 
 <a id="FETCH-3"></a>
 ### FETCH-3: an approval is bound to the URL it was given for, and nothing is remembered
