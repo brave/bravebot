@@ -22701,7 +22701,7 @@ fn a_spawn_asking_for_a_checkout_it_may_not_have_starts_nothing() {
         (
             "other",
             r#"{"kind":"worker","task":"NEVER-RUNS","isolation":"copy"}"#,
-            "may only be",
+            "works in your working directory, unless its definition asks for one",
         ),
         (
             "reader",
@@ -22800,6 +22800,307 @@ fn a_delegate_in_a_checkout_is_refused_another() {
     assert!(
         asked.iter().all(|body| !body.contains("\"ran\"")),
         "the inner delegate started"
+    );
+}
+
+/// CHECKOUT-2. A definition asking for a checkout gives its delegate one when the spawn did not
+/// ask, so the planner cannot start it in the working directory.
+#[test]
+fn a_definition_asking_for_a_checkout_gives_its_delegate_one_the_spawn_did_not_ask_for() {
+    let scratch = Scratch::new("checkout-definition-writes");
+    let home = Scratch::new("checkout-definition-writes-home");
+    define(
+        &home,
+        "migrator",
+        "kind: worker\nisolation: checkout\n",
+        "MIGRATE-WITH-CARE",
+    );
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAVE-THE-MIGRATOR-WRITE",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"migrator","task":"WRITE-OUT-MIGRATED"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("the delegate wrote it"),
+            ],
+        ),
+        (
+            "WRITE-OUT-MIGRATED",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"out.txt","contents":"from the migrator"}"#,
+                ),
+                reply_with("wrote it"),
+            ],
+        ),
+    ]);
+    let (asked, _) = run_in_a_repository(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "HAVE-THE-MIGRATOR-WRITE",
+    );
+
+    assert!(
+        asked
+            .iter()
+            .any(|body| !body.contains("HAVE-THE-MIGRATOR-WRITE")
+                && body.contains("MIGRATE-WITH-CARE")),
+        "the definition never selected the delegate"
+    );
+    assert!(
+        !scratch.path.join("out.txt").exists(),
+        "the definition's delegate wrote in the working directory"
+    );
+    let made = checkouts_under(&home.path);
+    assert_eq!(
+        made.len(),
+        1,
+        "the definition's delegate was given no checkout"
+    );
+    assert_eq!(
+        std::fs::read_to_string(made[0].join("out.txt")).expect("written in the checkout"),
+        "from the migrator"
+    );
+}
+
+/// CHECKOUT-2, CHECKOUT-3. A definition asking for a checkout is refused where a spawn asking for
+/// one would be, so a delegate already in a checkout cannot start it in the one it shares, and the
+/// refusal names the definition, since the call that met it did not ask.
+#[test]
+fn a_definition_asking_for_a_checkout_inside_one_is_refused() {
+    let scratch = Scratch::new("checkout-definition-nested");
+    let home = Scratch::new("checkout-definition-nested-home");
+    define(
+        &home,
+        "migrator",
+        "kind: worker\nisolation: checkout\n",
+        "MIGRATE-WITH-CARE",
+    );
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "START-AN-OUTER-ONE",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"OUTER-ONE","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "OUTER-ONE",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"migrator","task":"INNER-MIGRATION"}"#,
+                ),
+                reply_with("asked"),
+            ],
+        ),
+        ("INNER-MIGRATION", vec![reply_with("ran")]),
+    ]);
+    let (asked, _) = run_in_a_repository(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "START-AN-OUTER-ONE",
+    );
+
+    assert!(
+        asked.iter().any(|body| body.contains(
+            "the migrator definition asks for a checkout of its own, and you already work in a \
+             checkout"
+        )),
+        "the delegate was not refused the definition's checkout"
+    );
+    assert!(
+        asked.iter().all(|body| !body.contains("\"ran\"")),
+        "the definition's delegate started in the checkout it would share"
+    );
+}
+
+/// CHECKOUT-2, CHECKOUT-6. A project's definition asking for a checkout in a session keeping no
+/// state directory starts nothing, rather than start in the working directory its author meant to
+/// keep the work out of.
+#[test]
+fn a_definition_asking_for_a_checkout_with_no_state_directory_is_refused() {
+    let scratch = Scratch::new("checkout-definition-no-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    std::fs::create_dir_all(scratch.path.join(".bravebot/agents")).unwrap();
+    std::fs::write(
+        scratch.path.join(".bravebot/agents/migrator.md"),
+        "---\nname: migrator\ndescription: Migrates.\nkind: worker\nisolation: checkout\n---\n\n\
+         MIGRATE-WITH-CARE\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "START-THE-MIGRATOR",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"migrator","task":"HOMELESS-MIGRATION"}"#,
+                ),
+                reply_with("done"),
+                reply_with("done"),
+            ],
+        ),
+        ("HOMELESS-MIGRATION", vec![reply_with("ran")]),
+    ]);
+
+    turn::run_cancellable(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("START-THE-MIGRATOR"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let asked = every_request(&received);
+    assert!(
+        asked.iter().any(|body| body.contains(
+            "the migrator definition asks for a checkout of its own, and this session keeps no \
+             state directory"
+        )),
+        "the planner was not told why the definition's delegate did not start"
+    );
+    assert!(
+        asked.iter().all(|body| !body.contains("\"ran\"")),
+        "the definition's delegate started in the working directory"
+    );
+}
+
+/// CHECKOUT-2. A definition asking for a checkout in a directory no checkout can be made of starts
+/// nothing, and the refusal names the definition, since the call that met it did not ask.
+#[test]
+fn a_definition_asking_for_a_checkout_outside_a_repository_is_refused_by_name() {
+    let scratch = Scratch::new("checkout-definition-no-repository");
+    let home = Scratch::new("checkout-definition-no-repository-home");
+    define(
+        &home,
+        "migrator",
+        "kind: worker\nisolation: checkout\n",
+        "MIGRATE-WITH-CARE",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "START-THE-MIGRATOR",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"migrator","task":"UNROOTED-MIGRATION"}"#,
+                ),
+                reply_with("done"),
+                reply_with("done"),
+            ],
+        ),
+        ("UNROOTED-MIGRATION", vec![reply_with("ran")]),
+    ]);
+    let (asked, _) = run_in_a_repository(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "START-THE-MIGRATOR",
+    );
+
+    assert!(
+        asked.iter().any(|body| body.contains(
+            "The migrator definition asks for a checkout of its own. No checkout was made"
+        )),
+        "the refusal did not name the definition that asked"
+    );
+    assert!(
+        asked.iter().all(|body| !body.contains("\"ran\"")),
+        "the definition's delegate started in the working directory"
+    );
+    assert!(
+        checkouts_under(&home.path).is_empty(),
+        "a checkout was made"
+    );
+}
+
+/// CHECKOUT-2. A turn addressed to a definition asking for a checkout is the person's own, so it
+/// works in their working directory, and says so rather than leave the definition's line reading
+/// as applied.
+#[test]
+fn an_addressed_turn_works_in_the_working_directory_and_says_its_checkout_is_not_applied() {
+    let scratch = Scratch::new("address-checkout");
+    let home = Scratch::new("address-checkout-home");
+    define(
+        &home,
+        "migrator",
+        "kind: worker\nisolation: checkout\n",
+        "MIGRATE-WITH-CARE",
+    );
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_by_marker(vec![(
+        "ADDRESSED-TASK",
+        vec![
+            tool_request(
+                "write_file",
+                r#"{"path":"out.txt","contents":"from the person's turn"}"#,
+            ),
+            reply_with("wrote it"),
+        ],
+    )]);
+    let config = config_for(&endpoint);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = turn::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-TASK", &home, "migrator"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("out.txt")).expect("written where it runs"),
+        "from the person's turn"
+    );
+    assert!(
+        checkouts_under(&home.path).is_empty(),
+        "a checkout was made"
+    );
+    let said = "migrator asks for a checkout of its own, which only its delegates are given, so \
+                this turn works in your working directory";
+    assert!(
+        reporter.notices.iter().any(|notice| notice == said),
+        "nobody watching was told the checkout was not applied: {:?}",
+        reporter.notices
+    );
+    assert!(
+        outcome.notices.iter().any(|notice| notice == said),
+        "the turn's account did not say the checkout was not applied: {:?}",
+        outcome.notices
     );
 }
 

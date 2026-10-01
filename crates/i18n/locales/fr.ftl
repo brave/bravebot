@@ -206,6 +206,7 @@ doctor-model = modèle
 doctor-model-chosen = { $model } (choisi avec /model)
 doctor-model-default = { $model } (par défaut)
 doctor-model-set-aside = { $model } (par défaut, car { $pick }, choisi avec /model, n'est servi par aucun service configuré)
+doctor-model-refused = { $model } (par défaut, car { $pick }, choisi avec /model, n'est pas demandé sur cette machine)
 doctor-key-name = clé
 doctor-key = { $key } (jamais transmise)
 doctor-ends = fin
@@ -706,6 +707,17 @@ servers-no-home =
     { $alias } n'a pas été démarré : aucun répertoire à lui n'a pu être créé dans { $path } : { $reason }
 servers-no-handshake = { $alias } a été démarré et n'a pas terminé sa poignée de main : { $reason }
 servers-too-slow = { $alias } n'a pas terminé sa poignée de main en { $seconds } secondes
+
+## A model this machine's administrator does not let it ask for
+
+managed-model-refused = aucune requête n'est faite pour { $model } : { $reason }
+managed-model-not-allowed =
+    { $path }, que gère l'administrateur de cette machine, n'autorise que les modèles nommés par son
+    models.allow
+managed-model-denied =
+    { $path }, que gère l'administrateur de cette machine, le refuse par une entrée models.deny
+delegate-model-refused =
+    { $definition } demande { $model }, que cette machine ne demande pas : { $reason }
 
 ## The tools an MCP server offers, read by the person before any of them is offered to the model
 
@@ -1523,6 +1535,7 @@ session-directory-changed = travail désormais dans { $directory }, et approuvé
 session-directory-closed = { $directory } fermé ; rouvrez-le avec /add-dir { $directory }
 session-directory-not-changed = impossible de passer à { $directory } : { $problem }
 session-permission-rule-ignored = règle de permission ignorée dans settings.json : { $problem }
+session-model-pick-refused = { $model }, choisi avec /model, est ignoré : { $reason }
 session-model-pick-set-aside = { $model }, choisi avec /model, est ignoré car aucun service configuré ne le sert
 session-permission-allow-ignored =
     la règle allow { $rule } de { $path } n'est pas accordée : une règle allow répond à une invite,
@@ -1828,6 +1841,9 @@ session-model-is-the-definitions =
 agent-model-outranked =
     { $definition } a demandé { $model }, et --model l'emporte, donc cette exécution a demandé le
     modèle nommé par la ligne de commande
+agent-checkout-not-applied =
+    { $definition } demande une copie de travail à part, que seuls ses délégués reçoivent, donc ce
+    tour travaille dans votre répertoire de travail
 
 
 ## L'écran d'accueil
@@ -1897,6 +1913,12 @@ delegate-memory-not-a-slug =
     { $definition } ne garde aucune mémoire : une définition qui en garde une doit avoir un nom fait de lettres minuscules et de chiffres, en suites reliées par des tirets simples, de 64 caractères au plus
 delegate-memory-in-home =
     { $definition } ne garde aucune mémoire ici : dans ce répertoire, sa mémoire serait dans ~/.bravebot, qu'aucune écriture ne peut laisser non fiable
+delegate-isolation-not-read =
+    { $definition } est chargé sans copie de travail à part : sa ligne isolation indique { $value }, et seuls checkout et worktree en demandent une
+delegate-checkout-reader =
+    { $definition } est chargé sans copie de travail à part : c'est un reader, et un reader n'en reçoit jamais
+delegate-memory-in-checkout =
+    { $definition } ne garde sa mémoire que dans un tour lancé avec /agent : chacun de ses délégués travaille dans une copie de travail à part, qui n'en garde aucune
 
 ## Regarder ce que fait un delegue
 

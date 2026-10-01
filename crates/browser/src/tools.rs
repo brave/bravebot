@@ -44,12 +44,28 @@ pub const TOOLS: &[Tool] = &[
         schema: || json!({"type": "object", "properties": {}}),
     },
     Tool {
-        name: "read_page",
-        description: "Read the text of the open tab at this URL, as list_tabs gave it.",
+        name: "list_frames",
+        description: "List the exact HTTP and HTTPS frame URLs in the open tab at this URL, for a \
+            person to choose and provide in a later read_page call.",
         schema: || {
             json!({
                 "type": "object",
                 "properties": {"url": {"type": "string"}},
+                "required": ["url"],
+            })
+        },
+    },
+    Tool {
+        name: "read_page",
+        description: "Read the text of the open tab at this URL, or the exact frame_url in it that \
+            a person chose after list_frames.",
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "frame_url": {"type": "string"},
+                },
                 "required": ["url"],
             })
         },
@@ -106,10 +122,21 @@ mod tests {
     /// The question before a call shows its arguments, so a page is asked for by the URL a person
     /// can read there rather than by a tab id that names nothing they can check.
     #[test]
-    fn a_page_is_asked_for_by_its_url() {
+    fn a_page_is_asked_for_by_its_url_and_optional_frame_url() {
         let schema = named("read_page").unwrap().listed()["inputSchema"].clone();
         assert_eq!(schema["required"], json!(["url"]));
         assert_eq!(schema["properties"]["url"]["type"], "string");
+        assert_eq!(schema["properties"]["frame_url"]["type"], "string");
+        assert!(
+            !schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("frame_url"))
+        );
+
+        let frames = named("list_frames").unwrap().listed()["inputSchema"].clone();
+        assert_eq!(frames["required"], json!(["url"]));
+        assert_eq!(frames["properties"]["url"]["type"], "string");
     }
 
     /// Every schema is an object schema, which is what an MCP client expects of `inputSchema`.

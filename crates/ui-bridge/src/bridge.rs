@@ -707,6 +707,12 @@ impl Bridge {
 
         let model = requested_model.or_else(|| open.model.clone());
         let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
+        // A model the machine-level layer refuses is not requested, whichever service would have
+        // answered for it and whoever asked. The roster this window draws leaves such a model out,
+        // so reaching here means the name came from somewhere else (BACKEND-48).
+        if let Some(refused) = crate::models::refused(&config, model.as_deref()) {
+            return Err(Failure::bad_request(refused));
+        }
         // The same layers the configuration above came from, read here rather than in the worker
         // so what they say is what stood when the turn was asked for. Two answers come off them:
         // what a commit message or a pull request this turn writes may carry (BACKEND-30), and
@@ -860,6 +866,12 @@ impl Bridge {
 
         let model = requested_model.or_else(|| open.model.clone());
         let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
+        // A model the machine-level layer refuses is not requested, whichever service would have
+        // answered for it and whoever asked. The roster this window draws leaves such a model out,
+        // so reaching here means the name came from somewhere else (BACKEND-48).
+        if let Some(refused) = crate::models::refused(&config, model.as_deref()) {
+            return Err(Failure::bad_request(refused));
+        }
         let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
         let attribution = settings.attribution().clone();
         let output_cap = settings.run_output_cap();

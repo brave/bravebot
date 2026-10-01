@@ -27,7 +27,7 @@ mod settings;
 #[cfg(test)]
 mod testutil;
 
-pub use managed::{Managed, Refusal, Rule, Server, managed_file};
+pub use managed::{Managed, ModelRefusal, Models, Refusal, Rule, Server, managed_file};
 pub use settings::{
     Attribution, Narrowing, NotADocument, PermissionLists, RunDeadlines, Settings, check_document,
     local_settings_file, name_a_settings_file, named_settings_file, project_settings_file,
@@ -840,6 +840,12 @@ pub struct Config {
     /// Additive on the same terms as [`Config::bedrock`]: the models named here are offered beside
     /// the other rosters, and the model a person picks is what decides where a request goes.
     pub providers: Vec<provider::Provider>,
+    /// Which models the machine-level layer lets this machine request (BACKEND-48).
+    ///
+    /// Resolved onto the configuration rather than read where it is needed, because that layer is a
+    /// file read once at startup and every route to a model has to answer the same. Empty on a
+    /// machine with no such file, and an empty pair of lists refuses nothing.
+    pub models: managed::Models,
     /// HMAC signing key. Never transmitted; used only to sign the request digest.
     pub signing_key: Secret,
     /// Key id sent in the Authorization header. The server derives its copy of the
@@ -965,7 +971,7 @@ impl Config {
         settings: &Settings,
         managed: &Managed,
     ) -> Result<Self, ConfigError> {
-        Self::from_lookup_with_providers(
+        let mut config = Self::from_lookup_with_providers(
             |key| match managed.get(key) {
                 Some(pinned) => Some(pinned.to_string()),
                 None => match key {
@@ -981,7 +987,12 @@ impl Config {
                 Some(gateways) => gateways.to_vec(),
                 None => settings.providers().to_vec(),
             },
-        )
+        )?;
+        // Carried rather than consulted here: the name to check against the lists arrives later, from
+        // any of the places that may name a model, and each is checked against the same pair
+        // (BACKEND-48).
+        config.models = managed.models().clone();
+        Ok(config)
     }
 
     /// Read configuration from an arbitrary lookup, so tests need not mutate global
@@ -1089,6 +1100,9 @@ impl Config {
         Ok(Self {
             bedrock,
             providers,
+            // Nothing said here, there being no managed layer to read through a bare lookup.
+            // [`Config::from_env_and_settings`] is the one caller that has one.
+            models: managed::Models::default(),
             signing_key,
             key_id,
             endpoint: endpoint.trim_end_matches('/').to_string(),
@@ -1280,6 +1294,20 @@ impl Config {
     /// heard of and be answered by whatever it substitutes.
     pub fn model_named(&self, name: &str) -> String {
         resolved_model(name, self.tier_account(), self.serves_aichat())
+    }
+
+    /// Why the machine-level layer refuses `name`, and the file that refuses it (BACKEND-48).
+    ///
+    /// `name` is resolved here before being compared, so a tier word is checked as the model it names:
+    /// `opus` is not a name any service knows, and a list matched before that resolution would let
+    /// `{"model": "opus"}` reach the pinned account whatever the lists said. Resolving a name that is
+    /// already a model leaves it as it is, so a caller holding a resolved one may ask with that.
+    ///
+    /// Asked of every route to a model rather than at the moment a request goes out, for the reason
+    /// [`Config::model_named`] is shared: a name means the same model wherever it was written down,
+    /// and an answer that differed per route would be an answer per route to get wrong.
+    pub fn model_refused(&self, name: &str) -> Option<(&std::path::Path, managed::ModelRefusal)> {
+        self.models.refuses(&self.model_named(name))
     }
 
     /// What to write down for a chosen model: the tier word where a tier variable named it, so the
@@ -2282,7 +2310,7 @@ mod tests {
         exported: impl Fn(&str) -> Option<String>,
         baked: impl Fn(&str) -> Option<String>,
     ) -> Result<Config, ConfigError> {
-        Config::from_lookup_with_providers(
+        let mut config = Config::from_lookup_with_providers(
             |key| match managed.get(key) {
                 Some(pinned) => Some(pinned.to_string()),
                 None => match key {
@@ -2295,7 +2323,9 @@ mod tests {
                 Some(gateways) => gateways.to_vec(),
                 None => settings.providers().to_vec(),
             },
-        )
+        )?;
+        config.models = managed.models().clone();
+        Ok(config)
     }
 
     /// The names a settings file may set are the names something reads, and this is all of them. A
@@ -2564,6 +2594,106 @@ mod tests {
         let config =
             resolved_under(&managed, &settings, |_| None, complete_env).expect("configured");
         assert!(config.providers.is_empty());
+    }
+
+    /// BACKEND-48, and the whole reason the check is placed after tier resolution: `opus` is not a
+    /// name any service knows, so a list matched against what a settings file wrote would let
+    /// `{"model": "opus"}` reach the pinned account whatever either list said.
+    ///
+    /// Both lists, because the two mistakes point in opposite directions: an allow list matched
+    /// against the written word refuses a tier it was meant to allow, and a deny list matched that
+    /// way allows a tier it was meant to refuse. Only the second is dangerous and only a deny entry
+    /// shows it.
+    #[test]
+    fn a_tier_word_is_checked_as_the_model_it_names() {
+        let managed = managed::scratch(
+            "resolve-models-tier-word",
+            r#"{"models": {"allow": ["sonnet-arn", "haiku-arn"], "deny": ["haiku-arn"]}}"#,
+        );
+        let settings = Settings::parse(r#"{"model": "opus"}"#);
+        let config = resolved_under(
+            &managed,
+            &settings,
+            |name| match name {
+                env_var::USE_BEDROCK => Some("1".into()),
+                env_var::AWS_REGION => Some("us-west-2".into()),
+                env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+                env_var::BEDROCK_SONNET_MODEL => Some("sonnet-arn".into()),
+                env_var::BEDROCK_HAIKU_MODEL => Some("haiku-arn".into()),
+                _ => None,
+            },
+            complete_env,
+        )
+        .expect("configured");
+        // The key is resolved at construction, so the configured model is already the ARN. The word
+        // still reaches the check from a recorded pick, which BACKEND-47 writes down as a tier word,
+        // and from `--model opus`.
+        assert_eq!(config.default_model, "opus-arn");
+        for named in ["opus", "opus-arn"] {
+            assert_eq!(
+                config.model_refused(named).map(|(_, why)| why),
+                Some(ModelRefusal::NotAllowed),
+                "{named}"
+            );
+        }
+        // And the tier the deny list names is refused by the word, which is the direction that
+        // matters: a build matching the written word would send this request.
+        for named in ["haiku", "haiku-arn"] {
+            assert_eq!(
+                config.model_refused(named).map(|(_, why)| why),
+                Some(ModelRefusal::Denied),
+                "{named}"
+            );
+        }
+        // The tier the allow list names and the deny list does not is requestable by the word and by
+        // the ARN alike, a name that is already a model resolving to itself.
+        assert_eq!(config.model_refused("sonnet"), None);
+        assert_eq!(config.model_refused("sonnet-arn"), None);
+        // And the file that refused is named, since nobody at the machine can edit it.
+        assert_eq!(
+            config.model_refused("opus").map(|(path, _)| path),
+            managed.path()
+        );
+
+        // A deny list on its own, which is the file where matching the written word lets a request
+        // through rather than merely refusing one: with no allow list above it there is nothing else
+        // to refuse the word.
+        let denying = managed::scratch(
+            "resolve-models-tier-word-deny-only",
+            r#"{"models": {"deny": ["haiku-arn"]}}"#,
+        );
+        let config = resolved_under(
+            &denying,
+            &Settings::default(),
+            |name| match name {
+                env_var::USE_BEDROCK => Some("1".into()),
+                env_var::AWS_REGION => Some("us-west-2".into()),
+                env_var::BEDROCK_HAIKU_MODEL => Some("haiku-arn".into()),
+                _ => None,
+            },
+            complete_env,
+        )
+        .expect("configured");
+        assert_eq!(
+            config.model_refused("haiku").map(|(_, why)| why),
+            Some(ModelRefusal::Denied)
+        );
+        assert_eq!(config.model_refused("some-other-model"), None);
+    }
+
+    /// A machine with no such file requests whatever it is asked for, so deploying one to pin a host
+    /// does not quietly bound the roster as well.
+    #[test]
+    fn a_managed_layer_silent_on_models_refuses_none() {
+        let managed = managed::scratch(
+            "resolve-models-silent",
+            r#"{"env": {"BRAVE_AI_CHAT_ENDPOINT": "https://approved.example"}}"#,
+        );
+        let config = resolved_under(&managed, &Settings::default(), |_| None, complete_env)
+            .expect("configured");
+        assert!(config.models.is_empty());
+        assert_eq!(config.model_refused("anything-at-all"), None);
+        assert_eq!(config.model_refused(&config.default_model), None);
     }
 
     /// A file that says nothing about gateways must leave them alone, or every managed layer would
