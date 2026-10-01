@@ -40,6 +40,13 @@ DECIDES_UNDER = (".github/workflows/",)
 # Outside crates/, and read by a test all the same.
 READ_BY_RUST = ("docs/specs/layering.md",)
 
+# Outside crates/, run by the installer tests themselves rather than read as data: a change to
+# one is a change to what those tests exercise, whatever else reads it.
+READ_BY_INSTALLER_TESTS = {
+    "install.sh": frozenset({"rust"}),
+    "npm/scripts/postinstall.js": frozenset({"npm", "rust"}),
+}
+
 # Named by a crate's source without being read from this tree, which the selftest's scan cannot
 # tell from a read by itself.
 NAMED_NOT_READ = {
@@ -48,12 +55,11 @@ NAMED_NOT_READ = {
     "agents/AGENTS.md": "a marker doctor checks exists, which its tests write for themselves",
     "agents/setup.py": "a marker doctor checks exists, which its tests write for themselves",
     "docs/development/agent-configuration.md": "a marker doctor checks exists, likewise",
-    "install.sh": "text an update notice prints",
 }
 
 # Read by nothing heavier than the checks that always run.
 QUIET = (
-    "README.md", "CHANGELOG.md", "LICENSE", ".gitignore", ".envrc.example", "install.sh",
+    "README.md", "CHANGELOG.md", "LICENSE", ".gitignore", ".envrc.example",
     ".github/CODEOWNERS", ".github/renovate.json",
 )
 QUIET_UNDER = ("docs/", "agents/", "contrib/", ".githooks/")
@@ -99,6 +105,8 @@ def classify(path, desktop):
         return frozenset(found)
     if path in READ_BY_RUST:
         return frozenset({"rust"})
+    if path in READ_BY_INSTALLER_TESTS:
+        return READ_BY_INSTALLER_TESTS[path]
     if path.startswith("extension/"):
         # The job for the desktop UI runs the extension's tests, and a Rust test reads its files.
         return frozenset({"rust", "ui"})
@@ -275,7 +283,8 @@ CASES = (
     ("ui/package.json", {"ui", "npm"}),
     ("extension/tools.js", {"rust", "ui"}),
     ("extension/tests/tools.test.mjs", {"rust", "ui"}),
-    ("npm/scripts/postinstall.js", {"npm"}),
+    ("npm/scripts/postinstall.js", {"npm", "rust"}),
+    ("install.sh", {"rust"}),
     ("package-lock.json", {"npm"}),
     ("agents/skills/rebase/SKILL.md", NOTHING),
     ("contrib/check-locales.py", NOTHING),

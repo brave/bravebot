@@ -107,12 +107,49 @@ jobs:
             if ! printf '%s\n' "$names" | grep -qxF "${asset}.sha256"; then
               missing="$missing ${asset}.sha256"
             fi
+            # A Linux install with gpg refuses a checksum that has no signature beside it.
+            case "$asset" in
+              bravebot-linux-*)
+                if ! printf '%s\n' "$names" | grep -qxF "${asset}.sha256.asc"; then
+                  missing="$missing ${asset}.sha256.asc"
+                fi
+                ;;
+            esac
           done
           if [ -n "$missing" ]; then
             echo "error: GitHub release $TAG is missing:$missing"
             echo "run Jenkins job bravebot-build (UPLOAD and RELEASE) first"
             exit 1
           fi
+
+      # The key an installer checks against is the one in this tree, so a release signed by any
+      # other key would publish a wrapper whose Linux installs all fail.
+      - name: Refuse a Linux checksum whose signature does not verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -eu
+          fingerprint="$(sed -n 's/^const SIGNING_KEY_FINGERPRINT = "\([0-9A-F]\{40\}\)";$/\1/p' npm/scripts/postinstall.js)"
+          if [ -z "$fingerprint" ]; then
+            echo "error: npm/scripts/postinstall.js names no signing key fingerprint"
+            exit 1
+          fi
+          GNUPGHOME="$(mktemp -d)"
+          export GNUPGHOME
+          downloads="$(mktemp -d)"
+          sed -n '/-----BEGIN PGP PUBLIC KEY BLOCK-----/,/-----END PGP PUBLIC KEY BLOCK-----/p' npm/scripts/postinstall.js |
+            sed -e 's/^.*\(-----BEGIN PGP PUBLIC KEY BLOCK-----\)/\1/' -e 's/\(-----END PGP PUBLIC KEY BLOCK-----\).*$/\1/' |
+            gpg --batch --quiet --import
+          for asset in bravebot-linux-amd64 bravebot-linux-arm64; do
+            gh release download "$TAG" --dir "$downloads" \
+              --pattern "${asset}.sha256" --pattern "${asset}.sha256.asc"
+            status="$(gpg --batch --status-fd 1 --verify "$downloads/${asset}.sha256.asc" "$downloads/${asset}.sha256" 2>/dev/null)" || status=""
+            if ! printf '%s\n' "$status" | grep -q "^\[GNUPG:\] VALIDSIG .* ${fingerprint}\$"; then
+              echo "error: ${asset}.sha256.asc on GitHub release $TAG does not verify against key $fingerprint"
+              exit 1
+            fi
+          done
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
