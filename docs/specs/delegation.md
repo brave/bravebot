@@ -332,8 +332,9 @@ The exchange, the tool results, the narration and the quarantine all end with th
 reference minted inside one names nothing afterwards, and none of it can be asked for later.
 
 [CHECKOUT-18](checkouts.md#CHECKOUT-18) has the driver say one more thing beside the report, from
-its own record: where a delegate's checkout is and the commit it holds, or that it was removed. The
-paths that could come back from it are not built.
+its own record: where a delegate's checkout is and the commit it holds, or that it was removed, and
+for a kept one the paths written in it whose names the delegate typed. A path written only through
+a reference is counted, so the name a reference held stays with the delegate.
 
 **Why.** This is the feature rather than a restriction on it. A delegate whose reading reached
 its parent's context would have moved the log rather than absorbed it.

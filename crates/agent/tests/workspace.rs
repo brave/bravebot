@@ -6483,6 +6483,45 @@ fn a_checkout_is_removed_unless_something_was_done_in_it() {
     );
 }
 
+/// CHECKOUT-13. A checkout's candidates are the paths inside it a file effect landed on: named
+/// where a planner typed the name, counted where only a reference gave it, and never a path
+/// outside the checkout.
+#[test]
+fn a_checkout_records_the_paths_written_in_it() {
+    use bravebot_agent::workspace::Candidates;
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-candidates", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace.checkout_for(&policy, &state.path).expect("made");
+    let idle = workspace.checkout_for(&policy, &state.path).expect("idle");
+    let info = made.checkout().unwrap();
+    assert_eq!(info.candidates(), Candidates::default());
+
+    info.record_effect(&made.root().join("src/new.rs"), true);
+    info.record_effect(&made.root().join("README"), false);
+    info.record_effect(&made.root().join("vendor/theirs.js"), false);
+    info.record_effect(&made.root().join("vendor").join("theirs.js"), false);
+    info.record_effect(&made.root().join("README"), true);
+    info.record_effect(&workspace.root().join("README"), true);
+    info.record_effect(&state.path.join("elsewhere.txt"), true);
+
+    assert!(info.worked_in());
+    assert_eq!(
+        info.candidates(),
+        Candidates {
+            named: vec!["README".to_string(), "src/new.rs".to_string()],
+            referenced: 1,
+        }
+    );
+
+    let idle = idle.checkout().unwrap();
+    idle.record_effect(&workspace.root().join("README"), true);
+    idle.record_effect(&made.root().join("README"), true);
+    assert!(!idle.worked_in(), "a write outside the checkout kept it");
+    assert_eq!(idle.candidates(), Candidates::default());
+}
+
 /// CHECKOUT-12. A rule that distrusts a path in a checkout outlives the checkout, and a history
 /// answer that shows the path is labelled by it, kept or removed.
 #[test]

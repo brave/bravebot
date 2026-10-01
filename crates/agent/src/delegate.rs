@@ -251,6 +251,40 @@ pub(crate) fn checkout_notice(checkout: &crate::workspace::CheckoutInfo) -> Stri
     notice
 }
 
+/// What the driver says of a kept checkout's candidate paths beside the report (CHECKOUT-13,
+/// CHECKOUT-18).
+///
+/// A name is given only where a planner typed it. One written through a reference is counted. No
+/// status is read in a checkout, so the note says it leaves out any file a program wrote.
+pub(crate) fn checkout_candidates(checkout: &crate::workspace::CheckoutInfo) -> String {
+    let candidates = checkout.candidates();
+    let named: Vec<String> = candidates
+        .named
+        .iter()
+        .map(|path| format!("`{path}`"))
+        .collect();
+    let named: Vec<&str> = named.iter().map(String::as_str).collect();
+    let referenced = (candidates.referenced > 0).then(|| {
+        format!(
+            "{} named only by a reference",
+            crate::tools::tally(candidates.referenced, "file", "files")
+        )
+    });
+    let recorded = match (named.is_empty(), referenced) {
+        (true, None) => "The driver recorded no write there.".to_string(),
+        (false, None) => format!("The driver recorded writes there to {}.", listed(&named)),
+        (true, Some(referenced)) => format!("The driver recorded writes there to {referenced}."),
+        (false, Some(referenced)) => format!(
+            "The driver recorded writes there to {}, and to {referenced}.",
+            listed(&named)
+        ),
+    };
+    format!(
+        "{recorded} Its status could not be read, so this leaves out any file a program wrote \
+         there."
+    )
+}
+
 /// The whole of what a delegate is told.
 ///
 /// Its own introduction, including whether it sits where it may delegate again, then the

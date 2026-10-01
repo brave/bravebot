@@ -4110,7 +4110,8 @@ fn write_file<S: Sink, C: Confirmer>(
     policy.issue_grant("file_write", "path", proposed_path.clone());
 
     match workspace.write_endorsed_at_revision(policy, &path, &body, Some(approved_revision)) {
-        Ok(_) => {
+        Ok(written) => {
+            workspace.record_effect(&written, destination == Destination::Named);
             let Reviewed { note, changes, .. } = reviewed;
 
             // What the model is told, which is what its own account of the turn will repeat. It
@@ -4326,7 +4327,8 @@ fn edit_file<S: Sink, C: Confirmer>(
     // The path as the planner gave it, not the copy promoted above for the read. A write routed
     // on a promoted value would be routed by the model's own proposal.
     match workspace.write_endorsed_if_unchanged(policy, &proposed, &body, &current) {
-        Ok(_) => {
+        Ok(written) => {
+            workspace.record_effect(&written, destination == Destination::Named);
             let Reviewed { note, changes, .. } = reviewed;
             let note = carried_note(note, &scanned);
             let headline = format!("edited {shown_path}: {occurrences} replacement(s)");
@@ -6062,6 +6064,8 @@ fn run<S: Sink, C: Confirmer>(
                     prior,
                 });
                 effects.insert(key, (effect, prior));
+                // The line is the planner's own words, so the name in it is one it typed.
+                tools.workspace.record_effect(path, true);
                 Ok(())
             })
         },

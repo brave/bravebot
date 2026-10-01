@@ -2335,10 +2335,12 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 ),
                 Retired::Kept => (
                     format!(
-                        "Its checkout {} of commit {} was kept at {}, since something was done in it.",
+                        "Its checkout {} of commit {} was kept at {}, since something was done in \
+                         it. {}",
                         checkout.id(),
                         checkout.commit(),
-                        checkout.path().display()
+                        checkout.path().display(),
+                        crate::delegate::checkout_candidates(&checkout)
                     ),
                     "its checkout was kept",
                 ),

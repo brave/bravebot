@@ -327,6 +327,18 @@ pub struct CheckoutInfo {
     /// (CHECKOUT-15).
     worked_in: AtomicBool,
     listed: Arc<Mutex<Vec<PathBuf>>>,
+    /// Each path relative to the checkout that a file effect landed on, and whether the planner
+    /// typed its name (CHECKOUT-13).
+    effects: Mutex<std::collections::BTreeMap<String, bool>>,
+}
+
+/// The paths that could come back from a checkout, as the driver recorded them (CHECKOUT-13).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Candidates {
+    /// Those whose names the planner typed, relative to the checkout and sorted.
+    pub named: Vec<String>,
+    /// How many were written only through a reference, whose name no planner was shown.
+    pub referenced: usize,
 }
 
 /// What became of a checkout when its delegate ended (CHECKOUT-15).
@@ -371,6 +383,45 @@ impl CheckoutInfo {
 
     pub fn worked_in(&self) -> bool {
         self.worked_in.load(Ordering::SeqCst)
+    }
+
+    /// Record a file effect on `path`, where it lands inside the checkout (CHECKOUT-13).
+    ///
+    /// `typed` says the planner wrote the name itself. A name given through a reference came out
+    /// of a directory nobody vouched for (WRITE-4), so it is counted and never named.
+    pub fn record_effect(&self, path: &Path, typed: bool) {
+        let Some(landed) = destination(path) else {
+            return;
+        };
+        let Ok(inside) = landed.strip_prefix(&self.path) else {
+            return;
+        };
+        let relative: Vec<String> = inside
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        if relative.is_empty() {
+            return;
+        }
+        self.mark_worked_in();
+        if let Ok(mut effects) = self.effects.lock() {
+            *effects.entry(relative.join("/")).or_default() |= typed;
+        }
+    }
+
+    pub fn candidates(&self) -> Candidates {
+        let Ok(effects) = self.effects.lock() else {
+            return Candidates::default();
+        };
+        let named: Vec<String> = effects
+            .iter()
+            .filter(|(_, typed)| **typed)
+            .map(|(path, _)| path.clone())
+            .collect();
+        Candidates {
+            referenced: effects.len() - named.len(),
+            named,
+        }
     }
 
     /// End the checkout: remove it unless the record shows something was done in it. Its rules go
@@ -2959,8 +3010,16 @@ impl Workspace {
             source: self.clone(),
             worked_in: AtomicBool::new(false),
             listed: self.checkouts.clone(),
+            effects: Mutex::default(),
         }));
         Ok(delegate)
+    }
+
+    /// Record a file effect on `path` in the checkout this workspace is, where it is one.
+    pub(crate) fn record_effect(&self, path: &Path, typed: bool) {
+        if let Some(checkout) = &self.checkout {
+            checkout.record_effect(path, typed);
+        }
     }
 
     /// Collect workspace-relative paths of regular files beneath `directory`.

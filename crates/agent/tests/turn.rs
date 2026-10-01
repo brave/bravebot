@@ -22640,6 +22640,105 @@ fn a_checkout_nothing_was_done_in_is_removed_when_its_delegate_ends() {
     assert_eq!(entries, 0, "the repository still lists the checkout");
 }
 
+/// CHECKOUT-13, CHECKOUT-18. Beside the report the planner is told the paths written in a kept
+/// checkout: by name where the delegate typed it, in a write, an edit or a redirection, by count
+/// where it wrote through a reference, and that the checkout's status was not read.
+#[test]
+fn a_kept_checkout_is_named_with_the_paths_written_in_it() {
+    let scratch = Scratch::new("checkout-candidates");
+    let home = Scratch::new("checkout-candidates-home");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            ("README", "committed\n"),
+            ("vendor/NAME-NOBODY-VOUCHED-FOR.js", "theirs\n"),
+        ],
+        "first",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "PARENT-OF-THE-CHECKOUT",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"CHILD-IN-THE-CHECKOUT","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "CHILD-IN-THE-CHECKOUT",
+            vec![
+                tool_request("list_files", r#"{"directory":"vendor"}"#),
+                tool_request("write_file", r#"{"path_ref":"ref:1","contents":"ours"}"#),
+                tool_request(
+                    "write_file",
+                    r#"{"path":"notes/out.txt","contents":"written"}"#,
+                ),
+                tool_request(
+                    "edit_file",
+                    r#"{"path":"README","old_text":"committed","new_text":"edited"}"#,
+                ),
+                tool_request("run", r#"{"command":"echo printed > printed.txt"}"#),
+                reply_with("wrote four"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_writes();
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust("vendor");
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("PARENT-OF-THE-CHECKOUT").with_home(Some(home.path.clone())),
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+    let asked = every_request(&received);
+
+    let made = checkouts_under(&home.path);
+    assert_eq!(made.len(), 1, "the checkout was not kept");
+    for (path, held) in [
+        ("vendor/NAME-NOBODY-VOUCHED-FOR.js", "ours"),
+        ("notes/out.txt", "written"),
+        ("README", "edited\n"),
+        ("printed.txt", "printed\n"),
+    ] {
+        assert_eq!(
+            std::fs::read_to_string(made[0].join(path)).ok().as_deref(),
+            Some(held),
+            "{path} was not written in the checkout"
+        );
+    }
+    let told: Vec<&String> = asked
+        .iter()
+        .filter(|body| body.contains("PARENT-OF-THE-CHECKOUT"))
+        .collect();
+    assert!(
+        told.iter()
+            .all(|body| !body.contains("NAME-NOBODY-VOUCHED-FOR")),
+        "a name only a reference gave reached the planner"
+    );
+    assert!(
+        told.iter().any(|body| body.contains(
+            "The driver recorded writes there to `README`, `notes/out.txt` and `printed.txt`, \
+             and to 1 file named only by a reference. Its status could not be read"
+        )),
+        "the planner was not told the paths written in the checkout"
+    );
+}
+
 /// CHECKOUT-9. A delegate in a checkout reads the working directory's standing instructions, as
 /// they are there, including those nobody has committed.
 #[test]
