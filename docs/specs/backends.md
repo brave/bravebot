@@ -1118,15 +1118,16 @@ Whatever presents these figures presents nothing when they are zero, rather than
 that may not have happened. That holds of each figure alone: a turn that established a prefix and
 read nothing back reports the write and says nothing about the read.
 
-**The status panel reports the last turn's, beside what the session cost.** The last turn rather
-than a total over the session, because caching is a property of a request: a session that compacted
-part way through has turns whose prefix survived and turns whose prefix was rewritten, and a total
-averages away the thing the figures are for. Nothing about a cache is kept in a session record, so a
-resumed session reports nothing until a turn has run. Clearing goes with what the conversation spent
-rather than with the model the user chose, the figures describing a prompt that has been thrown away.
-Anything else that changes which turn is the last one moves the figures with it: rewinding a turn
-puts back what the turn before it read, and a turn that failed or was stopped reports nothing rather
-than leaving the turn before it on the panel.
+**The status panel and footer report the last turn's.** The last turn rather than a total over the
+session, because caching is a property of a request: a session that compacted part way through has
+turns whose prefix survived and turns whose prefix was rewritten, and a total averages away the
+thing the figures are for. The footer shows the cached read as a percentage of the turn's prompt
+tokens. Nothing about a cache is kept in a session record, so a resumed session reports nothing
+until a turn has run. Clearing goes with what the conversation spent rather than with the model the
+user chose, the figures describing a prompt that has been thrown away. Anything else that changes
+which turn is the last one moves the figures with it: rewinding a turn puts back what the turn
+before it read, and a turn that failed or was stopped reports nothing rather than leaving the turn
+before it on the panel.
 
 **Presented as two figures and never as their sum.** They are priced in opposite directions, a read
 at a fraction of a fresh token and a write above one, so a turn that saved almost the whole prompt
@@ -1144,6 +1145,8 @@ says which turn it speaks for, the counts beside it being the session's.
 `verified-by: bravebot_tui::status::the_panel_says_how_much_of_the_prompt_came_out_of_the_cache`
 `verified-by: bravebot_tui::status::a_backend_that_reports_nothing_about_a_cache_gets_no_cache_lines`
 `verified-by: bravebot_tui::status::a_turn_that_only_wrote_to_the_cache_does_not_report_a_read_of_zero`
+`verified-by: bravebot_tui::render::the_hint_line_shows_the_last_turns_cache_hit_rate`
+`verified-by: bravebot_tui::render::the_hint_line_says_nothing_where_the_backend_reported_nothing`
 `verified-by: bravebot_tui::state::clearing_forgets_what_the_last_turn_read_out_of_the_cache`
 `verified-by: bravebot_tui::state::the_cache_figure_follows_which_turn_is_the_last_one`
 `verified-by: bravebot_tui::sessions::a_rewind_point_keeps_no_cache_figure_in_the_record`

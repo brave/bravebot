@@ -2193,6 +2193,7 @@ fn a_point_before_turn_two(
         spend: BTreeMap::from([(1, 600)]),
         timing: BTreeMap::new(),
         cached: None,
+        cached_prompt_tokens: None,
         trust: a_trust_map(),
         programs: a_program_list(),
         transcript_len: 2,
@@ -2557,6 +2558,7 @@ mod preserved_history {
                 spend: session.spend_by_turn().clone(),
                 timing: session.timing_by_turn().clone(),
                 cached: session.cached(),
+                cached_prompt_tokens: session.cached_prompt_tokens(),
                 trust: TrustStore::new("/work"),
                 programs: TrustedPrograms::new(),
                 transcript_len: session.transcript.len(),
@@ -2847,7 +2849,7 @@ mod preserved_history {
         session.turns = snapshot.turns;
         session.restore_spend(snapshot.tokens, snapshot.spend);
         session.restore_timing(snapshot.timing);
-        session.restore_cache(snapshot.cached);
+        session.restore_cache(snapshot.cached, snapshot.cached_prompt_tokens);
         session.rewind_history();
         let mut conversation = Conversation::restored(snapshot.conversation);
         let saved = save(&scratch.project, &session, &conversation);
@@ -3217,6 +3219,7 @@ mod preserved_history {
             spend: session.spend_by_turn().clone(),
             timing: session.timing_by_turn().clone(),
             cached: session.cached(),
+            cached_prompt_tokens: session.cached_prompt_tokens(),
             trust: TrustStore::new(&scratch.project),
             programs: TrustedPrograms::new(),
             transcript_len: session.transcript.len(),
@@ -3240,6 +3243,7 @@ mod preserved_history {
             spend: session.spend_by_turn().clone(),
             timing: session.timing_by_turn().clone(),
             cached: session.cached(),
+            cached_prompt_tokens: session.cached_prompt_tokens(),
             trust: TrustStore::new(&scratch.project),
             programs: TrustedPrograms::new(),
             transcript_len: session.transcript.len(),

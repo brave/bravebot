@@ -1356,6 +1356,8 @@ pub struct Session {
     /// turns whose prefix survived with the turns whose prefix was rewritten and averages away the
     /// only thing the number is for.
     cached: Option<bravebot_aichat::protocol::Cached>,
+    /// Prompt tokens behind [`Session::cached`], for its hit rate.
+    cached_prompt_tokens: Option<u64>,
     /// Prompts already sent, for recall with the arrow keys.
     pub history: crate::history::History,
     /// What the mouse is sweeping over, or what it last swept over.
@@ -1729,6 +1731,7 @@ impl Session {
             served_names_are_comparable: true,
             premium: None,
             cached: None,
+            cached_prompt_tokens: None,
             history: crate::history::History::new(),
             selection: None,
             copied: None,
@@ -2252,6 +2255,7 @@ impl Session {
         // Goes with the spend rather than staying like the chosen model: it describes the prompt the
         // cleared conversation sent, and the panel prints it beside a cost that is now zero.
         self.cached = None;
+        self.cached_prompt_tokens = None;
         self.occupancy = Occupancy::Unmeasured;
         self.written = 0;
         self.progress = Default::default();
@@ -7735,7 +7739,10 @@ impl Session {
         self.tokens += spent.tokens;
         *self.spend.entry(self.turns).or_default() += spent.tokens;
         self.spent_time(spent.timing);
-        self.served_from_cache(spent.cached);
+        self.served_from_cache(
+            spent.cached,
+            spent.tokens.saturating_sub(spent.output_tokens),
+        );
         spent.tokens
     }
 
@@ -7839,21 +7846,36 @@ impl Session {
     }
 
     /// Record how much of the turn just finished the backend did not have to read.
-    pub fn served_from_cache(&mut self, cached: bravebot_aichat::protocol::Cached) {
+    pub fn served_from_cache(
+        &mut self,
+        cached: bravebot_aichat::protocol::Cached,
+        prompt_tokens: u64,
+    ) {
         self.cached = Some(cached);
+        self.cached_prompt_tokens = Some(prompt_tokens);
     }
 
     /// Put back what an earlier turn read, or forget the figure with `None`.
     ///
     /// The figure is the last turn's, so anything that changes which turn that is has to say so:
     /// undoing a turn puts back the one before it.
-    pub fn restore_cache(&mut self, cached: Option<bravebot_aichat::protocol::Cached>) {
+    pub fn restore_cache(
+        &mut self,
+        cached: Option<bravebot_aichat::protocol::Cached>,
+        prompt_tokens: Option<u64>,
+    ) {
         self.cached = cached;
+        self.cached_prompt_tokens = prompt_tokens;
     }
 
     /// What the last turn read out of the cache and wrote into it, or `None` before one has run.
     pub fn cached(&self) -> Option<bravebot_aichat::protocol::Cached> {
         self.cached
+    }
+
+    /// Prompt tokens behind the last turn's cache figures.
+    pub fn cached_prompt_tokens(&self) -> Option<u64> {
+        self.cached_prompt_tokens
     }
 
     /// The model the server last reported using, or `None` before any turn has run.
@@ -12419,6 +12441,7 @@ mod tests {
             spend: std::collections::BTreeMap::new(),
             timing: std::collections::BTreeMap::new(),
             cached: None,
+            cached_prompt_tokens: None,
             trust: bravebot_core::trust::TrustStore::new("/work"),
             programs: bravebot_core::programs::TrustedPrograms::default(),
             transcript_len: turns,
@@ -12677,14 +12700,22 @@ mod tests {
     #[test]
     fn clearing_forgets_what_the_last_turn_read_out_of_the_cache() {
         let mut s = session();
-        s.served_from_cache(bravebot_aichat::protocol::Cached {
-            read_tokens: 900,
-            written_tokens: 100,
-        });
+        s.served_from_cache(
+            bravebot_aichat::protocol::Cached {
+                read_tokens: 900,
+                written_tokens: 100,
+            },
+            1_000,
+        );
         assert!(s.cached().is_some(), "the figure was never recorded");
 
         s.clear();
         assert_eq!(s.cached(), None, "the cache figure survived clear");
+        assert_eq!(
+            s.cached_prompt_tokens(),
+            None,
+            "the cache rate denominator survived clear"
+        );
     }
 
     /// The panel reports the last turn's split, so anything that changes which turn is the last one
@@ -12697,24 +12728,37 @@ mod tests {
             read_tokens: 400,
             written_tokens: 50,
         };
-        s.served_from_cache(first);
-        s.served_from_cache(bravebot_aichat::protocol::Cached {
-            read_tokens: 900,
-            written_tokens: 100,
-        });
+        s.served_from_cache(first, 500);
+        s.served_from_cache(
+            bravebot_aichat::protocol::Cached {
+                read_tokens: 900,
+                written_tokens: 100,
+            },
+            1_000,
+        );
 
-        s.restore_cache(Some(first));
+        s.restore_cache(Some(first), Some(500));
         assert_eq!(
             s.cached(),
             Some(first),
             "rewinding did not put back the earlier turn's figure"
         );
+        assert_eq!(
+            s.cached_prompt_tokens(),
+            Some(500),
+            "rewinding did not put back the earlier turn's prompt total"
+        );
 
-        s.restore_cache(None);
+        s.restore_cache(None, None);
         assert_eq!(
             s.cached(),
             None,
             "a turn that measured nothing left the one before it on the panel"
+        );
+        assert_eq!(
+            s.cached_prompt_tokens(),
+            None,
+            "a turn that measured nothing left the earlier rate denominator"
         );
     }
 

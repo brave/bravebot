@@ -1278,6 +1278,7 @@ status-time-overhead = non attribué
 status-cache = Cache du prompt, dernier tour
 status-cache-read = servi depuis le cache
 status-cache-written = écrit dans le cache pour le tour suivant
+hint-cache-hit-rate = cache { $rate } %
 status-trust = Confiance
 status-nothing-vouched-for = rien d'approuvé
 status-trusted = fiable
