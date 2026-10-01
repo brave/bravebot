@@ -6,7 +6,7 @@
 //! # Startup waits for none of it
 //!
 //! The line shown at startup comes out of `~/.bravebot`, where an earlier launch wrote the answer
-//! down. Asking again happens on a thread nothing joins, at most once a day, and what it learns is
+//! down. Asking again happens on a thread nothing joins, at most once an hour, and what it learns is
 //! for the next launch. Somebody opening a session on a train waits for nothing and, with no
 //! answer on disk yet, is told nothing.
 //!
@@ -78,8 +78,10 @@ const CACHE_TEMPORARY: &str = "update-check.tmp";
 ///
 /// Releases happen on the order of days, and the cost of a stale answer is being told about an
 /// update one launch later than it existed. The cost of asking on every launch is a request per
-/// launch to somebody else's registry, for a number that will not have changed.
-const GOOD_FOR: u64 = 24 * 60 * 60;
+/// launch to somebody else's registry, for a number that will rarely have changed. An hour keeps
+/// a person who restarts to pick up a release from waiting a day for the notice, while a burst of
+/// launches still makes one request.
+const GOOD_FOR: u64 = 60 * 60;
 
 impl Install {
     /// The command that updates a copy installed this way.
@@ -326,7 +328,7 @@ fn refresh(install: Install, stored: Option<Record>) {
         // joined: a session that ends while the ask is still out would otherwise record nothing,
         // and a registry that accepts the connection and then says nothing holds the thread for
         // the whole reply timeout, which outlasts most sessions. Recording the ask first bounds
-        // the requests to one a day whatever becomes of this one.
+        // the requests to one an hour whatever becomes of this one.
         store(install, recorded(stored, None, now()));
         if let Some(latest) = ask(install) {
             store(install, recorded(stored, Some(latest), now()));
@@ -753,6 +755,15 @@ mod tests {
         ));
         assert!(worth_asking(true, 1_000_000, Some(1_000_000 - GOOD_FOR)));
         assert!(worth_asking(true, 1_000_000, None));
+    }
+
+    /// A person restarting to pick up a release is not made to wait a day for the notice, and a
+    /// burst of launches is still one request.
+    #[test]
+    fn a_registry_is_asked_again_once_an_hour_has_passed() {
+        let asked_at = 1_000_000;
+        assert!(!worth_asking(true, asked_at + 59 * 60, Some(asked_at)));
+        assert!(worth_asking(true, asked_at + 60 * 60, Some(asked_at)));
     }
 
     /// A clock that moved, or a stamp somebody else wrote, must not leave this silent until the

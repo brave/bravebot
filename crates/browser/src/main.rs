@@ -41,7 +41,9 @@ fn main() {
             };
             let extension = match rest {
                 [] => install::EXTENSION_ID,
-                [extension] => *extension,
+                // A word that starts like a flag is one this does not take, or one missing its
+                // value, such as `--manifest-dir` with no directory after it.
+                [extension] if !extension.starts_with('-') => *extension,
                 _ => usage(),
             };
             let installed = match (manifests, paths::host_directory()) {

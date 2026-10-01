@@ -17,6 +17,9 @@ pub const PROTOCOL_VERSION: &str = "2025-06-18";
 /// JSON-RPC's code for a method this server does not have.
 const METHOD_NOT_FOUND: i64 = -32601;
 
+/// JSON-RPC's code for JSON that is not a request object.
+const INVALID_REQUEST: i64 = -32600;
+
 /// JSON-RPC's code for a line that is not JSON.
 const PARSE_ERROR: i64 = -32700;
 
@@ -41,7 +44,12 @@ pub fn run(directory: &Path, input: impl BufRead, output: &mut impl Write) -> io
 }
 
 /// The reply to one request, or `None` for a notification, which has none.
+///
+/// JSON that is not an object is no request at all, and is answered with an error under no id.
 fn answer(directory: &Path, request: &Value) -> Option<Value> {
+    if !request.is_object() {
+        return Some(error(Value::Null, INVALID_REQUEST, "not a request"));
+    }
     let id = request.get("id")?.clone();
     let method = request.get("method").and_then(Value::as_str).unwrap_or("");
     let result = match method {

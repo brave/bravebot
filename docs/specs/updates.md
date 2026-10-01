@@ -112,15 +112,17 @@ was out, and the update they ran installed 0.11.0.
 `verified-by: by-construction (the request is made outside any turn, and the only value returned from it is a version of three numbers)`
 
 <a id="UPDATE-6"></a>
-### UPDATE-6: a registry is asked at most once a day
+### UPDATE-6: a registry is asked at most once an hour
 
-An ask stands for a day whether or not it learned a version, so a registry that refuses, that
+An ask stands for an hour whether or not it learned a version, so a registry that refuses, that
 cannot be reached, or that answers with something this program will not offer is left alone until
-the day is up. Each registry has a stamp of its own. A stamp in the future is asked again rather
+the hour is up. Each registry has a stamp of its own. A stamp in the future is asked again rather
 than waited out.
 
 **Why.** A published version changes on the order of days, so asking on every launch is a request
-to somebody else's registry per session for a number that has not moved. Standing the day on an
+to somebody else's registry per session for a number that has rarely moved. An hour is short
+enough that restarting to pick up a release does not mean waiting a day for the notice, and long
+enough that a burst of launches makes one request. Standing the hour on an
 answer instead of on the ask exempts every launch that learned nothing, which makes a registry in
 trouble the one asked every session and the launches it refuses the ones that keep coming back. A
 machine that has both installations on it would double that again if one stamp overwrote the
@@ -128,6 +130,7 @@ other. A clock that went backwards, or a record somebody else wrote, must not le
 until the date catches up with the file.
 
 `verified-by: bravebot_tui::update::a_fresh_answer_is_not_asked_for_again`
+`verified-by: bravebot_tui::update::a_registry_is_asked_again_once_an_hour_has_passed`
 `verified-by: bravebot_tui::update::an_answer_stamped_in_the_future_is_asked_again`
 `verified-by: bravebot_tui::update::an_ask_that_learned_nothing_still_holds_the_next_one_off_for_the_day`
 `verified-by: bravebot_tui::update::recording_one_registrys_ask_keeps_the_others`
@@ -196,9 +199,9 @@ while a copy the record does not name is one this program will not offer a comma
   told about a release is its second launch. The alternative is a round trip in front of the first
   frame, which UPDATE-1 exists to refuse.
 
-- **An answer is as old as the last launch that asked.** A release published this morning is
-  announced tomorrow to somebody whose last launch was last night, and a week late to somebody who
-  last opened a session a week ago.
+- **An answer is as old as the last launch that asked.** The first launch after the hour is up
+  asks, and the launch after that says so. Somebody whose last session was a week ago is told a
+  week late.
 
 - **The line does not say which version the update installs.** By UPDATE-5 it names only the
   running version, so somebody who wants the number has to update and ask the binary for it.

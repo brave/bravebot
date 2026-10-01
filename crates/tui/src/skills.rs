@@ -5,6 +5,7 @@
 
 use bravebot_agent::Workspace;
 use bravebot_agent::skills::Source;
+use bravebot_core::permissions::Permissions;
 use bravebot_core::trust::TrustStore;
 use bravebot_session::audit::Trail;
 
@@ -20,13 +21,14 @@ pub struct Skill {
 
 /// The skills a turn starting now would advertise, read the way the turn reads them.
 ///
-/// An untrusted project's skills are dropped here as they are there, so a name the planner would
-/// never be shown is never drawn either.
-pub fn resolved(workspace: &Workspace, trust: TrustStore) -> Vec<Skill> {
+/// An untrusted project's skills are dropped here as they are there, and so is one `permissions`
+/// denies reading, so a name the planner would never be shown is never drawn either.
+pub fn resolved(workspace: &Workspace, trust: TrustStore, permissions: Permissions) -> Vec<Skill> {
     bravebot_agent::skills::resolved(
         workspace,
         bravebot_agent::home::directory().as_deref(),
         trust,
+        permissions,
         &mut Trail::new(),
     )
     .iter()

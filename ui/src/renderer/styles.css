@@ -665,6 +665,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .fork-banner .link:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
 .vetting-banner { border-left: 3px solid var(--accent); }
 .vetting-banner strong { color: var(--ink); }
+/* What a settings file wrote that is not in force. Folded, so a long list does not push the
+   conversation down. */
+.rules-banner { border-left: 3px solid var(--warn); }
+.rules-banner summary { cursor: pointer; }
+.rules-banner strong { color: var(--ink); }
+.rules-banner p { margin: 6px 0 2px; }
+.rules-banner ul { margin: 2px 0; padding-left: 18px; }
+.rules-banner code { font-family: var(--mono); font-size: 11px; overflow-wrap: anywhere; }
+.settings-rules h4 { margin: 10px 0 0; font-size: 12px; }
 
 /* Where a fork's link landed. `display: contents` on `.entry-hit` means the wrapper cannot be
    painted, so the mark is drawn on the row inside it — and it fades, because it answers "which
@@ -808,7 +817,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
   max-width: 100%;
 }
 
-.narration { color: var(--ink-dim); font-style: italic; margin: 8px 2px; }
+/* Line breaks are kept: a manifest run narrates its goal and its plan as several lines. */
+.narration { color: var(--ink-dim); font-style: italic; margin: 8px 2px; white-space: pre-wrap; }
 
 .tool {
   display: flex;
@@ -927,6 +937,59 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* Output the planner has not read is confined content, and is drawn as confined content
    rather than as a quotation: it is the one card whose whole body is untrusted bytes. */
 .confirm.output { border-color: var(--confine); }
+/* A fetch that reaches a machine's metadata service is bordered as a command releasing private
+   data is: both are a grant the request itself does not show. */
+.confirm.fetch.spends { border-color: var(--warn); border-width: 2px; }
+/* An address has no spaces to break at, so it breaks anywhere rather than run under the edge
+   of the card, where the end of it would be the part nobody read. */
+.confirm.fetch .confirm-head .path { overflow-wrap: anywhere; }
+.confirm.fetch .fetch-host { border-top: 0; color: var(--ink); }
+.confirm.fetch .fetch-host code { font-family: var(--mono); font-weight: 600; }
+/* A server that runs build tooling gets the warning border a command releasing private data gets. */
+.confirm.server.builds { border-color: var(--warn); border-width: 2px; }
+.confirm.server .confirm-head .server-language { font-family: inherit; }
+.confirm.server .permission-scope code { overflow-wrap: anywhere; }
+
+/* A file that holds a credential is bordered as a warning, since a yes discloses the value. */
+.confirm.exposure { border-color: var(--warn); border-width: 2px; }
+.exposure-findings { margin: 4px 0 0; padding-left: 18px; }
+.exposure-findings code { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+
+/* A plan to approve. The steps scroll inside the card so a long plan keeps its buttons in reach. */
+.confirm.manifest .confirm-head .manifest-count { font-family: inherit; color: var(--ink-dim); }
+.manifest-steps { list-style: none; margin: 0; padding: 8px 12px; max-height: 320px; overflow: auto; border-top: 1px solid var(--line); }
+.manifest-steps li { padding: 2px 0; }
+.manifest-steps code { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* The task of a manifest run. Drawn where a prompt is, and marked so it is not taken for one. */
+.bubble.user.plan-task { border: 1px dashed var(--accent-quiet); }
+.plan-task-mark { display: block; font-size: 10px; font-weight: 700; text-transform: uppercase; opacity: 0.75; margin-bottom: 2px; }
+
+/* What a run released for a screen. Bordered as confined content is, since it can be a file's text. */
+.plan-reply { border: 1px solid var(--confine); border-radius: var(--radius); margin: 8px 0; overflow: hidden; }
+.plan-reply-head { display: flex; gap: 8px; align-items: baseline; padding: 6px 12px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--ink-dim); }
+.plan-reply-head .mark { text-transform: uppercase; font-size: 10px; font-weight: 700; color: var(--confine); }
+.plan-reply-foot { padding: 6px 12px; border-top: 1px solid var(--line); font-size: 11px; color: var(--ink-dim); }
+
+.plan-ended { border: 1px solid var(--line); border-radius: var(--radius); margin: 8px 0; padding: 10px 12px; }
+.plan-ended.failed { border-color: var(--removed); }
+.plan-ended p { margin: 4px 0; color: var(--ink-dim); font-size: 12px; }
+.plan-ended summary { cursor: pointer; font-size: 12px; margin-top: 6px; }
+.plan-text { margin: 4px 0 0; font-family: var(--mono); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+
+/* A saved plan run, read only. */
+.run-record-body { padding: 12px 2px 24px; }
+.run-record-body h2 { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--ink-dim); margin: 16px 0 4px; }
+.run-record-body section p { margin: 4px 0; font-size: 12px; }
+.run-record-notice { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; background: var(--bubble-agent); }
+.run-record-notice p { margin: 4px 0 8px; font-size: 12px; color: var(--ink-dim); }
+.run-record-outcome.stopped strong { color: var(--removed); }
+.run-record-outcome.finished strong { color: var(--added); }
+.run-record-meta { margin-top: 18px; font-size: 11px; color: var(--ink-faint); overflow-wrap: anywhere; }
+.session-badges .plan-run { color: var(--accent-text); }
+
+.composer-toolbar .plan-first { background: transparent; color: var(--accent-text); border: 1px solid var(--accent); border-radius: var(--radius); padding: 0 12px; }
+.composer-toolbar .plan-first:disabled { opacity: 0.45; cursor: default; }
 .confirm.output .confirm-head .intent,
 .confirm.vouch .confirm-head .intent { color: var(--confine); }
 
@@ -2137,6 +2200,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .composer-hint { font-size: 11px; color: var(--ink-dim); flex: 1; }
 .composer-toolbar .stop { min-height: 36px; padding: 6px 12px; border: 1px solid var(--removed); color: var(--removed); background: var(--bg); border-radius: 8px; }
 .app .composer .send { white-space: nowrap; margin-left: auto; min-height: 36px; height: auto; }
+/* Plan first sits beside Send on the right, so it takes the gap and Send follows it. */
+.app .composer .plan-first { white-space: nowrap; margin-left: auto; min-height: 36px; }
+.app .composer .plan-first + .send { margin-left: 0; }
 .attention-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 20px; color: var(--ink-dim); font-size: 12px; min-height: 34px; }
 .attention-bar button { border: 1px solid var(--line); border-radius: 7px; padding: 6px 10px; background: var(--bg); }
 .attention-bar .pending-jump { background: var(--warn-bg); color: var(--warn); text-align: left; font-weight: 600; }

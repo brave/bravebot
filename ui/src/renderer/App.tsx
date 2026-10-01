@@ -8,6 +8,8 @@ import type {
   ForkedSession,
   KeptTrust,
   OpenedSession,
+  RunRecord,
+  SettingsRules,
   Phase,
   SessionSummary,
   Shown,
@@ -109,6 +111,8 @@ interface Live {
   archived: number
   /** Whether the session opened with auto-vetting on, as the agent settled it then. */
   autoVetting: boolean
+  /** The permission rules this session opened under. Null where the bridge reported none. */
+  rules?: SettingsRules | null
   /**
    * The entry id of a prompt this window has sent and not yet been told the ordinal of.
    *
@@ -157,23 +161,11 @@ function cameFrom(
 /** Raised for the one failure that needs its own screen rather than a line of text. */
 class Unconfigurable extends Error {}
 
-/** Which kinds of question a person can be put. */
-export type Asked = 'confirm' | 'run' | 'output' | 'vouch' | 'vet'
+/** Which kinds of question a person can be put. Declared beside the method each is answered by. */
+export type Asked = t.Asked
 
-/**
- * Which method answers which question.
- *
- * Four methods rather than one taking a kind, so an answer cannot be delivered to the
- * wrong question by getting a field wrong: the agent derives the kind from the method it
- * was called on and checks it against what is actually waiting.
- */
-const METHOD: Record<Asked, string> = {
-  confirm: 'confirm.reply',
-  run: 'run.reply',
-  output: 'output.reply',
-  vouch: 'vouch.reply',
-  vet: 'vet.reply',
-}
+/** Which method answers which question. See [`t.REPLY`], which is where they are written down. */
+const METHOD: Record<Asked, string> = t.REPLY
 
 async function call<T>(method: string, params?: Record<string, unknown>): Promise<T> {
   const answer = await window.bravebot.request<T>(method, params)
@@ -212,6 +204,8 @@ export function App(): React.JSX.Element {
   const [agentSettings, setAgentSettings] = useState(false)
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [live, renderLive] = useState<Live | null>(null)
+  /** A saved manifest run being read. Shown in place of a session, and only while none is. */
+  const [reading, setReading] = useState<RunRecord | null>(null)
   const liveRef = useRef<Live | null>(null)
   const handleRef = useRef<string | null>(null)
   const openedLives = useRef(new Map<string, Live>())
@@ -229,6 +223,8 @@ export function App(): React.JSX.Element {
     liveRef.current = next
     handleRef.current = next?.handle ?? null
     if (next) openedLives.current.set(next.handle, next)
+    // A session on screen takes the place of a run being read.
+    if (next) setReading(null)
     renderLive(next)
   }, [])
   const updateSession = useCallback((handle: string, action: React.SetStateAction<Live | null>) => {
@@ -479,6 +475,15 @@ export function App(): React.JSX.Element {
   const showSession = useCallback(
     async (summary: SessionSummary, focus?: number, bot?: { slug: string; model: string | null }) => {
     try {
+      // A plan run has no conversation, so it is read and not opened. No session is made for
+      // it. Sessions already open stay open behind it.
+      if (summary.manifest) {
+        const run = await call<RunRecord>('manifest.read', { directory: summary.directory, id: summary.id })
+        setLive(null)
+        setReading(run)
+        setProblem(null)
+        return
+      }
       if (summary.id.startsWith('draft:')) {
         const cached = [...openedLives.current.values()].find((item) => item.draftId === summary.id)
         if (cached) setLive(cached)
@@ -539,6 +544,7 @@ export function App(): React.JSX.Element {
         bot: bot ? { slug: bot.slug, grounded: false } : null,
         archived: opened.archived,
         autoVetting: opened.autoVetting,
+        rules: opened.settingsRules ?? null,
       })
       const notes = [opened.branchNote, opened.buildNote, opened.frontNote, opened.serversNote].filter(Boolean) as string[]
       setProblem(notes.length ? notes.join(' · ') : null)
@@ -563,6 +569,7 @@ export function App(): React.JSX.Element {
         branch: string | null
         model: string | null
         autoVetting: boolean
+        settingsRules?: SettingsRules | null
         serversNote: string | null
         remembered?: KeptTrust | null
         keeping?: string | null
@@ -598,6 +605,7 @@ export function App(): React.JSX.Element {
         bot: bot ? { slug: bot.slug, grounded: false } : null,
         archived: 0,
         autoVetting: made.autoVetting,
+        rules: made.settingsRules ?? null,
       })
       setProblem(made.serversNote)
     } catch (error) {
@@ -714,9 +722,9 @@ export function App(): React.JSX.Element {
   /**
    * Answer whichever question is on screen.
    *
-   * One callback for all four, because the shape of the exchange is identical and the
-   * differences are entirely in which method carries it. `remember` is only ever sent for
-   * a run — it is the second answer that question has and the others do not.
+   * One callback for every kind in [`t.REPLY`], because the shape of the exchange is identical
+   * and the differences are entirely in which method carries it. `remember` is only ever true
+   * for a run: it is the second answer that question has and the others do not.
    *
    * The card is only marked once the agent has accepted the answer. Marking it first would
    * draw an approval the turn never received if the call failed, which is the one direction
@@ -900,6 +908,36 @@ export function App(): React.JSX.Element {
     },
     [readBots],
   )
+
+  /**
+   * Start a manifest run for a task: plan all of it, ask once, then walk the plan.
+   *
+   * One run per press. The session does not hold this as a mode, so the next message is an
+   * ordinary turn unless the button is pressed again.
+   */
+  const plan = useCallback(async (task: string) => {
+    const handle = handleRef.current
+    if (!handle) return
+    const model = openedLives.current.get(handle)?.model ?? null
+    updateSession(handle, (old) => old ? { ...old, running: true, entries: [...old.entries, t.planAsked(task)] } : old)
+    try {
+      await call('manifest.run', { session: handle, task, model })
+    } catch (error) {
+      if (error instanceof Unconfigurable) setUnconfigured(error.message)
+      updateSession(handle, (old) => old ? { ...old, running: false, queuePaused: true, entries: [...old.entries, t.errored(error instanceof Unconfigurable ? error.message : String(error))] } : old)
+    }
+  }, [])
+
+  /** Start a run from whatever is in the composer, where a run can take it. */
+  const submitPlan = useCallback(() => {
+    const task = draft.trim()
+    if (!task || !handleRef.current || live?.running || live?.askingTrust || backendReady === false) return
+    // A run reads nothing before it plans, so it cannot take attached files, and a bot's turn
+    // carries a briefing a run has no place for.
+    if (live?.attachments?.length || live?.bot) return
+    setDraft('')
+    void plan(task)
+  }, [draft, live?.running, live?.askingTrust, live?.attachments, live?.bot, plan, backendReady])
 
   /** Send whatever is in the composer, on the same terms the Send button uses. */
   const submit = useCallback(() => {
@@ -1135,6 +1173,7 @@ export function App(): React.JSX.Element {
         // in this build it asks for nothing at all.
         archived: 0,
         autoVetting: forked.autoVetting,
+        rules: forked.settingsRules ?? null,
         forkedFrom: {
             directory: forked.parent.directory,
             id: forked.parent.id,
@@ -1249,7 +1288,7 @@ export function App(): React.JSX.Element {
         sessions={ownSessions}
         onNewBotConversation={(bot) => { void create(bot.directory, { slug: bot.slug, model: bot.model }) }}
         onBotConversation={(bot, summary) => { void showSession(summary, undefined, { slug: bot.slug, model: bot.model }) }}
-        openId={live?.summary.id ?? live?.draftId ?? undefined}
+        openId={live?.summary.id ?? live?.draftId ?? reading?.record.id ?? undefined}
         forked={forked}
         onOpen={showSession}
         onNew={create}
@@ -1309,6 +1348,8 @@ export function App(): React.JSX.Element {
         onDraft={setDraft}
         onModel={(model) => void chooseModel(model)}
         onSubmit={submit}
+        onPlan={submitPlan}
+        reading={reading}
         onCancel={cancel}
         canExport={canExport}
         includeTools={includeTools}
@@ -1431,6 +1472,25 @@ export function apply(
         return { ...old, entries: [...old.entries, t.askedOutput(message.data)] }
       case 'vet.request':
         return { ...old, entries: [...old.entries, t.askedVet(message.data)] }
+      case 'fetch.request':
+        return { ...old, entries: [...old.entries, t.askedFetch(message.data)] }
+      case 'server.request':
+        return { ...old, entries: [...old.entries, t.askedServer(message.data)] }
+      case 'manifest.request':
+        return { ...old, entries: [...old.entries, t.askedManifest(message.data, t.narrowing(old.rules))] }
+      case 'exposure.request':
+        return { ...old, entries: [...old.entries, t.askedExposure(message.data)] }
+      // A run is not a turn, so it adds no turn marker and no reply to the conversation.
+      case 'manifest.started':
+        return { ...old, running: true, phase: null, checking: null, tokens: 0 }
+      case 'manifest.done':
+        refresh()
+        return { ...old, running: false, phase: null, checking: null, outcome: 'complete',
+          entries: [...old.entries, t.planReplied(message.data.reply, message.data.record)] }
+      case 'manifest.error':
+        refresh()
+        return { ...old, running: false, phase: null, checking: null, queuePaused: true,
+          entries: [...t.interruptPending(old.entries), t.planEnded(message.data)] }
       case 'vouch.request':
         return { ...old, entries: [...old.entries, t.askedVouch(message.data)] }
       case 'ask.request':
@@ -1466,7 +1526,7 @@ export function apply(
           running: false,
           phase: null,
           checking: null,
-          entries: [...t.interruptPending(t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt)), { ...t.errored(`${kind}: ${detail}`), category: kind === 'cancelled' ? 'cancelled' : message.data.category, attempts: message.data.attempts, status: message.data.status, turn: message.data.turn }],
+          entries: [...t.interruptPending(t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt)), { ...t.errored(`${kind}: ${detail}`), category: kind === 'cancelled' ? 'cancelled' : message.data.category, attempts: message.data.attempts, status: message.data.status, cutOff: message.data.cutOff, turn: message.data.turn }],
           awaitingOrdinal: null,
           queuePaused: true,
         }

@@ -2607,6 +2607,222 @@ fn an_ask_rule_still_prompts_for_a_write_through_a_link_to_the_file() {
     );
 }
 
+/// The rules a settings file carrying `block` gives a session in `workspace`, read the way a
+/// session reads them, which is where a link in a rule's own spelling is followed.
+#[cfg(unix)]
+fn rules_as_a_session_reads_them(
+    block: &str,
+    workspace: &Workspace,
+) -> bravebot_core::permissions::Permissions {
+    let settings = bravebot_config::Settings::parse(block);
+    let (permissions, rejected) =
+        bravebot_agent::permissions::from_settings(&settings, None, workspace.root());
+    assert!(rejected.is_empty(), "a rule in this test did not parse");
+    permissions
+}
+
+/// A workspace holding `real/secret.txt`, a `linked` link to `real`, and two files a listing and a
+/// search of it report, so a walk that ran can be told apart from one that did not.
+#[cfg(unix)]
+fn workspace_with_a_linked_directory(tag: &str) -> (Scratch, Workspace) {
+    let scratch = Scratch::new(tag);
+    std::fs::create_dir_all(scratch.path.join("real")).unwrap();
+    std::fs::write(scratch.path.join("real/secret.txt"), "SECRET_TOKEN=hunter2").unwrap();
+    std::fs::write(
+        scratch.path.join("notes.md"),
+        "SECRET_TOKEN is set elsewhere",
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("readme.txt"), "nothing to find").unwrap();
+    std::os::unix::fs::symlink("real", scratch.path.join("linked")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    (scratch, workspace)
+}
+
+/// A rule's own spelling is followed as a call's is: `Read(linked/**)` is about the files in the
+/// directory `linked` reaches, so asking for one of them by its own name is refused, for a read and
+/// for a write alike.
+#[cfg(unix)]
+#[test]
+fn a_file_a_rule_names_through_a_link_is_not_read_or_written_by_its_own_name() {
+    let (scratch, workspace) = workspace_with_a_linked_directory("permissions-rule-through-a-link");
+    let permissions = rules_as_a_session_reads_them(
+        r#"{"permissions": {"deny": ["Read(linked/**)"]}}"#,
+        &workspace,
+    );
+
+    let bodies = run_calls_under(
+        &workspace,
+        permissions,
+        trusting_the_workspace(),
+        &[
+            ("read_file", r#"{"path":"real/secret.txt"}"#),
+            (
+                "write_file",
+                r#"{"path":"real/secret.txt","contents":"replaced"}"#,
+            ),
+            // Outside `real`, which the rule covers for every tool, so a refusal above cannot be a
+            // write that fails for a reason of its own.
+            ("write_file", r#"{"path":"other.txt","contents":"written"}"#),
+        ],
+    );
+
+    assert!(
+        !bodies.iter().any(|b| b.contains("hunter2")),
+        "a file a rule names through a link reached the planner under its own name"
+    );
+    assert!(
+        bodies
+            .iter()
+            .any(|b| b.contains("deny rule in the user's settings covers real/secret.txt")),
+        "the planner was not told a rule refused the read"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("real/secret.txt")).unwrap(),
+        "SECRET_TOKEN=hunter2",
+        "a file a rule names through a link was replaced under its own name"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("other.txt")).ok(),
+        Some("written".to_string()),
+        "a write no rule covers did not land, so the refusal above proves nothing"
+    );
+}
+
+/// The walk half. A listing or a search of the tree reaches the file under its own name, and the
+/// rule written through the link leaves it out there too.
+#[cfg(unix)]
+#[test]
+fn a_file_a_rule_names_through_a_link_is_not_listed_or_searched() {
+    let (_scratch, workspace) =
+        workspace_with_a_linked_directory("permissions-rule-through-a-link-walk");
+    let permissions = rules_as_a_session_reads_them(
+        r#"{"permissions": {"deny": ["Read(linked/**)"]}}"#,
+        &workspace,
+    );
+
+    let bodies = run_calls_under(
+        &workspace,
+        permissions,
+        trusting_the_workspace(),
+        &[
+            ("list_files", r#"{"directory":"."}"#),
+            ("search", r#"{"pattern":"SECRET_TOKEN","directory":"."}"#),
+        ],
+    );
+
+    assert!(
+        bodies.iter().any(|b| b.contains("readme.txt")),
+        "the listing named nothing, so it proves nothing"
+    );
+    assert!(
+        bodies.iter().any(|b| b.contains("is set elsewhere")),
+        "the search quoted nothing, so it proves nothing"
+    );
+    assert!(
+        !bodies.iter().any(|b| b.contains("secret.txt")),
+        "a walk named a file a rule covers through a link"
+    );
+    assert!(
+        !bodies.iter().any(|b| b.contains("hunter2")),
+        "a search quoted a file a rule covers through a link"
+    );
+}
+
+/// A `//` rule spelled through a link to an added directory covers the files in it, which a gate
+/// holds under the directory's canonical name.
+#[cfg(unix)]
+#[test]
+fn a_full_path_rule_through_a_link_to_an_added_directory_covers_its_files() {
+    let scratch = Scratch::new("permissions-rule-through-a-linked-added-directory");
+    let outside = Scratch::new("permissions-rule-through-a-linked-added-directory-outside");
+    let links = Scratch::new("permissions-rule-through-a-linked-added-directory-links");
+    std::fs::write(outside.path.join("secret.txt"), "SECRET_TOKEN=hunter2").unwrap();
+    std::os::unix::fs::symlink(&outside.path, links.path.join("added")).unwrap();
+
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let added = workspace
+        .add_directory(outside.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let rule = format!("Read(/{}/added/**)", links.path.display());
+    let permissions = rules_as_a_session_reads_them(
+        &format!(r#"{{"permissions": {{"deny": ["{rule}"]}}}}"#),
+        &workspace,
+    );
+    let mut trust = trusting_the_workspace();
+    trust.trust(&added.display().to_string());
+
+    let secret = added.join("secret.txt").display().to_string();
+    let bodies = run_calls_under(
+        &workspace,
+        permissions,
+        trust,
+        &[("read_file", &format!(r#"{{"path":"{secret}"}}"#))],
+    );
+
+    assert!(
+        !bodies.iter().any(|b| b.contains("hunter2")),
+        "a file in an added directory a rule names through a link reached the planner"
+    );
+    assert!(
+        bodies
+            .iter()
+            .any(|b| b.contains(&format!("deny rule in the user's settings covers {secret}"))),
+        "the planner was not told a rule refused the read"
+    );
+}
+
+/// An `ask` rule spelled through a link still asks for a write to the file the link reaches, named
+/// by its own name, in a workspace the user trusted at startup.
+#[cfg(unix)]
+#[test]
+fn an_ask_rule_spelled_through_a_link_still_prompts_for_a_write_to_its_target() {
+    let scratch = Scratch::new("permissions-ask-rule-through-a-link");
+    std::fs::create_dir_all(scratch.path.join("real")).unwrap();
+    std::fs::write(scratch.path.join("real/notes.md"), "original").unwrap();
+    std::os::unix::fs::symlink("real", scratch.path.join("linked")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let permissions = rules_as_a_session_reads_them(
+        r#"{"permissions": {"ask": ["Edit(linked/notes.md)"]}}"#,
+        &workspace,
+    );
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            r#"{"path":"real/notes.md","contents":"replaced"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("write the notes").with_permissions(permissions);
+    let mut recording = RecordingConfirmer::rejecting();
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut recording,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        recording.seen.len(),
+        1,
+        "a write to a file an ask rule names through a link went ahead without asking"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("real/notes.md")).unwrap(),
+        "original",
+        "the write went ahead after the person said no"
+    );
+}
+
 /// The case the rule's own spelling misses on a volume that opens `.GITHUB` as `.github`, which is
 /// the default on macOS and on Windows. The rules here are parsed without the volume's answer, so
 /// nothing but where the call lands connects the two spellings. Skipped where the volume tells the
@@ -3270,6 +3486,22 @@ fn run_calls_under_deny_rules(
     calls: &[(&str, &str)],
 ) -> Vec<String> {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
+    run_calls_under(
+        &workspace,
+        rules(deny, &[], &[]),
+        trusting_the_workspace(),
+        calls,
+    )
+}
+
+/// The same for rules and a trust map of the caller's own.
+#[cfg(unix)]
+fn run_calls_under(
+    workspace: &Workspace,
+    permissions: bravebot_core::permissions::Permissions,
+    trust: bravebot_core::trust::TrustStore,
+    calls: &[(&str, &str)],
+) -> Vec<String> {
     let mut replies: Vec<String> = calls
         .iter()
         .map(|(tool, arguments)| tool_request_2(tool, arguments))
@@ -3280,15 +3512,15 @@ fn run_calls_under_deny_rules(
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
 
-    let task = Task::new("work with the files").with_permissions(rules(deny, &[], &[]));
+    let task = Task::new("work with the files").with_permissions(permissions);
     turn::run_with_trust(
         &config,
         &egress,
-        &workspace,
+        workspace,
         &task,
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut sink,
-        trusting_the_workspace(),
+        trust,
     )
     .expect("turn runs");
     received.try_iter().collect()
@@ -11088,6 +11320,87 @@ fn a_trusted_workspace_agents_file_reaches_the_system_prompt() {
     assert!(
         body.contains("Run make check before every commit."),
         "trusted standing instructions did not reach the model"
+    );
+}
+
+/// An instructions file is read by the driver before anything is asked, so it is a read nobody
+/// named, and a link from it to a denied file would put that file in the system prompt of a
+/// workspace the person trusted. The rule is asked about the file the name lands on.
+#[cfg(unix)]
+#[test]
+fn a_denied_file_does_not_reach_the_system_prompt_through_an_agents_file_linking_to_it() {
+    let scratch = Scratch::new("agents-links-to-a-denied-file");
+    std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=hunter2").unwrap();
+    std::os::unix::fs::symlink(".env", scratch.path.join("AGENTS.md")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(&reply_with("the answer"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let outcome = turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("do the work").with_permissions(rules(&["Read(./.env)"], &[], &[])),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let body = received.recv().expect("request body");
+    assert!(
+        !body.contains("hunter2"),
+        "a denied file reached the system prompt through AGENTS.md: {body}"
+    );
+    assert_eq!(
+        outcome.notices,
+        ["AGENTS.md was not loaded: a deny rule in your settings covers it"],
+        "the person was not told why their AGENTS.md is not in force"
+    );
+}
+
+/// The file a pointer names is a second read nobody named, so a rule covering it keeps it out too.
+/// The pointer stands as itself, as it does when the file it names cannot be read, and the person is
+/// told why the instructions it names are not in force.
+#[test]
+fn a_denied_file_an_agents_file_points_at_does_not_reach_the_system_prompt() {
+    let scratch = Scratch::new("agents-points-at-a-denied-file");
+    std::fs::write(scratch.path.join("AGENTS.md"), "See notes.md.").unwrap();
+    std::fs::write(scratch.path.join("notes.md"), "SECRET_TOKEN=hunter2").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(&reply_with("the answer"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let outcome = turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("do the work").with_permissions(rules(&["Read(./notes.md)"], &[], &[])),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let body = received.recv().expect("request body");
+    assert!(
+        !body.contains("hunter2"),
+        "a denied file reached the system prompt through a pointer to it: {body}"
+    );
+    assert!(
+        body.contains("See notes.md."),
+        "the pointer did not stand as itself, so this proves nothing about the rule: {body}"
+    );
+    assert_eq!(
+        outcome.notices,
+        ["notes.md was not loaded: a deny rule in your settings covers it"],
+        "the person was not told why the instructions AGENTS.md names are not in force"
     );
 }
 
@@ -26696,7 +27009,9 @@ mod usage {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    const WAIT: Duration = Duration::from_secs(5);
+    /// Long enough that a CI runner stalling for seconds fails no step. A wait returns as soon as
+    /// what it waits for arrives, so a passing run takes no longer for it.
+    const WAIT: Duration = Duration::from_secs(30);
 
     /// Holding the reply lets tests inspect progress before another request can finish.
     struct Pending {
@@ -32691,6 +33006,54 @@ fn a_redirection_into_a_memory_is_recorded_before_it_opens_it() {
         memories_recorded(&home, &workspace),
         vec![memory_key(&workspace, "notes-keeper")],
         "a memory a line left untrusted was not recorded"
+    );
+}
+
+/// MEMORY-5 for a redirection on a volume that folds case, where `.Bravebot/memory/NOTES-KEEPER.md`
+/// opens the memory `notes-keeper`. The line is recorded under the key a later session asks about
+/// before it opens the memory, and with nowhere to record it the line does not open it. A volume
+/// that holds the spellings apart has no such memory to record.
+#[test]
+fn a_redirection_into_a_memory_in_another_case_is_recorded_before_it_opens_it() {
+    let scratch = Scratch::new("memory-redirect-folded");
+    let home = Scratch::new("memory-redirect-folded-home");
+    std::fs::create_dir_all(scratch.path.join(".bravebot/memory")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    if !bravebot_agent::workspace::volume_folds_case(workspace.root()) {
+        return;
+    }
+    let memory = scratch.path.join(".bravebot/memory/notes-keeper.md");
+    let line = "echo FROM-A-PAGE > .Bravebot/memory/NOTES-KEEPER.md";
+
+    a_run_writing_a_memory(
+        &workspace,
+        None,
+        line,
+        bravebot_agent::RunDecision::approve(),
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+    assert!(
+        !memory.exists(),
+        "a line wrote a memory nothing could record"
+    );
+
+    let outcome = a_run_writing_a_memory(
+        &workspace,
+        Some(&home),
+        line,
+        bravebot_agent::RunDecision::approve(),
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+    assert_eq!(
+        std::fs::read_to_string(&memory).unwrap(),
+        "FROM-A-PAGE\n",
+        "the redirection did not write the memory"
+    );
+    assert!(!outcome.trust.is_trusted(".Bravebot/memory/NOTES-KEEPER.md"));
+    assert_eq!(
+        memories_recorded(&home, &workspace),
+        vec![memory_key(&workspace, "notes-keeper")],
+        "a memory a line left untrusted under another spelling was not recorded"
     );
 }
 

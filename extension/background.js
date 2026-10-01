@@ -21,17 +21,20 @@ function connect() {
   if (port) {
     return;
   }
-  port = chrome.runtime.connectNative(HOST);
-  port.onMessage.addListener(async (message) => {
+  const current = chrome.runtime.connectNative(HOST);
+  port = current;
+  current.onMessage.addListener(async (message) => {
     const reply = await handle(message, chrome);
+    // On the port the request came in on. A port opened since belongs to
+    // another host, whose ids can match the reply to a request of its own.
     try {
-      port?.postMessage(reply);
+      current.postMessage(reply);
     } catch {
       // The port closed while the tool ran. The host tells the session that
       // asked.
     }
   });
-  port.onDisconnect.addListener(() => {
+  current.onDisconnect.addListener(() => {
     // Read so Brave does not report it as unchecked. Missing host, host
     // exited, or refused.
     console.info(

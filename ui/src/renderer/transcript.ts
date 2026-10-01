@@ -16,10 +16,17 @@ import type {
   AskRequest,
   Change,
   ConfirmRequest,
+  CutOff,
+  ExposureRequest,
+  FetchRequest,
   Landing,
+  ManifestError,
+  ManifestRequest,
   OutputRequest,
   RunRequest,
   Said,
+  ServerRequest,
+  SettingsRules,
   Shown,
   VouchRequest,
   VetRequest,
@@ -103,8 +110,61 @@ export type Entry = (
    * everything.
    */
   | { kind: 'vet'; id: string; request: VetRequest; decision: 'approve' | 'reject' | null }
+  /**
+   * A URL awaiting a decision about whether to fetch it, or the record of one already made.
+   *
+   * No `remember`, because there is nothing to remember: an approval covers the one URL it was
+   * given for and the next fetch asks again.
+   */
+  | { kind: 'fetch'; id: string; request: FetchRequest; decision: 'approve' | 'reject' | null }
+  /**
+   * A language server awaiting a decision about whether to start it, or the record of one
+   * already made.
+   *
+   * No `remember`. An approval lasts for the conversation, and the agent keeps track of it: the
+   * same language is not asked about again until the conversation closes.
+   */
+  | { kind: 'server'; id: string; request: ServerRequest; decision: 'approve' | 'reject' | null }
+  /**
+   * A frozen plan awaiting a decision about whether to run it, or the record of one already made.
+   *
+   * No `remember`. An approval covers this plan only, and does not approve the plan's writes.
+   */
+  | {
+      kind: 'manifest'
+      id: string
+      request: ManifestRequest
+      decision: 'approve' | 'reject' | null
+      /**
+       * The session's `deny` and `ask` rules, where it has any. The agent does not apply
+       * permission rules to a manifest run, so the card names the rules the plan is not held to.
+       */
+      unheld?: string[]
+    }
+  /**
+   * A file holding a credential, awaiting a decision about whether the model may read it, or
+   * the record of one already made.
+   *
+   * No `remember`. An approval covers the file for the conversation, and the agent keeps track
+   * of it.
+   */
+  | { kind: 'exposure'; id: string; request: ExposureRequest; decision: 'approve' | 'reject' | null }
+  /**
+   * The task a manifest run was asked to plan.
+   *
+   * Not a `user` entry. A run is not part of the conversation, so its task has no ordinal, cannot
+   * be forked from, and is left out of an export.
+   */
+  | { kind: 'plan-task'; id: string; text: string }
+  /**
+   * What a manifest run's last step released for a screen, and the run's record where one was
+   * written. The text can come from a file nobody vouched for.
+   */
+  | { kind: 'plan-reply'; id: string; text: string; record: string | null }
+  /** A manifest run that stopped: declined, stopped by the person, or failed. */
+  | { kind: 'plan-ended'; id: string; ended: ManifestError }
   | { kind: 'ask'; id: string; request: AskRequest; answers: AskAnswer[] | null }
-  | { kind: 'error'; id: string; text: string; category?: string | null; attempts?: number | null; status?: number | null }
+  | { kind: 'error'; id: string; text: string; category?: string | null; attempts?: number | null; status?: number | null; cutOff?: CutOff | null }
   | { kind: 'watch'; id: string; text: string }
   /** A replayed tool line from a stored session: no outcome, because none was kept. */
   | { kind: 'replayed-tool'; id: string; text: string; why: string }
@@ -193,6 +253,20 @@ export const askedOutput = (request: OutputRequest): Entry => ({
   decision: null,
 })
 export const askedVet = (request: VetRequest): Entry => ({ kind: 'vet', id: nextId(), request, decision: null })
+export const askedFetch = (request: FetchRequest): Entry => ({ kind: 'fetch', id: nextId(), request, decision: null })
+export const askedServer = (request: ServerRequest): Entry => ({ kind: 'server', id: nextId(), request, decision: null })
+export const askedManifest = (request: ManifestRequest, unheld: string[] = []): Entry => ({ kind: 'manifest', id: nextId(), request, decision: null, unheld })
+
+/** The rules that narrow what a session does, which a manifest run is not held to. */
+export const narrowing = (rules: SettingsRules | null | undefined): string[] => [...(rules?.deny ?? []), ...(rules?.ask ?? [])]
+
+/** Whether a settings file wrote something that is not in force, which the person is told. */
+export const notInForce = (rules: SettingsRules | null | undefined): boolean =>
+  !!rules && (rules.unreadable.length > 0 || rules.proposed.length > 0 || rules.directories.length > 0)
+export const askedExposure = (request: ExposureRequest): Entry => ({ kind: 'exposure', id: nextId(), request, decision: null })
+export const planAsked = (text: string): Entry => ({ kind: 'plan-task', id: nextId(), text })
+export const planReplied = (text: string, record: string | null): Entry => ({ kind: 'plan-reply', id: nextId(), text, record })
+export const planEnded = (ended: ManifestError): Entry => ({ kind: 'plan-ended', id: nextId(), ended })
 export const askedVouch = (request: VouchRequest): Entry => ({
   kind: 'vouch',
   id: nextId(),
@@ -268,20 +342,42 @@ export function land(entries: Entry[], landing: Landing): Entry[] {
 }
 
 /** Record what the user decided about a write. */
+/**
+ * Every question answered with a yes or a no, and the method that carries the answer.
+ *
+ * Written down once. The kinds a card may answer, the entries that count as waiting, and the
+ * method an answer is sent through all read this table, so a question added to it cannot be one
+ * the transcript draws and the composer does not wait for, or one answered through a method
+ * meant for another.
+ *
+ * A method per kind rather than one taking a kind, so an answer cannot be delivered to the wrong
+ * question by getting a field wrong: the agent derives the kind from the method it was called on
+ * and checks it against what is actually waiting.
+ *
+ * A series of questions is not here. Its reply is an answer per question and not a decision, so
+ * it has a method and a callback of its own.
+ */
+export const REPLY = {
+  confirm: 'confirm.reply',
+  run: 'run.reply',
+  output: 'output.reply',
+  vouch: 'vouch.reply',
+  vet: 'vet.reply',
+  fetch: 'fetch.reply',
+  server: 'server.reply',
+  manifest: 'manifest.reply',
+  exposure: 'exposure.reply',
+} as const
+
+/** Which kinds of question a person can answer with a yes or a no. */
+export type Asked = keyof typeof REPLY
+
 /** Every entry kind that puts something to the person. */
-export type Asking = Extract<
-  Entry,
-  { kind: 'confirm' | 'run' | 'output' | 'vouch' | 'vet' | 'ask' }
->
+export type Asking = Extract<Entry, { kind: Asked | 'ask' }>
 
 /** Whether an entry awaits a decision or an answer. */
 const isAsking = (entry: Entry): entry is Asking =>
-  entry.kind === 'confirm' ||
-  entry.kind === 'run' ||
-  entry.kind === 'output' ||
-  entry.kind === 'vouch' ||
-  entry.kind === 'vet' ||
-  entry.kind === 'ask'
+  entry.kind === 'ask' || Object.hasOwn(REPLY, entry.kind)
 
 /**
  * Whether it is still waiting.
@@ -383,6 +479,8 @@ export function plainText(entry: Entry): string | null {
     case 'watch':
     case 'error':
     case 'replayed-tool':
+    case 'plan-task':
+    case 'plan-reply':
       return entry.text
     case 'quarantined':
       // The preview, which is all the interface ever had: the kernel trimmed it before it
@@ -448,6 +546,11 @@ export function searchableText(entry: Entry): string {
     case 'run': return [entry.request.summary, entry.request.directory, entry.request.line ?? '', ...entry.request.stages.map((stage) => stage.display)].join(' ')
     case 'output': return [entry.request.command, entry.request.summary, entry.request.output].join(' ')
     case 'vet': return [entry.request.origin, entry.request.expects, entry.request.content].join(' ')
+    case 'fetch': return [entry.request.url, entry.request.host].join(' ')
+    case 'server': return [entry.request.language, entry.request.program, entry.request.workspace].join(' ')
+    case 'manifest': return [entry.request.task, ...entry.request.steps].join(' ')
+    case 'exposure': return [entry.request.path, ...entry.request.credentials].join(' ')
+    case 'plan-ended': return [entry.ended.problem ?? '', entry.ended.attempt?.plan ?? '', ...(entry.ended.attempt?.steps ?? [])].join(' ')
     case 'vouch': return [entry.request.path, entry.request.preview].join(' ')
     case 'ask': return entry.request.prompts.map((prompt) => [prompt.header, prompt.question, ...prompt.rows.map((row) => `${row.label} ${row.detail ?? ''}`)].join(' ')).join(' ')
   }

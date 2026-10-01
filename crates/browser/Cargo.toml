@@ -15,6 +15,11 @@ path = "src/main.rs"
 rand = { workspace = true }
 serde_json = { workspace = true }
 
+# flock(2), for the lock a native host holds on its directory for as long as it runs. rustix
+# rather than libc so the call needs no unsafe here, as the agent crate takes it for the same call.
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["fs"] }
+
 [dev-dependencies]
 # What derives an extension's id from the key in its manifest, for the test holding the id install
 # records to the one the extension in this repository has.

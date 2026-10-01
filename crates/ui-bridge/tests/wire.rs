@@ -803,6 +803,53 @@ fn a_command_that_spends_an_ambient_authority_says_so_across_the_bridge() {
     );
 }
 
+/// A turn the output ceiling ended crosses with the ceiling and what the reply was doing, since the
+/// remedies differ: a reply that spent it on one call's arguments is asked for in parts, and one
+/// that spent it thinking is not. Without these the window can only say the reply was too long.
+///
+/// Whole and equal rather than read a key at a time: the byte count is the trail's, and a field
+/// added here is one more thing a front end could start drawing.
+#[test]
+fn a_reply_stopped_at_the_ceiling_crosses_with_the_ceiling_and_what_it_was_writing() {
+    use bravebot_aichat::{CutOff, OpenCall};
+    let stopped = |call: Option<OpenCall>, thought| CutOff {
+        ceiling: 8192,
+        call,
+        thought,
+    };
+
+    assert_eq!(
+        wire::cut_off(Some(&stopped(
+            Some(OpenCall {
+                tool: Some("write_file".into()),
+                arguments: 30_000,
+            }),
+            true,
+        ))),
+        json!({ "ceiling": 8192, "call": { "tool": "write_file" }, "thought": true })
+    );
+    assert_eq!(
+        wire::cut_off(Some(&stopped(
+            Some(OpenCall {
+                tool: None,
+                arguments: 12,
+            }),
+            false,
+        ))),
+        json!({ "ceiling": 8192, "call": { "tool": null }, "thought": false }),
+        "a call to a tool nobody offered crossed as no call at all"
+    );
+    assert_eq!(
+        wire::cut_off(Some(&stopped(None, true))),
+        json!({ "ceiling": 8192, "call": null, "thought": true })
+    );
+    assert_eq!(
+        wire::cut_off(Some(&stopped(None, false))),
+        json!({ "ceiling": 8192, "call": null, "thought": false })
+    );
+    assert_eq!(wire::cut_off(None), Value::Null);
+}
+
 #[test]
 fn approval_evidence_is_kept_beside_the_decision() {
     use bravebot_agent::confirm::{OutputRequest, Remark, VetRequest, VouchRequest};
@@ -868,4 +915,141 @@ fn approval_evidence_is_kept_beside_the_decision() {
     );
     assert_eq!(write["remark"]["lines"], 9);
     assert_eq!(write["remark"]["preview"], json!(["Fixed a typo"]));
+}
+
+/// The host crosses beside the URL, as the agent's parser read it, and is not a front end's to work
+/// out: the string below reads as one site and reaches another, and what a yes agrees to is the
+/// one it reaches (FETCH-2). Nothing about what would come back is sent, because nothing has been
+/// fetched, and the question carries no answer of its own.
+#[test]
+fn a_fetch_prompt_carries_the_host_beside_the_url_and_nothing_of_a_body() {
+    use bravebot_agent::confirm::FetchRequest;
+    let value = wire::fetch_request(
+        3,
+        &FetchRequest {
+            url: "https://example.com@evil.test/docs".into(),
+            host: "evil.test".into(),
+        },
+    );
+
+    assert_eq!(
+        value,
+        json!({
+            "request": 3,
+            "url": "https://example.com@evil.test/docs",
+            "host": "evil.test",
+            "ambient": [],
+            "summary": "fetch from evil.test",
+        })
+    );
+}
+
+/// A metadata service is an ordinary host to everything between here and it, so the address alone
+/// does not say that reaching it is being handed the role this machine runs as. The kind and the
+/// word that named it cross in the shape a run's do, so one drawing serves both.
+#[test]
+fn a_fetch_from_a_metadata_service_says_so_across_the_bridge() {
+    use bravebot_agent::confirm::FetchRequest;
+    let value = wire::fetch_request(
+        4,
+        &FetchRequest {
+            url: "http://169.254.169.254/latest/meta-data/".into(),
+            host: "169.254.169.254".into(),
+        },
+    );
+
+    assert_eq!(
+        value["ambient"],
+        json!([{ "authority": "metadata-service", "named": "169.254.169.254" }])
+    );
+}
+
+/// What would run and what running it means, and no sentence about either: the binary as it
+/// resolved, the tree it would index, and whether starting it runs build tooling, which is the
+/// fact a front end has to say out loud (LSP-5). The question carries no answer of its own.
+#[test]
+fn a_server_prompt_carries_what_would_run_and_whether_it_builds() {
+    use bravebot_agent::confirm::ServerRequest;
+    let request = ServerRequest {
+        language: "Rust",
+        program: "/home/someone/.cargo/bin/rust-analyzer".into(),
+        workspace: "/home/someone/project".into(),
+        runs_build_tooling: true,
+    };
+
+    assert_eq!(
+        wire::server_request(5, &request),
+        json!({
+            "request": 5,
+            "language": "Rust",
+            "program": "/home/someone/.cargo/bin/rust-analyzer",
+            "workspace": "/home/someone/project",
+            "runsBuildTooling": true,
+            "summary": "start the Rust language server",
+        })
+    );
+    assert_eq!(
+        wire::server_request(
+            6,
+            &ServerRequest {
+                runs_build_tooling: false,
+                ..request
+            }
+        )["runsBuildTooling"],
+        false,
+        "a server that builds nothing was said to build"
+    );
+}
+
+/// Every step crosses, in order and unshortened, because the answer covers the whole plan
+/// (MANIFEST-10). The question carries no answer of its own.
+#[test]
+fn a_plan_prompt_carries_the_task_and_every_step() {
+    use bravebot_agent::confirm::ManifestRequest;
+    let steps: Vec<String> = (1..=40)
+        .map(|number| format!("{number}. [read] read file-{number}.md into `slot{number}`"))
+        .collect();
+    let value = wire::manifest_request(
+        8,
+        &ManifestRequest {
+            task: "summarise every file".into(),
+            steps: steps.clone(),
+        },
+    );
+
+    assert_eq!(
+        value,
+        json!({ "request": 8, "task": "summarise every file", "steps": steps })
+    );
+}
+
+/// The file and each finding cross, and nothing else: no text of the file, and no answer. A
+/// finding is a kind, a location and a mask, so no line of it holds any part of a value
+/// (CRED-19).
+#[test]
+fn an_exposure_prompt_carries_the_file_and_the_findings_and_no_text_of_the_file() {
+    use bravebot_agent::confirm::ExposureRequest;
+    let value = wire::exposure_request(
+        9,
+        &ExposureRequest {
+            path: "config/.env".into(),
+            credentials: vec![
+                "an AWS access key id at config/.env:1, AKIA…MPLE".into(),
+                "a private key at config/.env:4, ----…----".into(),
+            ],
+        },
+    );
+
+    assert_eq!(
+        value,
+        json!({
+            "request": 9,
+            "path": "config/.env",
+            "credentials": [
+                "an AWS access key id at config/.env:1, AKIA…MPLE",
+                "a private key at config/.env:4, ----…----",
+            ],
+            "summary": "let the model read config/.env, which holds 2 credentials",
+        })
+    );
 }

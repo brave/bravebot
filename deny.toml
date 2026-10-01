@@ -9,7 +9,8 @@
 #
 # What a new crate buys, and what writing it by hand would cost, is a judgement a person
 # makes: DEP-001 in docs/best-practices/dependencies.md. This file is the half of that rule
-# a tool can decide.
+# a tool can decide. `make check-deps` first runs contrib/check-deny-reasons.py, which fails an
+# `ignore`, `skip`, `skip-tree` or `deny` entry that has no `reason`.
 
 [graph]
 # The feature set clippy is run under here, and the widest one anything ships with. A
@@ -60,6 +61,11 @@ deny = [
     { crate = "gix-filter", reason = "runs clean and smudge filter drivers" },
     { crate = "gix-protocol", reason = "the network half of git, which is how gix-transport is reached" },
     { crate = "gix-transport", reason = "starts ssh and git-upload-pack" },
+    # A pattern can arrive through a turn, so the engine that runs it is attack surface.
+    # crates/agent/src/regex.rs matches without backtracking and is what `search` uses.
+    { crate = "regex", reason = "a pattern that arrives through a turn is run by the engine, so match literally or with crates/agent/src/regex.rs" },
+    { crate = "regex-lite", reason = "a second regex engine" },
+    { crate = "fancy-regex", reason = "a backtracking regex engine, which a crafted pattern can make exponential" },
 ]
 # `wildcards` is left at its default. It reads every intra-workspace path dependency here as
 # a `*` requirement, and `allow-wildcard-paths` does not apply to them because no crate in

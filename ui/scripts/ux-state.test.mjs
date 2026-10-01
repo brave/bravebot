@@ -424,3 +424,55 @@ test('a call is drawn with the reason the planner gave for it', () => {
   assert.match(draw({ kind: 'replayed-tool', id: 'row', text: 'Read(src/main.rs)', why: 'see the entry point' }), /<span class="why">see the entry point<\/span>/)
   assert.doesNotMatch(draw({ kind: 'replayed-tool', id: 'row', text: 'Read(src/main.rs)', why: '' }), /class="why"/)
 })
+
+// A reply that spent the output limit on one call's arguments is asked for in parts, and one that
+// spent it thinking is not, so a card that says only that the reply was too long names no remedy.
+// Folded by the window's reducer and drawn through the real row, because the fields arriving on
+// `turn.error` and going undrawn is the fault.
+test('a turn the output limit ended says the limit and what the reply was writing', () => {
+  const React = require('react')
+  const { renderToStaticMarkup } = require('react-dom/server')
+  const source = buildSync({ entryPoints: ['src/renderer/components/Transcript.tsx'], bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic', external: ['react', 'react-dom', 'react/jsx-runtime'] }).outputFiles[0].text
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', source)(require, module, module.exports)
+  const { Row } = module.exports
+
+  const session = liveSession()
+  let turn = 0
+  const failed = (category, cutOff) => {
+    turn += 1
+    session.send('turn.started', { turn })
+    session.send('turn.error', { kind: 'chat', message: category, category, turn, prompt: 0, contextTokens: 0, cutOff })
+    const entry = session.live.entries.at(-1)
+    return renderToStaticMarkup(React.createElement(Row, { entry, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false }))
+  }
+  // The agent asked for smaller parts once before the turn failed, so the card names the setting.
+  const raise = /raise the limit with BRAVEBOT_OUTPUT_BUDGET in the env block of ~\/\.bravebot\/settings\.json\./
+
+  const call = failed('too-long', { ceiling: 32000, call: { tool: 'write_file' }, thought: true })
+  assert.match(call, /<strong>The reply reached its output limit<\/strong>/)
+  assert.match(call, /reached its limit of 32,000 tokens part way through a call to write_file, so the call was not made\. Ask for the work in smaller parts, or /)
+  assert.match(call, raise)
+
+  const unnamed = failed('too-long', { ceiling: 32000, call: { tool: null }, thought: false })
+  assert.match(unnamed, /32,000 tokens part way through a tool call, so the call was not made/)
+  assert.doesNotMatch(unnamed, /a call to/, 'a call to a tool nobody offered was given a name')
+
+  const thinking = failed('too-long', { ceiling: 8192, call: null, thought: true })
+  assert.match(thinking, /reached its limit of 8,192 tokens while it was still thinking\. Choose another model, or /)
+  assert.match(thinking, raise)
+  assert.doesNotMatch(thinking, /smaller/, 'a reply that spent the limit thinking was asked for less work')
+
+  const neither = failed('too-long', { ceiling: 8192, call: null, thought: false })
+  assert.match(neither, /reached its limit of 8,192 tokens\. Ask for a smaller next step, or /)
+  assert.match(neither, raise)
+  assert.doesNotMatch(neither, /thinking|tool call|call to/)
+
+  // Without the fields there is no figure to give, and the card says what it said before.
+  const bare = failed('too-long', null)
+  assert.match(bare, /<p>Ask for a smaller next step or choose another model\.<\/p>/)
+  assert.doesNotMatch(bare, /tokens/)
+
+  // The fields describe a stop at the limit and nothing else, so they move no other card.
+  assert.doesNotMatch(failed('unavailable', { ceiling: 8192, call: null, thought: false }), /tokens/)
+})

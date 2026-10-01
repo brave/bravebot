@@ -8,9 +8,8 @@
 //! for the duration of the turn and hands it back by releasing the lock; the dispatch
 //! thread holds only what it needs to answer a question or stop the work.
 
-use crate::turn::{Kind, Reply};
+use crate::turn::Reply;
 use bravebot_agent::Conversation;
-use bravebot_agent::confirm::{Decision, RunDecision};
 use bravebot_agent::conversation::Snapshot;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::programs::TrustedPrograms;
@@ -82,6 +81,27 @@ pub struct State {
     pub rewind: Vec<bravebot_session::sessions::RewindPoint>,
     /// The first thing the user asked, which is what a list calls the session.
     pub first_prompt: Option<String>,
+    /// The permission rules this session opened under (PERM-12). Empty until the session is
+    /// opened, and for a session no settings file wrote a rule for.
+    ///
+    /// Read once and kept, so a settings file edited while the session is open changes nothing
+    /// about it. Not saved: a reopened session reads the files again.
+    pub rules: crate::rules::SettingsRules,
+    /// How many manifest runs this open session has started. Numbers the runs in events.
+    ///
+    /// Not saved: a run is written as its own record (MANIFEST-11), and the session's record
+    /// holds nothing about it.
+    pub runs: usize,
+    /// The language servers this session has started (LSP-8). `None` until a turn builds the set.
+    ///
+    /// The session holds the set so that an approved server answers later turns. A set owned by
+    /// a turn would stop at the end of it, and the next turn would ask about the same language
+    /// and index the same tree again. Each turn takes the set and puts it back.
+    ///
+    /// The set is not saved to the record. A reopened or forked session starts with none and
+    /// asks before starting a server. Dropping this state stops the servers, which happens when
+    /// the session closes or the process ends.
+    pub servers: Option<bravebot_agent::lsp::LanguageServers>,
 }
 
 impl State {
@@ -103,6 +123,9 @@ impl State {
             asides: Vec::new(),
             rewind: Vec::new(),
             first_prompt: None,
+            rules: Default::default(),
+            runs: 0,
+            servers: None,
         }
     }
 
@@ -142,6 +165,9 @@ impl State {
             asides: bravebot_session::sessions::recall(project, record).asides,
             rewind: record.rewind_points(project),
             first_prompt: Some(record.title.clone()),
+            rules: Default::default(),
+            runs: 0,
+            servers: None,
         }
     }
 
@@ -198,6 +224,9 @@ impl State {
             asides: Vec::new(),
             rewind: Vec::new(),
             first_prompt,
+            rules: Default::default(),
+            runs: 0,
+            servers: None,
         }
     }
 }
@@ -267,15 +296,7 @@ impl Running {
             // Refused in the shape of the question that was asked, so the worker's own
             // match arm accepts it. A `Write` sent at a waiting run would be discarded as
             // a mismatch and the turn would block until the channel dropped instead.
-            let _ = self.answers.send(match question.kind {
-                Kind::Write => Reply::Write(Decision::Reject),
-                Kind::Run => Reply::Run(RunDecision::reject()),
-                Kind::Output => Reply::Output(Decision::Reject),
-                Kind::Vouch => Reply::Vouch(Decision::Reject),
-                Kind::Vet => Reply::Vet(Decision::Reject),
-                // No answers at all, which is how this question says nobody was asked.
-                Kind::Ask => Reply::Ask(Vec::new()),
-            });
+            let _ = self.answers.send(question.kind.refusal());
         }
     }
 }

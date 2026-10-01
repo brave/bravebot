@@ -1,0 +1,32 @@
+name: Narration
+
+# Whether what a pull request writes narrates its writer's process: its commit messages, its title
+# and body, and every line it adds. Its own workflow rather than a job in ci.yml because the title
+# and body are part of what it reads, and an edit to either has to run it again without running
+# every other job in ci.yml with it. Standard library Python over the checkout, so it needs no
+# toolchain and answers in seconds.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  narration:
+    name: Process narration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The commits are listed from the base to the tip of the branch, which a shallow clone
+          # does not hold.
+          fetch-depth: 0
+
+      - name: Check the commits, the description and the added lines
+        # The title and body are written by whoever opened the pull request, so they reach the
+        # script as environment variables and are never interpolated into the command.
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: make check-narration

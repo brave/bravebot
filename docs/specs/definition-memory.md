@@ -239,23 +239,30 @@ for files in general. For a memory it does not hold.
 A write that leaves a memory's path untrusted, whether a file tool makes it or a command's
 redirection does, is recorded before the write lands, naming the path in full, in
 `~/.bravebot/untrusted/`, beside the remembered answers to the startup question and keyed as they
-are. A write that cannot be recorded, because the session has no state directory or the record
-cannot be written, does not land. A rewind putting back bytes the map will not trust is recorded
-first in the same way, and is not put back where it cannot be. The record will also hold the old
-notes [MEMORY-11](#MEMORY-11) puts in it, which nothing yet builds. Before every turn, a planned one
-included, each path the record names is untrusted in the session's map, as though the session's own
-write had marked it, so the memory is withheld ([MEMORY-4](#MEMORY-4)) and a read of it is
-quarantined. That holds however the session came to the directory: started there, cleared, resumed,
-reopened, or moved there with `/cd`.
+are. The path named is the one a session in the memory's directory asks about: that directory
+resolved as a working directory is, through every link and in the case the host reports for it,
+then `.bravebot/memory/<name>.md`. So a write through a link to `sub` is recorded under `sub`, and
+on a volume that holds two spellings differing only in case as one file, a write to
+`.Bravebot/memory/NOTES.md` is recorded as `.bravebot/memory/notes.md` and one to
+`Sub/.bravebot/memory/notes.md` under `sub`. A write that cannot be recorded, because the session
+has no state directory or the record cannot be written, does not land. A rewind putting back bytes
+the map will not trust is recorded first in the same way, and is not put back where it cannot be.
+The record will also hold the old notes [MEMORY-11](#MEMORY-11) puts in it, which nothing yet
+builds. Before every turn, a planned one included, each path the record names is untrusted in the
+session's map, as though the session's own write had marked it, so the memory is withheld
+([MEMORY-4](#MEMORY-4)) and a read of it is quarantined. That holds however the session came to the
+directory: started there, cleared, resumed, reopened, or moved there with `/cd`.
 
 A path leaves the record when a session trusts it again: by a later write that leaves it trusted, by
 a rewind that puts back bytes the map trusts, by a person's yes when a read of it is quarantined
 ([TRUST-8](trust-map.md#TRUST-8)), or by their naming it with `@`, dropping it or attaching it, which
-vouches for it as the yes does. A rewind past that grant takes it back, and the path is recorded
-again, since a rewind point holds the map with the record's rules in it. A path already distrusted
-by a rule of its own is left as it is when the record is read again, so a run starting changes
-nothing another run's command is labelled by. A run and its delegates changing the record at once
-lose no line either wrote. The record is kept in every session, incognito included.
+vouches for it as the yes does. Under another spelling, that takes the memory out only where the
+volume opens the spelling as the file kept there: NTFS holds `claß.md` apart from `class.md`, and
+a yes for one is no yes for the other. A rewind past that grant takes it back, and the path is
+recorded again, since a rewind point holds the map with the record's rules in it. A path already
+distrusted by a rule of its own is left as it is when the record is read again, so a run starting
+changes nothing another run's command is labelled by. A run and its delegates changing the record
+at once lose no line either wrote. The record is kept in every session, incognito included.
 
 **Why a memory and not every file.** Every other file reaches a run because something asked to
 read it. A memory is read because the driver tells every run under the definition where it is, and
@@ -293,14 +300,23 @@ in that directory, which [INCOG-3](incognito.md#INCOG-3) otherwise refuses, so
 `verified-by: bravebot_agent::memory::a_path_recorded_after_a_half_written_line_is_read_back`
 `verified-by: bravebot_agent::memory::a_path_recorded_while_another_is_trusted_again_stays_recorded`
 `verified-by: bravebot_agent::memory::the_map_a_rewind_point_holds_distrusts_every_recorded_memory`
+`verified-by: bravebot_agent::memory::on_a_volume_that_folds_case_a_memory_in_any_case_is_that_memory`
+`verified-by: bravebot_agent::memory::a_memory_written_in_another_case_is_recorded_as_a_session_asks_about_it`
+`verified-by: bravebot_agent::memory::a_spelling_the_volume_does_not_open_as_the_memory_leaves_it_recorded`
 `verified-by: bravebot_agent::workspace::an_untrusted_write_to_a_memory_is_recorded_in_the_state_directory`
+`verified-by: bravebot_agent::workspace::an_untrusted_write_to_a_memory_in_another_case_is_recorded_in_the_state_directory`
+`verified-by: bravebot_agent::workspace::an_untrusted_write_to_a_memory_under_a_directory_in_another_case_is_recorded_for_it`
+`verified-by: bravebot_agent::workspace::a_write_to_a_memory_through_a_linked_directory_is_recorded_for_the_directory_it_reaches`
+`verified-by: bravebot_agent::workspace::a_rewind_into_a_memory_in_another_case_is_recorded_in_the_state_directory`
 `verified-by: bravebot_agent::workspace::an_untrusted_write_to_a_memory_with_nowhere_to_record_it_is_refused`
 `verified-by: bravebot_agent::workspace::a_trusted_write_to_a_memory_takes_it_out_of_the_record`
 `verified-by: bravebot_agent::turn::a_memory_a_write_left_untrusted_is_withheld_from_the_next_session_until_trusted_again`
 `verified-by: bravebot_agent::turn::a_persons_yes_to_a_recorded_memory_takes_it_out_of_the_record`
 `verified-by: bravebot_agent::turn::a_recorded_memory_named_dropped_or_attached_leaves_the_record`
 `verified-by: bravebot_agent::turn::a_redirection_into_a_memory_is_recorded_before_it_opens_it`
+`verified-by: bravebot_agent::turn::a_redirection_into_a_memory_in_another_case_is_recorded_before_it_opens_it`
 `verified-by: bravebot_agent::rewind::a_rewind_into_a_memory_is_recorded_as_a_write_is`
+`verified-by: bravebot_agent::rewind::a_rewind_into_a_memory_in_another_case_is_recorded_as_a_session_asks_about_it`
 `verified-by: bravebot_agent::manifest::a_memory_an_earlier_session_left_untrusted_is_untrusted_in_a_plan`
 `verified-by: bravebot_agent::manifest::a_plan_writing_untrusted_bytes_into_a_memory_records_it`
 `verified-by: bravebot_agent::incognito::a_memory_left_untrusted_is_still_recorded`
@@ -351,7 +367,10 @@ own store ([MEMORY-1](#MEMORY-1)), and a bot's conversation is a session in that
   ([TRUST-10](trust-map.md#TRUST-10)). A checkout named in a file is reachable only once somebody
   opens it, and that is a person's act and not a file's.
 
-`isolation:` is not read either, and is an open question below rather than a refusal.
+`isolation:` is not read either. [CHECKOUT-2](checkouts.md#CHECKOUT-2), which nothing yet builds,
+reads it as a request for a checkout the driver makes, so that key would start a run somewhere
+other than the working directory. The file still names no path, and a delegate in a checkout keeps
+no memory ([CHECKOUT-9](checkouts.md#CHECKOUT-9)).
 
 `verified-by: by-construction (a definition is read for its named keys alone, none of which is a directory, and every run works in the session's workspace)`
 
@@ -492,8 +511,8 @@ Nothing builds this yet.
   gives a subagent a fresh worktree. Here that would be a run writing outside its working directory
   ([TRUST-10](trust-map.md#TRUST-10)), into a path nobody vouched for whose first write asks, after
   a `git` command no person chose to run. The directory would outlive the turn that made it, so
-  removing it is either a question for a person or a deletion nobody approved. Each of those has an
-  answer, and together they are a spec of their own.
+  removing it is either a question for a person or a deletion nobody approved.
+  [checkouts.md](checkouts.md) proposes an answer to each, which nothing yet builds.
 
 - **Whether a memory may live in the person's own directory.** `memory: user` needs a run to write
   into `~/.bravebot` without a person opening it, which no tool does. It also needs a record of what

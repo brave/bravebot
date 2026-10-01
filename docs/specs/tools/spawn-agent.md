@@ -14,6 +14,9 @@ call answers as soon as the kernel has approved it, and the report follows later
 is, what it may do and how long it may live is [delegation.md](../delegation.md); this spec is the
 call surface.
 
+[CHECKOUT-1](../checkouts.md#CHECKOUT-1), which nothing yet builds, adds a routing field,
+`isolation`, whose one value asks for a checkout of the delegate's own.
+
 ## Clauses
 
 <a id="AGENT-1"></a>

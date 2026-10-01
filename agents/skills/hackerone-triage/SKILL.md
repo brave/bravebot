@@ -2,8 +2,9 @@
 name: hackerone-triage
 description:
   'Review a HackerOne report against the code and the tracker, decide whether it should be
-  awarded, and file an issue assigned to the configured git author when it is a valid problem
-  nobody knew about. Known, fixed, or already-posted problems are not awarded. Triggers on:
+  awarded, and draft an issue assigned to the configured git author when it is a valid problem
+  nobody knew about, filing it once the user agrees. Known, fixed, or already-posted problems are
+  not awarded. Triggers on:
   /hackerone-triage <paste>, HackerOne report, H1 report, bug bounty report, should this be
   awarded, review this bounty submission.'
 argument-hint: '<paste>'
@@ -22,8 +23,9 @@ substitute `$ARGUMENTS`, it is the report text the user gave with the request.
 
 Review it to determine whether it should be awarded. **A problem that is already known about,
 already fixed, or already posted on GitHub is not awarded.** A valid problem that needs fixing
-and is none of those gets an issue, posted and assigned to the configured git author, and is
-awarded. Either way, tell the user the verdict.
+and is none of those gets an issue, assigned to the configured git author, and is awarded. The
+issue is drafted and shown to the user, and nothing is posted to GitHub until they agree. Either
+way, tell the user the verdict.
 
 ---
 
@@ -141,14 +143,14 @@ where nothing fails today.
 | **FIXED** | Does not happen on `upstream/main` | No | Cite the commit |
 | **KNOWN** | Written down as a known cost or a deliberate behaviour | No | Cite the document and section |
 | **INVALID** | Does not reproduce, misreads the rule, or needs a precondition that is the attacker's goal already | No | Say which claim fails, with a file and line |
-| **VALID** | Reproduces on `upstream/main`, needs fixing, and none of the above | Yes | File the issue (step 7) |
+| **VALID** | Reproduces on `upstream/main`, needs fixing, and none of the above | Yes | Draft the issue, ask, then file it (step 7) |
 
 Where the evidence is split, for instance valid but only partly overlapping an existing issue,
 say so and leave the award to the user rather than rounding either way. Where the report is valid
-but the existing issue only covers part of it, file the part that is new and name the existing
+but the existing issue only covers part of it, draft the part that is new and name the existing
 issue in the body.
 
-## Step 7: file the issue (VALID only)
+## Step 7: draft the issue, then file it once the user agrees (VALID only)
 
 ### Who it is assigned to
 
@@ -189,6 +191,24 @@ The body, written in the repository's own words rather than the reporter's:
 - `Reported through HackerOne` and the report number if it has one. Not the reporter's name,
   handle, or contact details, and not their text pasted verbatim: the issue is public.
 
+### Ask before posting
+
+Write the body to a file. Then explain the finding to the user in plain words before asking, so
+they can decide without reading the body first:
+
+- what the report claims, and what you checked and reproduced;
+- who has to do what for it to matter, and what it buys an attacker;
+- why the severity is what you chose, and what else you considered;
+- whether it is a defect to fix or a behaviour that could be documented instead.
+
+Then show the title, the labels, the assignee and the body, and ask whether to file it. Stop
+there. Whether a report is awarded, how severe it is, and whether it is a defect to fix or a
+behaviour to document are the user's to decide, and a public issue is hard to take back.
+
+File only after they agree. Apply any change they ask for to the draft first, and ask again if
+they want more than the change they named. If they decide against filing, or to document the
+behaviour as a known cost instead, do that and post nothing.
+
 ```bash
 gh issue create --repo brave/bravebot --title '<title>' \
   --label security,needs-security-review,<kind>,severity/<level>[,area/<area>] \
@@ -216,7 +236,9 @@ In this conversation, not on GitHub:
 1. **Award: yes, no, or your call**, on the first line.
 2. The verdict from the table and the one-sentence reason.
 3. The evidence: the issue number, the commit, the document section, or the file and line.
-4. For VALID: the URL of the issue filed, its labels, and who it is assigned to, and the
-   severity with its reason.
+4. For VALID: the explanation of the finding, the draft issue and the question whether to file
+   it (see "Ask before posting"). After they agree and it is
+   filed, the URL of the issue, its labels, and who it is assigned to, and the severity with its
+   reason.
 5. Anything not checked: a proof of concept not run, a platform not tried, a claim resting on
    reading rather than reproduction.

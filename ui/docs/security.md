@@ -36,8 +36,8 @@ it under whatever the trust map says about that path. See
 
 ## Decisions and refusal
 
-The transcript presents write, command, command-output, path-vouch and user-question
-requests. Replies must match both the pending request ID and its kind. Within a turn, an unknown
+The transcript presents write, command, command-output, path-vouch, fetch, language-server,
+plan, credential-exposure and user-question requests. Replies must match both the pending request ID and its kind. Within a turn, an unknown
 or consumed ID cannot approve another request. Clients discard pending questions
 when a turn ends because IDs may recur in later turns. Malformed decisions decline;
 question answers are checked against the offered choices.
@@ -47,9 +47,38 @@ shutdown also refuse outstanding questions. There is no timeout that grants appr
 These properties depend on both bridge refusal handling and Electron lifetime handling;
 they are covered by the Rust refusal suites and Electron tests in [testing](testing.md).
 
-The v0.9.0 agent also has fetch-host, language-server and manifest-plan approvals.
-The UI does not present those requests yet; the bridge refuses them without taking
-an answer intended for another pending question.
+A fetch approval is consent to one request to the host shown, which the card draws on a
+line of its own as the agent read it out of the address. It trusts nothing that comes
+back, which stays confined, and it is not remembered: the next fetch asks again.
+
+A language-server approval starts one process for the conversation, with the person's own
+access and unconfined. The card names the binary the server's name resolved to and the tree
+it would index, and says so where starting it runs build tooling, since that is code from
+the dependency tree running as the person. The bridge holds the servers a conversation
+started and stops them when it closes. An approval is no claim about what a server reports:
+a place in a file reaches the model and the text at it stays confined.
+
+A plan approval is asked once per manifest run, before its first step. The card shows the
+task and every step. An approval covers that plan only and does not approve its writes: each
+write is still asked about when its step is reached. What a run releases for a screen can be
+a file's text, so the window draws it as plain text in a marked container and never formats
+it. A run is not part of the conversation and is left out of an export.
+
+Permission rules from settings files decide whether a card appears at all. A `deny` rule
+refuses before any card, and an `allow` rule in the person's own file answers one. An
+`allow` rule a project's file wrote answers nothing, since it arrived with the project. The
+window lists the rules in force and says which settings are not. Rules are not applied to a
+plan run, and the plan card says so where the conversation holds a rule that narrows.
+
+A credential-exposure approval is asked when the planner reads a trusted file that the scan
+found a credential in. The card names the file and each finding, which is a kind, a place
+and a mask. The value is not sent to the window, so it is never drawn. An approval sends the
+file to the model and covers that file until the conversation closes. It is not saved and
+does not change whether the file is trusted. A refusal keeps the file's text from the model.
+
+The agent also asks before starting or calling an MCP server. The desktop app starts no MCP
+server, and the bridge refuses those requests without taking an answer intended for another
+pending question.
 
 Vetted-content approval releases only the displayed bytes once; it does not create a trust
 rule for future reads. Checker verdicts are advisory. Checking already sends the content

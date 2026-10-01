@@ -288,6 +288,18 @@ question and never removes one. On Windows a name that reads as something other 
 spells (a stream, a device, a trailing dot or space, an 8.3 short name) is refused outright, since
 the rules cannot be matched against a spelling that is not the file's.
 
+The same holds for the spelling a rule is written in. A `deny` or `ask` path rule whose segments
+before the first `*` pass through a symbolic link also covers the place the link reaches, under the
+name a gate holds that place by ([PERM-3](#PERM-3)): with `linked` a link to `real`,
+`Read(linked/**)` refuses `real/secret.txt` asked for by that name, in a call or in a walk, and a
+`//` rule written through a link to an added directory covers the files in it. A name is a place
+at the top of the workspace too, so with `.env` a link, `Read(.env)` covers the file it reaches. A
+rule whose spelling passes through no link is left as written, so a full path to a project file
+still says nothing about the name the project holds it by. The rule stays one rule, and the name it
+reaches is covered at that place only, not wherever it appears as the written pattern may be
+([PERM-4](#PERM-4)). An `allow` rule is matched as written, so a grant does not reach further than
+the spelling the person approved.
+
 Nor is it about the directory a call happened to name, so it holds whichever way a walk arrives at
 the file. A listing or a search consults the rules for every entry its walk reaches as well as for
 the directory it was asked for, and an entry a rule covers is left out before the file is opened or
@@ -295,6 +307,12 @@ its name is reported. A directory a rule covers is not descended into. Both are 
 the walk's own caps, so a rule never costs a listing or a search the files it was asked about. A walk
 does not follow a symbolic link it meets: the entry is neither reported nor descended into, so a
 link to a denied file is not a second name a listing or a search hands back.
+
+The files this program reads from the project on its own account are judged the same way. The
+project's instructions file, the file it points at, and a skill or a definition the project holds,
+where a rule covers it under the name it was found by or the one it lands on, are left out of the
+turn and the person is told, so a checkout cannot put a denied file into the system prompt by
+committing a link to it or a short file naming it.
 
 What comes back says a rule was the reason only where the rule is the whole reason: a search that
 had nothing left to read reports that and that retrying is not the answer, and one that read the
@@ -334,6 +352,24 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::turn::a_link_to_a_directory_a_rule_covers_is_not_listed_or_searched_through`
 `verified-by: bravebot_agent::turn::an_ask_rule_still_prompts_for_a_write_through_a_link_to_the_file`
 `verified-by: bravebot_agent::turn::a_denied_directory_is_not_written_under_another_case_of_its_name`
+`verified-by: bravebot_agent::turn::a_denied_file_does_not_reach_the_system_prompt_through_an_agents_file_linking_to_it`
+`verified-by: bravebot_agent::turn::a_denied_file_an_agents_file_points_at_does_not_reach_the_system_prompt`
+`verified-by: bravebot_agent::skills::a_skill_a_deny_rule_covers_is_offered_nowhere_through_a_link_to_it`
+`verified-by: bravebot_agent::agents::a_definition_a_deny_rule_covers_is_selectable_nowhere_through_a_link_to_it`
+`verified-by: bravebot_agent::turn::a_file_a_rule_names_through_a_link_is_not_read_or_written_by_its_own_name`
+`verified-by: bravebot_agent::turn::a_file_a_rule_names_through_a_link_is_not_listed_or_searched`
+`verified-by: bravebot_agent::turn::a_full_path_rule_through_a_link_to_an_added_directory_covers_its_files`
+`verified-by: bravebot_agent::turn::an_ask_rule_spelled_through_a_link_still_prompts_for_a_write_to_its_target`
+`verified-by: bravebot_agent::permissions::a_restricting_rule_spelled_through_a_link_covers_the_file_it_reaches`
+`verified-by: bravebot_agent::permissions::an_unattended_run_follows_a_rule_spelled_through_a_link_too`
+`verified-by: bravebot_agent::permissions::the_name_a_link_reaches_is_covered_at_that_place_only`
+`verified-by: bravebot_agent::permissions::an_allow_rule_spelled_through_a_link_grants_only_the_spelling_it_names`
+`verified-by: bravebot_agent::permissions::a_rule_through_a_link_covers_its_target_on_whichever_side_of_the_root_it_is`
+`verified-by: bravebot_agent::permissions::a_rule_under_a_linked_home_directory_covers_the_directory_it_reaches`
+`verified-by: bravebot_agent::permissions::a_rule_naming_a_link_covers_the_file_it_reaches`
+`verified-by: bravebot_agent::permissions::a_full_path_rule_with_no_link_in_it_says_nothing_about_a_project_file`
+`verified-by: bravebot_core::permissions::a_restricting_path_rule_is_followed_from_the_segments_before_its_first_star`
+`verified-by: bravebot_core::permissions::a_landing_is_read_in_the_spelling_a_path_is_matched_in`
 `verified-by: bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only`
 `verified-by: bravebot_agent::turn::a_denied_host_is_refused_without_asking`
 `verified-by: bravebot_agent::turn::a_deny_rule_holds_against_a_trusted_workspace`
@@ -678,11 +714,21 @@ about the first one's ([#843](https://github.com/brave/bravebot/issues/843)).
 ### PERM-16: `readsStayInWorkspace` holds the file tools to the workspace, whatever else is written
 
 `"permissions": { "readsStayInWorkspace": true }` refuses every path outside the working directory,
-in every mode, whatever a rule, a mode, or an answer given during the session would otherwise open.
-No directory may be opened beside the workspace: `/add-dir` and `--add-dir` are refused, a name in
+in every mode. No directory may be opened beside the workspace, whatever a rule, a mode, or an answer
+given during the session would otherwise open: `/add-dir` and `--add-dir` are refused, a name in
 `additionalDirectories` is refused rather than put to anybody, and a directory that was already open
 when the key was read is not reachable either, which is what a resume reopening the directories its
 own record holds arrives as ([PERM-10](#PERM-10)).
+
+[CHECKOUT-7](checkouts.md#CHECKOUT-7), which nothing yet builds, makes a delegate's checkout its
+workspace, so for that delegate this key refuses every path outside the checkout, the working
+directory among them.
+
+The working directory may not move outward either. `/cd` into the tree is allowed, and `/cd` to a
+parent or a sibling is refused, because a parent holds whatever was refused beside the old root and
+the move would reach by relocation what the key refuses by name. The destination is judged by where
+it lands rather than by how it is spelled, so a name inside the root that reaches outside it, a link
+among them, is refused as a move outward.
 
 **Where the refusal is made.** In the workspace, at the two places the reach exists: the one function
 every door onto a directory by name resolves through, and the test of where a path lands that every
@@ -701,9 +747,10 @@ the key nor a file would send somebody looking for a fault in the program.
 
 **What it does not refuse.** The directory the session was given for itself stays reachable: nobody
 was asked for it, no rule opened it, and a session whose own directory went unreachable would fail
-every read and write it makes there ([TRUST-16](trust-map.md#TRUST-16)). `/cd` is not refused either:
-it replaces the workspace and closes what it left ([TRUST-13](trust-map.md#TRUST-13)), so nothing is
-open beside the workspace at any moment, which is the whole of what this clause promises. A file a
+every read and write it makes there ([TRUST-16](trust-map.md#TRUST-16)). `/cd` into the working
+directory is not refused: it replaces the workspace and closes what it left
+([TRUST-13](trust-map.md#TRUST-13)), and a directory inside the root was reachable already, so the
+move opens nothing. A file a
 person dropped on the window keeps the reach [dropping.md](dropping.md) gives it, for the reason
 stated there: the path is fixed into routing by a gesture before a turn starts, so it is not reach a
 rule, a mode or an answer opened.
@@ -718,6 +765,9 @@ which is [PERM-13](#PERM-13)'s reasoning about a question that changes nothing.
 `verified-by: bravebot_agent::workspace::a_directory_by_name_is_refused_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::a_directory_already_open_is_unreachable_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::the_sessions_own_directory_stays_reachable_where_reads_stay_in_the_workspace`
+`verified-by: bravebot_agent::workspace::a_move_outward_is_refused_where_reads_stay_in_the_workspace`
+`verified-by: bravebot_agent::workspace::a_move_inward_is_allowed_where_reads_stay_in_the_workspace`
+`verified-by: bravebot_agent::workspace::a_move_through_a_link_out_of_the_tree_is_refused_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_tui::app::a_named_directory_is_refused_rather_than_asked_about_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_tui::app::add_dir_is_refused_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_ui_bridge::workspace::a_turn_is_held_inside_the_project_where_its_settings_ask_for_it`
@@ -822,6 +872,18 @@ have made each of those three depend on nobody else having spoken.
   ([cli.md](cli.md)) asks nothing here, so a rule granted in the panel is a prompt again on either.
   Both fail closed, and putting the question on a surface is what would fix it rather than reading the
   record on one that cannot ask.
+- **The desktop application grants no rule a checkout proposes, and opens no directory a file
+  names.** It has neither the question [PERM-15](#PERM-15) puts nor the one
+  [PERM-10](#PERM-10) puts, so it reads no grant recorded at the terminal and opens nothing
+  `additionalDirectories` names. Both fail closed. Each rule and each directory passed over is
+  named as the session opens, with the file that wrote the rule, so a prompt the rule was written
+  to answer does not read as a second fault. `deny` and `ask` rules from every layer, and `allow`
+  rules from the person's own file, hold there as they do in the terminal.
+- **A manifest run reads no rule.** The runner builds its policy without the rules the session
+  holds, so a `deny` rule does not refuse a step of a plan and an `ask` rule puts no question
+  about one. What stands in a run is the plan question and the write question
+  ([manifest.md](manifest.md#MANIFEST-10)). The desktop application says so on the plan it puts
+  to the person, where the session holds a `deny` or an `ask` rule.
 - **Declining to trust the workspace still leads to the question.** The two are separate claims, so
   somebody who said the tree's content is not theirs is still offered its rules, and may grant them.
   That is the point of asking separately, and it is also the odd case: a person who has just said
@@ -839,11 +901,27 @@ have made each of those three depend on nobody else having spoken.
   expecting it to fence every subprocess would be believing something that is not true.
 - **`readsStayInWorkspace` is read when the session opens, so `/cd` does not read it again.** The two
   keys are read once per session with the rest of the block ([PERM-12](#PERM-12)), and `/cd` reads the
-  destination's rules again but not these. A session already confined stays confined wherever it
-  moves, which is the direction to be wrong in; a session that was not confined and moves into a
-  checkout asking for it is confined from the next session there rather than from that turn. Closing
-  it would mean the restriction arriving partway through a session, and the file the session started
-  under is the one its author read.
+  destination's rules again but not these. A session already confined keeps the key set wherever it
+  moves, and it may only move further in, so the reach never grows; a session that was not confined
+  and moves into a checkout asking for it is confined from the next session there rather than from
+  that turn. Closing it would mean the restriction arriving partway through a session, and the file
+  the session started under is the one its author read.
+- **`/cd` is one way under `readsStayInWorkspace`.** A session may move further into its tree and not
+  back out, so a person who moves into a subdirectory and then wants the directory above has to start
+  a session there. Allowing the move back would allow every move outward, since the key cannot tell a
+  return from a widening: both name a directory that holds the root. Starting again is the same answer
+  the key gives to a sibling checkout in the known cost below.
+- **A link in a rule's spelling is followed when the rules are read.** [PERM-7](#PERM-7) has a rule
+  written through a link cover the place the link reached then, and the rules are read once per
+  session ([PERM-12](#PERM-12)). A link made, removed or repointed later is followed again only when
+  the rules are read again, at the next session or a `/cd`; until then the rule covers the place the
+  link used to reach as well as its own spelling, and a call through the link is still checked under
+  the name it reaches. Following the rule's links at every call would put I/O in every match. Only
+  the place a rule names is followed, not the nested copies a restricting pattern floats to
+  ([PERM-4](#PERM-4)): with `vendor/secrets` a link to `vault`, `Read(secrets/**)` covers
+  `vendor/secrets/key` and not `vault/key`, since finding every copy is a walk of the tree. And
+  the place is looked up in the spelling the rule is stored in, folded where the volume folds case,
+  so a link behind a name the volume does not open in its folded spelling is not followed.
 - **`readsStayInWorkspace` does not confine a program a `run` starts.** It governs the file tools, as
   the path rules do, and the known cost above about a path rule not reaching a program's own file
   access holds here word for word: `run cat ~/.ssh/id_rsa` is judged against the `Bash` rules and the

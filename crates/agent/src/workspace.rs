@@ -427,7 +427,7 @@ fn refuse_misleading_names(
 ///
 /// Says where an operation goes now, not where it goes when it happens; the window between the
 /// two is a known cost against the clause this serves.
-fn destination(path: &Path) -> Option<PathBuf> {
+pub(crate) fn destination(path: &Path) -> Option<PathBuf> {
     let mut missing: Vec<OsString> = Vec::new();
     let mut existing = path.to_path_buf();
     let mut followed = 0usize;
@@ -769,6 +769,19 @@ impl Workspace {
             });
         }
 
+        // The key holds the file tools to the working directory, and moving the working directory
+        // outward is how that reach grows without a name being opened: a parent contains whatever
+        // `resolve_directory` refused beside the old root, so the move reaches by relocation what
+        // the key refuses by name (PERM-16). Refused here rather than at the command, for the
+        // reason `resolve_directory` refuses here: this is the one function a root moves through.
+        if self.reads_stay_inside && !canonical.starts_with(&self.root) {
+            return Err(WorkspaceError::Invalid {
+                path: directory.to_string(),
+                reason: "is not inside the working directory, and \
+                         permissions.readsStayInWorkspace keeps the file tools inside it",
+            });
+        }
+
         if self.reaches_scratch(&canonical) {
             return Err(WorkspaceError::Invalid {
                 path: directory.to_string(),
@@ -871,6 +884,18 @@ impl Workspace {
             .components()
             .filter(|component| !matches!(component, Component::CurDir));
         (!Path::new(&landed).components().eq(typed)).then_some(landed)
+    }
+
+    /// Whether a `deny` rule covers reading `named`, under that name or the one it lands on
+    /// (PERM-7), asked without refusing anything.
+    ///
+    /// For a file the driver looks for itself rather than one a call named, which is left out
+    /// rather than failed, as a walk leaves out an entry a rule covers.
+    pub(crate) fn rule_denies_reading<S: Sink>(&self, policy: &Policy<'_, S>, named: &str) -> bool {
+        policy.read_is_denied(named)
+            || self
+                .landing(named)
+                .is_some_and(|landed| policy.read_is_denied(&landed))
     }
 
     /// Where an attachment's bytes are.
@@ -1483,11 +1508,12 @@ impl Workspace {
     ) -> Result<PathBuf, WorkspaceError> {
         let resolved = self.resolve(&relative)?;
         let written = policy.file_authority().key(&self.trust_key(&relative));
+        let folds = volume_folds_case(&self.root);
         // Before the capture rather than inside it, so no other write waits on the record's sync.
         // A write refused after this leaves a line distrusting a path it did not change, which
         // is the direction that trusts nothing.
         if contents.label().integrity == bravebot_core::label::Integrity::Untrusted {
-            crate::memory::record_before_write(self.memories(), &written).map_err(|e| {
+            crate::memory::record_before_write(self.memories(), &written, folds).map_err(|e| {
                 WorkspaceError::Io {
                     path: relative.clone(),
                     detail: e.to_string(),
@@ -1534,7 +1560,7 @@ impl Workspace {
         #[cfg(test)]
         self.interrupt_after_write()?;
         effect.complete(contents.label().integrity);
-        crate::memory::after_write(policy, self.memories(), &written);
+        crate::memory::after_write(policy, self.memories(), &written, folds);
         Ok(resolved)
     }
 
@@ -2914,6 +2940,31 @@ pub const BACKSLASH_SEPARATES: bool = cfg!(windows);
 /// directory under ([`refuse_unkeyable`]), which is the direction that trusts nothing.
 pub fn key_of(resolved: &Path) -> String {
     to_key(&resolved.to_string_lossy(), BACKSLASH_SEPARATES).into_owned()
+}
+
+/// The path the map key `key` names on this host, where it is a full one.
+fn host_path(key: &str) -> Option<&Path> {
+    let path = match BACKSLASH_SEPARATES {
+        true => key.strip_prefix('/').filter(|rest| {
+            matches!(rest.as_bytes(), [letter, b':', b'/', ..] if letter.is_ascii_alphabetic())
+        })?,
+        false => Some(key).filter(|key| key.starts_with('/'))?,
+    };
+    Some(Path::new(path))
+}
+
+/// The map key `key`, spelled as the volume spells each part of it that exists and through every
+/// link, which is how [`key_of`] spells a working directory there.
+///
+/// `None` for a key that names no full path on this host, or one that does not resolve.
+pub(crate) fn on_disk(key: &str) -> Option<String> {
+    destination(host_path(key)?).map(|resolved| key_of(&resolved))
+}
+
+/// Whether the map keys `one` and `other` name one file that is there now, as the volume says.
+pub(crate) fn one_file(one: &str, other: &str) -> bool {
+    let id = |key| host_path(key).map(file_id);
+    matches!((id(one), id(other)), (Some(Ok(one)), Some(Ok(other))) if one == other)
 }
 
 /// An empty trust map for the workspace at `root`, comparing names the way the volume it is on

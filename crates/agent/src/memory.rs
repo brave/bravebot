@@ -28,6 +28,7 @@
 use crate::workspace::Workspace;
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
+use std::borrow::Cow;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -67,18 +68,48 @@ pub fn relative(name: &str) -> String {
     format!("{MEMORY}/{name}.md")
 }
 
-/// The directory whose memory the map key `key` is, where it is one.
+/// The memory the map key `key` is, where it is one: the directory it is kept under, as the key
+/// spells it, and the memory's name.
 ///
 /// A key spelled `<directory>/.bravebot/memory/<slug>.md`. Read off the key rather than off the
 /// session's own directory, so a write into a subdirectory's memory is recorded against the
 /// directory a session there reads it from.
-fn directory_of(key: &str) -> Option<&str> {
-    let (directory, file) = key.rsplit_once('/')?;
-    if !file.strip_suffix(".md").is_some_and(is_a_slug) {
+///
+/// Where `folds` says the volume holds two spellings differing only in case as one file, the
+/// `.bravebot` and `memory` directories and the file name are compared with case folded, as the
+/// map folds them. There `.Bravebot/memory/NOTES.md` opens the memory `notes`.
+fn memory_at(key: &str, folds: bool) -> Option<(&str, String)> {
+    let (rest, file) = key.rsplit_once('/')?;
+    let (rest, memory) = rest.rsplit_once('/')?;
+    let (directory, bravebot) = rest.rsplit_once('/')?;
+    if spelled(bravebot, folds) != ".bravebot" || spelled(memory, folds) != "memory" {
         return None;
     }
-    let directory = directory.strip_suffix(MEMORY)?.strip_suffix('/')?;
-    Some(if directory.is_empty() { "/" } else { directory })
+    let file = spelled(file, folds);
+    let slug = file.strip_suffix(".md").filter(|name| is_a_slug(name))?;
+    let directory = if directory.is_empty() { "/" } else { directory };
+    Some((directory, slug.to_string()))
+}
+
+/// `written` as the map compares it on a volume that folds case where `folds` says this one does.
+fn spelled(written: &str, folds: bool) -> Cow<'_, str> {
+    match folds {
+        true => Cow::Owned(bravebot_core::trust::fold_case(written)),
+        false => Cow::Borrowed(written),
+    }
+}
+
+/// The record a memory named `name` kept under `directory` belongs in, and the key it is
+/// recorded under.
+///
+/// The directory as the volume spells it and through every link, which is how a session there
+/// keys its own working directory, and the rest as [`relative`] spells it, which is how that
+/// session asks the map about the memory. Recorded as written, a write naming the directory or
+/// the memory another way would name a path no later session asks about.
+fn recorded_as(home: &Path, directory: &str, name: &str) -> (Record, String) {
+    let directory = crate::workspace::on_disk(directory).unwrap_or_else(|| directory.to_string());
+    let memory = format!("{}/{}", directory.trim_end_matches('/'), relative(name));
+    (Record::new(home, &directory), memory)
 }
 
 /// Whether a memory kept under `root` would be inside the person's own directory, `home`.
@@ -116,8 +147,15 @@ pub(crate) fn kept_in_home(root: &Path, home: Option<&Path>) -> bool {
 /// Nothing to do where `key` is no memory's. Where it is one, an error is a write that must not
 /// land: with no state directory, or one the record cannot be written to, the next session would
 /// read the bytes as trusted.
-pub(crate) fn record_before_write(home: Option<&Path>, key: &str) -> std::io::Result<()> {
-    let Some(directory) = directory_of(key) else {
+///
+/// `folds` here and in the functions below is the answer of
+/// [`crate::workspace::volume_folds_case`] for the working directory.
+pub(crate) fn record_before_write(
+    home: Option<&Path>,
+    key: &str,
+    folds: bool,
+) -> std::io::Result<()> {
+    let Some((directory, name)) = memory_at(key, folds) else {
         return Ok(());
     };
     let Some(home) = home else {
@@ -125,18 +163,27 @@ pub(crate) fn record_before_write(home: Option<&Path>, key: &str) -> std::io::Re
             "there is no state directory to record an untrusted memory in",
         ));
     };
-    Record::new(home, directory).keep(key)
+    let (record, memory) = recorded_as(home, directory, &name);
+    record.keep(&memory)
 }
 
 /// Take the memory at the map key `key` out of the record, now that the session trusts it again.
 ///
+/// Under a spelling of the memory's own name, or one the volume opens as the file now kept there.
+/// A spelling that only folds to the memory's need not open it: NTFS holds `cla\u{df}.md` and
+/// `class.md` apart, and trusting one is no yes for the other.
+///
 /// Best effort: a line left behind distrusts the path on the next turn, which is the direction
 /// that trusts nothing.
-pub(crate) fn trusted_again(home: Option<&Path>, key: &str) {
-    let (Some(home), Some(directory)) = (home, directory_of(key)) else {
+pub(crate) fn trusted_again(home: Option<&Path>, key: &str, folds: bool) {
+    let (Some(home), Some((directory, name))) = (home, memory_at(key, folds)) else {
         return;
     };
-    let _ = Record::new(home, directory).forget(key);
+    let (record, memory) = recorded_as(home, directory, &name);
+    let named = key.ends_with(&format!("/{}", relative(&name)));
+    if named || crate::workspace::one_file(key, &memory) {
+        let _ = record.forget(&memory);
+    }
 }
 
 /// Bring the record into line with what the map says of the memory at `key` once a write to it
@@ -146,8 +193,13 @@ pub(crate) fn trusted_again(home: Option<&Path>, key: &str) {
 /// a write whose data was trusted can still end untrusted when another changed the path meanwhile,
 /// and that one was not recorded before it landed. Best effort both ways, since the bytes are
 /// already there.
-pub(crate) fn after_write<S: Sink>(policy: &Policy<'_, S>, home: Option<&Path>, key: &str) {
-    settle(home, key, !policy.read_is_quarantined(key));
+pub(crate) fn after_write<S: Sink>(
+    policy: &Policy<'_, S>,
+    home: Option<&Path>,
+    key: &str,
+    folds: bool,
+) {
+    settle(home, key, !policy.read_is_quarantined(key), folds);
 }
 
 /// Vouch for `path`, which the person named, dropped or attached, and bring the record into line.
@@ -165,6 +217,7 @@ pub(crate) fn vouch_for_named<S: Sink>(
         policy,
         workspace.memories(),
         &policy.file_authority().key(&named),
+        crate::workspace::volume_folds_case(workspace.root()),
     );
 }
 
@@ -194,24 +247,25 @@ pub(crate) fn after_rewind(
     home: Option<&Path>,
     current: &bravebot_core::trust::TrustStore,
     restored: &[String],
+    folds: bool,
 ) {
     for key in restored {
-        settle(home, key, current.is_trusted(key));
+        settle(home, key, current.is_trusted(key), folds);
     }
     for (key, integrity) in current.keyed() {
         if integrity == Some(bravebot_core::label::Integrity::Untrusted) {
-            settle(home, key, false);
+            settle(home, key, false, folds);
         }
     }
 }
 
 /// Record the memory at `key`, or take it out, as the map now trusts it or not. Best effort, and
 /// nothing where `key` is no memory's.
-fn settle(home: Option<&Path>, key: &str, trusted: bool) {
+fn settle(home: Option<&Path>, key: &str, trusted: bool, folds: bool) {
     if trusted {
-        trusted_again(home, key);
+        trusted_again(home, key, folds);
     } else {
-        let _ = record_before_write(home, key);
+        let _ = record_before_write(home, key, folds);
     }
 }
 
@@ -473,24 +527,25 @@ mod tests {
     }
 
     /// MEMORY-5: a write is recorded against the directory whose memory it is, read off the path,
-    /// and a path that is no memory's is recorded nowhere.
+    /// and a path that is no memory's is recorded nowhere. On a volume that keeps two spellings
+    /// apart, `Notes.md` is another file.
     #[test]
     fn a_memory_path_names_the_directory_it_is_kept_under() {
-        assert_eq!(
-            directory_of("/work/.bravebot/memory/notes.md"),
-            Some("/work")
-        );
-        assert_eq!(
-            directory_of("/work/sub/.bravebot/memory/notes.md"),
-            Some("/work/sub")
-        );
-        assert_eq!(
-            directory_of("C:/work/.bravebot/memory/notes.md"),
-            Some("C:/work")
-        );
-        assert_eq!(directory_of("/.bravebot/memory/notes.md"), Some("/"));
+        for (key, directory) in [
+            ("/work/.bravebot/memory/notes.md", "/work"),
+            ("/work/sub/.bravebot/memory/notes.md", "/work/sub"),
+            ("C:/work/.bravebot/memory/notes.md", "C:/work"),
+            ("/.bravebot/memory/notes.md", "/"),
+        ] {
+            assert_eq!(
+                memory_at(key, false),
+                Some((directory, "notes".to_string())),
+                "{key}"
+            );
+        }
         for not in [
             "/work/.bravebot/memory/Notes.md",
+            "/work/.Bravebot/memory/notes.md",
             "/work/.bravebot/memory/notes.txt",
             "/work/.bravebot/memory/sub/notes.md",
             "/work/.bravebot/agents/notes.md",
@@ -498,7 +553,86 @@ mod tests {
             "/work/notes.md",
             ".bravebot/memory/notes.md",
         ] {
-            assert_eq!(directory_of(not), None, "{not} is no memory's path");
+            assert_eq!(memory_at(not, false), None, "{not} is no memory's path");
+        }
+    }
+
+    /// MEMORY-5 and TRUST-2: on a volume that folds case, every spelling that opens a memory is
+    /// that memory. The fold is the map's, so `\u{17f}`, which APFS opens as `s`, is one too.
+    #[test]
+    fn on_a_volume_that_folds_case_a_memory_in_any_case_is_that_memory() {
+        for key in [
+            "/work/.bravebot/memory/notes.md",
+            "/work/.Bravebot/memory/notes.md",
+            "/work/.bravebot/Memory/notes.md",
+            "/work/.bravebot/memory/NOTES.md",
+            "/work/.bravebot/memory/notes.MD",
+            "/work/.BRAVEBOT/MEMORY/Notes.Md",
+            "/work/.bravebot/memory/note\u{17f}.md",
+        ] {
+            assert_eq!(
+                memory_at(key, true),
+                Some(("/work", "notes".to_string())),
+                "{key}"
+            );
+        }
+        assert_eq!(
+            memory_at("/.Bravebot/memory/notes.md", true),
+            Some(("/", "notes".to_string()))
+        );
+        for not in [
+            "/work/.bravebot/memory/notes.txt",
+            "/work/.bravebot/memory/sub/notes.md",
+            "/work/.Bravebot/agents/notes.md",
+            "/work/x.Bravebot/memory/notes.md",
+            "/work/.bravebot/memory/N\u{f6}tes.md",
+            ".Bravebot/memory/notes.md",
+        ] {
+            assert_eq!(memory_at(not, true), None, "{not} is no memory's path");
+        }
+    }
+
+    /// MEMORY-5: on a volume that folds case, a write under another spelling records the memory
+    /// as a session asks about it, and trusting it again under that spelling takes the line out.
+    #[test]
+    fn a_memory_written_in_another_case_is_recorded_as_a_session_asks_about_it() {
+        let scratch = Scratch::new("memory-record-folded");
+        let home = Some(scratch.path.as_path());
+        let record = Record::new(&scratch.path, "/work");
+        for written in [
+            "/work/.Bravebot/memory/notes.md",
+            "/work/.bravebot/memory/NOTES.md",
+        ] {
+            record_before_write(home, written, true).unwrap();
+            assert_eq!(
+                record.paths(),
+                vec!["/work/.bravebot/memory/notes.md".to_string()],
+                "{written}"
+            );
+            trusted_again(home, "/work/.bravebot/memory/notes.md", true);
+            assert!(record.paths().is_empty(), "{written}");
+        }
+    }
+
+    /// MEMORY-5: a yes under a spelling that folds to a memory's name, where the volume opens no
+    /// one file for the two, takes nothing out of the record. NTFS holds `cla\u{df}.md` apart from
+    /// `class.md`, and nothing is kept under either spelling here.
+    #[test]
+    fn a_spelling_the_volume_does_not_open_as_the_memory_leaves_it_recorded() {
+        let scratch = Scratch::new("memory-record-folded-apart");
+        let home = Some(scratch.path.as_path());
+        let record = Record::new(&scratch.path, "/work");
+        record_before_write(home, "/work/.bravebot/memory/class.md", true).unwrap();
+        for other in [
+            "/work/.bravebot/memory/cla\u{df}.md",
+            "/work/.Bravebot/memory/CLASS.md",
+        ] {
+            trusted_again(home, other, true);
+            assert_eq!(
+                record.paths(),
+                vec!["/work/.bravebot/memory/class.md".to_string()],
+                "a yes for {other} took class.md out of the record"
+            );
         }
     }
 
@@ -508,9 +642,9 @@ mod tests {
     fn a_recorded_memory_is_read_back_for_its_directory_alone() {
         let scratch = Scratch::new("memory-record-read-back");
         let home = Some(scratch.path.as_path());
-        record_before_write(home, "/work/.bravebot/memory/notes.md").unwrap();
-        record_before_write(home, "/work/.bravebot/memory/notes.md").unwrap();
-        record_before_write(home, "/other/.bravebot/memory/notes.md").unwrap();
+        record_before_write(home, "/work/.bravebot/memory/notes.md", false).unwrap();
+        record_before_write(home, "/work/.bravebot/memory/notes.md", false).unwrap();
+        record_before_write(home, "/other/.bravebot/memory/notes.md", false).unwrap();
 
         assert_eq!(
             Record::new(&scratch.path, "/work").paths(),
@@ -541,8 +675,8 @@ mod tests {
     /// asks nothing of the record.
     #[test]
     fn an_untrusted_memory_write_with_nowhere_to_record_it_is_refused() {
-        assert!(record_before_write(None, "/work/.bravebot/memory/notes.md").is_err());
-        assert!(record_before_write(None, "/work/notes.md").is_ok());
+        assert!(record_before_write(None, "/work/.bravebot/memory/notes.md", false).is_err());
+        assert!(record_before_write(None, "/work/notes.md", false).is_ok());
     }
 
     /// MEMORY-5: the record is a file under the state directory, and one that cannot be written
@@ -556,7 +690,12 @@ mod tests {
         )
         .unwrap();
         assert!(
-            record_before_write(Some(&scratch.path), "/work/.bravebot/memory/notes.md").is_err()
+            record_before_write(
+                Some(&scratch.path),
+                "/work/.bravebot/memory/notes.md",
+                false
+            )
+            .is_err()
         );
     }
 
@@ -566,14 +705,14 @@ mod tests {
     fn a_path_trusted_again_leaves_the_record_and_the_rest_stays() {
         let scratch = Scratch::new("memory-record-forget");
         let home = Some(scratch.path.as_path());
-        record_before_write(home, "/work/.bravebot/memory/notes.md").unwrap();
-        record_before_write(home, "/work/.bravebot/memory/plans.md").unwrap();
+        record_before_write(home, "/work/.bravebot/memory/notes.md", false).unwrap();
+        record_before_write(home, "/work/.bravebot/memory/plans.md", false).unwrap();
         let record = Record::new(&scratch.path, "/work");
         let mut written = std::fs::read(record.path()).unwrap();
         written.extend_from_slice(b"not an entry\n");
         std::fs::write(record.path(), &written).unwrap();
 
-        trusted_again(home, "/work/.bravebot/memory/notes.md");
+        trusted_again(home, "/work/.bravebot/memory/notes.md", false);
 
         assert_eq!(
             record.paths(),
@@ -588,8 +727,8 @@ mod tests {
     fn trusting_the_last_recorded_path_again_removes_the_record() {
         let scratch = Scratch::new("memory-record-forget-last");
         let home = Some(scratch.path.as_path());
-        record_before_write(home, "/work/.bravebot/memory/notes.md").unwrap();
-        trusted_again(home, "/work/.bravebot/memory/notes.md");
+        record_before_write(home, "/work/.bravebot/memory/notes.md", false).unwrap();
+        trusted_again(home, "/work/.bravebot/memory/notes.md", false);
         assert!(!Record::new(&scratch.path, "/work").path().exists());
     }
 

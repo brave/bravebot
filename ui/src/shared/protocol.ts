@@ -104,6 +104,26 @@ export interface TodoRow {
   status: TodoStatus
 }
 
+/**
+ * The permission rules a session opened under, read from the settings files when it opened.
+ *
+ * `deny`, `ask` and `allow` are the rules in force, as the files spelled them. The rest is what
+ * a file wrote that is not in force: an entry that is not a rule, an `allow` rule a project's
+ * file wrote, and a directory a file asked to have opened. Rule text is what a person wrote in a
+ * settings file.
+ */
+export interface SettingsRules {
+  deny: string[]
+  ask: string[]
+  allow: string[]
+  /** An entry nothing could read as a rule, and the agent's sentence about why. */
+  unreadable: { rule: string; said: string }[]
+  /** An `allow` rule a project's settings file wrote. It answers no question here. */
+  proposed: { rule: string; file: string }[]
+  /** A directory a settings file asked to have opened. This app opens none of them. */
+  directories: string[]
+}
+
 export interface SessionSummary {
   id: string
   directory: string
@@ -112,6 +132,11 @@ export interface SessionSummary {
   title: string
   updated: number
   bytes: number
+  /**
+   * Whether the record is a manifest run. A run has no conversation, so it is read with
+   * `manifest.read` and cannot be opened or continued. Absent from an older bridge.
+   */
+  manifest?: boolean
 }
 
 export interface SessionRecord {
@@ -168,6 +193,8 @@ export interface OpenedSession {
    * says it once at the top of the transcript and goes on showing it (CHECK-11).
    */
   autoVetting: boolean
+  /** Absent from an older bridge, which read no rules. */
+  settingsRules?: SettingsRules | null
 }
 
 export interface ModelOption {
@@ -211,6 +238,8 @@ export interface ForkedSession {
   keeping?: string | null
   /** The parent's, as it opened: the child carries on its conversation. */
   autoVetting: boolean
+  /** Absent from an older bridge, which read no rules. */
+  settingsRules?: SettingsRules | null
   /** As on `OpenedSession`, read again for the child. */
   serversNote: string | null
   parent: {
@@ -286,12 +315,24 @@ export interface TurnDone {
   archived: number
 }
 
+/**
+ * What a reply the output ceiling stopped was doing. `tool` is the request's own name for a tool
+ * it offered, and `null` for a call to one it did not.
+ */
+export interface CutOff {
+  ceiling: number
+  call: { tool: string | null } | null
+  thought: boolean
+}
+
 export interface TurnError {
   /** As on `TurnDone`. */
   prompt?: number | null
   category?: string | null
   attempts?: number | null
   status?: number | null
+  /** Where the output ceiling ended the turn, and `null` otherwise. */
+  cutOff?: CutOff | null
   contextTokens?: number
   /** A failed turn may still have saved a recoverable conversation. */
   id?: string | null
@@ -318,6 +359,142 @@ export interface Stage {
   args: string[]
   /** The agent's own rendering of the argv, so both front-ends show the same characters. */
   display: string
+}
+
+/**
+ * Access a request reaches that nothing in the agent holds: the kind, and the word that named it.
+ *
+ * `authority` is what to match on. The sentence a person reads is the front end's, because the
+ * words belong to the surface drawing them.
+ */
+export interface Ambient {
+  authority: string
+  named: string
+}
+
+/**
+ * A URL the planner wants fetched.
+ *
+ * `host` is the agent's own reading of the URL and is drawn as sent, never worked out here from
+ * `url`: `https://example.com@evil.test/` reads as one site and reaches the other, and the host
+ * is what a yes agrees to talk to. Nothing of a reply is here, since nothing has been fetched,
+ * and what comes back is confined whatever is answered.
+ *
+ * `ambient` is empty for every host but a machine's metadata service, which hands out the
+ * credentials of the role the machine runs as to whatever reaches it.
+ */
+export interface FetchRequest {
+  request: number
+  url: string
+  host: string
+  ambient?: Ambient[]
+  summary: string
+}
+
+/**
+ * A language server the planner wants started.
+ *
+ * `program` is the absolute path the server's name resolved to, drawn as sent. The agent picks
+ * the name from its own table, so nothing a turn read chooses what runs.
+ *
+ * When `runsBuildTooling` is true, starting the server runs code from the dependency tree with
+ * the person's own access, as a build does. The card must say so.
+ */
+export interface ServerRequest {
+  request: number
+  language: string
+  program: string
+  workspace: string
+  runsBuildTooling: boolean
+  summary: string
+}
+
+/**
+ * A frozen plan a manifest run is about to walk.
+ *
+ * `task` is what the person typed. `steps` has one line per step, in order, as the agent
+ * rendered it. Every line is drawn, because the answer covers the whole plan.
+ */
+export interface ManifestRequest {
+  request: number
+  task: string
+  steps: string[]
+}
+
+/**
+ * What a manifest run produced, whether or not it finished.
+ *
+ * All of it came from a planner that was shown the task and nothing else, or from the agent's
+ * own account of what it did. `proposed` is the planner's manifest verbatim, which is all there
+ * is to read when it could not be made into a plan.
+ */
+export interface PlanAttempt {
+  goal: string | null
+  proposed: string | null
+  plan: string | null
+  steps: string[]
+}
+
+/**
+ * A saved manifest run, read back with `manifest.read`.
+ *
+ * `failure` is the agent's sentence about why the run stopped, and is null for a run that
+ * finished. What the run released for a screen is not saved, so it is not here.
+ */
+export interface RunRecord {
+  record: SessionRecord
+  model: string | null
+  manifest: PlanAttempt & { failure: string | null }
+}
+
+/** A manifest run that finished. `record` names the run's own record, where one was written. */
+export interface ManifestDone {
+  run: number
+  /**
+   * What the plan's last step released for a screen. This can be the text of a file nobody
+   * vouched for, so it is drawn as plain text in a marked container and never formatted.
+   */
+  reply: string
+  model: string
+  steps: number
+  clean: boolean
+  tokens: number
+  outputTokens: number
+  notices?: string[]
+  attempt: PlanAttempt | null
+  record: string | null
+}
+
+/** A manifest run that stopped: declined, stopped by the person, or failed. */
+export interface ManifestError {
+  run: number
+  kind: string
+  message: string
+  category: string | null
+  attempts?: number | null
+  status?: number | null
+  /** Whether the person stopped it. A stopped run is not recorded. */
+  stopped: boolean
+  /** Whether the plan was put to the person and declined. Read this, not the wording of `problem`. */
+  declined: boolean
+  /** The agent's own sentence about why, where it wrote one. Absent for a service failure. */
+  problem: string | null
+  attempt: PlanAttempt | null
+  record: string | null
+  notices?: string[]
+}
+
+/**
+ * A vouched file the planner asked to read, which the scan found a credential in.
+ *
+ * `credentials` has one line per finding, as the agent wrote it: the kind, where it is, and a
+ * mask of the value. No line holds any part of a value, and the file's text is not sent.
+ */
+export interface ExposureRequest {
+  request: number
+  path: string
+  credentials: string[]
+  summary: string
 }
 
 /** A pipeline the planner wants to run. */
@@ -357,7 +534,7 @@ export interface RunRequest {
    * a program, an address, a socket or a variable. The sentence is the front end's, because the
    * words a person reads belong to the surface drawing them. Empty for nearly every command.
    */
-  ambient?: { authority: string; named: string }[]
+  ambient?: Ambient[]
   /** What approving *and remembering* would cover — the thing the second answer is about. */
   vouches: { program: string; args: string[]; display: string }[]
   summary: string
@@ -453,12 +630,20 @@ export interface EventMap {
   quarantined: Shown
   todos: { rows: TodoRow[] }
   tokens: { written: number }
-  audit: { turn: number; event: Record<string, unknown> }
+  /** Numbered by `turn`, or by `run` for a manifest run, which is not one of the turns. */
+  audit: { turn?: number; run?: number; event: Record<string, unknown> }
   'confirm.request': ConfirmRequest
   'run.request': RunRequest
   'output.request': OutputRequest
   'vouch.request': VouchRequest
   'vet.request': VetRequest
+  'fetch.request': FetchRequest
+  'server.request': ServerRequest
+  'manifest.request': ManifestRequest
+  'exposure.request': ExposureRequest
+  'manifest.started': { run: number }
+  'manifest.done': ManifestDone
+  'manifest.error': ManifestError
   'ask.request': AskRequest
   'turn.done': TurnDone
   'turn.error': TurnError

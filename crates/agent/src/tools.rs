@@ -3144,6 +3144,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
                 crate::memory::trusted_again(
                     workspace.memories(),
                     &policy.file_authority().key(&keyed),
+                    crate::workspace::volume_folds_case(workspace.root()),
                 );
             }
         }
@@ -5984,6 +5985,7 @@ fn run<S: Sink, C: Confirmer>(
     // and for the credential scan below: there is no later moment to ask, because afterwards
     // every answer is the line's own.
     let mut standing: Vec<Standing> = Vec::new();
+    let folds = crate::workspace::volume_folds_case(tools.workspace.root());
     tools
         .workspace
         .mark_rewind_gap(crate::rewind::CoverageGap::Command);
@@ -6000,7 +6002,7 @@ fn run<S: Sink, C: Confirmer>(
             }
             // Whatever the line's label: a line that stops short leaves every destination
             // untrusted, and whether it will is not known until it has (MEMORY-5).
-            crate::memory::record_before_write(tools.workspace.memories(), &key)
+            crate::memory::record_before_write(tools.workspace.memories(), &key, folds)
                 .map_err(|e| crate::exec::ExecError::Io(e.to_string()))?;
             policy.capture_files(|policy, capture| {
                 let prior = if !policy.read_is_quarantined(&key) {
@@ -6089,7 +6091,7 @@ fn run<S: Sink, C: Confirmer>(
         }
     }
     for destination in &standing {
-        crate::memory::after_write(policy, tools.workspace.memories(), &destination.key);
+        crate::memory::after_write(policy, tools.workspace.memories(), &destination.key, folds);
     }
     if !left.scanned.refused().is_empty() {
         return credential_refusal_after_a_line(&displayed, &left, &stuck);

@@ -23,12 +23,13 @@
 //! typed.
 
 use bravebot_agent::confirm::{
-    Decision, Intent, OutputRequest, RunDecision, RunRequest, VetRequest, VouchRequest,
-    WriteRequest,
+    Decision, ExposureRequest, FetchRequest, Intent, ManifestRequest, OutputRequest, RunDecision,
+    RunRequest, ServerRequest, VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::conversation::{Composed, Said};
 use bravebot_agent::diff::Change;
 use bravebot_agent::report::{Activity, Landing, Phase, Reach, Shown};
+use bravebot_aichat::CutOff;
 use bravebot_core::ask::{Answer, Asking};
 use bravebot_core::todo::{Row, Status};
 use serde_json::{Value, json};
@@ -170,6 +171,21 @@ pub fn shown(shown: &Shown) -> Value {
         "label": shown.label,
         "preview": shown.preview,
         "lines": shown.lines,
+    })
+}
+
+/// What a reply the output ceiling stopped was doing, for the failure it ended the turn with.
+///
+/// The ceiling is this program's own figure, and the tool is the request's spelling of one it
+/// offered, so nothing here is the reply's own text. `null` where the turn did not end on a stop.
+pub fn cut_off(cut_off: Option<&CutOff>) -> Value {
+    let Some(cut_off) = cut_off else {
+        return Value::Null;
+    };
+    json!({
+        "ceiling": cut_off.ceiling,
+        "call": cut_off.call.as_ref().map(|call| json!({ "tool": call.tool })),
+        "thought": cut_off.thought,
     })
 }
 
@@ -411,6 +427,83 @@ pub fn vouch_request(id: u64, request: &VouchRequest) -> Value {
         "preview": request.preview,
         "truncated": request.truncated,
         "vetting": vetting(request.verdict, request.reason.as_deref()),
+    })
+}
+
+/// A URL the model has asked to fetch.
+///
+/// `host` is sent beside `url` and is never to be derived from it by whoever draws this: the
+/// agent's parser took it out of the URL, and `https://example.com@evil.test/` is a string whose
+/// host a reader, and a front end splitting on the first slash, both get wrong. What a yes agrees
+/// to is talking to that host, so it is the field the question is about.
+///
+/// Nothing of what would come back is here, because nothing has been fetched: the question is
+/// put before the request goes out, and the body is quarantined whatever is answered (FETCH-1).
+///
+/// `ambient` has the shape a run's has, so one drawing serves both: the kind of authority and the
+/// word that named it, and no sentence. It is empty for every host but a machine's metadata
+/// service, which hands the credentials of the role this machine runs as to whatever opens the
+/// socket, so a request to one is a grant of that and an address alone does not say so.
+pub fn fetch_request(id: u64, request: &FetchRequest) -> Value {
+    json!({
+        "request": id,
+        "url": request.url,
+        "host": request.host,
+        "ambient": request
+            .ambient_authority()
+            .iter()
+            .map(|spent| json!({ "authority": spent.authority.name(), "named": spent.named }))
+            .collect::<Vec<_>>(),
+        "summary": request.summary(),
+    })
+}
+
+/// A language server the planner would like started.
+///
+/// `program` is the absolute path the server's name resolved to. The agent picks the name from
+/// its own table, so nothing a turn read chooses what runs. A front end draws the path as sent.
+///
+/// `runsBuildTooling` is sent as a boolean and the front end writes the sentence. When it is
+/// true, starting the server runs code from the dependency tree with the person's own access,
+/// as a build does. The card must say so (LSP-5).
+pub fn server_request(id: u64, request: &ServerRequest) -> Value {
+    json!({
+        "request": id,
+        "language": request.language,
+        "program": request.program,
+        "workspace": request.workspace,
+        "runsBuildTooling": request.runs_build_tooling,
+        "summary": request.summary(),
+    })
+}
+
+/// A frozen plan a manifest run is about to walk.
+///
+/// `steps` has one line per step, in order, as the agent rendered it: the tier, what the step
+/// does, and the routing it fixed. A front end draws every line and does not shorten the list,
+/// because the answer covers the whole plan (MANIFEST-10).
+///
+/// The task is the person's own words and the steps are the driver's rendering of a plan made
+/// from those words alone, so neither is untrusted content.
+pub fn manifest_request(id: u64, request: &ManifestRequest) -> Value {
+    json!({
+        "request": id,
+        "task": request.task,
+        "steps": request.steps,
+    })
+}
+
+/// A vouched file the planner asked to read, which the scan found a credential in.
+///
+/// `credentials` has one line per finding, as the agent wrote it: the kind, where it is, and a
+/// mask of the value. No line holds any part of a value, and the file's text is not sent
+/// (CRED-19). A front end draws the lines as sent.
+pub fn exposure_request(id: u64, request: &ExposureRequest) -> Value {
+    json!({
+        "request": id,
+        "path": request.path,
+        "credentials": request.credentials,
+        "summary": request.summary(),
     })
 }
 

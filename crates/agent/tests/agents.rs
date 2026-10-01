@@ -81,6 +81,21 @@ fn from_disk(definitions: &Definitions) -> Vec<&str> {
         .collect()
 }
 
+/// Deny rules as a settings file would carry them. Every rule must parse: a test whose rule was
+/// silently dropped would pass by matching nothing.
+#[cfg(unix)]
+fn denying(rules: &[&str]) -> bravebot_core::permissions::Permissions {
+    let rules: Vec<String> = rules.iter().map(|rule| rule.to_string()).collect();
+    let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+        &rules,
+        &[],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "a rule in this test did not parse");
+    permissions
+}
+
 fn routing() -> Routing {
     let mut r = Routing::new();
     r.insert_trusted("task", "do the work");
@@ -592,7 +607,13 @@ fn the_set_an_interface_resolves_is_the_one_a_turn_would() {
         for path in trusted {
             store.trust(path);
         }
-        let interface = agents::resolved(&workspace, Some(&home), store, &mut sink);
+        let interface = agents::resolved(
+            &workspace,
+            Some(&home),
+            store,
+            Default::default(),
+            &mut sink,
+        );
 
         assert_eq!(
             interface.names(),
@@ -606,6 +627,59 @@ fn the_set_an_interface_resolves_is_the_one_a_turn_would() {
         };
         assert_eq!(from_disk(&interface), expected, "trusting {trusted:?}");
     }
+}
+
+/// A definition is read before anything is asked, so nobody named the file, and a link from the
+/// definitions directory to a file a deny rule covers would make that file a delegate's whole
+/// instructions in a project the person trusted (PERM-7). The interface reads the same rules, so a
+/// name typed for it is refused before anything starts (ADDRESS-5). The definition beside it is the
+/// control, since a set missing everything would pass.
+#[cfg(unix)]
+#[test]
+fn a_definition_a_deny_rule_covers_is_selectable_nowhere_through_a_link_to_it() {
+    let scratch = Scratch::new("denied-through-a-link");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    write_definition(
+        &project.join(".bravebot"),
+        "auditor",
+        &frontmatter("auditor", "audits", "worker"),
+        "audit it",
+    );
+    write_definition(
+        &project.join("private"),
+        "keys",
+        &frontmatter("keys", "knows the keys", "worker"),
+        "SECRET_TOKEN=hunter2",
+    );
+    std::os::unix::fs::symlink(
+        "../../private/agents/keys.md",
+        project.join(".bravebot/agents/keys.md"),
+    )
+    .expect("link the definition");
+    let workspace = Workspace::new(&project).expect("workspace");
+    let rules = denying(&["Read(./private/**)"]);
+
+    let mut sink = RecordingSink::new();
+    let (turn, notices) = {
+        let mut policy = policy(&mut sink, &["."]).with_permissions(rules.clone());
+        agents::discover(&mut policy, &workspace, Some(&home))
+    };
+    let mut store = TrustStore::new("/work");
+    store.trust(".");
+    let interface = agents::resolved(&workspace, Some(&home), store, rules, &mut sink);
+
+    assert_eq!(from_disk(&turn), ["auditor"]);
+    assert_eq!(
+        from_disk(&interface),
+        ["auditor"],
+        "the interface offered a definition the turn left out"
+    );
+    let told: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert_eq!(
+        told,
+        [".bravebot/agents/keys.md was not loaded: a deny rule in your settings covers it"]
+    );
 }
 
 /// MEMORY-2: a session whose working directory is the one holding the state directory, as a

@@ -107,7 +107,7 @@ pub fn compose<S: Sink>(
             text.trim()
         ));
     }
-    match read_workspace_agents(policy, workspace) {
+    match read_workspace_agents(policy, workspace, &mut preamble.notices) {
         Ok(Some(found)) => {
             standing.push_str(&format!(
                 "From {}:\n\n{}\n\n",
@@ -518,9 +518,14 @@ struct Standing {
 /// Three answers, and they are genuinely different: there is no file, there is one and it is the
 /// user's own, or there is one from a path nobody vouched for. Only the last is worth a word,
 /// and the word has to be about the directory rather than about the file's contents.
+///
+/// A file a deny rule covers is not read whatever the trust map says (PERM-7), and that is a word
+/// too. Where it is the file a pointer names, the pointer stands as itself and the word goes to
+/// `notices`.
 fn read_workspace_agents<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
+    notices: &mut Vec<Notice>,
 ) -> Result<Option<Standing>, Notice> {
     let Some(name) = WORKSPACE_AGENT_FILES
         .iter()
@@ -528,6 +533,9 @@ fn read_workspace_agents<S: Sink>(
     else {
         return Ok(None);
     };
+    if workspace.rule_denies_reading(policy, name) {
+        return Err(Notice::denied_by_rule(name));
+    }
 
     let Some(text) = read_instructions(policy, workspace, name)? else {
         return Ok(None);
@@ -542,12 +550,15 @@ fn read_workspace_agents<S: Sink>(
     // support, and following one is how a cycle becomes a hang.
     if let Some(target) = pointer_target(&text, name)
         && workspace.root().join(&target).is_file()
-        && let Ok(Some(pointed)) = read_instructions(policy, workspace, &target)
     {
-        return Ok(Some(Standing {
-            origin: target,
-            text: pointed,
-        }));
+        if workspace.rule_denies_reading(policy, &target) {
+            notices.push(Notice::denied_by_rule(&target));
+        } else if let Ok(Some(pointed)) = read_instructions(policy, workspace, &target) {
+            return Ok(Some(Standing {
+                origin: target,
+                text: pointed,
+            }));
+        }
     }
 
     Ok(Some(Standing {

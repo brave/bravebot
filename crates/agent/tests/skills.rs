@@ -91,6 +91,21 @@ fn routing() -> Routing {
     r
 }
 
+/// Deny rules as a settings file would carry them. Every rule must parse: a test whose rule was
+/// silently dropped would pass by matching nothing.
+#[cfg(unix)]
+fn denying(rules: &[&str]) -> bravebot_core::permissions::Permissions {
+    let rules: Vec<String> = rules.iter().map(|rule| rule.to_string()).collect();
+    let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+        &rules,
+        &[],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "a rule in this test did not parse");
+    permissions
+}
+
 fn policy<'s>(sink: &'s mut RecordingSink, trusted: &[&str]) -> Policy<'s, RecordingSink> {
     let mut store = TrustStore::new("/work");
     for path in trusted {
@@ -676,7 +691,13 @@ fn the_set_an_interface_resolves_is_the_one_a_turn_would() {
         for path in trusted {
             store.trust(path);
         }
-        let interface = skills::resolved(&workspace, Some(&home), store, &mut sink);
+        let interface = skills::resolved(
+            &workspace,
+            Some(&home),
+            store,
+            Default::default(),
+            &mut sink,
+        );
 
         let names = |catalogue: &skills::Catalogue| {
             catalogue
@@ -696,6 +717,60 @@ fn the_set_an_interface_resolves_is_the_one_a_turn_would() {
         };
         assert_eq!(from_disk(&interface), expected, "trusting {trusted:?}");
     }
+}
+
+/// A skill is read before anything is asked, so nobody named the file, and a link from the skills
+/// directory to a file a deny rule covers would put that file in the prompt of a project the person
+/// trusted (PERM-7). The interface reads the same rules, so it does not offer the skill either
+/// (SKILL-14). The skill beside it is the control, since a set missing everything would pass.
+#[cfg(unix)]
+#[test]
+fn a_skill_a_deny_rule_covers_is_offered_nowhere_through_a_link_to_it() {
+    let scratch = Scratch::new("denied-through-a-link");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    write_skill(
+        &project.join(".bravebot"),
+        "release-notes",
+        "release-notes",
+        "draft the notes",
+        "draft",
+    );
+    write_skill(
+        &project.join("private"),
+        "keys",
+        "keys",
+        "where the keys are",
+        "SECRET_TOKEN=hunter2",
+    );
+    std::os::unix::fs::symlink(
+        "../../private/skills/keys",
+        project.join(".bravebot/skills/keys"),
+    )
+    .expect("link the skill");
+    let workspace = Workspace::new(&project).expect("workspace");
+    let rules = denying(&["Read(./private/**)"]);
+
+    let mut sink = RecordingSink::new();
+    let (turn, notices) = {
+        let mut policy = policy(&mut sink, &["."]).with_permissions(rules.clone());
+        skills::discover(&mut policy, &workspace, Some(&home))
+    };
+    let mut store = TrustStore::new("/work");
+    store.trust(".");
+    let interface = skills::resolved(&workspace, Some(&home), store, rules, &mut sink);
+
+    assert_eq!(from_disk(&turn), ["release-notes"]);
+    assert_eq!(
+        from_disk(&interface),
+        ["release-notes"],
+        "the interface offered a skill the turn left out"
+    );
+    let told: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert_eq!(
+        told,
+        [".bravebot/skills/keys/SKILL.md was not loaded: a deny rule in your settings covers it"]
+    );
 }
 
 /// Where a skill came from is said beside its name, so each has to carry the place it was found,

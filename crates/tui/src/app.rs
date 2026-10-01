@@ -1579,10 +1579,16 @@ fn work_under(
     workspace: &Workspace,
     home: Option<&std::path::Path>,
     trust: &TrustStore,
+    permissions: &bravebot_core::permissions::Permissions,
     name: &str,
 ) -> Result<(), String> {
-    let definitions =
-        bravebot_agent::agents::resolved(workspace, home, trust.clone(), &mut Trail::new());
+    let definitions = bravebot_agent::agents::resolved(
+        workspace,
+        home,
+        trust.clone(),
+        permissions.clone(),
+        &mut Trail::new(),
+    );
     let definition = definition_named(config, &definitions, name)?;
     let names_a_model = definition.model.is_some();
     session.note(t!(session_working_under, definition = name));
@@ -2994,6 +3000,7 @@ fn event_loop(
             &workspace,
             bravebot_agent::home::directory().as_deref(),
             &answers.trust,
+            &answers.rules.permissions,
             name,
         )
     {
@@ -3010,7 +3017,13 @@ fn event_loop(
     loop {
         // Before the frame and before the next key, so what a slash offers is on the screen as the
         // slash is, and Tab never reaches a list the frame did not show.
-        session.settle_skills(|| crate::skills::resolved(&workspace, answers.trust.clone()));
+        session.settle_skills(|| {
+            crate::skills::resolved(
+                &workspace,
+                answers.trust.clone(),
+                answers.rules.permissions.clone(),
+            )
+        });
         // A picture decoded since the last pass is drawn on this one rather than at the next key.
         needs_draw |= session.settle_previews();
 
@@ -3095,6 +3108,7 @@ fn event_loop(
                     &workspace,
                     bravebot_agent::home::directory().as_deref(),
                     answers.trust.clone(),
+                    answers.rules.permissions.clone(),
                     &mut Trail::new(),
                 );
                 address(
@@ -13565,6 +13579,7 @@ mod tests {
                 &workspace,
                 Some(&home),
                 &trust,
+                &Default::default(),
                 "nobody"
             ),
             Err(
@@ -13585,6 +13600,7 @@ mod tests {
                 &workspace,
                 Some(&home),
                 &trust,
+                &Default::default(),
                 "rule-reviewer"
             ),
             Ok(())

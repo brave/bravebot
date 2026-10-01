@@ -744,12 +744,22 @@ fn run_task(args: &[String], skip_permissions: bool, agent: Option<String>) -> E
         return stopped_before_the_turn(as_json, Ending::Argument, problem);
     }
 
+    // The rules the settings file carried, read before the definition is matched so the match
+    // leaves out a definition they deny reading, as the turn does. Anything unreadable is named on
+    // stderr below, beside the rest of what this run has to say about itself.
+    let (permissions, rejected) = rules_for_a_one_shot_run(
+        &settings,
+        bravebot_agent::home::profile().as_deref(),
+        workspace.root(),
+        skip_permissions,
+    );
+
     // Matched here, before any server is reached, so a name matching nothing sends nothing and the
     // refusal lists the names that exist (ADDRESS-5). The turn's kernel matches it again and makes
     // the decision. This match is what makes a miss exit with the argument status.
     let under = match agent
         .as_deref()
-        .map(|name| definition_for_a_run(&config, &workspace, name, model.is_some()))
+        .map(|name| definition_for_a_run(&config, &workspace, &permissions, name, model.is_some()))
         .transpose()
     {
         Ok(under) => under.flatten(),
@@ -774,14 +784,6 @@ fn run_task(args: &[String], skip_permissions: bool, agent: Option<String>) -> E
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
 
-    // The rules the settings file carried. Anything unreadable is named on stderr, beside the rest
-    // of what this run has to say about itself.
-    let (permissions, rejected) = rules_for_a_one_shot_run(
-        &settings,
-        bravebot_agent::home::profile().as_deref(),
-        workspace.root(),
-        skip_permissions,
-    );
     for problem in &rejected {
         eprintln!(
             "{}",
@@ -1305,6 +1307,7 @@ fn open_directories(workspace: &mut Workspace, directories: &[String]) -> Result
 fn definition_for_a_run(
     config: &Config,
     workspace: &Workspace,
+    permissions: &bravebot_core::permissions::Permissions,
     name: &str,
     model_named: bool,
 ) -> Result<Option<String>, String> {
@@ -1313,6 +1316,7 @@ fn definition_for_a_run(
         workspace,
         bravebot_agent::home::directory().as_deref(),
         trust.clone(),
+        permissions.clone(),
         &mut RecordingSink::new(),
     );
     if definitions.get(name).is_none() {
@@ -2152,10 +2156,10 @@ fn report_mcp_declared(settings: &bravebot_config::Settings, ending: &mut Ending
 /// because almost every skill written for another agent carries one and a line repeated every turn
 /// about something that is working is how a notice stops being read.
 ///
-/// The set is read the way a turn starting in this directory would read it, through the same gate
-/// and the same trust map, so no skill a turn would drop is named and one it would offer is. A
-/// project whose directory nobody has vouched for offers none, which is not silence about a
-/// mistake: it is the answer a session there would give too.
+/// The set is read the way a turn starting in this directory would read it, through the same gate,
+/// the same trust map and the same rules, so no skill a turn would drop is named and one it would
+/// offer is. A project whose directory nobody has vouched for offers none, which is not silence
+/// about a mistake: it is the answer a session there would give too.
 ///
 /// Nothing is said about a skill whose every key is read, which is the ordinary case, so a report on
 /// a machine with nothing to fix carries no skills section at all.
@@ -2163,8 +2167,10 @@ fn skill_keys_unread(
     workspace: &Workspace,
     home: Option<&Path>,
     trust: bravebot_core::TrustStore,
+    permissions: bravebot_core::permissions::Permissions,
 ) -> Vec<String> {
-    bravebot_agent::skills::resolved(workspace, home, trust, &mut bravebot_core::event::NullSink)
+    let sink = &mut bravebot_core::event::NullSink;
+    bravebot_agent::skills::resolved(workspace, home, trust, permissions, sink)
         .iter()
         .filter(|skill| !skill.unread.is_empty())
         .map(|skill| {
@@ -2548,12 +2554,19 @@ fn doctor() -> ExitCode {
     }
 
     // Outside the configuration block as well: which skills a session here loads is read off two
-    // directories and a trust map, and a key nothing reads is wrong whatever the configuration says.
+    // directories, a trust map and the rules, and a key nothing reads is wrong whatever the
+    // configuration says.
     if let Ok(workspace) = current_workspace(&settings, &managed) {
+        let (permissions, _) = bravebot_agent::permissions::from_settings(
+            &settings,
+            bravebot_agent::home::profile().as_deref(),
+            workspace.root(),
+        );
         let lines = skill_keys_unread(
             &workspace,
             bravebot_agent::home::directory().as_deref(),
             trust_already_answered(workspace.root()),
+            permissions,
         );
         if !lines.is_empty() {
             println!();

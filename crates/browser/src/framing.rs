@@ -59,6 +59,14 @@ pub fn read_message(input: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
 mod tests {
     use super::*;
 
+    /// The two limits are the ones native messaging sets and the spec states. Every other test
+    /// sizes its input from these constants, so it would pass at any value.
+    #[test]
+    fn the_limits_are_one_megabyte_out_and_sixty_four_in() {
+        assert_eq!(TO_EXTENSION_LIMIT, 1024 * 1024);
+        assert_eq!(FROM_EXTENSION_LIMIT, 64 * 1024 * 1024);
+    }
+
     /// The extension reads exactly what was written, and the next message starts where this one
     /// ended, so a stream of several is read back as several.
     #[test]

@@ -3,6 +3,10 @@
 import { DEFAULT_SETTINGS, SETTINGS_KEY, settings } from "./tools.js";
 
 const LABELS = {
+  get_platform_info: [
+    "Check the extension is installed",
+    "The operating system and architecture Brave runs on, and nothing else.",
+  ],
   list_tabs: ["List open tabs", "The title and URL of every open tab."],
   read_page: [
     "Read an open page",

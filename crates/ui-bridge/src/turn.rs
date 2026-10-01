@@ -41,6 +41,14 @@ pub enum Kind {
     Output,
     Vouch,
     Vet,
+    /// Whether to fetch one URL, which is consent to talk to its host and to nothing it sends back.
+    Fetch,
+    /// Whether to start a language server for the session.
+    Server,
+    /// Whether to run a frozen plan. Asked once per manifest run, before its first step.
+    Manifest,
+    /// Whether the planner may be given a vouched file the scan found a credential in.
+    Exposure,
     Ask,
 }
 
@@ -73,6 +81,10 @@ pub enum Reply {
     Output(Decision),
     Vouch(Decision),
     Vet(Decision),
+    Fetch(Decision),
+    Server(Decision),
+    Manifest(Decision),
+    Exposure(Decision),
     /// One answer per question, in the order they were asked. Empty means nobody could be
     /// asked — see [`Confirmer::ask_user`].
     Ask(Vec<Answer>),
@@ -86,7 +98,56 @@ impl Reply {
             Reply::Output(_) => Kind::Output,
             Reply::Vouch(_) => Kind::Vouch,
             Reply::Vet(_) => Kind::Vet,
+            Reply::Fetch(_) => Kind::Fetch,
+            Reply::Server(_) => Kind::Server,
+            Reply::Manifest(_) => Kind::Manifest,
+            Reply::Exposure(_) => Kind::Exposure,
             Reply::Ask(_) => Kind::Ask,
+        }
+    }
+
+    /// The yes or no this reply carries, where a yes or a no is all it is.
+    ///
+    /// `None` for the two that carry more: a run's answer is a decision and whether to remember
+    /// it, and a series of questions has an answer per question. Reading either as a bare
+    /// decision would drop the half that makes it the answer it is, so neither has one here.
+    pub fn decision(&self) -> Option<Decision> {
+        match self {
+            Reply::Write(decision)
+            | Reply::Output(decision)
+            | Reply::Vouch(decision)
+            | Reply::Vet(decision)
+            | Reply::Fetch(decision)
+            | Reply::Server(decision)
+            | Reply::Manifest(decision)
+            | Reply::Exposure(decision) => Some(*decision),
+            Reply::Run(_) | Reply::Ask(_) => None,
+        }
+    }
+}
+
+impl Kind {
+    /// The refusal of a question of this kind, in the shape its own answer takes.
+    ///
+    /// What is sent when nobody is going to answer: a session closing, or the process ending. It
+    /// is the kind's own variant because the worker discards a reply of any other kind as an
+    /// answer to a different question, and would then wait on a channel nothing else writes to.
+    ///
+    /// Written as a match with no wildcard, so a kind added above does not build until somebody
+    /// has said what refusing it looks like.
+    pub fn refusal(self) -> Reply {
+        match self {
+            Kind::Write => Reply::Write(Decision::Reject),
+            Kind::Run => Reply::Run(RunDecision::reject()),
+            Kind::Output => Reply::Output(Decision::Reject),
+            Kind::Vouch => Reply::Vouch(Decision::Reject),
+            Kind::Vet => Reply::Vet(Decision::Reject),
+            Kind::Fetch => Reply::Fetch(Decision::Reject),
+            Kind::Server => Reply::Server(Decision::Reject),
+            Kind::Manifest => Reply::Manifest(Decision::Reject),
+            Kind::Exposure => Reply::Exposure(Decision::Reject),
+            // No answers at all, which is how this question says nobody was asked.
+            Kind::Ask => Reply::Ask(Vec::new()),
         }
     }
 }
@@ -225,6 +286,8 @@ impl Reporter for BridgeReporter {
 pub struct BridgeSink {
     emitter: Emitter,
     session: String,
+    /// The key the number below is sent under: `turn`, or `run` for a manifest run.
+    counted: &'static str,
     turn: usize,
     trail: bravebot_session::audit::Trail,
 }
@@ -234,8 +297,20 @@ impl BridgeSink {
         Self {
             emitter,
             session: session.into(),
+            counted: "turn",
             turn,
             trail: bravebot_session::audit::Trail::new(),
+        }
+    }
+
+    /// A sink for a manifest run, whose events carry `run` and no `turn`.
+    ///
+    /// A run is not one of the session's turns, so its events must not be filed under a turn
+    /// number. A front end that groups audit events by turn leaves these out.
+    pub fn for_run(emitter: Emitter, session: impl Into<String>, run: usize) -> Self {
+        Self {
+            counted: "run",
+            ..Self::new(emitter, session, run)
         }
     }
 
@@ -250,7 +325,7 @@ impl Sink for BridgeSink {
         // Projected with the agent's own function rather than a second spelling of it:
         // two renderings of one trail would drift the moment either changed.
         let data = json!({
-            "turn": self.turn,
+            self.counted: self.turn,
             "event": bravebot_session::audit::as_json(&event, self.trail.recording()),
         });
         self.emitter.send(Event::new("audit", &self.session, data));
@@ -278,6 +353,8 @@ pub struct BridgeConfirmer {
     answers: Receiver<Reply>,
     next: u64,
     cancel: bravebot_core::cancel::Cancel,
+    /// Whether a plan was put to the person and not approved. See [`Self::declined_a_plan`].
+    declined_a_plan: bool,
 }
 
 impl BridgeConfirmer {
@@ -295,7 +372,17 @@ impl BridgeConfirmer {
             answers,
             next: 0,
             cancel,
+            declined_a_plan: false,
         }
+    }
+
+    /// Whether a plan was put to the person and came back without a yes.
+    ///
+    /// A run that ends this way fails with the agent's sentence about an unapproved plan. A
+    /// front end is sent this flag so that it does not have to read that sentence to tell a
+    /// declined plan from a failed one.
+    pub fn declined_a_plan(&self) -> bool {
+        self.declined_a_plan
     }
 
     /// Put one question to whoever is watching, and block until it is answered.
@@ -361,21 +448,58 @@ impl BridgeConfirmer {
         // question nobody was shown.
         reply.filter(|reply| reply.kind() == kind)
     }
+
+    /// Put a question whose answer is a yes or a no, and read anything but a yes as a no.
+    ///
+    /// The whole of what a new approval of that shape needs from this type. Nobody answering, an
+    /// answer to a different question and an answer that carries no decision all arrive at the
+    /// refusal, so a kind added through here cannot be approved by a reply that was not about it.
+    ///
+    /// The kind is compared here as well as in [`Self::ask`], for the reason every other question
+    /// in this file matches on its own variant: [`Reply::decision`] reads a yes out of any reply
+    /// that is one, so without this the check in `ask` would be the only thing between a yes
+    /// about a write and a request leaving the machine.
+    fn yes_or_no(
+        &mut self,
+        kind: Kind,
+        event: &'static str,
+        data: impl FnOnce(u64) -> Value,
+    ) -> Decision {
+        self.ask(kind, event, data)
+            .filter(|reply| reply.kind() == kind)
+            .and_then(|reply| reply.decision())
+            .unwrap_or(Decision::Reject)
+    }
 }
 
 impl Confirmer for BridgeConfirmer {
-    // These upstream capabilities have no approval UI yet. Never grant authority
-    // for a request the person could not review.
-    fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
-        Decision::Reject
+    /// Ask whether to fetch one URL.
+    ///
+    /// The host goes out beside the URL, taken from it by the agent's parser, because the host is
+    /// what a yes agrees to talk to and a URL can be written to read as another one. A yes is
+    /// consent to that one request: what comes back stays quarantined whatever is answered, and
+    /// nothing is remembered, so the next fetch asks again (FETCH-1, FETCH-3).
+    fn confirm_fetch(&mut self, request: &FetchRequest) -> Decision {
+        self.yes_or_no(Kind::Fetch, "fetch.request", |id| {
+            wire::fetch_request(id, request)
+        })
     }
 
-    /// Refuses, for the reason the three above do: this application draws no screen for it, and a
-    /// yes here would send a credential to a model on nobody's word. What it costs is the text of
-    /// one file, and the planner is told why it did not get it.
-    fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
-        Decision::Reject
+    /// Ask whether the planner may read a vouched file the scan found a credential in (CRED-15).
+    ///
+    /// The request names the file and each finding: a kind, a location and a masked preview. It
+    /// carries no part of a value and no text of the file (CRED-19).
+    ///
+    /// An approval discloses the file to the model. It covers this file for the session and
+    /// writes no rule. A refusal keeps the file's text from the planner, which is told why.
+    fn confirm_exposing_read(&mut self, request: &ExposureRequest) -> Decision {
+        self.yes_or_no(Kind::Exposure, "exposure.request", |id| {
+            wire::exposure_request(id, request)
+        })
     }
+
+    // The questions below are about MCP servers, which this application does not start. It
+    // has no card for them, so each is refused.
 
     fn confirm_tool_list(
         &mut self,
@@ -396,12 +520,31 @@ impl Confirmer for BridgeConfirmer {
         Decision::Reject
     }
 
-    fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
-        Decision::Reject
+    /// Ask whether to start a language server.
+    ///
+    /// The request names the language, the resolved binary, the tree it would index, and whether
+    /// starting it runs build tooling. Build tooling runs code from the dependency tree with the
+    /// person's own access (LSP-5).
+    ///
+    /// An approval starts one process for the session and is not remembered after it. It does
+    /// not change how the server's answers are labelled.
+    fn confirm_server(&mut self, request: &ServerRequest) -> Decision {
+        self.yes_or_no(Kind::Server, "server.request", |id| {
+            wire::server_request(id, request)
+        })
     }
 
-    fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {
-        Decision::Reject
+    /// Ask whether to run a frozen plan (MANIFEST-10).
+    ///
+    /// The request carries the task and every step. An approval covers this plan only and is not
+    /// remembered. It does not approve the plan's writes: each write is still asked about when
+    /// its step is reached.
+    fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+        let decision = self.yes_or_no(Kind::Manifest, "manifest.request", |id| {
+            wire::manifest_request(id, request)
+        });
+        self.declined_a_plan = decision == Decision::Reject;
+        decision
     }
 
     fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
