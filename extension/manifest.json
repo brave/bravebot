@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "BraveBot",
   "version": "0.1.0",
-  "description": "Lets a BraveBot session read your open tabs, and your history and bookmarks where you allow it.",
+  "description": "Lets a BraveBot session read your open tabs, history and bookmarks, each once you turn it on.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0OJD10KKgKJfSl+h+AeOINH6HDehHEC+o7yIqawjS4Se81nlInEWoqCT9Tt114IPW42HfcDn2pHcQRhPSduziuelJf+wQ6YS/BSu6FZ2Bk8wyLlp48V0UkPFlLGWW9I8+di6ciuL7IioSGg1iyGxSwUUKdd+I/7N4eipz0nBoOWp+sAUi7U1omVhCNThwka++Rxa0lGQUoAf0Iaffjzk1bE8zWYY2B3b3esN9lPzVWLyTAEuAv1LimRGOjyC96HFX7guZw1lNkySCp8RVs5naknE1lKAJAkyUVkAxz92sQ8Sg8kNWkLni6jOUowsN7mTRn2njprPxNnD4d7HDtCtywIDAQAB",
   "minimum_chrome_version": "116",
   "permissions": [
