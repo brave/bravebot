@@ -590,6 +590,12 @@ fn place(typed: &str) -> Result<String, Stopped> {
             true => argument(t!(mcp_dir_not_a_directory_unshown)),
             false => argument(t!(mcp_dir_not_a_directory, path = shown(typed))),
         })?;
+    if let Some(repository) = crate::servers::repository_holding(&resolved) {
+        return Err(argument(crate::servers::in_a_repository(
+            &resolved,
+            &repository,
+        )));
+    }
     resolved
         .into_os_string()
         .into_string()
@@ -2079,9 +2085,8 @@ mod tests {
     /// spells it, with the flags before it read the same and every word after it the server's.
     #[test]
     fn a_bare_double_dash_declares_the_program_after_it() {
-        let directory = scratch("cli-mcp-bare-dashes");
-        let place = std::fs::canonicalize(&directory).unwrap();
-        let place = place.to_str().unwrap();
+        let directory = crate::servers::outside_any_repository("cli-mcp-bare-dashes");
+        let place = directory.to_str().unwrap();
         let declared_by = |flags: &[&str]| declared(&words(flags), 1, &mut None).ok();
 
         assert_eq!(
@@ -2110,6 +2115,29 @@ mod tests {
             refused(&["--http", "https://mcp.example.com/mcp", "--", "npx"]),
             t!(mcp_two_transports).to_string()
         );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// SERVERS-10: a server may write the directory `--dir` names, and git runs the commands a
+    /// repository names, unconfined. So `add` declares no directory inside a repository, and says
+    /// which repository, rather than leaving the refusal to the first session.
+    #[test]
+    fn add_declares_no_directory_inside_a_repository() {
+        let root = crate::servers::outside_any_repository("cli-mcp-dir-in-a-repository");
+        let inside = root.join("checkout").join("server");
+        std::fs::create_dir_all(&inside).unwrap();
+        std::fs::create_dir_all(root.join("checkout").join(".git")).unwrap();
+        let typed = inside.to_str().unwrap();
+
+        match declared(&words(&["--dir", typed, "--", "/opt/srv"]), 1, &mut None) {
+            Err(Refusal::Said((Ending::Argument, said))) => assert_eq!(
+                said,
+                crate::servers::in_a_repository(&inside, &root.join("checkout"))
+            ),
+            _ => panic!("a directory inside a repository was not refused as an argument"),
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// SERVERS-10: a program named by a bare name is looked for only in the `PATH` its declaration
