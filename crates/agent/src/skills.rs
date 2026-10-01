@@ -378,6 +378,14 @@ impl Notice {
         Self::new(message)
     }
 
+    /// That `origin` was left out because a `deny` rule covers it (PERM-7).
+    ///
+    /// Here rather than beside each source because the preamble's own words are the planner's and
+    /// may not come from a catalog, and this sentence is the person's.
+    pub(crate) fn denied_by_rule(origin: &str) -> Self {
+        Self::new(t!(source_denied_by_rule, source = origin))
+    }
+
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -573,13 +581,14 @@ pub fn discover<S: Sink>(
 /// The set a turn starting now would resolve, for an interface offering the names as they are typed.
 ///
 /// Read the way a turn reads it, through a policy holding only the read, so what the box offers is
-/// what the planner would be advertised: the same gate, the same trust map, the same shadowing. An
-/// untrusted project's skills are dropped here exactly as they are there, so no name the turn would
-/// refuse is ever drawn.
+/// what the planner would be advertised: the same gate, the same trust map, the same rules, the same
+/// shadowing. An untrusted project's skills are dropped here exactly as they are there, and so is a
+/// skill `permissions` denies reading, so no name the turn would refuse is ever drawn.
 pub fn resolved<S: Sink>(
     workspace: &Workspace,
     home: Option<&Path>,
     trust: bravebot_core::trust::TrustStore,
+    permissions: bravebot_core::permissions::Permissions,
     sink: &mut S,
 ) -> Catalogue {
     let mut routing = bravebot_core::policy::Routing::new();
@@ -594,6 +603,7 @@ pub fn resolved<S: Sink>(
     };
     let mut policy = policy
         .with_trust(trust)
+        .with_permissions(permissions)
         .with_root(workspace.root())
         .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES);
     discover(&mut policy, workspace, home).0
@@ -678,6 +688,10 @@ fn discover_workspace<S: Sink>(
     for name in names {
         let relative = format!("{WORKSPACE_SKILLS}/{name}/{SKILL_FILE}");
 
+        if workspace.rule_denies_reading(policy, &relative) {
+            notices.push(Notice::denied_by_rule(&relative));
+            continue;
+        }
         let Ok(contents) = workspace.read(policy, &Labelled::trusted(relative.clone())) else {
             continue;
         };

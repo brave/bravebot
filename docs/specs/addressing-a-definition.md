@@ -182,9 +182,10 @@ went on.
 ### ADDRESS-5: a name selects from the set this session resolved, or it selects nothing
 
 The set is the one [delegation.md](delegation.md) fixes before every turn: the three kinds, which
-are this program's own, and whatever definitions resolved from a source somebody vouched for. A
-name is compared against it and matches or does not. A name matching nothing runs nothing and says
-so, and there is no spelling of it that reaches a file nobody vouched for.
+are this program's own, and whatever definitions resolved from a source somebody vouched for, less
+any in the project a `deny` rule covers ([PERM-7](permissions.md#PERM-7)). A name is compared
+against it and matches or does not. A name matching nothing runs nothing and says so, and there is
+no spelling of it that reaches a file nobody vouched for.
 
 `/agent` with a name and no task runs nothing and says a task is needed, rather than starting a
 definition on an empty one.
@@ -201,6 +202,7 @@ many definitions were not read ([CLI-17](cli.md#CLI-17)).
 `verified-by: bravebot_core::policy::a_name_this_session_did_not_resolve_is_refused_with_the_names_it_did`
 `verified-by: bravebot_agent::turn::a_name_this_session_did_not_resolve_sends_nothing_and_lists_what_it_did`
 `verified-by: bravebot_agent::agents::the_set_an_interface_resolves_is_the_one_a_turn_would`
+`verified-by: bravebot_agent::agents::a_definition_a_deny_rule_covers_is_selectable_nowhere_through_a_link_to_it`
 `verified-by: bravebot_tui::app::a_name_this_session_did_not_resolve_runs_nothing_and_lists_what_it_did`
 `verified-by: bravebot_tui::app::a_name_with_no_task_runs_nothing_and_says_a_task_is_needed`
 `verified-by: bravebot_cli::running::a_run_refuses_a_definition_only_an_untrusted_checkout_holds_and_says_it_counted_one`

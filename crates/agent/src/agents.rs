@@ -308,14 +308,15 @@ pub fn discover<S: Sink>(
 
 /// The set a turn starting now would resolve, for an interface about to start one.
 ///
-/// Read the way a turn reads it, through a policy holding only the read, so a name a person
-/// typed is compared against the set the turn will compare it against. The turn resolves the set
-/// again and its kernel decides; this is what lets a miss be said before anything starts, where a
-/// turn refused later is drawn as a failure whose reason nobody is shown.
+/// Read the way a turn reads it, through a policy holding only the read and the turn's rules, so a
+/// name a person typed is compared against the set the turn will compare it against. The turn
+/// resolves the set again and its kernel decides; this is what lets a miss be said before anything
+/// starts, where a turn refused later is drawn as a failure whose reason nobody is shown.
 pub fn resolved<S: Sink>(
     workspace: &Workspace,
     home: Option<&Path>,
     trust: bravebot_core::trust::TrustStore,
+    permissions: bravebot_core::permissions::Permissions,
     sink: &mut S,
 ) -> Definitions {
     let mut routing = bravebot_core::policy::Routing::new();
@@ -330,6 +331,7 @@ pub fn resolved<S: Sink>(
     };
     let mut policy = policy
         .with_trust(trust)
+        .with_permissions(permissions)
         .with_root(workspace.root())
         .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES);
     discover(&mut policy, workspace, home).0
@@ -409,6 +411,10 @@ fn discover_workspace<S: Sink>(
     for file in files {
         let relative = format!("{WORKSPACE_AGENTS}/{file}");
 
+        if workspace.rule_denies_reading(policy, &relative) {
+            notices.push(Notice::denied_by_rule(&relative));
+            continue;
+        }
         let Ok(contents) = workspace.read(policy, &Labelled::trusted(relative.clone())) else {
             continue;
         };

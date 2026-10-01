@@ -296,6 +296,12 @@ the walk's own caps, so a rule never costs a listing or a search the files it wa
 does not follow a symbolic link it meets: the entry is neither reported nor descended into, so a
 link to a denied file is not a second name a listing or a search hands back.
 
+The files this program reads from the project on its own account are judged the same way. The
+project's instructions file, the file it points at, and a skill or a definition the project holds,
+where a rule covers it under the name it was found by or the one it lands on, are left out of the
+turn and the person is told, so a checkout cannot put a denied file into the system prompt by
+committing a link to it or a short file naming it.
+
 What comes back says a rule was the reason only where the rule is the whole reason: a search that
 had nothing left to read reports that and that retrying is not the answer, and one that read the
 rest of the tree reports what it found and nothing more. Saying which entries were left out, or how
@@ -334,6 +340,10 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::turn::a_link_to_a_directory_a_rule_covers_is_not_listed_or_searched_through`
 `verified-by: bravebot_agent::turn::an_ask_rule_still_prompts_for_a_write_through_a_link_to_the_file`
 `verified-by: bravebot_agent::turn::a_denied_directory_is_not_written_under_another_case_of_its_name`
+`verified-by: bravebot_agent::turn::a_denied_file_does_not_reach_the_system_prompt_through_an_agents_file_linking_to_it`
+`verified-by: bravebot_agent::turn::a_denied_file_an_agents_file_points_at_does_not_reach_the_system_prompt`
+`verified-by: bravebot_agent::skills::a_skill_a_deny_rule_covers_is_offered_nowhere_through_a_link_to_it`
+`verified-by: bravebot_agent::agents::a_definition_a_deny_rule_covers_is_selectable_nowhere_through_a_link_to_it`
 `verified-by: bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only`
 `verified-by: bravebot_agent::turn::a_denied_host_is_refused_without_asking`
 `verified-by: bravebot_agent::turn::a_deny_rule_holds_against_a_trusted_workspace`
