@@ -70,8 +70,9 @@ defect on the same path. Where one does, keep the verdict you reached and give i
 **5. Otherwise the verdict is `affected`**, and you write the issue the tracker needs.
 
 `deferred` is for a question you could not settle, with the reason naming what would settle it: a
-platform you could not run, a reproduction that needs a backend. It is offered to the next run, so
-do not use it to avoid a decision.
+platform you could not run, a reproduction that needs a backend, a check that was refused or cut
+off. It is offered to the next run, so do not use it to avoid a decision. Never give a final
+verdict for a check you did not finish.
 
 ## The issue, for `affected` with no `existing_issue`
 

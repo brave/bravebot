@@ -76,3 +76,6 @@ Write this JSON, and nothing else, to `{{results_file}}`:
 `holds` where something stops it, `absent` where bravebot has no such surface, `known` where a
 spec accepts it, `confirmed` only where it survived every question. `security` and `severity` are
 optional, and only for lowering what the claim says; leave them out to keep it.
+
+Where you could not answer the questions, because a command was refused, a file could not be read
+or anything else stopped you, write no results file. The advisory is then offered to the next run.

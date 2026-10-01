@@ -718,14 +718,16 @@ def record(args, today=None):
     path = Path(manifest["root"]) / LEDGER
     ledger = read_ledger(path)
     today = today or datetime.date.today().isoformat()
-    written, waiting = 0, 0
+    written, waiting, removed = 0, 0, 0
     for ghsa, outcome in decided.items():
         if outcome["state"] == "file" and ghsa in filed:
             outcome = {"state": "final", "verdict": "affected", "issue": filed[ghsa]["issue"], "reason": outcome["reason"]}
         if outcome["state"] != "final":
             waiting += 1
             why = "confirmed and not filed" if outcome["state"] == "file" else outcome["reason"]
-            print(f"  left   {ghsa}  {why}")
+            earlier = ledger.pop(ghsa, None)
+            removed += earlier is not None
+            print(f"  left   {ghsa}  {why}" + (f"  (its {earlier['verdict']} line is removed)" if earlier else ""))
             continue
         issue = f"#{outcome['issue']}" if outcome.get("issue") else "-"
         ledger[ghsa] = {
@@ -737,10 +739,10 @@ def record(args, today=None):
         }
         written += 1
         print(f"  {outcome['verdict']:<8} {ghsa}  {issue}  {one_line(outcome['reason'], 90)}")
-    if not args.dry_run and written:
+    if not args.dry_run and (written or removed):
         write_ledger(path, ledger)
-    verb = "would record" if args.dry_run else "recorded"
-    print(f"{verb} {written} in {LEDGER}, {waiting} left for the next run")
+    verb, gone = ("would record", "would remove") if args.dry_run else ("recorded", "removed")
+    print(f"{verb} {written} and {gone} {removed} in {LEDGER}, {waiting} left for the next run")
     return 0
 
 
