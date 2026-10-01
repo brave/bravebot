@@ -1849,11 +1849,15 @@ fn draw_vet(
     furthest
 }
 
-/// Draw the offer to vouch for a quarantined file, and wait for an answer.
 /// Ask whether to fetch a URL, blocking until answered.
 pub fn ask_fetch<B: Backend>(terminal: &mut Terminal<B>, request: &FetchRequest) -> Answer {
+    let mut scroll = 0u16;
     loop {
-        if terminal.draw(|frame| draw_fetch(frame, request)).is_err() {
+        let mut drawn = FetchDrawn::default();
+        if terminal
+            .draw(|frame| drawn = draw_fetch(frame, request, scroll))
+            .is_err()
+        {
             return Answer::Reject;
         }
 
@@ -1861,11 +1865,9 @@ pub fn ask_fetch<B: Backend>(terminal: &mut Terminal<B>, request: &FetchRequest)
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
-            Ok(TermEvent::Key(key)) => match answer_for(key) {
+            Ok(TermEvent::Key(key)) => match drawn.response_to(key) {
                 Some(Response::Answer(answer)) => return answer,
-                // Nothing here scrolls: a URL and a host are two lines, and there is no body to
-                // page through because none has been fetched yet.
-                Some(Response::Scroll(_)) => continue,
+                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
                 None => continue,
             },
             Ok(_) => continue,
@@ -1985,14 +1987,67 @@ fn draw_server(frame: &mut ratatui::Frame, request: &ServerRequest) {
     frame.render_widget(Paragraph::new(keys), rows[1]);
 }
 
+/// What one draw of the fetch question decided for the keys that answer it.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct FetchDrawn {
+    /// How far the URL and what follows it can be scrolled.
+    furthest: u16,
+    /// Whether a yes may be taken. It may where the host, the metadata warning when there is one,
+    /// and the keys are all whole on the screen, with at least one row of the URL.
+    answerable: bool,
+}
+
+impl FetchDrawn {
+    /// One key pressed at the question this draw put on the screen.
+    fn response_to(&self, key: KeyEvent) -> Option<Response> {
+        match answer_for(key) {
+            Some(Response::Answer(Answer::Approve)) if !self.answerable => None,
+            response => response,
+        }
+    }
+
+    /// Where the URL starts once moved `by` rows from `scroll`.
+    ///
+    /// Moved from where this draw put it rather than from `scroll`, which a terminal made taller
+    /// since can leave past the bottom, where a press of Up would move nothing.
+    fn moved(&self, scroll: u16, by: i16) -> u16 {
+        scroll
+            .min(self.furthest)
+            .saturating_add_signed(by)
+            .min(self.furthest)
+    }
+}
+
 /// Draw the fetch question.
 ///
 /// The host is drawn on its own line rather than left inside the URL. A person skimming
 /// `https://example.com@evil.test/` reads the first name and the request goes to the second, so
 /// what they are actually answering about is put where it cannot be misread.
-fn draw_fetch(frame: &mut ratatui::Frame, request: &FetchRequest) {
+///
+/// It is drawn above the URL, in rows the URL cannot take. A userinfo segment can be longer than
+/// the box, and a host drawn below it would be pushed off the screen while the keys stayed on it.
+fn draw_fetch(frame: &mut ratatui::Frame, request: &FetchRequest, scroll: u16) -> FetchDrawn {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::ok(), t!(fetch_title));
+    let width = inside.width as usize;
+
+    let mut header = indented(
+        t!(fetch_host, host = request.host.as_str()),
+        Style::default().fg(theme::muted()),
+        width,
+    );
+    // What the host is, where it is the metadata service of the machine this runs on. The
+    // address above is what the request reaches and is not what it means: that service asks
+    // nothing of whoever opens the socket and answers with the credentials of the role, so a
+    // person shown the number alone is being asked about an address.
+    if request.ambient_authority().is_some() {
+        header.extend(indented(
+            t!(fetch_authority_metadata),
+            Style::default().fg(theme::fail()),
+            width,
+        ));
+    }
+    header.push(Line::raw(""));
 
     let mut lines = vec![
         Line::from(vec![
@@ -2007,35 +2062,75 @@ fn draw_fetch(frame: &mut ratatui::Frame, request: &FetchRequest) {
                 Style::default().add_modifier(Modifier::BOLD),
             ),
         ]),
-        Line::styled(
-            format!("  {}", t!(fetch_host, host = request.host.as_str())),
-            Style::default().fg(theme::muted()),
-        ),
         Line::raw(""),
     ];
-    // What the host is, where it is the metadata service of the machine this runs on. The
-    // address above is what the request reaches and is not what it means: that service asks
-    // nothing of whoever opens the socket and answers with the credentials of the role, so a
-    // person shown the number alone is being asked about an address.
-    if request.ambient_authority().is_some() {
-        lines.extend(indented(
-            t!(fetch_authority_metadata),
-            Style::default().fg(theme::fail()),
-            inside.width as usize,
-        ));
-        lines.push(Line::raw(""));
-    }
     lines.extend(indented(
         t!(fetch_explained),
         Style::default().fg(theme::muted()),
-        inside.width as usize,
+        width,
     ));
 
-    let keys = Line::from(vec![
+    let wrapped = |lines: Vec<Line<'static>>| Paragraph::new(lines).wrap(Wrap { trim: false });
+    let rows_of = |paragraph: &Paragraph| {
+        u16::try_from(paragraph.line_count(inside.width)).unwrap_or(u16::MAX)
+    };
+    let header = wrapped(header);
+    let body = wrapped(lines);
+    let heading = rows_of(&header);
+    let rest = rows_of(&body);
+    let answering = rows_of(&wrapped(vec![fetch_keys(true)]));
+
+    // The host and what it is claim their rows first and the keys next, so keys drawn whole have
+    // both whole above them.
+    let header_rows = heading.min(inside.height);
+    let keys_rows = answering.min(inside.height - header_rows);
+    let between = inside.height - header_rows - keys_rows;
+    // A row saying how much of the URL is below, where that leaves the URL a row of its own. The
+    // keys wrap and this does not share their row, so neither cuts off the other.
+    let hint_rows = u16::from(rest > between && between > 1);
+    let body_rows = between - hint_rows;
+    let furthest = rest.saturating_sub(body_rows);
+    let offset = scroll.min(furthest);
+    // A box with no column to draw in takes no rows for any of it, so the keys count as whole there.
+    let answerable = inside.width > 0 && keys_rows == answering && body_rows > 0;
+
+    let row = |y: u16, height: u16| Rect {
+        y,
+        height,
+        ..inside
+    };
+    let header_area = row(inside.y, header_rows);
+    let body_area = row(header_area.bottom(), body_rows);
+    let hint_area = row(body_area.bottom(), hint_rows);
+    let keys_area = row(hint_area.bottom(), keys_rows);
+    frame.render_widget(header, header_area);
+    frame.render_widget(body.scroll((offset, 0)), body_area);
+    frame.render_widget(
+        Paragraph::new(Line::styled(
+            scroll_hint(furthest - offset),
+            Style::default().fg(theme::brand_primary()),
+        )),
+        hint_area,
+    );
+    frame.render_widget(wrapped(vec![fetch_keys(answerable)]), keys_area);
+
+    FetchDrawn {
+        furthest,
+        answerable,
+    }
+}
+
+/// The fetch question's keys, with `y` muted where a yes is not taken from this draw.
+fn fetch_keys(answerable: bool) -> Line<'static> {
+    Line::from(vec![
         Span::styled(
             "  y",
             Style::default()
-                .fg(theme::ok())
+                .fg(if answerable {
+                    theme::ok()
+                } else {
+                    theme::muted()
+                })
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(format!(" {}    ", t!(fetch_yes))),
@@ -2056,15 +2151,7 @@ fn draw_fetch(frame: &mut ratatui::Frame, request: &FetchRequest) {
             format!(" {}", t!(stop_the_turn)),
             Style::default().fg(theme::muted()),
         ),
-    ]);
-
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(inside);
-
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), rows[0]);
-    frame.render_widget(Paragraph::new(keys), rows[1]);
+    ])
 }
 
 /// Ask whether a remote MCP server is now where its reply pointed, blocking until answered.
@@ -2160,6 +2247,7 @@ fn draw_move(frame: &mut ratatui::Frame, request: &MoveRequest) {
     frame.render_widget(Paragraph::new(keys), rows[1]);
 }
 
+/// Draw the offer to vouch for a quarantined file, and wait for an answer.
 pub fn ask_vouch<B: Backend>(terminal: &mut Terminal<B>, request: &VouchRequest) -> Answer {
     let mut scroll = 0u16;
     loop {
@@ -3212,19 +3300,62 @@ mod tests {
     }
 
     fn rendered_fetch(request: &FetchRequest) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(160, 24)).expect("terminal");
-        terminal
-            .draw(|frame| {
-                draw_fetch(frame, request);
+        fetch_screen(request, (160, 24), 0).0.concat()
+    }
+
+    /// The fetch question drawn at this size and scroll, one string per row of the screen.
+    fn fetch_screen(
+        request: &FetchRequest,
+        (width, height): (u16, u16),
+        scroll: u16,
+    ) -> (Vec<String>, FetchDrawn) {
+        let mut drawn = FetchDrawn::default();
+        let rows = rows_of(width, height, |frame| {
+            drawn = draw_fetch(frame, request, scroll);
+        });
+        (rows, drawn)
+    }
+
+    /// What each row of the fetch box holds between its borders.
+    fn fetch_box(rows: &[String]) -> Vec<String> {
+        rows.iter()
+            .filter_map(|row| {
+                let first = row.find('│')?;
+                let last = row.rfind('│')?;
+                (first < last).then(|| row[first + '│'.len_utf8()..last].to_string())
             })
-            .expect("draw");
-        terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
             .collect()
+    }
+
+    /// The box's words in order, however they wrapped.
+    fn fetch_words(rows: &[String]) -> String {
+        words(&fetch_box(rows).join(" "))
+    }
+
+    fn words(text: &str) -> String {
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// The keys' words in order, however they wrapped.
+    fn fetch_keys_words() -> String {
+        words(&format!(
+            "y {} n {} ctrl-c {}",
+            t!(fetch_yes),
+            t!(fetch_no),
+            t!(stop_the_turn)
+        ))
+    }
+
+    /// The issue's request: a userinfo of 1,500 characters naming a documentation site, in front
+    /// of the metadata service's address.
+    fn a_metadata_fetch_behind_a_long_userinfo() -> FetchRequest {
+        FetchRequest {
+            url: format!(
+                "http://docs.example.invalid{}@169.254.169.254/latest/meta-data/",
+                "a".repeat(1_500)
+            ),
+            host: "169.254.169.254".to_string(),
+        }
     }
 
     fn rendered_move(request: &MoveRequest) -> String {
@@ -3361,6 +3492,168 @@ mod tests {
             host: "example.test".to_string(),
         });
         assert!(!drawn.contains("metadata service"), "{drawn}");
+    }
+
+    /// FETCH-2: the host is what a person is answering about, so a URL that wraps past the bottom
+    /// of the box scrolls under it rather than pushing it off, and the box says how much is below.
+    /// Asked at widths where the keys leave too little of their row for that to fit beside them.
+    #[test]
+    fn a_url_longer_than_the_fetch_box_keeps_the_host_above_it_and_says_how_much_is_below() {
+        let request = FetchRequest {
+            url: format!("https://docs.example.invalid/{}", "section/".repeat(250)),
+            host: "docs.example.invalid".to_string(),
+        };
+        for width in [56, 64, 80] {
+            let (rows, drawn) = fetch_screen(&request, (width, 24), 0);
+            let screen = rows.join("\n");
+
+            let inside = fetch_box(&rows);
+            let host = t!(fetch_host, host = "docs.example.invalid").to_string();
+            let host_row = inside.iter().position(|row| row.contains(&host));
+            let url_row = inside
+                .iter()
+                .position(|row| row.trim_start().starts_with(t!(fetch_verb)));
+            assert!(
+                matches!((host_row, url_row), (Some(host), Some(url)) if host < url),
+                "{width} columns: the host is not drawn above the URL: {screen}"
+            );
+            assert!(drawn.furthest > 0, "a URL of 2,000 characters fitted");
+            assert!(
+                fetch_words(&rows).contains(&fetch_keys_words()),
+                "{width} columns: the keys were pushed off: {screen}"
+            );
+            assert!(
+                inside
+                    .iter()
+                    .any(|row| row.contains(scroll_hint(drawn.furthest).trim())),
+                "{width} columns: the box does not say how much of the URL is below: {screen}"
+            );
+            assert!(drawn.answerable, "{width} columns: {screen}");
+        }
+    }
+
+    /// FETCH-2: a userinfo segment is the part of a URL that names a site the request does not
+    /// reach. One long enough to fill the box leaves the address it does reach on the screen, and
+    /// the sentence saying that address is the metadata service, and the keys under them.
+    #[test]
+    fn a_userinfo_that_fills_the_fetch_box_leaves_the_host_and_what_it_is_on_screen() {
+        let (rows, drawn) = fetch_screen(&a_metadata_fetch_behind_a_long_userinfo(), (80, 24), 0);
+        let screen = rows.join("\n");
+        let shown = fetch_words(&rows);
+
+        assert!(
+            shown.contains(&words(
+                &t!(fetch_host, host = "169.254.169.254").to_string()
+            )),
+            "the host the request reaches is not on the screen: {screen}"
+        );
+        assert!(
+            shown.contains(&words(t!(fetch_authority_metadata))),
+            "the metadata warning is not on the screen: {screen}"
+        );
+        assert!(shown.contains(&fetch_keys_words()), "{screen}");
+        assert!(drawn.answerable, "{screen}");
+    }
+
+    /// FETCH-2: the rest of the URL is reachable by the arrows, and the host stays where it was
+    /// while it is read.
+    #[test]
+    fn the_end_of_a_long_url_can_be_scrolled_to_with_the_host_still_shown() {
+        let request = a_metadata_fetch_behind_a_long_userinfo();
+        let end = "@169.254.169.254/latest/meta-data/";
+        let host = words(&t!(fetch_host, host = "169.254.169.254").to_string());
+
+        let (top, drawn) = fetch_screen(&request, (80, 24), 0);
+        assert!(
+            !fetch_box(&top).concat().contains(end),
+            "the whole URL fitted, so nothing here scrolls"
+        );
+
+        let (rows, _) = fetch_screen(&request, (80, 24), drawn.furthest);
+        let screen = rows.join("\n");
+        assert!(
+            fetch_box(&rows).concat().contains(end),
+            "scrolling to the end did not reach the end of the URL: {screen}"
+        );
+        assert!(fetch_words(&rows).contains(&host), "{screen}");
+    }
+
+    /// FETCH-2: `y` is not taken from a draw that cut off the host, what it is, the keys, or the
+    /// URL, whatever the size of the terminal; `n` is taken from any draw. Keys wider than the box
+    /// wrap rather than costing the question its yes.
+    #[test]
+    fn a_fetch_question_takes_a_yes_only_from_a_draw_showing_the_host_and_the_keys() {
+        let request = a_metadata_fetch_behind_a_long_userinfo();
+        let host = words(&t!(fetch_host, host = "169.254.169.254").to_string());
+        let warning = words(t!(fetch_authority_metadata));
+
+        for width in [1, 2, 24, 40, 50, 56, 60, 64, 80, 160] {
+            for height in 1..=30 {
+                let (rows, drawn) = fetch_screen(&request, (width, height), 0);
+                if !drawn.answerable {
+                    continue;
+                }
+                let screen = rows.join("\n");
+                let shown = fetch_words(&rows);
+                assert!(shown.contains(&host), "{width}x{height}: {screen}");
+                assert!(shown.contains(&warning), "{width}x{height}: {screen}");
+                assert!(
+                    shown.contains(&fetch_keys_words()),
+                    "{width}x{height}: {screen}"
+                );
+                assert!(
+                    fetch_box(&rows)
+                        .iter()
+                        .any(|row| row.trim_start().starts_with(t!(fetch_verb))),
+                    "{width}x{height}: {screen}"
+                );
+            }
+        }
+        for size in [(80, 3), (80, 4), (80, 10), (24, 6), (2, 40), (1, 1)] {
+            assert!(
+                !fetch_screen(&request, size, 0).1.answerable,
+                "{size:?} took a yes"
+            );
+        }
+        for size in [(80, 24), (50, 24)] {
+            assert!(
+                fetch_screen(&request, size, 0).1.answerable,
+                "{size:?} refused a yes"
+            );
+        }
+
+        let y = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+        let n = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
+        let (_, cut_off) = fetch_screen(&request, (80, 4), 0);
+        let (_, whole) = fetch_screen(&request, (80, 24), 0);
+        assert_eq!(cut_off.response_to(y), None);
+        assert_eq!(
+            cut_off.response_to(n),
+            Some(Response::Answer(Answer::Reject))
+        );
+        assert_eq!(
+            whole.response_to(y),
+            Some(Response::Answer(Answer::Approve))
+        );
+    }
+
+    /// FETCH-2: a scroll moves the URL from where the last draw put it. A terminal made taller
+    /// since the last key leaves the stored position past the bottom, and Up has to move it.
+    #[test]
+    fn a_fetch_scroll_moves_from_where_the_url_was_drawn() {
+        let request = a_metadata_fetch_behind_a_long_userinfo();
+        let (_, short) = fetch_screen(&request, (80, 16), 0);
+        let (_, tall) = fetch_screen(&request, (80, 30), 0);
+        assert!(short.furthest > tall.furthest && tall.furthest > 0);
+
+        let scrolled_to_the_end = short.furthest;
+        assert_eq!(
+            tall.moved(scrolled_to_the_end, -1),
+            tall.furthest - 1,
+            "Up moved nothing after the terminal grew"
+        );
+        assert_eq!(tall.moved(0, -1), 0);
+        assert_eq!(tall.moved(tall.furthest, i16::MAX), tall.furthest);
     }
 
     /// Vouching grants two things, and the prompt has to ask for both in as many words. The
