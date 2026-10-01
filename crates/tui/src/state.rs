@@ -580,13 +580,18 @@ pub fn failure_reason(
             (None, _) => t!(failure_too_long).into(),
             (Some(tokens), None) => t!(failure_too_long_at, tokens = tokens).into(),
             (Some(tokens), Some(cut_off)) => match (&cut_off.call, cut_off.thought) {
-                (Some(OpenCall { tool: Some(tool) }), _) => t!(
+                (
+                    Some(OpenCall {
+                        tool: Some(tool), ..
+                    }),
+                    _,
+                ) => t!(
                     failure_too_long_in_call,
                     tokens = tokens,
                     tool = tool.as_str()
                 )
                 .into(),
-                (Some(OpenCall { tool: None }), _) => {
+                (Some(OpenCall { tool: None, .. }), _) => {
                     t!(failure_too_long_in_a_call, tokens = tokens).into()
                 }
                 (None, true) => t!(failure_too_long_thinking, tokens = tokens).into(),
@@ -12275,6 +12280,7 @@ mod tests {
                     ceiling: 64_000,
                     call: call.map(|tool| OpenCall {
                         tool: tool.map(str::to_owned),
+                        arguments: 0,
                     }),
                     thought,
                 }),

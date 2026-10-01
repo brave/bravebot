@@ -154,6 +154,8 @@ pub struct OpenCall {
     /// The offered tool it named, spelt as the request offered it, and `None` where it named
     /// none of them. The reply's own spelling never travels.
     pub tool: Option<String>,
+    /// How many bytes of its arguments had arrived, counted and never read.
+    pub arguments: usize,
 }
 
 /// A source of subscription credentials, one per request.

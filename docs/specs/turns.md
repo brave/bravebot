@@ -259,6 +259,14 @@ out again after being told how to do the work in parts cannot do it in parts her
 found by matching what the reply was writing against the tools the request offered, so a name the
 reply made up is never repeated back to it.
 
+**Every stop is recorded.** The trail gets a line for each: the ceiling, the tool-calling round it
+landed on, the offered tool of the call that was open and how many bytes of its arguments had
+arrived, whether any reasoning arrived, and whether the turn asked again, kept the text as its
+answer, or ended. Counts and the request's own tool name, so the line carries no content
+([TRACE-2](trace.md#TRACE-2)). A turn that went on past a stop leaves nothing else saying it
+happened, and one that ended on a stop is read back to ask what the ceiling was spent on, which is
+what says whether the work wanted splitting.
+
 `verified-by: bravebot_agent::turn::a_reply_cut_off_while_writing_a_call_is_told_so_and_the_turn_carries_on`
 `verified-by: bravebot_agent::turn::a_reply_cut_off_after_text_keeps_the_text_and_the_turn_carries_on`
 `verified-by: bravebot_agent::turn::two_ceiling_stops_in_a_row_end_the_turn`
@@ -267,3 +275,4 @@ reply made up is never repeated back to it.
 `verified-by: bravebot_agent::turn::the_line_after_a_ceiling_stop_says_what_to_do_about_it`
 `verified-by: bravebot_agent::turn::the_person_is_told_what_a_ceiling_stop_asked_for`
 `verified-by: bravebot_agent::turn::a_ceiling_stop_between_two_empty_replies_is_not_two_empty_replies_in_a_row`
+`verified-by: bravebot_agent::turn::the_trail_says_what_each_ceiling_stop_was_writing_and_what_the_turn_did`

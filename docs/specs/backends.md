@@ -1724,8 +1724,8 @@ asks once for less ([TURN-7](turns.md#TURN-7)). A reply that reaches the ceiling
 nothing is a failure, and the failure names the ceiling.
 
 Either way what the reply was doing when it stopped travels with it: the call it was part way
-through, where its last block was one, and whether any of its reasoning arrived. The call's tool
-is named as the request offered it, and a name the request never offered is reported as a tool
+through, where its last block was one, with how many bytes of its arguments had arrived, and
+whether any of its reasoning arrived. The call's tool is named as the request offered it, and a name the request never offered is reported as a tool
 call and nothing more. A failure says which of the three it was: part way through a call,
 thinking, or neither.
 
@@ -1754,6 +1754,7 @@ it and was writing the text when the ceiling fell.
 `verified-by: bravebot_bedrock::lib::reaching_the_token_ceiling_is_not_retried`
 `verified-by: bravebot_bedrock::lib::a_stopped_call_to_a_tool_nobody_offered_is_not_named`
 `verified-by: bravebot_bedrock::lib::a_reply_the_ceiling_stopped_while_it_was_thinking_says_so`
+`verified-by: bravebot_bedrock::lib::a_reply_the_ceiling_stopped_says_how_much_of_its_call_had_arrived`
 `verified-by: bravebot_bedrock::lib::a_call_followed_by_text_is_not_the_one_the_ceiling_stopped`
 `verified-by: bravebot_agent::backend::a_reply_stopped_at_the_ceiling_reports_which_ceiling`
 `verified-by: bravebot_tui::state::a_reply_stopped_at_the_ceiling_says_what_it_was_writing`

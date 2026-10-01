@@ -1604,6 +1604,7 @@ mod tests {
                 ceiling,
                 call: Some(bravebot_aichat::OpenCall {
                     tool: Some("write_file".into()),
+                    arguments: 118_234,
                 }),
                 thought: false,
             };

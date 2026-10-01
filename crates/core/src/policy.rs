@@ -240,6 +240,17 @@ pub enum Destination {
     Reference,
 }
 
+/// What a turn did about a reply the output ceiling stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AfterCeilingStop {
+    /// Told the planner why and asked it once more.
+    AskedAgain,
+    /// Kept what the reply wrote as the turn's answer, which stops where the reply did.
+    KeptTheText,
+    /// Ended the turn on the stop, the reply having written nothing to keep.
+    Ended,
+}
+
 /// The reference monitor for exactly one turn.
 ///
 /// Not `Clone`. [`Policy::finish`] takes `self`, so a policy cannot outlive its turn.
@@ -2236,6 +2247,54 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             format!(
                 "round {round}: {summarised} message(s) summarised, {kept} kept word for word, \
                  costing {cost} tokens"
+            ),
+        );
+    }
+
+    /// Record a reply the output ceiling stopped: what it was part way through, and what the
+    /// turn did about it.
+    ///
+    /// `call` is the call that was open, where one was: the offered tool it named, `None` where it
+    /// named none of them, and how many bytes of its arguments had arrived. Counts and a name
+    /// from the request's own list of tools, so the trail carries no content.
+    ///
+    /// **Why the trail needs it.** A turn that stopped at the ceiling is read back to ask what the
+    /// model spent the ceiling on, and the answer decides the remedy: one file's worth of argument
+    /// wants the work in parts, and a ceiling spent thinking does not. A turn that went on past
+    /// a stop leaves nothing else saying it happened.
+    pub fn record_ceiling_stop(
+        &mut self,
+        round: usize,
+        ceiling: u64,
+        call: Option<(Option<&str>, usize)>,
+        thought: bool,
+        then: AfterCeilingStop,
+    ) {
+        let open = match call {
+            Some((Some(tool), arguments)) => format!(
+                "a call to {tool} was open with {arguments} bytes of its arguments, and was not made"
+            ),
+            Some((None, arguments)) => format!(
+                "a call to a tool it was not offered was open with {arguments} bytes of its \
+                 arguments, and was not made"
+            ),
+            None => "no call was open".to_string(),
+        };
+        let reasoning = if thought {
+            "reasoning arrived"
+        } else {
+            "no reasoning arrived"
+        };
+        let then = match then {
+            AfterCeilingStop::AskedAgain => "the planner was told why and asked again",
+            AfterCeilingStop::KeptTheText => "what it wrote is the answer, and the turn ends there",
+            AfterCeilingStop::Ended => "the turn ends on it, with nothing written",
+        };
+        self.allow(
+            "ceiling",
+            format!(
+                "round {round}: stopped at the output limit of {ceiling} tokens; {open}; \
+                 {reasoning}; {then}"
             ),
         );
     }
