@@ -23,6 +23,10 @@ const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 /// The socket every host name lookup on macOS goes through.
 const RESOLVER: &str = "/private/var/run/mDNSResponder";
 
+/// Refuses a write to any path with a `.git` component, in either case, since the default
+/// volume opens `.GIT` when git asks for `.git`.
+const GIT_DIRECTORY_WRITE: &str = "(deny file-write* (regex #\"/\\.[Gg][Ii][Tt](/|$)\"))\n";
+
 /// The program a confined process is reached through where the environment would not
 /// survive the journey otherwise.
 ///
@@ -109,6 +113,13 @@ impl SeatbeltSandbox {
                 "(allow file-write* (subpath {}))\n",
                 quote(&row.path.to_string_lossy())
             ));
+        }
+
+        // A repository's configuration and hooks are commands git runs, unconfined, the next time
+        // anybody runs git there. Seatbelt lets the last matching rule decide, so this follows the
+        // rows it narrows.
+        if !policy.writable.is_empty() {
+            out.push_str(GIT_DIRECTORY_WRITE);
         }
 
         // Looking at a path answers what it is and not what it holds: this allows stat and
@@ -1072,6 +1083,86 @@ int main(void) {
             inode,
             "the file was copied and unlinked rather than moved, so the move was denied"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A program that can write a repository's `.git/config` or a hook in it has a command run
+    /// outside confinement the next time a person, or a shell prompt, runs git there. So a write
+    /// row reaches everything beneath it except a `.git`, existing or new, in either case.
+    ///
+    /// Writes beside the `.git` succeed in the same run, so the refusals are of `.git` and not of
+    /// the row.
+    #[test]
+    fn a_write_row_does_not_reach_a_git_directory_beneath_it() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+
+        let dir = crate::testutil::scratch_dir("bravebot-sandbox-git-directory");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".git").join("hooks"))
+            .expect("the scratch directory is creatable");
+        std::fs::create_dir_all(dir.join("below")).expect("the scratch directory is creatable");
+        let config = dir.join(".git").join("config");
+        std::fs::write(&config, b"[core]\n").expect("the file is writable");
+
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read(&dir)
+            .allow_write(&dir);
+        let touch = |target: &Path| {
+            sandbox
+                .spawn(
+                    "/usr/bin/touch",
+                    &[target.display().to_string()],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+                .wait()
+                .expect("should wait")
+                .code()
+        };
+
+        for allowed in [
+            dir.join("beside"),
+            dir.join(".gitignore"),
+            dir.join("below").join("file"),
+        ] {
+            assert_eq!(
+                touch(&allowed),
+                Some(0),
+                "{} was refused",
+                allowed.display()
+            );
+            assert!(allowed.exists(), "{} was not written", allowed.display());
+        }
+
+        let modified = std::fs::metadata(&config).and_then(|m| m.modified()).ok();
+        assert_eq!(
+            touch(&config),
+            Some(TOUCH_FAILED),
+            "the repository's config was written"
+        );
+        assert_eq!(
+            std::fs::metadata(&config).and_then(|m| m.modified()).ok(),
+            modified,
+            "the repository's config was touched"
+        );
+        for refused in [
+            dir.join(".git").join("hooks").join("pre-commit"),
+            dir.join("below").join(".git"),
+            dir.join("below").join(".GIT"),
+        ] {
+            assert_eq!(
+                touch(&refused),
+                Some(TOUCH_FAILED),
+                "{} was not refused",
+                refused.display()
+            );
+            assert!(!refused.exists(), "{} was written", refused.display());
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }

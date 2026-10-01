@@ -59,7 +59,7 @@ argument, and a flag of bravebot's own among them, such as `--settings`, is the 
 |---|---|
 | `-e`, `--env <name>=<value>...` | store this value for the server under this name; repeatable, and one flag takes every word up to the next flag |
 | `-e`, `--env <name>` | pass this variable to the server from your environment, by name; one name to each flag |
-| `--dir <path>` | the directory the server runs in, kept as the absolute path it resolves to |
+| `--dir <path>` | the directory the server runs in and may write, kept as the absolute path it resolves to; one inside a git repository is refused |
 | `-- <program> [args...]` | a program on this machine; `--stdio --` means the same |
 | `--http <url>` | a service at this url; takes neither `-e` nor `--dir` |
 | `-s <scope>` | which settings file [asks for the server](#asking-for-one-from-a-checkout) once you approve it: `local`, the default, `project` or `user`; it may come before the alias |
@@ -425,7 +425,9 @@ Windows today, it is not started. It gets:
   `bin` directory the installation around it, including one deep in your home directory as `nvm`
   installs one;
 - the directory you gave with `--dir`, to read and write and start in, or the temporary directory
-  if you gave none;
+  if you gave none. A directory inside a git repository is refused, since git runs the commands a
+  repository's configuration and hooks name, and a server that may write them may run code
+  unconfined the next time you run git there. On macOS the server cannot write a `.git` anywhere;
 - the network by IP address, and the machine's own system directories. A local socket, such as
   the one the Docker daemon listens on, is reached only in a directory the server may write, so a
   server that runs `docker` does not reach the daemon. On Linux that needs a kernel with Landlock
@@ -614,6 +616,16 @@ profile directory there is no `~/.bravebot` at all: nothing is declared there, a
   somewhere.
 - **The full-screen interface does not show a server's own error output.** `--plain` and a one-shot
   run pass it through to stderr.
+- **A directory holding checkouts is not refused.** Only the directories above `--dir` are searched
+  for a repository, so a server given one above your projects may write their files. Give a server
+  a directory of its own.
+- **On Linux a server can write a repository it reaches.** A `.git` under its directory, its home
+  or the temporary directory is one it may write, whether it was there already or the server made
+  it, so do not run git in a directory a server has written.
+- **On macOS a server cannot clone a repository.** It cannot write a `.git` anywhere, so a server
+  or runner that clones one into its home or the temporary directory fails, and no server can be
+  given a git repository to work on.
+- **If your home directory is a git work tree, every directory in it is refused as a server's.**
 - **No local server starts on Windows yet.** There is no confinement for one there, so the session
   says so and goes on without it.
 - **The desktop application starts no server yet.** Only the terminal client acts on a checkout's

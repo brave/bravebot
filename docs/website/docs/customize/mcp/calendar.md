@@ -60,7 +60,7 @@ checking its digest, so no package manager runs, and turns off everything except
    ```
      calendar   stdio   node /Users/you/google-workspace-calendar-mcp/dist/index.js
                 variables: BROWSER (stored), GEMINI_CLI_WORKSPACE_FORCE_FILE_STORAGE (stored), WORKSPACE_FEATURE_OVERRIDES (stored), PATH
-                directory: /Users/you/google-workspace-calendar-mcp
+                directory, which it may write: /Users/you/google-workspace-calendar-mcp
    ```
 
    It then asks whether to use the server, and shows a digest line under these. Answer yes once
