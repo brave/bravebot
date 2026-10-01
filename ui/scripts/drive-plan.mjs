@@ -79,7 +79,7 @@ try {
   await trust.waitFor({ state: 'hidden' })
 
   const composer = page.locator('.composer textarea')
-  const planFirst = page.locator('.composer .plan-first')
+  const planFirst = page.locator('.composer .plan-first button')
   const stop = page.locator('.composer .stop')
   const cards = page.locator('.confirm.manifest')
   const ended = () => stop.waitFor({ state: 'hidden' })
@@ -104,7 +104,8 @@ try {
   )
   assert.match(await card.innerText(), /does not approve its writes/)
   assert.deepEqual(await card.locator('.confirm-actions button').allInnerTexts(), ['Don’t run', 'Run this plan'])
-  assert.match(await page.locator('.pending-jump').innerText(), /Approval needed · Answer the plan/)
+  assert.match(await page.locator('.pending-jump').innerText(), /Approval needed/)
+  assert.equal(await page.locator('.pending-jump').getAttribute('data-tooltip'), 'Answer the plan')
   assert.equal(await planFirst.count(), 0, 'a second run cannot be started while one is waiting')
   assert.ok(!existsSync(notes), 'nothing was written before the plan was answered')
   await page.screenshot({ path: join(output, 'plan-asked.png') })
@@ -130,7 +131,7 @@ try {
   // ---- an ordinary message afterwards, which is a turn and knows nothing of the run ------------
   assert.ok(await planFirst.isDisabled(), 'the button goes back to waiting for a task: no mode is held')
   await composer.fill('Say done.')
-  await page.locator('.composer .send').click()
+  await page.locator('.composer .send button').click()
   await page.locator('.bubble.assistant').first().waitFor()
   await ended()
   assert.equal(rounds.length, 3)
@@ -206,7 +207,7 @@ try {
     await trust.waitFor({ state: 'hidden' })
   }
   assert.equal(await page.locator('.bubble').count(), 0, 'the new session holds nothing the run said')
-  assert.ok((await page.locator('.transcript-head .where').innerText()).includes(project))
+  assert.ok((await page.locator('.transcript-head .where').getAttribute('data-tooltip')).startsWith(project))
 
   assert.deepEqual(errors, [])
   console.log(`PASS: a run is started from the composer, its plan is put to the window with every step, a yes runs it and a no runs nothing, what it releases stays in a marked container, the conversation holds none of it, and a run's record is read and cannot be typed into. Screenshots in ${output}/plan-*.png`)
