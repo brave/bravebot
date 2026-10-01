@@ -733,8 +733,8 @@ fn a_request_whose_id_is_too_long_to_keep_is_refused_under_no_id() {
     assert_eq!(extension.request()["params"], json!({"after": true}));
 }
 
-/// Whitespace around an id is not part of it, so a line pushed over the limit by spaces after a short
-/// id is refused under that id, and the next request still reaches the extension.
+/// Whitespace around an id is not part of it, so a line pushed over the limit by spaces after a
+/// short id is refused under that id, and the next request still reaches the extension.
 #[test]
 fn a_request_padded_after_its_id_is_refused_under_that_id() {
     let directory = installed_for(OURS);
