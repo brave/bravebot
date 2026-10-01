@@ -29,6 +29,7 @@ use bravebot_agent::confirm::{
 use bravebot_agent::conversation::{Composed, Said};
 use bravebot_agent::diff::Change;
 use bravebot_agent::report::{Activity, Landing, Phase, Reach, Shown};
+use bravebot_aichat::CutOff;
 use bravebot_core::ask::{Answer, Asking};
 use bravebot_core::todo::{Row, Status};
 use serde_json::{Value, json};
@@ -170,6 +171,21 @@ pub fn shown(shown: &Shown) -> Value {
         "label": shown.label,
         "preview": shown.preview,
         "lines": shown.lines,
+    })
+}
+
+/// What a reply the output ceiling stopped was doing, for the failure it ended the turn with.
+///
+/// The ceiling is this program's own figure, and the tool is the request's spelling of one it
+/// offered, so nothing here is the reply's own text. `null` where the turn did not end on a stop.
+pub fn cut_off(cut_off: Option<&CutOff>) -> Value {
+    let Some(cut_off) = cut_off else {
+        return Value::Null;
+    };
+    json!({
+        "ceiling": cut_off.ceiling,
+        "call": cut_off.call.as_ref().map(|call| json!({ "tool": call.tool })),
+        "thought": cut_off.thought,
     })
 }
 

@@ -1085,7 +1085,7 @@ function Card({
     case 'watch':
       return <div className="watch-turn"><strong>{entry.text}</strong><span>Automatic turn · file contents still follow normal read permissions</span></div>
     case 'error':
-      return <ErrorCard category={entry.category} attempts={entry.attempts} status={entry.status} detail={entry.text} onRetry={onRecover} onModel={onChooseModel} />
+      return <ErrorCard category={entry.category} attempts={entry.attempts} status={entry.status} cutOff={entry.cutOff} detail={entry.text} onRetry={onRecover} onModel={onChooseModel} />
 
     case 'replayed-tool':
       // No outcome, because the record does not keep one. Drawn quietly for the same

@@ -865,12 +865,23 @@ a client that reloads on receipt sees the same thing on disk.
 ```json
 { "event": "turn.error", "session": "s1", "data": {
   "turn": 5, "kind": "cancelled"|"precommit"|"workspace"|"chat", "message": "…",
+  "category": "too-long",
+  "cutOff": { "ceiling": 32000, "call": { "tool": "write_file" }, "thought": false },
   "notices": ["hook turn-finished: /usr/bin/fmt could not be started"],
   "prompt": 4, "id": "saved-session-id-or-null" } }
 ```
 
 `prompt` is as on `turn.done`: a turn that failed still said what it was asked, so the
 prompt is in the conversation and is still a place a fork can be cut at.
+
+`cutOff` is set where a reply stopped at the output ceiling is what failed, and `null`
+otherwise. That is `category: "too-long"`, or `"internal"` where the stop was in a plan's
+step (`kind: "manifest"`). `ceiling` is the limit in tokens. `call` is the tool call the
+reply was part way through, or `null` where it was in none, and its `tool` is the request's
+own name for a tool it offered, `null` for a call to one it did not. `thought` says whether
+any reasoning arrived. A client names the ceiling and which of these it was, since a reply
+that spent the limit on one call's arguments is asked for in parts and one that spent it
+thinking is not.
 
 The four `TurnError` variants. A failed turn is still part of the conversation and the
 conversation is handed back either way — the next question is usually about it — so the
@@ -1114,7 +1125,8 @@ Still open:
   The desktop category `model-unconfigured` identifies a selected Brave model without
   Brave configuration when another gateway or Bedrock service is configured; select
   a model from that service instead of replacing its credential.
-  Error events include stable `category`, optional `status` and `attempts`; raw backend
+  Error events include stable `category`, optional `status` and `attempts`, and `cutOff` for a
+  turn the output ceiling ended; raw backend
   diagnostic text is not sent as a turn error.
 - `hooks.inspect` reports the hooks file as the agent reads it: `path`, its `text` (null for a
   file this could not read at all), the `hooks` it declares as `{ on, tool, run, firesForNothing }`,

@@ -16,6 +16,7 @@ import type {
   AskRequest,
   Change,
   ConfirmRequest,
+  CutOff,
   Landing,
   OutputRequest,
   RunRequest,
@@ -104,7 +105,7 @@ export type Entry = (
    */
   | { kind: 'vet'; id: string; request: VetRequest; decision: 'approve' | 'reject' | null }
   | { kind: 'ask'; id: string; request: AskRequest; answers: AskAnswer[] | null }
-  | { kind: 'error'; id: string; text: string; category?: string | null; attempts?: number | null; status?: number | null }
+  | { kind: 'error'; id: string; text: string; category?: string | null; attempts?: number | null; status?: number | null; cutOff?: CutOff | null }
   | { kind: 'watch'; id: string; text: string }
   /** A replayed tool line from a stored session: no outcome, because none was kept. */
   | { kind: 'replayed-tool'; id: string; text: string; why: string }

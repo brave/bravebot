@@ -1,3 +1,4 @@
+import type { CutOff } from '../../shared/protocol'
 import { failureSummary } from '../failure'
 
 /**
@@ -7,12 +8,14 @@ import { failureSummary } from '../failure'
  * something a model wrote. Matching on it is what the wire protocol forbids in as many words,
  * and it is why every enum here arrives with a tag. A failure that carried no category gets
  * `failureSummary`'s unknown-category answer, which is the same one an unrecognised tag gets.
+ * A stop at the output ceiling is described from `cutOff`, which is fields the agent sent, for the
+ * same reason.
  */
-export function ErrorCard({ detail, onRetry, onModel, category, attempts, status }: {
-  category?: string | null; attempts?: number | null; status?: number | null
+export function ErrorCard({ detail, onRetry, onModel, category, attempts, status, cutOff }: {
+  category?: string | null; attempts?: number | null; status?: number | null; cutOff?: CutOff | null
   detail: string; onRetry?: () => void; onModel?: () => void
 }): React.JSX.Element {
-  const classified = failureSummary(category ?? '')
+  const classified = failureSummary(category ?? '', cutOff)
   return <div className="error-card" role="alert">
     <strong>{classified.title}</strong><p>{classified.description}</p>
     <div className="error-actions">

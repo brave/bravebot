@@ -1,5 +1,7 @@
+import type { CutOff } from '../shared/protocol'
+
 /** Stable agent categories, independent of backend wording or translated diagnostics. */
-export function failureSummary(category: string): { title: string; description: string } {
+export function failureSummary(category: string, cutOff?: CutOff | null): { title: string; description: string } {
   const rows: Record<string, [string, string]> = {
     cancelled: ['Task stopped', 'Completed changes remain in the project. You can continue from here.'],
     unauthorized: ['Authentication failed', 'Check the model service credentials in Agent settings before continuing.'],
@@ -17,5 +19,21 @@ export function failureSummary(category: string): { title: string; description: 
     internal: ['The turn could not finish', 'Your conversation is preserved. Review diagnostics before continuing.'],
   }
   const [title, description] = rows[category] ?? ['The turn could not finish', 'Your conversation is preserved. Review the details before continuing.']
+  if (category === 'too-long' && cutOff) return { title, description: ceilingStop(cutOff) }
   return { title, description }
+}
+
+/**
+ * A reply that spent the limit on a call is asked for in parts, and one that spent it thinking is
+ * not. The agent has already asked the model for smaller parts once, so the setting is named too.
+ */
+function ceilingStop({ ceiling, call, thought }: CutOff): string {
+  const reached = `The model reached its limit of ${ceiling.toLocaleString('en-US')} tokens`
+  const raise = 'raise the limit with BRAVEBOT_OUTPUT_BUDGET in the env block of ~/.bravebot/settings.json'
+  if (call) {
+    const what = call.tool === null ? 'a tool call' : `a call to ${call.tool}`
+    return `${reached} part way through ${what}, so the call was not made. Ask for the work in smaller parts, or ${raise}.`
+  }
+  if (thought) return `${reached} while it was still thinking. Choose another model, or ${raise}.`
+  return `${reached}. Ask for a smaller next step, or ${raise}.`
 }
