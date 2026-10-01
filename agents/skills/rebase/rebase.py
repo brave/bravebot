@@ -3,7 +3,8 @@
 
     rebase.py start <pr>                fetch, check the head out in ../<checkout>-<pr>, rebase
     rebase.py continue <pr>             stage the resolved files and carry on
-    rebase.py check <pr> [target ...]   run make targets there, printing only a failure
+    rebase.py check <pr> [target ...]   run the checks the resolved files call for, or the make
+                                        targets named, printing only a failure
     rebase.py push <pr>                 push over the head `start` fetched, and nothing newer
 
 Every step that needs no judgement is decided here, so what it prints is only what a model has to
@@ -17,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -27,6 +29,8 @@ PULL_URL = re.compile(r"github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)")
 OURS = re.compile(r"^<{7}(?: |$)")
 THEIRS = re.compile(r"^>{7}(?: |$)")
 MAKE_FAILED = re.compile(r"^make(?:\[\d+\])?: \*\*\*")
+SPEC_RECORDS = {"agents/unverified-clauses.txt", "agents/renumbered-clauses.txt"}
+LOCK_RESOLVES = ["cargo", "metadata", "--locked", "--format-version", "1"]
 
 
 def die(message):
@@ -175,6 +179,71 @@ def unmerged(tree):
     return [one for one in listing.split("\0") if one]
 
 
+def resolved_log(tree):
+    return Path(git("rev-parse", "--absolute-git-dir", cwd=tree)) / "rebase-resolved"
+
+
+def resolved(tree):
+    """The files a person resolved during the rebase in `tree`, which is all a check is chosen from."""
+    log = resolved_log(tree)
+    return [one for one in log.read_text(encoding="utf-8").split("\0") if one] if log.is_file() else []
+
+
+def remember_resolved(tree, files):
+    joined = "\0".join(sorted({*resolved(tree), *files}))
+    resolved_log(tree).write_text(joined, encoding="utf-8")
+
+
+def package_of(tree, directory):
+    manifest = Path(tree, "crates", directory, "Cargo.toml")
+    if not manifest.is_file():
+        return None
+    return tomllib.loads(manifest.read_text(encoding="utf-8")).get("package", {}).get("name")
+
+
+def plan(tree, files):
+    """The commands the resolved files call for, each the cheapest that could catch what they break.
+
+    A file no rule names gets no local command: CI runs on the pull request anyway, and it is the
+    only place the desktop app, the website and the dependency policy are built.
+    """
+    crates, tests, targets, commands = set(), [], set(), []
+    for name in files:
+        path = Path(name)
+        parts = path.parts
+        if len(parts) > 2 and parts[0] == "crates":
+            if path.suffix == ".rs" or path.name == "Cargo.toml":
+                crates.add(parts[1])
+            if len(parts) == 4 and parts[2] == "tests" and path.suffix == ".rs":
+                tests.append((parts[1], path.stem))
+            if parts[1:3] == ("i18n", "locales"):
+                targets.add("check-locales")
+        if name == "contrib/untranslated-messages.txt":
+            targets.add("check-locales")
+        if path.suffix == ".rs" or parts[:2] == ("docs", "specs") or name in SPEC_RECORDS:
+            targets.add("check-spec")
+        if parts[:2] == (".github", "workflows") or name == "contrib/required-checks.txt":
+            targets.add("check-security")
+        if path.name in ("Cargo.toml", "Makefile") or path.name.startswith("Dockerfile"):
+            targets.add("check-security")
+        if path.name in ("Cargo.toml", "Cargo.lock", "package.json", "package-lock.json"):
+            targets.add("check-versions")
+        if path.name in ("Cargo.toml", "Cargo.lock") and LOCK_RESOLVES not in commands:
+            commands.append(LOCK_RESOLVES)
+    packages = sorted(filter(None, (package_of(tree, one) for one in crates)))
+    if packages:
+        flags = [flag for one in packages for flag in ("-p", one)]
+        commands.append(["cargo", "fmt", "--all", "--", "--check"])
+        commands.append(["cargo", "clippy", *flags, "--all-targets", "--all-features", "--", "-D", "warnings"])
+        for directory, test in sorted(tests):
+            package = package_of(tree, directory)
+            if package:
+                commands.append(["cargo", "test", "-p", package, "--locked", "--test", test])
+    if targets:
+        commands.append(["make", "-k", *sorted(targets)])
+    return commands
+
+
 def describe(tree, name):
     path = Path(tree, name)
     if not path.is_file():
@@ -252,6 +321,7 @@ def start(pr):
     elif not subjects(pr.tip) <= subjects("HEAD"):
         die(f"{pr.branch} in {tree} and {pr.tip} have diverged")
     if not succeeds("merge-base", "--is-ancestor", pr.onto, "HEAD", cwd=tree):
+        resolved_log(tree).unlink(missing_ok=True)
         done = run("git", "rebase", pr.onto, cwd=tree, check=False)
         if done.returncode and rebase_dir(tree) is None:
             die(f"git rebase {pr.onto} failed:\n{(done.stderr or done.stdout).strip()}")
@@ -276,6 +346,7 @@ def resume(pr):
         return 1
     if files:
         git("add", "-A", "--", *files, cwd=tree)
+        remember_resolved(tree, files)
     done = run(
         "git", "rebase", "--continue", cwd=tree, check=False, env={**os.environ, "GIT_EDITOR": "true"}
     )
@@ -288,21 +359,32 @@ def check(pr, targets):
     tree = pr.tree
     if rebase_dir(tree):
         die(f"finish the rebase first: `{SCRIPT} continue {pr.number}`")
-    targets = targets or ["check-all-local"]
-    command = ["make", "-k", *targets]
-    # The worktree's .envrc holds what the build reads, and a subprocess never loads it.
-    if shutil.which("direnv") and Path(tree, ".envrc").is_file():
-        command = ["direnv", "exec", str(tree), *command]
-    log = Path(git("rev-parse", "--absolute-git-dir", cwd=tree)) / "rebase-check.log"
-    with open(log, "w", encoding="utf-8") as out:
-        done = subprocess.run(command, cwd=tree, stdout=out, stderr=subprocess.STDOUT)
-    if done.returncode == 0:
-        print(f"passed: make {' '.join(targets)}")
+    commands = [["make", "-k", *targets]] if targets else plan(tree, resolved(tree))
+    if not commands:
+        print("nothing resolved needs a local check; CI runs the rest")
         return 0
-    lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
-    print(f"failed: make {' '.join(targets)} (full log {log})")
-    print("\n".join([one for one in lines if MAKE_FAILED.match(one)] + ["..."] + lines[-30:]))
-    return 1
+    # The worktree's .envrc holds what the build reads, and a subprocess never loads it.
+    wrap = ["direnv", "exec", str(tree)] if shutil.which("direnv") and Path(tree, ".envrc").is_file() else []
+    log = Path(git("rev-parse", "--absolute-git-dir", cwd=tree)) / "rebase-check.log"
+    failed = False
+    with open(log, "wb") as out:
+        for command in commands:
+            shown = " ".join(command)
+            out.write(f"$ {shown}\n".encode())
+            out.flush()
+            begin = out.tell()
+            done = subprocess.run([*wrap, *command], cwd=tree, stdout=out, stderr=subprocess.STDOUT)
+            if done.returncode == 0:
+                print(f"passed: {shown}")
+                continue
+            failed = True
+            out.flush()
+            with open(log, "rb") as back:
+                back.seek(begin)
+                lines = back.read().decode(errors="replace").splitlines()
+            print(f"failed: {shown} (full log {log})")
+            print("\n".join([one for one in lines if MAKE_FAILED.match(one)] + ["..."] + lines[-30:]))
+    return 1 if failed else 0
 
 
 def push(pr):

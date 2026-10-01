@@ -136,6 +136,10 @@ def test_a_conflict_is_reported_resolved_and_pushed_from_a_worktree_of_its_own()
         (tree / "a.txt").write_text("from main and the pull request\n")
         code, out = quietly(rebase.resume, pr())
         assert code == 0 and "push 9" in out, out
+        assert rebase.resolved(tree) == ["a.txt"], "a resolved file is what a check is chosen from"
+
+        code, out = quietly(rebase.check, pr(), [])
+        assert code == 0 and "CI runs the rest" in out, "a file no rule names runs nothing here"
 
         code, out = quietly(rebase.push, pr())
         assert code == 0, out
@@ -181,8 +185,55 @@ def test_a_branch_already_rebased_here_is_rebased_again_rather_than_refused():
         assert git("log", "-1", "--format=%s", "HEAD^", cwd=pr().tree) == "main moves again"
 
 
+def test_a_rebase_without_a_conflict_leaves_nothing_resolved_to_check():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, seed, _ = world(Path(tmp).resolve())
+        quietly(rebase.start, pr())
+        (pr().tree / "a.txt").write_text("resolved\n")
+        quietly(rebase.resume, pr())
+        assert rebase.resolved(pr().tree) == ["a.txt"]
+
+        (seed / "c.txt").write_text("later\n")
+        git("add", "c.txt", cwd=seed)
+        git("commit", "-q", "-m", "main moves again", cwd=seed)
+        git("push", "-q", "origin", "main", cwd=seed)
+
+        code, out = quietly(rebase.start, pr())
+        assert code == 0, out
+        assert rebase.resolved(pr().tree) == [], "the earlier rebase's files are not this one's"
+        code, out = quietly(rebase.check, pr(), [])
+        assert code == 0 and "CI runs the rest" in out, out
+
+
+def test_the_resolved_files_choose_the_checks_and_a_file_no_rule_names_chooses_none():
+    with tempfile.TemporaryDirectory() as tmp:
+        tree = Path(tmp)
+        for crate in ("agent", "tui"):
+            (tree / "crates" / crate).mkdir(parents=True)
+            (tree / "crates" / crate / "Cargo.toml").write_text(f'[package]\nname = "bravebot-{crate}"\n')
+        plan = lambda *files: rebase.plan(tree, list(files))
+
+        assert plan("ui/src/app.ts", "docs/website/docs/index.md", "README.md", "docs/development/checks.md") == []
+        assert plan("docs/specs/labels.md") == [["make", "-k", "check-spec"]]
+        assert plan("crates/i18n/locales/fr.ftl") == [["make", "-k", "check-locales"]]
+        assert plan("Cargo.lock") == [rebase.LOCK_RESOLVES, ["make", "-k", "check-versions"]]
+        assert plan(".github/workflows/ci.yml") == [["make", "-k", "check-security"]]
+
+        rust = plan("crates/agent/src/lib.rs", "crates/agent/tests/exec.rs", "crates/tui/src/view.rs")
+        assert rust == [
+            ["cargo", "fmt", "--all", "--", "--check"],
+            [
+                "cargo", "clippy", "-p", "bravebot-agent", "-p", "bravebot-tui",
+                "--all-targets", "--all-features", "--", "-D", "warnings",
+            ],
+            ["cargo", "test", "-p", "bravebot-agent", "--locked", "--test", "exec"],
+            ["make", "-k", "check-spec"],
+        ], rust
+        assert plan("crates/gone/src/lib.rs") == [["make", "-k", "check-spec"]], "a deleted crate is not linted"
+
+
 def main():
-    tests = [(name, one) for name, one in globals().items() if name.startswith("test_")]
+    tests =[(name, one) for name, one in globals().items() if name.startswith("test_")]
     for name, one in tests:
         one()
         print(f"  ok    {name[len('test_'):].replace('_', ' ')}")
