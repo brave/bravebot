@@ -99,8 +99,10 @@ List the documents and read the top of the likely ones:
 ls docs/best-practices/
 ```
 
-Each document has a title, an `<!-- applicability: always -->` line and a short paragraph saying
-what it holds. Put the entry in the document whose paragraph it fits. Where none fits:
+Each document has a title, an applicability line and a short paragraph saying what it holds. The
+line is `<!-- applicability: always -->`, or `<!-- applicability: paths:ui/ -->` for a document
+that only bears on the files under a directory (comma-separate several); the review bot then checks
+a pull request against it only when one of those files changed. Put the entry in the document whose paragraph it fits. Where none fits:
 
 - **A one-off:** add it to the closest document.
 - **A topic that will attract more rules:** create a document.

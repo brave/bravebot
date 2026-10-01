@@ -1,6 +1,6 @@
 # Desktop UI
 
-<!-- applicability: always -->
+<!-- applicability: paths:ui/ -->
 
 A change under `ui/`. For one a person sees or interacts with (components, layout, styles, icons,
 copy, dialogs, menus, cards) the quality bar itself is
