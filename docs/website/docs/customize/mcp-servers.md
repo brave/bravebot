@@ -616,10 +616,16 @@ profile directory there is no `~/.bravebot` at all: nothing is declared there, a
   somewhere.
 - **The full-screen interface does not show a server's own error output.** `--plain` and a one-shot
   run pass it through to stderr.
-- **On Linux a server can make a repository and write it.** A `.git` it creates in its directory,
-  its home or the temporary directory is one it may write, so do not run git in a directory a
-  server has written. If your home directory is a git work tree, every directory in it is refused
-  as a server's.
+- **A directory holding checkouts is not refused.** Only the directories above `--dir` are searched
+  for a repository, so a server given one above your projects may write their files. Give a server
+  a directory of its own.
+- **On Linux a server can write a repository it reaches.** A `.git` under its directory, its home
+  or the temporary directory is one it may write, whether it was there already or the server made
+  it, so do not run git in a directory a server has written.
+- **On macOS a server cannot clone a repository.** It cannot write a `.git` anywhere, so a server
+  or runner that clones one into its home or the temporary directory fails, and no server can be
+  given a git repository to work on.
+- **If your home directory is a git work tree, every directory in it is refused as a server's.**
 - **No local server starts on Windows yet.** There is no confinement for one there, so the session
   says so and goes on without it.
 - **The desktop application starts no server yet.** Only the terminal client acts on a checkout's

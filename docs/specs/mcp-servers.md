@@ -1546,12 +1546,20 @@ This spec cannot land without these. Each is named by what the clause says rathe
 - **No stdio server starts on Windows.** The sandbox there has no base rows to build a server's
   policy on, so the line says the platform has no confinement for one yet, which is
   [MCP-3](mcp.md#MCP-3) holding rather than failing.
-- **On Linux a server may still write a repository beneath its directory.** Landlock grants a
-  directory with everything beneath it and cannot hold one subdirectory back, so a `.git` the server
-  makes in its directory, its own home or the temporary directory is one it may write, and git run
-  there later runs what the server wrote. On every platform a directory a server lays out as a
-  repository itself, with no `.git` in its path, is not refused once the server is running. A person
-  whose home directory is a git work tree has every directory in it refused as a server's.
+- **Only the directories above a server's directory are searched for a repository.** A directory
+  holding checkouts is not refused, so the server may write their work trees, a hook a relative
+  `core.hooksPath` points at among them, on every platform.
+- **On Linux a server may still write a repository it can reach.** Landlock grants a directory with
+  everything beneath it and cannot hold one subdirectory back, so a `.git` beneath the server's
+  directory, its own home or the temporary directory is one it may write, whether it was there
+  before the server started or the server made it, and git run there later runs what the server
+  wrote. On every platform a directory a server lays out as a repository itself, with no `.git` in
+  its path, is not refused once the server is running.
+- **On macOS a server cannot make a work tree.** No `.git` is writable to it, so a server or a
+  runner that clones a repository into its home or the temporary directory fails there, and on
+  every platform a server meant to work on a git repository cannot be given one.
+- **A person whose home directory is a git work tree** has every directory in it refused as a
+  server's, on every platform.
 - **An administrator's deny list names a spelling.** A command entry binds a path and a host entry
   a name, so a link, a copy or another name for the same machine is not denied, and a command match
   leaves out the variables a server starts with. The allow list is the form that holds
