@@ -5790,6 +5790,180 @@ fn an_untrusted_write_to_a_memory_is_recorded_in_the_state_directory() {
     assert!(policy.read_is_quarantined(&memory_key(&workspace)));
 }
 
+/// MEMORY-5 on a volume that folds case, where `.Bravebot/memory/notes.md` and
+/// `.bravebot/memory/NOTES.md` open the memory `notes`. A write of model output under either
+/// spelling is recorded under the key a later session asks about, so that session's map does not
+/// trust the memory, and with nowhere to record it the write does not land. A trusted write under
+/// the same spelling opens the same file, so it takes the memory out of the record. A volume that
+/// holds the spellings apart has no such memory to record.
+#[test]
+fn an_untrusted_write_to_a_memory_in_another_case_is_recorded_in_the_state_directory() {
+    for spelled in [".Bravebot/memory/notes.md", ".bravebot/memory/NOTES.md"] {
+        let scratch = Scratch::new("memory-recorded-folded");
+        let home = Scratch::new("memory-recorded-folded-home");
+        let unrecorded = Workspace::new(&scratch.path).expect("workspace");
+        if !bravebot_agent::workspace::volume_folds_case(unrecorded.root()) {
+            return;
+        }
+        let workspace = Workspace::new(&scratch.path)
+            .expect("workspace")
+            .keeping_memories(Some(home.path.clone()));
+        let path = Labelled::trusted(spelled.to_string());
+        let model_output = || Labelled::new("NOTES".to_string(), Label::untrusted_public());
+
+        let mut sink = RecordingSink::new();
+        let mut policy = trusting_all_of(&unrecorded, &mut sink);
+        let refused = unrecorded.write(&mut policy, &path, &model_output());
+        assert!(
+            matches!(refused, Err(WorkspaceError::Io { .. })),
+            "model output was written to the memory as {spelled} with nothing to record it in"
+        );
+        assert!(
+            !scratch.path.join(spelled).exists(),
+            "the refused write to {spelled} landed anyway"
+        );
+
+        let mut sink = RecordingSink::new();
+        let mut policy = trusting_all_of(&workspace, &mut sink);
+        workspace
+            .write(&mut policy, &path, &model_output())
+            .expect("model output is written to a memory");
+        assert_eq!(
+            recorded_in(&home, &workspace),
+            vec![memory_key(&workspace)],
+            "{spelled}"
+        );
+        let mut next = bravebot_agent::workspace::trust_store(workspace.root());
+        next.trust(".");
+        let next = bravebot_agent::memory::with_recorded(&next, &workspace, Some(&home.path));
+        assert!(
+            !next.is_trusted(&memory_key(&workspace)),
+            "the next session trusts model output written to the memory as {spelled}"
+        );
+
+        let mut sink = RecordingSink::new();
+        let mut policy = trusting_all_of(&workspace, &mut sink);
+        workspace
+            .write(&mut policy, &path, &Labelled::trusted("NOTES".to_string()))
+            .expect("trusted bytes are written to a memory");
+        assert!(
+            recorded_in(&home, &workspace).is_empty(),
+            "a trusted write to the memory as {spelled} left it in the record"
+        );
+    }
+}
+
+/// MEMORY-5 on a volume that folds case, for the memory of a directory named in another case. A
+/// session opened in `sub` keys it as the volume spells it, so a write of model output to
+/// `Sub/.bravebot/memory/notes.md` is recorded under `sub`.
+#[test]
+fn an_untrusted_write_to_a_memory_under_a_directory_in_another_case_is_recorded_for_it() {
+    let scratch = Scratch::new("memory-recorded-folded-directory");
+    let home = Scratch::new("memory-recorded-folded-directory-home");
+    std::fs::create_dir_all(scratch.path.join("sub")).unwrap();
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .keeping_memories(Some(home.path.clone()));
+    if !bravebot_agent::workspace::volume_folds_case(workspace.root()) {
+        return;
+    }
+    let mut sink = RecordingSink::new();
+    let mut policy = trusting_all_of(&workspace, &mut sink);
+
+    workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted("Sub/.bravebot/memory/notes.md".to_string()),
+            &Labelled::new("NOTES".to_string(), Label::untrusted_public()),
+        )
+        .expect("model output is written to a memory");
+
+    let there = Workspace::new(scratch.path.join("sub")).expect("a workspace in sub");
+    assert_eq!(recorded_in(&home, &there), vec![memory_key(&there)]);
+}
+
+/// MEMORY-5 for the memory of a directory reached through a link. A session opened through the
+/// link keys the directory it reaches, so a write of model output through the link is recorded
+/// there, and a trusted write through it takes the memory out again.
+#[cfg(unix)]
+#[test]
+fn a_write_to_a_memory_through_a_linked_directory_is_recorded_for_the_directory_it_reaches() {
+    let scratch = Scratch::new("memory-recorded-linked");
+    let home = Scratch::new("memory-recorded-linked-home");
+    std::fs::create_dir_all(scratch.path.join("sub")).unwrap();
+    std::os::unix::fs::symlink(scratch.path.join("sub"), scratch.path.join("link")).unwrap();
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .keeping_memories(Some(home.path.clone()));
+    let there = Workspace::new(scratch.path.join("link")).expect("a workspace through the link");
+    let path = Labelled::trusted("link/.bravebot/memory/notes.md".to_string());
+
+    let mut sink = RecordingSink::new();
+    let mut policy = trusting_all_of(&workspace, &mut sink);
+    workspace
+        .write(
+            &mut policy,
+            &path,
+            &Labelled::new("NOTES".to_string(), Label::untrusted_public()),
+        )
+        .expect("model output is written to a memory");
+    assert_eq!(recorded_in(&home, &there), vec![memory_key(&there)]);
+
+    let mut sink = RecordingSink::new();
+    let mut policy = trusting_all_of(&workspace, &mut sink);
+    workspace
+        .write(&mut policy, &path, &Labelled::trusted("NOTES".to_string()))
+        .expect("trusted bytes are written to a memory");
+    assert!(
+        recorded_in(&home, &there).is_empty(),
+        "a trusted write through the link left the memory in the record"
+    );
+}
+
+/// MEMORY-5 for a rewind on a volume that folds case. Untrusted bytes a rewind puts back into the
+/// memory under another spelling are recorded under the key a later session asks about, and with
+/// nowhere to record them they are not put back.
+#[test]
+fn a_rewind_into_a_memory_in_another_case_is_recorded_in_the_state_directory() {
+    use bravebot_agent::workspace::{Backup, Before};
+
+    let scratch = Scratch::new("memory-rewind-folded");
+    let home = Scratch::new("memory-rewind-folded-home");
+    std::fs::create_dir_all(scratch.path.join(".bravebot/memory")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    if !bravebot_agent::workspace::volume_folds_case(workspace.root()) {
+        return;
+    }
+    let mut trusting = bravebot_agent::workspace::trust_store(workspace.root());
+    trusting.trust(".");
+    let spelled = workspace.root().join(".Bravebot/memory/NOTES.md");
+    let rewind = |home: Option<&std::path::Path>| {
+        bravebot_agent::rewind::restore(
+            &workspace,
+            vec![Backup {
+                captured_trust: Integrity::Untrusted,
+                path: spelled.clone(),
+                was: Before::Bytes(b"FROM-A-PAGE".to_vec()),
+            }],
+            &mut trusting.clone(),
+            &trusting,
+            &mut None,
+            home,
+        )
+    };
+
+    assert_eq!(
+        rewind(None),
+        vec![spelled.clone()],
+        "model output was put back into the memory with nothing to record it in"
+    );
+    assert!(!spelled.exists(), "the refused rewind put the bytes back");
+
+    let refused = rewind(Some(&home.path));
+    assert!(refused.is_empty(), "{refused:?}");
+    assert_eq!(recorded_in(&home, &workspace), vec![memory_key(&workspace)]);
+}
+
 /// MEMORY-5's refusal. With no state directory to record it in, the next session would read model
 /// output in a memory as trusted, so the write does not land. A write of model output to any other
 /// file still does, as `untrusted_contents_may_be_written_to_a_trusted_path` shows.
