@@ -1041,8 +1041,8 @@ fn doctor_accounts_for_an_imported_subscription_at_the_tier_its_walk_stopped_at(
 /// would claim a window bounds a credential that has none.
 ///
 /// Both AWS arrangements are held wherever an account is configured, so an account is all the
-/// fixture needs; the AWS CLI is never run, since this is what the configuration holds rather
-/// than what a profile resolves to.
+/// fixture needs; what the AWS CLI answers changes neither, since this is what the configuration
+/// holds rather than what a profile resolves to.
 #[test]
 fn doctor_sizes_the_window_on_a_session_credential_and_on_nothing_else() {
     let scratch = Scratch::new("cli-running-brief-window");
@@ -1108,8 +1108,8 @@ fn doctor_sizes_the_window_on_a_session_credential_and_on_nothing_else() {
 /// the wrong credential.
 ///
 /// Both AWS arrangements are held wherever an account is configured, so an account is all the
-/// fixture needs; the AWS CLI is never run, since this is what the configuration holds rather
-/// than what a profile resolves to.
+/// fixture needs; what the AWS CLI answers changes neither, since this is what the configuration
+/// holds rather than what a profile resolves to.
 #[test]
 fn doctor_accounts_for_every_drop_of_each_credentials_walk() {
     let scratch = Scratch::new("cli-running-gate-walk");
@@ -3796,6 +3796,124 @@ fn auth_login_bedrock_signs_in_to_every_profile_and_names_the_one_that_failed() 
     assert!(
         stderr.contains("profile lapsed is not signed in"),
         "the failure does not name its profile: {stderr}"
+    );
+}
+
+/// CLI-7: `doctor` says of each AWS account whether the AWS CLI gives its profile a credential, and
+/// names the command that signs in where it does not. What the CLI exported is never printed, and a
+/// signed-out account does not fail the report.
+#[cfg(unix)]
+#[test]
+fn doctor_says_whether_each_aws_account_is_signed_in_and_never_the_credential() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new("cli-running-doctor-aws-session")
+        .with_settings(
+            r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2", "profile": "work"}}},
+                "model": "opus"}"#,
+        )
+        // What the stand-in leaves after `aws sso login --profile work`.
+        .with_file("aws-work", "");
+    let bin = scratch.path.join("bin");
+    std::fs::create_dir_all(&bin).expect("create the bin directory");
+    let aws = bin.join("aws");
+    std::fs::write(&aws, AWS_WITH_A_LAPSED_PROFILE).expect("write the stand-in aws");
+    std::fs::set_permissions(&aws, std::fs::Permissions::from_mode(0o755))
+        .expect("make it executable");
+    let path = bin.to_str().expect("a UTF-8 path");
+
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([
+        ("PATH", path),
+        ("BRAVEBOT_USE_BEDROCK", "1"),
+        ("AWS_REGION", "us-east-1"),
+        ("AWS_PROFILE", "lapsed"),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+    ]);
+    let output = bravebot(&scratch.path, &environment, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stdout}{stderr}");
+    let lines: Vec<&str> = stdout.lines().map(str::trim).collect();
+    let sessions: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| line.starts_with("session "))
+        .collect();
+    assert_eq!(
+        sessions.len(),
+        2,
+        "one line per account, the tier variables' and the block's: {stdout}"
+    );
+    let after = |profile: &str| {
+        let at = lines
+            .iter()
+            .position(|line| *line == format!("profile   {profile}"))
+            .unwrap_or_else(|| panic!("no account on {profile}: {stdout}"));
+        lines.get(at + 1).copied().unwrap_or_default()
+    };
+    assert_eq!(
+        after("lapsed"),
+        "session   not signed in (run `bravebot auth login bedrock`)",
+        "{stdout}"
+    );
+    assert_eq!(after("work"), "session   signed in", "{stdout}");
+    assert!(
+        !stdout.contains("placeholder") && !stderr.contains("placeholder"),
+        "the exported credential was printed: {stdout}{stderr}"
+    );
+}
+
+/// CLI-7: `doctor` tells a missing AWS CLI and a profile the CLI does not have from a session that
+/// has run out, and names the sign-in command for neither, since signing in fixes neither. A block
+/// naming no profile is reported on the one `AWS_PROFILE` names, as the tier variables' account is.
+#[cfg(unix)]
+#[test]
+fn doctor_names_no_sign_in_for_a_missing_aws_cli_or_an_unknown_profile() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new("cli-running-doctor-aws-unknown").with_settings(
+        r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2"}}}, "model": "opus"}"#,
+    );
+    let empty = scratch.path.join("empty");
+    std::fs::create_dir_all(&empty).expect("create an empty bin directory");
+    let bin = scratch.path.join("bin");
+    std::fs::create_dir_all(&bin).expect("create the bin directory");
+    let aws = bin.join("aws");
+    std::fs::write(&aws, AWS_WITH_A_LAPSED_PROFILE).expect("write the stand-in aws");
+    std::fs::set_permissions(&aws, std::fs::Permissions::from_mode(0o755))
+        .expect("make it executable");
+
+    let session = |path: &std::path::Path, profile: &str| {
+        let mut environment = NOTHING_CONFIGURED.to_vec();
+        environment.extend([
+            ("PATH", path.to_str().expect("a UTF-8 path")),
+            ("BRAVEBOT_USE_BEDROCK", "1"),
+            ("AWS_REGION", "us-east-1"),
+            ("AWS_PROFILE", profile),
+            ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+        ]);
+        let output = bravebot(&scratch.path, &environment, &["doctor"]);
+        let (stdout, stderr) = said(&output);
+        assert!(output.status.success(), "{stdout}{stderr}");
+        let lines: Vec<String> = stdout.lines().map(|line| line.trim().to_string()).collect();
+        let on = format!("profile   {profile}");
+        assert_eq!(
+            lines.iter().filter(|line| **line == on).count(),
+            2,
+            "both accounts are on {profile}: {stdout}"
+        );
+        lines
+            .into_iter()
+            .filter(|line| line.starts_with("session "))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        session(&empty, "work"),
+        ["session   unknown (the AWS CLI is not installed)"; 2]
+    );
+    assert_eq!(
+        session(&bin, "missing"),
+        ["session   no such profile in the AWS CLI (it has work, lapsed)"; 2]
     );
 }
 

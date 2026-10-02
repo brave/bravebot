@@ -12,6 +12,7 @@
 use crate::outcome::{Category, Diagnosis};
 use bravebot_aichat::protocol::{ChatRequest, Usage};
 use bravebot_aichat::{AichatClient, ChatError, Completion, CutOff, Progress, Subscription};
+pub use bravebot_bedrock::credentials::CredentialError;
 use bravebot_bedrock::{BedrockClient, BedrockError};
 use bravebot_config::Config;
 use bravebot_config::ModelRefusal;
@@ -636,6 +637,12 @@ impl<'a> Backend<'a> {
     /// Whether one AWS account has a usable session, without signing in to it.
     pub fn signed_in_to(bedrock: &bravebot_config::bedrock::Bedrock) -> bool {
         bravebot_bedrock::credentials::is_signed_in(bedrock.profile.as_deref())
+    }
+
+    /// [`Backend::signed_in_to`] with the reason a profile has no usable session, `None` being the
+    /// AWS CLI's default chain.
+    pub fn session_of(profile: Option<&str>) -> Result<(), CredentialError> {
+        bravebot_bedrock::credentials::session(profile)
     }
 
     /// Whether the name a request carries and the name its reply reports are from the same roster.

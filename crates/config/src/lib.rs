@@ -1260,8 +1260,9 @@ impl Config {
     /// The credentials this build holds itself, each owing an account of what would end it.
     ///
     /// Both AWS arrangements wherever an account is configured, because which one a profile
-    /// resolves to is the AWS CLI's answer and asking it means running it, which a report about
-    /// configuration does not do. A resolved credential says which it is for itself.
+    /// resolves to is the AWS CLI's answer, and asking it would make this record of the
+    /// configuration differ between two runs of it. A resolved credential says which it is for
+    /// itself.
     ///
     /// A build that cannot reach the Brave backend holds no signing key to account for, which is
     /// the build-from-source case [`Config::serves_aichat`] describes: the field is blank there,

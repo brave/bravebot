@@ -2810,6 +2810,7 @@ fn report_bedrock(bedrock: &bravebot_config::bedrock::Bedrock) {
         Some(profile) => fact(t!(doctor_profile), profile),
         None => fact(t!(doctor_profile), t!(doctor_profile_absent)),
     }
+    report_aws_session(bedrock.profile.as_deref());
 
     // The tiers a person may choose, by name. An ARN is unreadable and looks identical between
     // tiers, so the names are what tells someone whether the block did what they meant.
@@ -2825,6 +2826,30 @@ fn report_bedrock(bedrock: &bravebot_config::bedrock::Bedrock) {
         ),
         true => fact(t!(doctor_tiers), t!(doctor_tiers_absent)),
     }
+}
+
+/// What `doctor` says about whether an AWS account can sign a request now.
+///
+/// Asked of the AWS CLI the way a turn asks before it signs, so the answer is the one a session
+/// would get. Only the answer is printed: what the CLI exports to give it is a live AWS credential.
+/// The sign-in command is named only where a sign-in is what is missing.
+fn report_aws_session(profile: Option<&str>) {
+    use bravebot_agent::backend::{Backend, CredentialError};
+    fact(
+        t!(doctor_aws_session),
+        match Backend::session_of(profile) {
+            Ok(()) => t!(doctor_aws_signed_in).to_string(),
+            Err(CredentialError::Refused { .. }) => t!(doctor_aws_signed_out).to_string(),
+            Err(CredentialError::NoSuchProfile { available, .. }) if available.is_empty() => {
+                t!(doctor_aws_no_profiles).to_string()
+            }
+            Err(CredentialError::NoSuchProfile { available, .. }) => {
+                t!(doctor_aws_no_profile, available = available.join(", "))
+            }
+            Err(CredentialError::NotInstalled) => t!(doctor_aws_no_cli).to_string(),
+            Err(CredentialError::Undecodable { .. }) => t!(doctor_aws_undecodable).to_string(),
+        },
+    );
 }
 
 /// What `doctor` says about one configured gateway.
@@ -2843,6 +2868,16 @@ fn report_gateway(provider: &bravebot_config::provider::Provider) {
         t!(doctor_key_name),
         gateway_credential(provider, |name| std::env::var(name).ok()),
     );
+    if let Some(bedrock) = provider.bedrock.as_ref() {
+        // A block naming no profile is on the one the `aws` it starts inherits, and asked about
+        // by that name so a profile the CLI does not have is told from a lapsed session.
+        let profile = bedrock.profile.clone().or_else(auth::inherited_profile);
+        fact(
+            t!(doctor_profile),
+            profile.as_deref().unwrap_or(t!(doctor_profile_absent)),
+        );
+        report_aws_session(profile.as_deref());
+    }
     match provider.models.is_empty() {
         false => fact(
             t!(doctor_tiers),

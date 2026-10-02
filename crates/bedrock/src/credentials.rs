@@ -233,16 +233,29 @@ pub fn resolve(profile: Option<&str>) -> Result<Credentials, CredentialError> {
 /// every turn: paid on each one it is a visible pause between pressing Enter and seeing the line
 /// land. Only a good answer is kept, so a session needing a sign-in is never told it has one.
 pub fn is_signed_in(profile: Option<&str>) -> bool {
+    checked(profile).is_ok()
+}
+
+/// [`is_signed_in`] with the reason a session is not good, for a report rather than a turn.
+///
+/// A report has to tell the cases apart, because signing in fixes only one of them: a missing CLI
+/// or a profile the CLI does not have fails the sign-in the same way the export failed. The profile
+/// list is asked only after a refusal, so a good session still costs one export or none.
+pub fn session(profile: Option<&str>) -> Result<(), CredentialError> {
+    checked(profile).map_err(|failure| match failure {
+        CredentialError::Refused { .. } => absent_from(profile, profiles()).unwrap_or(failure),
+        other => other,
+    })
+}
+
+/// One export, or none while a kept answer holds, and the good answer kept.
+fn checked(profile: Option<&str>) -> Result<(), CredentialError> {
     if known_good().holds(profile, now()) {
-        return true;
+        return Ok(());
     }
-    match export(profile) {
-        Ok(credentials) => {
-            known_good().keep(profile, credentials.expires_at);
-            true
-        }
-        Err(_) => false,
-    }
+    let credentials = export(profile)?;
+    known_good().keep(profile, credentials.expires_at);
+    Ok(())
 }
 
 /// The sessions an export has already shown to be good, and until when.

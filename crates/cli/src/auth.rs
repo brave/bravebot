@@ -289,7 +289,7 @@ fn bedrock() -> ExitCode {
 
 /// The profile an `aws` started with no `--profile` uses: the one `AWS_PROFILE` names, which it
 /// inherits.
-fn inherited_profile() -> Option<String> {
+pub(crate) fn inherited_profile() -> Option<String> {
     std::env::var(env_var::AWS_PROFILE)
         .ok()
         .map(|profile| profile.trim().to_string())

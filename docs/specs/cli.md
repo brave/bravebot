@@ -170,9 +170,14 @@ machine-level file pinned and where that file is, how to configure a service whe
 configured will serve a turn, the model in force
 and whether it was chosen or defaulted, where the state directory is or that there is none, what a
 TLS handshake is validated against and what a request is routed through, the
-confinement available on this platform, and the state of any imported subscription. Where the
-report names a Bravebot command that signs in, or one that forgets an imported subscription, it is
-`bravebot auth login` or `bravebot auth logout` ([CLI-18](#CLI-18)). The signing key
+confinement available on this platform, and the state of any imported subscription. Each AWS
+account gets its profile and a line saying whether the AWS CLI gives it a credential a request can
+be signed with. Where it does not, the line says why: a session that is signed out names `bravebot
+auth login bedrock`, and a profile the CLI does not have, a CLI that is not installed and an answer
+that is not a credential are each said as such, naming no sign-in. That line does not change the
+exit status. Where the report names a Bravebot command that signs in, or one that forgets an
+imported subscription, it is `bravebot auth login` or `bravebot auth logout`
+([CLI-18](#CLI-18)). The signing key
 is named as never transmitted, and a value from a settings file is never printed: where a credential
 decides whether a backend works, what is reported is that one was found. A configuration error makes
 it fail rather than pass with a warning.
@@ -209,6 +214,18 @@ from and the path is the whole of what narrows it to one. Values are withheld be
 holds credentials on some machines, and a diagnostic that prints one is a diagnostic people paste
 into issues. Whether one was found still has to be said, because a backend nothing can authenticate
 is the case this is most often run to explain.
+
+An AWS account is the case where the profile line says nothing about that, since the credential is
+the AWS CLI's and a session that has expired looks the same as one that works. The question is put
+to the AWS CLI as a turn puts it before signing, so the answer is the one a session would get, and
+only the answer is printed because what the CLI exports is a live credential. Asking can make the
+AWS CLI renew its own cached session or prompt for an MFA code, as it does before a turn; nothing of
+Bravebot's changes. A long-lived access key that AWS has revoked still reads as signed in, because
+only a request to AWS would tell. It costs most of a second per account. The reasons a session is
+not good are told apart because signing in fixes only an expired one: named beside a missing CLI or
+profile, it sends somebody to a sign-in that fails the same way. None of them fails the report. A
+signed-out session signs in on its first turn, and the others are the AWS CLI's to fix, which the
+line says.
 
 The commands the report names are `auth`'s because it is the one command that lists every way to
 sign in. The older commands still work.
@@ -299,6 +316,8 @@ the case a directory listing calls healthy, and it is the one the reader cannot 
 
 `verified-by: bravebot_cli::main::a_gateway_credential_is_reported_as_found_and_never_printed`
 `verified-by: bravebot_cli::main::a_gateway_with_no_credential_is_reported_as_having_none`
+`verified-by: bravebot_cli::running::doctor_says_whether_each_aws_account_is_signed_in_and_never_the_credential`
+`verified-by: bravebot_cli::running::doctor_names_no_sign_in_for_a_missing_aws_cli_or_an_unknown_profile`
 `verified-by: bravebot_cli::running::doctor_ends_on_the_configuration_status_where_nothing_will_serve_a_turn`
 `verified-by: bravebot_cli::main::doctor_names_the_state_directory_it_resolved`
 `verified-by: bravebot_cli::main::doctor_says_when_the_files_are_left_unrestricted`

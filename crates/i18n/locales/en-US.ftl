@@ -232,8 +232,9 @@ doctor-key = { $key } (never transmitted)
 # because the moment somebody needs it is the moment it is too late to work out, and because the
 # disposition people reach for, deleting the local copy, ends this machine's custody and nothing
 # else. One line per credential, and both AWS arrangements where an account is configured, since
-# which one a profile resolves to is the AWS CLI's answer and this report does not run it. One
-# per gateway a settings file configured too, so each names the host that would end its token.
+# which one a profile resolves to is the AWS CLI's answer and this report asks it only whether the
+# account is signed in. One per gateway a settings file configured too, so each names the host that
+# would end its token.
 doctor-ends = ends
 doctor-ends-signing-key =
     the signing key: issued by the Brave backend, which derives its copy from a master seed and this key id; ended only by retiring that id there and shipping another build, since one build's key is every install's
@@ -321,6 +322,17 @@ doctor-gateway-models-unlisted = none configured (this service has no listing, s
 doctor-region = region
 doctor-profile = profile
 doctor-profile-absent = default credentials
+# Whether the AWS CLI hands this account a credential a request can be signed with now. Only the
+# answer is shown, never the credential, and the command to run where there is none. The sign-in
+# command is named only where a sign-in is what is missing: it cannot add a profile or install the CLI.
+doctor-aws-session = session
+doctor-aws-signed-in = signed in
+doctor-aws-signed-out = not signed in (run `bravebot auth login bedrock`)
+# $available is the AWS CLI's own profile names, comma-separated.
+doctor-aws-no-profile = no such profile in the AWS CLI (it has { $available })
+doctor-aws-no-profiles = no such profile, and the AWS CLI has none (run `aws configure sso`)
+doctor-aws-no-cli = unknown (the AWS CLI is not installed)
+doctor-aws-undecodable = unknown (the AWS CLI answered with something that is not a credential)
 doctor-tiers = models
 doctor-tiers-absent = none configured (set ANTHROPIC_DEFAULT_OPUS_MODEL)
 doctor-settings = settings
