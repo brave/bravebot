@@ -5,7 +5,7 @@
  * The token stylesheet and icon base path are set from `nala-setup.ts` so Node
  * tests that load React components through esbuild do not have to emit CSS.
  *
- * Button, Input, TextArea, Checkbox, RadioButton and Toggle are wrapped by `withShadowAttrs`
+ * Button, Input, Navigation, NavigationItem, TextArea, Checkbox, RadioButton and Toggle are wrapped by `withShadowAttrs`
  * (see `nala-a11y.tsx`): Leo's React wrappers drop `aria-*` props, so an icon-only button would
  * have no accessible name. ButtonMenu is wrapped so its anchor is not a second button around the
  * Button inside it. Everything else is Leo's own export.
@@ -18,6 +18,8 @@ import LeoButton from '@brave/leo/react/button'
 import LeoButtonMenu from '@brave/leo/react/buttonMenu'
 import LeoCheckbox from '@brave/leo/react/checkbox'
 import LeoInput from '@brave/leo/react/input'
+import LeoNavigation from '@brave/leo/react/navigation'
+import LeoNavigationItem from '@brave/leo/react/navigationItem'
 import LeoRadioButton from '@brave/leo/react/radioButton'
 import LeoTextArea from '@brave/leo/react/textarea'
 import LeoToggle from '@brave/leo/react/toggle'
@@ -27,6 +29,8 @@ export const Button = withShadowAttrs(LeoButton, 'button, a')
 export const ButtonMenu = withPlainMenuAnchor(LeoButtonMenu)
 export const Checkbox = withShadowAttrs(LeoCheckbox, 'input')
 export const Input = withShadowAttrs(LeoInput, 'input', { flattenTabindex: true })
+export const Navigation = withShadowAttrs(LeoNavigation, 'nav')
+export const NavigationItem = withShadowAttrs(LeoNavigationItem, 'button, a')
 export const RadioButton = withShadowAttrs(LeoRadioButton, 'input')
 export const TextArea = withShadowAttrs(LeoTextArea, 'textarea', { flattenTabindex: true })
 export const Toggle = withShadowAttrs(LeoToggle, 'button')

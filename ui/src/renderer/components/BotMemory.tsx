@@ -1,13 +1,17 @@
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import { useEffect, useRef, useState } from 'react'
-import { Alert, Button, Collapse, ControlItem, ProgressRing, SegmentedControl, TextArea } from '../nala'
+import { Alert, Button, Collapse, ProgressRing, TextArea } from '../nala'
 
-export function BotMemory({ slug }: { slug: string }): React.JSX.Element {
+/**
+ * The memory a bot keeps in one folder: the text as it is, and the buttons that change it.
+ *
+ * The text is shown raw rather than rendered, because it is the bot's own file and what is in it
+ * is what the next conversation reads. Earlier versions and reset sit beside Edit memory.
+ */
+export function BotMemory({ slug, directory }: { slug: string; directory: string }): React.JSX.Element {
   const [text, setText] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [editing, setEditing] = useState(false)
-  const [mode, setMode] = useState<'readable' | 'raw' | 'history'>('readable')
+  const [showHistory, setShowHistory] = useState(false)
   const [history, setHistory] = useState<{ at: number; text: string; source: string }[]>([])
   const [problem, setProblem] = useState('')
   const [busy, setBusy] = useState(true)
@@ -23,59 +27,52 @@ export function BotMemory({ slug }: { slug: string }): React.JSX.Element {
   }, [confirmReset])
   useEffect(() => {
     let gone = false
-    void Promise.all([window.bravebot.readBotMemory(slug), window.bravebot.readMemoryHistory(slug)]).then(([memory, revisions]) => {
+    void Promise.all([window.bravebot.readBotMemory(slug, directory), window.bravebot.readMemoryHistory(slug, directory)]).then(([memory, revisions]) => {
       if (!gone) { setText(memory); setHistory(revisions) }
     }).catch(() => { if (!gone) setProblem('Memory could not be loaded.') }).finally(() => { if (!gone) setBusy(false) })
     return () => { gone = true }
-  }, [slug])
+  }, [slug, directory])
   const save = async (value: string) => {
     setBusy(true); setProblem('')
     try {
-      const saved = await window.bravebot.editBotMemory(slug, value, text)
+      const saved = await window.bravebot.editBotMemory(slug, directory, value, text)
       document.dispatchEvent(new CustomEvent('bravebot:memory-edited', { detail: slug }))
       setText(saved); setEditing(false); setConfirmReset(false)
-      setHistory(await window.bravebot.readMemoryHistory(slug))
+      setHistory(await window.bravebot.readMemoryHistory(slug, directory))
     } catch (error) { setProblem(String(error)) }
     finally { setBusy(false) }
   }
-  return <section className="bot-memory-panel" data-test="bot-memory">
-    <div className="memory-head">
-      <h3>Persistent memory</h3>
-      <SegmentedControl className="memory-tabs" size="small" value={mode} data-test="memory-mode"
-        onChange={({ value }) => { if (value === 'readable' || value === 'raw' || value === 'history') setMode(value) }}>
-        <ControlItem value="readable">Read</ControlItem>
-        <ControlItem value="raw">Raw</ControlItem>
-        <ControlItem value="history">History</ControlItem>
-      </SegmentedControl>
-    </div>
-    <p className="bot-note">Saved memory is included when the bot is briefed in a conversation. It is separate from the full message history. Memory saves independently of bot details. Edits are included with your next message to this bot.</p>
-    <p className="bot-note">Up to 30 memory revisions are stored locally. Reset keeps revisions for recovery; deleting the bot removes this local history. Project memory files and conversations remain.</p>
+  return <section className="bot-memory-panel" data-test="bot-memory" aria-labelledby={`memory-${slug}`}>
+    <span className="bot-field-label" id={`memory-${slug}`}>Memory</span>
     {problem && <Alert type="error" size="small" role="alert">{problem}</Alert>}
     {busy && <p role="status" className="memory-loading"><ProgressRing mode="indeterminate" /> Loading…</p>}
     {editing ? <>
-      <TextArea autofocus aria-label="Edit persistent memory" value={draft} minRows={8} data-test="memory-editor"
+      <TextArea autofocus aria-label="Edit memory" value={draft} minRows={8} data-test="memory-editor"
         onInput={({ value }) => setDraft(value)}
         onChange={({ value }) => setDraft(value)} />
       <div className="memory-actions">
         <Button size="small" kind="filled" isDisabled={busy} onClick={() => void save(draft)} data-test="memory-save">Save memory</Button>
         <Button size="small" kind="plain-faint" onClick={() => setEditing(false)}>Cancel edit</Button>
       </div>
-    </>
-    : mode === 'history' ? <div className="memory-history">{history.length ? [...history].reverse().map((revision, index) => (
+    </> : <>
+      <pre className="bot-memory" tabIndex={0}>{text || 'Nothing remembered yet.'}</pre>
+      <div className="memory-actions">
+        <Button size="small" kind="outline" isDisabled={busy} onClick={() => { setDraft(text ?? ''); setEditing(true) }} data-test="memory-edit">Edit memory</Button>
+        <Button size="small" kind="plain-faint" aria-expanded={showHistory} onClick={() => setShowHistory(!showHistory)} data-test="memory-history">
+          {showHistory ? 'Hide history' : 'History'}
+        </Button>
+        <Button size="small" kind="plain-faint" isDisabled={busy || !text} onClick={() => setConfirmReset(true)}>Reset…</Button>
+      </div>
+    </>}
+    {showHistory && !editing && <div className="memory-history">{history.length ? [...history].reverse().map((revision, index) => (
       <Collapse key={`${revision.at}-${index}`} className="flat-collapse memory-revision" isOpen={undefined}
         title={`${new Date(revision.at).toLocaleString()} · ${revision.source === 'user' ? 'Your edit' : 'Bot update'}`}>
         <pre>{revision.text || '(Empty memory)'}</pre>
         <Button size="small" kind="outline" onClick={() => { setDraft(revision.text); setEditing(true) }}>Review for restore</Button>
       </Collapse>
-    )) : <p>History begins with memory updates captured by this version.</p>}</div>
-    : mode === 'raw' ? <pre className="bot-memory">{text || 'Nothing remembered yet.'}</pre>
-    : <div className="memory-readable"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ children }) => <span>{children}</span>, img: ({ alt }) => <span>{alt}</span> }}>{text || 'Nothing remembered yet.'}</ReactMarkdown></div>}
-    {!editing && <div className="memory-actions">
-      <Button size="small" kind="outline" isDisabled={busy} onClick={() => { setDraft(text ?? ''); setEditing(true) }} data-test="memory-edit">Edit memory</Button>
-      <Button size="small" kind="plain-faint" isDisabled={busy || !text} onClick={() => setConfirmReset(true)}>Reset memory…</Button>
-    </div>}
+    )) : <p className="bot-note">History begins with the next change to this memory. Up to 30 versions are kept.</p>}</div>}
     {confirmReset && <Alert type="warning" size="small" className="memory-reset" ref={reset} hasActions>
-      <span>Reset this bot’s saved memory? The current version remains in History for restoration. Conversation messages are kept.</span>
+      <span>Reset this bot’s saved memory? The current version stays in History. Conversations are kept.</span>
       <div slot="actions" className="memory-actions">
         <Button size="small" kind="filled" isDisabled={busy} onClick={() => void save('')}>Reset saved memory</Button>
         <Button size="small" kind="plain-faint" onClick={() => setConfirmReset(false)}>Keep memory</Button>

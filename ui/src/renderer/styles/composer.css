@@ -35,6 +35,11 @@
 }
 .composer-stack { display: flex; flex-direction: column; min-width: 0; }
 
+/* The white box sits in a sunken shell that also carries the footer strip under it. The box's
+   border lies over the shell's on three sides, so the two read as one object. */
+.composer-shell { display: flex; flex-direction: column; min-width: 0; border-radius: var(--radius-field); }
+.composer-shell.with-footer { border: 1px solid var(--border-subtle); background: var(--surface-app); }
+.composer-shell.with-footer > .composer-box { margin: -1px -1px 0; }
 .composer-box {
   display: flex;
   flex-direction: column;
@@ -42,16 +47,16 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-field);
   background: var(--surface-raised);
-  box-shadow: var(--shadow-raised);
   transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
 }
 .composer-box:hover { border-color: var(--border-strong); }
 .composer-box:focus-within {
   border-color: var(--border-focus);
-  box-shadow: var(--shadow-raised), var(--shadow-focus);
+  box-shadow: var(--shadow-focus);
 }
 /* A tray above takes the top corners: the two read as one object. */
-.composer-tray + .composer-box,
+.composer-tray + .composer-shell,
+.composer-tray + .composer-shell > .composer-box,
 .composer-tray + .composer-tray { border-top-left-radius: 0; border-top-right-radius: 0; }
 
 .composer leo-textarea {
@@ -68,11 +73,36 @@
 .composer-toolbar {
   display: flex;
   align-items: center;
-  gap: var(--leo-spacing-s);
+  gap: var(--leo-spacing-m);
   min-width: 0;
-  padding: var(--leo-spacing-m);
+  padding: var(--leo-spacing-m) var(--leo-spacing-m) var(--leo-spacing-m) var(--leo-spacing-xl);
 }
 .toolbar-spacer { flex: 1; min-width: 0; }
+
+/* The strip under the box, on the shell's ground: the project on the left, the pull request and
+   branch on the right. */
+.composer-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  padding: var(--leo-spacing-m);
+  font: var(--type-meta);
+  color: var(--ink-secondary);
+  --leo-icon-size: var(--icon-control);
+  --leo-icon-color: var(--ink-secondary);
+}
+.project-trigger { --leo-button-color: var(--ink-secondary); max-width: 100%; }
+.project-menu { min-width: 0; }
+.composer-project,
+.composer-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--leo-spacing-xs);
+  min-width: 0;
+  padding: 0 var(--leo-spacing-s);
+}
+.composer-branch { flex: 0 1 auto; }
+.composer-branch-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-toolbar .model-picker { flex: 0 1 auto; min-width: 0; max-width: 220px; margin: 0; }
 .composer .model-trigger { width: auto; max-width: 100%; --leo-button-color: var(--ink-tertiary); }
 .composer .model-current { max-width: 180px; }
@@ -250,32 +280,27 @@
 }
 .transcript.fresh .composer-spacer { flex-grow: 1; }
 .transcript.fresh .entries { justify-content: flex-end; }
-.fresh-greeting { text-align: center; padding-bottom: var(--leo-spacing-xl); }
-.fresh-greeting h1 { margin: 0 0 var(--leo-spacing-m); font: var(--leo-font-heading-h2); color: var(--ink-primary); }
-.fresh-project { font: inherit; color: var(--ink-secondary); }
-.fresh-greeting p { margin: 0; font: var(--type-body); color: var(--ink-tertiary); }
-.suggestions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: var(--leo-spacing-m);
-  animation: pill-in var(--motion-panel);
-}
-.suggestion {
-  flex: none;
-  height: var(--hit);
-  padding: 0 var(--leo-spacing-l);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-pill);
-  background: var(--surface-raised);
-  font: var(--type-meta);
-  color: var(--ink-secondary);
+.fresh-greeting { text-align: center; padding-bottom: var(--leo-spacing-4xl); }
+.fresh-greeting h1 { margin: 0 0 var(--leo-spacing-xl); font: var(--type-page-title); color: var(--ink-primary); text-wrap: balance; }
+.fresh-project { font: inherit; color: inherit; text-decoration: underline; text-underline-offset: 0.12em; }
+/* In the greeting the project's name opens the same menu as the composer's project button. */
+button.fresh-project {
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: none;
   cursor: pointer;
-  transition: background-color var(--motion-fast), color var(--motion-fast);
+  text-decoration-thickness: 2px;
+  transition: color var(--motion-fast);
 }
-.suggestion:hover { background: var(--surface-hover); color: var(--ink-primary); }
-.suggestion:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
-
+button.fresh-project:hover { color: var(--ink-accent); }
+button.fresh-project:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+button.fresh-project:disabled { cursor: default; color: inherit; }
+.fresh-greeting .project-menu.title { display: inline-block; vertical-align: baseline; }
+.fresh-greeting p { margin: 0; font: var(--type-lede); color: var(--ink-secondary); text-wrap: pretty; }
+/* The notes under the greeting are centred lines in caption ink, 40px over the box. */
+.transcript.fresh .session-notices { align-items: center; margin-bottom: var(--leo-spacing-4xl); }
+.transcript.fresh .session-notice { justify-content: center; gap: var(--leo-spacing-s); font: var(--type-meta); color: var(--ink-tertiary); --leo-icon-size: var(--icon-control); }
 /* ---- no session: the welcome */
 
 .empty-body {
@@ -351,9 +376,17 @@
 @media (forced-colors: active) {
   .composer-tray,
   .attention-pill,
-  .suggestion { border: 1px solid CanvasText; }
   .composer-box:focus-within { outline: 2px solid Highlight; }
 }
 
 /* Beside Send, so it reads as the other way to send what is written. */
-.composer-toolbar .plan-first { flex: none; white-space: nowrap; }
+/* Agent or Plan for the next message. In caption ink like the model beside it; the accent while
+   Plan is chosen, since the next Send does something other than the usual. */
+.composer .mode-trigger { flex: none; --leo-button-color: var(--ink-tertiary); white-space: nowrap; }
+.composer .mode-trigger.planning { --leo-button-color: var(--ink-accent); }
+.mode-menu leo-menu-item { width: min(320px, calc(100vw - 24px)); box-sizing: border-box; }
+.mode-menu leo-menu-item[aria-disabled='true'] { color: var(--ink-disabled); cursor: default; }
+.mode-row { align-items: flex-start; }
+.mode-text { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.mode-name { font: var(--type-body); }
+.mode-about { font: var(--type-caption); color: var(--ink-tertiary); white-space: normal; }

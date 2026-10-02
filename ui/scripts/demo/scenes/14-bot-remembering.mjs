@@ -42,12 +42,20 @@ export default {
 
     // --- what it has kept ---------------------------------------------------------------------
 
-    await s.say('What a bot has kept', 'The memory is a file, and the form shows it as it stands.', 2.6)
-    await s.click(row.locator('.bot-edit'))
-    await page.waitForTimeout(700)
+    await s.say('What a bot has kept', 'The memory is a file, and its details show it as it stands.', 2.6)
+    await s.click(row.locator('.bot-open-button'))
+    await page.locator('[data-test="bot-details"]').waitFor()
+    // A bot keeps one memory per folder; `13-bot-memory` worked in a project, so that one is shown.
+    const folder = page.locator('[data-test="memory-folder"]')
+    if (await folder.count()) {
+      await s.click(folder)
+      const project = page.locator('leo-option').filter({ hasNotText: 'No project' }).first()
+      if (await project.count()) await s.click(project)
+      await page.waitForTimeout(600)
+    }
 
-    const shown = page.locator('.bot-memory')
-    if (!(await shown.count())) s.skip('this build shows no memory in the form')
+    const shown = page.locator('[data-test="bot-details"] [data-test="bot-memory"]')
+    if (!(await shown.count())) s.skip('this build shows no memory in the bot details')
     await s.glideTo(shown)
     await s.spotlight(shown, 2.4)
     await s.say(
@@ -59,15 +67,11 @@ export default {
     await s.shot('14-bot-memory-kept')
     await s.beat(1.0)
 
-    // Leave the form the way it was found. A driver can afford to end anywhere; a take cannot,
-    // because the scene after this one opens on whatever this one left on screen.
-    const close = page.locator('.bot-form button').filter({ hasText: /^Cancel$/ }).first()
-    if (await close.count()) await s.click(close)
-    await page.waitForTimeout(500)
-
     // --- and the turn nobody asked for ---------------------------------------------------------
 
-    await s.click(row.locator('.bot-open-button'))
+    const conversation = page.locator('[data-test="bot-conversations"] .bot-history-row').first()
+    if (!(await conversation.count())) s.skip(`"${NAME}" has no conversation yet — 13-bot-memory starts one`)
+    await s.click(conversation)
     await page.waitForTimeout(2200)
 
     const asked = page.locator('.consolidation').first()

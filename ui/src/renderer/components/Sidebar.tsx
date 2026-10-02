@@ -1,7 +1,7 @@
 /**
  * The left column, and the choice of which list is in it.
  *
- * There are two: the sessions, which is every conversation the agent has a record of, and the
+ * There are two: the chats, which is every conversation the agent has a record of, and the
  * bots, which is the people who have one. They are separate tabs rather than one list with a mark
  * on some rows because they answer different questions — "what was I doing on Tuesday" and "who
  * works on this" — and a list that answers both answers neither well.
@@ -30,22 +30,26 @@ import type { Doing } from './BotAvatar'
 import type { Tab } from '../../shared/view'
 import { Sessions } from './Sessions'
 import { Bots } from './Bots'
-import { SidebarRow } from './SidebarTools'
-import { ControlItem, SegmentedControl } from '../nala'
+import { ControlItem, NavigationItem, SegmentedControl } from '../nala'
 
 interface Props {
   sessions: SessionSummary[]
-  onNewBotConversation: (bot: Bot) => void
-  onBotConversation: (bot: Bot, summary: SessionSummary) => void
   openId: string | undefined
   forked: ReadonlySet<string>
   onOpen: (summary: SessionSummary) => void
+  /** Start a chat in this folder, or ask for one with the picker when none is named. */
   onNew: (directory?: string) => void
+  /** Start a chat in the project used last. */
+  onNewChat: () => void
+  /** Said when somebody switches the tab, so the first item of the other list can be opened. */
+  onTab: (tab: Tab) => void
   bots: Bot[]
+  /** The bot on screen, as a bot view or as one of its conversations. */
   openSlug: string | null
   /** What that bot is doing, so its row's face can match the header's. */
   openDoing: Doing
-  onSaveBot: (bot: { slug?: string; avatar?: string; model?: string | null; name: string; purpose: string; directory: string }) => Promise<boolean>
+  onOpenBot: (bot: Bot) => void
+  onSaveBot: (bot: { slug?: string; avatar?: string; model?: string | null; name: string; purpose: string }) => Promise<boolean>
   onRetireBot: (slug: string, retired: boolean) => void
   onRemoveBot: (slug: string) => void
   onSettings: () => void
@@ -54,15 +58,16 @@ interface Props {
 
 export const Sidebar = memo(function Sidebar({
   sessions,
-  onNewBotConversation,
-  onBotConversation,
   openId,
   forked,
   onOpen,
   onNew,
+  onNewChat,
+  onTab,
   bots,
   openSlug,
   openDoing,
+  onOpenBot,
   onSaveBot,
   onRetireBot,
   onRemoveBot,
@@ -100,7 +105,14 @@ export const Sidebar = memo(function Sidebar({
     }
   }, [tab, grouped, collapsed])
 
-  const show = useCallback((next: Tab) => setTab(next), [])
+  // Read by the control's handler, which Leo may keep from the first render.
+  const latest = useRef({ tab, onTab })
+  latest.current = { tab, onTab }
+  const show = useCallback((next: Tab) => {
+    if (next === latest.current.tab) return
+    setTab(next)
+    latest.current.onTab(next)
+  }, [])
 
   return (
     <aside className="sessions" id="sessions-column" data-build={build ?? undefined}>
@@ -115,7 +127,7 @@ export const Sidebar = memo(function Sidebar({
           data-test="sidebar-tabs"
           onChange={({ value }) => { if (value === 'sessions' || value === 'bots') show(value) }}
         >
-          <ControlItem value="sessions">Sessions</ControlItem>
+          <ControlItem value="sessions">Chats</ControlItem>
           <ControlItem value="bots">Bots</ControlItem>
         </SegmentedControl>
       </div>
@@ -127,6 +139,7 @@ export const Sidebar = memo(function Sidebar({
           forked={forked}
           onOpen={onOpen}
           onNew={onNew}
+          onNewChat={onNewChat}
           grouped={grouped}
           onGroup={setGrouped}
           collapsed={collapsed}
@@ -137,9 +150,7 @@ export const Sidebar = memo(function Sidebar({
       <div className="sidebar-body" hidden={tab !== 'bots'}>
         <Bots
           bots={bots}
-          sessions={sessions}
-          onNewConversation={onNewBotConversation}
-          onConversation={onBotConversation}
+          onOpen={onOpenBot}
           openSlug={openSlug}
           openDoing={openDoing}
           onSave={onSaveBot}
@@ -151,7 +162,9 @@ export const Sidebar = memo(function Sidebar({
       {/* The build the sessions are stamped with is in About; it rides here only as data, for
           the drivers that check a packaged app is the one they built. */}
       <footer className="sidebar-foot">
-        <SidebarRow icon="settings" label="Agent settings" className="agent-settings-open" onClick={onSettings} data-test="agent-settings" />
+        <NavigationItem outsideList icon="settings" className="agent-settings-open" onClick={onSettings} data-test="agent-settings">
+          Settings
+        </NavigationItem>
       </footer>
     </aside>
   )

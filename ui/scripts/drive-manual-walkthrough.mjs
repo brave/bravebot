@@ -87,9 +87,15 @@ try {
     assert.equal(terminal.event, 'turn.done', JSON.stringify(terminal))
     return terminal
   }
-  const settings = page.getByRole('dialog', { name: 'Agent settings', exact: true })
-  const openSettings = () => page.getByRole('button', { name: 'Agent settings', exact: true }).click()
-  const closeSettings = async () => { await page.keyboard.press('Escape'); await settings.waitFor({ state: 'hidden' }) }
+  // Settings take the window rather than opening a dialog; the agent's configuration is its own page.
+  const settings = page.locator('[data-test="settings-view"]')
+  const openSettings = async () => {
+    await page.getByRole('button', { name: 'Settings', exact: true }).click()
+    await settings.locator('[data-test="settings-page-agent"]').click()
+  }
+  const closeSettings = async () => { await page.keyboard.press('Escape'); await settings.waitFor({ state: 'detached' }) }
+  // The chat view stays mounted under the settings, and must be out of reach of Tab while it is.
+  const inertBehind = async () => assert.equal(await page.locator('.app-main').evaluate(el => el.inert), true, 'the chat view is inert under the settings')
   const fits = async locator => assert(await locator.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'content fits its width')
   const hasFocus = (locator) => locator.evaluate(el => {
     if (el === document.activeElement) return true
@@ -116,36 +122,32 @@ try {
 
   // Sidebar children retain their open width during folding; button margins must fit too.
   const sidebar = page.locator('#sessions-column')
-  const settingsButton = sidebar.getByRole('button', { name: 'Agent settings', exact: true })
+  const settingsButton = sidebar.getByRole('button', { name: 'Settings', exact: true })
   await settingsButton.waitFor()
   const divider = page.locator('.gutter').first()
   for (const [key, presses, expectedWidth] of [['Home', 1, 260], ['Shift+ArrowLeft', 2, 220], ['Shift+ArrowRight', 7, 400]]) {
     await divider.focus()
     for (let i = 0; i < presses; i++) await page.keyboard.press(key)
     await until(async () => Math.abs((await sidebar.boundingBox()).width - expectedWidth) < 1, 'sidebar resized')
-    for (const tab of ['Sessions', 'Bots']) {
+    for (const tab of ['Chats', 'Bots']) {
       await sidebar.getByRole('button', { name: tab, exact: true }).click()
       const panel = await sidebar.boundingBox(), button = await settingsButton.boundingBox()
       assert(button.x >= panel.x && button.x + button.width <= panel.x + panel.width,
-        `Agent settings stays inside ${tab} sidebar at ${expectedWidth}px: ${JSON.stringify({ panel, button })}`)
+        `Settings stays inside ${tab} sidebar at ${expectedWidth}px: ${JSON.stringify({ panel, button })}`)
       assert(await settingsButton.evaluate(el => el.scrollWidth <= el.clientWidth), 'settings label fits')
     }
   }
-  await sidebar.getByRole('button', { name: 'Sessions', exact: true }).click()
+  await sidebar.getByRole('button', { name: 'Chats', exact: true }).click()
   await divider.focus(); await page.keyboard.press('Home')
-  console.log('PASS: Agent settings button fits both sidebar tabs at default/minimum/maximum widths')
+  console.log('PASS: Settings button fits both sidebar tabs at default/minimum/maximum widths')
 
   // 1–2: diagnostics, keyboard navigation, real override validation and clearing.
   await openSettings()
   await settings.getByText('Model service configured', { exact: true }).waitFor()
   assert.match(await settings.innerText(), new RegExp(version.replaceAll('.', '\\.')))
   await settings.getByRole('button', { name: 'Refresh diagnostics' }).click()
-  await settings.getByRole('tab', { name: 'Connection', exact: true }).focus()
-  for (const [key, name] of [['ArrowRight', 'Hooks'], ['ArrowRight', 'Run settings'], ['ArrowRight', 'Connection'], ['ArrowLeft', 'Run settings'], ['Home', 'Connection'], ['End', 'Run settings']]) {
-    await page.keyboard.press(key)
-    const tab = settings.getByRole('tab', { name, exact: true })
-    assert.equal(await tab.getAttribute('aria-selected'), 'true')
-  }
+  // One page of stacked sections rather than tabs.
+  for (const name of ['Connection', 'Hooks', 'Run settings']) await settings.getByRole('heading', { name, exact: true, level: 2 }).waitFor()
   await app.evaluate((_, path) => { globalThis.walkthroughPicker.path = path }, override)
   await settings.getByRole('button', { name: 'Choose settings file…' }).click()
   await settings.getByText('Run override selected. Future turns and model discovery use it.', { exact: true }).waitFor()
@@ -156,10 +158,10 @@ try {
   assert((await settings.innerText()).includes(override), 'invalid selection preserves previous override')
   await settings.getByRole('button', { name: 'Clear override' }).click()
   await settings.getByText('No override selected', { exact: true }).waitFor()
-  await tabCycle(settings)
+  await inertBehind()
   await closeSettings()
-  assert(await hasFocus(page.getByRole('button', { name: 'Agent settings', exact: true })))
-  console.log('PASS: real diagnostics, override selection/validation/clearing, keyboard tabs and focus')
+  assert(await hasFocus(page.getByRole('button', { name: 'Settings', exact: true })))
+  console.log('PASS: real diagnostics, override selection/validation/clearing, stacked sections and focus')
 
   // Simulate a gateway settings file without a model selection: it retains the Brave default.
   writeFixtureSettings('automatic-bravebot')
@@ -187,7 +189,7 @@ try {
   console.log('PASS: file API key, wrong-backend diagnosis and model-picker recovery, context and cancellation')
 
   // 4: edit hooks in the UI, execute the saved hook, then remove and prove it stays removed.
-  await openSettings(); await settings.getByRole('tab', { name: 'Hooks', exact: true }).click()
+  await openSettings()
   await settings.getByRole('button', { name: 'Add hook', exact: true }).click()
   await settings.locator('[data-test="hook-when-0"]').click()
   await page.getByRole('option', { name: 'Turn ends', exact: true }).click()
@@ -203,7 +205,7 @@ try {
   steps.push(() => content('Hook verification finished.'))
   await done(await send('Run the hook verification.'))
   assert.equal(readFileSync(hookLog, 'utf8'), 'finished\n')
-  await openSettings(); await settings.getByRole('tab', { name: 'Hooks', exact: true }).click()
+  await openSettings()
   await settings.getByRole('button', { name: 'Remove hook', exact: true }).click()
   await settings.getByRole('button', { name: 'Save hooks', exact: true }).click()
   await settings.getByText('Hooks saved. They apply when the next turn starts.').waitFor(); await closeSettings()
@@ -258,7 +260,8 @@ try {
     body => { assert.equal(lastTool(body).includes(original.trim()), accepted, 'only an approved read reaches planner'); return content(accepted ? 'The release colour is blue.' : 'I respected the refusal.') },
   ]
   for (const [caseIndex, accepted] of [false, true, false].entries()) {
-    await page.getByRole('button', { name: /New session$/, exact: false }).click()
+    // A new chat in the project used last, which is the one this walkthrough opened.
+    await page.getByRole('button', { name: 'New chat', exact: true }).click()
     await page.getByRole('button', { name: "Don't trust", exact: true }).click()
     steps.push(...vetSteps(accepted))
     const before = await send(`Read notes.txt using vet_content. Verification ${caseIndex}: ${accepted ? 'approve' : 'reject'}.`)
@@ -325,9 +328,9 @@ try {
 
   // 8: settings narrow layout and cleanup assertions.
   await page.setViewportSize({ width: 560, height: 780 })
-  if (await page.locator('.app.left-folded').count()) await page.getByRole('button', { name: 'Session list', exact: true }).click()
+  if (await page.locator('.app.left-folded').count()) await page.getByRole('button', { name: 'Chat list', exact: true }).click()
   await openSettings(); await settings.getByText('Model service configured', { exact: true }).waitFor()
-  await fits(settings); await tabCycle(settings); await closeSettings()
+  await fits(settings.locator('.settings-main')); await inertBehind(); await closeSettings()
   assert.deepEqual(JSON.parse(readFileSync(join(home, '.bravebot/hooks.json'), 'utf8')).hooks, [])
   assert(existsSync(hookLog)); assert.deepEqual(uiErrors, []); assert.deepEqual(failures, [])
   const picks = await app.evaluate(() => globalThis.walkthroughPicker.calls)

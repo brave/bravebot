@@ -13,12 +13,12 @@
 import { openNewest } from '../pick.mjs'
 
 const KEYS = [
-  ['⌘N', 'New session'],
-  ['⇧⌘W', 'Close the session — ⌘W still closes the window'],
+  ['⌘N', 'New chat, in the project used last'],
+  ['⇧⌘W', 'Close the chat — ⌘W still closes the window'],
   ['⌘↵', 'Send'],
   ['⌘.', 'Cancel the running turn'],
-  ['⌥⌘← / ⌥⌘→', 'Fold the session list / the context panel'],
-  ['Esc', 'Cancel from the composer — or clear the session filter'],
+  ['⌥⌘← / ⌥⌘→', 'Fold the chat list / the context panel'],
+  ['Esc', 'Cancel from the composer — or clear the chat search'],
 ]
 
 export default {
@@ -39,7 +39,7 @@ export default {
 
     for (const [key, what] of KEYS) await s.say(key, what, 1.7)
 
-    await s.say('⌥⌘←', 'Folds the session list.')
+    await s.say('⌥⌘←', 'Folds the chat list.')
     await fire('view.fold-left')
     await s.beat(1.4)
     await s.say('⌥⌘→', 'And the context panel.')
@@ -51,17 +51,15 @@ export default {
     await fire('view.fold-left')
     await s.beat(1)
 
-    // The recents menu, which is in the window rather than in the bar — and so is the one
-    // part of the command surface a recording can actually show opening.
-    const chevron = page.locator('.new-split .new-recent')
-    if (await chevron.count()) {
-      await s.say('New session', 'The chevron beside it remembers the projects opened before.')
-      if (!(await s.openMenu(chevron))) s.skip('the recents menu would not stay open')
+    // The two ways to start one, which sit beside the chat search: a new project, and a new chat
+    // in the project used last.
+    const newProject = page.locator('[data-test="new-project"]')
+    if (await newProject.count()) {
+      await s.say('New project…', 'Opens a folder; the plus beside it starts a chat in the project used last.')
+      await s.pointAt(newProject)
       await s.beat(1)
-      await s.shot('10-recents')
-      await s.pointAt(chevron)
-      await page.keyboard.press('Escape')
-      await s.beat(0.8)
+      await s.pointAt('[data-test="new-session"]')
+      await s.beat(1)
     }
 
     await s.say(

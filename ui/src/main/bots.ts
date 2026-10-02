@@ -20,8 +20,10 @@ import { readProjectText, seedProjectMemory } from './project-files'
  *   *not* confined to the workspace. It lives outside the checkout precisely so the planner cannot
  *   rewrite the thing that defines it: the agent may write inside the workspace and nowhere else,
  *   and this is nowhere else.
- * - **The memory file**, `<directory>/.bravebot-ui/bots/<slug>.md`, is inside the checkout because
- *   that is the only place the agent can write. That is the whole mechanism by which memory is
+ * - **The memory file**, `<folder>/.bravebot-ui/bots/<slug>.md`, is inside the folder the
+ *   conversation runs in because that is the only place the agent can write. A bot keeps one in
+ *   each folder it works in: its home folder for conversations with no project, and each project
+ *   it is sent into. That is the whole mechanism by which memory is
  *   appended: the bot is told where its memory is and asked to keep it current, and it edits the
  *   file with its ordinary write tool. Nothing here parses what a model said; the change the agent
  *   applied is the record. What that write is *gated* on is below, and is not what it looks like.
@@ -109,11 +111,10 @@ import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { type Bot, botOf, isBotModel, isSlug, slugFor, withBot } from '../shared/bots'
+import { type Bot, botFolders, botOf, isBotModel, isSlug, slugFor, withBot } from '../shared/bots'
 import { newAvatarSeed } from '../shared/avatar'
-import { isProjectPath } from '../shared/recents'
 import { isOpenedDirectory } from './opened'
-import { putBots, readState } from './state'
+import { botHome, putBots, readState } from './state'
 
 /** Where a bot's files live inside the checkout it works in, relative to that checkout. */
 const HOME = '.bravebot-ui'
@@ -157,41 +158,37 @@ export function bot(slug: unknown): Bot | null {
  * The bot a window's form describes, or `null` if what it sent is not a bot this app may keep.
  *
  * Four fields cross from a window (a name, a purpose, a model and a face), and none of them is
- * a path. The fifth is, and it is the one field that decides where on the disk this app writes:
- * a bot's memory is made under its project folder by a helper pinned to that folder, and no
- * session and no prompt stands between a saved bot and that write. So the folder is checked
- * against the ones the picker handed out rather than for the shape of a path. `isProjectPath`
- * says a string is absolute and holds no NUL, which every folder on the account satisfies.
+ * a path. The home folder is composed here from the slug, so no field a window sends decides where
+ * on the disk this app writes. Which project a conversation runs in is decided per conversation,
+ * by `worksIn`.
  *
- * An existing bot keeps everything this road cannot say: its id, its watermark, its seed, its
- * folder, when it was made. Its folder is fixed for the reason the form gives, to keep a bot's
- * memory and its conversations together, and this never reads the one it was sent. A new one is
- * given a slug composed here from the name, so the thing that becomes a path segment is never a
- * string that arrived as one.
+ * An existing bot keeps everything this road cannot say: its id, its watermark, its home, its
+ * conversations, when it was made. Its seed changes only when the window sends a new one. A new one is given a slug composed here from the
+ * name, so the thing that becomes a path segment is never a string that arrived as one.
  */
 export function botFromForm(value: unknown): Bot | null {
   if (typeof value !== 'object' || value === null) return null
-  const { slug, avatar, model, name, purpose, directory } = value as Record<string, unknown>
+  const { slug, avatar, model, name, purpose } = value as Record<string, unknown>
   if (model !== undefined && !isBotModel(model)) return null
   if (typeof name !== 'string' || typeof purpose !== 'string') return null
   if (!name.trim() || !purpose.trim()) return null
-  if (!isProjectPath(directory)) return null
   if (avatar !== undefined && (typeof avatar !== 'string' || !avatar.trim() || avatar.length > 128)) {
     return null
   }
 
   const held = isSlug(slug) ? bot(slug) : null
-  if (held) return { ...held, name, purpose, model: model === undefined ? held.model : model }
-  if (!isOpenedDirectory(directory)) return null
+  // A new face is kept only when the window asks for one; a rename leaves the face as it was.
+  if (held) return { ...held, name, purpose, model: model === undefined ? held.model : model, avatar: typeof avatar === 'string' ? avatar : held.avatar }
+  const made = slugFor(name, new Set(bots().map((each) => each.slug)))
   return {
-    slug: slugFor(name, new Set(bots().map((each) => each.slug))),
+    slug: made,
     name,
     purpose,
     model: typeof model === 'string' ? model : null,
     // Use the draft's preview seed so creation keeps the face already shown. Older callers may
     // omit it; either way it is stored and survives a rename.
     avatar: typeof avatar === 'string' ? avatar : newAvatarSeed(randomUUID()),
-    directory,
+    home: botHome(made),
     session: null,
     conversations: [],
     archived: 0,
@@ -211,11 +208,44 @@ export function saveBot(next: Bot): void {
   putBots(withBot(bots(), { ...next, updated: Date.now() }))
 }
 
-/** Record the latest durable conversation without discarding any earlier IDs. */
-export function noteBotSession(slug: string, id: string): void {
+/**
+ * Make a bot's home folder if it is not there yet.
+ *
+ * Called whenever the bots are handed to a window, so a home deleted by hand is back before a
+ * conversation is started in it. `false` when it cannot be made.
+ */
+export function ensureHome(held: Bot): boolean {
+  try {
+    mkdirSync(held.home, { recursive: true, mode: 0o700 })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether a bot may work in this folder: its home, a folder it has already worked in, or one the
+ * picker handed over in this run.
+ *
+ * The folder becomes the directory a confined helper seeds the memory in, so the same rule
+ * `isOpenedDirectory` gives applies. A folder the window can name by opening a session there is
+ * not one somebody chose for this bot.
+ */
+export function worksIn(held: Bot, directory: string | undefined): directory is string {
+  if (directory === undefined) return false
+  return botFolders(held).includes(directory) || isOpenedDirectory(directory)
+}
+
+/** Record a durable conversation and the folder it ran in, without discarding any earlier ones. */
+export function noteBotSession(slug: string, id: string, directory: string): void {
   const held = bot(slug)
   if (!held) return
-  saveBot({ ...held, session: id, conversations: [...new Set([...held.conversations, id])] })
+  const known = held.conversations.some((each) => each.id === id && each.directory === directory)
+  saveBot({
+    ...held,
+    session: id,
+    conversations: known ? held.conversations : [...held.conversations, { id, directory }],
+  })
 }
 
 /**
@@ -272,7 +302,7 @@ function ownDirectory(slug: string): string {
   return join(app.getPath('userData'), 'bots', slug)
 }
 
-/** Where a bot's memory sits inside its checkout, as the agent would name it. */
+/** Where a bot's memory sits inside the folder it works in, as the agent would name it. */
 export function memoryPath(slug: string): string {
   return `${HOME}/bots/${slug}.md`
 }
@@ -291,12 +321,12 @@ function memoryFile(directory: string, slug: string): string {
  * rewritten with the same words counts as changed, which is the harmless direction to be wrong in:
  * it costs one nudge that was not needed.
  */
-function memoryStamp(bot: Bot): number {
+function memoryStamp(bot: Bot, directory: string): number {
   try {
     // `lstat`, so a link at the memory path reports on itself rather than on whatever it aims at.
     // Nothing here would act on the answer, but a figure about a file outside the checkout has no
     // business being read at all, and the difference is one letter.
-    return lstatSync(memoryFile(bot.directory, bot.slug)).mtimeMs
+    return lstatSync(memoryFile(directory, bot.slug)).mtimeMs
   } catch {
     return 0
   }
@@ -314,10 +344,10 @@ function memoryStamp(bot: Bot): number {
  * another conversation, where an mtime falls perfectly ordinarily when a file is restored from a
  * checkout or a branch is switched. What matters is only that it differs from the mark.
  */
-export function noteBotMemory(slug: string): void {
+export function noteBotMemory(slug: string, directory: string): void {
   const held = bot(slug)
   if (!held) return
-  const stamp = memoryStamp(held)
+  const stamp = memoryStamp(held, directory)
   if (stamp !== held.remembered) saveBot({ ...held, remembered: stamp, quiet: 0 })
   else saveBot({ ...held, quiet: held.quiet + 1 })
 }
@@ -421,7 +451,7 @@ function groundText(bot: Bot, nudge: boolean, fresh: boolean): string {
     '',
     '## Memory',
     '',
-    `Your memory is the file \`${memoryPath(bot.slug)}\` in this checkout. It is the only thing`,
+    `Your memory is the file \`${memoryPath(bot.slug)}\` in this folder. It is the only thing`,
     'about you that survives a compaction, so when you learn something durable — a decision and',
     'why, a constraint, how something here is arranged — edit that file to say so as you go, in',
     'the same turn you learnt it, rather than waiting to be asked. Keep it short enough to stay',
@@ -441,7 +471,7 @@ function groundText(bot: Bot, nudge: boolean, fresh: boolean): string {
       : [
           'Read that file now, before anything else. It is not quoted here: what is in it is your',
           'own writing rather than anything this window wrote, so you read it on the same terms as',
-          'any other file in this checkout. If it comes back withheld, say so and carry on without',
+          'any other file in this folder. If it comes back withheld, say so and carry on without',
           'it rather than guessing at what it used to say.',
         ]),
     '',
@@ -512,14 +542,14 @@ export interface Grounding {
  * the outcome the gate was for. Whether it may be trusted is the agent's question, and this is how
  * it gets asked.
  */
-export function ground(bot: Bot, nudge = false): Grounding | null {
+export function ground(bot: Bot, directory: string, nudge = false): Grounding | null {
   try {
     // Through the confined helper rather than `node:fs`. A concatenated path handed to `node:fs`
     // follows a link at every component, so a link at the memory file was read through and
     // written through; the helper opens each component relative to a pinned directory and follows
     // nothing. It answers only whether it wrote, because what the memory *says* has no business
     // in a file this process composes.
-    const fresh = seedProjectMemory(bot.directory, memoryPath(bot.slug), emptyMemory(bot), GITIGNORE)
+    const fresh = seedProjectMemory(directory, memoryPath(bot.slug), emptyMemory(bot), GITIGNORE)
 
     const ground = join(ownDirectory(bot.slug), 'ground.md')
     mkdirSync(ownDirectory(bot.slug), { recursive: true })
@@ -547,9 +577,24 @@ export function ground(bot: Bot, nudge = false): Grounding | null {
   }
 }
 
-/** What a bot's memory says, for showing it in the window. Never the path, only the words. */
-export function memory(slug: unknown): string | null {
+/**
+ * The folder a window asked about, if it is one this bot has worked in.
+ *
+ * Only folders this process recorded. A window may not point the memory reader at a folder of its
+ * choosing.
+ */
+export function folderOf(held: Bot, directory: unknown): string | null {
+  return typeof directory === 'string' && botFolders(held).includes(directory) ? directory : null
+}
+
+/**
+ * What a bot's memory in one folder says, for showing it in the window. Never the path, only the
+ * words.
+ */
+export function memory(slug: unknown, directory: unknown): string | null {
   const held = bot(slug)
   if (!held) return null
-  return readProjectText(held.directory, memoryPath(held.slug), MEMORY_MAX)?.text ?? null
+  const folder = folderOf(held, directory)
+  if (!folder) return null
+  return readProjectText(folder, memoryPath(held.slug), MEMORY_MAX)?.text ?? null
 }

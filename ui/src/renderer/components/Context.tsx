@@ -5,7 +5,6 @@ import { isConfined, type Activity, type Phase, type Shown, type TodoRow } from 
 import type { Entry } from '../transcript'
 import { Collapse, Icon, Label, ProgressRing, TabItem, Tabs, type IconName } from '../nala'
 import { FileGlyph } from './FileGlyph'
-import { IconButton } from './IconButton'
 import { middleTruncate } from '../truncate'
 
 interface Live {
@@ -39,7 +38,12 @@ interface Live {
  * the disk, because the question it answers — what else is in there, and what does this file look
  * like in a real editor — is not one the transcript can be asked.
  */
-export const Context = memo(function Context({ live, onClose, audit }: { live: Live | null; onClose: () => void; audit?: React.ReactNode }): React.JSX.Element {
+export const Context = memo(function Context({ live, audit, details }: {
+  live: Live | null
+  audit?: React.ReactNode
+  /** Drawn in place of the panels, for a bot's own page, which has no session to inspect. */
+  details?: React.ReactNode
+}): React.JSX.Element {
   const [tab, setTab] = useState<'overview' | 'files'>('overview')
   const off = new Set<PanelName>(tab === 'overview' ? ['files'] : ['plan', 'read', 'writes', 'confined'])
   const reveal = (path: string) => {
@@ -48,6 +52,7 @@ export const Context = memo(function Context({ live, onClose, audit }: { live: L
     if (entry) document.dispatchEvent(new CustomEvent('bravebot:reveal-entry', { detail: entry.id }))
   }
 
+  if (details) return <aside className="context" id="context-column">{details}</aside>
   if (!live) return <aside className={`context ${tab === 'files' ? 'context-files' : ''}`} id="context-column" />
 
   const files = touched(live.entries)
@@ -87,11 +92,6 @@ export const Context = memo(function Context({ live, onClose, audit }: { live: L
           column will come back at when it unfolds — which a full-width row of buttons plus its
           own margins overflows. The wrapper takes that width and the bar sits inside it. */}
       <div className="context-head">
-        <div className="inspector-title">
-          <strong>Context</strong>
-          <IconButton icon="close" label="Close context panel" tooltip="Close context panel" className="drawer-close"
-            onClick={onClose} data-test="context-close" />
-        </div>
         <Tabs className="inspector-tabs" size="small" value={tab} data-test="inspector-tabs"
           onChange={({ value }) => { if (value === 'overview' || value === 'files') setTab(value) }}>
           <TabItem value="overview">Overview</TabItem>
@@ -295,7 +295,8 @@ function Section({
       <Collapse className="flat-collapse panel-collapse" isOpen={open} onToggle={({ open: next }) => setOpen(next)} data-test={`panel-${id}-collapse`}>
         <span slot="title" className="panel-title" data-tooltip={about}>
           {title}
-          <span className="count num" aria-label={`${count} ${count === 1 ? 'item' : 'items'}`}>{count}</span>
+          <Label color="neutral" className="count num">{count}</Label>
+          <span className="visually-hidden">{`, ${count} ${count === 1 ? 'item' : 'items'}`}</span>
         </span>
         <div className="panel-inner">{children}</div>
       </Collapse>

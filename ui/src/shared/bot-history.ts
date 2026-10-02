@@ -4,31 +4,35 @@ import type { SessionSummary } from './protocol'
 
 export interface BotConversation {
   id: string
+  /** The folder the conversation runs in: the bot's home, or a project. */
+  directory: string
   session: SessionSummary | null
   archived: boolean
 }
 
 /** Keep saved history, live conversations and associated drafts together, including archives. */
 export function botHistory(bot: Bot, sessions: SessionSummary[], experience: Experience): BotConversation[] {
-  const ids = new Set([...bot.conversations, ...(bot.session ? [bot.session] : [])])
+  const known = new Map<string, { id: string; directory: string }>()
+  const add = (directory: string, id: string) => known.set(conversationKey(directory, id), { id, directory })
+  for (const each of bot.conversations) add(each.directory, each.id)
   for (const [key, preference] of Object.entries(experience.conversations)) {
     if (preference.botSlug !== bot.slug) continue
     try {
       const [directory, id] = JSON.parse(key)
-      if (directory === bot.directory && typeof id === 'string' && !id.startsWith('draft:')) ids.add(id)
+      if (typeof directory === 'string' && typeof id === 'string' && !id.startsWith('draft:')) add(directory, id)
     } catch { /* Ignore invalid preference keys. */ }
   }
   const available = new Map<string, SessionSummary>()
   for (const session of sessions) {
-    if (session.directory !== bot.directory) continue
-    const preference = experience.conversations[conversationKey(session.directory, session.id)]
-    if (ids.has(session.id) || preference?.botSlug === bot.slug) {
-      ids.add(session.id)
-      available.set(session.id, session.id.startsWith('draft:') && preference?.draft.trim()
+    const key = conversationKey(session.directory, session.id)
+    const preference = experience.conversations[key]
+    if (known.has(key) || preference?.botSlug === bot.slug) {
+      add(session.directory, session.id)
+      available.set(key, session.id.startsWith('draft:') && preference?.draft.trim()
         ? { ...session, title: `Draft · ${preference.draft.slice(0, 60)}` } : session)
     }
   }
-  return [...ids].map(id => ({ id, session: available.get(id) ?? null,
-    archived: experience.conversations[conversationKey(bot.directory, id)]?.archived ?? false,
+  return [...known].map(([key, { id, directory }]) => ({ id, directory, session: available.get(key) ?? null,
+    archived: experience.conversations[key]?.archived ?? false,
   })).sort((a, b) => (b.session?.updated ?? -1) - (a.session?.updated ?? -1))
 }

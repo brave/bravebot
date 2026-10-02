@@ -215,16 +215,12 @@ async function ensureResidents(world) {
     await page.waitForTimeout(1500)
 
     if (missing.length) {
-      const homes = Object.fromEntries(
-        missing.map((bot) => [bot.name, join(world, 'projects', bot.project)]),
-      )
+      // A bot has no folder of its own to pick; each conversation is started in a project.
       await page.evaluate(
-        async ([bots, homes]) => {
-          for (const bot of bots) {
-            await window.bravebot.writeBot({ name: bot.name, purpose: bot.purpose, directory: homes[bot.name] })
-          }
+        async (bots) => {
+          for (const bot of bots) await window.bravebot.writeBot({ name: bot.name, purpose: bot.purpose })
         },
-        [missing, homes],
+        missing,
       )
       await page.waitForTimeout(500)
       if (unspoken.length) {
@@ -251,16 +247,28 @@ async function ensureResidents(world) {
           console.log(`  ${bot.name} is not in the list; leaving it unspoken to`)
           continue
         }
+        // The bot's page starts a conversation from its composer, in the project picked in its
+        // footer. The picker is native, so it is answered with the bot's own fixture checkout.
         await row.locator('.bot-open-button').click()
-        await page.waitForTimeout(1600)
-        if (await page.locator('.trust').isVisible().catch(() => false)) {
-          await page.locator('[data-test="trust-approve"]').click()
-          await page.waitForTimeout(800)
-        }
-        for (const prompt of bot.prompts) {
+        await page.locator('[data-test="bot-conversations"]').waitFor()
+        await app.evaluate(({ dialog }, where) => {
+          dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [where] })
+        }, join(world, 'projects', bot.project))
+        await page.locator('[data-test="project-trigger"]').click()
+        await page.locator('[data-test="project-pick"]').click()
+        await page.waitForTimeout(400)
+        for (const [index, prompt] of bot.prompts.entries()) {
           console.log(`  ${bot.name}: ${prompt.slice(0, 62)}…`)
           await page.locator('.composer textarea').fill(prompt)
           await page.locator('.composer .send').click()
+          // The first message starts the conversation, which asks the trust question first.
+          if (index === 0) {
+            await page.waitForTimeout(1600)
+            if (await page.locator('.trust').isVisible().catch(() => false)) {
+              await page.locator('[data-test="trust-approve"]').click()
+              await page.waitForTimeout(800)
+            }
+          }
           if (!(await settle(page))) {
             console.log('    the turn did not finish in time; keeping what it managed')
             break
