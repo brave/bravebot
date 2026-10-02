@@ -48,11 +48,14 @@ those are is [CHECK-10](vetting.md#CHECK-10).
 The plan prompt shows the task in the person's own words and then every step, in order, each naming
 its tier, what it would do, and every routing field the step fixes rather than the headline one
 alone. Every step, never a count and never the first few: one answer covers all of them, and the
-step below the fold is as binding as the first.
+step below the fold is as binding as the first. A run prompt's arguments are the same: the last of
+them runs as surely as the first, so no key that runs the line is taken until every row of its plan
+has been on the screen ([PROMPT-4](#PROMPT-4)).
 
 `verified-by: bravebot_tui::confirm::a_new_file_prompt_shows_the_path_and_body`
 `verified-by: bravebot_tui::confirm::an_overwrite_prompt_shows_what_it_replaces`
 `verified-by: bravebot_tui::confirm::a_run_prompt_shows_the_argv_the_binary_and_the_directory`
+`verified-by: bravebot_tui::confirm::no_key_runs_a_long_plan_until_every_row_of_it_has_been_on_the_screen`
 `verified-by: bravebot_tui::confirm::the_output_prompt_shows_the_bytes_and_the_command`
 `verified-by: bravebot_tui::confirm::the_vet_prompt_shows_the_bytes_and_where_they_came_from`
 `verified-by: bravebot_tui::confirm::the_output_prompt_says_what_a_check_found`
@@ -137,6 +140,12 @@ than the box is scrolled to rather than cut short, and the question stays on scr
 The questions a session opens with keep their question and their keys on screen the same way, with
 what lies between scrolled by the keys the write and run prompts use, a page moving one row fewer
 than the box shows, and none of them takes a yes at a draw that cuts either off.
+A run prompt keeps its question and its keys on screen the same way and pages the same way. While a
+row of its plan, down to the access the line spends, has not been on the screen during this
+question, the row above the keys says how many have not, and `y`, `a` and `r` are not taken: each
+runs the line. Reaching the bottom is not reading what was passed over, and a row read at one width
+is not a row of the plan wrapped to another. What `a` and `r` grant besides is said below the plan,
+and each of them also waits until the rows saying what it grants have been on the screen.
 A processor's remark is bounded in **drawn rows**, so a claim cannot push the bytes it is a claim
 about below the fold, and the block says how many lines it is not showing.
 
@@ -152,6 +161,13 @@ on a passage rather than a whole body. A prompt that scrolled the question away 
 `verified-by: bravebot_tui::confirm::an_uncomputable_diff_says_so`
 `verified-by: bravebot_tui::confirm::a_long_plan_keeps_the_question_on_screen_and_offers_the_rest`
 `verified-by: bravebot_tui::confirm::a_long_remark_does_not_push_the_diff_off_the_screen`
+`verified-by: bravebot_tui::confirm::a_plan_longer_than_the_box_keeps_the_run_keys_and_says_how_many_rows_are_unread`
+`verified-by: bravebot_tui::confirm::no_key_runs_a_long_plan_until_every_row_of_it_has_been_on_the_screen`
+`verified-by: bravebot_tui::confirm::a_and_r_each_wait_for_the_rows_saying_what_they_grant_besides_running_the_line`
+`verified-by: bravebot_tui::confirm::jumping_to_the_end_of_a_long_plan_leaves_the_rows_passed_over_unread`
+`verified-by: bravebot_tui::confirm::a_run_prompt_too_small_for_its_question_takes_no_key_that_runs_the_line`
+`verified-by: bravebot_tui::confirm::a_plan_read_at_one_width_is_unread_again_at_another`
+`verified-by: bravebot_tui::confirm::paging_through_a_long_plan_in_a_short_box_puts_every_row_on_the_screen`
 `verified-by: bravebot_tui::trust_prompt::a_list_longer_than_the_box_keeps_the_question_and_the_keys_and_says_how_many_rules_are_below`
 `verified-by: bravebot_tui::trust_prompt::the_rest_of_a_long_list_can_be_scrolled_to`
 `verified-by: bravebot_tui::trust_prompt::a_directory_question_longer_than_the_box_keeps_its_keys_and_scrolls_to_the_rest`
