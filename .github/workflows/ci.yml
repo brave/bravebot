@@ -478,6 +478,7 @@ jobs:
         env:
           npm_config_loglevel: silly
           npm_config_timing: "true"
+          GIT_TRACE: "1"
         run: |
           ui/scripts/ci-install.sh "$HOME/.cache/bravebot-leo"
           BRAVEBOT_BUILD_UNCONFIGURED=1 npm --prefix ui run build
