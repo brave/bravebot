@@ -571,7 +571,8 @@ and push the hint line off the screen.
 
 The hint line carries what the session is doing (the mode in force where it is not asking, the
 trail, how full the context is and on what footing it knows that, INPUT-22, a loop that is running
-and when its next tick is due, [loop.md](loop.md), the key that opens the delegates where the
+and when its next tick is due, [loop.md](loop.md), how many background jobs the turn has running,
+[RUN-26](tools/run.md#RUN-26), the key that opens the delegates where the
 session has spawned any, the key that moves the command the turn is waiting on to the background
 while it can be moved, [RUN-25](tools/run.md#RUN-25)) and then `? for shortcuts`. It lists no other binding of its own, and it does not report the
 confinement. The trail key is named only **once a turn has left a trail to look at**: a trail is
@@ -586,13 +587,17 @@ what this one is for.
 
 **What does not fit is dropped whole, at a separator.** The parts are given up in order (a reading
 with no figure in it, then the way to the bindings, then the trail key, then the figures, then the
-move key, and a running loop after all of them), and the mode is the last to go. The move key is
+move key, then the count of jobs, and a running loop after all of them), and the mode is the last to
+go. The move key is
 kept that late because it is up only while somebody is waiting on a command, which is when they read
 this line for a way out of the wait. The loop is kept that late because
 it is the only part of the line spending something while nobody is watching, and it is given up at
 all because a part nothing may give up would have a narrow terminal clear the whole row and take the
-mode with it. In shell mode the line is the shell's own, and the loop is said there too, since a loop
-spends a turn whichever mode the box is in. A note about what a press just did, drawn at the right of
+mode with it. The count of jobs goes just before the loop for the loop's reason: a job runs while nobody
+watches it, and once the block that started it has scrolled away nothing else on the screen says it
+runs. It is counted from the driver's events and never from anything a job printed. In shell mode
+the line is the shell's own, and the loop and the count of jobs are said there too, since a loop
+spends a turn and a job runs whichever mode the box is in. A note about what a press just did, drawn at the right of
 the same row,
 takes its room ahead of all of them: the parts are fitted against the width it leaves, since a part
 fitted against the whole width is one the note writes over the middle of. Left to the
@@ -641,6 +646,9 @@ prevent, and a mode read off `/status` after the write is a mode read too late.
 `verified-by: bravebot_tui::render::the_hint_line_says_nothing_about_a_loop_in_a_session_with_none`
 `verified-by: bravebot_tui::render::a_narrow_terminal_gives_up_the_bindings_rather_than_the_mode`
 `verified-by: bravebot_tui::render::a_narrow_terminal_gives_up_a_reading_before_the_loop_and_the_loop_before_the_mode`
+`verified-by: bravebot_tui::render::the_hint_line_counts_the_jobs_running`
+`verified-by: bravebot_tui::render::the_hint_line_counts_the_jobs_running_in_shell_mode_too`
+`verified-by: bravebot_tui::render::a_narrow_terminal_gives_up_a_reading_before_the_jobs_and_the_jobs_before_the_loop`
 `verified-by: bravebot_tui::render::what_does_not_fit_is_dropped_whole_rather_than_cut_mid_word`
 `verified-by: bravebot_tui::render::a_reading_with_no_figure_in_it_is_given_up_before_a_binding`
 `verified-by: bravebot_tui::render::a_note_at_the_right_takes_its_room_from_the_parts_rather_than_over_them`

@@ -37,7 +37,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [terminal-input.md](terminal-input.md) | `INPUT` | 37 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 10 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, and what a slash word is offered |
 | [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 26 | what is drawn back: the transcript, a resumed session, and how content reaches the screen |
-| [watching.md](watching.md) | `WATCH` | 21 | work done outside the transcript: a delegate's own lines, what a command printed, a question asked beside it, and the mode Ctrl-L opens over them |
+| [watching.md](watching.md) | `WATCH` | 23 | work done outside the transcript: a delegate's own lines, what a command printed, a question asked beside it, and the mode Ctrl-L opens over them |
 | [scroller.md](scroller.md) | `SCROLL` | 9 | reading back through what happened: the mode Ctrl-O opens over the transcript, and the keys inside it |
 | [credential-protection.md](credential-protection.md) | `CRED` | 25 | where credentials come from, which of them may be held at all, and what each tier owes |
 | [premium-credentials.md](premium-credentials.md) | `PREM` | 9 | importing a Leo Premium subscription and spending its credentials |
@@ -79,7 +79,7 @@ the routing-versus-content split they share.
 | [tools/edit-file.md](tools/edit-file.md) | `EDIT` | 4 | `edit_file` |
 | [tools/spawn-processor.md](tools/spawn-processor.md) | `SPAWN` | 5 | `spawn_processor` |
 | [tools/spawn-agent.md](tools/spawn-agent.md) | `AGENT` | 5 | `spawn_agent` |
-| [tools/run.md](tools/run.md) | `RUN` | 25 | `run` |
+| [tools/run.md](tools/run.md) | `RUN` | 26 | `run` |
 | [tools/command-line.md](tools/command-line.md) | `CMDLINE` | 16 | `run`'s command line, compiled rather than interpreted |
 | [tools/read-output.md](tools/read-output.md) | `OUTPUT` | 4 | `read_output` |
 | [tools/vet-content.md](tools/vet-content.md) | `VET` | 4 | `vet_content` |

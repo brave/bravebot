@@ -30,6 +30,39 @@ use std::path::Path;
 /// says how much more is in a file the reader has just been pointed at.
 const MAX_REMEMBERED: usize = 6;
 
+/// How much of a background job's line `/status` gives, so a long one does not push every note in
+/// the report across the screen. The whole line is in the job's row, which the view opens.
+const JOB_LINE: usize = 48;
+
+/// One line at most `most` columns wide, ending in an ellipsis where it was cut.
+///
+/// Only line breaks and tabs are folded, since neither can be drawn in one row of the report. The
+/// spacing inside a line is the command as it was approved.
+fn cut(text: &str, most: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+    let line = text
+        .lines()
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace('\t', " ");
+    if crate::wrap::display_width(&line) <= most {
+        return line;
+    }
+    let mut kept = String::new();
+    let mut width = 0;
+    for c in line.chars() {
+        let wide = c.width().unwrap_or(0);
+        if width + wide + 1 > most {
+            break;
+        }
+        width += wide;
+        kept.push(c);
+    }
+    kept + "…"
+}
+
 /// One line of the report: a label, a value, and an optional aside.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Line {
@@ -143,6 +176,12 @@ pub struct Facts<'a> {
     /// a line each, because the number is what a person ends it by and the turn that armed it is
     /// what makes a prompt arriving hours later have a cause.
     pub watches: &'a [watch::Watch],
+    /// The background jobs of the turn in flight, or of the last one, in the order they started.
+    ///
+    /// A `/status` typed during a turn waits for the turn to end, so today every job here has ended.
+    ///
+    /// Empty says nothing, for the reason no watch says nothing.
+    pub jobs: Vec<(&'a crate::state::Output, &'a crate::state::JobView)>,
     /// The command lines somebody asked to be remembered past a session, for this directory.
     ///
     /// `None` where this session keeps no such record at all: no state directory, or a mode that
@@ -421,6 +460,29 @@ pub fn report(facts: &Facts<'_>) -> Report {
                 left = crate::loops::spell(watch.left(now))
             )),
         );
+    }
+
+    // After the watches, being the other thing running that no line on the screen may still be
+    // about: the block that started a job scrolls away while it runs (RUN-26). Every word is the
+    // driver's or this end's clock, and none is anything the job printed.
+    for (row, job) in &facts.jobs {
+        let label = match job.delegate {
+            Some(delegate) => t!(
+                status_job_of_delegate,
+                name = job.name.clone(),
+                number = delegate.to_string()
+            ),
+            None => t!(status_job, name = job.name.clone()),
+        };
+        let origin = match job.moved_after {
+            Some(after) => t!(status_job_moved, after = crate::loops::spell(after)),
+            None => t!(status_job_started).to_string(),
+        };
+        lines.push(Line::new(&label, cut(&row.command, JOB_LINE)).with_note(t!(
+            status_job_note,
+            standing = job.standing(&row.outcome),
+            origin = origin
+        )));
     }
 
     lines.push(Line::new(
@@ -781,6 +843,8 @@ mod tests {
             // Nothing watched, on the same footing. The test about the watch lines builds its
             // own registry and sets it.
             watches: &[],
+            // No job running, on the same footing.
+            jobs: Vec::new(),
             // Nothing remembered past a session, which is what a fresh directory looks like. Tests
             // about that line build their own record and set it.
             remembered: None,
@@ -861,6 +925,128 @@ mod tests {
                 .iter()
                 .any(|line| line.label.trim() == t!(status_watch, number = 1)),
             "a session with no watch reported one"
+        );
+    }
+
+    /// A job runs while nobody watches it and its block scrolls away, so the report names each
+    /// one, how it stands, and how it came to be in the background.
+    #[test]
+    fn the_report_lists_every_job_and_how_it_came_to_run_in_the_background() {
+        use bravebot_agent::report::JobEvent;
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut session = crate::state::Session::new("none");
+        session.job(JobEvent::Started {
+            name: "job:1".to_string(),
+            line: format!("cargo test {}", "--workspace ".repeat(10)),
+            moved_after: Some(std::time::Duration::from_secs(72)),
+        });
+        session.job(JobEvent::Started {
+            name: "job:2".to_string(),
+            line: "sleep 600".to_string(),
+            moved_after: None,
+        });
+        session.job(JobEvent::Ended {
+            name: "job:2".to_string(),
+            outcome: bravebot_agent::report::Outcome::Failed("exit 3".to_string()),
+        });
+
+        let mut facts = facts(&config, &trust);
+        facts.jobs = session.jobs().collect();
+        let report = report(&facts);
+        let line = |name: &str| {
+            report
+                .lines
+                .iter()
+                .find(|line| line.label.trim() == t!(status_job, name = name))
+                .unwrap_or_else(|| panic!("{name} is not on the report: {report:?}"))
+                .clone()
+        };
+
+        let moved = line("job:1");
+        assert!(moved.value.starts_with("cargo test --workspace"));
+        assert!(moved.value.ends_with('…'), "{:?}", moved.value);
+        assert_eq!(moved.value.chars().count(), JOB_LINE);
+        // The line started 72 seconds before it was moved, and its clock counts those too.
+        assert!(moved.note.contains("running 1m 12s"), "{:?}", moved.note);
+        assert!(
+            moved
+                .note
+                .contains("moved from the foreground after 1m 12s"),
+            "{:?}",
+            moved.note
+        );
+
+        let ended = line("job:2");
+        assert_eq!(ended.value, "sleep 600");
+        assert!(ended.note.contains("exit 3"), "{:?}", ended.note);
+        assert!(
+            ended.note.contains("started in the background"),
+            "{:?}",
+            ended.note
+        );
+    }
+
+    /// The report gives the line as it was approved: only what cannot sit on one row is folded,
+    /// and a wide character counts as the two columns it takes.
+    #[test]
+    fn a_job_line_keeps_its_spacing_and_is_cut_by_the_columns_it_takes() {
+        assert_eq!(cut("printf \"a    b\"", JOB_LINE), "printf \"a    b\"");
+        assert_eq!(
+            cut("cd src &&\n\tmake\tall", JOB_LINE),
+            "cd src && make all"
+        );
+        let wide = cut(&"漢".repeat(JOB_LINE), JOB_LINE);
+        assert!(wide.ends_with('…'), "{wide:?}");
+        assert!(crate::wrap::display_width(&wide) <= JOB_LINE, "{wide:?}");
+    }
+
+    /// A delegate numbers its jobs from one as the turn does, so a line that did not say whose
+    /// job it was would show two `job:1` lines as the same job.
+    #[test]
+    fn the_report_says_which_delegate_a_job_belongs_to() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut session = crate::state::Session::new("none");
+        let id = bravebot_agent::report::DelegateId::nth(1);
+        session.delegate_started(bravebot_agent::report::Delegation {
+            id,
+            kind: "reader".to_string(),
+            task: "find the parser".to_string(),
+        });
+        session.reporting_for(Some(id));
+        session.job(bravebot_agent::report::JobEvent::Started {
+            name: "job:1".to_string(),
+            line: "sleep 600".to_string(),
+            moved_after: None,
+        });
+
+        let mut facts = facts(&config, &trust);
+        facts.jobs = session.jobs().collect();
+        let report = report(&facts);
+        let label = t!(
+            status_job_of_delegate,
+            name = "job:1",
+            number = id.to_string()
+        );
+        assert!(
+            report.lines.iter().any(|line| line.label.trim() == label),
+            "{report:?}"
+        );
+    }
+
+    /// For the reason a session watching nothing says nothing about watches.
+    #[test]
+    fn a_session_with_no_job_says_nothing_about_jobs() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let report = report(&facts(&config, &trust));
+        assert!(
+            !report
+                .lines
+                .iter()
+                .any(|line| line.label.trim().starts_with("Background")),
+            "a session with no job reported one: {report:?}"
         );
     }
 

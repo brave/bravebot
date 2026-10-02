@@ -416,7 +416,9 @@ Both are refused rather than half-honoured.
 
 **A job cannot outlive the turn that started it.** The turn owns the pipeline and ending the turn
 kills it. A background program still running afterwards would be an effect nobody is watching,
-nobody is being asked about, and nobody can stop.
+nobody is being asked about, and nobody can stop. The terminal shows each job while it runs and says
+when the turn stopped one ([Moving a command to the
+background](../using/interactive-mode.md#moving-a-command-to-the-background)).
 
 ## Moving a running command to the background
 

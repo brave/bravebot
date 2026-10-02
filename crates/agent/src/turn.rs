@@ -2388,7 +2388,16 @@ fn collect_jobs<S: Sink, R: Reporter>(
     conversation: &mut Conversation,
     reporter: &mut R,
 ) -> Result<(), TurnError> {
-    for ended in jobs.ended(output_cap) {
+    let finished = jobs.ended(output_cap);
+    // Every finish is told before any is presented. A presentation that fails ends the turn, and a
+    // job it never reached is marked reported already, so it would read as stopped with the turn.
+    for ended in &finished {
+        reporter.job(crate::report::JobEvent::Ended {
+            name: ended.name.clone(),
+            outcome: ended.outcome.clone(),
+        });
+    }
+    for ended in finished {
         let origin = format!("what `{}` printed", ended.line);
         // Whichever way the label went: it is their directory, and a person who let a program run
         // in it is entitled to read what it printed and to be told how it ended. "12 lines,
@@ -2441,6 +2450,7 @@ fn collect_jobs<S: Sink, R: Reporter>(
             total,
             read_by_the_planner: !matches!(presented, Some(Presentation::Quarantined(_))),
             outcome: ended.outcome.clone(),
+            job: Some(ended.name.clone()),
         });
 
         // In front of what it printed, so a long log does not bury the verdict, and said from the
@@ -4353,6 +4363,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                         Presentation::Visible(_)
                                     ),
                                     outcome: command.outcome.clone(),
+                                    job: command.job.clone(),
                                 });
                             }
 
@@ -4744,6 +4755,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             }
             result
         });
+        // Whatever way the rounds ended, a stop and a failed request included: each leaves the jobs
+        // to die with the turn, and the person is told which ones before they do.
+        jobs.stop_all(&mut reporter);
         spent.wall = began.elapsed();
         reporter.spent(crate::outcome::Spent {
             tokens,

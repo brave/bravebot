@@ -416,6 +416,13 @@ The hint is there only while a press would move something. A command joined to a
 or `||`, one with a redirection such as `2>&1`, and one a delegate is running cannot be moved, and
 the hint does not appear for them.
 
+**A job stays on the screen after its block scrolls away.** For as long as the turn has a job
+running, whether you moved it or the model started it in the background, the hint line says how many,
+as in `1 in the background`, in shell mode too. Each job is one row under
+[Ctrl-L](#watching-a-delegate-reading-a-command-and-asking-something-aside), and
+[`/status`](../reference/commands.md#status) lists them. When the turn ends with a job still running,
+the turn stops it, and its row says `stopped when the turn ended`.
+
 The key works from the box. In the transcript view and the scroller, Ctrl-B pages back. In the box
 it is the move key and not a word back; Alt-B and Ctrl-Left move the caret a word back.
 
@@ -496,6 +503,11 @@ printed, as far back as is kept, and says so rather than dropping quietly where 
 was kept. Where the planner was kept from the output, every row of it carries the margin every
 quarantined block carries. The row is there whether or not the planner read what it printed, and
 says which, that being the one thing about the bytes you cannot work out from them.
+
+**A background job is one row**, made when the job starts and named `background` in the list, so
+what it printed before the move and every look the model takes afterwards are in the same place.
+Opening it says which job it is and whether it is still running, has ended, or was stopped when the
+turn ended.
 
 **A command's row says how the run ended**, with the same three marks a delegate's row carries: one
 for a run whose every step exited zero, one for a run a step failed, and the mark of work still going

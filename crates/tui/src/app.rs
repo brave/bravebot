@@ -3334,6 +3334,7 @@ fn event_loop(
                     programs: &answers.programs,
                     looping: session.looping(),
                     watches: session.watches(),
+                    jobs: session.jobs().collect(),
                     goal: session.goal(),
                     remembered: record
                         .as_ref()
@@ -6696,6 +6697,7 @@ fn run_turn_animated(
             crate::remote_confirm::ToMain::Started(activity) => session.start_activity(activity),
             crate::remote_confirm::ToMain::Finished(activity) => session.finish_activity(activity),
             crate::remote_confirm::ToMain::Movable(handoff) => session.movable(handoff),
+            crate::remote_confirm::ToMain::Job(event) => session.job(event),
             crate::remote_confirm::ToMain::CheckStarted(checking) => session.checking(checking),
             crate::remote_confirm::ToMain::CheckFinished => session.checked(),
             crate::remote_confirm::ToMain::Quarantined(shown) => session.show(shown),

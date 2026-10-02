@@ -24866,6 +24866,7 @@ fn a_background_server_is_still_running_when_the_next_call_is_made() {
 #[derive(Default)]
 struct MovesWhenOffered {
     offered: usize,
+    jobs: Vec<bravebot_agent::report::JobEvent>,
 }
 
 impl bravebot_agent::report::Reporter for MovesWhenOffered {
@@ -24878,6 +24879,71 @@ impl bravebot_agent::report::Reporter for MovesWhenOffered {
             handoff.request();
         });
     }
+
+    fn job(&mut self, event: bravebot_agent::report::JobEvent) {
+        self.jobs.push(event);
+    }
+}
+
+/// A moved line is a job from the moment it moves, and the person who moved it is told so with
+/// how long it had already run, which is what the time it is said to have run for counts from.
+#[test]
+fn a_moved_line_is_announced_as_a_job_with_how_long_it_had_run() {
+    let scratch = Scratch::new("moved-announced");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let script = scratch.path.join("build");
+    std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./build"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = MovesWhenOffered::default();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("build it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    use bravebot_agent::report::JobEvent;
+    let [
+        JobEvent::Started {
+            name,
+            line,
+            moved_after: Some(after),
+        },
+        JobEvent::Dropped { name: dropped },
+    ] = reporter.jobs.as_slice()
+    else {
+        panic!("not a start by a move and then a stop: {:?}", reporter.jobs);
+    };
+    assert_eq!(name, "job:1");
+    assert!(line.ends_with("/build"), "{line}");
+    assert!(
+        *after >= std::time::Duration::from_millis(200),
+        "the move was not said to come after the line had run: {after:?}"
+    );
+    assert_eq!(dropped, "job:1");
 }
 
 /// A line moved part way is still the planner's to read and nobody else's choice to repeat: the
@@ -25534,6 +25600,245 @@ fn a_background_jobs_finish_reaches_the_turn_without_the_planner_asking() {
     assert!(
         told.contains("FINISH-MARKER-GRAULT"),
         "what the job printed never reached the planner: {told}"
+    );
+}
+
+/// The screen is told a job exists when it starts, not when somebody first reads it, and the finish
+/// the turn finds by itself is put under the same name so it lands on the same row.
+#[test]
+fn a_background_job_is_announced_when_it_starts_and_its_finish_carries_its_name() {
+    let scratch = Scratch::new("background-announced");
+    let script = scratch.path.join("build");
+    std::fs::write(&script, "#!/bin/sh\necho FINISHED\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./build","background":true}"#),
+        tool_request("run", r#"{"command":"sleep 1"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start the build and get on with something else"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    use bravebot_agent::report::{JobEvent, Outcome};
+    let [
+        JobEvent::Started {
+            name,
+            line,
+            moved_after: None,
+        },
+        JobEvent::Ended {
+            name: ended,
+            outcome: Outcome::Succeeded,
+        },
+    ] = reporter.jobs.as_slice()
+    else {
+        panic!("not a start and then a finish: {:?}", reporter.jobs);
+    };
+    assert_eq!(name, "job:1");
+    assert!(line.ends_with("/build"), "{line}");
+    assert_eq!(ended, "job:1");
+
+    let finish: Vec<_> = reporter
+        .printed
+        .iter()
+        .filter(|printed| printed.job.is_some())
+        .collect();
+    assert_eq!(finish.len(), 1, "{:?}", reporter.printed);
+    assert_eq!(finish[0].job.as_deref(), Some("job:1"));
+    assert!(
+        reporter
+            .printed
+            .iter()
+            .any(|printed| printed.command.contains("sleep 1") && printed.job.is_none()),
+        "a foreground line was put under a job: {:?}",
+        reporter.printed
+    );
+}
+
+/// A look that stops a job is that job's finish, so the screen hears it under the job's name, and
+/// neither a later look nor the turn ending says anything more about a job already accounted for.
+#[test]
+fn a_look_that_stops_a_job_is_its_finish_under_its_name() {
+    let scratch = Scratch::new("background-stopped-by-a-look");
+    let script = scratch.path.join("serve");
+    std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./serve","background":true}"#),
+        tool_request("job_output", r#"{"job":"job:1","kill":true}"#),
+        tool_request("job_output", r#"{"job":"job:1"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it and stop it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    use bravebot_agent::report::{JobEvent, Outcome};
+    assert!(
+        matches!(
+            reporter.jobs.as_slice(),
+            [
+                JobEvent::Started { .. },
+                JobEvent::Ended { name, outcome: Outcome::Stopped(_) },
+            ] if name == "job:1"
+        ),
+        "not a start and then a stop: {:?}",
+        reporter.jobs
+    );
+    assert!(
+        reporter
+            .printed
+            .iter()
+            .any(|printed| printed.job.as_deref() == Some("job:1")),
+        "the look was not put under the job: {:?}",
+        reporter.printed
+    );
+}
+
+/// Records, when told the turn is stopping a job, whether the job's process is still alive.
+#[cfg(unix)]
+struct NotesWhetherAStoppedJobStillRan {
+    pid: std::path::PathBuf,
+    jobs: Vec<bravebot_agent::report::JobEvent>,
+    alive: Vec<bool>,
+}
+
+#[cfg(unix)]
+impl bravebot_agent::report::Reporter for NotesWhetherAStoppedJobStillRan {
+    fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+    fn job(&mut self, event: bravebot_agent::report::JobEvent) {
+        if matches!(event, bravebot_agent::report::JobEvent::Dropped { .. }) {
+            self.alive.push(process_is_alive(&self.pid));
+        }
+        self.jobs.push(event);
+    }
+}
+
+/// The shell's own `kill`, since a slim Linux image has no `kill` program on its path.
+#[cfg(unix)]
+fn process_is_alive(pid: &std::path::Path) -> bool {
+    let pid = std::fs::read_to_string(pid).expect("the job wrote its pid");
+    std::process::Command::new("sh")
+        .args(["-c", "kill -0 \"$1\"", "sh", pid.trim()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("kill runs")
+        .success()
+}
+
+/// The person is told the turn is stopping a job while it is still running, so what they read is
+/// that the turn ended it and not how a killed program exited; and it is stopped all the same.
+#[cfg(unix)]
+#[test]
+fn a_turn_ending_with_a_job_running_says_so_before_it_stops_it() {
+    let scratch = Scratch::new("background-dropped-with-the-turn");
+    let script = scratch.path.join("serve");
+    std::fs::write(&script, "#!/bin/sh\necho $$ > pid\nsleep 30\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // The round between gives the job time to write its pid before the turn ends.
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./serve","background":true}"#),
+        tool_request("run", r#"{"command":"sleep 1"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = NotesWhetherAStoppedJobStillRan {
+        pid: scratch.path.join("pid"),
+        jobs: Vec::new(),
+        alive: Vec::new(),
+    };
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it and get on with something else"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    use bravebot_agent::report::JobEvent;
+    assert!(
+        matches!(
+            reporter.jobs.as_slice(),
+            [JobEvent::Started { .. }, JobEvent::Dropped { name }] if name == "job:1"
+        ),
+        "not a start and then a stop with the turn: {:?}",
+        reporter.jobs
+    );
+    assert_eq!(
+        reporter.alive,
+        [true],
+        "the job was stopped before anybody was told"
+    );
+    assert!(
+        !process_is_alive(&scratch.path.join("pid")),
+        "the job outlived its turn"
     );
 }
 

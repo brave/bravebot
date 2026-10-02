@@ -1763,6 +1763,33 @@ impl Jobs {
         }
         finished
     }
+
+    /// Tell the person what the turn ending does to each job nobody has had the finish of, then
+    /// stop every one (RUN-26).
+    ///
+    /// Before the kill rather than after it, so the account says the job was running when the turn
+    /// ended and not how a killed program exited. One that exited since the turn last looked is
+    /// reported as what it did, from its exit codes.
+    ///
+    /// Asked whether its steps exited and not whether its pipes drained: nothing here reads what it
+    /// printed, and waiting out the drain would hold the end of the turn for each one.
+    pub fn stop_all<R: Reporter>(&mut self, reporter: &mut R) {
+        for (name, job) in self.running.iter_mut() {
+            if job.reported {
+                continue;
+            }
+            job.reported = true;
+            let name = name.clone();
+            reporter.job(match job.running.steps_exited() {
+                true => crate::report::JobEvent::Ended {
+                    name,
+                    outcome: how_it_ended(job.running.codes()),
+                },
+                false => crate::report::JobEvent::Dropped { name },
+            });
+        }
+        self.running.clear();
+    }
 }
 
 /// How a job that has ended finished, read off the exit code of each of its steps.
@@ -2611,7 +2638,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         // point somewhere, so this one is refused here too: the gate would pass it, since the
         // capability really is held.
         "fetch_url" if !tools.delegated => fetch_url(policy, tools, confirmer, &arguments),
-        "job_output" => job_output(policy, tools, &arguments),
+        "job_output" => job_output(policy, tools, reporter, &arguments),
         // A delegate ends when it answers, a tick the person timed has its next look coming
         // already, and a turn nothing will ask again has nowhere for a wait to go, so none of the
         // three is offered this and a call from any of them is answered as an unknown name.
@@ -5985,6 +6012,11 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                     authority.clone(),
                     started_revision,
                 );
+                reporter.job(crate::report::JobEvent::Started {
+                    name: name.clone(),
+                    line: displayed.clone(),
+                    moved_after: None,
+                });
                 Produced::new(
                     // Nothing has been printed yet, and the label is the one the kernel fixed
                     // before anything started: leaving it running does not make it trustworthier.
@@ -6055,6 +6087,11 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                     started_revision,
                 );
                 policy.record_handoff(&name, moved.after);
+                reporter.job(crate::report::JobEvent::Started {
+                    name: name.clone(),
+                    line: displayed.clone(),
+                    moved_after: Some(moved.after),
+                });
                 return Produced::new(
                     Labelled::new(String::new(), label),
                     format!("`{displayed}` moved to the background"),
@@ -6270,6 +6307,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             produced.printed_by = Some(crate::report::Command {
                 line: displayed.clone(),
                 outcome,
+                job: None,
             });
             produced.covered_by_record = covered_by_record;
             produced.read_asked = read_asked;
@@ -6446,9 +6484,10 @@ fn call_server_tool<S: Sink, C: Confirmer, R: Reporter>(
 /// The job name is routing, and it is the driver's own: a name this module minted and looked up in
 /// its own map, so nothing the planner writes reaches anything but that lookup. The output is
 /// content and carries the label the kernel fixed before the pipeline started.
-fn job_output<S: Sink>(
+fn job_output<S: Sink, R: Reporter>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
+    reporter: &mut R,
     arguments: &Value,
 ) -> Produced {
     let Some(named) = argument(arguments, "job") else {
@@ -6522,8 +6561,12 @@ fn job_output<S: Sink>(
     // This answer is the account of the finish, so the turn's own look between rounds does not give
     // it a second time (CMDLINE-14). A killed job is finished too: the planner asked for the end of
     // it and was told what it had done, and news of it exiting afterwards is news of nothing.
-    if ended || kill {
+    if (ended || kill) && !job.reported {
         job.reported = true;
+        reporter.job(crate::report::JobEvent::Ended {
+            name: name.clone(),
+            outcome: outcome.clone(),
+        });
     }
 
     if kill {
@@ -6563,7 +6606,11 @@ fn job_output<S: Sink>(
     // So a person can be asked to read it later, and can see which command they are reading. This is
     // also the one place the window a wait watched is said to the planner, which the note above is
     // not: that one goes to a screen.
-    produced.printed_by = Some(crate::report::Command { line, outcome });
+    produced.printed_by = Some(crate::report::Command {
+        line,
+        outcome,
+        job: Some(name),
+    });
     produced
 }
 
@@ -11902,7 +11949,12 @@ mod tests {
             let mut policy = policy(&mut sink);
 
             let produced = with_tools(&workspace, |tools| {
-                job_output(&mut policy, tools, &json!({"job": "job:1"}))
+                job_output(
+                    &mut policy,
+                    tools,
+                    &mut crate::report::IgnoreReports,
+                    &json!({"job": "job:1"}),
+                )
             });
             let said = told(&mut policy, &produced.text);
 
@@ -11934,7 +11986,12 @@ mod tests {
             let mut policy = policy(&mut sink).resuming(Integrity::Untrusted);
 
             let produced = with_tools(&workspace, |tools| {
-                job_output(&mut policy, tools, &json!({"job": "job:1", "kill": true}))
+                job_output(
+                    &mut policy,
+                    tools,
+                    &mut crate::report::IgnoreReports,
+                    &json!({"job": "job:1", "kill": true}),
+                )
             });
             let said = told(&mut policy, &produced.text);
 
