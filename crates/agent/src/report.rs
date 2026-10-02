@@ -610,6 +610,14 @@ pub trait Reporter {
     /// time: there is never a second call in flight for this to be ambiguous between.
     fn tool_finished(&mut self, _activity: Activity) {}
 
+    /// The command the call [`Reporter::tool_started`] last announced can be moved to the
+    /// background, by requesting this token.
+    ///
+    /// Sent before the command starts, and only for a line a job can hold. The token is good for
+    /// that one run and is read by nothing else, so a display holding it after the call finished
+    /// can request it and change nothing.
+    fn movable(&mut self, _handoff: bravebot_core::cancel::Handoff) {}
+
     /// A confined check has begun, over this many lines of quarantined content, or over a
     /// picture or a PDF.
     ///
@@ -695,6 +703,8 @@ pub struct RecordingReporter {
     pub started: Vec<Activity>,
     /// Every tool call announced as finished, in order.
     pub finished: Vec<Activity>,
+    /// Every token offered for moving a command to the background, in order.
+    pub movable: Vec<bravebot_core::cancel::Handoff>,
     /// Every check announced as starting, in order, by what it was given.
     pub checks: Vec<Checking>,
     /// How many checks were announced as over.
@@ -772,6 +782,10 @@ impl Reporter for RecordingReporter {
 
     fn tool_finished(&mut self, activity: Activity) {
         self.finished.push(activity);
+    }
+
+    fn movable(&mut self, handoff: bravebot_core::cancel::Handoff) {
+        self.movable.push(handoff);
     }
 
     fn check_started(&mut self, checking: Checking) {

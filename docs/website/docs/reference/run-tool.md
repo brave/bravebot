@@ -417,3 +417,28 @@ Both are refused rather than half-honoured.
 **A job cannot outlive the turn that started it.** The turn owns the pipeline and ending the turn
 kills it. A background program still running afterwards would be an effect nobody is watching,
 nobody is being asked about, and nobody can stop.
+
+## Moving a running command to the background
+
+A line the turn is waiting on can be moved to the background by the person at the terminal, with the
+key the hint line names (`ctrl-b` unless you [moved it](../using/interactive-mode.md#moving-a-key)).
+Only the interactive terminal client has the key: one-shot mode and the desktop app wait as before.
+The command is not stopped or started again. It becomes a job exactly as if it had been started with
+`background: true`, and the agent's result for the call says the user moved it, after how many
+seconds, and under which job name. Nothing it printed is in that result, including what it printed
+before the move: [`job_output`](tools.md#job_output) reads all of it, under the label the line was
+always going to carry.
+
+**Only a line a job can hold is offered.** That is one pipeline with no redirection, the same lines
+`background: true` accepts. A line that reads its input from an earlier result, one that asked for
+its output in the same result with `read: true`, and one a delegate is running are waited for to the
+end, and the hint does not name the key while they run.
+
+**The deadline goes with the wait.** A moved line is not killed when its `deadline_seconds` would
+have run out, because a deadline is how long the turn will wait and the turn is no longer waiting.
+
+**The turn still owns it.** Ending the turn kills it, as it kills every job. Stopping the turn with
+Ctrl-C at the moment of the press stops the command: a stop always wins over a move.
+
+The audit trail records the move as a `handoff` entry naming the job and when it happened, so a
+command that went on without a deadline is shown to be your choice and not the agent's.

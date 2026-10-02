@@ -1732,6 +1732,9 @@ watching-calls = { $count ->
 # pressing. Every kind of row is counted together, since one key opens the list holding all of
 # them and naming one kind here would undercount the rest.
 watching-hint = { $chord } { $count } to open
+# Said on the bottom line for as long as a command the turn is waiting on can be moved, and gone
+# the moment it ends or is moved. Short, because it shares the line with everything else there.
+background-hint = { $chord } to background
 
 
 ## The commands a line beginning with a slash may be

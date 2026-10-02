@@ -24861,6 +24861,225 @@ fn a_background_server_is_still_running_when_the_next_call_is_made() {
     );
 }
 
+/// Presses the move key a moment after each line it is offered starts, the way a person watching
+/// a build that is taking too long would.
+#[derive(Default)]
+struct MovesWhenOffered {
+    offered: usize,
+}
+
+impl bravebot_agent::report::Reporter for MovesWhenOffered {
+    fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+    fn movable(&mut self, handoff: bravebot_core::cancel::Handoff) {
+        self.offered += 1;
+        thread::spawn(move || {
+            thread::sleep(std::time::Duration::from_millis(300));
+            handoff.request();
+        });
+    }
+}
+
+/// A line moved part way is still the planner's to read and nobody else's choice to repeat: the
+/// planner is told the user moved it and the job it is running as, it is told nothing the program
+/// printed, the trail says whose choice it was, and the job goes when the turn does like one the
+/// planner started in the background. A move that dropped the job would leave the planner told to
+/// read a job that is not there, and one that kept it past the turn would leave a build running
+/// after the session said it had stopped.
+#[test]
+fn a_line_the_user_moves_to_the_background_goes_on_as_a_job_the_turn_owns() {
+    let scratch = Scratch::new("moved-to-background");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // Prints before the move, then writes a file well after it, which is how this observes whether
+    // the job outlived the turn.
+    let script = scratch.path.join("build");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\necho BUILD_SENTINEL\nsleep 10\ntouch late\nsleep 30\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./build"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = MovesWhenOffered::default();
+
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    let started = std::time::Instant::now();
+    let outcome = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("build it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    assert!(outcome.clean, "no gate should have refused");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(8),
+        "the turn waited for the line it was told to stop waiting for: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(reporter.offered, 1, "the line was not offered to be moved");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let told = bodies
+        .iter()
+        .find(|body| body.contains("moved this command to the background"))
+        .expect("the planner was not told the user moved the line");
+    assert!(
+        told.contains("job:1") && told.contains("Do not run it again"),
+        "the planner was not told which job the line is or not to run it again: {told}"
+    );
+    assert!(
+        !bodies.iter().any(|body| body.contains("BUILD_SENTINEL")),
+        "what the program printed reached the planner without a call to read it"
+    );
+
+    let recorded = sink.events().iter().any(|event| {
+        matches!(
+            event,
+            Event::GatePassed { gate, detail }
+                if *gate == "handoff" && detail.contains("job:1")
+        )
+    });
+    assert!(recorded, "the trail does not say the user moved the line");
+
+    // Past the moment the line would have written the file, had it been left running.
+    thread::sleep(std::time::Duration::from_secs(12).saturating_sub(started.elapsed()));
+    assert!(
+        !scratch.path.join("late").exists(),
+        "the moved line went on running after the turn ended"
+    );
+}
+
+/// The key is offered only for a line a job can hold whole. A join is two lines, and the turn
+/// would be holding the second; a route sends a stream somewhere a job does not read; a line asked
+/// to be read hands its output back; a line fed a reference would write it into a job nobody
+/// waits for. Offering one of those, the press either did nothing or kept a job that is not the
+/// line the person approved. The two plain lines are offered, so the count is these lines being
+/// turned down rather than nothing ever being offered.
+#[test]
+fn only_a_line_a_job_can_hold_is_offered_to_be_moved() {
+    let scratch = Scratch::new("movable-lines");
+    std::fs::write(scratch.path.join("page.txt"), "alpha\nbeta\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat page.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n 2p","stdin_ref":"ref:1"}"#),
+        tool_request("run", r#"{"command":"echo a && echo b"}"#),
+        tool_request("run", r#"{"command":"ls 2>&1"}"#),
+        tool_request("run", r#"{"command":"ls 2>/dev/null"}"#),
+        tool_request("run", r#"{"command":"echo c","read":true}"#),
+        tool_request("run", r#"{"command":"echo d | cat"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let outcome = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("run them"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    assert!(outcome.clean, "no gate should have refused");
+
+    assert_eq!(
+        reporter.movable.len(),
+        2,
+        "a line no job can hold was offered to be moved, or a plain one was not"
+    );
+}
+
+/// A delegate's line is not offered. The screen shows the turn's own command running, so a key
+/// pressed while a delegate's runs would move a line the person cannot see, under a job the
+/// delegate's planner was never told about. The line is one the turn's own call would be offered
+/// for, and the delegate is shown to have run it, so the empty list is the delegate being turned
+/// down rather than nothing having run.
+#[test]
+fn a_delegates_line_is_not_offered_to_be_moved() {
+    let scratch = Scratch::new("movable-delegate");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "SEND-A-WORKER",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"worker","task":"RUN-THE-LINE"}"#),
+                reply_with("waiting on the worker"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "RUN-THE-LINE",
+            vec![
+                tool_request("run", r#"{"command":"touch ran.txt"}"#),
+                reply_with("ran it"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("SEND-A-WORKER"),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    assert!(
+        scratch.path.join("ran.txt").exists(),
+        "the delegate never ran its line, so this proves nothing"
+    );
+    assert!(
+        reporter.movable.is_empty(),
+        "a delegate's line was offered to be moved"
+    );
+}
+
 /// A program a turn runs is told where this session's own directory is, so what it writes there
 /// goes when the session does instead of being left beside the work.
 #[test]
