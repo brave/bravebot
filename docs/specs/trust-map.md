@@ -951,7 +951,7 @@ whose directory it is rather than from anything here. That is the same footing t
 system reads it on, and it is why pinning to it is not an exception to the paragraph above but an
 instance of it: it is the person's own directory.
 
-`verified-by: none`
+`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so the bot-folder road onto a pinned directory is pinned instead by ui/scripts/bot-directory.test.mjs, which loads the real bots and opened modules against a picker it supplies the answer for and asserts that a bot takes a folder only once the picker handed that folder over and not the folder beside it, that a cancelled picker leaves nothing a window may name, and that editing a bot keeps the folder it already has whatever folder the payload states; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing. Nothing pins the other three roads onto a pinned directory, which session.new, session.open and session.fork take, each reaching one through the root files.ts records off the agent's answer.)`
 
 <a id="TRUST-21"></a>
 ### TRUST-21: a directory the helper cannot pin itself to is refused rather than resolved
