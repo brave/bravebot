@@ -856,20 +856,24 @@ fn draw_output(frame: &mut Frame, session: &Session, output: &Output) -> Laid {
         ])
         .split(frame.area());
 
-    let (standing, colour) = if output.read_by_the_planner {
-        (t!(watching_output_read), theme::ok())
-    } else {
-        (t!(watching_output_kept), theme::running())
+    // A job that has printed nothing makes no claim either way; the line below says where it is.
+    let (standing, colour) = match output.read() {
+        Some(true) => (format!("  {}", t!(watching_output_read)), theme::ok()),
+        Some(false) => (format!("  {}", t!(watching_output_kept)), theme::running()),
+        None => (String::new(), mark_for(&output.outcome).1),
     };
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
                 Span::styled(format!("{TURN_MARKER} "), Style::default().fg(colour)),
                 Span::styled(
-                    t!(watching_output_head),
+                    match &output.job {
+                        Some(job) => t!(watching_output_job_head, name = job.label()),
+                        None => t!(watching_output_head).to_string(),
+                    },
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(format!("  {standing}"), Style::default().fg(colour)),
+                Span::styled(standing, Style::default().fg(colour)),
             ]),
             // The command and how it ended, both the driver's own record of what ran rather than
             // anything read out of what it printed. How it ended is here as well as on the row
@@ -877,8 +881,16 @@ fn draw_output(frame: &mut Frame, session: &Session, output: &Output) -> Laid {
             // is not always in them.
             Line::from(vec![
                 Span::styled(format!("  {}", one_line(&output.command)), dim()),
+                // A job's from its state and this end's clock, which is what tells one still
+                // running apart from a run stopped at its deadline: both carry the same mark.
                 Span::styled(
-                    format!("  {}", output.outcome.summary()),
+                    format!(
+                        "  {}",
+                        match &output.job {
+                            Some(job) => job.standing(&output.outcome),
+                            None => output.outcome.summary(),
+                        }
+                    ),
                     Style::default().fg(mark_for(&output.outcome).1),
                 ),
             ]),
@@ -1001,17 +1013,28 @@ fn draw_watching_footer(frame: &mut Frame, area: Rect, session: &Session) {
                     number = delegate.id.to_string()
                 )
                 .to_string(),
-                standing,
+                standing.to_string(),
                 colour,
             )
         }
         Some(Watched::Output(output)) => {
-            let (standing, colour) = if output.read_by_the_planner {
-                (t!(watching_output_read), theme::ok())
-            } else {
-                (t!(watching_output_kept), theme::running())
+            let (standing, colour) = match output.read() {
+                Some(true) => (t!(watching_output_read).to_string(), theme::ok()),
+                Some(false) => (t!(watching_output_kept).to_string(), theme::running()),
+                None => (
+                    output
+                        .job
+                        .as_ref()
+                        .map(|job| job.standing(&output.outcome))
+                        .unwrap_or_default(),
+                    mark_for(&output.outcome).1,
+                ),
             };
-            (t!(watching_list_command).to_string(), standing, colour)
+            let name = match &output.job {
+                Some(job) => t!(watching_footer_job, name = job.label()),
+                None => t!(watching_list_command).to_string(),
+            };
+            (name, standing, colour)
         }
         // An aside is answered by the time it is a row, so what the standing says is whether the
         // record keeps it, which is the one thing about it a person cannot work out from the bytes.
@@ -1021,7 +1044,11 @@ fn draw_watching_footer(frame: &mut Frame, area: Rect, session: &Session) {
             } else {
                 (t!(watching_row_screen_only), theme::running())
             };
-            (t!(watching_list_aside).to_string(), standing, colour)
+            (
+                t!(watching_list_aside).to_string(),
+                standing.to_string(),
+                colour,
+            )
         }
         None => return,
     };
@@ -1350,18 +1377,28 @@ const STANDING_COLUMN: usize = 8;
 /// to nobody who has not been told what the glyphs mean.
 fn output_row(output: &Output, highlighted: bool, width: usize) -> Line<'static> {
     let (mark, colour) = mark_for(&output.outcome);
-    let (standing, standing_colour) = if output.read_by_the_planner {
-        (t!(watching_row_read), theme::ok())
-    } else {
-        (t!(watching_row_kept), theme::running())
+    let (standing, standing_colour) = match output.read() {
+        Some(true) => (t!(watching_row_read).to_string(), theme::ok()),
+        Some(false) => (t!(watching_row_kept).to_string(), theme::running()),
+        None => (String::new(), theme::muted()),
     };
 
-    let name = t!(watching_list_command);
+    // A job says so in the column a delegate's kind goes in, and leads its line with the name the
+    // planner reads it by, which is what tells two runs of the same line apart.
+    let (name, command) = match &output.job {
+        Some(job) => (
+            t!(watching_list_job).to_string(),
+            format!("{}  {}", job.label(), one_line(&output.command)),
+        ),
+        None => (
+            t!(watching_list_command).to_string(),
+            one_line(&output.command),
+        ),
+    };
     let count = t!(watching_lines, count = output.total);
 
     let spent = 4 + NAME_COLUMN + STANDING_COLUMN + count.chars().count() + 6;
     let room = width.saturating_sub(spent);
-    let command = one_line(&output.command);
     let command = if command.chars().count() > room {
         command
             .chars()
@@ -3410,6 +3447,14 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         (true, false) => format!("{} show trail", session.bindings().trail_name()),
     };
 
+    // Beside the loop and for the same reason: a job runs while nobody watches it, and once the
+    // block that started it has scrolled away nothing else on the screen says it runs (RUN-26).
+    // Counted from the driver's events and never from what a job printed.
+    let jobs = match session.jobs_running() {
+        0 => String::new(),
+        count => t!(jobs_hint, count = count),
+    };
+
     // Only while the command the turn is waiting on can be moved, for the reason the trail is only
     // named once there is one: offered at any other moment, the press does nothing.
     let movable = if session.can_move_to_background() {
@@ -3437,6 +3482,9 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         }
         if !looping.is_empty() {
             spans.push(Span::styled(format!("  ·  {looping}"), dim()));
+        }
+        if !jobs.is_empty() {
+            spans.push(Span::styled(format!("  ·  {jobs}"), dim()));
         }
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
         return;
@@ -3529,6 +3577,7 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         context,
         cache,
         looping,
+        jobs,
         watchable,
         movable,
         SHORTCUTS_HINT.to_string(),
@@ -3547,12 +3596,14 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // narrow terminal, which would take the mode with it, and a mode nobody can read is worse than
     // a loop they can still find with `/loop` or `/status`.
     //
-    // The way to move a command goes just before the loop. It is up only while somebody is waiting
-    // on that command, which is the moment they are reading this line for a way out of the wait.
+    // The way to move a command goes just before the jobs, and the jobs just before the loop. The
+    // offer is up only while somebody is waiting on that command, which is the moment they are
+    // reading this line for a way out of the wait; a job is spending something unwatched, as the
+    // loop is.
     let expendable: &[usize] = if context_is_unmeasured {
-        &[3, 8, 2, 4, 6, 7, 5]
+        &[3, 9, 2, 4, 7, 8, 6, 5]
     } else {
-        &[8, 2, 3, 4, 6, 7, 5]
+        &[9, 2, 3, 4, 7, 8, 6, 5]
     };
     // A note is drawn over the right of this same row, so what the parts may occupy is the width
     // less that note. Fitted against the whole width instead, the last part that fits is one the
@@ -3797,6 +3848,7 @@ mod tests {
                 total,
                 read_by_the_planner: read,
                 outcome,
+                job: None,
             });
         }
 
@@ -3999,6 +4051,119 @@ mod tests {
             assert!(screen.contains("command"), "{screen}");
             assert!(screen.contains("cargo test"), "{screen}");
             assert!(screen.contains("reader"), "{screen}");
+        }
+
+        fn job_started(session: &mut Session, name: &str, line: &str) {
+            session.job(bravebot_agent::report::JobEvent::Started {
+                name: name.to_string(),
+                line: line.to_string(),
+                moved_after: None,
+            });
+        }
+
+        /// A job's row says it is one and leads with the name the planner reads it by, since the
+        /// same line run twice in the background is two rows that are otherwise alike.
+        #[test]
+        fn the_list_names_a_job_row_as_a_background_job() {
+            let mut session = Session::new("kernel-enforced");
+            job_started(&mut session, "job:1", "sleep 600");
+            ran(&mut session, "cargo test", true, &["ok"], 1);
+            session.watch();
+            assert!(
+                session.listing_delegates(),
+                "two rows did not open the list"
+            );
+
+            let screen = rendered(&session);
+            assert!(screen.contains("background"), "{screen}");
+            assert!(screen.contains("job:1  sleep 600"), "{screen}");
+            assert!(screen.contains("command"), "{screen}");
+        }
+
+        /// A job carries the same mark while it runs as one stopped at its deadline, so the view
+        /// says which from the job's state, and says so once the turn has stopped it.
+        #[test]
+        fn a_jobs_view_names_the_job_and_whether_it_still_runs() {
+            let mut session = Session::new("kernel-enforced");
+            job_started(&mut session, "job:1", "sleep 600");
+            session.watch();
+
+            let screen = rendered(&session);
+            assert!(screen.contains("what background job:1 printed"), "{screen}");
+            // Its clock is this end's, so the seconds are whatever the test took to get here.
+            assert!(screen.contains("running "), "{screen}");
+
+            session.job(bravebot_agent::report::JobEvent::Dropped {
+                name: "job:1".to_string(),
+            });
+            let screen = rendered(&session);
+            assert!(screen.contains("stopped when the turn ended"), "{screen}");
+            assert!(!screen.contains("running "), "{screen}");
+        }
+
+        /// A job that has printed nothing holds nothing the planner could have read or been kept
+        /// from, so neither its view nor its row says the model read it.
+        #[test]
+        fn a_job_says_nothing_about_a_reading_until_it_has_printed() {
+            let mut session = Session::new("kernel-enforced");
+            job_started(&mut session, "job:1", "sleep 600");
+            session.watch();
+            let screen = rendered(&session);
+            assert!(!screen.contains("has read this"), "{screen}");
+            assert!(!screen.contains("has not read this"), "{screen}");
+
+            session.command_printed(bravebot_agent::report::Printed {
+                command: "sleep 600".to_string(),
+                lines: vec!["waiting".to_string()],
+                total: 1,
+                read_by_the_planner: true,
+                outcome: bravebot_agent::report::Outcome::Running {
+                    ran_for: std::time::Duration::from_secs(1),
+                    waited: None,
+                },
+                job: Some("job:1".to_string()),
+            });
+            let screen = rendered(&session);
+            assert!(screen.contains("the model has read this"), "{screen}");
+
+            let mut session = Session::new("kernel-enforced");
+            job_started(&mut session, "job:1", "sleep 600");
+            ran(&mut session, "cargo test", true, &["ok"], 1);
+            session.watch();
+            let row = row_naming(&listed(&session, 90, 24), "job:1");
+            assert!(!row.contains("read"), "{row}");
+        }
+
+        /// A delegate numbers its jobs from one as the turn does, so its job's row and view say
+        /// whose job it is, and the turn's say only the name.
+        #[test]
+        fn a_delegates_job_says_whose_it_is_and_the_turns_does_not() {
+            let mut session = Session::new("kernel-enforced");
+            job_started(&mut session, "job:1", "cargo build");
+            let id = spawn(&mut session, "reader", "find the parser");
+            job_started(&mut session, "job:1", "cargo test");
+            session.reporting_for(None);
+            session.watch();
+            let theirs = format!("job:1 of delegate {id}");
+
+            let rows = listed(&session, 90, 24);
+            let row = row_naming(&rows, "cargo test");
+            assert!(row.contains(&theirs), "{row}");
+            let row = row_naming(&rows, "cargo build");
+            assert!(!row.contains("of delegate"), "{row}");
+
+            for _ in 0..session.outputs().len() + 1 {
+                if matches!(session.watched_output(), Some(o) if o.command == "cargo test") {
+                    break;
+                }
+                session.watch_next();
+            }
+            session.open_watched();
+            let screen = rendered(&session);
+            assert!(
+                screen.contains(&format!("what background {theirs} printed")),
+                "{screen}"
+            );
         }
 
         fn asked(session: &mut Session, question: &str, answer: &str, kept: bool) {
@@ -6904,6 +7069,7 @@ mod tests {
             total: 1,
             read_by_the_planner: false,
             outcome: bravebot_agent::report::Outcome::Succeeded,
+            job: None,
         });
 
         let hint = hint_row_at(&session, 120, 24);
@@ -7201,6 +7367,91 @@ mod tests {
         assert!(
             !hint.trim_end().ends_with('·'),
             "a separator with nothing after it: {hint}"
+        );
+    }
+
+    fn job_event(session: &mut Session, event: bravebot_agent::report::JobEvent) {
+        session.job(event);
+    }
+
+    fn started(name: &str) -> bravebot_agent::report::JobEvent {
+        bravebot_agent::report::JobEvent::Started {
+            name: name.to_string(),
+            line: "sleep 600".to_string(),
+            moved_after: None,
+        }
+    }
+
+    /// Once the block that started a job has scrolled away, nothing else on the screen says it
+    /// runs; and a count still standing after the last one ended is a job nobody can find.
+    #[test]
+    fn the_hint_line_counts_the_jobs_running() {
+        let mut session = Session::new("kernel-enforced");
+        assert!(
+            !hint_row_at(&session, 120, 24).contains("in the background"),
+            "a session with no jobs counted one"
+        );
+
+        job_event(&mut session, started("job:1"));
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(hint.contains("1 in the background"), "{hint}");
+
+        job_event(&mut session, started("job:2"));
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(hint.contains("2 in the background"), "{hint}");
+
+        for name in ["job:1", "job:2"] {
+            job_event(
+                &mut session,
+                bravebot_agent::report::JobEvent::Ended {
+                    name: name.to_string(),
+                    outcome: bravebot_agent::report::Outcome::Succeeded,
+                },
+            );
+        }
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(!hint.contains("in the background"), "{hint}");
+    }
+
+    /// Shell mode draws its own row, and a job goes on running while somebody types into it.
+    #[test]
+    fn the_hint_line_counts_the_jobs_running_in_shell_mode_too() {
+        let mut session = Session::new("kernel-enforced");
+        session.shell = true;
+        job_event(&mut session, started("job:1"));
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(hint.contains("1 in the background"), "{hint}");
+        assert!(
+            hint.contains("esc to cancel"),
+            "this is not the shell row: {hint}"
+        );
+    }
+
+    /// The jobs go just before the loop, for the loop's reason: both spend something while nobody
+    /// watches, where a reading or an offer of a key can be had again.
+    #[test]
+    fn a_narrow_terminal_gives_up_a_reading_before_the_jobs_and_the_jobs_before_the_loop() {
+        let mut session = Session::new("kernel").allowing_bypass();
+        session.start_loop(
+            crate::loops::request("5m check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
+        job_event(&mut session, started("job:1"));
+        let word = t!(loop_hint).to_string();
+
+        let hint = hint_row_at(&session, 80, 24);
+        assert!(hint.contains("1 in the background"), "{hint}");
+        assert!(
+            !hint.contains(UNMEASURED_CONTEXT),
+            "nothing was given up: {hint}"
+        );
+
+        let hint = hint_row_at(&session, 50, 24);
+        assert!(hint.contains(&word), "the loop went first: {hint}");
+        assert!(
+            !hint.contains("in the background"),
+            "the jobs outlasted the loop: {hint}"
         );
     }
 

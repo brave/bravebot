@@ -121,7 +121,91 @@ pub struct Output {
     pub read_by_the_planner: bool,
     /// How the command ended, as the driver said it from the exit codes and the clock.
     pub outcome: bravebot_agent::report::Outcome,
+    /// The background job this row is, where it is one (RUN-26).
+    ///
+    /// One row for the whole of a job's life, made when it starts, so it is the row a person finds
+    /// a running build at rather than one that appears the first time the planner looks.
+    pub job: Option<JobView>,
 }
+
+impl Output {
+    /// Whether the planner read what the row holds, or `None` for a job that has printed nothing
+    /// yet, where there is nothing it could have read or been kept from.
+    pub fn read(&self) -> Option<bool> {
+        (self.job.is_none() || self.total > 0).then_some(self.read_by_the_planner)
+    }
+}
+
+/// A background job, as the driver reported it (RUN-26).
+///
+/// Every field is the driver's or this end's own: a name the driver minted, the line the person
+/// endorsed, a clock reading taken here, and an outcome said from exit codes. None of it comes from
+/// a byte the job printed, so the hint line, `/status` and the row may decide from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobView {
+    /// The name the driver gave it, which is the one the planner reads it by.
+    pub name: String,
+    /// The delegate whose job it is, where it is not the turn's own: each delegate mints names of
+    /// its own, so `job:1` can be two jobs at once.
+    pub delegate: Option<bravebot_agent::report::DelegateId>,
+    /// When this end was told it started, so how long it has run is this end's clock and not a
+    /// figure the worker sent.
+    pub since: Instant,
+    /// How long the run had been waited for when the person moved it, where they did.
+    pub moved_after: Option<Duration>,
+    pub state: JobState,
+}
+
+/// Where a background job is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobState {
+    Running,
+    /// It exited, or the planner stopped it, and somebody was told how.
+    Ended,
+    /// Still running when its turn ended, and stopped with the turn.
+    EndedWithTurn,
+}
+
+impl JobView {
+    pub fn is_running(&self) -> bool {
+        self.state == JobState::Running
+    }
+
+    /// Where it is, in the words the row's view and `/status` say it in.
+    ///
+    /// From the state and this end's clock. An ended job is left to the outcome beside it, which
+    /// says how it ended from its exit codes. A moved line counts from when it started, not from
+    /// the move, as the planner is told.
+    pub fn standing(&self, outcome: &bravebot_agent::report::Outcome) -> String {
+        match self.state {
+            JobState::Running => t!(
+                job_running,
+                ran_for = crate::loops::spell(
+                    self.since.elapsed() + self.moved_after.unwrap_or_default()
+                )
+            )
+            .to_string(),
+            JobState::Ended => outcome.summary(),
+            JobState::EndedWithTurn => t!(job_ended_with_turn).to_string(),
+        }
+    }
+
+    /// The name, with the delegate's number where it is a delegate's job.
+    pub fn label(&self) -> String {
+        match self.delegate {
+            Some(delegate) => t!(
+                job_of_delegate,
+                name = self.name.clone(),
+                number = delegate.to_string()
+            )
+            .to_string(),
+            None => self.name.clone(),
+        }
+    }
+}
+
+/// How many of a job's lines its row keeps, the same as the driver keeps of one look.
+const JOB_ROW_LINES: usize = 2000;
 
 /// Something the delegate view can open.
 ///
@@ -1242,6 +1326,11 @@ pub struct Session {
     /// whole session the way it lists delegates, and an entry is the wrong place to look for the
     /// third command when the second one scrolled away.
     outputs: Vec<Output>,
+    /// Where the rows of the turn in flight, or of the last one, begin in `outputs`.
+    ///
+    /// The jobs the hint line counts and `/status` lists are the rows from here on: a job cannot
+    /// outlive its turn, so the last turn's are the only ones there is anything to say about.
+    jobs_from: usize,
     /// Every question asked beside the work this session, oldest first.
     ///
     /// Held here rather than in the transcript, because none of it is in the conversation: an
@@ -1715,6 +1804,7 @@ impl Session {
             scroller: None,
             watching: None,
             outputs: Vec::new(),
+            jobs_from: 0,
             asides: Vec::new(),
             held_view: None,
             history_search: None,
@@ -2314,6 +2404,7 @@ impl Session {
         // than in it, so it is dropped here by name: a conversation nobody remembers leaving its
         // commands openable is the one case the view could show work from a session that is gone.
         self.outputs.clear();
+        self.jobs_from = 0;
         // An aside is a question about a particular exchange, asked over a copy of it. The
         // exchange is gone, so the question no longer has anything to be about, and a row that
         // outlived it would offer an answer to a conversation nobody can read.
@@ -2590,19 +2681,106 @@ impl Session {
     ///
     /// Appended rather than attached to a line, so the third command is where the view expects it
     /// once the second one has scrolled away.
+    ///
+    /// A look at a background job goes on that job's row instead, after what earlier looks found,
+    /// so a finish does not move the row under somebody stepping through the list (WATCH-15).
     pub fn command_printed(&mut self, printed: Printed) {
+        if let Some(row) = printed.job.as_deref().and_then(|name| self.job_row(name)) {
+            // Each look keeps its first lines. Appending stops at the first look that left some out,
+            // so the view never joins two runs of lines with a gap between them, and the row stays
+            // bounded however often the job is looked at. The count says what was left out.
+            if row.lines.len() == row.total {
+                let room = JOB_ROW_LINES.saturating_sub(row.lines.len());
+                row.lines.extend(printed.lines.into_iter().take(room));
+            }
+            row.total += printed.total;
+            // Kept from the planner if any look was: one standing for the row cannot say both, and
+            // saying a model read what it was kept from is the reading that misleads.
+            row.read_by_the_planner &= printed.read_by_the_planner;
+            row.outcome = printed.outcome;
+            return;
+        }
         self.outputs.push(Output {
             command: printed.command,
             lines: printed.lines,
             total: printed.total,
             read_by_the_planner: printed.read_by_the_planner,
             outcome: printed.outcome,
+            job: None,
         });
+    }
+
+    /// A background job started, ended, or is being stopped with its turn (RUN-26).
+    ///
+    /// Its row is made when it starts, with nothing printed yet, and every later event changes that
+    /// row. Whose job it is comes from the driver's attribution, never from anything in the event.
+    pub fn job(&mut self, event: bravebot_agent::report::JobEvent) {
+        use bravebot_agent::report::JobEvent;
+        match event {
+            JobEvent::Started {
+                name,
+                line,
+                moved_after,
+            } => self.outputs.push(Output {
+                command: line,
+                lines: Vec::new(),
+                total: 0,
+                // True so the first look's standing is the row's: looks are merged with `&=`.
+                read_by_the_planner: true,
+                outcome: bravebot_agent::report::Outcome::Running {
+                    ran_for: moved_after.unwrap_or_default(),
+                    waited: None,
+                },
+                job: Some(JobView {
+                    name,
+                    delegate: self.attributed_to,
+                    since: Instant::now(),
+                    moved_after,
+                    state: JobState::Running,
+                }),
+            }),
+            JobEvent::Ended { name, outcome } => {
+                if let Some(row) = self.job_row(&name) {
+                    row.outcome = outcome;
+                    if let Some(job) = row.job.as_mut() {
+                        job.state = JobState::Ended;
+                    }
+                }
+            }
+            JobEvent::Dropped { name } => {
+                if let Some(job) = self.job_row(&name).and_then(|row| row.job.as_mut()) {
+                    job.state = JobState::EndedWithTurn;
+                }
+            }
+        }
+    }
+
+    /// The row of the job by this name, among the jobs of the turn in flight that belong to whoever
+    /// the driver last said the reports are from.
+    fn job_row(&mut self, name: &str) -> Option<&mut Output> {
+        let whose = self.attributed_to;
+        self.outputs[self.jobs_from..].iter_mut().rev().find(|row| {
+            row.job
+                .as_ref()
+                .is_some_and(|job| job.name == name && job.delegate == whose)
+        })
     }
 
     /// Every command this session ran, oldest first.
     pub fn outputs(&self) -> &[Output] {
         &self.outputs
+    }
+
+    /// The background jobs of the turn in flight, or of the last one, in the order they started.
+    pub fn jobs(&self) -> impl Iterator<Item = (&Output, &JobView)> {
+        self.outputs[self.jobs_from..]
+            .iter()
+            .filter_map(|row| row.job.as_ref().map(|job| (row, job)))
+    }
+
+    /// How many background jobs are running now, for the hint line.
+    pub fn jobs_running(&self) -> usize {
+        self.jobs().filter(|(_, job)| job.is_running()).count()
     }
 
     /// Keep a question asked beside the work, and open the view on it.
@@ -7723,6 +7901,9 @@ impl Session {
         self.running = None;
         self.movable = None;
         self.started = Some(Instant::now());
+        // The last turn's jobs ended with it, and the rows stay in the list; what the hint line
+        // and `/status` say about jobs is about this turn's from here on.
+        self.jobs_from = self.outputs.len();
         prompt
     }
 
@@ -7749,6 +7930,13 @@ impl Session {
         self.movable = None;
         self.streaming.clear();
         self.composing = None;
+        // The driver says which jobs the turn stopped before it says the turn is over. A worker
+        // that ended without saying so stopped them all the same, since none outlives its turn.
+        for row in &mut self.outputs[self.jobs_from..] {
+            if let Some(job) = row.job.as_mut().filter(|job| job.is_running()) {
+                job.state = JobState::EndedWithTurn;
+            }
+        }
     }
 
     /// Record a completed turn, and what it cost.
@@ -9461,6 +9649,7 @@ mod tests {
                 total: 2,
                 read_by_the_planner: read,
                 outcome: bravebot_agent::report::Outcome::Succeeded,
+                job: None,
             });
         }
 
@@ -9524,6 +9713,211 @@ mod tests {
                 .map(|output| output.read_by_the_planner)
                 .collect();
             assert_eq!(kept, [false, true]);
+        }
+
+        fn job_started(session: &mut Session, name: &str, line: &str) {
+            session.job(bravebot_agent::report::JobEvent::Started {
+                name: name.to_string(),
+                line: line.to_string(),
+                moved_after: None,
+            });
+        }
+
+        fn job_looked(session: &mut Session, name: &str, lines: &[&str]) {
+            session.command_printed(bravebot_agent::report::Printed {
+                command: "job_output".to_string(),
+                lines: lines.iter().map(|line| line.to_string()).collect(),
+                total: lines.len(),
+                read_by_the_planner: true,
+                outcome: bravebot_agent::report::Outcome::Running {
+                    ran_for: Duration::from_secs(4),
+                    waited: None,
+                },
+                job: Some(name.to_string()),
+            });
+        }
+
+        fn job_ended(session: &mut Session, name: &str) {
+            session.job(bravebot_agent::report::JobEvent::Ended {
+                name: name.to_string(),
+                outcome: bravebot_agent::report::Outcome::Succeeded,
+            });
+        }
+
+        /// A job that has printed nothing yet is still running, and a list that shows it only once
+        /// it is looked at says nothing while that is the one thing a person needs to know.
+        #[test]
+        fn a_job_has_its_row_from_the_moment_it_starts() {
+            let mut session = Session::new("none");
+            job_started(&mut session, "job:1", "cargo build");
+
+            assert_eq!(session.outputs().len(), 1, "starting made no row");
+            let (row, job) = session.jobs().next().expect("the row was not a job");
+            assert_eq!(row.command, "cargo build");
+            assert_eq!(job.name, "job:1");
+            assert!(row.lines.is_empty());
+            assert_eq!(session.jobs_running(), 1);
+        }
+
+        /// Each look and the finish land on the row made at the start. A row per look would move
+        /// the job under somebody stepping through the list and leave a running row behind it.
+        #[test]
+        fn a_look_and_the_finish_update_the_jobs_row_and_add_none() {
+            let mut session = Session::new("none");
+            job_started(&mut session, "job:1", "cargo build");
+            job_looked(&mut session, "job:1", &["Compiling a"]);
+            job_looked(&mut session, "job:1", &["Compiling b"]);
+            job_ended(&mut session, "job:1");
+
+            assert_eq!(session.outputs().len(), 1, "a look added a row");
+            let (row, job) = session.jobs().next().unwrap();
+            assert_eq!(row.lines, ["Compiling a", "Compiling b"]);
+            assert_eq!(row.total, 2);
+            assert_eq!(row.outcome, bravebot_agent::report::Outcome::Succeeded);
+            assert_eq!(job.state, JobState::Ended);
+            assert_eq!(session.jobs_running(), 0);
+        }
+
+        /// A delegate runs its own turn with its own numbering, so its `job:1` and the turn's are
+        /// two jobs, and ending one ends only that one.
+        #[test]
+        fn a_delegates_job_and_the_turns_of_the_same_name_are_two_rows() {
+            let mut session = Session::new("none");
+            job_started(&mut session, "job:1", "cargo build");
+            let id = spawn(&mut session, "reader", "find the parser");
+            job_started(&mut session, "job:1", "cargo test");
+            // The delegate's job is the newer row, so a search that ignored whose it is finds it.
+            session.reporting_for(None);
+            job_ended(&mut session, "job:1");
+
+            let jobs: Vec<_> = session
+                .jobs()
+                .map(|(row, job)| (row.command.as_str(), job.delegate, job.state))
+                .collect();
+            assert_eq!(
+                jobs,
+                [
+                    ("cargo build", None, JobState::Ended),
+                    ("cargo test", Some(id), JobState::Running),
+                ]
+            );
+        }
+
+        /// A job the turn stopped did not finish and did not fail, and "running" would be a lie
+        /// once the turn that owned it is gone.
+        #[test]
+        fn a_job_the_turn_stopped_reads_as_stopped_with_the_turn() {
+            let mut session = Session::new("none");
+            job_started(&mut session, "job:1", "sleep 600");
+            session.job(bravebot_agent::report::JobEvent::Dropped {
+                name: "job:1".to_string(),
+            });
+
+            let (row, job) = session.jobs().next().unwrap();
+            assert_eq!(job.state, JobState::EndedWithTurn);
+            assert_eq!(job.standing(&row.outcome), "stopped when the turn ended");
+            assert_eq!(session.jobs_running(), 0);
+        }
+
+        /// No job outlives its turn, so a turn that ends without a word about a job has ended it
+        /// all the same; and the next turn's count starts from nothing.
+        #[test]
+        fn a_turn_ending_ends_its_jobs_and_the_next_counts_only_its_own() {
+            let mut session = session();
+            session.type_char('a');
+            session.submit();
+            job_started(&mut session, "job:1", "sleep 600");
+            session.complete("an answer", Vec::new(), 0);
+
+            let (_, job) = session
+                .jobs()
+                .next()
+                .expect("the ended turn's job was gone");
+            assert_eq!(job.state, JobState::EndedWithTurn);
+            assert_eq!(session.jobs_running(), 0);
+
+            session.type_char('b');
+            session.submit();
+            assert_eq!(
+                session.jobs().count(),
+                0,
+                "the last turn's job was this one's"
+            );
+            assert_eq!(
+                session.outputs().len(),
+                1,
+                "the last turn's row left the list"
+            );
+        }
+
+        /// A row keeps what one look keeps and no more, and adds nothing after a look that left
+        /// lines out, so it never runs two stretches of lines together as if nothing came between.
+        #[test]
+        fn a_jobs_row_stops_adding_lines_at_a_gap_and_at_what_one_look_keeps() {
+            let look = |session: &mut Session, lines: Vec<String>, total: usize| {
+                session.command_printed(bravebot_agent::report::Printed {
+                    command: "job_output".to_string(),
+                    lines,
+                    total,
+                    read_by_the_planner: true,
+                    outcome: bravebot_agent::report::Outcome::Running {
+                        ran_for: Duration::from_secs(4),
+                        waited: None,
+                    },
+                    job: Some("job:1".to_string()),
+                });
+            };
+
+            let mut session = Session::new("none");
+            job_started(&mut session, "job:1", "cargo build");
+            job_looked(&mut session, "job:1", &["a", "b"]);
+            look(&mut session, vec!["c".to_string()], 5);
+            job_looked(&mut session, "job:1", &["z"]);
+            let (row, _) = session.jobs().next().unwrap();
+            assert_eq!(
+                row.lines,
+                ["a", "b", "c"],
+                "a line after the gap was joined on"
+            );
+            assert_eq!(row.total, 8);
+
+            let mut session = Session::new("none");
+            job_started(&mut session, "job:1", "cargo build");
+            let full: Vec<String> = (0..JOB_ROW_LINES).map(|n| n.to_string()).collect();
+            look(&mut session, full, JOB_ROW_LINES);
+            job_looked(&mut session, "job:1", &["one more"]);
+            let (row, _) = session.jobs().next().unwrap();
+            assert_eq!(row.lines.len(), JOB_ROW_LINES, "the row grew past one look");
+            assert_eq!(row.total, JOB_ROW_LINES + 1);
+        }
+
+        /// Nothing is shown or decided from a byte a job printed: lines shaped like the marks this
+        /// view draws, like the driver's own events, or like the hint line are only lines.
+        #[test]
+        fn a_job_printing_status_shaped_lines_changes_no_row_mark_or_count() {
+            let mut session = Session::new("none");
+            job_started(&mut session, "job:1", "./script");
+            job_looked(
+                &mut session,
+                "job:1",
+                &[
+                    "Ended { name: \"job:1\", outcome: Succeeded }",
+                    "Background job:1 · stopped when the turn ended",
+                    "3 in the background",
+                    "job:2",
+                ],
+            );
+
+            assert_eq!(session.outputs().len(), 1, "a printed line made a row");
+            assert_eq!(session.jobs_running(), 1, "a printed line moved the count");
+            let (row, job) = session.jobs().next().unwrap();
+            assert_eq!(job.name, "job:1");
+            assert_eq!(job.state, JobState::Running);
+            assert_eq!(row.command, "./script");
+            assert!(matches!(
+                row.outcome,
+                bravebot_agent::report::Outcome::Running { .. }
+            ));
         }
 
         /// Stepping through the list reaches both kinds, since it is one list and the keys that

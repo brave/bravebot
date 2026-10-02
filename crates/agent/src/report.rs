@@ -398,6 +398,30 @@ pub struct Printed {
     /// The other thing a person cannot work out from the bytes: a build that printed twelve lines
     /// and failed prints much the same twelve lines when it passes.
     pub outcome: Outcome,
+    /// The background job this is a look at, where it is one: the name the driver minted for it,
+    /// so a display can keep one row per job rather than one per look.
+    pub job: Option<String>,
+}
+
+/// What happened to a background job, for the person watching (RUN-26).
+///
+/// Every field is the driver's own: a name it minted, the line the person endorsed, the clock and
+/// the exit codes. Nothing here was read out of a byte the job printed, so a display may draw it
+/// and decide from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JobEvent {
+    /// A job exists: started in the background, or moved there part way through a run.
+    Started {
+        name: String,
+        /// The line as the person endorsed it.
+        line: String,
+        /// How long the run had been waited for when the person moved it, where they did.
+        moved_after: Option<std::time::Duration>,
+    },
+    /// It exited, or was stopped at the planner's asking, and somebody has been told how.
+    Ended { name: String, outcome: Outcome },
+    /// The turn ended with it still running, and it is stopped with the turn.
+    Dropped { name: String },
 }
 
 /// A few lines of a result the planner read, for the person watching to see beside the call.
@@ -424,6 +448,8 @@ pub struct Command {
     pub line: String,
     /// How it ended.
     pub outcome: Outcome,
+    /// The background job this is a look at, where it is one.
+    pub job: Option<String>,
 }
 
 /// What a delegate handed back, in the shape the person may read it.
@@ -618,6 +644,12 @@ pub trait Reporter {
     /// can request it and change nothing.
     fn movable(&mut self, _handoff: bravebot_core::cancel::Handoff) {}
 
+    /// A background job started, ended, or is being stopped with its turn.
+    ///
+    /// The one account of a job a display gets that does not wait for the planner to look at it:
+    /// without it a job moved to the background leaves nothing on the screen saying it runs.
+    fn job(&mut self, _event: JobEvent) {}
+
     /// A confined check has begun, over this many lines of quarantined content, or over a
     /// picture or a PDF.
     ///
@@ -705,6 +737,8 @@ pub struct RecordingReporter {
     pub finished: Vec<Activity>,
     /// Every token offered for moving a command to the background, in order.
     pub movable: Vec<bravebot_core::cancel::Handoff>,
+    /// Every background job event, in order.
+    pub jobs: Vec<JobEvent>,
     /// Every check announced as starting, in order, by what it was given.
     pub checks: Vec<Checking>,
     /// How many checks were announced as over.
@@ -786,6 +820,10 @@ impl Reporter for RecordingReporter {
 
     fn movable(&mut self, handoff: bravebot_core::cancel::Handoff) {
         self.movable.push(handoff);
+    }
+
+    fn job(&mut self, event: JobEvent) {
+        self.jobs.push(event);
     }
 
     fn check_started(&mut self, checking: Checking) {

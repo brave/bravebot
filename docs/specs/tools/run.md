@@ -1409,7 +1409,8 @@ label.
 limit bounds how long the turn waits on one command, and the turn no longer waits on this one.
 
 **The turn still owns it.** A moved line is ended when the turn ends, like any job. Moving it is a
-way to get on with the turn, never a way to leave something running after it.
+way to get on with the turn, never a way to leave something running after it. The person is told it
+is a job from the moment it moves, and told when the turn stops it ([RUN-26](#RUN-26)).
 
 **Cancellation wins.** The press and the stop are read on the same pass, the stop first, so a stop
 asked for in the same moment as a move ends the line rather than keeping it. The press is read off
@@ -1443,10 +1444,61 @@ whenever it guessed wrong.
 `verified-by: bravebot_tui::state::a_delegate_offers_nothing_to_move`
 `verified-by: bravebot_tui::state::a_delegates_call_ending_leaves_the_turns_command_movable`
 
+<a id="RUN-26"></a>
+### RUN-26: the person is told when a job starts, how it ended, and when the turn stops it
+
+The driver tells the front end three things about each job, in its own words. That it **started**,
+with the name it minted, the line as the plan displays it, and, for a line the person moved, how
+long the line had run before the move ([RUN-25](#RUN-25)). That it **ended**, with the outcome
+[RUN-13](#RUN-13) gives the planner, when a look at it finds it ended or stops it, or when the turn
+finds between rounds that it has ended. And that the turn is **stopping** it, when the turn ends
+with the job still running.
+
+The stop is said before the job is stopped, so what the person reads is that the turn ended it, not
+how a killed program exited. A job that exited since the turn last looked is reported as what it
+did, from its exit codes. A job the planner was already told the finish of is not reported again,
+however often it is looked at afterwards. Every finish the turn finds between rounds is reported
+before any of them is handed to the planner, so a turn that fails part way through that handing
+still says how each one ended. The turn's end asks only whether a job's steps exited, so it does not
+wait for a job's pipes to drain.
+
+None of the three carries a byte the job printed. What a job printed reaches the screen only in the
+job's row ([WATCH-22](../watching.md#WATCH-22)), and nothing there is decided from it.
+
+The terminal client counts the running jobs on the hint line
+([INPUT-13](../terminal-input.md#INPUT-13)) and keeps one row per job
+([WATCH-22](../watching.md#WATCH-22), [WATCH-23](../watching.md#WATCH-23)). A running job's time is
+counted from when its line started, the move included. `/status` gives each job of the last turn a
+line: its name, and the delegate's number where a delegate started
+it; its line, with line breaks folded and cut to a width so a long one does not push every note in
+the report across the screen; how it stands; and whether it was started in the background or moved
+there, and after how long. A session with no job says nothing about jobs. A `/status` typed during
+a turn waits for the turn to end, so it gives how each job ended.
+
+**Why.** Once the block that started a job, or the move that made one, had scrolled away, nothing
+on the screen said a job was running. A person could not tell a turn with a build going from a turn
+with nothing going.
+
+`verified-by: bravebot_agent::turn::a_background_job_is_announced_when_it_starts_and_its_finish_carries_its_name`
+`verified-by: bravebot_agent::turn::a_moved_line_is_announced_as_a_job_with_how_long_it_had_run`
+`verified-by: bravebot_agent::turn::a_look_that_stops_a_job_is_its_finish_under_its_name`
+`verified-by: bravebot_agent::turn::a_turn_ending_with_a_job_running_says_so_before_it_stops_it`
+`verified-by: bravebot_agent::shared::a_delegates_job_is_reported_as_its_own`
+`verified-by: bravebot_tui::remote_confirm::a_job_event_travels_without_an_answer`
+`verified-by: bravebot_tui::status::the_report_lists_every_job_and_how_it_came_to_run_in_the_background`
+`verified-by: bravebot_tui::status::the_report_says_which_delegate_a_job_belongs_to`
+`verified-by: bravebot_tui::status::a_session_with_no_job_says_nothing_about_jobs`
+`verified-by: bravebot_tui::status::a_job_line_keeps_its_spacing_and_is_cut_by_the_columns_it_takes`
+`verified-by: bravebot_tui::state::a_job_printing_status_shaped_lines_changes_no_row_mark_or_count`
+
 ## Open questions
 
 - Whether output can ever be trusted by proof rather than by assertion is issue #3, and it may not
   be resolved by weakening RUN-4.
+- A person cannot yet stop one job from the screen. The planner can, with `job_output` and `kill`,
+  and the turn stops every job when it ends.
+- Only the terminal client draws the job events. The one-shot command line and the desktop app
+  receive them and draw nothing of them yet.
 - A separate proof path reaches RUN-4's trusted label by the other road, proving from the program
   and its arguments that a stage can read nothing the label does not account for. It is a proof about a program where
   RUN-7 is a person taking responsibility for one, and the two must not be merged. It remains

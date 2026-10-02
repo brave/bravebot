@@ -1154,7 +1154,7 @@ impl Background {
     /// complete. Anything waiting to a bound has to ask this instead: the grace would carry the wait
     /// past the bound it was given, and it does not look at the cancellation token, so a person who
     /// changed their mind would still sit through it.
-    fn steps_exited(&mut self) -> bool {
+    pub(crate) fn steps_exited(&mut self) -> bool {
         for (index, child) in self.children.iter_mut().enumerate() {
             if self.finished[index] {
                 continue;

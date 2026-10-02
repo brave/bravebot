@@ -59,6 +59,10 @@ Reports everything the session knows about itself:
 - the confinement available here;
 - turns and tokens spent, and **where the time went**: how much was spent waiting on the model,
   running tools, and waiting for you to answer a prompt;
+- each [background job](run-tool.md#leaving-a-pipeline-running) of the last turn: its name, and the
+  delegate's number where a delegate started it, its line cut short, how it ended, and whether it was
+  started in the background or you moved it there. Typed while a turn runs, `/status` waits for the
+  turn to end, so the hint line is where a running job shows;
 - **every trust rule in force**, listed in full, each marked trusted or untrusted;
 - **every command you vouched for**, which now run unasked and whose output is read as trusted;
 - what a [`/loop`](#loop-interval-prompt) is repeating and when the next tick is due, where one is

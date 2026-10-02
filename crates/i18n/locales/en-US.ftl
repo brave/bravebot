@@ -1217,6 +1217,8 @@ run-stages = { $count ->
     }
 run-in-directory = in { $directory }
 watching-list-command = command
+# The same column on a background job's row. The job's name leads the line beside it.
+watching-list-job = background
 # The row and the view for a question asked beside the work, which is what /btw sends.
 watching-list-aside = aside
 watching-aside-head = a question asked beside the work
@@ -1229,6 +1231,8 @@ watching-lines = { $count ->
    *[other] { $count } lines
     }
 watching-output-head = what this command printed
+# The name is the one the driver gave the job, never anything the job printed.
+watching-output-job-head = what background { $name } printed
 watching-output-read = the model has read this
 watching-output-kept = the model has not read this
 # Short enough to stand in a column beside a command line. The whole sentence is in the header of
@@ -1542,6 +1546,12 @@ status-loop-unpaced = waiting for the turn to say when
 status-goal = Goal
 status-watch = Watch { $number }
 status-watch-armed-by = armed by turn { $turn } · { $left } left
+# One line per background job of the last turn. The name is the driver's.
+status-job = Background { $name }
+status-job-of-delegate = Background { $name } of delegate { $number }
+status-job-note = { $standing } · { $origin }
+status-job-moved = moved from the foreground after { $after }
+status-job-started = started in the background
 status-goal-rounds = { $rounds ->
     [one] sent back { $rounds } time, { $left } left
    *[other] sent back { $rounds } times, { $left } left
@@ -1759,6 +1769,7 @@ scroller-footer-search = / search
 # The footer of one delegate's own view. The kind and the number are the driver's words for it,
 # never anything the model wrote.
 watching-footer = { $kind } delegate { $number }
+watching-footer-job = background { $name }
 watching-working = working
 watching-answered = answered
 watching-failed = did not finish
@@ -1785,6 +1796,17 @@ watching-hint = { $chord } { $count } to open
 # Said on the bottom line for as long as a command the turn is waiting on can be moved, and gone
 # the moment it ends or is moved. Short, because it shares the line with everything else there.
 background-hint = { $chord } to background
+# Said on the bottom line while a background job runs, and gone once the last one ends.
+jobs-hint = { $count ->
+    [one] 1 in the background
+   *[other] { $count } in the background
+    }
+# Where a background job is, in the view a row opens and in /status. How long is this end's clock,
+# counted from when the line started.
+job-running = running { $ran_for }
+job-ended-with-turn = stopped when the turn ended
+# A background job's name where a delegate started it: each delegate numbers its jobs from one.
+job-of-delegate = { $name } of delegate { $number }
 
 
 ## The commands a line beginning with a slash may be
