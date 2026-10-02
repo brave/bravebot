@@ -1,6 +1,5 @@
-import { Alert, Icon } from '../nala'
+import { Alert, Button, Icon } from '../nala'
 import { dismissToast, useToasts } from '../toasts'
-import { IconButton } from './IconButton'
 
 /** Confirmations for exports and copies, stacked in the corner of the conversation card. */
 export function Toasts(): React.JSX.Element {
@@ -12,7 +11,9 @@ export function Toasts(): React.JSX.Element {
           <Icon name="check-circle-filled" slot="icon" />
           <span slot="title">{toast.title}</span>
           {toast.body && <span className="status-toast-body">{toast.body}</span>}
-          <IconButton slot="content-after" icon="close" label="Dismiss" size="tiny" onClick={() => dismissToast(toast.id)} />
+          <Button slot="content-after" kind="plain-faint" fab size="tiny" aria-label="Dismiss" onClick={() => dismissToast(toast.id)}>
+            <Icon name="close" />
+          </Button>
         </Alert>
       ))}
     </div>

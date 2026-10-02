@@ -176,8 +176,6 @@
   font: var(--type-caption);
   color: var(--ink-secondary);
 }
-/* The close button has no wash of its own on a tinted alert; only its glyph darkens. */
-:is(.problem-toast, .status-toast) > .icon-button.plain-faint:hover { background: transparent; }
 .problem-text {
   display: -webkit-box;
   -webkit-box-orient: vertical;

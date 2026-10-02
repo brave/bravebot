@@ -557,7 +557,9 @@ export function Transcript({
       <Icon name="warning-circle-filled" slot="icon" />
       <span slot="title">Something went wrong</span>
       <span className="problem-text">{problem}</span>
-      <IconButton slot="content-after" icon="close" label="Dismiss" size="tiny" onClick={() => setDismissed(problem)} />
+      <Button slot="content-after" kind="plain-faint" fab aria-label="Dismiss" onClick={() => setDismissed(problem)}>
+        <Icon name="close" />
+      </Button>
     </Alert>
   )
 
