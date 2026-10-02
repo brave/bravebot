@@ -1,7 +1,7 @@
 /* ------------------------------------------------------------------ sidebar
 
-   The left column, on the app ground: a titlebar holding the list switch, a head with the create
-   row and search, the list, and one row at the foot. */
+   The left column, on the app ground: a titlebar holding the list switch, a head with the search
+   and the create actions on one line, the list, and one row at the foot. */
 
 .sessions {
   display: flex;
@@ -9,9 +9,6 @@
   min-height: 0;
   overflow: hidden;
 }
-/* The recents menu is anchored inside this clip, and it has to paint past the column. */
-.sessions.recents-open { overflow: visible; }
-
 /* The column's titlebar. Traffic-light clearance on the left (macOS only: elsewhere the window has
    its native frame, and the list switch takes the whole width), the strip drags the window, and
    everything in it that is a control opts out. The same height as the conversation's head, and
@@ -65,43 +62,11 @@
   display: flex;
   flex-direction: column;
   gap: var(--leo-spacing-s);
-  padding: var(--leo-spacing-m) var(--leo-spacing-m) var(--leo-spacing-m);
+  padding: var(--leo-spacing-m);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
-/* A full-width row: icon, label, and the shortcut in caption ink at the end. The same shape as a
-   list row, so the create action reads as the first thing in the list rather than a button
-   floating over it. */
-.sidebar-row {
-  display: flex;
-  align-items: center;
-  gap: var(--leo-spacing-m);
-  width: 100%;
-  min-width: 0;
-  height: var(--hit);
-  padding: 0 var(--leo-spacing-m);
-  border: 0;
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: var(--ink-primary);
-  font: var(--type-body);
-  text-align: left;
-  --leo-icon-size: var(--icon-control);
-  --leo-icon-color: var(--ink-secondary);
-  transition: background-color var(--motion-fast);
-}
-.sidebar-row:hover { background: var(--surface-hover); }
-.sidebar-row:active { background: var(--surface-selected); }
-.sidebar-row-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sidebar-row-hint {
-  flex: none;
-  font: var(--type-caption);
-  color: var(--ink-tertiary);
-}
-
-.new-split { display: flex; align-items: center; gap: var(--leo-spacing-xs); }
-.new-split .sidebar-row { flex: 1; }
-
-.sidebar-search-row { display: flex; align-items: center; gap: var(--leo-spacing-xs); }
+.sidebar-search-row { display: flex; align-items: center; gap: var(--leo-spacing-s); }
 .sidebar-search {
   flex: 1;
   min-width: 0;
@@ -119,7 +84,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--leo-spacing-s);
-  padding: 0 var(--leo-spacing-m) var(--leo-spacing-m);
+  padding: var(--leo-spacing-m);
 }
 
 .sidebar-empty {
@@ -143,10 +108,10 @@
 }
 .session-row:hover,
 .bot:hover { background: var(--surface-hover); }
+/* The open row sits on the card surface, the way the chat it opened does. */
 .session-row.current,
-.bot-open { background: var(--surface-selected); }
+.bot-open { background: var(--surface-panel); }
 
-.session,
 .bot-open-button {
   flex: 1;
   min-width: 0;
@@ -154,7 +119,7 @@
   align-items: center;
   gap: var(--leo-spacing-m);
   min-height: var(--session-row-h);
-  padding: 0 var(--leo-spacing-m);
+  padding: var(--leo-spacing-m) var(--leo-spacing-l);
   border: 0;
   border-radius: var(--radius-control);
   background: transparent;
@@ -162,6 +127,32 @@
   font: inherit;
   text-align: left;
 }
+/* Three lines: where and when, the title, the branch. */
+.session {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: var(--leo-spacing-m) var(--leo-spacing-l);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--ink-primary);
+  font: inherit;
+  text-align: left;
+}
+.session-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-xs);
+  min-width: 0;
+  font: var(--type-caption-strong);
+  color: var(--ink-tertiary);
+}
+.session-project { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-folder { --leo-icon-color: var(--ink-secondary); }
 .session:focus-visible,
 .bot-open-button:focus-visible,
 .session-group-fold:focus-visible,
@@ -200,11 +191,11 @@
   gap: var(--leo-spacing-xs);
   min-width: 0;
   font: var(--type-body);
-  color: var(--ink-primary);
+  color: var(--ink-secondary);
 }
 .session-name,
 .bot-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bot-name { font: var(--type-body); }
+.bot-name { font: var(--type-body); color: var(--ink-secondary); }
 .session-row.current .session-title,
 .bot-open .bot-name { font: var(--type-body-strong); }
 
@@ -213,7 +204,7 @@
 .fork-icon { display: inline-flex; --leo-icon-size: var(--icon-meta); }
 
 .session-where,
-.bot-where {
+.bot-purpose {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -221,18 +212,17 @@
   font: var(--type-caption);
   color: var(--ink-tertiary);
 }
-/* A single-line row in compact density: the meta line goes, the row still says its title. */
+/* Compact density drops the branch line; the row still says where and what. */
 .app.compact .session-where { display: none; }
+.app.compact .session { padding-block: var(--leo-spacing-s); }
 
 .session-time {
   flex: none;
-  align-self: flex-start;
-  margin-top: var(--leo-spacing-m);
+  margin-left: auto;
   font: var(--type-caption);
   color: var(--ink-tertiary);
   transition: opacity var(--motion-fast);
 }
-.app.compact .session-time { align-self: center; margin-top: 0; }
 
 .session-more-menu {
   position: absolute;
@@ -257,11 +247,27 @@
 
 /* The foot of a list drawn a page at a time: quieter than a session, since it is not one. */
 .session-show-more {
+  display: flex;
   flex: none;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  width: 100%;
+  min-width: 0;
+  height: var(--hit);
+  padding: 0 var(--leo-spacing-m);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
   color: var(--ink-secondary);
   font: var(--type-meta);
+  text-align: left;
+  --leo-icon-size: var(--icon-control);
   --leo-icon-color: var(--ink-tertiary);
+  transition: background-color var(--motion-fast);
 }
+.session-show-more:hover { background: var(--surface-hover); }
+.session-show-more:active { background: var(--surface-selected); }
+.session-show-more-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ------------------------------------------------------------------ groups
 
@@ -313,19 +319,6 @@
 
 /* ------------------------------------------------------------------ bots */
 
-.bot-open-button { gap: var(--leo-spacing-m); }
-.bot-edit {
-  position: absolute;
-  top: 50%;
-  right: var(--leo-spacing-s);
-  transform: translateY(-50%);
-  opacity: 0;
-  transition: opacity var(--motion-fast);
-}
-.bot:hover .bot-edit,
-.bot:has(.bot-open-button:focus-visible) .bot-edit,
-.bot-edit:focus-within { opacity: 1; }
-
 /* The archive: the foot of the tab, outside the scrolling list, so it is in the same place with
    three bots and with thirty. It never scrolls, so its heading is not sticky. */
 .bot-archive {
@@ -366,10 +359,17 @@
 
 .sidebar-foot {
   flex: none;
-  padding: var(--leo-spacing-s) var(--leo-spacing-m) var(--leo-spacing-m);
+  padding: 0 0 var(--leo-spacing-m);
+  border-top: 1px solid var(--border-subtle);
 }
+/* Leo's navigation item draws at 16px inside a Navigation and at its own size outside one; the
+   design draws both the sidebar's and the settings' items at 20px. */
+.sidebar-foot leo-navigationitem,
+.settings-navigation leo-navigationitem { display: block; --leo-icon-size: var(--icon-hero); }
 
-/* ------------------------------------------------------------------ menus opened from here */
+/* ------------------------------------------------------------------ menus opened from here
+
+   The recents rows are shared with the composer's project menu. */
 
 .recent-menu leo-menu-item { width: min(380px, calc(100vw - 24px)); box-sizing: border-box; overflow: hidden; }
 .recent-row { align-items: flex-start; }
@@ -386,4 +386,4 @@
 .recent-menu leo-menu-item[aria-disabled='true'] { color: var(--ink-disabled); cursor: default; }
 
 /* A plan run can be read and not continued, which its row says before it is opened. */
-.session-where .plan-run { color: var(--ink-accent); }
+.session-meta .plan-run { flex: none; color: var(--ink-accent); }

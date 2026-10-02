@@ -32,12 +32,12 @@ const check = (ok, what) => {
 async function showSessions(page) {
   await page
     .locator('[data-test="sidebar-tabs"]')
-    .getByText('Sessions', { exact: true })
+    .getByText('Chats', { exact: true })
     .waitFor({ state: 'visible', timeout: 15000 })
     .catch(() => undefined)
   await page
     .locator('[data-test="sidebar-tabs"]')
-    .getByText('Sessions', { exact: true })
+    .getByText('Chats', { exact: true })
     .click({ timeout: 3000 })
     .catch(() => undefined)
   await page.waitForTimeout(250)
@@ -88,7 +88,7 @@ const roles = (title) =>
 // --- it is ours ---------------------------------------------------------------------
 check(titles.includes('File'), `there is a File menu (${titles.join(', ')})`)
 check(titles.includes('View'), 'there is a View menu')
-check(titles.includes('Session'), 'there is a Session menu — the app has its own verbs')
+check(titles.includes('Chat'), 'there is a Chat menu — the app has its own verbs')
 check(titles.includes('Help'), 'there is a Help menu')
 check(
   !every.some((i) => /learn more/i.test(i.label ?? '')),
@@ -175,12 +175,12 @@ check(
 // see it. So the accelerator string is asserted as a contract and the effect is driven by
 // clicking the item.
 const accel = (id) => every.find((i) => i.id === id)?.accelerator
-check(accel('session.new') === 'CmdOrCtrl+N', `New Session is Cmd+N (${accel('session.new')})`)
+check(accel('session.new') === 'CmdOrCtrl+N', `New Chat is Cmd+N (${accel('session.new')})`)
 check(accel('turn.send') === 'CmdOrCtrl+Enter', 'Send is Cmd+Enter')
 check(accel('turn.cancel') === 'CmdOrCtrl+.', 'Cancel Turn is Cmd+.')
 check(
   accel('session.close') === 'CmdOrCtrl+Shift+W',
-  'Close Session is Cmd+Shift+W, leaving Cmd+W to the window',
+  'Close Chat is Cmd+Shift+W, leaving Cmd+W to the window',
 )
 
 // --- developer items are gated --------------------------------------------------------
@@ -193,7 +193,7 @@ check(view.includes('toggledevtools'), 'unpackaged, View offers Developer Tools'
 // --- enablement tracks what the window can do -----------------------------------------
 const fresh = await readMenu()
 const freshItem = (id) => fresh.flatMap((m) => m.items).find((i) => i.id === id)
-check(freshItem('session.close').enabled === false, 'with no session open, Close Session is grey')
+check(freshItem('session.close').enabled === false, 'with no chat open, Close Chat is grey')
 check(freshItem('turn.send').enabled === false, 'with no session open, Send is grey')
 check(freshItem('turn.cancel').enabled === false, 'with nothing running, Cancel Turn is grey')
 
@@ -210,7 +210,7 @@ if (hasSessions) {
   }
   let open = await readMenu()
   const openItem = (id) => open.flatMap((m) => m.items).find((i) => i.id === id)
-  check(openItem('session.close').enabled === true, 'with a session open, Close Session lights up')
+  check(openItem('session.close').enabled === true, 'with a chat open, Close Chat lights up')
   check(openItem('turn.send').enabled === false, 'an empty composer still leaves Send grey')
 
   // The assertion that proves the state channel is live in both directions.
@@ -240,7 +240,7 @@ const before = await widthOf('.sessions')
 await click('view.fold-left')
 await page.waitForTimeout(400)
 const afterFold = await widthOf('.sessions')
-check(afterFold < 1, `View → Hide Session List folds it (was ${Math.round(before)}, now ${Math.round(afterFold)})`)
+check(afterFold < 1, `View → Hide Chat List folds it (was ${Math.round(before)}, now ${Math.round(afterFold)})`)
 check(
   (await page.locator('.fold-toggle.left').getAttribute('aria-expanded')) === 'false',
   'and the transcript header agrees the column is folded',
@@ -248,7 +248,7 @@ check(
 let folded = await readMenu()
 check(
   folded.flatMap((m) => m.items).find((i) => i.id === 'view.fold-left').label ===
-    'Show Session List',
+    'Show Chat List',
   'the item renames itself to the thing it will now do',
 )
 await click('view.fold-left')
@@ -270,93 +270,9 @@ await page.keyboard.press('Escape')
 await page.waitForTimeout(400)
 check(!(await about.isVisible()), 'Escape closes it — nothing here traps anybody')
 
-// The recents list is this machine's, and a fresh checkout has none — which would leave the
-// keyboard walk below with a single disabled row and nothing to walk. So a known list is put
-// in place for the duration and the original is put back at the end, the way
-// `drive-columns.mjs` treats the layout it shares. One key of the file, not the file: the
-// other four are somebody's arrangement of this window.
-const userData = await app.evaluate(({ app }) => app.getPath('userData'))
-const stateFile = join(userData, 'bravebot-ui.json')
-const hadState = existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : null
-writeFileSync(
-  stateFile,
-  JSON.stringify({
-    ...(hadState === null ? {} : JSON.parse(hadState)),
-    // The third is deliberately not a path, to prove the validator drops it rather than
-    // refusing the two good ones alongside it.
-    recents: ['/tmp/alpha-project', '/tmp/beta-project', 'relative/nope'],
-  }),
-  'utf8',
-)
-
-// --- the in-window picker -----------------------------------------------------------------
-// Native menus cover right-clicks; this one is in the window because it has to hand focus
-// back to the button that opened it, which `Menu.popup` gives no way to do.
-const chevron = page.locator('.new-recent')
-check(await chevron.isVisible(), 'the New session button has a recents chevron')
-check(
-  (await chevron.locator('leo-button').getAttribute('aria-expanded')) === 'false',
-  'and it says it is closed before it is opened',
-)
-await chevron.click()
-await page.waitForTimeout(350)
-check(await page.locator('[role="menu"]').isVisible(), 'clicking it opens a menu')
-check(
-  (await chevron.locator('leo-button').getAttribute('aria-expanded')) === 'true',
-  'and the trigger now says it is open',
-)
-// Every session row keeps its own menu's items in the page, so count only this menu's.
-const recentRows = chevron.locator('[role="menuitem"]')
-const rows = await recentRows.count()
-check(rows === 2, `the two valid recents are listed and the bad one was dropped (${rows})`)
-check(
-  (await recentRows.first().textContent()).includes('alpha-project'),
-  'newest first, by folder name',
-)
-check(
-  (await page.locator('.recent-path').first().textContent()) === '/tmp/alpha-project',
-  'with the full path under it, because two checkouts share a basename',
-)
-// Leo's menu moves focus on the first arrow, rather than when it opens.
-await page.keyboard.press('ArrowDown')
-await page.waitForTimeout(150)
-check(
-  (await page.evaluate(() => document.activeElement?.textContent))?.includes('alpha-project'),
-  'ArrowDown moves focus onto the first row',
-)
-if (rows > 1) {
-  await page.keyboard.press('ArrowDown')
-  await page.waitForTimeout(150)
-  check(
-    (await page.evaluate(() => document.activeElement?.textContent))?.includes('beta-project'),
-    'and another ArrowDown moves to the next row',
-  )
-  await page.keyboard.press('Home')
-  await page.waitForTimeout(150)
-  check(
-    (await page.evaluate(() => document.activeElement?.textContent))?.includes('alpha-project'),
-    'and Home comes back to the first',
-  )
-}
-await page.screenshot({ path: '/tmp/bravebot-ui/12-popmenu.png' })
-await page.keyboard.press('Escape')
-await page.waitForTimeout(300)
-check(!(await page.locator('[role="menu"]').isVisible()), 'Escape closes it')
-check(
-  await page.evaluate(() => !!document.activeElement?.closest('.new-recent')),
-  'and focus went back to the button that opened it',
-)
-
-await chevron.click()
-await page.waitForTimeout(300)
-await page.keyboard.press('b')
-await page.waitForTimeout(150)
-check(
-  (await page.evaluate(() => document.activeElement?.textContent))?.includes('beta-project'),
-  'typing a letter jumps to the matching recent project',
-)
-await page.keyboard.press('Escape')
-await page.waitForTimeout(250)
+// The recents chevron beside New session is gone: a new chat starts in the project used last, and
+// the projects opened before are offered by the project menu in a fresh chat's composer and by
+// File ▸ Open Recent. Neither is driven here; this driver only reads the real profile.
 
 // --- context menus ----------------------------------------------------------------------
 // A real popup is modal and would block the run, so `popup` is replaced with something that
@@ -413,9 +329,6 @@ if (await prompt.isVisible().catch(() => false)) {
   )
 }
 
-// Put the preferences file back the way it was found.
-if (hadState === null) rmSync(stateFile, { force: true })
-else writeFileSync(stateFile, hadState, 'utf8')
 
 // The columns are shared with the other drivers, so this one puts them back.
 await page.locator('.gutter').first().dblclick()

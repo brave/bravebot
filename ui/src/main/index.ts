@@ -24,6 +24,8 @@ import {
   bot,
   botFromForm,
   bots,
+  ensureHome,
+  worksIn,
   ground,
   memory,
   noteBotArchived,
@@ -172,6 +174,13 @@ async function sendBotTurn(
 ): Promise<{ ok?: unknown; error?: BotFailure }> {
   if (!bridge) return { error: { code: 'no_bridge', message: 'the agent is not running' } }
 
+  // The folder the agent confirmed this session runs in, never one the window named. A bot only
+  // works where `worksIn` allows, because grounding seeds a file there.
+  const folder = rootForSession(session)
+  if (!worksIn(held, folder)) {
+    return { error: { code: 'not_this_bots_folder', message: `${held.name} has not been given this folder` } }
+  }
+
   // A bot made before definitions is given one first, and its old memory is recorded as untrusted
   // (MEMORY-11). Nothing is sent until that has happened, so a briefing never names the old path
   // of a bot whose notes are not yet recorded.
@@ -203,12 +212,12 @@ async function sendBotTurn(
     // turn names and cannot read is not a smaller turn, it is a failed one — so a memory deleted
     // by a `git clean`, or a branch switched to one that never had it, is repaired here instead of
     // ending the turn inside the agent with a message about a path.
-    const paths = ground(held, nudge)
+    const paths = ground(held, folder, nudge)
     if (!paths) {
       return {
         error: {
           code: 'no_checkout',
-          message: `${held.name} works in ${held.directory}, which cannot be written to`,
+          message: `${held.name} works in ${folder}, which cannot be written to`,
         },
       }
     }
@@ -336,8 +345,9 @@ function createWindow(): void {
     if (message.event === 'turn.done' && typeof message.session === 'string') {
       const handle = message.session
       const slug = botHandles.get(handle)
-      if (slug) {
-        if (message.data.id) noteBotSession(slug, message.data.id)
+      const folder = rootForSession(handle)
+      if (slug && folder) {
+        if (message.data.id) noteBotSession(slug, message.data.id, folder)
         // Read before `noteBotArchived` moves it, because the comparison *is* the signal: the
         // archive rises exactly once per compaction that actually happened, which is the only
         // reliable way to learn that one did. See the note on `Bot.archived`.
@@ -346,8 +356,8 @@ function createWindow(): void {
         // Whether the bot wrote anything down during the turn that has just ended. Asked of every
         // turn including a consolidation's own, so a consolidation that worked is what resets the
         // count that would otherwise have nudged.
-        noteBotMemory(slug)
-        try { snapshotMemory(slug) } catch { /* Memory itself remains available if history storage fails. */ }
+        noteBotMemory(slug, folder)
+        try { snapshotMemory(slug, folder) } catch { /* Memory itself remains available if history storage fails. */ }
 
         // A consolidation ending is the end of it. Answering it with another would be a loop.
         if (consolidating.delete(handle)) {
@@ -367,7 +377,8 @@ function createWindow(): void {
     if (message.event === 'turn.error' && typeof message.session === 'string') {
       const handle = message.session
       const slug = botHandles.get(handle)
-      if (slug && message.data.id) noteBotSession(slug, message.data.id)
+      const folder = rootForSession(handle)
+      if (slug && folder && message.data.id) noteBotSession(slug, message.data.id, folder)
       if (consolidating.delete(handle)) {
         after = () => ended(handle, botHandles.get(handle) ?? null, true)
       }
@@ -559,9 +570,10 @@ app.whenReady().then(() => {
       // Opening a session is the other way a project becomes recent, and this handler is
       // already the choke point that sees it. Reading one field it is forwarding anyway is
       // a smaller thing than a channel that would let the renderer write the list itself.
+      // A bot's home folder is not a project, so it is kept off the list.
       if (method === 'session.open' || method === 'session.new') {
         const directory = (params as { directory?: unknown } | null)?.directory
-        if (isProjectPath(directory) && noteProject(directory)) rebuildMenu()
+        if (isProjectPath(directory) && !bots().some((each) => each.home === directory) && noteProject(directory)) rebuildMenu()
       }
       // A fork is the one call whose *answer* is worth writing down: which session it made and
       // which one it came out of. Read off the agent's reply and never off `params`, so the
@@ -693,7 +705,11 @@ app.whenReady().then(() => {
   // two figures that decide when a bot is reminded to write are reports of what the agent did, are
   // taken off its answers and off the filesystem below, and have no way in from here.
 
-  ipcMain.handle('bravebot:bots:read', () => bots())
+  ipcMain.handle('bravebot:bots:read', () => {
+    const all = bots()
+    for (const each of all) ensureHome(each)
+    return all
+  })
 
   ipcMain.handle('bravebot:bots:model', async (_event, slug: unknown, model: unknown) => {
     const held = bot(slug)
@@ -711,7 +727,7 @@ app.whenReady().then(() => {
     // rewrites the fields the form shows (MEMORY-9). This process writes nothing there itself; the
     // agent does, and `saveFormBot` keeps the name it answers with.
     const next = await saveFormBot(form, bridge ? (method, params) => bridge!.request(method, params) : null)
-    if (noteProject(next.directory)) rebuildMenu()
+    ensureHome(next)
     return next
   })
 
@@ -743,11 +759,12 @@ app.whenReady().then(() => {
     return held.slug
   })
 
-  ipcMain.handle('bravebot:bots:memory', (_event, slug: unknown) => memory(slug))
-  ipcMain.handle('bravebot:bots:memory-history', (_event, slug: unknown) => memoryHistory(slug))
-  ipcMain.handle('bravebot:bots:edit-memory', (_event, slug: unknown, text: unknown, expected: unknown) => {
+  // Each names a folder, which is checked against the folders this process recorded for the bot.
+  ipcMain.handle('bravebot:bots:memory', (_event, slug: unknown, directory: unknown) => memory(slug, directory))
+  ipcMain.handle('bravebot:bots:memory-history', (_event, slug: unknown, directory: unknown) => memoryHistory(slug, directory))
+  ipcMain.handle('bravebot:bots:edit-memory', (_event, slug: unknown, directory: unknown, text: unknown, expected: unknown) => {
     if ([...botHandles].some(([handle, owner]) => owner === slug && runningHandles.has(handle))) throw new Error('Stop this bot’s running conversations before editing its memory.')
-    return editMemory(slug, text, expected)
+    return editMemory(slug, directory, text, expected)
   })
 
   // Asked for when the window finds a bot pointing at a session the agent no longer lists. What it

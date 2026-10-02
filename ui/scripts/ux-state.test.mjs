@@ -165,20 +165,23 @@ test('memory edits use compare-and-replace and preserve recoverable history', ()
   try {
     const bots = load('src/main/bots.ts', electron)
     const { parseBots } = load('src/shared/bots.ts')
-    bots.saveBot(parseBots({ bots: [{ slug: 'test', name: 'Test', purpose: 'Test', directory: project, avatar: 'test' }] }).bots[0])
+    bots.saveBot(parseBots({ bots: [{ slug: 'test', name: 'Test', purpose: 'Test', home: join(profile, 'bot-homes', 'test'), avatar: 'test',
+      conversations: [{ id: '11111111-1111-4111-8111-111111111111', directory: project }] }] }).bots[0])
     const memory = load('src/main/memory.ts', electron)
-    assert.equal(memory.editMemory('test', 'First memory', null), 'First memory')
-    assert.throws(() => memory.editMemory('test', 'Lost edit', null), /changed/)
-    assert.equal(memory.editMemory('test', 'Second memory', 'First memory'), 'Second memory')
-    assert.deepEqual(memory.memoryHistory('test').map((entry) => entry.text), ['First memory', 'Second memory'])
-    memory.editMemory('test', '', 'Second memory')
+    assert.equal(memory.editMemory('test', project, 'First memory', null), 'First memory')
+    assert.throws(() => memory.editMemory('test', project, 'Lost edit', null), /changed/)
+    assert.equal(memory.editMemory('test', project, 'Second memory', 'First memory'), 'Second memory')
+    assert.deepEqual(memory.memoryHistory('test', project).map((entry) => entry.text), ['First memory', 'Second memory'])
+    // A folder this bot never worked in is not one a window may point the memory editor at.
+    assert.throws(() => memory.editMemory('test', directory, 'Elsewhere', null), /not worked in/)
+    assert.equal(existsSync(join(directory, '.bravebot-ui')), false)
+    memory.editMemory('test', project, '', 'Second memory')
     assert.equal(readFileSync(join(project, '.bravebot-ui', 'bots', 'test.md'), 'utf8'), '')
-    assert.equal(memory.memoryHistory('test').at(-2).text, 'Second memory')
+    assert.equal(memory.memoryHistory('test', project).at(-2).text, 'Second memory')
     writeFileSync(join(profile, 'bots', 'test', 'ground.md'), 'private briefing')
     memory.removeMemoryHistory('test')
-    assert.deepEqual(memory.memoryHistory('test'), [])
-    assert.equal(existsSync(join(profile, 'bots', 'test', 'ground.md')), false)
-    assert.equal(existsSync(join(profile, 'bots', 'test', 'memory-history.json')), false)
+    assert.deepEqual(memory.memoryHistory('test', project), [])
+    assert.equal(existsSync(join(profile, 'bots', 'test')), false, 'the briefing and every history go with the bot')
     assert.equal(readFileSync(join(project, '.bravebot-ui', 'bots', 'test.md'), 'utf8'), '')
 
   } finally { rmSync(directory, { recursive: true, force: true }) }
@@ -303,22 +306,30 @@ test('reference-backed writes and approval paths share one execution outcome', (
   assert.equal(written([{ ...approval, decision: null, interrupted: true }])[0].state, 'cancelled')
 })
 
-test('bot history includes every saved, associated and draft conversation without mixing bots or projects', () => {
+test('bot history includes every saved, associated and draft conversation without mixing bots or folders', () => {
   const { botHistory } = load('src/shared/bot-history.ts')
   const { parseExperience, conversationKey } = load('src/shared/experience.ts')
-  const bot = { slug: 'review', directory: '/project', session: 'new', conversations: ['old', 'new', 'missing'] }
+  const recorded = (id, directory = '/project') => ({ id, directory })
+  const bot = { slug: 'review', home: '/home/review', session: 'new', conversations: [recorded('old'), recorded('new'), recorded('missing'), recorded('chat', '/home/review')] }
   const row = (id, updated = 1, directory = '/project') => ({ id, directory, title: id, updated, project: 'project', branch: null, bytes: 0 })
   const experience = parseExperience({ conversations: {
     [conversationKey('/project', 'old')]: { archived: true },
     [conversationKey('/project', 'associated')]: { botSlug: 'review' },
     [conversationKey('/project', 'draft:pending')]: { botSlug: 'review', draft: 'unsent work' },
-    [conversationKey('/elsewhere', 'foreign')]: { botSlug: 'review' },
+    [conversationKey('/elsewhere', 'second-project')]: { botSlug: 'review' },
     [conversationKey('/project', 'other-bot')]: { botSlug: 'another' },
     [conversationKey('/project', 'draft:migrated')]: { botSlug: 'review', draft: '' },
   } })
-  const history = botHistory(bot, [row('old'), row('new', 2), row('associated', 3), row('draft:pending', 4), row('other-bot'), row('foreign', 5, '/elsewhere')], experience)
-  assert.deepEqual(history.map(row => row.id), ['draft:pending', 'associated', 'new', 'old', 'missing'])
+  const sessions = [row('old'), row('new', 2), row('associated', 3), row('draft:pending', 4), row('other-bot'),
+    row('second-project', 5, '/elsewhere'), row('chat', 6, '/home/review'),
+    // The same id as a recorded conversation, in a folder it was never recorded in: another session.
+    row('old', 9, '/unrelated')]
+  const history = botHistory(bot, sessions, experience)
+  assert.deepEqual(history.map(row => `${row.directory}:${row.id}`), [
+    '/home/review:chat', '/elsewhere:second-project', '/project:draft:pending', '/project:associated', '/project:new', '/project:old', '/project:missing',
+  ])
   assert.equal(history.find(row => row.id === 'old').archived, true)
+  assert.equal(history.find(row => row.id === 'old').session.updated, 1)
   assert.equal(history.at(-1).session, null)
 })
 
@@ -329,13 +340,15 @@ test('starting and revisiting bot conversations preserves all earlier IDs across
   try {
     const { parseBots } = load('src/shared/bots.ts')
     const storage = load('src/main/bots.ts', electron)
-    storage.saveBot(parseBots({ bots: [{slug:'review', name:'Review', purpose:'Review', directory:'/project', session:ids[0]}] }).bots[0])
-    storage.noteBotSession('review', ids[1])
-    storage.noteBotSession('review', ids[2])
-    storage.noteBotSession('review', ids[0])
+    storage.saveBot(parseBots({ bots: [{slug:'review', name:'Review', purpose:'Review', home:'/home/review', conversations:[{id:ids[0], directory:'/project'}], session:ids[0]}] }).bots[0])
+    storage.noteBotSession('review', ids[1], '/home/review')
+    storage.noteBotSession('review', ids[2], '/project')
+    storage.noteBotSession('review', ids[0], '/project')
     storage.releaseBotSession('review')
     const reopened = load('src/main/bots.ts', electron).bot('review')
-    assert.deepEqual(reopened.conversations, ids)
+    assert.deepEqual(reopened.conversations, [
+      { id: ids[0], directory: '/project' }, { id: ids[1], directory: '/home/review' }, { id: ids[2], directory: '/project' },
+    ])
     assert.equal(reopened.session, null)
   } finally { rmSync(directory, {recursive:true, force:true}) }
 })

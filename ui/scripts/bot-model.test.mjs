@@ -11,7 +11,7 @@ const source = buildSync({ entryPoints: ['src/shared/bots.ts'], bundle: true, wr
 const module = { exports: {} }
 new Function('require', 'module', 'exports', source)(require, module, module.exports)
 const { parseBots, withBot, isBotModel } = module.exports
-const definition = { slug: 'web-dev', name: 'Web dev', purpose: 'Build websites', directory: '/tmp/web-dev', avatar: 'v2:preview', session: null }
+const definition = { slug: 'web-dev', name: 'Web dev', purpose: 'Build websites', home: '/tmp/bot-homes/web-dev', avatar: 'v2:preview', session: null }
 
 test('model selection survives storage, updates, and unrelated bot edits', () => {
   const original = parseBots({ bots: [{ ...definition, model: 'provider/model-a' }] }).bots[0]
@@ -180,7 +180,7 @@ test('a bot made before definitions is migrated once, and the briefing never nam
     const migrated = await storage.migrateBot(old, async (method, params) => { calls.push([method, params]); return { name: 'web-dev-2' } })
     assert.equal(migrated.definition, 'web-dev-2')
     assert.equal(storage.bot(old.slug).definition, 'web-dev-2')
-    assert.deepEqual(calls, [['bot.migrate', { slug: 'web-dev', purpose: 'Build websites', directory: '/tmp/web-dev', model: 'provider/model-a' }]])
+    assert.deepEqual(calls, [['bot.migrate', { slug: 'web-dev', purpose: 'Build websites', directory: '/tmp/bot-homes/web-dev', model: 'provider/model-a' }]])
 
     const again = await storage.migrateBot(migrated, async () => { throw new Error('a bot with a definition is not migrated again') })
     assert.equal(again.definition, 'web-dev-2')
@@ -189,4 +189,23 @@ test('a bot made before definitions is migrated once, and the briefing never nam
     assert.ok(prompt.includes('.bravebot/memory/web-dev-2.md'), prompt)
     assert.ok(!prompt.includes('.bravebot-ui'), prompt)
   } finally { rmSync(profile, { recursive: true, force: true }) }
+})
+
+// Rejects a migration that drops the folder an old bot was pinned to: its conversations ran there,
+// so pairing them with the new home would send the next turn to a folder with none of its memory.
+test('a bot written before home folders keeps its conversations in the folder it was pinned to', () => {
+  const first = 'a1b2c3d4-0000-4000-8000-000000000001'
+  const latest = 'a1b2c3d4-0000-4000-8000-000000000002'
+  const legacy = { slug: 'web-dev', name: 'Web dev', purpose: 'Build websites', directory: '/work/site', avatar: 'v2:x', session: latest, conversations: [first] }
+  const [bot] = parseBots({ bots: [legacy] }, (slug) => `/app/bot-homes/${slug}`).bots
+  assert.equal(bot.home, '/app/bot-homes/web-dev')
+  assert.deepEqual(bot.conversations, [
+    { id: first, directory: '/work/site' },
+    { id: latest, directory: '/work/site' },
+  ])
+  // Without a way to place it there is nowhere to run it, which is not a bot that can be shown.
+  assert.equal(parseBots({ bots: [legacy] }).bots.length, 0)
+  // Written back and read again, the pairs survive as pairs.
+  const again = parseBots(JSON.parse(JSON.stringify({ bots: [bot] }))).bots[0]
+  assert.deepEqual(again.conversations, bot.conversations)
 })

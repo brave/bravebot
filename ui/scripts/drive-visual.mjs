@@ -255,8 +255,9 @@ try {
   })
 
   await scene('17-appearance', async () => {
+    // View ▸ Appearance… opens the General settings page rather than a dialog.
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('bravebot:command', 'view.theme'))
-    await page.getByRole('dialog').waitFor()
+    await page.locator('[data-test="settings-view"] [data-test="appearance-control"]').waitFor()
     await variants('17-appearance', { dark: false })
     await escape()
   })
@@ -269,8 +270,9 @@ try {
   })
 
   await scene('19-agent-settings', async () => {
-    await page.locator('[data-test="agent-settings"], .sidebar-footer leo-button').first().click()
-    await page.getByRole('dialog').waitFor()
+    await page.locator('[data-test="agent-settings"]').click()
+    await page.locator('[data-test="settings-page-agent"]').click()
+    await page.locator('[data-test="settings-view"] [data-test="settings-body"]').waitFor()
     await variants('19-agent-settings')
     await escape()
   })
@@ -278,7 +280,7 @@ try {
   await scene('20-bots', async () => {
     await page.getByText('Bots', { exact: true }).first().click()
     await variants('20-bots')
-    await page.getByText('Sessions', { exact: true }).first().click()
+    await page.getByText('Chats', { exact: true }).first().click()
   })
 
   await scene('21-minimum-window', async () => {

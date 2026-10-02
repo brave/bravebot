@@ -10,7 +10,7 @@
 //     reason the seed is stored rather than derived from the name, and it is exactly the sort of
 //     thing that works until somebody simplifies it into `hash(bot.name)` a year from now.
 //  5. The two figures that decide when a bot is nudged to write its memory survive a relaunch and
-//     survive the form being saved. They are main-written, like the session id and the compaction
+//     survive the details being saved. They are main-written, like the session id and the compaction
 //     watermark beside them, and a window that could reset them could decide when a bot forgets.
 //  6. Deleting one asks first. It is the only act in this window that cannot be taken back, and a
 //     confirmation nothing checks is one somebody removes in a refactor without noticing what it
@@ -29,7 +29,6 @@
 import { _electron as electron } from 'playwright-core'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
@@ -93,39 +92,45 @@ const putKey = (key, value) => {
   }
 }
 
-// A checkout for the bots to work in. Real, because making a bot writes a `.bravebot-ui` folder
-// into the directory it is pinned to, and a path that is not there would be a refusal rather than
-// a bot. Removed at the end, along with everything the app put in it.
-const checkout = join(tmpdir(), 'bravebot-ui-drive-bots')
-rmSync(checkout, { recursive: true, force: true })
-mkdirSync(checkout, { recursive: true })
+// Each bot gets a home folder the app makes under its own data directory. Removed at the end,
+// since these two are this driver's.
+const homes = MINE.map((slug) => join(userData, 'bot-homes', slug))
+for (const home of homes) rmSync(home, { recursive: true, force: true })
 
 // Only this driver's own rows, in case an earlier run was interrupted before its teardown.
 putKey('bots', (readState().bots ?? []).filter((bot) => !MINE.includes(bot.slug)))
 putKey('view', undefined)
 
 /**
- * Make a bot without the folder picker.
- *
- * The picker is native and a driver cannot answer one, so the two bots below are written through
- * the same channel the form writes through — which is the channel under test, and leaves only the
- * picker itself undriven. The window is then told to read the list back, exactly as it does after
- * saving one.
+ * Make a bot through the channel the Create bot form writes through, which is the channel under
+ * test. A bot has no folder of its own to pick: the app gives it a home. The window is then told to
+ * read the list back, exactly as it does after saving one.
  */
 const makeBot = (page, name, purpose) =>
-  page.evaluate(
-    async ([name, purpose, directory]) => {
-      // A new bot is only pinned to a folder the native picker handed over, so ask for it first.
-      await window.bravebot.chooseDirectory()
-      return window.bravebot.writeBot({ name, purpose, directory })
-    },
-    [name, purpose, checkout],
-  )
+  page.evaluate(([name, purpose]) => window.bravebot.writeBot({ name, purpose }), [name, purpose])
+
+/** Open a bot's own page, where its details are edited and it is archived. */
+const openBot = async (page, row) => {
+  await row.locator('.bot-open-button').click()
+  await page.locator('[data-test="bot-details"]').waitFor()
+}
+
+/** Change a field in the bot's details and leave it, which is when the details are saved. */
+const editDetail = async (page, name, value) => {
+  const field = page.locator('[data-test="bot-details"]').getByRole('textbox', { name, exact: true })
+  await field.fill(value)
+  await field.press('Tab')
+  await page.waitForTimeout(600)
+}
+
+/** Archive the bot whose page is open, from its details menu. */
+const archiveOpen = async (page, name) => {
+  await page.getByRole('button', { name: `Actions for ${name}`, exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Archive bot', exact: true }).click()
+  await page.waitForTimeout(600)
+}
 
 const app = await launch()
-await app.evaluate(({ dialog }, directory) => {
-  dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] })
-}, checkout)
 const page = await app.firstWindow()
 await page.waitForLoadState('domcontentloaded')
 page.on('pageerror', (error) => console.log('PAGE ERROR:', error.message))
@@ -138,7 +143,7 @@ const tabs = page.locator('.sidebar-tabs [role="option"]')
 check((await tabs.count()) === 2, 'the column offers two lists')
 check(
   (await tabs.nth(0).getAttribute('aria-selected')) !== null,
-  'and opens on the sessions, which is what every launch before this showed',
+  'and opens on the chats, which is what every launch before this showed',
 )
 
 await tabs.nth(1).click()
@@ -149,7 +154,7 @@ check((await tabs.nth(1).getAttribute('aria-selected')) !== null, 'pressing Bots
 // state is not a thing that can be shown and saying it was would be a false ok.
 if ((await page.locator('.bot').count()) === 0) {
   check(
-    await page.locator('.session-list .empty').first().isVisible(),
+    await page.locator('.session-list .sidebar-empty').first().isVisible(),
     'and an empty list says what a bot is rather than nothing',
   )
 } else {
@@ -189,8 +194,12 @@ check(
   'and are named what they were called',
 )
 check(
-  (await mine.locator('.bot-where').textContent())?.includes('not spoken to yet'),
-  'a bot that has never spoken says so rather than showing a time it was never at',
+  (await mine.locator('.bot-purpose').textContent())?.trim() === 'Draft release notes from the commits since the last tag.',
+  'and say what they are for',
+)
+check(
+  readState().bots?.find((bot) => bot.slug === MINE[0])?.home === homes[0],
+  'a new bot is given a home folder of its own under the app’s data directory',
 )
 
 // The form the seed chose — `round-antenna-ears-wide-dome-collar` — rather than the pixels. The
@@ -209,17 +218,17 @@ await page.screenshot({ path: '/tmp/bravebot-ui/21-bots-listed.png' })
 
 // The seed is stored rather than derived, so renaming a bot must not repaint it. A face that
 // changed when its name did would not be a face.
-await mine.locator('.bot-edit').click()
-await page.waitForTimeout(300)
-check((await page.locator('.bot-form').count()) === 1, 'the edit control opens the form')
+await openBot(page, mine)
 check(
-  (await page.locator('[data-test="bot-memory"]').count()) === 1,
-  'and the form shows what the bot has remembered',
+  (await page.locator('main.transcript.bot-view h1').textContent())?.trim() === 'Release Notes',
+  'opening a bot shows its own page',
+)
+check(
+  (await page.locator('[data-test="bot-details"] [data-test="bot-memory"]').count()) === 1,
+  'and its details show what the bot has remembered',
 )
 await page.screenshot({ path: '/tmp/bravebot-ui/23-bots-form.png' })
-await page.locator('.bot-form').getByRole('textbox', { name: 'Name', exact: true }).fill('Release Notes (weekly)')
-await page.locator('.bot-save').click()
-await page.waitForTimeout(600)
+await editDetail(page, 'Bot name', 'Release Notes (weekly)')
 
 const renamed = rowFor('Release Notes (weekly)')
 check((await renamed.count()) === 1, 'a renamed bot is called what it was renamed to')
@@ -277,17 +286,18 @@ check(
   'the memory watermark and the quiet count come back off disk as they were written',
 )
 
-// Saving the form is the one way a window can write a bot at all, and it may say four things. A
-// save that reset either of these would hand the renderer a lever over when a bot is asked to
+// Saving the details is the one way a window can write a bot at all, and it may say four things.
+// A save that reset either of these would hand the renderer a lever over when a bot is asked to
 // remember — the same reason the session id and the compaction watermark are not its to set.
-await backMine.locator('.bot-edit').click()
-await back.waitForTimeout(300)
-await back.locator('.bot-form').getByRole('textbox', { name: 'Name', exact: true }).fill('Release Notes (weekly)')
-await back.locator('.bot-save').click()
-await back.waitForTimeout(600)
+await openBot(back, backMine)
+await editDetail(back, 'Purpose', 'Draft weekly release notes from the commits since the last tag.')
+check(
+  onDisk(MINE[0])?.purpose === 'Draft weekly release notes from the commits since the last tag.',
+  'a purpose changed in the details is saved',
+)
 check(
   onDisk(MINE[0])?.remembered === seed.remembered && onDisk(MINE[0])?.quiet === seed.quiet,
-  'and saving the form does not disturb them — the window has no way to say either',
+  'and saving the details does not disturb them — the window has no way to say either',
 )
 
 // --- putting one away, and taking it back out ----------------------------------------------
@@ -298,10 +308,11 @@ check(
 // is what happens after that, and only from the archive.
 const before = onDisk(MINE[0])
 
-await backMine.locator('.bot-edit').click()
-await back.waitForTimeout(300)
-await back.locator('.bot-archive-button').click()
-await back.waitForTimeout(600)
+await archiveOpen(back, 'Release Notes (weekly)')
+check(
+  (await back.locator('[data-test="bot-details"]').count()) === 0,
+  'archiving the bot on screen closes its page',
+)
 
 const archive = back.locator('.bot-archive')
 // Scoped to this driver's own bot, and counted against what was in the archive before it started.
@@ -364,6 +375,8 @@ check(
     after?.slug === before?.slug &&
     after?.avatar === before?.avatar &&
     after?.session === before?.session &&
+    after?.home === before?.home &&
+    JSON.stringify(after?.conversations) === JSON.stringify(before?.conversations) &&
     after?.archived === before?.archived &&
     after?.remembered === before?.remembered &&
     after?.quiet === before?.quiet &&
@@ -378,14 +391,12 @@ check(
 
 // --- deleting one, which is now the second step and asks first -----------------------------
 
-await backMine.locator('.bot-edit').click()
-await back.waitForTimeout(300)
+await openBot(back, backMine)
 check(
-  (await back.locator('.bot-form').getByText(/^(Forget|Delete)$/).count()) === 0,
-  'the form offers no way to delete a bot at all — archiving is what a row leaving means',
+  (await back.locator('[data-test="bot-details"]').getByText(/^(Forget|Delete)$/).count()) === 0,
+  'the details offer no way to delete a bot at all — archiving is what a row leaving means',
 )
-await back.locator('.bot-archive-button').click()
-await back.waitForTimeout(600)
+await archiveOpen(back, 'Release Notes (weekly)')
 await openArchive()
 
 // The one act in this window that cannot be taken back, so the claim worth a driver is that one
@@ -428,11 +439,10 @@ await back.waitForTimeout(300)
 await second_app.close()
 
 // What this driver touched, put back. Only its own two keys — the rest of that file is somebody's
-// arrangement of this window — and the checkout it made, with the memory folder the app wrote into
-// it.
+// arrangement of this window — and the home folders the app made for its two bots.
 putKey('bots', (readState().bots ?? []).filter((bot) => !MINE.includes(bot.slug)))
 putKey('view', { ...(hadView ?? { grouped: false, collapsed: [] }), tab: 'sessions' })
-rmSync(checkout, { recursive: true, force: true })
+for (const home of homes) rmSync(home, { recursive: true, force: true })
 
 console.log(problems.length ? `\nRESULT: ${problems.length} problem(s)` : '\nRESULT: ok')
 process.exit(problems.length ? 1 : 0)

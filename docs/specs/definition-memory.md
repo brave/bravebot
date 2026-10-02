@@ -18,6 +18,10 @@ governs:
   - ui/src/shared/bots.ts
   - ui/src/main/bots.ts
   - ui/src/main/memory.ts
+  - ui/src/shared/bot-history.ts
+  - ui/scripts/bot-directory.test.mjs
+  - ui/scripts/bot-grounding.test.mjs
+  - ui/scripts/bot-model.test.mjs
 documented-by:
   - docs/website/docs/customize/agents.md
 ---
@@ -54,17 +58,19 @@ whose `isolation:` asks for a checkout works in a checkout of it
 ([CHECKOUT-2](checkouts.md#CHECKOUT-2)).
 
 The desktop front end's bots are a format of their own. A bot is a row in the desktop's store: a
-name, a purpose, a model, a folder chosen when it was made, the name of the definition written for
-it ([MEMORY-8](#MEMORY-8)), and a history of conversations. A bot that has a definition has every
-turn addressed to it ([MEMORY-10](#MEMORY-10)): the purpose reaches the run as the definition's
-body, and its memory is `.bravebot/memory/<definition>.md`, which the run is told about and reads
-with its ordinary tools. A bot made before definitions existed has none. Its purpose reaches a turn
-as a briefing file the desktop composes under its own data directory and hands over as a dropped
-file, on the first turn of a session, after a compaction, and after a run of turns in which its
-memory did not change. Its memory is a file in its folder, `.bravebot-ui/bots/<slug>.md`, which the
-briefing names and the bot reads and writes with its ordinary tools. The desktop keeps up to thirty
-earlier versions of that file in its own data directory, and a person can edit the memory and
-restore an earlier version from a panel.
+name, a purpose, a model, a home folder the desktop makes for it under its own data directory, the
+name of the definition written for it ([MEMORY-8](#MEMORY-8)), and a history of conversations, each
+with the folder it ran in. A conversation runs in the home folder or in a project folder a person
+picked for it ([MEMORY-7](#MEMORY-7)). A bot that has a definition has every turn addressed to it
+([MEMORY-10](#MEMORY-10)): the purpose reaches the run as the definition's body, and its memory is
+`.bravebot/memory/<definition>.md` in the folder the conversation runs in, which the run is told
+about and reads with its ordinary tools. A bot made before definitions existed has none. Its purpose
+reaches a turn as a briefing file the desktop composes under its own data directory and hands over
+as a dropped file, on the first turn of a session, after a compaction, and after a run of turns in
+which its memory did not change. Its memory is a file in the folder the conversation runs in,
+`.bravebot-ui/bots/<slug>.md`, one in each folder it works in, which the briefing names and the bot
+reads and writes with its ordinary tools. The desktop keeps up to thirty earlier versions of each in
+its own data directory, and a person can edit the memory and restore an earlier version from a panel.
 
 ## The comparison
 
@@ -94,11 +100,11 @@ and `local` values, and one memory per definition name.
 | Kept in | What | Why there |
 |---|---|---|
 | the definition file | its name, description, kind, tools, model, skills, rounds, `memory:` and `isolation:`, and the purpose as its body | each says what the bot is for or narrows what it may reach, and each means the same on every machine |
-| the desktop's store | the name it is shown under, its folder, its avatar, its session and every conversation, how much compaction has taken from that session, and when it was archived, made and last changed | each is a fact about one machine or a record of what happened |
+| the desktop's store | the name it is shown under, its home folder, its avatar, its session and every conversation with the folder it ran in, how much compaction has taken from that session, and when it was archived, made and last changed | each is a fact about one machine or a record of what happened |
 
-The memory itself is in neither. It is a file in the checkout ([MEMORY-2](#MEMORY-2)).
+The memory itself is in neither. It is a file in each folder the bot works in ([MEMORY-2](#MEMORY-2)).
 
-**Why the folder is not in the file.** A path is a fact about one machine, and
+**Why no folder is in the file.** A path is a fact about one machine, and
 [MEMORY-7](#MEMORY-7) gives the rest of the reasons.
 
 **Why the history is not in the file.** A session id and a list of conversations are records of
@@ -362,9 +368,18 @@ gate a memory needs.
 
 A definition works in the session's working directory, as every run does, except where its
 `isolation:` key asks for a checkout the driver makes of it for its delegates
-([CHECKOUT-2](checkouts.md#CHECKOUT-2)). No `directory:` key is read, and no key names a directory. The desktop keeps the folder a bot was made for in its
-own store ([MEMORY-1](#MEMORY-1)), and a bot's conversation is a session in that folder
+([CHECKOUT-2](checkouts.md#CHECKOUT-2)). No `directory:` key is read, and no key names a directory. The desktop keeps a bot's
+home folder and the folder each of its conversations ran in in its own store
+([MEMORY-1](#MEMORY-1)), and each conversation is a session in its folder
 ([SESSION-1](sessions.md#SESSION-1)).
+
+The desktop sends a bot's turn only in a folder the agent confirmed the session runs in, and only
+when that folder is one of three: the bot's home folder, which the main process composes from the
+bot's slug under its own data directory; a folder the native picker handed over in this run; or a
+folder the bot's store records a conversation in. The store records a folder only when a turn sent
+there under this rule ends, so a window cannot add one by opening a session somewhere
+([TRUST-20](trust-map.md#TRUST-20)). The home folder is beside the directory that holds the
+briefing and never inside it, so a run in the home folder cannot rewrite its own purpose.
 
 **Why no file names one.** Each of three reasons is enough:
 
@@ -385,6 +400,7 @@ works in the working directory, and a delegate in a checkout keeps no memory
 says so when it loads, so its author learns that only an addressed turn keeps one.
 
 `verified-by: by-construction (a definition is read for its named keys alone, none of which is a directory, and every run works in the session's workspace or in a checkout the driver made of it)`
+`verified-by: by-construction (the desktop is not a crate this workspace compiles, so the folder rule is pinned instead by ui/scripts/bot-directory.test.mjs, which asserts that a new bot's home is composed under the app's data directory whatever the window sent, that a bot works in its home and in a folder the picker handed over and in no other absolute path, that a cancelled picker grants nothing, that a recorded folder survives a restart, and that an edit cannot move the home; ui/scripts/bot-grounding.test.mjs asserts that each folder keeps its own memory, and ui/scripts/bot-model.test.mjs that a bot written before home folders keeps its conversations in the folder it was pinned to; make check-ui and the Front end CI job run them)`
 
 ## The desktop's bots
 
@@ -396,7 +412,7 @@ person's definitions writes it, since a surface writes nothing into that directo
 ([STATE-3](state-directory.md#STATE-3)). The name is the bot's
 slug. The description is the first line of its purpose that is not blank, and the body is the whole
 purpose. The kind is `worker`, `memory:` is `project`, and the model is given where one was chosen.
-The desktop's row names the definition and the folder.
+The desktop's row names the definition and the home folder.
 
 Nothing typed into the form becomes a key. The description and the model are each written so that
 reading the file back gives exactly what was typed, and the body comes after the front matter
@@ -408,7 +424,7 @@ of the kinds' own names ([DELEGATE-19](delegation.md#DELEGATE-19)), is taken, an
 with a number after it is used.
 
 **Why the person's own directory.** A file there is trusted for being theirs
-([SKILL-3](skills.md#SKILL-3)), whatever the bot's folder is. And it is outside every checkout, so
+([SKILL-3](skills.md#SKILL-3)), whatever folder a conversation runs in. And it is outside every checkout, so
 a run cannot rewrite the definition it runs under, which is the reason the desktop keeps its
 briefing outside the folder today.
 
@@ -568,7 +584,7 @@ Nothing builds the composed turn yet. The migration and the briefing are built, 
 for [MEMORY-10](#MEMORY-10), which addresses the bot's turns:
 
 - `bravebot_agent::agents::migrate_definition` gives the bot its definition as `make_definition`
-  does and records the path `.bravebot-ui/bots/<old slug>.md` under the bot's folder in the record
+  does and records the path `.bravebot-ui/bots/<old slug>.md` under the folder the bot's first conversation ran in, or its home folder where it has none, in the record
   [MEMORY-5](#MEMORY-5) keeps. The file is not opened and need not exist. The record is written
   first, and a record that cannot be written makes no definition. A person's yes, or naming the
   file, takes the path out of the record as it does a memory's. The desktop asks for it through the
@@ -587,7 +603,7 @@ for [MEMORY-10](#MEMORY-10), which addresses the bot's turns:
 `verified-by: bravebot_agent::memory::a_persons_yes_to_the_old_notes_takes_them_out_of_the_record`
 `verified-by: bravebot_ui_bridge::definitions::a_bot_made_before_definitions_is_migrated_and_its_old_memory_recorded`
 `verified-by: bravebot_ui_bridge::definitions::a_refused_migration_writes_nothing`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-model.test.mjs pins its half: a bot with no definition is migrated through bot.migrate with the folder the row holds, the row keeps only a name the agent answers with that is a slug, a failed migration leaves the row as it was, a bot with a definition is not migrated again, and the composed prompt names the definition's memory and never the old path; make check-ui runs it)`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-model.test.mjs pins its half: a bot with no definition is migrated through bot.migrate with the folder its first conversation ran in or its home folder, the row keeps only a name the agent answers with that is a slug, a failed migration leaves the row as it was, a bot with a definition is not migrated again, and the composed prompt names the definition's memory and never the old path; make check-ui runs it)`
 
 ## Open questions
 
@@ -635,8 +651,8 @@ for [MEMORY-10](#MEMORY-10), which addresses the bot's turns:
   ([ADDRESS-8](addressing-a-definition.md#ADDRESS-8)). A watch the person arms still fires.
 
 - **A bot is on offer to every planner in every project**, as any definition in the person's own
-  directory is ([INSTR-1](instructions.md#INSTR-1)). A planner may spawn one as a delegate far from
-  the folder it was made for, where its memory is whichever that checkout keeps. Whether a
+  directory is ([INSTR-1](instructions.md#INSTR-1)). A planner may spawn one as a delegate in a
+  folder the person never sent it to, where its memory is whichever that checkout keeps. Whether a
   definition may say it is meant only to be addressed is an open question in
   [addressing-a-definition.md](addressing-a-definition.md).
 

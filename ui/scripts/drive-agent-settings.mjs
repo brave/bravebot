@@ -49,20 +49,23 @@ try {
   const emit = (event, data, session = 's-a') => app.evaluate((_, args) => globalThis.agentSettingsFixture.emit(args.event, args.data, args.session), { event, data, session })
   const snap = name => page.screenshot({ path: join(output, name + '.png'), scale: 'css' })
   await page.reload()
-  await page.getByRole('button', { name: 'Agent settings', exact: true }).click()
-  const dialog = page.getByRole('dialog', { name: 'Agent settings', exact: true })
+  // Settings is a page that takes the window, not a dialog. It opens on General, and the agent's
+  // configuration is the page beside it, with Connection, Hooks and Run settings stacked.
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  const dialog = page.locator('[data-test="settings-view"]')
+  await dialog.waitFor()
+  await dialog.locator('[data-test="settings-page-agent"]').click()
+  for (const name of ['Connection', 'Hooks', 'Run settings']) await dialog.getByRole('heading', { name, exact: true, level: 2 }).waitFor()
   await dialog.getByText('Model service configured', { exact: true }).waitFor()
   await dialog.getByText('Locked by your administrator: provider', { exact: true }).waitFor()
   await dialog.getByText('proxy.example:8080 · authenticated', { exact: true }).waitFor()
   await snap('01-connection')
-  await dialog.getByRole('tab', { name: 'Run settings', exact: true }).click()
   await dialog.getByRole('button', { name: 'Choose settings file…' }).click()
   await dialog.getByRole('button', { name: 'Clear override' }).waitFor({ state: 'visible' })
   // Leo draws the button inside a shadow root, so wait on the role query, which pierces it.
   for (let tries = 0; tries < 100 && !(await dialog.getByRole('button', { name: 'Clear override' }).isEnabled()); tries++) await page.waitForTimeout(100)
   await dialog.getByRole('button', { name: 'Clear override' }).click()
   await dialog.getByText('No override selected', { exact: true }).waitFor()
-  await dialog.getByRole('tab', { name: 'Hooks', exact: true }).click()
   await dialog.getByText('No hooks configured.', { exact: true }).waitFor()
   await dialog.getByRole('button', { name: 'Add hook', exact: true }).click()
   // An entry with no program is one the agent reads no hook out of, and a file this panel wrote and
@@ -115,8 +118,9 @@ try {
     assert.equal(await dialog.getByRole('button', { name, exact: true }).isDisabled(), true, `${name} is refused for a file the agent did not wholly read`)
   }
   await snap('02b-hooks-unread')
+  // Escape leaves the settings, and focus goes back to the row that opened them.
   await page.keyboard.press('Escape')
-  await dialog.waitFor({ state: 'hidden' })
+  await dialog.waitFor({ state: 'detached' })
   // Focus is on the button Leo draws inside the host, which the page reports as the host itself.
   assert.equal(await page.locator('.agent-settings-open').evaluate(el => el === document.activeElement || el.getRootNode().host === document.activeElement), true)
   await page.locator('.session').filter({ hasText: 'Agent settings a' }).click()
@@ -174,11 +178,12 @@ try {
   await page.waitForFunction(() => ![...document.querySelectorAll('button')].some(b => b.textContent === 'Let the planner read once'))
   await page.setViewportSize({ width: 560, height: 780 })
   assert(await page.locator('.conversation-toolbar').evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'toolbar fits narrow layout')
-  // The settings dialog is also accessible from the persistent sidebar on small screens.
-  if (await page.locator('.app.left-folded').count()) await page.getByRole('button', { name: 'Session list', exact: true }).click()
-  await page.getByRole('button', { name: 'Agent settings', exact: true }).click()
+  // The settings are also reachable from the persistent sidebar on small screens, and open on the
+  // page used last.
+  if (await page.locator('.app.left-folded').count()) await page.getByRole('button', { name: 'Chat list', exact: true }).click()
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
   await dialog.getByText('Model service configured', { exact: true }).waitFor()
-  assert(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'dialog fits narrow layout')
+  assert(await dialog.locator('.settings-main').evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'settings page fits narrow layout')
   await snap('06-narrow-settings')
   assert.deepEqual(errors, [])
   console.log('PASS: connection and managed diagnostics, settings override, hook editing/conflicts, watches, automatic turns, approval evidence, background cancellation, context, stable failures, narrow layout and focus restoration')

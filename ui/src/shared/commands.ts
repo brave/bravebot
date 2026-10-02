@@ -121,10 +121,10 @@ export const NOTHING_OPEN: WindowState = {
 }
 
 export const COMMANDS: readonly Command[] = [
-  { id: 'session.new', label: 'New Session…', accelerator: 'CmdOrCtrl+N', requires: 'always' },
+  { id: 'session.new', label: 'New Chat', accelerator: 'CmdOrCtrl+N', requires: 'always' },
   {
     id: 'session.close',
-    label: 'Close Session',
+    label: 'Close Chat',
     accelerator: 'CmdOrCtrl+Shift+W',
     requires: 'session',
   },
@@ -152,7 +152,7 @@ export const COMMANDS: readonly Command[] = [
   { id: 'turn.cancel', label: 'Cancel Turn', accelerator: 'CmdOrCtrl+.', requires: 'running' },
   {
     id: 'view.fold-left',
-    label: 'Hide Session List',
+    label: 'Hide Chat List',
     accelerator: 'CmdOrCtrl+Alt+Left',
     requires: 'always',
   },
@@ -253,7 +253,7 @@ export function parseWindowState(value: unknown): WindowState | null {
  */
 export function menuLabel(item: Command, state: WindowState): string {
   if (item.id === 'view.fold-left') {
-    return state.folded.left ? 'Show Session List' : 'Hide Session List'
+    return state.folded.left ? 'Show Chat List' : 'Hide Chat List'
   }
   if (item.id === 'view.fold-right') {
     return state.folded.right ? 'Show Context Panel' : 'Hide Context Panel'
@@ -316,7 +316,7 @@ export const CONTEXT: Record<
   directory: [],
   session: [
     { id: 'context.session.open', label: 'Open' },
-    { id: 'context.session.close', label: 'Close Session' },
+    { id: 'context.session.close', label: 'Close Chat' },
     { id: 'context.session.copy-path', label: 'Copy Project Path' },
   ],
   entry: [{ id: 'context.entry.copy', label: 'Copy' }],

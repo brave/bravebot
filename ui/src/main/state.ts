@@ -32,6 +32,14 @@ import { SYSTEM } from '../shared/theme'
 const file = (): string => join(app.getPath('userData'), 'bravebot-ui.json')
 
 /**
+ * The folder a bot's conversations with no project run in.
+ *
+ * Beside `bots/<slug>`, never inside it. That folder holds the briefing, and the agent may write
+ * anywhere in the folder it runs in, so a home inside it would let a bot rewrite its own purpose.
+ */
+export const botHome = (slug: string): string => join(app.getPath('userData'), 'bot-homes', slug)
+
+/**
  * Everything remembered, or the defaults for anything that is not.
  *
  * Never throws. A file that cannot be read is a window that has never been arranged, which is a
@@ -39,7 +47,7 @@ const file = (): string => join(app.getPath('userData'), 'bravebot-ui.json')
  */
 export function readState(): StoredState {
   try {
-    return parseState(JSON.parse(readFileSync(file(), 'utf8')))
+    return parseState(JSON.parse(readFileSync(file(), 'utf8')), botHome)
   } catch {
     // No file here yet. There may be four older ones, though, and somebody's columns are not
     // worth losing to a rename.
@@ -87,7 +95,7 @@ function inherited(): StoredState {
  * judgement each of the files this replaces made about itself.
  */
 function update(change: Partial<StoredState>): void {
-  const next = parseState({ ...readState(), ...change })
+  const next = parseState({ ...readState(), ...change }, botHome)
   try {
     writeFileSync(file(), `${JSON.stringify(next, null, 2)}\n`, 'utf8')
   } catch {

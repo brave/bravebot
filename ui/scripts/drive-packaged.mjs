@@ -95,7 +95,7 @@ check(
   ['undo', 'cut', 'copy', 'paste', 'selectall'].every((r) => seen.edit.includes(r)),
   'Edit kept the clipboard roles',
 )
-check(seen.titles[4] === 'Session', `the app's own menu is there (${seen.titles.join(', ')})`)
+check(seen.titles[4] === 'Chat', `the app's own menu is there (${seen.titles.join(', ')})`)
 
 // That the agent was found at the packaged path and actually answered. Sessions on screen
 // mean `bravebot-rpc` was spawned from Resources and the store was read through it — the one

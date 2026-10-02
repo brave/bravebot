@@ -98,13 +98,6 @@
   word-break: break-word;
 }
 
-/* ------------------------------------------------------------ appearance */
-
-.appearance-field { display: flex; flex-direction: column; align-items: flex-start; gap: var(--leo-spacing-s); margin-bottom: var(--leo-spacing-xl); }
-.appearance-field:last-child { margin-bottom: 0; }
-.appearance-label { font: var(--type-meta-strong); color: var(--ink-primary); }
-.modal .theme-aside { margin: 0; font: var(--type-caption); color: var(--ink-tertiary); }
-
 /* ----------------------------------------------------- permissions, watches */
 
 .grant-lede { font: var(--type-meta); }
@@ -147,70 +140,6 @@
 }
 .watch-add { display: flex; align-items: flex-end; gap: var(--leo-spacing-m); margin-top: var(--leo-spacing-xl); }
 .watch-add leo-input { flex: 1; min-width: 0; }
-
-/* ------------------------------------------------------- agent settings */
-
-.settings-tabs { display: block; margin-bottom: var(--leo-spacing-l); }
-.settings-body section { padding: var(--leo-spacing-l) 0; border-bottom: 1px solid var(--border-hairline); }
-.settings-body section:last-child, .settings-body .settings-status { border-bottom: 0; }
-.settings-body h3 { margin: var(--leo-spacing-m) 0 var(--leo-spacing-s); }
-.settings-body p { font: var(--type-meta); }
-.settings-body dl {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: var(--leo-spacing-s) var(--leo-spacing-2xl);
-  margin: 0 0 var(--leo-spacing-l);
-  font: var(--type-meta);
-}
-.settings-body dt { color: var(--ink-secondary); }
-.settings-body dd { margin: 0; overflow-wrap: anywhere; color: var(--ink-primary); }
-.settings-body pre {
-  margin: 0 0 var(--leo-spacing-l);
-  padding: var(--leo-spacing-l);
-  border-radius: var(--radius-control);
-  background: var(--surface-sunken);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font: var(--type-code);
-}
-.settings-body ol { margin: 0 0 var(--leo-spacing-l); padding-left: var(--leo-spacing-2xl); font: var(--type-meta); }
-.setup-routes { display: flex; flex-direction: column; }
-.setup-routes section { padding: var(--leo-spacing-l); }
-.settings-path { overflow-wrap: anywhere; font: var(--type-code); color: var(--ink-primary); }
-.modal .settings-caption { font: var(--type-caption); color: var(--ink-tertiary); }
-.settings-error { display: flex; flex-direction: column; align-items: flex-start; gap: var(--leo-spacing-m); margin-bottom: var(--leo-spacing-l); }
-.settings-busy { font: var(--type-meta); color: var(--ink-secondary); }
-
-/* Label and description on the left, the control on the right, the way a settings pane is read. */
-.settings-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: var(--leo-spacing-2xl);
-  padding: var(--leo-spacing-l) 0;
-  border-bottom: 1px solid var(--border-hairline);
-}
-.settings-row h3 { margin-top: 0; }
-.settings-row p:last-child { margin-bottom: 0; }
-.settings-row-control { display: flex; flex-direction: column; align-items: stretch; gap: var(--leo-spacing-s); }
-.settings-actions { display: flex; flex-wrap: wrap; gap: var(--leo-spacing-m); margin-top: var(--leo-spacing-l); }
-
-.hook-editor {
-  margin: 0 0 var(--leo-spacing-l);
-  padding: var(--leo-spacing-l) var(--leo-spacing-xl);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-card);
-  background: var(--surface-panel);
-}
-.hook-editor legend { padding: 0 var(--leo-spacing-s); font: var(--type-meta-strong); color: var(--ink-secondary); }
-.hook-editor leo-input, .hook-editor leo-dropdown { display: block; margin: var(--leo-spacing-m) 0; }
-.hook-argument { display: flex; align-items: flex-end; gap: var(--leo-spacing-m); }
-.hook-argument leo-input { flex: 1; }
-
-@media (max-width: 640px) {
-  .settings-body dl, .settings-row { grid-template-columns: 1fr; gap: var(--leo-spacing-s); }
-  .settings-body dd { margin-bottom: var(--leo-spacing-m); }
-}
 
 /* ------------------------------------------------------------- connectors */
 
@@ -352,21 +281,7 @@ code.connector-summary { font: var(--type-code); overflow: hidden; text-overflow
 /* The menu's minimum is the anchor. Keep the popup at its own width once the anchor shrinks. */
 .bot-form-model .model-menu { --model-menu-width: min(360px, calc(100vw - 48px)); width: max-content; max-width: min(360px, calc(100vw - 48px)); }
 
-.bot-fixed-group { display: flex; flex-direction: column; align-items: flex-start; gap: var(--leo-spacing-s); }
-.modal .bot-fixed {
-  align-self: stretch;
-  margin: 0;
-  padding: var(--leo-spacing-m) var(--leo-spacing-l);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-field);
-  background: var(--surface-sunken);
-  color: var(--ink-secondary);
-  font: var(--type-code);
-  overflow-wrap: anywhere;
-}
-.bot-choose { align-self: flex-start; max-width: 100%; }
-.bot-choose-label { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.modal .bot-note { margin: 0; font: var(--type-caption); color: var(--ink-tertiary); }
+.bot-note { margin: 0; font: var(--type-caption); color: var(--ink-tertiary); }
 .bot-note code { font: var(--type-caption); font-family: var(--font-mono); }
 
 /* Pinned to the foot of the dialog, so Save is in reach however long the memory is. */
@@ -385,89 +300,18 @@ code.connector-summary { font: var(--type-code); overflow: hidden; text-overflow
 .bot-spacer { flex: 1; }
 .bot-actions leo-button { flex: none; }
 
-.bot-memory-panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--leo-spacing-m);
-  padding: var(--leo-spacing-l) var(--leo-spacing-xl);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-card);
-}
-.memory-head { display: flex; align-items: center; justify-content: space-between; gap: var(--leo-spacing-l); }
-.memory-head h3 { margin: 0; }
-.memory-readable, .bot-memory {
-  max-height: 300px;
-  margin: 0;
-  padding: var(--leo-spacing-l);
-  overflow: auto;
-  border-radius: var(--radius-control);
-  background: var(--surface-sunken);
-}
-.memory-readable { font: var(--type-body); color: var(--ink-primary); overflow-wrap: anywhere; }
-.memory-readable p { margin: 0 0 var(--leo-spacing-l); color: inherit; }
-.memory-readable h1, .memory-readable h2, .memory-readable h3 { margin: 0 0 var(--leo-spacing-m); font: var(--type-body-strong); }
-.memory-readable ul, .memory-readable ol { margin: 0 0 var(--leo-spacing-l); padding-left: var(--leo-spacing-2xl); }
-.memory-readable pre { white-space: pre-wrap; overflow-wrap: anywhere; font: var(--type-code); }
-.bot-memory { color: var(--ink-secondary); font: var(--type-code); white-space: pre-wrap; }
+.bot-memory-panel { display: flex; flex-direction: column; }
 .memory-history { display: flex; flex-direction: column; }
 .memory-revision { border-bottom: 1px solid var(--border-hairline); --leo-collapse-summary-padding: var(--leo-spacing-m) 0; }
 .memory-history pre { max-height: 240px; margin: 0 0 var(--leo-spacing-m); padding: var(--leo-spacing-l); overflow: auto; border-radius: var(--radius-control); background: var(--surface-sunken); white-space: pre-wrap; font: var(--type-code); }
 .memory-actions { display: flex; flex-wrap: wrap; gap: var(--leo-spacing-m); }
 .memory-loading { font: var(--type-meta); color: var(--ink-secondary); }
 
-.bot-overview-card {
-  display: flex;
-  align-items: center;
-  gap: var(--leo-spacing-l);
-  margin-bottom: var(--leo-spacing-l);
-  padding: var(--leo-spacing-l);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-card);
-  background: var(--surface-sunken);
-}
-.bot-overview-where { display: flex; flex-direction: column; min-width: 0; }
-.bot-overview-where strong { font: var(--type-body-strong); }
-.bot-overview-where code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--type-caption); font-family: var(--font-mono); color: var(--ink-tertiary); }
-.bot-overview h3:first-of-type { margin-top: var(--leo-spacing-l); }
-.modal .bot-purpose { color: var(--ink-primary); }
-.bot-history-head { display: flex; align-items: center; justify-content: space-between; gap: var(--leo-spacing-l); margin-top: var(--leo-spacing-2xl); }
-.bot-history-head h3 { margin: 0; }
-.bot-history-search { flex: 0 1 220px; min-width: 0; }
-.bot-conversations {
-  display: flex;
-  flex-direction: column;
-  max-height: 300px;
-  margin-top: var(--leo-spacing-m);
-  overflow-y: auto;
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-card);
-}
-.bot-history-row {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--leo-spacing-xs);
-  width: 100%;
-  padding: var(--leo-spacing-m) var(--leo-spacing-l);
-  border: 0;
-  background: transparent;
-  color: var(--ink-primary);
-  text-align: left;
-  cursor: pointer;
-}
-.bot-history-row + .bot-history-row { border-top: 1px solid var(--border-hairline); }
-.bot-history-row:hover { background: var(--surface-hover); }
-.bot-history-row:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
-.bot-history-row strong { font: var(--type-meta-strong); overflow-wrap: anywhere; }
-.bot-history-row span { font: var(--type-caption); color: var(--ink-tertiary); }
-.bot-history-unavailable { margin: var(--leo-spacing-m); }
-.modal .bot-history-empty { display: flex; align-items: center; gap: var(--leo-spacing-m); margin: 0; padding: var(--leo-spacing-l); font: var(--type-caption); color: var(--ink-tertiary); --leo-icon-size: var(--icon-meta); }
-
 @media (prefers-reduced-motion: reduce) {
   .modal.about { animation: none; }
 }
 @media (forced-colors: active) {
-  .grant-list, .bot-conversations, .bot-memory-panel, .bot-overview-card { border-color: CanvasText; }
+  .grant-list, .bot-details .bot-memory { border-color: CanvasText; }
 }
 
 .settings-rules h4 { margin: var(--leo-spacing-l) 0 var(--leo-spacing-xs); font: var(--type-meta-strong); }

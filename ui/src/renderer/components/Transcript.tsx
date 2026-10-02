@@ -13,7 +13,10 @@ import type { Side } from '../columns'
 import type { Asked } from '../App'
 import type { ExportFormat } from '../../shared/export'
 import { Diff } from './Diff'
-import { BackendTray, Composer } from './Composer'
+import { BackendTray, Composer, ProjectMenu, type ComposerFooterProps } from './Composer'
+import { BotView } from './BotView'
+import type { BotConversation } from '../../shared/bot-history'
+import type { SessionSummary } from '../../shared/protocol'
 import { Toasts } from './Toasts'
 import { ForkIcon } from './ForkIcon'
 import { ago, contextMenu } from './Sessions'
@@ -124,6 +127,15 @@ interface Props {
   onExport: (format: ExportFormat) => void
   /** The kept yes about this directory as Permissions last read it, which another session may have changed. */
   onTrustRemembered: (session: string, kept: KeptTrust | null) => void
+  /** A bot's own page, shown when no conversation is open. */
+  botView?: { bot: Bot; history: BotConversation[] } | null
+  onOpenBotConversation: (bot: Bot, summary: SessionSummary) => void
+  onStartBotChat: (bot: Bot, prompt: string, directory: string | null) => void
+  onBotModel: (bot: Bot, model: string) => void
+  /** The composer's footer for the open conversation: its project and branch. */
+  footer?: ComposerFooterProps
+  /** Whether the open conversation runs in a bot's home folder, which has no project to show. */
+  noProject: boolean
 }
 
 /** Dispatched on `document` by the View menu's Find item. */
@@ -203,8 +215,8 @@ function ColumnToggle({
   onToggle: (side: Side) => void
   attention?: number
 }): React.JSX.Element {
-  const what = side === 'left' ? 'the session list' : 'the context panel'
-  const label = side === 'left' ? 'Session list' : 'Context panel'
+  const what = side === 'left' ? 'the chat list' : 'the context panel'
+  const label = side === 'left' ? 'Chat list' : 'Context panel'
   const controls = side === 'left' ? 'sessions-column' : 'context-column'
   const icon: IconName =
     side === 'left'
@@ -215,7 +227,7 @@ function ColumnToggle({
         ? 'sidepanel-open'
         : 'browser-split-view-right'
   const waiting = collapsed && attention > 0
-  const need = `${attention} ${attention === 1 ? 'session needs' : 'sessions need'} you`
+  const need = `${attention} ${attention === 1 ? 'chat needs' : 'chats need'} you`
 
   return (
     <span className={`fold-toggle-slot ${side}`}>
@@ -276,6 +288,12 @@ export function Transcript({
   onToggleTools,
   onExport,
   onTrustRemembered,
+  botView,
+  onOpenBotConversation,
+  onStartBotChat,
+  onBotModel,
+  footer,
+  noProject,
 }: Props): React.JSX.Element {
   const bottom = useRef<HTMLDivElement>(null)
   const marked = useRef<HTMLDivElement>(null)
@@ -410,14 +428,6 @@ export function Transcript({
   const setup = useEvent(onSetup)
   const checkBackend = useEvent(onCheckBackend)
   const diagnostics = useEvent(onDiagnostics)
-  const suggest = (text: string): void => {
-    onDraft(text)
-    requestAnimationFrame(() => {
-      input.current?.focus()
-      const field = input.current?.shadowRoot?.querySelector('textarea')
-      field?.setSelectionRange(text.length, text.length)
-    })
-  }
   const stableFork = useEvent(onFork)
   const recover = useEvent(() => {
     onDraft((draft.trim() ? `${draft}\n\n` : '') + 'Continue the previous task from the current project state. First check which actions already completed; do not repeat successful commands or writes. Resolve the last error before proceeding.')
@@ -457,7 +467,13 @@ export function Transcript({
   // window's drag strip, and with no session open there would otherwise be neither: a
   // sessions column folded shut here could not be brought back, and the state outlives the
   // launch that caused it.
-  const where = live ? `${projectLabel(live.summary.directory)}${live.summary.branch ? ` · ${live.summary.branch}` : ''}` : ''
+  const viewing = !live && !reading ? botView ?? null : null
+  // The search belongs to what is on screen: a bot's page filters its list, a conversation finds
+  // in its transcript. Moving between them closes it.
+  useEffect(() => { setSearching(false) }, [viewing?.bot.slug, live?.handle])
+  // A bot's conversation with no project has no context worth a column, so the right toggle goes
+  // with the column. See `.app.no-context`.
+  const contextless = !!live && noProject
   const head = (
     <header className="transcript-head">
       <div className="drag" />
@@ -468,45 +484,49 @@ export function Transcript({
         <div className="head-titles">
           {!live && reading && (
             <>
-              <h1>{reading.record.title}</h1>
-              <span className="where" title={reading.record.directory}>
-                Plan run · {reading.record.directory}
-                {reading.record.branch && ` · ${reading.record.branch}`}
+              <span className="where" data-tooltip={reading.record.directory}>
+                <Label color="neutral"><Icon name="folder-open" slot="icon-before" />{projectLabel(reading.record.directory)}</Label>
               </span>
+              <h1>{reading.record.title}</h1>
+              <span className="plan-run-chip">Plan run</span>
+            </>
+          )}
+          {viewing && (
+            <>
+              <BotAvatar seed={viewing.bot.avatar} size={16} doing="open" />
+              <h1>{viewing.bot.name}</h1>
             </>
           )}
           {live && (
             <>
-              {/* A bot's session is titled by whatever was asked first, like every session — but a
-                  bot is not an occasion, it is somebody, and a header saying "Hello." over a
-                  conversation with the Custodian names the wrong thing. So a bot's own name and
-                  face stand where the title would, and the title moves into the meta beside
-                  the checkout: still there, no longer pretending to say whose this is. */}
-              {bot && <BotAvatar seed={bot.avatar} size={20} doing={doing} />}
-              <h1>{bot ? bot.name : live.summary.title}</h1>
-              {/* The full path in the tooltip: the line names the project, and the checkout it
-                  is in is the half that says which copy of a project this is. */}
-              <span
-                className="where"
-                data-tooltip={`${live.summary.directory}${live.summary.branch ? ` · ${live.summary.branch}` : ''}`}
-              >
-                {bot && `${live.summary.title} · `}
-                {where}
-              </span>
-              {live.autoVetting && (
+              {/* A bot's conversation carries its face, so whose it is reads before what it is
+                  about. The project chip names the folder; its tooltip is the whole path, the half
+                  that says which copy of a project this is. */}
+              {bot && <BotAvatar seed={bot.avatar} size={16} doing={doing} />}
+              {!noProject && (
+                <span className="where" data-tooltip={live.summary.directory}>
+                  <Label color="neutral"><Icon name="folder-open" slot="icon-before" />{projectLabel(live.summary.directory)}</Label>
+                </span>
+              )}
+              <h1>{live.summary.title}</h1>
+              {live.autoVetting && !noProject && (
                 <span className="vetting-chip" tabIndex={0}
                   data-tooltip="Auto-vetting is on: a check that finds nothing reads content to the model without asking you.">
-                  <Icon name="shield-done" />Vetting on
+                  <Label color="green" mode="outline"><Icon name="shield-done" slot="icon-before" />Vetting on</Label>
                 </span>
               )}
             </>
           )}
         </div>
+        {viewing && <div className="conversation-toolbar">
+          <IconButton icon="search" label="Search conversations" tooltip="Search conversations" pressed={searching}
+            className="find-open" onClick={() => setSearching((value) => !value)} />
+        </div>}
         {live && <div className="conversation-toolbar">
           <IconButton icon="search" label="Find" tooltip="Find in conversation" shortcut="⌘F" pressed={searching}
             className="find-open" onClick={() => setSearching((value) => !value)} />
           <ExportMenu canExport={canExport} includeTools={includeTools} onToggleTools={onToggleTools} onExport={onExport} />
-          <IconMenu icon="more-horizontal" label="More" tooltip={false} className="conversation-more" data-test="conversation-more">
+          <IconMenu icon="more-vertical" label="More" tooltip={false} className="conversation-more" data-test="conversation-more">
             <leo-menu-item onClick={() => afterMenu(() => setPermissions(true))}>
               <span className="menu-icon-row"><Icon name="shield-done" />Permissions…</span>
             </leo-menu-item>
@@ -515,7 +535,7 @@ export function Transcript({
             </leo-menu-item>
           </IconMenu>
         </div>}
-        <ColumnToggle side="right" collapsed={collapsed.right} onToggle={onToggle} />
+        {!contextless && <ColumnToggle side="right" collapsed={collapsed.right} onToggle={onToggle} />}
       </div>
     </header>
   )
@@ -553,6 +573,27 @@ export function Transcript({
     )
   }
 
+
+  if (!live && viewing) {
+    return (
+      <main className="transcript bot-view">
+        {head}
+        <div className="toast-stack">{toast}<Toasts /></div>
+        <BotView
+          bot={viewing.bot}
+          history={viewing.history}
+          filtering={searching}
+          backendReady={backendReady}
+          onOpen={(summary) => onOpenBotConversation(viewing.bot, summary)}
+          onStart={(prompt, directory) => onStartBotChat(viewing.bot, prompt, directory)}
+          onModel={(model) => onBotModel(viewing.bot, model)}
+          onSetup={setup}
+          onCheckBackend={checkBackend}
+          onDiagnostics={diagnostics}
+        />
+      </main>
+    )
+  }
 
   if (!live) {
     return (
@@ -609,8 +650,15 @@ export function Transcript({
       }}>
         {fresh && (
           <div className="fresh-greeting">
-            <h1>Ready in <span className="fresh-project">{projectLabel(live.summary.directory)}</span></h1>
-            <p>Ask for a change, a review or an explanation. Nothing is written without your approval.</p>
+            {noProject ? <>
+              <h1>{bot ? `Talk to ${bot.name}` : 'Ready'}</h1>
+              <p>This conversation has no project. Pick one below to work in a folder.</p>
+            </> : <>
+              <h1>Ready in {footer?.choices
+                ? <ProjectMenu directory={footer.directory} choices={footer.choices} onChoose={footer.onChoose} disabled={live.running} variant="title" />
+                : <span className="fresh-project">{projectLabel(live.summary.directory)}</span>}</h1>
+              <p>Ask for a change, a review or an explanation. Nothing is written without your approval.</p>
+            </>}
           </div>
         )}
         <SessionNotices
@@ -698,14 +746,8 @@ export function Transcript({
           onSetup={setup}
           onCheckBackend={checkBackend}
           onDiagnostics={diagnostics}
+          footer={footer}
         />
-        {fresh && (
-          <div className="suggestions" role="group" aria-label="Suggestions">
-            {SUGGESTIONS.map(([label, text]) => (
-              <button key={label} type="button" className="suggestion" onClick={() => suggest(text)}>{label}</button>
-            ))}
-          </div>
-        )}
       </div>
       {/* Takes the space under a fresh session's composer, which holds it in the middle of the
           column; it gives the space up when the first message is sent. */}
@@ -716,13 +758,6 @@ export function Transcript({
     </main>
   )
 }
-
-/** What a fresh session offers to start with: a label, and the draft it fills in. */
-const SUGGESTIONS: readonly [string, string][] = [
-  ['Explain this codebase', 'Explain how this codebase is organised: its main parts, how they fit together, and where to start reading.'],
-  ['Find likely bugs', 'Look through this project for likely bugs. For each one, name the file and say why it looks wrong.'],
-  ['Add tests for…', 'Add tests for '],
-]
 
 /** The three files a conversation can become. Ordered plainest first. */
 const FORMATS: readonly { id: ExportFormat; label: string; detail: string; icon: IconName }[] = [
@@ -1193,7 +1228,7 @@ function SessionNotices({ forkedFrom, kept, vetting, rules, onOpenParent, onMana
           <span className="notice-text">
             Forked from <strong>{forkedFrom.title}</strong>, before prompt {forkedFrom.prompt + 1}.
           </span>
-          <Button kind="plain" size="tiny" className="link" onClick={onOpenParent} data-tooltip="Show the session this was forked from">
+          <Button kind="plain" size="tiny" className="link" onClick={onOpenParent} data-tooltip="Show the chat this was forked from">
             View original
           </Button>
         </p>
@@ -1201,7 +1236,7 @@ function SessionNotices({ forkedFrom, kept, vetting, rules, onOpenParent, onMana
       {kept && (
         <p className="session-banner session-notice" role="note" data-tooltip={`Remembered ${ago(kept.at)} · kept in ${kept.path}`}>
           <Icon name="shield-done" />
-          <span className="notice-text">Trust is remembered for this directory, so sessions started here are not asked.</span>
+          <span className="notice-text">Trust is remembered for this directory, so chats started here are not asked.</span>
           <Button kind="plain" size="tiny" className="link" onClick={onManage}>Manage</Button>
         </p>
       )}
@@ -2444,7 +2479,7 @@ function Card({
     case 'plan-task':
       return (
         <div className="bubble user plan-task">
-          <span className="plan-task-mark">Plan first</span>
+          <span className="plan-task-mark">Plan</span>
           {entry.text}
         </div>
       )

@@ -115,7 +115,7 @@ test('only an answer to a plan is drawn on a plan', () => {
 test('the task of a run is drawn as a run’s task and cannot be forked from', () => {
   const markup = draw(t.planAsked('write the release notes'))
 
-  assert.ok(markup.includes('Plan first'), markup)
+  assert.ok(markup.includes('class="plan-task-mark">Plan<'), markup)
   assert.ok(markup.includes('write the release notes'), markup)
   // A prompt offers a fork. A run's task is in no conversation, so there is nothing to cut.
   assert.deepEqual(buttons(markup), [])

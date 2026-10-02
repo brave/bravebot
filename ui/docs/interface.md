@@ -18,10 +18,11 @@ are in [setup](setup.md) and [development](development.md); the protocol underne
 
 Three columns, each side one resizable and foldable:
 
-- **Sessions** — saved conversations under `~/.bravebot/sessions`, with bot histories
-  accessed through the Bots tab, and a button to start a
-  new one against any directory. A second tab beside it holds the **bots**: named, persistent
-  agents with a purpose and a memory, each pinned to one checkout. See *Bots* below.
+- **Chats** — saved conversations under `~/.bravebot/sessions`, bots' conversations included,
+  with buttons to start one in the project used last or in a folder you pick. A second tab beside
+  it holds the **bots**: named, persistent agents with a purpose and a memory, whose conversations
+  run in a project picked for each one or in none. Switching tabs opens the first item of the
+  other list. See *Bots* below.
 - **Transcript** — the conversation, with the turn's tool calls gathered into runs that
   fold away, and confined content shown as what it is rather than as text the model read.
   Nine kinds of question are put here and answered here: a **write** (as a diff), a
@@ -36,7 +37,7 @@ Three columns, each side one resizable and foldable:
   turn blocks until one is answered. Window close and app shutdown refuse outstanding
   questions. For the last of the nine that means *no answers at all* rather than a decline per question: a decline
   somebody made and a question that never reached them must not look alike.
-- **Context** — an inspector with **Overview**, **Changes** and **Files** tabs.
+- **Context** — an inspector with **Overview** and **Files** tabs, folded from the header's toggle.
   Overview summarises the plan, reads and confined material; Changes distinguishes
   pending decisions, approved writes and their actual execution outcomes. Files
   provides a lazily loaded tree and project-wide filename search, including folders
@@ -44,29 +45,32 @@ Three columns, each side one resizable and foldable:
   On narrow windows the inspector opens as a drawer.
 
 The two side columns fold from controls at either end of the transcript header, and their
-widths and fold states survive a relaunch. With the session list folded, its toggle carries a
-count of the background sessions waiting on an answer or an approval, and opens the list. There
+widths and fold states survive a relaunch. With the chat list folded, its toggle carries a
+count of the background chats waiting on an answer or an approval, and opens the list. There
 is no separate focus mode: folding both columns is it. Density, comfortable or compact, is a
 preference rather than a per-conversation action, so it lives in [Appearance](#appearance) and
 not in the header.
 
-The sidebar sits flush on the window's ground. The transcript and the inspector share one raised
-card, inset by 8px from the window's edges, with a hairline border and rounded corners; the strip
-of ground above the card still drags the window. With the session list folded the card gains
+The sidebar sits flush on the window's ground. The transcript and the inspector are two raised
+cards, inset by 8px from the window's edges and 8px from each other, each with a hairline border
+and rounded corners; the strip of ground above the cards still drags the window. The gap between
+them is the divider that resizes the inspector. With the chat list folded the transcript card gains
 ground on its left too, so its corners never meet the edge. The three column heads are 44px tall
 so they line up across the window, and the sidebar's head leaves room for the inset traffic
 lights.
 
-**Plan first**, beside Send, starts a manifest run from the draft. The agent plans the
-whole task before reading anything, shows you the plan, and runs it only if you approve.
-Each press starts one run. The next message is an ordinary turn. A run cannot take attached
-files, and a bot cannot start one. The run is saved as its own record and is not part of the
-conversation, so a later turn is not sent what the run said.
+The **Agent** menu beside the model picker chooses how the next message is handled. **Agent** is
+the default: an ordinary turn. **Plan** makes the next Send start a manifest run from the draft.
+The agent plans the whole task before reading anything, shows you the plan, and runs it only if
+you approve. The menu goes back to Agent once the run starts, so the next message is an ordinary
+turn; a conversation never holds the mode. A run cannot take attached files, and a bot cannot
+start one, so Plan is greyed with the reason in either case. The run is saved as its own record
+and is not part of the conversation, so a later turn is not sent what the run said.
 
 A run's record is listed with the conversations and marked **Plan run**. Choosing one reads
 it: the task, the goal, the plan, the steps that ran, and why it stopped if it did. It has
-no message box, because a run has no conversation to continue. **New session here** starts
-a session in the run's project. Runs started in the terminal are listed and read the same way.
+no message box, because a run has no conversation to continue. **New chat here** starts
+a chat in the run's project. Runs started in the terminal are listed and read the same way.
 
 Drafts and reading positions survive conversation switches and restarts. A running
 conversation can continue in the background. Drafting during a run does not send
@@ -82,18 +86,33 @@ said by the working row and the composer, not by a status line.
 
 ### The conversation header
 
-Beside the fold toggle, the header names the conversation, the checkout it is in and its branch.
-A **Vetting on** chip appears while auto-vetting is on. Three controls sit at the right of the
-title, before the context panel's toggle:
+Beside the fold toggle, the header shows the bot's face for a bot's conversation, a chip naming
+the project (the full path is its tooltip), and the conversation's title. A bot's conversation with
+no project shows no chip, no vetting chip and no context panel. A **Vetting on** chip appears at
+the right while auto-vetting is on. Three controls sit after it, before the context panel's
+toggle:
 
 - **Find** (`⌘F`) opens the find bar over the transcript and searches the current
   conversation. Enter steps to the next match, Shift+Enter to the previous, Esc closes it. The
   button shows as pressed while the bar is open.
 - **Export** (a download icon) opens the export menu described under [Forking, and
   export](#forking). It is disabled until somebody has said something in the session.
-- **More** (an ellipsis) holds the two dialogs that are seldom wanted mid-conversation:
+- **More** (vertical dots) holds the two dialogs that are seldom wanted mid-conversation:
   **Permissions…** lists and revokes path and command grants after the current turn stops, and
   **File watches…** opens the [watches](#agent-09-controls) list.
+
+A bot's own page has a header of its face and its name, with a search over its conversations and
+the context panel's toggle.
+
+### The composer's footer
+
+Under the message box a strip names the project the conversation runs in, and its branch at the
+right. Until the first message is sent the project is a menu: a chat offers the projects opened
+before and **Select project…**, which opens the folder picker, and moving to one starts the chat
+there with the draft carried over. A bot's conversation offers **No project**, the projects the
+bot has worked in, and **Select project…**. Once something has been said the project is fixed and
+shown without the menu. The branch is read from the checkout's `.git/HEAD`, and only shown: no git
+command is run, so there is no branch menu and no pull request number yet.
 
 Every icon-only control shows its name and, where it has one, its shortcut in a tooltip
 (`⌘F` for Find, `⌘↩` for Send, `⌘.` for Stop); the accessible name is set separately and is never
@@ -209,24 +228,35 @@ whole extra window.
 
 ### Bots
 
-The left column has two lists. The **Sessions** tab is everything above; the **Bots** tab is the
-people who have one.
+The left column has two lists. The **Chats** tab is everything above; the **Bots** tab is the
+people who have them. A bot's row shows its face, its name and its purpose; **+** opens
+**Create bot**, which asks for a face, a name, a purpose and a model.
 
-A bot has a name, purpose, model choice, avatar, project and persistent memory.
-Its overview lists its conversations and offers **Continue** and **New conversation**.
-Starting a new conversation preserves earlier history; the bot's purpose and project
-memory carry across conversations. Bot-associated conversations are accessed through
-the bot rather than mixed into the ordinary conversation list.
+A bot has a name, purpose, model choice, avatar, a home folder and persistent memory. The home
+folder is made by the app under its own data directory, beside the briefing and never inside it.
+Opening a bot shows its page. A bot nobody has talked to yet shows its face, that it is ready, and
+a message box; one with conversations lists its recent ones above the box. Sending from the box
+starts a new conversation.
+The box's footer picks where the conversation runs: **No project** runs it in the home folder, and
+a project runs it in that folder. Only the projects the bot has already worked in, and one picked
+with **Select project…**, are offered, because those are the only folders the main process lets a
+bot's turn run in. A conversation with no project has no context panel.
 
-The editor keeps the project fixed. **Duplicate into another project** creates a
-separate bot. The memory editor offers readable and raw views, explicit saves,
-reset with confirmation, and revision history for review and restoration. Reset
-preserves history; deleting a bot removes its app-owned history and cached briefing.
-See [file retention](file-access-security.md) for what stays in the project.
+The right column of a bot's page holds its details: the face, with a button for a new one, the
+name and the purpose, which are saved when a field is left, and the memory. A bot keeps one memory per folder it works in, so a
+**Memory for** menu picks which folder's memory is shown once there is more than one. The memory is
+shown as the bot wrote it; **Edit memory** opens it for editing with an explicit save, **History**
+lists earlier versions for review and restoration, one history per folder, and **Reset…** asks
+before it empties the memory. Reset preserves history; deleting a bot removes
+its app-owned histories and cached briefing. See [file retention](file-access-security.md) for what
+stays in the project.
+
+Bots' conversations are listed in the Chats tab too, with the bot's face in place of the folder
+mark.
 
 #### Archiving one
 
-A bot leaves the list by being **archived**, from the same form that renames it. It drops into a
+A bot leaves the list by being **archived**, from the menu on its details. It drops into a
 folded **Archived** section at the foot of the tab, and comes back from there with one click.
 
 Nothing about it changes but a single field recording when it was put away. It keeps its slug, so
@@ -246,15 +276,15 @@ this window that cannot be taken back, and it is the only control that says so b
 hovered: it carries the colour a deletion wears in a diff, where everything else in that column
 earns its colour on the way past.
 
-It also asks. The row turns, the checkout name is replaced by what the deletion costs, and the
+It also asks. The row turns, the purpose is replaced by what the deletion costs, and the
 answer is a different button in a different place, so nobody arrives at it by pressing twice. The
 question is asked *in the row* rather than in a dialog, for the reason the agent's own questions
 are asked in the transcript: a modal takes the thing being decided off the screen and replaces it
 with a sentence about it, and here the sentence needs the bot's name still beside it.
 
 Deletion removes the bot definition, cached briefing and app-owned memory revision
-history. Saved conversations stay under `~/.bravebot`, and the project memory file
-stays in the checkout. Deletion is refused while a bot conversation is running.
+histories. Saved conversations stay under `~/.bravebot`, the project memory files stay in
+their checkouts, and the home folder stays where it is. Deletion is refused while a bot conversation is running.
 
 Archiving changes nothing in the sessions tab. An archived bot still owns its session — that is
 what makes restoring it a restoration — so the conversation does not surface there while the bot
@@ -294,8 +324,9 @@ So a bot is handed a **file to read**, and there are two of them:
   confined to the workspace. It lives outside the checkout precisely so the planner cannot rewrite
   what defines it — the agent may write inside the workspace and nowhere else, and this is nowhere
   else.
-- **The memory**, `<checkout>/.bravebot-ui/bots/<slug>.md`, which is inside the checkout because
-  that is the only place the agent *can* write. That is the whole mechanism: the bot is told where
+- **The memory**, `<folder>/.bravebot-ui/bots/<slug>.md`, inside the folder the conversation runs
+  in, because that is the only place the agent *can* write. There is one in each folder the bot
+  works in: its home folder for conversations with no project, and each project. That is the whole mechanism: the bot is told where
   its memory is and asked to keep it current, and it edits the file with its ordinary write tool.
   Nothing parses what a model said; the change the agent applied is the record. The folder ignores
   itself, so it never becomes a change nobody made. What that write is *gated* on is below, and is
@@ -447,17 +478,17 @@ and an item is greyed when its `requires` tag is not met. (On Windows and Linux,
 
 | Key | Menu item | What |
 | --- | --- | --- |
-| `⌘N` | File › New Session… | Open a project and start a session |
-| `⇧⌘W` | File › Close Session | Close the session — `⌘W` still closes the window |
+| `⌘N` | File › New Chat | Start a chat in the project used last, or pick a folder when there is none |
+| `⇧⌘W` | File › Close Chat | Close the chat — `⌘W` still closes the window |
 | `⌘F` | View › Find in Conversation | Open the find bar and focus its field; needs a session |
 | `⌘L` | View › Focus Composer | Move focus to the message box; needs a session |
-| `⌘↩` | Session › Send | Send the draft; greyed while a turn runs or the draft is empty |
-| `⌘.` | Session › Cancel Turn | Cancel the running turn; greyed when nothing is running |
-| `⌥⌘←` / `⌥⌘→` | View › Hide/Show Session List / Context Panel | Fold the session list / the context panel |
+| `⌘↩` | Chat › Send | Send the draft; greyed while a turn runs or the draft is empty |
+| `⌘.` | Chat › Cancel Turn | Cancel the running turn; greyed when nothing is running |
+| `⌥⌘←` / `⌥⌘→` | View › Hide/Show Chat List / Context Panel | Fold the chat list / the context panel |
 | `Enter` | | In the message box: send, or queue the message while a turn is running |
 | `Shift+Enter` | | In the message box: insert a new line |
 | `Esc` | | See below |
-| right-click | | A session row, or anything in the transcript |
+| right-click | | A chat row, or anything in the transcript |
 
 The round button at the foot of the composer is **Send** (`⌘↩` in its tooltip) and, for as long as
 a reply is generating, **Stop** (`⌘.`). The working row has no stop control of its own; `Esc` in
@@ -470,18 +501,24 @@ whichever surface has it, and each one gives way to the one above it:
 - In the composer, with a turn running: cancel it. If the find bar or a menu is open, `Esc`
   closes that instead and the turn keeps running.
 - In the find bar: close it.
-- In an open menu, the model picker or a dialog: close it. In the appearance picker it also puts
-  back what was there.
+- In an open menu, the model picker or a dialog: close it.
+- In Settings: go back to the chat view.
 - In the audit inspector: close it and restore the previous context view.
-- In the filter box above the session list: clear the filter.
+- In the search box above the chat list: clear the search.
 
-The filter box has no key of its own, nor does the toggle beside it that groups the sessions
-under the checkout each was started in. Both are always on screen under **New session**, so
-there is nothing to reveal; `⌘F` belongs to the conversation.
+The chat list's head is one line: the search box, the filter menu that groups the chats under the
+checkout each was started in and shows archived ones, a folder button that opens the picker and
+starts a chat in the folder chosen, and **+**, which starts a chat in the project used last. None
+has a key of its own beyond `⌘N` for **+**; `⌘F` belongs to the conversation.
+
+Each chat row has three lines: the project (or **No project** for a bot's conversation in its home
+folder) with how long ago it was active, the title, and the branch it was started on. The leading
+mark is the bot's face for a bot's conversation and a folder otherwise, or the working or waiting
+mark while the chat asks something of you.
 
 Clicking a group's name folds it away and brings it back, and the **+** beside its count
-starts a session in that checkout — the same thing **New session** does, minus the folder
-picker, since the heading already knows which folder. A checkout that has since been deleted
+starts a chat in that checkout, without the folder picker, since the heading already knows which
+folder. A checkout that has since been deleted
 or moved is refused by the bridge with `not_a_directory` rather than failing quietly. A live filter reaches into a
 folded group regardless — a heading with nothing under it is the opposite of what somebody
 who just typed a search asked for — and the fold is still there when the box is cleared.
@@ -570,7 +607,7 @@ src/renderer/               the React app
   toasts.ts                 the store behind the confirmation toasts
   theme.ts                  putting System / Light / Dark on <html> data-theme
   export.tsx                the PDF entry point, using the components the window uses
-  components/               AppearancePicker, Sidebar, Transcript, FileTree,
+  components/               SettingsView, Sidebar, Transcript, BotView, FileTree,
                             Diff, TrustPrompt and BotAvatar are the load-bearing ones
   avatar/stage.ts           one WebGL context, however many avatars, and their clock
   avatar/figure.ts          what a friendly figure is made of, and what a seed varies
@@ -596,17 +633,19 @@ docs/                       the protocol design, this document, testing and the 
 | Key | What it holds |
 | --- | --- |
 | `layout` | The column widths and which side columns are folded |
-| `view` | Whether the session list is grouped by checkout, and which headings are shut |
+| `view` | Whether the chat list is grouped by checkout, which headings are shut, and which tab is open |
 | `recents` | The projects opened before, newest first |
 | `forks` | Which session came out of which |
-| `bots` | The bots defined here: name, purpose, avatar seed, checkout, model, conversation IDs and memory bookkeeping |
+| `bots` | The bots defined here: name, purpose, avatar seed, home folder, model, each conversation ID with the folder it ran in, and memory bookkeeping |
 | `theme` | Appearance: `system`, `light`, or `dark` |
 
 Additional state lives outside this file:
 
 - `experience.json`: per-conversation drafts, scroll, pins, archives and bot associations;
   also density and recent model choices.
-- `bots/<slug>/ground.md` and `memory-history.json`: cached briefing and memory revisions.
+- `bots/<slug>/ground.md` and `memory-history-<folder hash>.json`: cached briefing and memory
+  revisions, one history per folder.
+- `bot-homes/<slug>/`: a bot's home folder, where its conversations with no project run.
 - Project `.bravebot-ui/bots/<slug>.md`: the bot's persistent memory.
 - Renderer `localStorage`: per-conversation model choices, keyed by project and session ID.
 
@@ -636,10 +675,10 @@ where they are and never read again.
 
 ### Appearance
 
-`View ▸ Appearance…` opens a picker with System, Light, and Dark, and a **Density** control,
-Comfortable or Compact. Previewing applies immediately, for the theme and the density alike; Use
-keeps the theme in `bravebot-ui.json` and the density in `experience.json`; Escape puts back what
-was there. Compact tightens row heights and the gaps between turns and their parts.
+**Settings ▸ General** holds the theme, System, Light or Dark, and the **Density**, Comfortable or
+Compact. Each applies and is kept as soon as it is chosen: the theme in `bravebot-ui.json` and the
+density in `experience.json`. `View ▸ Appearance…` opens that page. Compact tightens row heights
+and the gaps between turns and their parts, and drops the branch line from each chat row.
 
 System follows the OS (`prefers-color-scheme`). Light and Dark set `data-theme` on
 `<html>` so Leo (Nala) tokens stay put. The PDF export window is pinned with
@@ -651,7 +690,12 @@ resolve to System.
 
 ## Agent 0.9 controls
 
-**Agent settings** in the sidebar opens Connection, Hooks and Run settings. Connection
+**Settings** at the foot of the sidebar replaces the chat view with the settings: pages on the
+left (**General** and **Agent settings**, with a search over their sections) and **Back to
+BraveBot**, which `Esc` also does. The chat view stays as it was underneath. The setup button on
+the backend notice opens Agent settings.
+
+**Agent settings** shows Connection, Hooks and Run settings, one after another. Connection
 shows the bundled agent build, model services, certificate/proxy details and administrator
 pins, with setup instructions for gateways, AWS Bedrock and Brave. Secrets are not shown.
 Run settings selects a JSON model/connection override for this app run, lists loaded files
@@ -662,7 +706,8 @@ read. Permission rules in settings files are: see *Permission rules* below.
 Hooks are shared with the terminal client. Add a lifecycle event, a program and separate
 arguments, optionally limiting a tool-completion hook to a tool name. Save applies changes
 to future turns. Reload resolves external-edit conflicts; malformed or unsupported existing
-files are reported rather than silently rewritten. Hook failures appear in turn notices.
+files are reported rather than silently rewritten. Hook failures appear in turn notices. Leaving
+the page with unsaved hook changes asks first.
 
 ### Permission rules
 

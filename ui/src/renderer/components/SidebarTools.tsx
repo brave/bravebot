@@ -51,25 +51,3 @@ export function SidebarSearch({ query, onQuery, label, placeholder, children }: 
     </div>
   )
 }
-
-/**
- * A full-width row button in the sidebar's head or foot: an icon, a label, and the shortcut
- * that does the same thing, in caption ink on the right.
- */
-export function SidebarRow({ icon, label, hint, className, onClick, 'data-test': dataTest }: {
-  icon: 'plus-add' | 'settings' | 'plug'
-  label: string
-  hint?: string
-  className?: string
-  onClick: () => void
-  'data-test'?: string
-}): React.JSX.Element {
-  return (
-    <button type="button" className={`sidebar-row${className ? ` ${className}` : ''}`} onClick={onClick} data-test={dataTest}
-      aria-keyshortcuts={hint === '⌘N' ? 'Meta+N' : undefined}>
-      <Icon name={icon} />
-      <span className="sidebar-row-label">{label}</span>
-      {hint && <kbd className="sidebar-row-hint" aria-hidden="true">{hint}</kbd>}
-    </button>
-  )
-}

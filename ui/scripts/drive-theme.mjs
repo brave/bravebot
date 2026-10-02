@@ -98,28 +98,27 @@ const appearanceAttr = async (page) =>
   check((await appearanceAttr(page)) === null, 'system clears data-theme again')
   check(readState().theme === 'system', 'system is remembered')
 
+  // View ▸ Appearance… opens the General settings page. A choice there applies and is kept at
+  // once, with no Use or Cancel; leaving the page keeps it.
   const openPicker = () => app.evaluate(({ BrowserWindow }) => {
     BrowserWindow.getAllWindows()[0].webContents.send('bravebot:command', 'view.theme', null)
   })
+  const kept = async (theme) => {
+    for (let tries = 0; tries < 50 && readState().theme !== theme; tries++) await page.waitForTimeout(100)
+    return readState().theme === theme
+  }
   await openPicker()
-  const control = page.locator('[data-test="appearance-control"]')
+  const control = page.locator('[data-test="settings-view"] [data-test="appearance-control"]')
   await control.waitFor()
-  await control.getByText('System', { exact: true }).click()
-  await page.keyboard.press('ArrowDown')
+  await control.getByText('Light', { exact: true }).click()
   await page.waitForFunction(() => document.documentElement.getAttribute('data-theme') === 'light')
-  check(readState().theme === 'system', 'keyboard preview does not persist before Use')
+  check(await kept('light'), 'choosing Light on the settings page keeps it at once')
+  await control.getByText('Dark', { exact: true }).click()
+  await page.waitForFunction(() => document.documentElement.getAttribute('data-theme') === 'dark')
+  check(await kept('dark'), 'and choosing Dark replaces it')
   await page.keyboard.press('Escape')
-  await page.locator('[data-test="modal"]').waitFor({ state: 'detached' })
-  check((await appearanceAttr(page)) === null, 'Escape restores the appearance that opened the picker')
-
-  await openPicker()
-  await control.waitFor()
-  await control.getByText('System', { exact: true }).click()
-  await page.keyboard.press('ArrowDown')
-  await page.keyboard.press('ArrowDown')
-  await page.keyboard.press('Enter')
-  await page.locator('[data-test="modal"]').waitFor({ state: 'detached' })
-  check(readState().theme === 'dark', 'Enter keeps the keyboard-selected appearance')
+  await page.locator('[data-test="settings-view"]').waitFor({ state: 'detached' })
+  check((await appearanceAttr(page)) === 'dark', 'Escape leaves the settings and keeps what was chosen')
   await page.evaluate(() => window.bravebot.writeTheme('system'))
 
   await app.close()
