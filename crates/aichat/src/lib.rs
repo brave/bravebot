@@ -373,6 +373,13 @@ impl<'a> AichatClient<'a> {
         {
             fields.remove(protocol::EFFORT_FIELD);
         }
+        if !self
+            .gateway
+            .as_ref()
+            .is_some_and(|gateway| gateway.provider.takes_extra_content())
+        {
+            protocol::remove_extra_content(&mut body);
+        }
         Ok(body)
     }
 
@@ -477,7 +484,8 @@ impl<'a> AichatClient<'a> {
             let mut http = Request::post(gateway.provider.chat_completions_url(), encode(&body)?)
                 .header("content-type", "application/json");
             if let Some(token) = gateway.token.as_ref().map(Secret::expose) {
-                http = http.header("authorization", format!("Bearer {token}"));
+                let (name, value) = gateway.provider.credential_header(token);
+                http = http.header(name, value);
             }
             return Ok(http);
         }
@@ -1177,6 +1185,103 @@ mod tests {
         assert_eq!(header(&http, "authorization"), Some("Bearer a-token"));
         assert_eq!(header(&http, "digest"), None);
         assert_eq!(header(&http, "Brave-Product"), None);
+    }
+
+    fn vertex_provider() -> bravebot_config::provider::Provider {
+        provider_block(
+            r#"{"provider": {"google-vertex": {"options": {"project": "example-project-1"}}}}"#,
+        )
+    }
+
+    /// The service refuses a key sent as a bearer token, so the header every other gateway takes is
+    /// the one that cannot work here. Nothing goes in `authorization` either, which the service does
+    /// not read for a key and anything on the path could log.
+    #[test]
+    fn a_google_vertex_request_carries_its_key_in_x_goog_api_key_and_no_authorization_header() {
+        let config = config();
+        let egress = Egress::new();
+        let provider = vertex_provider();
+        let http = AichatClient::new(&config, &egress)
+            .for_gateway(
+                &provider,
+                "google/gemini-2.5-flash",
+                Some(Secret::new("placeholder-key")),
+            )
+            .prepare(&request("google-vertex/google/gemini-2.5-flash"))
+            .expect("prepared");
+
+        assert_eq!(
+            http.url,
+            "https://aiplatform.googleapis.com/v1/projects/example-project-1/locations/global/endpoints/openapi/chat/completions"
+        );
+        assert_eq!(header(&http, "x-goog-api-key"), Some("placeholder-key"));
+        assert_eq!(header(&http, "authorization"), None);
+        assert_eq!(
+            body(&http).get("model"),
+            Some(&serde_json::json!("google/gemini-2.5-flash"))
+        );
+    }
+
+    #[test]
+    fn another_gateway_still_sends_its_token_as_a_bearer() {
+        let config = config();
+        let egress = Egress::new();
+        let provider = provider(r#"{"z-ai/glm-4.6": {}}"#);
+        let http = AichatClient::new(&config, &egress)
+            .for_gateway(&provider, "z-ai/glm-4.6", Some(Secret::new("a-token")))
+            .prepare(&request("z-ai/glm-4.6"))
+            .expect("prepared");
+
+        assert_eq!(header(&http, "authorization"), Some("Bearer a-token"));
+        assert_eq!(header(&http, "x-goog-api-key"), None);
+    }
+
+    /// A conversation can change service between two turns. Only Google is sent the member it
+    /// attached, since another service ignores it or refuses the request for carrying it.
+    #[test]
+    fn extra_content_reaches_only_a_google_vertex_service() {
+        let config = config();
+        let egress = Egress::new();
+        let signature = serde_json::json!({"google": {"thought_signature": "opaque-signature"}});
+        let history = || {
+            let mut request = request("m");
+            request.messages.push(Message::assistant_calling(
+                "",
+                vec![protocol::ToolCallRequest {
+                    id: "call_1".into(),
+                    kind: "function".into(),
+                    function: protocol::ToolCallRequestFunction {
+                        name: "read_file".into(),
+                        arguments: "{}".into(),
+                    },
+                    extra_content: Some(signature.clone()),
+                }],
+            ));
+            request
+        };
+        let calls = |http: &Request| {
+            body(http)["messages"]
+                .as_array()
+                .expect("messages")
+                .iter()
+                .find_map(|message| message.get("tool_calls").cloned())
+                .expect("the call stays")
+        };
+
+        let vertex = vertex_provider();
+        let http = AichatClient::new(&config, &egress)
+            .for_gateway(&vertex, "m", Some(Secret::new("placeholder-key")))
+            .prepare(&history())
+            .expect("prepared");
+        assert_eq!(calls(&http)[0]["extra_content"], signature);
+
+        let other = provider(r#"{"m": {}}"#);
+        let http = AichatClient::new(&config, &egress)
+            .for_gateway(&other, "m", Some(Secret::new("a-token")))
+            .prepare(&history())
+            .expect("prepared");
+        assert_eq!(calls(&http)[0]["id"], "call_1");
+        assert!(calls(&http)[0].get("extra_content").is_none());
     }
 
     /// A local Ollama wants no credential, and `Bearer` with nothing after it is not the same request

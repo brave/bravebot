@@ -272,6 +272,7 @@ doctor-gateway-token = trouvé (jamais affiché)
 doctor-gateway-token-absent = aucun trouvé (définissez une variable nommée dans `env`)
 doctor-gateway-token-not-needed = aucun requis (le bloc n'en nomme aucun)
 doctor-gateway-models-absent = aucun configuré (la passerelle est interrogée)
+doctor-gateway-models-unlisted = aucun configuré (ce service n'a pas de liste : nommez un modèle sous la forme <id>/<modèle>)
 doctor-region = région
 doctor-profile = profil
 doctor-profile-absent = identifiants par défaut
@@ -449,7 +450,7 @@ import-named-model = { $model } dans provider.{ $id }, nommé par { $variable }
 import-pinned = Non proposés, puisque { $file } les définit pour tous les utilisateurs de cette machine :
 import-left-heading = Trouvés dans { $source } et non importés :
 import-left-anthropic-api = l'API native d'Anthropic, dont aucun service ici ne parle le format d'échange
-import-left-vertex = Google Vertex AI, qu'aucun service ici ne joint
+import-left-vertex = Google Vertex AI sans projet Google Cloud, ou par des identifiants Google Cloud, qu'aucun service ici ne joint
 import-left-bearer-token =
     une clé d'API Bedrock ; bravebot signe plutôt les requêtes Bedrock avec la chaîne d'identifiants AWS
 import-left-no-region = Bedrock sans région pour laquelle signer

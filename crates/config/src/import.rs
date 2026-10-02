@@ -10,7 +10,7 @@
 use crate::Secret;
 use crate::bedrock::{Bedrock, Tier};
 use crate::env_var;
-use crate::provider::{self, AWS_PROVIDER_ID, Provider};
+use crate::provider::{self, AWS_PROVIDER_ID, GOOGLE_VERTEX_ID, Provider};
 use serde_json::{Map, Value};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -23,7 +23,7 @@ const SOURCE_BYTES: u64 = 1024 * 1024;
 
 /// Claude Code's switch for Bedrock, which bravebot spells [`env_var::USE_BEDROCK`].
 const CLAUDE_BEDROCK: &str = "CLAUDE_CODE_USE_BEDROCK";
-/// Claude Code's switch for Vertex AI, which no service here reaches.
+/// Claude Code's switch for Vertex AI, which serves Claude models through Google Cloud credentials.
 const CLAUDE_VERTEX: &str = "CLAUDE_CODE_USE_VERTEX";
 /// Claude Code's model variable, which it reads before the settings file's `model` key.
 const CLAUDE_MODEL: &str = "ANTHROPIC_MODEL";
@@ -404,7 +404,8 @@ pub struct Left {
 pub enum Reason {
     /// Anthropic's own API, whose wire format no service here speaks.
     AnthropicApi,
-    /// Google Vertex AI, which no service here reaches.
+    /// Google Vertex AI with no usable project, or through Google Cloud credentials: neither is
+    /// reached by a service here.
     Vertex,
     /// A Bedrock API key, where bravebot signs through the AWS credential chain.
     BearerToken,
@@ -911,6 +912,9 @@ fn opencode(configs: &[PathBuf], auth: Option<&Path>) -> Option<Found> {
                     continue;
                 } else if !speaks_the_protocol(id, None) {
                     Reason::AnotherSdk
+                } else if id == GOOGLE_VERTEX_ID {
+                    // A key with no project to build the endpoint from.
+                    Reason::Vertex
                 } else if let Some(endpoint) = provider::known_endpoint(id) {
                     gateways.push(Gateway {
                         id: id.clone(),
@@ -982,12 +986,11 @@ fn merge(into: &mut Map<String, Value>, from: Map<String, Value>) {
 
 /// The ids opencode reaches through an SDK of their own where the entry names none, each in a
 /// protocol other than OpenAI's.
-const OWN_SDK_IDS: [&str; 6] = [
+const OWN_SDK_IDS: [&str; 5] = [
     "anthropic",
     "azure",
     "cohere",
     "google",
-    "google-vertex",
     "google-vertex-anthropic",
 ];
 
@@ -1002,6 +1005,7 @@ fn speaks_the_protocol(id: &str, npm: Option<&str>) -> bool {
         Some("@ai-sdk/openai-compatible") => true,
         Some("@openrouter/ai-sdk-provider") => id == "openrouter",
         Some("@ai-sdk/amazon-bedrock") => id == AWS_PROVIDER_ID,
+        Some("@ai-sdk/google-vertex") => id == GOOGLE_VERTEX_ID,
         Some(_) => false,
     }
 }
@@ -1047,6 +1051,8 @@ fn gateway(
     let Some(kept) = Provider::all(&probe.0).pop() else {
         return Err(if aws {
             Reason::NoRegion
+        } else if id == GOOGLE_VERTEX_ID {
+            Reason::Vertex
         } else {
             Reason::NoEndpoint
         });
@@ -1113,6 +1119,8 @@ fn gateway(
     let mut kept_options = Map::new();
     let fields: &[&str] = if aws {
         &["region", "profile"]
+    } else if id == GOOGLE_VERTEX_ID {
+        &["baseURL", "project", "location"]
     } else {
         &["baseURL"]
     };
@@ -1711,6 +1719,56 @@ mod tests {
             gateway(&found, "amazon-bedrock").endpoint,
             "https://bedrock-runtime.us-west-2.amazonaws.com"
         );
+    }
+
+    /// IMPORT-3: the entry opencode writes for Vertex AI names a project, and it is offered with the
+    /// two fields the host is built from and the variable this program reads the key from.
+    #[test]
+    fn a_google_vertex_entry_naming_a_project_is_offered_with_its_project_and_location() {
+        let home = Scratch::new("import-vertex-project");
+        home.write(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"google-vertex": {
+                "npm": "@ai-sdk/google-vertex",
+                "options": {"project": "example-project-1", "location": "us-east5"}
+            }}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        assert_eq!(ids(&found), ["google-vertex"]);
+        let vertex = gateway(&found, "google-vertex");
+        assert_eq!(
+            vertex.endpoint,
+            "https://us-east5-aiplatform.googleapis.com/v1/projects/example-project-1/locations/us-east5/endpoints/openapi"
+        );
+        assert_eq!(vertex.variables(), [env_var::GOOGLE_API_KEY]);
+        assert_eq!(
+            vertex.entry.get("options"),
+            Some(&serde_json::json!({"project": "example-project-1", "location": "us-east5"}))
+        );
+    }
+
+    /// IMPORT-3 and IMPORT-4: without a project the entry configures nothing, and a project that is
+    /// a reference opencode would have substituted names no project here.
+    #[test]
+    fn a_google_vertex_entry_naming_no_project_is_left_and_said() {
+        let home = Scratch::new("import-vertex-no-project");
+        home.write(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"google-vertex": {"npm": "@ai-sdk/google-vertex"}}}"#,
+        );
+        let found = one(&home.path, &[], Source::Opencode);
+        assert!(ids(&found).is_empty());
+        assert_eq!(left(&found), [("google-vertex", Reason::Vertex)]);
+
+        home.write(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"google-vertex": {"options": {"project": "{env:GOOGLE_CLOUD_PROJECT}"}}}}"#,
+        );
+        let found = one(&home.path, &[], Source::Opencode);
+        assert!(ids(&found).is_empty());
+        assert_eq!(left(&found), [("google-vertex", Reason::Vertex)]);
     }
 
     /// IMPORT-3: an entry for another SDK would be kept by `Provider::all` and then sent requests in

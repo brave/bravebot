@@ -5099,6 +5099,7 @@ mod tests {
                             name: (*name).into(),
                             arguments: Some((*arguments).into()),
                         },
+                        extra_content: None,
                     })
                     .collect(),
                 context_tokens: 100,

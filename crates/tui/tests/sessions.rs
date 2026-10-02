@@ -2590,6 +2590,7 @@ mod preserved_history {
                             name: "read_file".into(),
                             arguments: format!(r#"{{"path":"file{n}"}}"#),
                         },
+                        extra_content: None,
                     }],
                 ));
                 conversation.push(Message::tool_result(format!("call-{n}"), "a result"));

@@ -736,6 +736,7 @@ pub fn parts_of(blocks: &[ReplyBlock]) -> (String, Vec<bravebot_aichat::protocol
                     // Back to a string, which is how the rest of the agent carries arguments.
                     arguments: Some(tool_use.input.to_string()),
                 },
+                extra_content: None,
             }),
             // Neither reaches here: an unreadable call fails the reply before it is taken apart.
             ReplyBlock::UnreadableToolUse { .. } | ReplyBlock::Other(_) => {}
@@ -890,6 +891,7 @@ mod tests {
                                 name: "one".into(),
                                 arguments: "{}".into(),
                             },
+                            extra_content: None,
                         },
                         ToolCallRequest {
                             id: "b".into(),
@@ -898,6 +900,7 @@ mod tests {
                                 name: "two".into(),
                                 arguments: "{}".into(),
                             },
+                            extra_content: None,
                         },
                     ],
                 ),
@@ -961,6 +964,7 @@ mod tests {
                         name: "read".into(),
                         arguments: r#"{"path":"src/lib.rs"}"#.into(),
                     },
+                    extra_content: None,
                 }],
             )],
             None,
@@ -985,6 +989,7 @@ mod tests {
                         name: "read".into(),
                         arguments: "{not json".into(),
                     },
+                    extra_content: None,
                 }],
             )],
             None,
@@ -1012,6 +1017,7 @@ mod tests {
                         name: "one".into(),
                         arguments: "{}".into(),
                     },
+                    extra_content: None,
                 }],
             )],
             None,

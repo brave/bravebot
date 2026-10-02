@@ -169,6 +169,7 @@ mod tests {
                 name: "read_file".into(),
                 arguments: "{}".into(),
             },
+            extra_content: None,
         }
     }
 

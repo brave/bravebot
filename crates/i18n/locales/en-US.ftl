@@ -315,6 +315,7 @@ doctor-gateway-token = found (never printed)
 doctor-gateway-token-absent = none found (set a variable its `env` names)
 doctor-gateway-token-not-needed = none needed (the block names none)
 doctor-gateway-models-absent = none configured (the gateway is asked what it serves)
+doctor-gateway-models-unlisted = none configured (this service has no listing, so name a model as <id>/<model>)
 doctor-region = region
 doctor-profile = profile
 doctor-profile-absent = default credentials
@@ -556,7 +557,7 @@ import-pinned = Not offered, since { $file } sets them for every user of this ma
 # Found and not imported, one line each, by name and reason and never by value.
 import-left-heading = Found in { $source } and not imported:
 import-left-anthropic-api = Anthropic's own API, whose wire format no service here speaks
-import-left-vertex = Google Vertex AI, which no service here reaches
+import-left-vertex = Google Vertex AI without a Google Cloud project, or through Google Cloud credentials, neither of which a service here reaches
 import-left-bearer-token =
     a Bedrock API key; bravebot signs Bedrock requests through the AWS credential chain instead
 import-left-no-region = Bedrock with no region to sign for

@@ -336,7 +336,7 @@ because its body is read to the end without a stop being looked at.
 
 - **Within https, a hop on this program's own connection may go to any host.** Every hop re-sends the
   whole request, which on those connections means the `authorization` header the aichat and gateway
-  backends carry, the `authorization` and `x-amz-security-token` pair a Bedrock request is signed
+  backends carry (`x-goog-api-key` for a Google Vertex service), the `authorization` and `x-amz-security-token` pair a Bedrock request is signed
   with, the `mcp-session-id` an HTTP MCP server issued, and a body holding the conversation. The
   per-hop check there is the capability and nothing more, for the reason NET-2 gives, so an endpoint
   somebody configured can name any https host in a `Location` header and be sent all of it. NET-9
