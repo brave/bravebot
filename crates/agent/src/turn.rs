@@ -2911,8 +2911,13 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 ),
             ),
             None => {
-                let mut offered =
-                    tools::for_planner(scheduling, arming, &delegates, task.deadlines);
+                let mut offered = tools::for_planner(
+                    scheduling,
+                    arming,
+                    &delegates,
+                    task.deadlines,
+                    tools::Running::Offered,
+                );
                 let names: Vec<&str> = offered
                     .iter()
                     .map(|tool| tool.function.name.as_str())
@@ -2929,6 +2934,19 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     }
                 };
                 if let Some(addressed) = &addressed {
+                    // Which names a definition keeps is read after the table is written, so a
+                    // definition narrowed past `run` leaves descriptions naming a tool that is no
+                    // longer beside them. Written again against what is left, which costs a second
+                    // table only in that case.
+                    if !addressed.tools().iter().any(|tool| tool == "run") {
+                        offered = tools::for_planner(
+                            scheduling,
+                            arming,
+                            &delegates,
+                            task.deadlines,
+                            tools::Running::Withheld,
+                        );
+                    }
                     offered.retain(|tool| addressed.tools().contains(&tool.function.name));
                 }
                 (addressed, offered)
@@ -3302,6 +3320,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // nudged into. Read once: the offer does not change while the turn runs.
         let may_write = tools::offer_writes(&offered);
         let may_run = tools::offer_runs(&offered);
+        // The same question in the form the refusals read it in: a tool that will not answer may say
+        // to use `run` only where this turn has one to use.
+        let running = tools::Running::on(&offered);
         // Whether the planner may ask for another round of tools. Cleared once, when the budget
         // runs out, so the last request goes out with none offered and the turn ends with an answer
         // rather than with the driver's apology.
@@ -3898,6 +3919,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 cancel,
                                 scheduling,
                                 arming,
+                                running,
                                 armed: &mut armed,
                                 home: task.home.as_deref(),
                                 profile: task.profile.as_deref(),

@@ -203,12 +203,15 @@ pub enum Declined {
 
 impl Declined {
     /// The sentence the planner reads, for a repository it called `named`.
+    ///
+    /// What to do instead is not in it. git answers nearly everything this reader declines, `run` is
+    /// how git is asked, and a turn is not always offered `run`, so that half is
+    /// [`Declined::instead`] and the caller that knows the turn puts the two together.
     pub fn describe(&self, named: &str) -> String {
-        let fallback = "Use run to read it with git instead.";
         match self {
             Declined::Untrusted => format!(
                 "{named}/.git is not a directory this session trusts in full, so read_git does \
-                 not open it: reading history means following what its files say. {fallback}"
+                 not open it: reading history means following what its files say."
             ),
             Declined::Fenced => format!(
                 "{named}/.git holds a file a deny rule covers, and read_git reads every file \
@@ -216,46 +219,45 @@ impl Declined {
             ),
             Declined::NoRepository => format!(
                 "{named} has no .git directory holding a repository. read_git reads a repository \
-                 whose .git is a directory. {fallback}"
+                 whose .git is a directory."
             ),
             Declined::LinkedGitDir => format!(
                 "{named}/.git is a file pointing elsewhere, as a linked worktree or a submodule \
-                 has, and read_git does not follow it. {fallback}"
+                 has, and read_git does not follow it."
             ),
-            Declined::Linked => format!(
-                "{named}/.git holds a symbolic link, and read_git does not follow one. {fallback}"
-            ),
+            Declined::Linked => {
+                format!("{named}/.git holds a symbolic link, and read_git does not follow one.")
+            }
             Declined::Alternates => format!(
                 "{named}/.git borrows objects from another repository through \
-                 objects/info/alternates, which read_git does not read. {fallback}"
+                 objects/info/alternates, which read_git does not read."
             ),
             Declined::CommonDir => format!(
                 "{named}/.git shares its refs and objects with another repository through \
-                 commondir, which read_git does not follow. {fallback}"
+                 commondir, which read_git does not follow."
             ),
             Declined::Replaced => format!(
                 "{named}/.git replaces objects or grafts parents, through refs/replace or \
-                 info/grafts, and read_git does not apply either. {fallback}"
+                 info/grafts, and read_git does not apply either."
             ),
             Declined::Include => format!(
                 "{named}/.git/config includes configuration from another file, which read_git \
-                 does not read. {fallback}"
+                 does not read."
             ),
-            Declined::Worktree => format!(
-                "{named}/.git/config sets core.worktree, which read_git does not follow. \
-                 {fallback}"
-            ),
+            Declined::Worktree => {
+                format!("{named}/.git/config sets core.worktree, which read_git does not follow.")
+            }
             Declined::Format => format!(
                 "{named}/.git/config names a repository format or extension read_git does not \
-                 read, or is not configuration read_git can parse. {fallback}"
+                 read, or is not configuration read_git can parse."
             ),
             Declined::Unreadable => format!(
                 "{named}/.git could not be read as a repository: something it names is missing \
-                 or damaged. {fallback}"
+                 or damaged."
             ),
             Declined::NoCommits => format!("{named} has no commits yet."),
             Declined::TooSlow => {
-                format!("Reading {named}/.git took longer than read_git allows. {fallback}")
+                format!("Reading {named}/.git took longer than read_git allows.")
             }
             Declined::Unknown(revision) => {
                 format!("{revision} names no commit, tag, branch or object in {named}.")
@@ -263,10 +265,9 @@ impl Declined {
             Declined::Ambiguous(revision) => format!(
                 "{revision} is the start of more than one object id in {named}; give more of it."
             ),
-            Declined::Unsupported(revision, what) => format!(
-                "{revision} uses {what}, which read_git does not support. Use run to ask git for \
-                 it."
-            ),
+            Declined::Unsupported(revision, what) => {
+                format!("{revision} uses {what}, which read_git does not support.")
+            }
             Declined::Kind { revision, wanted } => {
                 format!("{revision} does not name a {wanted} in {named}.")
             }
@@ -292,8 +293,7 @@ impl Declined {
                 query.word()
             ),
             Declined::DiffNeedsTwo => "diff compares two commits, written as A..B or as \"A B\". \
-                 To see what one commit changed, use show; to compare with the working tree, use \
-                 run."
+                 To see what one commit changed, use show."
                 .to_owned(),
             Declined::SearchNeedsPattern => "search needs a pattern: the regular expression to \
                  look for in the files at the revision."
@@ -312,27 +312,80 @@ impl Declined {
             ),
             Declined::UntrustedTree => format!(
                 "{named} is not a working tree this session trusts in full, so read_git does not \
-                 read its status: status compares every file there with the index. {fallback}"
+                 read its status: status compares every file there with the index."
             ),
             Declined::StatusTakesNoRevision => "status compares the index and the working tree \
                  with HEAD and takes no revision; to compare commits, use diff."
                 .to_owned(),
             Declined::SplitIndex => format!(
-                "{named}/.git/index is split into a shared index, which read_git does not read. \
-                 {fallback}"
+                "{named}/.git/index is split into a shared index, which read_git does not read."
             ),
-            Declined::SparseIndex => format!(
-                "{named}/.git/index is a sparse index, which read_git does not read. {fallback}"
-            ),
+            Declined::SparseIndex => {
+                format!("{named}/.git/index is a sparse index, which read_git does not read.")
+            }
             Declined::Bare => format!(
                 "{named}/.git/config sets core.bare, so the repository has no working tree to \
-                 read a status from. {fallback}"
+                 read a status from."
             ),
             Declined::Elsewhere => format!(
                 "{named}/.git/config names an ignore or attributes file outside the repository, \
                  through core.excludesFile, core.attributesFile or attr.tree, which read_git does \
-                 not read. {fallback}"
+                 not read."
             ),
+        }
+    }
+
+    /// What answers the question instead, where `run` is the thing that would and the caller says
+    /// the turn is offered one. Nothing where no other tool answers it.
+    ///
+    /// Written as a match over the whole enum rather than a list of the ones that have an answer, so
+    /// a variant added later says here whether anything else reads what this reader would not.
+    ///
+    /// The two refusals a deny rule causes are the ones that stay silent although git would print
+    /// the bytes: a file under `.git` a rule covers, and a path in the repository a rule covers. A
+    /// `Read` rule does not bar a command line, so the sentence would read as how to get past a rule
+    /// somebody wrote, and whether advice may point there is the permission rules' question rather
+    /// than this reader's.
+    pub fn instead(&self) -> Option<&'static str> {
+        let read = "Use run to read it with git instead.";
+        match self {
+            Declined::Untrusted
+            | Declined::NoRepository
+            | Declined::LinkedGitDir
+            | Declined::Linked
+            | Declined::Alternates
+            | Declined::CommonDir
+            | Declined::Replaced
+            | Declined::Include
+            | Declined::Worktree
+            | Declined::Format
+            | Declined::Unreadable
+            | Declined::TooSlow
+            | Declined::UntrustedTree
+            | Declined::SplitIndex
+            | Declined::SparseIndex
+            | Declined::Bare
+            | Declined::Elsewhere => Some(read),
+            Declined::Unsupported(..) => Some("Use run to ask git for it."),
+            Declined::DiffNeedsTwo => Some("To compare with the working tree, use run."),
+            // A deny rule's two refusals, for the reason above.
+            Declined::Fenced | Declined::Withheld(_) => None,
+            // Questions this reader answers, asked about something that is not there or asked the
+            // wrong way round. The sentence already says what to ask instead, and git would answer
+            // no better.
+            Declined::NoCommits
+            | Declined::Unknown(_)
+            | Declined::Ambiguous(_)
+            | Declined::Kind { .. }
+            | Declined::NoSuchPath(_)
+            | Declined::PathInvalid(_)
+            | Declined::ShowNeedsPath(_)
+            | Declined::TakesOne(..)
+            | Declined::SearchNeedsPattern
+            | Declined::PatternIsForSearch(_)
+            | Declined::TagsTakeNoPath
+            | Declined::PairIsForDiff(_)
+            | Declined::StatusTakesNoRevision => None,
         }
     }
 }
@@ -2858,6 +2911,27 @@ mod tests {
     /// 2023-11-14 22:13:20 UTC.
     const T1: i64 = 1_700_000_000;
     const DAY: i64 = 86_400;
+
+    /// The two refusals a deny rule causes are the only ones git would answer and this says nothing
+    /// about. A `Read` rule does not bar a command line, so a sentence pointing at `run` would read
+    /// as how to get past a rule somebody wrote, and which paths a command line may reach is the
+    /// permission rules' question rather than this reader's.
+    #[test]
+    fn a_refusal_a_deny_rule_caused_points_at_nothing_else() {
+        for declined in [
+            Declined::Fenced,
+            Declined::Withheld("src/key.pem".to_string()),
+        ] {
+            assert!(
+                declined.instead().is_none(),
+                "{declined:?} told the planner how to read past a deny rule"
+            );
+            assert!(
+                !declined.describe("project").contains("run"),
+                "{declined:?} told the planner how to read past a deny rule"
+            );
+        }
+    }
 
     /// A repository built object by object, so no test needs git installed.
     struct Repo {

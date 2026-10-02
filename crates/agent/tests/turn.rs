@@ -20690,6 +20690,55 @@ fn an_addressed_turn_runs_under_its_definitions_prompt_model_and_kind() {
     }
 }
 
+/// Which tools a definition keeps is read after the tool table is written, so a turn addressed to a
+/// reader starts from descriptions written for a turn that may run a program. What `read_git` says to
+/// do where it will not open a repository is the one of them that names `run`, and a turn offered no
+/// `run` that followed it would spend a round on a name that is not on its list.
+#[test]
+fn an_addressed_reader_reads_a_read_git_that_names_no_run() {
+    let scratch = Scratch::new("address-read-git");
+    let home = Scratch::new("address-read-git-home");
+    define(
+        &home,
+        "history-reader",
+        "kind: reader\n",
+        "READ-THE-HISTORY",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![("ADDRESSED-READ", vec![reply_with("read")])]);
+    let config = config_for(&endpoint);
+
+    turn::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-READ", &home, "history-reader"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let [request] = requests.as_slice() else {
+        panic!("one request, for one round: {requests:?}");
+    };
+    assert!(
+        !request.contains(r#""name":"run""#),
+        "a reader was offered a way to run a program: {request}"
+    );
+    assert!(
+        request.contains("no tool on your list reads that history instead"),
+        "the turn was not told that nothing else reads the history: {request}"
+    );
+    assert!(
+        !request.contains("elsewhere it says so and you use run"),
+        "the turn was sent to a tool it was not offered: {request}"
+    );
+}
+
 /// `--model` is a person choosing the model for this run (CLI-9), so it outranks the model a
 /// definition names. The definition's prompt and tools still apply, and the turn says which model
 /// it did not ask for, so nobody takes the reply for the definition model's.
