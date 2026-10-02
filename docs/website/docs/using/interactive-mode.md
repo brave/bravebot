@@ -40,7 +40,7 @@ works**, in every terminal and in shell mode too.
 With [vi editing](#editing-the-way-vi-does) chosen, Escape enters NORMAL mode instead of discarding
 the line, and the letters do what they do in vi.
 
-Seven of these chords can be [moved to keys of your own](#moving-a-key). Every chord named on this
+Eight of these chords can be [moved to keys of your own](#moving-a-key). Every chord named on this
 page, and every one the interface names on your screen, is the default.
 
 ## Editing the way vi does
@@ -59,7 +59,7 @@ objects, VISUAL selection and REPLACE mode, and how each treats a [marker](#mark
 
 A `keybindings` block in [`settings.json`](../customize/configuration.md) names an action and the
 chord you want to answer it. Write a chord as `ctrl-x`, `alt-o` or `ctrl+x`. The block layers per
-action the way `env` does, so a project file moving one action says nothing about the other six.
+action the way `env` does, so a project file moving one action says nothing about the other seven.
 
 ```json
 {
@@ -70,10 +70,11 @@ action the way `env` does, so a project file moving one action says nothing abou
 }
 ```
 
-**Seven actions can be moved, and nothing else can:**
+**Eight actions can be moved, and nothing else can:**
 
 | Action | Default | What it does |
 |---|---|---|
+| `background` | `ctrl-b` | move the command a turn is waiting on to the background |
 | `editor` | `ctrl-g` | open your editor on the prompt |
 | `watch` | `ctrl-l` | open what a delegate did, a command printed, or an aside answered |
 | `scroller` | `ctrl-o` | open the transcript scroller |
@@ -255,7 +256,7 @@ can see that what you sent went somewhere. Beside the mark is where it is going:
 | into this turn, next round | the running turn reads it once the calls in its current round are done |
 | a new turn after this | nothing running will read it, so it starts a turn when that ends: behind `/compact`, a plan or a goal check, or a turn you have asked to stop |
 | into the next turn | a prompt behind one that will start a turn, which that turn reads once the calls in its first round are done |
-| carried out after this | a slash command, carried out when what is running ends rather than sent into it |
+| carried out after this | a slash command that waits for what is running to end rather than being sent into it |
 | run in your shell | a command line, which your shell runs when what is running ends, and whose output the model then reads |
 
 A turn that answers without another round never reaches the one its prompts were waiting for, so
@@ -269,10 +270,14 @@ you typed it. So "no, the other file" reaches the planner while the work it is a
 happening, instead of arriving after the thing it was meant to prevent. A prompt still waiting when
 the turn ends becomes a turn of its own.
 
-**A [slash command](../reference/commands.md) waits to be carried out rather than to be sent.** It
+**A [slash command](../reference/commands.md) is never sent.** Most wait to be carried out: one
 comes off the box and is drawn under it like anything else waiting, but it is not offered to the turn
 in flight, so nothing about it reaches the planner. It runs when the queue is reached after the turn
-has ended, and a prompt behind it goes once it has.
+has ended, and a prompt behind it goes once it has. During a turn, `/cost`, `/watch`, `/loop` and
+`/goal` are carried out as you press Enter instead, except a `/loop` that starts a loop and a `/goal`
+that sets one, which wait. What they answer is drawn under the turn and joins the transcript after it,
+and nothing waiting moves. During a compaction, a `/btw` question, a `/manifest` run or a goal check,
+every command waits.
 
 **The turn in flight is the one on the screen.** Work handed out to a [delegate](#watching-a-delegate-reading-a-command-and-asking-something-aside)
 is a turn of its own, and you may not know one is running, so what you type waits for the turn you are
@@ -401,6 +406,33 @@ or `ssh` configured to keep flow control, the key can be taken before it arrives
 nothing here. Nothing is lost when that happens, because the line stays in the box.
 :::
 
+## Moving a command to the background
+
+While the turn waits on a command, the hint line beneath the box says `ctrl-b to background`. Press it
+and the turn stops waiting: the command goes on running as a job, the model is told you moved it and
+the job's name, and the turn carries on. The model reads what it printed with `job_output` when it
+needs to. The command is not restarted and keeps everything it printed. It has no deadline once
+moved, and it still ends when the turn does. See
+[background jobs](../reference/run-tool.md#moving-a-running-command-to-the-background) for which
+lines can be moved.
+
+The hint is there only while a press would move something. A command joined to another with `&&`
+or `||`, one with a redirection such as `2>&1`, and one a delegate is running cannot be moved, and
+the hint does not appear for them.
+
+**A job stays on the screen after its block scrolls away.** For as long as the turn has a job
+running, whether you moved it or the model started it in the background, the hint line says how many,
+as in `1 in the background`, in shell mode too. Each job is one row under
+[Ctrl-L](#watching-a-delegate-reading-a-command-and-asking-something-aside), and
+[`/status`](../reference/commands.md#status) lists them. When the turn ends with a job still running,
+the turn stops it, and its row says `stopped when the turn ended`.
+
+The key works from the box. In the transcript view and the scroller, Ctrl-B pages back. In the box
+it is the move key and not a word back; Alt-B and Ctrl-Left move the caret a word back.
+
+Ctrl-B is also the prefix key tmux waits for. Inside tmux, press it twice, or
+[move it](#moving-a-key) to another chord with `"background": "alt-b"`.
+
 ## The rows beneath the box
 
 They run in one order, nearest the box first:
@@ -475,6 +507,11 @@ printed, as far back as is kept, and says so rather than dropping quietly where 
 was kept. Where the planner was kept from the output, every row of it carries the margin every
 quarantined block carries. The row is there whether or not the planner read what it printed, and
 says which, that being the one thing about the bytes you cannot work out from them.
+
+**A background job is one row**, made when the job starts and named `background` in the list, so
+what it printed before the move and every look the model takes afterwards are in the same place.
+Opening it says which job it is and whether it is still running, has ended, or was stopped when the
+turn ended.
 
 **A command's row says how the run ended**, with the same three marks a delegate's row carries: one
 for a run whose every step exited zero, one for a run a step failed, and the mark of work still going

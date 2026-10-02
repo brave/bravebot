@@ -3656,6 +3656,7 @@ fn auth_login_naming_no_way_is_refused_where_nobody_can_pick_one() {
         "bravebot auth login leo",
         "bravebot auth login bedrock",
         "bravebot auth login import",
+        "bravebot auth login gateway",
     ] {
         assert!(stderr.contains(form), "{form} is not offered: {stderr}");
     }
@@ -3731,7 +3732,7 @@ fn auth_login_in_an_incognito_session_refuses_what_its_command_refuses() {
     );
     let (_, stderr) = said(&output);
     assert_eq!(output.status.code(), Some(3), "{stderr}");
-    assert!(stderr.contains("BRAVEBOT_USE_BEDROCK"), "{stderr}");
+    assert!(stderr.contains("AWS_REGION"), "{stderr}");
 }
 
 /// A stand-in for the AWS CLI on profiles `work` and `lapsed`. `aws sso login` succeeds on both,
@@ -3758,21 +3759,14 @@ esac
 #[cfg(unix)]
 #[test]
 fn auth_login_bedrock_signs_in_to_every_profile_and_names_the_one_that_failed() {
-    use std::os::unix::fs::PermissionsExt;
     let scratch = Scratch::new("cli-running-auth-bedrock").with_settings(
         r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2", "profile": "work"}}}}"#,
     );
-    let bin = scratch.path.join("bin");
-    std::fs::create_dir_all(&bin).expect("create the bin directory");
-    let aws = bin.join("aws");
-    std::fs::write(&aws, AWS_WITH_A_LAPSED_PROFILE).expect("write the stand-in aws");
-    std::fs::set_permissions(&aws, std::fs::Permissions::from_mode(0o755))
-        .expect("make it executable");
-    let path = bin.to_str().expect("a UTF-8 path");
+    let path = aws_stand_in(&scratch);
 
     let mut environment = NOTHING_CONFIGURED.to_vec();
     environment.extend([
-        ("PATH", path),
+        ("PATH", path.as_str()),
         ("BRAVEBOT_USE_BEDROCK", "1"),
         ("AWS_REGION", "us-east-1"),
         ("AWS_PROFILE", "lapsed"),
@@ -3797,6 +3791,254 @@ fn auth_login_bedrock_signs_in_to_every_profile_and_names_the_one_that_failed() 
         stderr.contains("profile lapsed is not signed in"),
         "the failure does not name its profile: {stderr}"
     );
+    // The account the switch turns on did not sign in, and the block's needs no switch.
+    let settings = std::fs::read_to_string(scratch.settings()).expect("the settings file");
+    assert!(
+        !settings.contains("BRAVEBOT_USE_BEDROCK"),
+        "the switch was recorded for an account that failed: {settings}"
+    );
+}
+
+/// Put the stand-in AWS CLI under `scratch`, and return the `PATH` that finds it.
+#[cfg(unix)]
+fn aws_stand_in(scratch: &Scratch) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = scratch.path.join("bin");
+    std::fs::create_dir_all(&bin).expect("create the bin directory");
+    let aws = bin.join("aws");
+    std::fs::write(&aws, AWS_WITH_A_LAPSED_PROFILE).expect("write the stand-in aws");
+    std::fs::set_permissions(&aws, std::fs::Permissions::from_mode(0o755))
+        .expect("make it executable");
+    bin.to_str().expect("a UTF-8 path").to_string()
+}
+
+/// CLI-18: picking Bedrock is the opt-in, so once the account the tier variables name signs in the
+/// switch is recorded in the person's own settings file, beside what it says already, and a session
+/// that does not export it uses the account. Recorded once: a second sign-in writes nothing.
+#[cfg(unix)]
+#[test]
+fn auth_login_bedrock_records_the_opt_in_once_its_account_signs_in() {
+    let scratch =
+        Scratch::new("cli-running-auth-bedrock-records").with_settings(r#"{"model": "opus"}"#);
+    let path = aws_stand_in(&scratch);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([
+        ("PATH", path.as_str()),
+        ("AWS_REGION", "us-east-1"),
+        ("AWS_PROFILE", "work"),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+    ]);
+
+    let output = bravebot(&scratch.path, &environment, &["auth", "login", "bedrock"]);
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stdout}{stderr}");
+    assert!(stdout.contains("profile work is signed in"), "{stdout}");
+    assert!(
+        stdout.contains("sets BRAVEBOT_USE_BEDROCK=1 now"),
+        "the record was not reported: {stdout}"
+    );
+    // What the file says is read back by the `doctor` run below, so this is only what it holds.
+    let recorded = std::fs::read_to_string(scratch.settings()).expect("the settings file");
+    assert!(
+        recorded.contains(r#""BRAVEBOT_USE_BEDROCK": "1""#),
+        "{recorded}"
+    );
+    assert!(
+        recorded.contains(r#""model": "opus""#),
+        "the record lost what the file said: {recorded}"
+    );
+
+    let doctor = bravebot(&scratch.path, &environment, &["doctor"]);
+    let (stdout, stderr) = said(&doctor);
+    assert!(doctor.status.success(), "{stdout}{stderr}");
+    let lines: Vec<&str> = stdout.lines().map(str::trim).collect();
+    let at = lines
+        .iter()
+        .position(|line| *line == "profile   work")
+        .unwrap_or_else(|| panic!("a session without the export has no account: {stdout}"));
+    assert_eq!(
+        lines.get(at + 1).copied(),
+        Some("session   signed in"),
+        "{stdout}"
+    );
+
+    let again = bravebot(&scratch.path, &environment, &["auth", "login", "bedrock"]);
+    let (stdout, stderr) = said(&again);
+    assert!(again.status.success(), "{stdout}{stderr}");
+    assert!(
+        !stdout.contains("BRAVEBOT_USE_BEDROCK") && !stderr.contains("BRAVEBOT_USE_BEDROCK"),
+        "a second sign-in had something to say about the switch: {stdout}{stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.settings()).expect("the settings file"),
+        recorded,
+        "a second sign-in wrote the file"
+    );
+}
+
+/// CLI-18: a checkout's settings turning the switch on are read only in that checkout, so the
+/// person's own file is where it is recorded.
+#[cfg(unix)]
+#[test]
+fn auth_login_bedrock_records_the_opt_in_where_only_a_checkout_turns_it_on() {
+    let scratch = Scratch::new("cli-running-auth-bedrock-checkout")
+        .with_settings(r#"{"model": "opus"}"#)
+        .with_file(
+            "checkout/.bravebot/settings.json",
+            r#"{"env": {"BRAVEBOT_USE_BEDROCK": "1"}}"#,
+        );
+    let path = aws_stand_in(&scratch);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([
+        ("PATH", path.as_str()),
+        ("AWS_REGION", "us-east-1"),
+        ("AWS_PROFILE", "work"),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+    ]);
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path.join("checkout"),
+        &environment,
+        &["auth", "login", "bedrock"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stdout}{stderr}");
+    assert!(stdout.contains("profile work is signed in"), "{stdout}");
+    let recorded = std::fs::read_to_string(scratch.settings()).expect("the settings file");
+    assert!(
+        recorded.contains(r#""BRAVEBOT_USE_BEDROCK": "1""#),
+        "the checkout's switch kept the person's file from recording it: {recorded}"
+    );
+}
+
+/// CLI-18: where no tier variable names a model, the tier variables' account is not one a session
+/// could use, so only a provider block's account is signed in, and nothing is recorded.
+#[cfg(unix)]
+#[test]
+fn auth_login_bedrock_signs_in_only_a_provider_block_where_no_tier_names_a_model() {
+    let block = r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2", "profile": "work"}}}}"#;
+    let scratch = Scratch::new("cli-running-auth-bedrock-block-only").with_settings(block);
+    let path = aws_stand_in(&scratch);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([("PATH", path.as_str()), ("AWS_REGION", "us-east-1")]);
+
+    let output = bravebot(&scratch.path, &environment, &["auth", "login", "bedrock"]);
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stdout}{stderr}");
+    assert!(stdout.contains("profile work is signed in"), "{stdout}");
+    assert!(
+        !stdout.contains("default AWS profile") && !stderr.contains("default AWS profile"),
+        "an account no session uses was signed in to: {stdout}{stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.settings()).expect("the settings file"),
+        block,
+        "the switch was recorded for a provider block"
+    );
+}
+
+/// CLI-18: an incognito session signs in and records nothing, and says the switch is still needed.
+#[cfg(unix)]
+#[test]
+fn auth_login_bedrock_in_an_incognito_session_records_nothing() {
+    let scratch = Scratch::new("cli-running-auth-bedrock-incognito");
+    let path = aws_stand_in(&scratch);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([
+        ("PATH", path.as_str()),
+        ("AWS_REGION", "us-east-1"),
+        ("AWS_PROFILE", "work"),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+    ]);
+
+    let output = bravebot(
+        &scratch.path,
+        &environment,
+        &["--incognito", "auth", "login", "bedrock"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stdout}{stderr}");
+    assert!(stdout.contains("profile work is signed in"), "{stdout}");
+    assert!(
+        stderr.contains("records nothing, so BRAVEBOT_USE_BEDROCK=1 still has to be exported"),
+        "{stderr}"
+    );
+    assert!(
+        !scratch.settings().exists(),
+        "an incognito session wrote settings"
+    );
+}
+
+/// CLI-18: a settings file the switch cannot be added to, that turns Bedrock off under an export
+/// that turns it on, or that names the switch with a value the settings reader does not take, is
+/// left byte for byte as it was, and the sign-in says why. Only a file that cannot be written fails
+/// the command: the others hold the person's own setting.
+#[cfg(unix)]
+#[test]
+fn auth_login_bedrock_leaves_a_settings_file_it_cannot_record_in_as_it_is() {
+    for (name, contents, exported, status, said_why) in [
+        (
+            "not-a-document",
+            "not a settings document",
+            None,
+            1,
+            "does not hold a settings document",
+        ),
+        ("env-not-a-block", r#"{"env": "x"}"#, None, 1, "env in "),
+        (
+            "off-under-an-export",
+            r#"{"env": {"BRAVEBOT_USE_BEDROCK": "0"}}"#,
+            Some("1"),
+            0,
+            "a settings file sets BRAVEBOT_USE_BEDROCK to something other than 1",
+        ),
+        (
+            "not-a-string",
+            r#"{"env": {"BRAVEBOT_USE_BEDROCK": 0}}"#,
+            None,
+            0,
+            "already names BRAVEBOT_USE_BEDROCK, so it was left as it is",
+        ),
+    ] {
+        let scratch =
+            Scratch::new(&format!("cli-running-auth-bedrock-{name}")).with_settings(contents);
+        let path = aws_stand_in(&scratch);
+        let mut environment = NOTHING_CONFIGURED.to_vec();
+        environment.extend([
+            ("PATH", path.as_str()),
+            ("AWS_REGION", "us-east-1"),
+            ("AWS_PROFILE", "work"),
+            ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+        ]);
+        environment.extend(exported.map(|value| ("BRAVEBOT_USE_BEDROCK", value)));
+
+        let output = bravebot(&scratch.path, &environment, &["auth", "login", "bedrock"]);
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(
+            output.status.code(),
+            Some(status),
+            "{name}: {stdout}{stderr}"
+        );
+        assert!(
+            stdout.contains("profile work is signed in"),
+            "{name}: {stdout}"
+        );
+        assert!(stderr.contains(said_why), "{name}: {stderr}");
+        assert!(
+            !stdout.contains("BRAVEBOT_USE_BEDROCK=1 now"),
+            "{name} reported a record: {stdout}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.settings()).expect("the settings file"),
+            contents,
+            "{name} was rewritten"
+        );
+    }
 }
 
 /// CLI-7: `doctor` says of each AWS account whether the AWS CLI gives its profile a credential, and
@@ -3943,7 +4185,9 @@ fn auth_logout_leo_forgets_the_import_in_an_incognito_session() {
 }
 
 /// CLI-18: the Bedrock way signs in to an account the configuration names, so where it names none
-/// it is a configuration failure that says what to set, and no AWS command is run.
+/// it is a configuration failure that says what to set, and no AWS command is run. The switch is not
+/// among what to set, since picking the way is the opt-in, unless a file or an export sets it to
+/// something that turns Bedrock off.
 #[test]
 fn auth_login_bedrock_is_refused_where_no_aws_account_is_configured() {
     let scratch = Scratch::new("cli-running-auth-no-aws");
@@ -3958,7 +4202,25 @@ fn auth_login_bedrock_is_refused_where_no_aws_account_is_configured() {
     assert_eq!(output.status.code(), Some(3), "{stderr}");
     assert!(stdout.is_empty(), "{stdout}");
     assert!(
-        stderr.contains("BRAVEBOT_USE_BEDROCK") && stderr.contains("AWS_REGION"),
+        stderr.contains("AWS_REGION")
+            && stderr.contains("ANTHROPIC_DEFAULT_OPUS_MODEL")
+            && !stderr.contains("BRAVEBOT_USE_BEDROCK"),
+        "{stderr}"
+    );
+
+    let scratch = Scratch::new("cli-running-auth-bedrock-off")
+        .with_settings(r#"{"env": {"BRAVEBOT_USE_BEDROCK": "0", "AWS_REGION": "us-east-1"}}"#);
+    let output = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["auth", "login", "bedrock"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("BRAVEBOT_USE_BEDROCK is set to something other than 1"),
         "{stderr}"
     );
 }
@@ -3984,6 +4246,277 @@ fn auth_login_import_is_the_import_and_refuses_where_it_does() {
         !scratch.settings().exists(),
         "a piped import wrote settings"
     );
+}
+
+/// Two gateways a settings file configures, one naming a variable for its credential and one
+/// naming none.
+const TWO_GATEWAYS: &str = r#"{"provider": {
+    "openrouter": {"env": ["OPENROUTER_API_KEY"],
+        "options": {"baseURL": "https://openrouter.example/api/v1"}},
+    "work": {"options": {"baseURL": "https://gateway.work.example/v1"}}
+}}"#;
+
+/// The placeholder a file of gateway keys holds in these tests.
+const A_STORED_KEY: &str = "placeholder-stored-key";
+
+/// A file of gateway keys holding [`A_STORED_KEY`] for each of `ids`.
+fn stored_keys(ids: &[&str]) -> String {
+    let entries: Vec<String> = ids
+        .iter()
+        .map(|id| format!(r#""{id}": "{A_STORED_KEY}""#))
+        .collect();
+    format!(r#"{{"gateways": {{{}}}}}"#, entries.join(", "))
+}
+
+fn gateway_keys(scratch: &Scratch) -> PathBuf {
+    scratch.path.join(".bravebot").join("gateway-keys.json")
+}
+
+/// CLI-18 and INCOG-7: every refusal the gateway way can make without asking anything is made
+/// before the key is asked for, and none of them writes a file of keys. A word that names no
+/// gateway, a word after the id and what follows `--key=` are not repeated, since each is most
+/// likely the key, typed where somebody took it for the argument.
+#[test]
+fn auth_login_gateway_is_refused_before_a_key_is_asked_for() {
+    let scratch = Scratch::new("cli-running-auth-gateway-refused").with_settings(TWO_GATEWAYS);
+    let key_as_a_flag = format!("--key={A_STORED_KEY}");
+
+    for (arguments, code, said_this) in [
+        (
+            &["auth", "login", "gateway", A_STORED_KEY][..],
+            2,
+            "openrouter, work",
+        ),
+        (
+            &["auth", "login", "gateway", "work", A_STORED_KEY][..],
+            2,
+            "never a command-line argument",
+        ),
+        (&["auth", "login", "gateway", "--key"][..], 2, "--key"),
+        (
+            &["auth", "login", "gateway", key_as_a_flag.as_str()][..],
+            2,
+            "--key",
+        ),
+        (&["auth", "login", "gateway"][..], 2, "needs a terminal"),
+        (
+            &["auth", "login", "gateway", "work"][..],
+            2,
+            "needs a terminal",
+        ),
+        (
+            &["--incognito", "auth", "login", "gateway", "work"][..],
+            1,
+            "incognito",
+        ),
+    ] {
+        let output = bravebot(&scratch.path, NOTHING_CONFIGURED, arguments);
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(code), "{arguments:?}: {stderr}");
+        assert!(stdout.is_empty(), "{arguments:?}: {stdout}");
+        assert!(stderr.contains(said_this), "{arguments:?}: {stderr}");
+        assert!(
+            !stderr.contains(A_STORED_KEY),
+            "{arguments:?} repeated the key: {stderr}"
+        );
+    }
+    assert!(
+        !gateway_keys(&scratch).exists(),
+        "a refused sign-in stored a key"
+    );
+
+    let unconfigured = Scratch::new("cli-running-auth-gateway-none");
+    let output = bravebot(
+        &unconfigured.path,
+        NOTHING_CONFIGURED,
+        &["auth", "login", "gateway"],
+    );
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("provider block"), "{stderr}");
+}
+
+/// CLI-18 and INCOG-7: logout forgets the key named and leaves the rest, says the key is still
+/// good at the host its block sends it to, and is allowed in an incognito session since it leaves
+/// less behind. With several stored and none named it forgets nothing.
+#[test]
+fn auth_logout_gateway_forgets_the_key_named_in_an_incognito_session() {
+    let scratch = Scratch::new("cli-running-auth-gateway-logout")
+        .with_settings(TWO_GATEWAYS)
+        .with_state("gateway-keys.json", &stored_keys(&["openrouter", "work"]));
+    let keys = gateway_keys(&scratch);
+    let logout = |more: &[&str]| {
+        let mut arguments = vec!["--incognito", "auth", "logout", "gateway"];
+        arguments.extend(more);
+        let output = bravebot(&scratch.path, NOTHING_CONFIGURED, &arguments);
+        let (stdout, stderr) = said(&output);
+        assert!(
+            !stdout.contains(A_STORED_KEY) && !stderr.contains(A_STORED_KEY),
+            "{more:?} printed the key: {stdout}{stderr}"
+        );
+        (output.status.code(), stdout, stderr)
+    };
+
+    let (code, _, stderr) = logout(&[]);
+    assert_eq!(code, Some(2), "{stderr}");
+    assert!(stderr.contains("openrouter, work"), "{stderr}");
+    let (code, _, stderr) = logout(&["elsewhere"]);
+    assert_eq!(code, Some(2), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(&keys).expect("the keys"),
+        stored_keys(&["openrouter", "work"]),
+        "a refused logout rewrote the keys"
+    );
+
+    let (code, stdout, stderr) = logout(&["work"]);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stdout.contains("gateway.work.example"), "{stdout}");
+    let left = std::fs::read_to_string(&keys).expect("the key left");
+    assert!(
+        left.contains("openrouter") && !left.contains("work"),
+        "{left}"
+    );
+
+    // The one left is the one meant where none is named.
+    let (code, stdout, stderr) = logout(&[]);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stdout.contains("openrouter.example"), "{stdout}");
+    assert!(!keys.exists(), "the last key forgotten left a file");
+
+    let (code, _, stderr) = logout(&[]);
+    assert_eq!(code, Some(2), "{stderr}");
+}
+
+/// CRED-25: `doctor` names a stored key as stored and never prints it, and a file of keys it cannot
+/// read is named, since every gateway a key in it was for then reports none.
+#[test]
+fn doctor_names_a_stored_gateway_key_without_printing_it() {
+    let scratch = Scratch::new("cli-running-doctor-stored-key")
+        .with_settings(TWO_GATEWAYS)
+        .with_state("gateway-keys.json", &stored_keys(&["work"]));
+
+    let (stdout, stderr) = said(&bravebot(&scratch.path, NOTHING_CONFIGURED, &["doctor"]));
+    assert!(!stdout.contains(A_STORED_KEY), "{stdout}");
+    assert!(
+        stdout.contains("stored by bravebot auth login gateway"),
+        "{stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains("bravebot auth login gateway openrouter"),
+        "the gateway with no key was not told how to store one: {stdout}"
+    );
+    assert!(!stdout.contains("gateway keys"), "{stdout}");
+
+    std::fs::write(gateway_keys(&scratch), "not a file of keys").expect("spoil the keys");
+    let (stdout, _) = said(&bravebot(&scratch.path, NOTHING_CONFIGURED, &["doctor"]));
+    assert!(!stdout.contains("stored by"), "{stdout}");
+    let line = stdout
+        .lines()
+        .find(|line| line.trim_start().starts_with("gateway keys"))
+        .unwrap_or_else(|| panic!("the unreadable file is not named: {stdout}"));
+    assert!(line.contains("gateway-keys.json"), "{line}");
+}
+
+/// CRED-25: a file of gateway keys doctor cannot read is a fault it ends on, as an unreadable rule
+/// is, since every key in it has stopped being sent; the model in force here is keyed by a
+/// variable, so the file is the only thing wrong.
+#[test]
+fn doctor_fails_on_a_file_of_gateway_keys_it_cannot_read() {
+    let settings = TWO_GATEWAYS.replacen('{', r#"{"model": "openrouter/z-ai/glm-4.6", "#, 1);
+    let scratch = Scratch::new("cli-running-doctor-unreadable-keys")
+        .with_settings(&settings)
+        .with_state("gateway-keys.json", &stored_keys(&["work"]));
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("OPENROUTER_API_KEY", "placeholder-variable-key"));
+
+    let output = bravebot(&scratch.path, &environment, &["doctor"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+
+    std::fs::write(gateway_keys(&scratch), "not a file of keys").expect("spoil the keys");
+    let output = bravebot(&scratch.path, &environment, &["doctor"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+}
+
+/// A gateway on loopback that answers every chat request with one short reply and hands over the
+/// `Authorization` header each one carried.
+fn a_gateway_seeing_bearers() -> (u16, mpsc::Receiver<String>) {
+    let listing = r#"{"data": [{"id": "reasons-only", "context_length": 262144}]}"#;
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, seen) = mpsc::channel();
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut request = String::new();
+            let _ = reader.read_line(&mut request);
+            let (mut length, mut bearer) = (0usize, String::new());
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':') {
+                    match name.trim().to_ascii_lowercase().as_str() {
+                        "content-length" => length = value.trim().parse().unwrap_or(0),
+                        "authorization" => bearer = value.trim().to_string(),
+                        _ => {}
+                    }
+                }
+            }
+            let mut body = vec![0u8; length];
+            let _ = reader.read_exact(&mut body);
+            let reply = match request.starts_with("GET") {
+                true => http(200, listing),
+                false => {
+                    let _ = sender.send(bearer);
+                    streamed("ok")
+                }
+            };
+            let _ = stream.write_all(reply.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (port, seen)
+}
+
+/// BACKEND-16: a key stored for a gateway's id is the bearer a run sends it where no variable the
+/// block names is set, and one that is set is sent instead.
+#[test]
+fn a_run_sends_the_key_stored_for_its_gateway() {
+    for (exported, expected) in [
+        (None, A_STORED_KEY),
+        (Some("placeholder-exported-key"), "placeholder-exported-key"),
+    ] {
+        let (port, seen) = a_gateway_seeing_bearers();
+        let scratch = Scratch::new("cli-running-stored-key-sent")
+            .with_settings(&format!(
+                r#"{{"provider": {{"openrouter": {{"env": ["OPENROUTER_API_KEY"],
+                    "options": {{"baseURL": "http://127.0.0.1:{port}/api/v1"}}}}}},
+                    "model": "openrouter/reasons-only"}}"#
+            ))
+            .with_state("gateway-keys.json", &stored_keys(&["openrouter"]));
+        let mut environment = vec![
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ];
+        environment.extend(exported.map(|key| ("OPENROUTER_API_KEY", key)));
+
+        let output = bravebot(&scratch.path, &environment, &["-p", "say something"]);
+
+        let (_, stderr) = said(&output);
+        let bearer = seen
+            .recv_timeout(Duration::from_secs(60))
+            .unwrap_or_else(|_| panic!("the run did not reach the gateway: {stderr}"));
+        assert_eq!(
+            bearer,
+            format!("Bearer {expected}"),
+            "{exported:?}: {stderr}"
+        );
+    }
 }
 
 /// What `ollama list` shows on a machine with one model that can call tools and one that cannot,

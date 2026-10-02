@@ -40,7 +40,9 @@ pub fn list(config: &Config) -> Value {
             continue;
         }
         let credential = provider.credential(|name| std::env::var(name).ok());
-        if matches!(credential, Credential::Absent) {
+        // A compiled list asks nothing, so a missing key is said when a turn is sent, as it is for
+        // a model a block names.
+        if matches!(credential, Credential::Absent) && provider.compiled_roster().is_none() {
             warnings.push(format!(
                 "No credential configured for {}.",
                 provider.display_name()
@@ -98,8 +100,8 @@ pub fn list(config: &Config) -> Value {
 ///
 /// `None` is not an error here: a gateway configured without a credential is asked without one,
 /// which is what a local Ollama wants. The shared listing reads `None` as a reason not to ask the
-/// account-scoped route at all, since there is no account to scope an answer to. `Absent` never
-/// reaches this, being the one state that is a warning rather than a request.
+/// account-scoped route at all, since there is no account to scope an answer to. `Absent` reaches
+/// this only for a service with a compiled list, which is offered without a request.
 fn bearer(credential: &Credential) -> Option<&str> {
     match credential {
         Credential::Token(token) => Some(token.expose()),
@@ -367,6 +369,86 @@ mod tests {
             );
         }
         assert_eq!(refused(&config, Some("an-allowed-model")), None);
+    }
+
+    /// A configuration that reaches Google Vertex through a block naming `models` where given. The
+    /// Brave credentials are blank so no Brave roster is asked for. With a key, the key is in the
+    /// block, so that it is found whatever this process has exported. Without one, the block names a
+    /// variable nothing sets.
+    fn a_config_with_google_vertex(key: Option<&str>, models: Option<&str>) -> Config {
+        use bravebot_config::env_var;
+
+        let credential = match key {
+            Some(key) => {
+                format!(r#""options": {{"project": "example-project-1", "apiKey": "{key}"}}"#)
+            }
+            None => r#""options": {"project": "example-project-1"},
+                "env": ["BRAVEBOT_TEST_UNSET_VERTEX_KEY"]"#
+                .to_string(),
+        };
+        let models = models
+            .map(|models| format!(r#", "models": {models}"#))
+            .unwrap_or_default();
+        let mut config = Config::from_lookup(|key| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+            _ => None,
+        })
+        .expect("an account named on its own is a working configuration");
+        config.providers = bravebot_config::Settings::parse(&format!(
+            r#"{{"provider": {{"google-vertex": {{{credential}{models}}}}}}}"#
+        ))
+        .providers()
+        .to_vec();
+        assert_eq!(config.providers.len(), 1, "the block configured no service");
+        config
+    }
+
+    /// The ids the window offers for the Google Vertex service.
+    fn google_vertex_rows(config: &Config) -> Vec<String> {
+        list(config)["models"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .filter_map(|row| row["id"].as_str())
+            .filter(|id| id.starts_with("google-vertex/"))
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// BACKEND-49 in the window: Vertex has no listing a key can call, so a service naming no models
+    /// is offered the list compiled in. Offering it asks nothing, so a key that is not found keeps no
+    /// row out, as it keeps out none of the models a block names.
+    #[test]
+    fn the_window_offers_the_compiled_models_for_a_google_vertex_service_naming_none() {
+        for key in [Some("placeholder-key"), None] {
+            let config = a_config_with_google_vertex(key, None);
+            let compiled = config.providers[0]
+                .compiled_roster()
+                .expect("a compiled list");
+            let mut expected: Vec<String> = compiled
+                .iter()
+                .map(|id| format!("google-vertex/{id}"))
+                .collect();
+            expected.sort();
+            assert!(!expected.is_empty());
+            assert_eq!(google_vertex_rows(&config), expected, "key {key:?}");
+        }
+    }
+
+    /// BACKEND-49 in the window: a block naming models is offered those and no others. The one named
+    /// is on no compiled list, so a window adding the two together would offer more than this row.
+    #[test]
+    fn the_window_offers_a_google_vertex_block_its_own_models_alone() {
+        let config = a_config_with_google_vertex(
+            Some("placeholder-key"),
+            Some(r#"{"google/gemini-3-flash-preview": {}}"#),
+        );
+        assert_eq!(
+            google_vertex_rows(&config),
+            ["google-vertex/google/gemini-3-flash-preview"]
+        );
     }
 
     #[test]

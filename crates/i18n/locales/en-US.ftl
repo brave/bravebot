@@ -33,7 +33,7 @@ cli-usage-doctor = Check configuration and confinement
 cli-usage-import = Import a Leo Premium subscription
 cli-usage-import-providers = Import a model service Claude Code or opencode configured
 cli-usage-auth-login = Sign in to a model service, listing every way when none is named
-cli-usage-auth-logout = Forget an imported Leo Premium subscription
+cli-usage-auth-logout = Forget an imported Leo Premium subscription or a stored gateway key
 cli-usage-mcp = Declare, list and approve MCP servers
 
 cli-keys-heading = Interactive keys:
@@ -243,7 +243,7 @@ doctor-ends-aws-access-key =
 doctor-ends-aws-session =
     a session credential: issued by AWS STS for the profile, and this program asks the AWS CLI for another as it builds each request, so the expiry ends that copy rather than this program's access; ended at its issuer, since `aws sso logout` clears this machine's copy rather than the session behind it, and the next one is minted from whatever the profile chains to, for as long as that lasts
 doctor-ends-gateway-token =
-    a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file or unsetting the variable ends this machine's custody and leaves the token live there
+    a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file, unsetting the variable or running `bravebot auth logout gateway` ends this machine's custody and leaves the token live there
 doctor-ends-subscription-batch =
     an imported subscription's credential batch: minted by Brave's subscription service against the order this install registered as a device on; each credential is spent by one premium request and the batch stops working when its last window closes, and nothing revokes an unspent one, so `bravebot auth logout leo` ends this machine's custody and leaves the batch spendable by whatever copied the file
 # Which tier the gate walk left a credential on, shown under the account of what would end it. One
@@ -304,7 +304,7 @@ doctor-dropped-gateway-token-nothing-decides-each-use =
 doctor-dropped-gateway-token-no-bound-fixed-before-issue =
     gate { $gate }, { $answer }: no bound on what the token may do is fixed before it is issued, since the block names a host and a variable and never an issuer, so there is nothing here to ask for a narrower one
 doctor-dropped-gateway-token-not-minted-for-one-step =
-    gate { $gate }, { $answer }: it is not minted for one step, since the token is whatever the settings file carries or the variable holds, and it is held for the whole run
+    gate { $gate }, { $answer }: it is not minted for one step, since the token is whatever the settings file carries, the variable holds or `bravebot auth login gateway` stored, and it is held for the whole run
 doctor-dropped-subscription-batch-nothing-decides-each-use =
     gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this process presents a credential from the batch itself and nothing is asked to authorise the request
 # Both are reported when both are reachable, so this names one of the two rather than the backend.
@@ -315,10 +315,16 @@ doctor-backend-gateway = { $gateway } (gateway)
 # Whether one was found, never the value: on this path it is a bearer token, and a diagnostic that
 # printed one is a diagnostic people paste into issues.
 doctor-gateway-token = found (never printed)
-doctor-gateway-token-absent = none found (set a variable its `env` names)
+doctor-gateway-token-stored = stored by bravebot auth login gateway (never printed)
+# The id is the provider block's.
+doctor-gateway-token-absent =
+    none found (set a variable its `env` names, or run bravebot auth login gateway { $id })
 doctor-gateway-token-not-needed = none needed (the block names none)
+doctor-gateway-keys = gateway keys
+doctor-gateway-keys-unreadable =
+    { $path } cannot be read, so no key in it is sent (bravebot auth login gateway leaves it as it is)
 doctor-gateway-models-absent = none configured (the gateway is asked what it serves)
-doctor-gateway-models-unlisted = none configured (this service has no listing, so name a model as <id>/<model>)
+doctor-gateway-models-compiled = { $models } (built in, since this service has no listing; name any other the same way)
 doctor-region = region
 doctor-profile = profile
 doctor-profile-absent = default credentials
@@ -623,12 +629,16 @@ auth-unexpected-argument = { $command } does not take { $argument }
 auth-needs-a-terminal =
     bravebot auth login asks which way to sign in, so it needs a terminal to ask on, or the name of a way
 auth-logout-needs-a-way = bravebot auth logout needs the name of the way to sign out of
-# The heading over the list. Each line under it starts with a number and a word, leo, bedrock or
-# import, which a script types and which are not translated.
+# The heading over the list. Each line under it starts with a number and a word, leo, bedrock,
+# import or gateway, which a script types and which are not translated.
 auth-ways-heading = Ways to sign in to a model service:
 auth-way-leo = Brave Leo Premium, from a Brave install that subscribes
 auth-way-bedrock = An AWS account, for Amazon Bedrock
 auth-way-import = A model service Claude Code, opencode or Ollama has, imported into settings
+auth-way-gateway = A key for a gateway a provider block in settings names, typed here and kept by bravebot
+# The status of the gateway way where keys are stored. The ids are provider ids.
+auth-gateway-held = a key stored for { $ids }
+auth-gateway-held-unreadable = the file of gateway keys cannot be read
 # A way that is already signed in, with what it holds.
 auth-way-held = { $description } ({ $status })
 auth-signed-in = signed in
@@ -642,9 +652,28 @@ auth-leo-held =
     Brave Leo Premium is signed in: { $status }. bravebot auth logout leo signs out.
 # A second sign-in registers this machine with Brave as one more device.
 auth-sign-in-again = Sign in again, as a new device?
-# The two variables are BRAVEBOT_USE_BEDROCK and AWS_REGION.
+# The region is AWS_REGION, and the tiers are the variables naming a model, such as
+# ANTHROPIC_DEFAULT_OPUS_MODEL.
 auth-no-aws-account =
-    no AWS account is configured for Bedrock: set { $switch }=1 and { $region }, or run bravebot auth login import where Claude Code or opencode uses one
+    no AWS account is configured for Bedrock: set { $region } and a model in one of { $tiers }, or run bravebot auth login import where Claude Code or opencode uses one
+# In every auth-bedrock message the switch is BRAVEBOT_USE_BEDROCK, and the file is the person's
+# own settings file.
+auth-bedrock-off =
+    { $switch } is set to something other than 1, which turns Bedrock off, and no amazon-bedrock provider block names an AWS account
+# The path is the machine-level settings file an administrator writes.
+auth-bedrock-pinned-off =
+    { $path } sets { $switch } for every user of this machine to something other than 1, which turns Bedrock off, and no amazon-bedrock provider block names an AWS account
+auth-bedrock-recorded = { $file } sets { $switch }=1 now, so a session uses Bedrock without it being exported
+auth-bedrock-not-recorded =
+    { $switch }=1 was not recorded, so it still has to be exported for a session to use Bedrock: { $problem }
+auth-bedrock-not-recorded-incognito =
+    an incognito session records nothing, so { $switch }=1 still has to be exported for a session to use Bedrock
+auth-bedrock-overruled =
+    a settings file sets { $switch } to something other than 1, so a session uses Bedrock only where { $switch }=1 is exported
+auth-bedrock-left =
+    { $file } already names { $switch }, so it was left as it is, and a session uses Bedrock only where { $switch }=1 is exported or a project's settings set it
+auth-bedrock-env-not-a-block = env in { $file } is not a block of names, so it was left as it is
+auth-bedrock-settings-changed = { $file } changed as it was being written, so it was left as it is
 auth-aws-profile-signed-in = the AWS profile { $profile } is signed in
 auth-aws-default-signed-in = the default AWS profile is signed in
 # The failure is what the AWS CLI or the check after it said.
@@ -656,6 +685,46 @@ auth-logout-bedrock =
     bravebot keeps no AWS session of its own: the AWS CLI keeps it, and aws sso logout ends it
 auth-logout-import =
     an import keeps no credential of its own: it wrote entries to the settings file, and removing them there undoes it
+# The id is the word typed after gateway. The word after it is not repeated, because it is most
+# likely the key.
+auth-gateway-key-argument =
+    a key is never a command-line argument, where other programs can read it and the shell keeps it: run bravebot auth login gateway { $id } and type the key when asked
+auth-gateway-not-while-incognito =
+    an incognito session writes nothing to disk, and storing a key is a write: run bravebot auth login gateway without --incognito
+auth-gateway-none-configured =
+    no gateway is configured: add a provider block to settings.json, or run bravebot auth login import, then store its key here
+auth-gateway-not-configured = that is not the id of a provider block; the gateways configured are { $ids }
+auth-gateway-needs-a-terminal =
+    a gateway key is typed at a terminal with nothing drawn, so bravebot auth login gateway needs a terminal
+auth-gateway-no-home = there is no home directory to store the key in
+auth-gateway-keys-unreadable =
+    { $path } is not a file of keys bravebot wrote, so it was left as it is and nothing was changed
+auth-gateways-heading = Gateways configured:
+# Beside a gateway in the list under auth-gateways-heading.
+auth-gateway-key-stored = a key stored
+auth-which-gateway = Which one? Type its number or its id, or nothing to stop:
+auth-not-a-listed-gateway = { $answer } is not one of the gateways listed
+auth-gateway-key-held = A key is already stored for { $id }.
+auth-gateway-replace = Replace it?
+# Asked with echo off, so nothing appears as the key is typed or pasted.
+auth-gateway-key-question = Key for { $id }, sent to { $host } (not shown as you type):
+auth-gateway-nothing-stored = nothing was stored
+auth-gateway-not-read = the key could not be read from the terminal: { $error }
+auth-gateway-not-stored = the key was not stored: { $path }: { $error }
+auth-gateway-stored =
+    the key for { $id } is stored in { $path }, and sessions started from now on send it to { $host }
+# The variable is one the provider block's env names.
+auth-gateway-variable-wins =
+    { $variable } is set, and while it is, a session sends its value instead of the stored key
+auth-logout-gateway-none = no gateway key is stored
+auth-logout-gateway-which =
+    keys are stored for { $ids }: name the one to forget, as bravebot auth logout gateway <id>
+auth-logout-gateway-not-stored = no key is stored for { $id }; keys are stored for { $ids }
+auth-logout-gateway-not-written = the key was not forgotten: { $path }: { $error }
+auth-logout-gateway-forgotten =
+    the key for { $id } is forgotten here, and still works at { $host } until it is revoked there
+auth-logout-gateway-forgotten-elsewhere =
+    the key for { $id } is forgotten here, and still works at the service that issued it until it is revoked there
 
 
 ## Declaring an MCP server, and approving one
@@ -1167,6 +1236,8 @@ run-stages = { $count ->
     }
 run-in-directory = in { $directory }
 watching-list-command = command
+# The same column on a background job's row. The job's name leads the line beside it.
+watching-list-job = background
 # The row and the view for a question asked beside the work, which is what /btw sends.
 watching-list-aside = aside
 watching-aside-head = a question asked beside the work
@@ -1179,6 +1250,8 @@ watching-lines = { $count ->
    *[other] { $count } lines
     }
 watching-output-head = what this command printed
+# The name is the one the driver gave the job, never anything the job printed.
+watching-output-job-head = what background { $name } printed
 watching-output-read = the model has read this
 watching-output-kept = the model has not read this
 # Short enough to stand in a column beside a command line. The whole sentence is in the header of
@@ -1236,6 +1309,20 @@ run-yes = run it
 run-always = always this session
 run-remember = remember it
 run-no = don't
+# Said above the keys while a row of the plan has not been on the screen. It counts rows, which is
+# what the arrows move by, and the count comes first so a narrow box does not cut it off.
+run-unseen =
+    { $count ->
+        [one] ↑↓ { $count } row not shown: no key runs this yet
+       *[other] ↑↓ { $count } rows not shown: no key runs this yet
+    }
+# Said once the plan has been read while the rows saying what `a` or `r` grant besides have not. The
+# keys still waiting on them are drawn muted.
+run-grant-unseen =
+    { $count ->
+        [one] ↑↓ { $count } row not shown: a muted key waits on it
+       *[other] ↑↓ { $count } rows not shown: a muted key waits on them
+    }
 
 
 ## What a check said, at the head of every prompt whose answer would promote content
@@ -1492,6 +1579,12 @@ status-loop-unpaced = waiting for the turn to say when
 status-goal = Goal
 status-watch = Watch { $number }
 status-watch-armed-by = armed by turn { $turn } · { $left } left
+# One line per background job of the last turn. The name is the driver's.
+status-job = Background { $name }
+status-job-of-delegate = Background { $name } of delegate { $number }
+status-job-note = { $standing } · { $origin }
+status-job-moved = moved from the foreground after { $after }
+status-job-started = started in the background
 status-goal-rounds = { $rounds ->
     [one] sent back { $rounds } time, { $left } left
    *[other] sent back { $rounds } times, { $left } left
@@ -1709,6 +1802,7 @@ scroller-footer-search = / search
 # The footer of one delegate's own view. The kind and the number are the driver's words for it,
 # never anything the model wrote.
 watching-footer = { $kind } delegate { $number }
+watching-footer-job = background { $name }
 watching-working = working
 watching-answered = answered
 watching-failed = did not finish
@@ -1732,6 +1826,20 @@ watching-calls = { $count ->
 # pressing. Every kind of row is counted together, since one key opens the list holding all of
 # them and naming one kind here would undercount the rest.
 watching-hint = { $chord } { $count } to open
+# Said on the bottom line for as long as a command the turn is waiting on can be moved, and gone
+# the moment it ends or is moved. Short, because it shares the line with everything else there.
+background-hint = { $chord } to background
+# Said on the bottom line while a background job runs, and gone once the last one ends.
+jobs-hint = { $count ->
+    [one] 1 in the background
+   *[other] { $count } in the background
+    }
+# Where a background job is, in the view a row opens and in /status. How long is this end's clock,
+# counted from when the line started.
+job-running = running { $ran_for }
+job-ended-with-turn = stopped when the turn ended
+# A background job's name where a delegate started it: each delegate numbers its jobs from one.
+job-of-delegate = { $name } of delegate { $number }
 
 
 ## The commands a line beginning with a slash may be

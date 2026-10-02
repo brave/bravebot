@@ -57,7 +57,7 @@
 //! attempted: what holds is narrow and exact rather than broad and approximate.
 
 use bravebot_core::Pipeline;
-use bravebot_core::cancel::Cancel;
+use bravebot_core::cancel::{Cancel, Handoff};
 use bravebot_core::command::{Joiner, Plan, Route, Step, Steps, is_the_null_device};
 use std::fmt;
 use std::io::{Read, Write};
@@ -420,6 +420,53 @@ pub fn run_plan_observed(
     running.finish(&plan.steps)
 }
 
+/// How a run that could be moved to the background came back.
+#[derive(Debug)]
+pub enum Waited {
+    /// It was waited for to the end, as [`run_plan`] waits.
+    Ran(Ran),
+    /// A person asked for it to go on running, and it is still running.
+    Moved(Moved),
+}
+
+/// A line that stopped being waited for part way through, with every step it started.
+#[derive(Debug)]
+pub struct Moved {
+    /// The same processes and the same pipes, so what it printed before the move is still there.
+    pub running: Background,
+    /// How long it had been waited for when the person asked.
+    pub after: Duration,
+}
+
+/// [`run_plan`], for a line a person may ask to go on running in the background.
+///
+/// Only a line [`Steps::unrouted_pipeline`] accepts reads `handoff`, because that is the one shape a
+/// job can hold. Any other line runs exactly as [`run_plan`] runs it and a request on the token does
+/// nothing to it.
+///
+/// The token is read on every pass of the wait, after the cancellation token. A pass that finds
+/// both set kills the line, because a person who asked the turn to stop has asked for everything
+/// in it to stop. What the move hands over is the processes themselves: they are never killed and
+/// started again, so a build that was half done is still half done.
+///
+/// No stdin is taken, because a line fed a reference is not one this is offered for: its bytes
+/// would have to be written into a job nobody waits for.
+pub fn run_plan_movable(
+    plan: &Plan,
+    cancel: &Cancel,
+    handoff: &Handoff,
+    limit: Duration,
+    scratch: Option<&std::path::Path>,
+) -> Result<Waited, ExecError> {
+    let mut running = Running::new(&plan.directory, cancel, limit, scratch, None);
+    running.handoff = plan.steps.unrouted_pipeline().map(|_| handoff);
+    let ended_well = running.run(&plan.steps)?;
+    Ok(match running.moved.take() {
+        Some(moved) => Waited::Moved(moved),
+        None => Waited::Ran(running.into_ran(ended_well)),
+    })
+}
+
 /// Where one of a step's streams goes.
 enum Where {
     /// The stage before this one.
@@ -469,6 +516,22 @@ struct Running<'a> {
     /// reading the reference and `wc` reading what `sed` printed, which is what a reader of the
     /// line expects and the only reading under which the bytes are released once.
     stdin: Option<&'a str>,
+    /// The token a person presses to stop waiting, where this line is one that can be moved.
+    handoff: Option<&'a Handoff>,
+    /// The pipeline the token took, once it has.
+    moved: Option<Moved>,
+}
+
+/// Why a wait came back without an error.
+enum Ending {
+    /// Every step is over, by exiting or by being stopped at the deadline.
+    Over(Vec<Option<i32>>),
+    /// A person asked for the steps to go on without being waited for, and at least one is still
+    /// running.
+    Handed {
+        codes: Vec<Option<i32>>,
+        finished: Vec<bool>,
+    },
 }
 
 impl<'a> Running<'a> {
@@ -491,18 +554,24 @@ impl<'a> Running<'a> {
             stopped: None,
             scratch,
             stdin,
+            handoff: None,
+            moved: None,
         }
     }
 
     fn finish(mut self, steps: &Steps) -> Result<Ran, ExecError> {
         let ended_well = self.run(steps)?;
-        Ok(Ran {
+        Ok(self.into_ran(ended_well))
+    }
+
+    fn into_ran(self, ended_well: bool) -> Ran {
+        Ran {
             stdout: self.stdout,
             stderr: self.stderr,
             codes: self.codes,
             stopped: self.stopped,
             ended_well,
-        })
+        }
     }
 
     /// Run one shape of a plan, and say whether it ended well.
@@ -700,7 +769,35 @@ impl<'a> Running<'a> {
             }
         }
 
-        let codes = self.wait(&mut children)?;
+        // Offered only with a pipe for standard output, since that is the one a job reads from.
+        let handoff = self.handoff.filter(|_| tail.is_some());
+        let (codes, tail) = match (self.wait(&mut children, handoff)?, tail) {
+            (Ending::Handed { codes, finished }, Some(stdout)) => {
+                // Taken out of the guard in the one expression that hands them on, so there is
+                // no point at which its drop could kill them and nothing else holds them.
+                self.moved = Some(Moved {
+                    running: Background {
+                        children: std::mem::take(&mut children.0),
+                        stdout,
+                        stderr: std::mem::take(&mut draining),
+                        codes,
+                        finished,
+                        started: self.started,
+                        exited: None,
+                    },
+                    after: self.started.elapsed(),
+                });
+                return Ok(false);
+            }
+            // Not reached, since the token is offered only with a tail. Stopped as the deadline
+            // stops a line, so nothing is left running behind a result that says it ended.
+            (Ending::Handed { codes, .. }, None) => {
+                stop(&mut children.0);
+                self.stopped = Some(self.started.elapsed());
+                (codes, None)
+            }
+            (Ending::Over(codes), tail) => (codes, tail),
+        };
 
         // Collected once the steps are over, whether they ended on their own or were killed. The
         // usual case is that every pipe reached its end the moment the step writing to it did; the
@@ -724,8 +821,13 @@ impl<'a> Running<'a> {
         Ok(self.stopped.is_none() && codes.iter().all(|code| *code == Some(0)))
     }
 
-    /// Wait for every child, until they are done, the user says stop, or the time runs out.
-    fn wait(&mut self, children: &mut [Child]) -> Result<Vec<Option<i32>>, ExecError> {
+    /// Wait for every child, until they are done, the user says stop, the user says to stop
+    /// waiting, or the time runs out.
+    fn wait(
+        &mut self,
+        children: &mut [Child],
+        handoff: Option<&Handoff>,
+    ) -> Result<Ending, ExecError> {
         let mut codes = vec![None; children.len()];
         let mut finished = vec![false; children.len()];
 
@@ -746,7 +848,7 @@ impl<'a> Running<'a> {
             }
 
             if finished.iter().all(|done| *done) {
-                return Ok(codes);
+                return Ok(Ending::Over(codes));
             }
 
             // Both of these kill. Something still running is an effect in progress, and neither a
@@ -755,11 +857,16 @@ impl<'a> Running<'a> {
                 stop(children);
                 return Err(ExecError::Cancelled);
             }
+            // Before the deadline, so a press that arrived in time is not lost to a pass that
+            // happens to land after it.
+            if handoff.is_some_and(Handoff::is_requested) {
+                return Ok(Ending::Handed { codes, finished });
+            }
             let waited = self.started.elapsed();
             if waited >= self.limit {
                 stop(children);
                 self.stopped = Some(waited);
-                return Ok(codes);
+                return Ok(Ending::Over(codes));
             }
 
             std::thread::sleep(TICK);
@@ -1047,7 +1154,7 @@ impl Background {
     /// complete. Anything waiting to a bound has to ask this instead: the grace would carry the wait
     /// past the bound it was given, and it does not look at the cancellation token, so a person who
     /// changed their mind would still sit through it.
-    fn steps_exited(&mut self) -> bool {
+    pub(crate) fn steps_exited(&mut self) -> bool {
         for (index, child) in self.children.iter_mut().enumerate() {
             if self.finished[index] {
                 continue;

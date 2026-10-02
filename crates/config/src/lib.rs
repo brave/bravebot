@@ -19,6 +19,7 @@ pub mod env_var {
 }
 
 pub mod hooks;
+pub mod keys;
 mod managed;
 pub mod mcp;
 mod obfuscate;
@@ -967,11 +968,24 @@ impl Config {
     /// would lose to it on every binary anybody was given: the key would parse, be reported by
     /// `doctor`, and change nothing outside a source build. It outranks an exported variable too,
     /// for the reason [`resolve_model`] gives.
+    ///
+    /// The keys `bravebot auth login gateway` stored are read here too, from the user's own
+    /// directory. A file of them that cannot be read is read as none, on the footing a half-typed
+    /// settings file is: it must not stop a session, and `doctor` says the file is unreadable.
     pub fn from_env_and_settings(
         settings: &Settings,
         managed: &Managed,
     ) -> Result<Self, ConfigError> {
-        Self::from_sources(settings, managed, |key| env::var(key).ok(), built_in)
+        let stored = settings::home()
+            .and_then(|home| keys::Keys::read(&home).ok())
+            .unwrap_or_default();
+        Self::from_sources(
+            settings,
+            managed,
+            &stored,
+            |key| env::var(key).ok(),
+            built_in,
+        )
     }
 
     /// [`Config::from_env_and_settings`] over sources it is handed, so the ranking of the layers is
@@ -979,6 +993,7 @@ impl Config {
     fn from_sources(
         settings: &Settings,
         managed: &Managed,
+        stored: &keys::Keys,
         exported: impl Fn(&str) -> Option<String>,
         baked: impl Fn(&str) -> Option<String>,
     ) -> Result<Self, ConfigError> {
@@ -1008,6 +1023,17 @@ impl Config {
                 providers
             }
         };
+        // A gateway the machine-level layer names is given a stored key too: that layer pins where
+        // a token goes and keeps none of its own, so a key its owner stored is the way it has.
+        let providers = providers
+            .into_iter()
+            .map(|mut entry| {
+                if entry.bedrock.is_none() {
+                    entry.stored_key = stored.get(&entry.id).cloned();
+                }
+                entry
+            })
+            .collect();
         let mut config = Self::from_lookup_with_providers(lookup, providers)?;
         // Carried rather than consulted here: the name to check against the lists arrives later, from
         // any of the places that may name a model, and each is checked against the same pair
@@ -2332,7 +2358,7 @@ mod tests {
         exported: impl Fn(&str) -> Option<String>,
         baked: impl Fn(&str) -> Option<String>,
     ) -> Result<Config, ConfigError> {
-        Config::from_sources(settings, managed, exported, baked)
+        Config::from_sources(settings, managed, &keys::Keys::default(), exported, baked)
     }
 
     /// The names a settings file may set are the names something reads, and this is all of them. A
@@ -2602,6 +2628,63 @@ mod tests {
         assert_eq!(ids, vec!["approved"]);
     }
 
+    /// The token each gateway resolves to, by id, from the sources named.
+    fn tokens_with_stored(
+        managed: &Managed,
+        settings: &Settings,
+        stored: &keys::Keys,
+    ) -> Vec<(String, Option<String>)> {
+        Config::from_sources(settings, managed, stored, |_| None, complete_env)
+            .expect("configured")
+            .providers
+            .iter()
+            .map(|provider| {
+                let token = match provider.credential(|_| None) {
+                    provider::Credential::Token(token) => Some(token.expose().to_string()),
+                    provider::Credential::Absent | provider::Credential::NotNeeded => None,
+                };
+                (provider.id.clone(), token)
+            })
+            .collect()
+    }
+
+    /// BACKEND-16: a key stored for an id reaches the gateway of that id and no other, including one
+    /// the machine-level layer names, which keeps no token of its own and leaves its owner to give
+    /// it one.
+    #[test]
+    fn a_stored_key_reaches_the_gateway_its_id_names() {
+        let mut stored = keys::Keys::default();
+        stored.insert("mine", Secret::new("placeholder-stored-key"));
+        let settings = Settings::parse(
+            r#"{"provider": {
+                "mine": {"options": {"baseURL": "https://mine.invalid/v1"}},
+                "other": {"env": ["ABSENT_ONE"], "options": {"baseURL": "https://other.invalid/v1"}}
+            }}"#,
+        );
+        assert_eq!(
+            tokens_with_stored(&Managed::default(), &settings, &stored),
+            [
+                (
+                    "mine".to_string(),
+                    Some("placeholder-stored-key".to_string())
+                ),
+                ("other".to_string(), None)
+            ]
+        );
+
+        let managed = managed::scratch(
+            "resolve-gateways-stored-key",
+            r#"{"provider": {"mine": {"options": {"baseURL": "https://approved.example/v1"}}}}"#,
+        );
+        assert_eq!(
+            tokens_with_stored(&managed, &Settings::default(), &stored),
+            [(
+                "mine".to_string(),
+                Some("placeholder-stored-key".to_string())
+            )]
+        );
+    }
+
     /// The only way to say there are to be no gateways at all, which is half of what pinning a
     /// destination means.
     #[test]
@@ -2761,6 +2844,25 @@ mod tests {
         assert_eq!(provider.id, provider::GOOGLE_VERTEX_ID);
         assert_eq!(wire, "google/gemini-2.5-flash");
         assert!(config.provider_for("google/gemini-2.5-flash").is_none());
+    }
+
+    /// BACKEND-50: the environment names no models, so the service is offered the list BACKEND-49
+    /// compiles in. Each is reached named qualified, which is how a pick off a picker is recorded,
+    /// and none by its bare name, since the list is not a roster anything is routed by.
+    #[test]
+    fn a_google_vertex_service_from_the_environment_is_offered_the_compiled_models() {
+        let config = resolved(&Settings::default(), google_env, |_| None).expect("configured");
+        let vertex = vertex_of(&config).expect("a google-vertex service");
+        assert!(vertex.models.is_empty(), "{:?}", vertex.models);
+        let compiled = vertex.compiled_roster().expect("a compiled list");
+        assert!(!compiled.is_empty());
+        for id in compiled {
+            let qualified = format!("google-vertex/{id}");
+            let (provider, wire) = config.provider_for(&qualified).expect("the service");
+            assert_eq!(provider.id, provider::GOOGLE_VERTEX_ID);
+            assert_eq!(wire, *id);
+            assert!(config.provider_for(id).is_none(), "{id} was routed bare");
+        }
     }
 
     #[test]

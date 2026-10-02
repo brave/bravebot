@@ -135,6 +135,11 @@ pub enum ToMain {
     Started(Activity),
     /// The tool call last announced has finished. No reply.
     Finished(Activity),
+    /// The command the call last announced runs can be moved to the background with this token.
+    /// No reply.
+    Movable(bravebot_core::cancel::Handoff),
+    /// A background job started, ended, or is being stopped with its turn. No reply.
+    Job(bravebot_agent::report::JobEvent),
     /// A check has begun over this many lines of quarantined content. No reply.
     CheckStarted(bravebot_core::vetting::Checking),
     /// The check last announced is over, whatever it decided. No reply.
@@ -388,6 +393,14 @@ impl Reporter for RemoteReporter {
 
     fn tool_finished(&mut self, activity: Activity) {
         let _ = self.outbound.send(ToMain::Finished(activity));
+    }
+
+    fn movable(&mut self, handoff: bravebot_core::cancel::Handoff) {
+        let _ = self.outbound.send(ToMain::Movable(handoff));
+    }
+
+    fn job(&mut self, event: bravebot_agent::report::JobEvent) {
+        let _ = self.outbound.send(ToMain::Job(event));
     }
 
     fn check_started(&mut self, checking: bravebot_core::vetting::Checking) {
@@ -988,6 +1001,8 @@ mod tests {
                     ToMain::Composing(_) => seen.push("composing"),
                     ToMain::Started(_) => seen.push("started"),
                     ToMain::Finished(_) => seen.push("finished"),
+                    ToMain::Movable(_) => seen.push("movable"),
+                    ToMain::Job(_) => seen.push("job"),
                     ToMain::CheckStarted(_) => seen.push("check started"),
                     ToMain::CheckFinished => seen.push("check finished"),
                     ToMain::Quarantined(_) => seen.push("quarantined"),
@@ -1063,6 +1078,27 @@ mod tests {
         let mut reporter = RemoteReporter::new(outbound);
         reporter.output_tokens(7);
     }
+
+    /// A job's events cross whole, since the row a job gets on this side is made from them alone.
+    #[test]
+    fn a_job_event_travels_without_an_answer() {
+        let (outbound, inbound) = channel::<ToMain>();
+        let event = bravebot_agent::report::JobEvent::Started {
+            name: "job:1".to_string(),
+            line: "cargo build".to_string(),
+            moved_after: Some(std::time::Duration::from_secs(3)),
+        };
+
+        let mut reporter = RemoteReporter::new(outbound);
+        reporter.job(event.clone());
+        drop(reporter);
+
+        match inbound.recv().expect("a message arrived") {
+            ToMain::Job(arrived) => assert_eq!(arrived, event),
+            other => panic!("expected a job event, got {other:?}"),
+        }
+    }
+
     /// A worker can finish with an error after sending progress, so totals travel on their own.
     #[test]
     fn cumulative_usage_reaches_the_main_thread_unchanged() {

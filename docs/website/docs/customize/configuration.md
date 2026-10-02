@@ -143,12 +143,14 @@ rather than obeyed.
 
 opens a picker on the model currently in use, as a panel in the middle of the screen. The list comes
 from the endpoint rather than from a set compiled in, so it is whatever the backend actually offers
-today. The choice is written to `~/.bravebot/model`, so it outlives the session that made it and
-applies in every directory, except one whose own settings name a [`model`](#model): a checkout that
-says which model it wants gets that one in the next session. A one-shot run reads the same record,
-so a script uses the model you picked unless [`--model`](../reference/cli.md#--model-name) names
-another. A model your AWS account named for a tier is written as that tier's word, `opus`, `sonnet`
-or `haiku`, so the record names whatever the tier variable names when the ARN is replaced.
+today. Google Vertex AI is the exception, having no listing to ask (see [Reaching an
+OpenAI-compatible gateway](#reaching-an-openai-compatible-gateway)). The choice is written to
+`~/.bravebot/model`, so it outlives the session that made it and applies in every directory, except
+one whose own settings name a [`model`](#model): a checkout that says which model it wants gets that
+one in the next session. A one-shot run reads the same record, so a script uses the model you picked
+unless [`--model`](../reference/cli.md#--model-name) names another. A model your AWS account named
+for a tier is written as that tier's word, `opus`, `sonnet` or `haiku`, so the record names whatever
+the tier variable names when the ARN is replaced.
 
 **Type to narrow the list rather than arrowing through it.** A search matches the name shown, the name
 a request would carry and the service that answers, ignoring case and anywhere in any of them, and
@@ -856,10 +858,11 @@ own.
 { "keybindings": { "stash": "alt-s", "scroller": "alt-o" } }
 ```
 
-Seven actions can be moved and nothing else can. A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
+Eight actions can be moved and nothing else can. A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
 
 | Action | Default | What it does |
 |---|---|---|
+| `background` | `ctrl-b` | move the command a turn is waiting on to the background |
 | `editor` | `ctrl-g` | open the current prompt in your editor |
 | `watch` | `ctrl-l` | watch a background delegate, or inspect what is running |
 | `scroller` | `ctrl-o` | open the [transcript scroller](../using/transcript.md) |
@@ -880,7 +883,7 @@ rather than one winning, since which won would come down to the order the file w
 actions *trading* chords is not a conflict and both get what they asked for.
 
 The block layers per action the way `env` does, so a project file moving one action says nothing about
-the other six. See [Interactive mode](../using/interactive-mode.md) for what the keys do.
+the other seven. See [Interactive mode](../using/interactive-mode.md) for what the keys do.
 
 ### `search`
 
@@ -1105,6 +1108,14 @@ A `provider` block in a settings file names a gateway, the models it offers and 
 holds its credential. It is opencode's block, so one copied from `opencode.json` works unedited, and
 a local Ollama needs no key. [Reaching an OpenAI-compatible gateway](providers/openai-compatible.md)
 has the fields, the credential, which models are offered, and how to name one.
+
+Google Vertex AI is reached by a block keyed `google-vertex`, or with no block by exporting
+`GOOGLE_API_KEY` and `GOOGLE_CLOUD_PROJECT`. It has no model listing a key can call, so `/model`
+offers a short list of Gemini models built into bravebot, and a block that lists `models` is offered
+those instead. A Vertex model, on the built-in list or off it, is named with the service's id in
+front, as `--model google-vertex/google/gemini-3-flash-preview` or the same value in the
+[`model`](#model) key.
+[Google Vertex AI](providers/openai-compatible.md#google-vertex-ai) has the fields.
 
 ## Context budget
 

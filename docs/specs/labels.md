@@ -13,7 +13,7 @@ guards:
       - crates/agent/src/lsp.rs: 4
       - crates/agent/src/manifest.rs: 3
       - crates/agent/src/mcp.rs: 1
-      - crates/agent/src/tools.rs: 24
+      - crates/agent/src/tools.rs: 25
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 8
       - crates/agent/tests/workspace.rs: 35
@@ -53,7 +53,7 @@ guards:
       - crates/agent/src/manifest.rs: 10
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 3
-      - crates/agent/src/tools.rs: 17
+      - crates/agent/src/tools.rs: 18
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4

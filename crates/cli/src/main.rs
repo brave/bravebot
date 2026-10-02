@@ -359,7 +359,7 @@ fn print_help() {
         ("bravebot --fork <id>", t!(cli_usage_fork)),
         ("bravebot doctor", t!(cli_usage_doctor)),
         ("bravebot auth login [way]", t!(cli_usage_auth_login)),
-        ("bravebot auth logout leo", t!(cli_usage_auth_logout)),
+        ("bravebot auth logout <way>", t!(cli_usage_auth_logout)),
         ("bravebot import-leo-creds [channel]", t!(cli_usage_import)),
         ("bravebot import-providers", t!(cli_usage_import_providers)),
         ("bravebot mcp <command>", t!(cli_usage_mcp)),
@@ -2479,6 +2479,21 @@ fn doctor() -> ExitCode {
             for provider in &config.providers {
                 report_gateway(provider);
             }
+            // A file of gateway keys that cannot be read is read as none, so every gateway a key in
+            // it was for is reported above as having none, and this says why. The catch-all
+            // status, as for a rule above: a session opens and works, without those keys.
+            if let Some(directory) = bravebot_agent::home::directory()
+                && bravebot_config::keys::Keys::read(&directory).is_err()
+            {
+                ending = ends_on(ending, Ending::Failed);
+                fact(
+                    t!(doctor_gateway_keys),
+                    t!(
+                        doctor_gateway_keys_unreadable,
+                        path = bravebot_config::keys::file(&directory).display()
+                    ),
+                );
+            }
 
             // What would end each credential this build holds for itself, and which tier the gate
             // walk left it on. Reported beside the backends rather than kept for a leak, because it
@@ -2878,20 +2893,33 @@ fn report_gateway(provider: &bravebot_config::provider::Provider) {
         );
         report_aws_session(profile.as_deref());
     }
-    match provider.models.is_empty() {
-        false => fact(
-            t!(doctor_tiers),
-            provider
-                .models
+    fact(t!(doctor_tiers), gateway_models(provider));
+}
+
+/// What `doctor` says a gateway offers: the models its block names, else the list compiled in for a
+/// service that cannot be asked, else that the service is asked.
+///
+/// A compiled id is shown with the service's id in front, as it has to be named: it is on no list
+/// a bare name is looked up in, which a model the block names is.
+fn gateway_models(provider: &bravebot_config::provider::Provider) -> String {
+    if !provider.models.is_empty() {
+        return provider
+            .models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+    }
+    match provider.compiled_roster() {
+        Some(compiled) => {
+            let models = compiled
                 .iter()
-                .map(|model| model.id.as_str())
+                .map(|id| format!("{}/{id}", provider.id))
                 .collect::<Vec<_>>()
-                .join(", "),
-        ),
-        true if !provider.has_roster() => {
-            fact(t!(doctor_tiers), t!(doctor_gateway_models_unlisted))
+                .join(", ");
+            t!(doctor_gateway_models_compiled, models = models).to_string()
         }
-        true => fact(t!(doctor_tiers), t!(doctor_gateway_models_absent)),
+        None => t!(doctor_gateway_models_absent).to_string(),
     }
 }
 
@@ -2904,14 +2932,22 @@ fn report_gateway(provider: &bravebot_config::provider::Provider) {
 /// Three answers, because a block that named nowhere for a credential to live needs none and there is
 /// nothing for anybody to go and set. Reported as absent, it reads as the thing to fix on a gateway
 /// that is working.
+///
+/// A key `bravebot auth login gateway` stored is named as that, because it is the one place a token
+/// can come from that neither the environment nor the settings file shows (CRED-25).
 fn gateway_credential(
     provider: &bravebot_config::provider::Provider,
     lookup: impl Fn(&str) -> Option<String>,
-) -> &'static str {
-    match provider.credential(lookup) {
-        bravebot_config::provider::Credential::Token(_) => t!(doctor_gateway_token),
-        bravebot_config::provider::Credential::Absent => t!(doctor_gateway_token_absent),
-        bravebot_config::provider::Credential::NotNeeded => t!(doctor_gateway_token_not_needed),
+) -> String {
+    use bravebot_config::provider::{Credential, Source};
+    match provider.credential_and_source(lookup) {
+        (Credential::Token(_), Some(Source::Stored)) => t!(doctor_gateway_token_stored).to_string(),
+        (Credential::Token(_), _) => t!(doctor_gateway_token).to_string(),
+        (Credential::Absent, _) => t!(
+            doctor_gateway_token_absent,
+            id = progress::printable(&provider.id)
+        ),
+        (Credential::NotNeeded, _) => t!(doctor_gateway_token_not_needed).to_string(),
     }
 }
 
@@ -4268,8 +4304,59 @@ mod tests {
         );
         assert_eq!(
             gateway_credential(&names_one, |_| None),
-            t!(doctor_gateway_token_absent)
+            t!(doctor_gateway_token_absent, id = "gw")
         );
+    }
+
+    /// CRED-25: a key `bravebot auth login gateway` stored is named as stored, since neither the
+    /// environment nor the settings file shows it, and is withheld like any other. A variable the
+    /// block names is sent before it, and is what the report then names.
+    #[test]
+    fn a_stored_gateway_key_is_named_as_stored_and_never_printed() {
+        let mut provider = configured_gateway(
+            r#"{"provider": {"gw": {
+                "env": ["A_TOKEN_VARIABLE"],
+                "options": {"baseURL": "https://example.invalid/v1"}
+            }}}"#,
+        );
+        provider.stored_key = Some(bravebot_config::Secret::new("placeholder-stored-key"));
+
+        let stored = gateway_credential(&provider, |_| None);
+        assert_eq!(stored, t!(doctor_gateway_token_stored));
+        assert!(!stored.contains("placeholder-stored-key"));
+        assert_eq!(
+            gateway_credential(&provider, |_| Some("from-the-environment".to_string())),
+            t!(doctor_gateway_token)
+        );
+    }
+
+    /// A Google Vertex block naming no models is offered the compiled list, so `doctor` names those
+    /// rather than saying the service is asked, which it never is, and names them as they are typed:
+    /// a bare compiled id routes nowhere. A block naming models is offered those alone, and is
+    /// reported so.
+    #[test]
+    fn doctor_names_the_compiled_models_a_google_vertex_service_is_offered() {
+        let names_none = configured_gateway(
+            r#"{"provider": {"google-vertex": {"options": {"project": "example-project-1"}}}}"#,
+        );
+        let reported = gateway_models(&names_none);
+        let compiled = names_none.compiled_roster().expect("a compiled list");
+        assert!(!compiled.is_empty());
+        for id in compiled {
+            let qualified = format!("google-vertex/{id}");
+            assert!(
+                reported.contains(&qualified),
+                "{qualified} is not in {reported:?}"
+            );
+        }
+
+        let names_one = configured_gateway(
+            r#"{"provider": {"google-vertex": {
+                "options": {"project": "example-project-1"},
+                "models": {"google/gemini-3-flash-preview": {}}
+            }}}"#,
+        );
+        assert_eq!(gateway_models(&names_one), "google/gemini-3-flash-preview");
     }
 
     /// An interactive `bravebot -p "task"` must not block waiting for a pipe that is not coming.

@@ -59,6 +59,10 @@ Reports everything the session knows about itself:
 - the confinement available here;
 - turns and tokens spent, and **where the time went**: how much was spent waiting on the model,
   running tools, and waiting for you to answer a prompt;
+- each [background job](run-tool.md#leaving-a-pipeline-running) of the last turn: its name, and the
+  delegate's number where a delegate started it, its line cut short, how it ended, and whether it was
+  started in the background or you moved it there. Typed while a turn runs, `/status` waits for the
+  turn to end, so the hint line is where a running job shows;
 - **every trust rule in force**, listed in full, each marked trusted or untrusted;
 - **every command you vouched for**, which now run unasked and whose output is read as trusted;
 - what a [`/loop`](#loop-interval-prompt) is repeating and when the next tick is due, where one is
@@ -76,7 +80,8 @@ is the thing people paste into an issue or a screenshot.
 
 Reports what the session has spent as a total, and under it **one figure per turn with that turn's
 share of the total beside it**. What was spent before the first turn is reported too, without a turn
-number, since no turn did it.
+number, since no turn did it. Typed while a turn runs, it answers at once, and the running turn's row
+holds what it has spent so far.
 
 A total cannot tell twenty even turns from one that ran away, and the share is what makes the second
 one visible without your dividing each row by the total. It is a word of its own rather than more rows
@@ -94,8 +99,9 @@ what it is read for.
 ## `/model`
 
 Opens a picker on the model in use. The list comes from the endpoint rather than a set compiled in, so
-it is whatever the backend offers today. The choice is written to `~/.bravebot`, so it outlives the
-session and applies in every directory, except one whose own settings name a
+it is whatever the backend offers today. Google Vertex AI, which has no listing to ask, is the
+exception: it is offered a short Gemini list built in. The choice is written to `~/.bravebot`, so it
+outlives the session and applies in every directory, except one whose own settings name a
 [`model`](../customize/configuration.md#model): that key outranks the choice, and the one in your own
 `~/.bravebot/settings.json` does not.
 
@@ -215,8 +221,10 @@ with the word is a line: `/loop stop the deploy` is a loop over `stop the deploy
 `/loop stop the deploy every 20m` is that line every twenty minutes. The bare command with no loop
 running says so, and so does `/loop stop`.
 
-Typed while a turn is running, `/loop stop` waits in the queue the way any line typed then waits, and
-ends the loop when the queue is reached. No tick goes out in the meantime.
+Typed while a turn is running, `/loop stop` and the bare `/loop` are carried out as you type them,
+ahead of anything waiting in the queue. The turn in flight finishes, and no tick goes out after it.
+A new loop typed mid-turn waits for the turn to end, and a `/loop stop` typed after it waits too, so
+it stops that loop after its first tick.
 
 The first tick goes at once, so you can see it happen while you are still watching. The gap is
 measured from the end of a tick rather than its start, so `every 5m` means five minutes between runs.
@@ -655,13 +663,21 @@ beside the line. A command that cannot carry it gets words in place of a picture
 place of a drop. `/btw`, `/manifest` and `/loop` send their argument, so a marker stays in
 it and the picture or file goes with it.
 
-**While a turn runs the word waits.** A command typed mid-turn comes off the box and joins the lines
-waiting for the turn to end, exactly as a prompt does: the box clears, the history remembers it, and it
-is drawn under the box marked as waiting. It is never offered to the turn in flight, so nothing about
-it reaches the planner, and when the queue reaches it, it is carried out rather than sent. The queue
-drains in the order you typed, so a command behind a prompt waits for that prompt's turn. Nothing
-enters the transcript while it waits, and taking back what is waiting gives the command back to the
-box like any other line.
+**While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/watch`,
+and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+what the session keeps for itself, so they are carried out as you type them, ahead of anything
+waiting. The exception is a line of the same command already waiting, which they wait behind, so
+`/goal clear` typed after a waiting `/goal <condition>` clears that goal. What they say is drawn under
+the turn and joins the transcript once the turn has ended.
+
+Every other command typed mid-turn comes off the box and joins the lines waiting for the turn to end,
+exactly as a prompt does: the box clears, the history remembers it, and it is drawn under the box
+marked as waiting. It is never offered to the turn in flight, so nothing about it reaches the planner,
+and when the queue reaches it, it is carried out rather than sent. The queue drains in the order you
+typed, so a command behind a prompt waits for that prompt's turn. Nothing enters the transcript while
+it waits, and taking back what is waiting gives the command back to the box like any other line.
+
+During a compaction, a `/btw` question, a `/manifest` run or a goal check, every command waits.
 
 **A command name is written in this program, never read from a directory.** There is no way to add one
 by putting a file somewhere.

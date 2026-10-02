@@ -139,9 +139,9 @@ on its first run, and every later run sends the marker as the file's name. A com
 interface carries out itself sends nothing to a model, so a marker on its line becomes the file's
 name, or words saying a picture was pasted and cannot be shown, and you are told it did not go.
 
-The same holds for a command that waited behind a running turn. Running a slash command counts as
-sending the line: what it named comes off the box with it, so nothing stays attached to a line that is
-no longer there.
+The same holds for a command typed while a turn runs, whether it waits or is carried out as typed.
+Running a slash command counts as sending the line: what it named comes off the box with it, so
+nothing stays attached to a line that is no longer there.
 
 ## Piping
 

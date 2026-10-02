@@ -650,6 +650,8 @@ impl RunAnswer {
 /// `r` is the same rule over the wider of the two lifetimes: it is bound only where the request
 /// says where the answer would be written, which is the driver having decided the key would stop a
 /// later prompt at all.
+///
+/// Whether the plan has been on the screen is not asked here: [`RunDrawn::response_to`] asks it.
 fn run_answer_for(key: KeyEvent, request: &RunRequest) -> Option<RunResponse> {
     // The prompt blocks the whole interface, so without this Ctrl-C would do nothing at the one
     // moment a user is most likely to press it.
@@ -674,8 +676,8 @@ fn run_answer_for(key: KeyEvent, request: &RunRequest) -> Option<RunResponse> {
         KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(RunResponse::Answer(RunAnswer::Reject)),
         KeyCode::Up => Some(RunResponse::Scroll(-1)),
         KeyCode::Down => Some(RunResponse::Scroll(1)),
-        KeyCode::PageUp => Some(RunResponse::Scroll(-10)),
-        KeyCode::PageDown => Some(RunResponse::Scroll(10)),
+        KeyCode::PageUp => Some(RunResponse::Page(-1)),
+        KeyCode::PageDown => Some(RunResponse::Page(1)),
         KeyCode::Home => Some(RunResponse::Scroll(i16::MIN)),
         KeyCode::End => Some(RunResponse::Scroll(i16::MAX)),
         // Enter is deliberately not an approval: it is the key most likely to be pressed out of
@@ -689,6 +691,96 @@ fn run_answer_for(key: KeyEvent, request: &RunRequest) -> Option<RunResponse> {
 enum RunResponse {
     Answer(RunAnswer),
     Scroll(i16),
+    /// Move by this many of the last draw's pages.
+    Page(i16),
+}
+
+/// What one draw of the run question decided for the keys that answer it.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct RunDrawn {
+    /// How far the plan can be scrolled.
+    furthest: u16,
+    /// The rows a page moves: one fewer than the body's rows on the screen, so paging from the top
+    /// puts every row on the screen. A page longer than the box would pass over rows that a key
+    /// then waits on.
+    page: u16,
+    /// Whether the question, the keys and a row of the body are on the screen.
+    whole: bool,
+    /// Rows of the plan not on the screen yet during this question. Every key that runs the line
+    /// waits on them.
+    unread: usize,
+    /// Rows saying what `a` grants besides running the line, not on the screen yet.
+    always_unread: usize,
+    /// Rows saying what `r` grants besides running the line, not on the screen yet.
+    record_unread: usize,
+}
+
+impl RunDrawn {
+    /// Whether this draw takes `answer`. A key that runs the line waits on the plan, and `a` and
+    /// `r` each wait on what they grant besides as well. Refusing waits on nothing.
+    fn takes(&self, answer: RunAnswer) -> bool {
+        let grant_unread = match answer {
+            RunAnswer::Reject | RunAnswer::Interrupt => return true,
+            RunAnswer::Approve => 0,
+            RunAnswer::ApproveAlways => self.always_unread,
+            RunAnswer::ApproveAndRecord => self.record_unread,
+        };
+        self.whole && self.unread == 0 && grant_unread == 0
+    }
+
+    /// One key pressed at the question this draw put on the screen.
+    fn response_to(&self, key: KeyEvent, request: &RunRequest) -> Option<RunResponse> {
+        match run_answer_for(key, request) {
+            Some(RunResponse::Answer(answer)) if !self.takes(answer) => None,
+            response => response,
+        }
+    }
+
+    /// Where the plan starts once moved `by` rows from `scroll`.
+    ///
+    /// Moved from where this draw put it rather than from `scroll`, which a terminal made taller
+    /// since can leave past the bottom, where a press of Up would move nothing.
+    fn moved(&self, scroll: u16, by: i32) -> u16 {
+        let from = i32::from(scroll.min(self.furthest));
+        let to = from.saturating_add(by).clamp(0, i32::from(self.furthest));
+        u16::try_from(to).unwrap_or(self.furthest)
+    }
+}
+
+/// Which rows of a run question's body have been on the screen during one question.
+///
+/// Kept across draws rather than read off the last one, because a plan longer than the box is read
+/// a part at a time: what a key that runs it needs is that each row was on the screen, not all at
+/// once. Counted at the width they were wrapped to, since another width wraps the body into other
+/// rows and a row read at the old one is not a row of the new.
+#[derive(Debug, Default)]
+struct RowsShown {
+    width: u16,
+    rows: Vec<bool>,
+}
+
+impl RowsShown {
+    /// Marks the rows `laid` puts on the screen, of a body wrapped into `total` rows at `width`.
+    fn mark(&mut self, width: u16, total: usize, laid: &Pinned) {
+        if self.width != width || self.rows.len() != total {
+            *self = RowsShown {
+                width,
+                rows: vec![false; total],
+            };
+        }
+        // A draw that cuts off the question or its keys leaves the body no rows, so a row marked
+        // here was on the screen under both.
+        let from = usize::from(laid.offset).min(total);
+        let to = (usize::from(laid.offset) + usize::from(laid.body.height)).min(total);
+        self.rows[from..to].fill(true);
+    }
+
+    /// How many of these rows have not been on the screen.
+    fn unseen(&self, rows: std::ops::Range<usize>) -> usize {
+        self.rows
+            .get(rows)
+            .map_or(0, |rows| rows.iter().filter(|shown| !**shown).count())
+    }
 }
 
 /// Draw the prompt for a run and wait for an answer.
@@ -698,12 +790,13 @@ enum RunResponse {
 /// its behalf.
 pub fn ask_run<B: Backend>(terminal: &mut Terminal<B>, request: &RunRequest) -> RunAnswer {
     let mut scroll = 0u16;
+    let mut shown = RowsShown::default();
     loop {
-        let mut most = 0u16;
+        let mut drawn = RunDrawn::default();
         // A terminal that cannot be drawn to cannot carry a question, so refuse rather than run
         // something unseen.
         if terminal
-            .draw(|frame| most = draw_run(frame, request, scroll))
+            .draw(|frame| drawn = draw_run(frame, request, scroll, &mut shown))
             .is_err()
         {
             return RunAnswer::Reject;
@@ -715,10 +808,11 @@ pub fn ask_run<B: Backend>(terminal: &mut Terminal<B>, request: &RunRequest) -> 
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
-            Ok(TermEvent::Key(key)) => match run_answer_for(key, request) {
+            Ok(TermEvent::Key(key)) => match drawn.response_to(key, request) {
                 Some(RunResponse::Answer(answer)) => return answer,
-                Some(RunResponse::Scroll(by)) => {
-                    scroll = scroll.saturating_add_signed(by).min(most);
+                Some(RunResponse::Scroll(by)) => scroll = drawn.moved(scroll, i32::from(by)),
+                Some(RunResponse::Page(by)) => {
+                    scroll = drawn.moved(scroll, i32::from(by) * i32::from(drawn.page));
                 }
                 None => continue,
             },
@@ -753,12 +847,22 @@ fn authority(spent: &bravebot_core::ambient::Spent) -> String {
     .to_string()
 }
 
-/// Draw the run confirmation, returning how far its body can be scrolled.
+/// Draw the run confirmation, marking in `shown` the rows of the body this draw put on the screen.
 ///
 /// One line per stage, rendered by [`bravebot_core::Stage::display`], which quotes unambiguously: two
 /// different argument vectors cannot come out looking alike, so what the reviewer reads names
 /// exactly the argv the endorsement will be bound to.
-fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u16 {
+///
+/// Drawn is not enough where the plan is longer than the box, since an argument below the bottom
+/// edge runs as surely as the first. So the keys and the row saying how much is unread are pinned
+/// where the body cannot push them off, and a key is taken only once every row it waits on has
+/// been on the screen.
+fn draw_run(
+    frame: &mut ratatui::Frame,
+    request: &RunRequest,
+    scroll: u16,
+    shown: &mut RowsShown,
+) -> RunDrawn {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::accent(), t!(run_title));
 
@@ -768,7 +872,7 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
     let offers_always = request.can_be_remembered();
 
     let steps = request.plan.steps();
-    let mut lines = vec![
+    let header = vec![
         Line::from(vec![
             Span::styled(
                 format!("{} ", t!(run_verb)),
@@ -790,6 +894,7 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         ]),
         Line::raw(""),
     ];
+    let mut lines = Vec::new();
 
     // The line the planner wrote, above the plan and marked as context. It is not what the answer
     // binds to: two spellings that compile alike are one thing to agree to, and the plan below is
@@ -907,12 +1012,23 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         )));
     }
 
+    let wrapped = |lines: Vec<Line<'static>>| Paragraph::new(lines).wrap(Wrap { trim: false });
+    // Each line wraps on its own, so the rows of a run of lines are where measuring before and
+    // after it puts them.
+    let measure = |lines: &[Line<'static>]| wrapped(lines.to_vec()).line_count(inside.width);
+    // Everything above is what running the line does, so it is what every key that runs it waits
+    // on. What `a` and `r` grant on top of that is below, and each of them waits on its own part.
+    let plan = 0..measure(&lines);
+    let mut always = 0..0;
+    let mut record = 0..0;
+
     // What `a` would actually grant, in as many words. It is two things, not one, and the second
     // is the one nothing else in the interface would tell them: what the command prints stops
     // being quarantined and the model reads it. Nothing checks that assertion, so the person
     // making it has to be asked for it in those terms.
     if offers_always {
         lines.push(Line::raw(""));
+        always.start = measure(&lines);
         lines.push(Line::from(Span::styled(
             format!("  {}", t!(run_always_explained)),
             Style::default().fg(theme::muted()),
@@ -963,6 +1079,7 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
             format!("     {}", t!(run_always_this_directory)),
             Style::default().fg(theme::muted()),
         )));
+        always.end = measure(&lines);
     } else {
         // Each of these asks every time whatever is remembered, so offering to stop asking would be
         // offering something that will not happen. Every reason that holds is given, not the first
@@ -994,6 +1111,7 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
     // shown, and deleting the line from that file is the way back.
     if let Some(path) = &request.record {
         lines.push(Line::raw(""));
+        record.start = measure(&lines);
         lines.push(Line::from(Span::styled(
             format!("  {}", t!(run_remember_explained)),
             Style::default().fg(theme::muted()),
@@ -1016,6 +1134,7 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
             format!("       {}", path.display()),
             Style::default().add_modifier(Modifier::BOLD),
         )));
+        record.end = measure(&lines);
     }
 
     // What answers a line whose arguments differ from one run to the next, since no key on this
@@ -1051,11 +1170,82 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         )));
     }
 
+    let total = measure(&lines);
+    let header = wrapped(header);
+    let body = wrapped(lines);
+    // Measured with the keys live, which is the same text: whether they are taken changes how they
+    // are coloured and not how many rows they take, so it can be decided after the layout.
+    let laid = Pinned::new(
+        inside,
+        (
+            rows_in(&header, inside.width),
+            u16::try_from(total).unwrap_or(u16::MAX),
+            0,
+            rows_in(
+                &wrapped(vec![run_keys(request, offers_always, |_| true)]),
+                inside.width,
+            ),
+        ),
+        scroll,
+    );
+    // Rows past the most the layout scrolls to are never marked, so a body that long is never
+    // taken rather than taken unread.
+    shown.mark(inside.width, total, &laid);
+    let drawn = RunDrawn {
+        furthest: laid.furthest,
+        page: laid.body.height.saturating_sub(1).max(1),
+        whole: laid.whole && laid.body.height > 0,
+        unread: shown.unseen(plan),
+        always_unread: shown.unseen(always),
+        record_unread: shown.unseen(record),
+    };
+
+    // Said in place of how far there is to scroll while a key waits on it, since what the person
+    // needs to know then is why the key does nothing.
+    let waiting = drawn.always_unread + drawn.record_unread;
+    let hint = if drawn.unread > 0 {
+        Line::styled(
+            format!("   {}", t!(run_unseen, count = drawn.unread)),
+            Style::default().fg(theme::running()),
+        )
+    } else if waiting > 0 {
+        Line::styled(
+            format!("   {}", t!(run_grant_unseen, count = waiting)),
+            Style::default().fg(theme::running()),
+        )
+    } else {
+        Line::styled(
+            scroll_hint(laid.furthest - laid.offset),
+            Style::default().fg(theme::brand_primary()),
+        )
+    };
+    laid.render(
+        frame,
+        header,
+        body,
+        hint,
+        wrapped(Vec::new()),
+        wrapped(vec![run_keys(request, offers_always, |answer| {
+            drawn.takes(answer)
+        })]),
+    );
+
+    drawn
+}
+
+/// The run question's keys, with each that `live` says is not taken drawn muted. A key not taken
+/// yet is muted rather than dropped, so the row keeps its shape and the row above it says why.
+fn run_keys(
+    request: &RunRequest,
+    offers_always: bool,
+    live: impl Fn(RunAnswer) -> bool,
+) -> Line<'static> {
+    let colour = |answer, colour| if live(answer) { colour } else { theme::muted() };
     let mut key_spans = vec![
         Span::styled(
             "  y",
             Style::default()
-                .fg(theme::ok())
+                .fg(colour(RunAnswer::Approve, theme::ok()))
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(format!(" {}    ", t!(run_yes))),
@@ -1066,7 +1256,7 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         key_spans.push(Span::styled(
             "a",
             Style::default()
-                .fg(theme::running())
+                .fg(colour(RunAnswer::ApproveAlways, theme::running()))
                 .add_modifier(Modifier::BOLD),
         ));
         key_spans.push(Span::raw(format!(" {}    ", t!(run_always))));
@@ -1078,7 +1268,7 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         key_spans.push(Span::styled(
             "r",
             Style::default()
-                .fg(theme::running())
+                .fg(colour(RunAnswer::ApproveAndRecord, theme::running()))
                 .add_modifier(Modifier::BOLD),
         ));
         key_spans.push(Span::raw(format!(" {}    ", t!(run_remember))));
@@ -1102,32 +1292,7 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
             Style::default().fg(theme::muted()),
         ),
     ]);
-    let keys = Line::from(key_spans);
-
-    // One row for the keys, the rest for the stages, split before the body is laid out so the
-    // question keeps its row whatever the body turns out to be.
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(inside);
-
-    let body = Paragraph::new(lines).wrap(Wrap { trim: false });
-    let drawn = body.line_count(rows[0].width) as u16;
-    let furthest = drawn.saturating_sub(rows[0].height);
-    let offset = scroll.min(furthest);
-    frame.render_widget(body.scroll((offset, 0)), rows[0]);
-
-    let mut keys = keys;
-    if furthest > 0 {
-        let below = furthest - offset;
-        keys.push_span(Span::styled(
-            scroll_hint(below),
-            Style::default().fg(theme::accent()),
-        ));
-    }
-    frame.render_widget(Paragraph::new(keys), rows[1]);
-
-    furthest
+    Line::from(key_spans)
 }
 
 /// Prose the panels indent by two columns, wrapped so every row keeps the indent.
@@ -2034,60 +2199,120 @@ fn draw_pinned(
     scroll: u16,
 ) -> PinnedDrawn {
     let wrapped = |lines: Vec<Line<'static>>| Paragraph::new(lines).wrap(Wrap { trim: false });
-    let rows_of = |paragraph: &Paragraph| {
-        u16::try_from(paragraph.line_count(inside.width)).unwrap_or(u16::MAX)
-    };
     let header = wrapped(above);
     let body = wrapped(scrolled);
     let footer = wrapped(below);
-    let heading = rows_of(&header);
-    let rest = rows_of(&body);
-    let footing = rows_of(&footer);
-    let answering = rows_of(&wrapped(vec![answer_keys(yes, no, true)]));
-
-    // Claimed in this order, so keys drawn whole have everything pinned drawn whole with them.
-    let header_rows = heading.min(inside.height);
-    let footer_rows = footing.min(inside.height - header_rows);
-    let keys_rows = answering.min(inside.height - header_rows - footer_rows);
-    let between = inside.height - header_rows - footer_rows - keys_rows;
-    // A row saying how much of the middle is below, where that leaves the middle a row of its own.
-    // The keys wrap and this does not share their row, so neither cuts off the other.
-    let hint_rows = u16::from(rest > between && between > 1);
-    // Only the rows the middle fills, so what is pinned below it is drawn right under it.
-    let body_rows = rest.min(between - hint_rows);
-    let furthest = rest - body_rows;
-    let offset = scroll.min(furthest);
-    // A box with no column to draw in takes no rows for any of it, so the keys count as whole there.
-    let answerable = inside.width > 0
-        && keys_rows == answering
-        && body_rows > 0
-        && body_rows >= needed.min(rest);
-
-    let row = |y: u16, height: u16| Rect {
-        y,
-        height,
-        ..inside
-    };
-    let header_area = row(inside.y, header_rows);
-    let body_area = row(header_area.bottom(), body_rows);
-    let hint_area = row(body_area.bottom(), hint_rows);
-    let footer_area = row(hint_area.bottom(), footer_rows);
-    let keys_area = row(inside.bottom() - keys_rows, keys_rows);
-    frame.render_widget(header, header_area);
-    frame.render_widget(body.scroll((offset, 0)), body_area);
-    frame.render_widget(
-        Paragraph::new(Line::styled(
-            scroll_hint(furthest - offset),
-            Style::default().fg(theme::brand_primary()),
-        )),
-        hint_area,
+    let rest = rows_in(&body, inside.width);
+    let laid = Pinned::new(
+        inside,
+        (
+            rows_in(&header, inside.width),
+            rest,
+            rows_in(&footer, inside.width),
+            rows_in(&wrapped(vec![answer_keys(yes, no, true)]), inside.width),
+        ),
+        scroll,
     );
-    frame.render_widget(footer, footer_area);
-    frame.render_widget(wrapped(vec![answer_keys(yes, no, answerable)]), keys_area);
+    let answerable = laid.whole && laid.body.height > 0 && laid.body.height >= needed.min(rest);
+
+    let hint = Line::styled(
+        scroll_hint(laid.furthest - laid.offset),
+        Style::default().fg(theme::brand_primary()),
+    );
+    laid.render(
+        frame,
+        header,
+        body,
+        hint,
+        footer,
+        wrapped(vec![answer_keys(yes, no, answerable)]),
+    );
 
     PinnedDrawn {
-        furthest,
+        furthest: laid.furthest,
         answerable,
+    }
+}
+
+/// The rows a paragraph takes when wrapped to `width`.
+fn rows_in(paragraph: &Paragraph, width: u16) -> u16 {
+    u16::try_from(paragraph.line_count(width)).unwrap_or(u16::MAX)
+}
+
+/// Where a question whose middle can be longer than the box puts each of its parts.
+///
+/// The rows above and below the middle claim their rows first and the keys next, so keys drawn
+/// whole have everything pinned drawn whole with them, and the middle takes the rows left between.
+struct Pinned {
+    header: Rect,
+    body: Rect,
+    /// The row saying how much of the middle is below, where it does not all fit.
+    hint: Rect,
+    footer: Rect,
+    keys: Rect,
+    /// The first row of the middle that is on the screen.
+    offset: u16,
+    /// How far the middle can be scrolled.
+    furthest: u16,
+    /// Whether the keys, and with them everything pinned, are whole in a box with a column to draw
+    /// in. A box with no column takes no rows for any of it, so the keys count as whole there.
+    whole: bool,
+}
+
+impl Pinned {
+    /// Laid out for parts this many rows tall: above the middle, the middle, below it, and the keys.
+    fn new(
+        inside: Rect,
+        (heading, rest, footing, answering): (u16, u16, u16, u16),
+        scroll: u16,
+    ) -> Self {
+        let header_rows = heading.min(inside.height);
+        let footer_rows = footing.min(inside.height - header_rows);
+        let keys_rows = answering.min(inside.height - header_rows - footer_rows);
+        let between = inside.height - header_rows - footer_rows - keys_rows;
+        // A row saying how much of the middle is below, where that leaves the middle a row of its
+        // own. The keys wrap and this does not share their row, so neither cuts off the other.
+        let hint_rows = u16::from(rest > between && between > 1);
+        // Only the rows the middle fills, so what is pinned below it is drawn right under it.
+        let body_rows = rest.min(between - hint_rows);
+        let furthest = rest - body_rows;
+
+        let row = |y: u16, height: u16| Rect {
+            y,
+            height,
+            ..inside
+        };
+        let header = row(inside.y, header_rows);
+        let body = row(header.bottom(), body_rows);
+        let hint = row(body.bottom(), hint_rows);
+        let footer = row(hint.bottom(), footer_rows);
+        let keys = row(inside.bottom() - keys_rows, keys_rows);
+        Pinned {
+            header,
+            body,
+            hint,
+            footer,
+            keys,
+            offset: scroll.min(furthest),
+            furthest,
+            whole: inside.width > 0 && keys_rows == answering,
+        }
+    }
+
+    fn render(
+        &self,
+        frame: &mut ratatui::Frame,
+        header: Paragraph,
+        body: Paragraph,
+        hint: Line,
+        footer: Paragraph,
+        keys: Paragraph,
+    ) {
+        frame.render_widget(header, self.header);
+        frame.render_widget(body.scroll((self.offset, 0)), self.body);
+        frame.render_widget(Paragraph::new(hint), self.hint);
+        frame.render_widget(footer, self.footer);
+        frame.render_widget(keys, self.keys);
     }
 }
 
@@ -3313,7 +3538,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(160, 24)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw_run(frame, request, 0);
+                draw_run(frame, request, 0, &mut RowsShown::default());
             })
             .expect("draw");
         terminal
@@ -4342,7 +4567,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(160, 48)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw_run(frame, request, 0);
+                draw_run(frame, request, 0, &mut RowsShown::default());
             })
             .expect("draw");
         terminal
@@ -4499,6 +4724,312 @@ mod tests {
             Some(RunResponse::Answer(RunAnswer::Reject))
         );
         assert!(!RunAnswer::Reject.decision().remember);
+    }
+
+    /// A run whose last argument changes what it does, behind more arguments than a box of 24 rows
+    /// shows, on a prompt that offers all three keys that run it.
+    fn a_run_with_a_long_argument_list() -> RunRequest {
+        let mut args = vec!["-cf".to_string(), "bundle.tar".to_string()];
+        args.extend((1..=36).map(|n| format!("draft-{n:02}-of-the-quarterly-report.txt")));
+        args.push("--remove-files".to_string());
+        RunRequest {
+            record: a_recordable_run().record,
+            ..RunRequest::from_pipeline(
+                &bravebot_core::Pipeline::new(vec![bravebot_core::Stage::new("tar", args)]),
+                &["/usr/bin/tar".into()],
+                "/home/someone/project",
+            )
+        }
+    }
+
+    /// The run question drawn at this size from `scroll`, after the draws `shown` remembers.
+    fn run_screen(
+        request: &RunRequest,
+        (width, height): (u16, u16),
+        scroll: u16,
+        shown: &mut RowsShown,
+    ) -> (Vec<String>, RunDrawn) {
+        let mut drawn = RunDrawn::default();
+        let rows = rows_of(width, height, |frame| {
+            drawn = draw_run(frame, request, scroll, shown);
+        });
+        (rows, drawn)
+    }
+
+    /// Where the plan starts once PageDown is pressed at `drawn`.
+    fn paged_down(drawn: &RunDrawn, request: &RunRequest, scroll: u16) -> u16 {
+        let Some(RunResponse::Page(by)) = drawn.response_to(press(KeyCode::PageDown), request)
+        else {
+            panic!("PageDown did not page");
+        };
+        drawn.moved(scroll, i32::from(by) * i32::from(drawn.page))
+    }
+
+    const RUNS_IT: [char; 3] = ['y', 'a', 'r'];
+
+    /// Which of the keys that run the line `drawn` takes.
+    fn taken(drawn: &RunDrawn, request: &RunRequest) -> Vec<char> {
+        RUNS_IT
+            .into_iter()
+            .filter(|key| {
+                drawn
+                    .response_to(press(KeyCode::Char(*key)), request)
+                    .is_some()
+            })
+            .collect()
+    }
+
+    /// PROMPT-1, PROMPT-4: a plan longer than the box leaves the keys whole and says how much of it
+    /// is unread, where before the argument list pushed the keys off the bottom with no cue that
+    /// anything was below.
+    #[test]
+    fn a_plan_longer_than_the_box_keeps_the_run_keys_and_says_how_many_rows_are_unread() {
+        let request = a_run_with_a_long_argument_list();
+        let keys = words(&format!(
+            "y {} a {} r {} n {} ctrl-c {}",
+            t!(run_yes),
+            t!(run_always),
+            t!(run_remember),
+            t!(run_no),
+            t!(stop_the_turn)
+        ));
+        for size in [(80, 24), (64, 24), (56, 30)] {
+            let (rows, drawn) = run_screen(&request, size, 0, &mut RowsShown::default());
+            let text = box_text(&rows);
+            assert!(
+                box_words(&rows).ends_with(&keys),
+                "{size:?}: the keys were not whole: {rows:#?}"
+            );
+            assert!(drawn.unread > 0, "{size:?}: the plan fit: {rows:#?}");
+            assert!(
+                text.contains(&squeezed(&t!(run_unseen, count = drawn.unread))),
+                "{size:?}: nothing said rows were unread: {rows:#?}"
+            );
+            assert!(!text.contains("--remove-files"), "{size:?}: {rows:#?}");
+            assert_eq!(taken(&drawn, &request), [], "{size:?}");
+        }
+    }
+
+    /// PROMPT-4: `y`, `a` and `r` each run the line, so none is taken while a row of it has not been
+    /// on the screen, and `y` is once paging has put every row there. Refusing never waits.
+    #[test]
+    fn no_key_runs_a_long_plan_until_every_row_of_it_has_been_on_the_screen() {
+        let request = a_run_with_a_long_argument_list();
+        let mut shown = RowsShown::default();
+        let mut scroll = 0;
+        let (mut rows, mut drawn) = run_screen(&request, (80, 24), scroll, &mut shown);
+        for key in RUNS_IT {
+            assert_eq!(
+                drawn.response_to(press(KeyCode::Char(key)), &request),
+                None,
+                "`{key}` ran a line whose last argument was never drawn"
+            );
+        }
+        assert_eq!(
+            drawn.response_to(press(KeyCode::Char('n')), &request),
+            Some(RunResponse::Answer(RunAnswer::Reject))
+        );
+        assert_eq!(
+            drawn.response_to(
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                &request
+            ),
+            Some(RunResponse::Answer(RunAnswer::Interrupt))
+        );
+
+        let (mut drew_the_last_argument, mut drew_the_access) = (false, false);
+        while drawn.unread > 0 {
+            assert_eq!(taken(&drawn, &request), [], "{rows:#?}");
+            assert!(
+                scroll < drawn.furthest,
+                "paged to the end and still taken nothing: {rows:#?}"
+            );
+            scroll = paged_down(&drawn, &request, scroll);
+            (rows, drawn) = run_screen(&request, (80, 24), scroll, &mut shown);
+            drew_the_last_argument |= box_text(&rows).contains("--remove-files");
+            drew_the_access |= box_text(&rows).contains(&squeezed(t!(run_not_sandboxed)));
+        }
+
+        assert!(drew_the_last_argument);
+        assert!(
+            drew_the_access,
+            "`y` was taken before the access it spends was drawn"
+        );
+        assert_eq!(
+            drawn.response_to(press(KeyCode::Char('y')), &request),
+            Some(RunResponse::Answer(RunAnswer::Approve))
+        );
+    }
+
+    /// PROMPT-4: `a` and `r` grant more than running the line, so each also waits for the rows
+    /// saying what it grants, where `y` waits only for the plan.
+    #[test]
+    fn a_and_r_each_wait_for_the_rows_saying_what_they_grant_besides_running_the_line() {
+        let request = a_run_with_a_long_argument_list();
+        let path = request.record.as_ref().expect("recordable").display();
+        let path = path.to_string();
+        let says = [
+            (
+                'a',
+                [
+                    t!(run_always_explained),
+                    t!(run_always_output_trusted),
+                    t!(run_always_this_directory),
+                ],
+            ),
+            (
+                'r',
+                [
+                    t!(run_remember_explained),
+                    t!(run_remember_only_asking),
+                    path.as_str(),
+                ],
+            ),
+        ];
+        let mut shown = RowsShown::default();
+        let mut scroll = 0;
+        let mut read = String::new();
+        let mut waited = false;
+        loop {
+            let (rows, drawn) = run_screen(&request, (80, 24), scroll, &mut shown);
+            read.push_str(&box_text(&rows));
+            read.push('\n');
+            let taken = taken(&drawn, &request);
+            for (key, sentences) in &says {
+                for sentence in sentences.iter().filter(|_| taken.contains(key)) {
+                    assert!(
+                        read.contains(&squeezed(sentence)),
+                        "`{key}` was taken before {sentence:?} was drawn: {rows:#?}"
+                    );
+                }
+            }
+            if taken == RUNS_IT {
+                break;
+            }
+            if taken.contains(&'y') {
+                waited = true;
+                let count = drawn.always_unread + drawn.record_unread;
+                assert!(
+                    box_text(&rows).contains(&squeezed(&t!(run_grant_unseen, count = count))),
+                    "nothing said why {taken:?} were all that was taken: {rows:#?}"
+                );
+            }
+            assert!(scroll < drawn.furthest, "paged to the end: {rows:#?}");
+            scroll = paged_down(&drawn, &request, scroll);
+        }
+        assert!(waited, "no draw took `y` alone, so nothing here waited");
+    }
+
+    /// PROMPT-4: having reached the bottom is not having read what was passed over on the way, and
+    /// End passes over the plan's arguments, which run as surely as the ones that were drawn.
+    #[test]
+    fn jumping_to_the_end_of_a_long_plan_leaves_the_rows_passed_over_unread() {
+        let request = a_run_with_a_long_argument_list();
+        let mut shown = RowsShown::default();
+        let (_, top) = run_screen(&request, (80, 24), 0, &mut shown);
+        let Some(RunResponse::Scroll(by)) = top.response_to(press(KeyCode::End), &request) else {
+            panic!("End did not scroll");
+        };
+        let (rows, end) = run_screen(&request, (80, 24), top.moved(0, i32::from(by)), &mut shown);
+
+        assert_eq!(top.moved(0, i32::from(by)), end.furthest);
+        assert!(end.unread > 0, "End read the rows it passed over");
+        assert!(
+            box_text(&rows).contains(&squeezed(&t!(run_unseen, count = end.unread))),
+            "the bottom said nothing was left to read: {rows:#?}"
+        );
+        for key in RUNS_IT {
+            assert_eq!(
+                end.response_to(press(KeyCode::Char(key)), &request),
+                None,
+                "`{key}` ran a line whose arguments were passed over"
+            );
+        }
+    }
+
+    /// PROMPT-4: a box too small for the question or its keys takes no key that runs the line,
+    /// wherever the plan is scrolled to and whatever an earlier, larger draw showed. A short prompt
+    /// in a box that holds it is answered at once, so the wait costs nothing where nothing is unread.
+    #[test]
+    fn a_run_prompt_too_small_for_its_question_takes_no_key_that_runs_the_line() {
+        for request in [a_recordable_run(), a_run_with_a_long_argument_list()] {
+            for size in [(80, 3), (80, 4), (24, 6), (2, 40), (1, 1)] {
+                let mut shown = RowsShown::default();
+                let (_, first) = run_screen(&request, size, 0, &mut shown);
+                for scroll in 0..=first.furthest {
+                    let (rows, drawn) = run_screen(&request, size, scroll, &mut shown);
+                    assert_eq!(
+                        taken(&drawn, &request),
+                        [],
+                        "{size:?} at {scroll}: {rows:#?}"
+                    );
+                }
+            }
+        }
+
+        let request = a_recordable_run();
+        let mut shown = RowsShown::default();
+        let (rows, whole) = run_screen(&request, (80, 40), 0, &mut shown);
+        assert_eq!(
+            taken(&whole, &request),
+            RUNS_IT,
+            "a prompt that fits waited to be scrolled: {rows:#?}"
+        );
+        let (rows, cut) = run_screen(&request, (80, 4), 0, &mut shown);
+        assert_eq!(
+            taken(&cut, &request),
+            [],
+            "a prompt read in a larger box was answered from one that cut it off: {rows:#?}"
+        );
+    }
+
+    /// PROMPT-4: another width wraps the plan into other rows, so a plan read at one width is unread
+    /// at the next until its rows there have been on the screen.
+    #[test]
+    fn a_plan_read_at_one_width_is_unread_again_at_another() {
+        let request = a_run_with_a_long_argument_list();
+        let mut shown = RowsShown::default();
+        let mut scroll = 0;
+        let (_, mut drawn) = run_screen(&request, (80, 24), scroll, &mut shown);
+        while drawn.unread > 0 && scroll < drawn.furthest {
+            scroll = paged_down(&drawn, &request, scroll);
+            (_, drawn) = run_screen(&request, (80, 24), scroll, &mut shown);
+        }
+        assert!(taken(&drawn, &request).contains(&'y'));
+
+        let (rows, fresh) = run_screen(&request, (120, 24), 0, &mut RowsShown::default());
+        assert!(fresh.unread > 0, "the plan fit the wider box: {rows:#?}");
+
+        let (rows, wider) = run_screen(&request, (120, 24), 0, &mut shown);
+        assert_eq!(
+            wider.unread, fresh.unread,
+            "rows read at 80 columns were counted at 120"
+        );
+        assert_eq!(taken(&wider, &request), [], "{rows:#?}");
+    }
+
+    /// PROMPT-4: a page is one row fewer than the box shows, so paging through a plan in a box
+    /// shorter than ten rows puts every row on the screen and every key that runs it is then taken.
+    #[test]
+    fn paging_through_a_long_plan_in_a_short_box_puts_every_row_on_the_screen() {
+        let request = a_run_with_a_long_argument_list();
+        let mut shown = RowsShown::default();
+        let mut scroll = 0;
+        let (rows, mut drawn) = run_screen(&request, (80, 14), scroll, &mut shown);
+        // Ten rows with the question and the keys in them leaves the plan fewer than ten.
+        assert!(
+            box_rows(&rows).len() <= 10,
+            "the box was not short: {rows:#?}"
+        );
+        while taken(&drawn, &request) != RUNS_IT {
+            assert!(
+                scroll < drawn.furthest,
+                "paging passed over {} rows: {drawn:?}",
+                drawn.unread + drawn.always_unread + drawn.record_unread
+            );
+            scroll = paged_down(&drawn, &request, scroll);
+            (_, drawn) = run_screen(&request, (80, 14), scroll, &mut shown);
+        }
     }
 
     fn a_vetting(verdict: Verdict, reason: Option<&str>, content: &str) -> VetRequest {
@@ -5885,7 +6416,7 @@ mod tests {
             (
                 "run",
                 unpainted_cell(painted, |frame| {
-                    draw_run(frame, &run, 0);
+                    draw_run(frame, &run, 0, &mut RowsShown::default());
                 }),
             ),
             (

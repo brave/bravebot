@@ -50,7 +50,7 @@ prompt is still a person's own line, so a recalled `/status` is a command again.
 still this rule: what waited is the line the box held when somebody pressed Enter on it, and nothing
 but that press puts anything in the queue.
 
-`verified-by: by-construction (both dispatch sites read a line that came off the input box: the box's own key handler, and the queue that handler put the line in for when the turn ends. No path carries model output, file content or processor output into either)`
+`verified-by: by-construction (every dispatch site reads a line that came off the input box: the box's own key handler at rest, the same box's handler mid-turn for a word that does not wait, and the queue that handler put the line in for when the turn ends. No path carries model output, file content or processor output into any of them)`
 
 
 <a id="CMD-2"></a>
@@ -191,11 +191,11 @@ exactly those characters have to arrive.
 <a id="CMD-6"></a>
 ### CMD-6: the set is written down once
 
-One table names every command, its argument and its one-line description, and each name is a
-single constant the one place that dispatches matches on. The completion list's command rows, Tab
-and the arrows all read the table, and so does the arm that queues a command typed mid-turn
-(CMD-8), so typing `/` lists every command with what it does and narrowing, queueing and
-dispatching all work on one set. The skill rows beneath them read the set a turn would advertise
+One table names every command, its argument, its one-line description and whether it waits for a
+turn in flight, and each name is a single constant the one place that dispatches matches on. The
+completion list's command rows, Tab and the arrows all read the table, and so do the arms that
+carry out or queue a command typed mid-turn (CMD-8), so typing `/` lists every command with what it
+does and narrowing, queueing and dispatching all work on one set. The skill rows beneath them read the set a turn would advertise
 (CMD-9), and no key on one dispatches anything.
 
 **Why.** A word written down in more than one place is a word that is renamed in one of them,
@@ -245,31 +245,69 @@ session resolved and never added here, however many definitions a machine holds
 
 
 <a id="CMD-8"></a>
-### CMD-8: while a turn runs the word waits, and is carried out when the queue reaches it
+### CMD-8: while a turn runs the word waits, unless it touches nothing the turn holds
 
-A command typed while a turn is in flight is taken off the box and joins the lines waiting for the
-turn to end, exactly as a prompt does: the box clears, the history remembers it, and it is drawn
-under the box marked as waiting. What it waits for is different. It is never offered to the turn in
-flight, so nothing about it reaches the planner, and when the queue reaches it, it is carried out
-rather than sent. The queue is drained in the order the lines were typed, so a command behind a
-prompt waits for that prompt's turn. Which lines are commands there is CMD-2's rule and nothing
+A command typed while a turn is in flight is one of two kinds, and a column of the table says which.
+
+| Kind | Commands | Enter mid-turn |
+|---|---|---|
+| reads or ends what the session keeps | `/cost`; `/watch` in every form; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| everything else | every other command, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
+
+A command carried out as it is typed goes ahead of every line already waiting, and a line behind it
+stays where it was. The exception is a line of the same command already waiting, which it waits
+behind: `/loop stop` typed after a waiting `/loop 5m check the deploy` would find no loop to stop
+and the loop would start after it, so two lines of one command are carried out in the order they
+were typed. It comes off the box and is not remembered, as at rest. What it says is drawn
+under the turn as notes are, and joins the transcript after the turn's own entries once the turn has
+ended. Ctrl-Enter on one stops nothing: the command is already done, and stopping the turn would
+send the prompts waiting behind it, which nobody asked to hurry.
+
+A command that waits is taken off the box and joins the lines waiting for the turn to end, exactly
+as a prompt does: the box clears, the history remembers it, and it is drawn under the box marked as
+waiting. What it waits for is different. It is never offered to the turn in flight, so nothing about
+it reaches the planner, and when the queue reaches it, it is carried out rather than sent. The queue
+is drained in the order the lines were typed, so a command behind a prompt waits for that prompt's
+turn.
+
+Neither kind is offered to the turn in flight. Which lines are commands is CMD-2's rule and nothing
 narrower, so a sentence mentioning a command is a prompt mid-turn as it is at rest, and a word the
-table gives no argument is a prompt with anything after it.
+table gives no argument is a prompt with anything after it. A compaction, an aside and the other
+loops that share the working status are not a turn, and every command typed during one waits.
 
-**Why.** Enter mid-turn already means the line waits, and that is what a person pressing it expects
-of every line they type. What the queue must not do is send a command: a line waiting there used to
-be a prompt like any other, and the running turn takes those at its next round boundary, so a queued
-`/clear` asked the planner what to clear. Carrying it out as it is typed is no better, because every
-command acts on the conversation, the terminal or the network and the turn holds all three, so it
-would change what the turn is running under. Waiting costs a person nothing and asks nothing of
-them: they typed the command once, and it happens.
+**Why the second kind waits.** Enter mid-turn already means the line waits, and that is what a
+person pressing it expects of a line they type. What the queue must not do is send a command: a line
+waiting there used to be a prompt like any other, and the running turn takes those at its next round
+boundary, so a queued `/clear` asked the planner what to clear. Carrying one of these out as it is
+typed is no better. Each acts on the conversation, the workspace, the terminal or the network, and
+the turn holds all four, so it would change what the turn is running under. Starting a loop or
+setting a goal is in this kind for the same reason: `/loop 5m check the deploy` sends its first tick
+at once, and a second turn may not begin while one is in flight, while a goal set mid-turn would
+have the turn in flight judged against a condition it was never sent with.
 
-**Nothing enters the transcript while it waits**, and taking back what is waiting gives the command
-back to the box like any other line. What a keystroke wrote into the transcript would count as the
-turn having done something, which is what decides whether a stopped prompt comes back to be edited,
-so a command recorded there would cost a person the prompt they stopped.
+**Why the first kind does not.** A loop, a goal, a watch and the spend so far are the session's own,
+and the turn holds none of them, so reading or ending one changes nothing the turn is using. The
+moment these are wanted is mid-turn: a person who has seen enough of a loop types `/loop stop` while
+its tick runs, and an ending carried out after that tick would cost them the next one too if the
+queue held a prompt. What a tick asks for once its loop is gone is
+[loop.md](loop.md#LOOP-11)'s.
+
+**Nothing enters the transcript while the turn runs.** What a keystroke wrote into the transcript
+would count as the turn having done something, which is what decides whether a stopped prompt comes
+back to be edited, so a command recorded there would cost a person the prompt they stopped. A
+waiting command is held in the queue, and taking back what is waiting gives it back to the box like
+any other line. What a command carried out mid-turn says is held under the turn until the turn has
+been folded in.
 
 `verified-by: bravebot_tui::app::a_command_typed_while_a_turn_runs_is_not_sent_as_a_prompt`
+`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::a_command_that_reads_or_ends_what_the_session_keeps_answers_mid_turn`
+`verified-by: bravebot_tui::app::a_command_that_would_start_a_loop_or_a_goal_waits_for_the_turn`
+`verified-by: bravebot_tui::app::a_command_typed_behind_a_waiting_one_of_its_own_waits_with_it`
+`verified-by: bravebot_tui::app::a_command_typed_during_a_compaction_waits`
+`verified-by: bravebot_tui::app::a_stopped_prompt_comes_back_after_a_command_answered_mid_turn`
+`verified-by: bravebot_tui::app::ctrl_enter_on_a_command_answered_mid_turn_hurries_nothing`
+`verified-by: bravebot_tui::render::what_a_command_answered_mid_turn_is_drawn_under_the_turn`
 `verified-by: bravebot_tui::app::no_command_is_sent_as_a_prompt_while_a_turn_runs`
 `verified-by: bravebot_tui::app::a_command_with_an_argument_is_not_sent_as_a_prompt_while_a_turn_runs`
 `verified-by: bravebot_tui::app::a_command_that_takes_no_argument_is_only_the_bare_word_mid_turn`

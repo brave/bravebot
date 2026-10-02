@@ -392,13 +392,26 @@ jobs:
       - name: Enable corepack for Leo's prepare
         run: corepack enable
 
+      # The built @brave/leo, which ui/scripts/ci-install.sh reuses so that Leo's prepare step
+      # runs once per Leo commit rather than on every install. The patch script is in the key
+      # because the cached copy is taken after our postinstall has patched it.
+      - name: Find the Leo commit
+        id: leo
+        run: echo "commit=$(node -p "require('./ui/package-lock.json').packages['node_modules/@brave/leo'].resolved.split('#')[1]")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the built Leo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/bravebot-leo
+          key: leo-${{ runner.os }}-${{ steps.leo.outputs.commit }}-${{ hashFiles('ui/scripts/patch-leo-types.mjs') }}
+
       - name: Install desktop test dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb libgtk-3-0 libnss3 libasound2t64
 
       - name: Build and test the desktop UI
-        run: make check-ui-build
+        run: make check-ui-build UI_INSTALL="ui/scripts/ci-install.sh $HOME/.cache/bravebot-leo"
 
       - name: Walkthrough regression
         timeout-minutes: 5
@@ -419,6 +432,10 @@ jobs:
         shell: bash
     env:
       npm_config_script_shell: C:\Program Files\Git\bin\bash.exe
+      # setup-node saves the directory `npm config get cache` names under cmd.exe. Without this,
+      # npm under Git's bash writes its cache elsewhere, the saved cache is empty, and Leo's
+      # prepare step downloads all of Leo's dev dependencies on every run.
+      npm_config_cache: C:\npm\cache
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -441,6 +458,17 @@ jobs:
       - name: Enable corepack for Leo's prepare
         run: corepack enable
 
+      # As in the Front end job.
+      - name: Find the Leo commit
+        id: leo
+        run: echo "commit=$(node -p "require('./ui/package-lock.json').packages['node_modules/@brave/leo'].resolved.split('#')[1]")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the built Leo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/bravebot-leo
+          key: leo-${{ runner.os }}-${{ steps.leo.outputs.commit }}-${{ hashFiles('ui/scripts/patch-leo-types.mjs') }}
+
       - name: Test the file helper on NTFS
         run: cargo test -p bravebot-ui-files --locked
 
@@ -448,7 +476,7 @@ jobs:
       # the installer's work (#769), and the Front end job runs them.
       - name: Build the desktop UI
         run: |
-          npm --prefix ui ci
+          ui/scripts/ci-install.sh "$HOME/.cache/bravebot-leo"
           BRAVEBOT_BUILD_UNCONFIGURED=1 npm --prefix ui run build
 
       - name: Walkthrough regression

@@ -184,6 +184,7 @@ impl KeyChord {
 /// Active keybindings for the interactive TUI prompt and navigation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Keybindings {
+    pub background: KeyChord,
     pub stash: KeyChord,
     pub scroller: KeyChord,
     pub editor: KeyChord,
@@ -196,6 +197,7 @@ pub struct Keybindings {
 impl Default for Keybindings {
     fn default() -> Self {
         Self {
+            background: KeyChord::ctrl('b'),
             stash: KeyChord::ctrl('s'),
             scroller: KeyChord::ctrl('o'),
             editor: KeyChord::ctrl('g'),
@@ -209,9 +211,10 @@ impl Default for Keybindings {
 
 impl Keybindings {
     /// Every action by the name a settings file calls it, in one list so that resolving one chord
-    /// can see the six it has to differ from.
-    fn slots(&mut self) -> [(&'static str, &mut KeyChord); 7] {
+    /// can see the seven it has to differ from.
+    fn slots(&mut self) -> [(&'static str, &mut KeyChord); 8] {
         [
+            ("background", &mut self.background),
             ("editor", &mut self.editor),
             ("history", &mut self.history),
             ("paste", &mut self.paste),
@@ -234,8 +237,8 @@ impl Keybindings {
     pub fn from_map(configured: &BTreeMap<String, String>) -> Self {
         let mut active = Self::default();
         let mut slots = active.slots();
-        let defaults: [KeyChord; 7] = std::array::from_fn(|i| *slots[i].1);
-        let mut asked: [Option<KeyChord>; 7] = std::array::from_fn(|i| {
+        let defaults: [KeyChord; 8] = std::array::from_fn(|i| *slots[i].1);
+        let mut asked: [Option<KeyChord>; 8] = std::array::from_fn(|i| {
             configured
                 .get(slots[i].0)
                 .and_then(|spelling| KeyChord::parse(spelling))
@@ -246,7 +249,7 @@ impl Keybindings {
         // given, so this settles rather than deciding once. Every round drops at least one request
         // or is the last, and with no requests left the defaults are what stand, which differ.
         loop {
-            let standing: [KeyChord; 7] = std::array::from_fn(|i| asked[i].unwrap_or(defaults[i]));
+            let standing: [KeyChord; 8] = std::array::from_fn(|i| asked[i].unwrap_or(defaults[i]));
             let contested =
                 |chord: KeyChord| standing.iter().filter(|on| **on == chord).count() > 1;
             let mut given_up = false;
@@ -265,6 +268,10 @@ impl Keybindings {
             **slot = asked[i].unwrap_or(defaults[i]);
         }
         active
+    }
+
+    pub fn is_background(&self, key: &KeyEvent) -> bool {
+        self.background.matches(key)
     }
 
     pub fn is_stash(&self, key: &KeyEvent) -> bool {
@@ -295,6 +302,10 @@ impl Keybindings {
         self.paste.matches(key)
     }
 
+    pub fn background_name(&self) -> String {
+        self.background.display()
+    }
+
     pub fn stash_name(&self) -> String {
         self.stash.display()
     }
@@ -323,9 +334,10 @@ impl Keybindings {
         self.paste.display()
     }
 
-    /// Whether any of the seven configurable actions answers this key event.
+    /// Whether any of the eight configurable actions answers this key event.
     pub fn claims(&self, key: &KeyEvent) -> bool {
-        self.is_stash(key)
+        self.is_background(key)
+            || self.is_stash(key)
             || self.is_scroller(key)
             || self.is_editor(key)
             || self.is_history(key)
@@ -446,10 +458,12 @@ mod tests {
     #[test]
     fn no_two_actions_are_left_on_one_chord() {
         let taking_anothers_default = [
-            ("stash", "ctrl-o"),   // the scroller's
-            ("watch", "ctrl-t"),   // the trail's
-            ("paste", "ctrl-g"),   // the editor's
-            ("history", "ctrl-s"), // the stash's
+            ("stash", "ctrl-o"),      // the scroller's
+            ("watch", "ctrl-t"),      // the trail's
+            ("paste", "ctrl-g"),      // the editor's
+            ("history", "ctrl-s"),    // the stash's
+            ("background", "ctrl-r"), // the history's
+            ("trail", "ctrl-b"),      // the background's
         ];
         for (action, chord) in taking_anothers_default {
             let mut map = BTreeMap::new();
@@ -483,6 +497,26 @@ mod tests {
 
         assert_eq!(bindings.stash, KeyChord::ctrl('o'));
         assert_eq!(bindings.scroller, KeyChord::ctrl('s'));
+    }
+
+    /// Moving a running command to the background is an action a settings file can move like the
+    /// other seven, since Ctrl-B is also the prefix tmux waits for and a person inside tmux would
+    /// otherwise press it twice every time.
+    #[test]
+    fn the_background_chord_is_ctrl_b_and_can_be_moved() {
+        let defaults = Keybindings::default();
+        assert_eq!(defaults.background, KeyChord::ctrl('b'));
+        assert_eq!(defaults.background_name(), "ctrl-b");
+
+        let mut map = BTreeMap::new();
+        map.insert("background".to_string(), "alt-b".to_string());
+        let bindings = Keybindings::from_map(&map);
+        assert_eq!(bindings.background, KeyChord::alt('b'));
+        assert_eq!(bindings.background_name(), "alt-b");
+        let moved = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT);
+        let vacated = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL);
+        assert!(bindings.is_background(&moved) && bindings.claims(&moved));
+        assert!(!bindings.is_background(&vacated) && !bindings.claims(&vacated));
     }
 
     #[test]
