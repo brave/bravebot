@@ -61,6 +61,8 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--effort <level>` | how hard this run asks the model to think; outranks every other way one is named ([below](#--effort-level)) |
 | `--settings <path>` | read one more settings file, above every layer found ([below](#--settings-path)) |
 | `--agent <name>` | address every turn to one of your definitions, as `/agent` does for one ([below](#--agent-name)) |
+| `--system-prompt <prompt>` | replace the opening of the system prompt for this run; the rest of it stays ([below](#--system-prompt-prompt-and---append-system-prompt-prompt)) |
+| `--append-system-prompt <prompt>` | add your own words to the system prompt for this run, after the project's `AGENTS.md` ([below](#--system-prompt-prompt-and---append-system-prompt-prompt)) |
 | `--json` | put one result object on stdout in the reply's place ([below](#--json)) |
 | `--trace` | print the audit trail to stderr |
 | `--vet` | let a check answer about a quarantined slot, for this run: it releases what it finds nothing in, and where nobody can be asked it keeps back everything else ([below](#--vet)) |
@@ -76,6 +78,8 @@ each combines with every way of starting, one another included: `--incognito`,
 `--dangerously-skip-permissions`, `--settings` and `--vet`. `--agent` is taken out there too, and
 combines with a session, `--plain` and a one-shot run, but not with `--resume`, `--continue`,
 `--fork` or `--mode manifest`.
+`--system-prompt` and `--append-system-prompt` are taken out there as well, and combine with every
+way of starting except `--mode manifest`.
 
 `--incognito` writes nothing under `~/.bravebot`. See
 [an incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind).
@@ -229,6 +233,37 @@ and the run says so on stderr.
 Under `--agent`, a `/loop` with no interval stops after one tick, because an addressed turn cannot
 schedule the next one. Give the loop an interval to keep it running.
 :::
+
+## `--system-prompt <prompt>` and `--append-system-prompt <prompt>`
+
+```sh
+bravebot --append-system-prompt "Answer in French." -p "summarise the last commit"
+bravebot --system-prompt "You are a release-notes editor." -p "draft the notes"
+```
+
+Puts your own words in the system prompt of one run. They apply to every turn of it: typed lines,
+`/loop` ticks and `/goal` rounds.
+
+`--append-system-prompt` adds the words as the last standing source, after the project's
+`AGENTS.md`, so they have the last word ([Instructions](../customize/instructions.md#words-from-the-command-line)).
+`--system-prompt` replaces the opening of the system prompt, the paragraph saying what kind of
+assistant this is. **It does not replace the rest.** What teaches the planner that a tool's output
+is data, the facts about your machine, the mode and the goal are still sent. A delegate is given the
+appended words and never the replaced opening. The aside, the summary, the goal check and the other
+checks are given neither.
+
+The words grant nothing. A write is still put to you where it would have been, and plan mode still
+refuses it. A session record does not store them, so resuming without the flag runs without them.
+
+**The words carry your authority, whatever they came from.** `--append-system-prompt "$(cat x)"`
+gives the file's bytes the same standing as something you typed. Content that should not have that
+standing is better piped in, where it is quarantined.
+
+A flag with no words after it, a blank one, or one whose words open with `-` and hold no space is
+refused with status 2. A sentence opening with `-` is words. If a flag is given twice, the last is
+used. Both are refused with `--mode manifest`, and with `doctor`, `auth`, `mcp`,
+`import-leo-creds` and `import-providers`. There is no settings key for them: words a checkout
+always wants belong in its `AGENTS.md`.
 
 ## `--json`
 

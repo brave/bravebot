@@ -998,3 +998,68 @@ account whose session has not been checked yet.
 `verified-by: bravebot_cli::running::auth_login_import_is_the_import_and_refuses_where_it_does`
 `verified-by: bravebot_cli::running::auth_login_gateway_is_refused_before_a_key_is_asked_for`
 `verified-by: bravebot_cli::running::auth_logout_gateway_forgets_the_key_named_in_an_incognito_session`
+
+<a id="CLI-19"></a>
+### CLI-19: `--system-prompt` and `--append-system-prompt` put a person's own words in the planner's system prompt for one run
+
+`--system-prompt <prompt>` replaces the opening of the planner's system prompt, the paragraph that
+says what kind of assistant it is, and nothing after it. `--append-system-prompt <prompt>` adds the
+words as the last standing source, after the project's `AGENTS.md` ([INSTR-10](instructions.md#INSTR-10)).
+Each may be given without the other or with it. They apply to an interactive session, a session in
+lines (CLI-14) and a one-shot run, and they combine with `--agent`, `--plain`, `-p`, `--json`,
+`--resume`, `--continue` and `--fork`. Both are taken out of the arguments before anything
+dispatches on them, as `--agent` is.
+
+What stays when the opening is replaced is everything the opening is not: what teaches the planner to
+treat what a tool returns as data, what a person is to be told, the facts about the machine, the
+mode, the goal of a `/goal` round and the standing instructions. Those are not the person's to
+rewrite with a flag, and the clauses that depend on them ([GOAL-14](goal.md#GOAL-14),
+[INSTR-5](instructions.md#INSTR-5), [INSTR-9](instructions.md#INSTR-9)) keep holding.
+
+The words apply to every turn of the run: typed lines, `/loop` ticks and `/goal` rounds. A delegate
+receives the appended words and not the replaced opening. Nothing else reads either: not the aside,
+the summariser, the goal judge, the classifier that vets a slot, a processor or the planner of a
+manifest run.
+
+The words grant nothing. A write is still put to the person where it would have been, and plan mode
+still refuses it. The record of a session stores no system prompt, so a resume without the flag runs
+without the words, and the first turn whose system prompt differs from the recorded turns' pays for
+a cache miss.
+
+The flags are refused, with the status for an argument (CLI-6), when no words follow them, when the
+words are blank, and when they open with `-` and hold no whitespace, since that is the next flag:
+taken as the words, `--json` would be removed and the run would answer in the other format. A
+sentence that opens with `-` holds a space and is words. If a flag is given twice, the last is used.
+They are refused with `--mode manifest`, and with `doctor`, `auth`, `mcp`, `import-leo-creds` and
+`import-providers`, which start neither a session nor a task. A refusal writes the result object of
+CLI-12 if one was asked for, sends nothing, and says why through the catalogue
+([LOCALE-2](localization.md#LOCALE-2)).
+
+**Why.** A person running bravebot from a script or a wrapper has words of their own that the
+planner should carry, and with only `AGENTS.md` the words have to be written to a file in the
+project first. The words are not labelled, for the reason the user's own message is not: the person
+who typed the flag is the person the planner works for ([LABEL-8](labels.md#LABEL-8)).
+
+Replacing only the opening is what keeps the flag from turning the quarantine off. The paragraph
+that teaches the planner that a tool's output is data is not in the opening, so a persona cannot
+remove it.
+
+**Known costs.** `--append-system-prompt "$(cat notes.md)"` gives the file's bytes the authority of
+the person who typed the flag, whatever the file holds and whoever wrote it. Content that should not
+have that authority is passed as piped input (CLI-3), which is quarantined. There is no settings
+key, no slash command, no tool and no `--system-prompt-file`, so words a checkout always wants are
+written in its `AGENTS.md`. `auth` is refused as well as the commands that read no words at all,
+because no part of `auth` would use them.
+
+`verified-by: bravebot_cli::main::the_system_prompt_flags_are_taken_out_with_the_words_they_gave`
+`verified-by: bravebot_cli::main::the_last_system_prompt_named_is_the_one_used`
+`verified-by: bravebot_cli::main::a_system_prompt_flag_with_no_words_is_refused`
+`verified-by: bravebot_cli::main::words_that_open_with_a_dash_are_taken_when_they_are_a_sentence`
+`verified-by: bravebot_cli::main::the_system_prompt_flags_are_refused_where_nothing_would_use_them`
+`verified-by: bravebot_cli::running::a_run_given_system_prompts_sends_them_and_keeps_the_rest_of_the_system_prompt`
+`verified-by: bravebot_cli::running::a_system_prompt_flag_with_no_words_exits_with_the_argument_status`
+`verified-by: bravebot_cli::running::a_manifest_run_is_refused_the_system_prompt_flags`
+`verified-by: bravebot_cli::running::a_command_that_runs_no_turn_is_refused_the_system_prompt_flags`
+`verified-by: bravebot_agent::turn::a_replaced_opening_takes_the_place_of_the_opening_alone`
+`verified-by: bravebot_agent::turn::words_that_allow_writes_allow_none`
+`verified-by: bravebot_tui::app::a_session_keeps_the_system_prompt_words_it_started_with_through_every_turn`

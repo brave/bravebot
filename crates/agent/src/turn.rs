@@ -683,6 +683,17 @@ pub struct Attachment {
     pub media: String,
 }
 
+/// What `--system-prompt` and `--append-system-prompt` named (CLI-19).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SystemPrompts {
+    /// Stands in for [`OPENING`] alone. Everything after it in the prompt stays, so the planner
+    /// still has the guidance its refusals and its quarantine rest on.
+    pub replacing: Option<String>,
+    /// Added to the standing instructions as the last source, after the project's `AGENTS.md`
+    /// (INSTR-10). A delegate is given this one and not the other.
+    pub appending: Option<String>,
+}
+
 /// What a turn is asked to do.
 #[derive(Debug, Clone)]
 pub struct Task {
@@ -826,6 +837,13 @@ pub struct Task {
     /// Nothing here writes a commit message. What this decides is what the planner is told
     /// (BACKEND-30), which is where the answer has to be for it to survive a long turn.
     pub attribution: bravebot_config::Attribution,
+    /// The words the command line put in the planner's system prompt, where it did (CLI-19).
+    ///
+    /// Plain strings, without a label, because a person typed them as an argument of the command
+    /// they ran, which is the footing their own message has (LABEL-8).
+    /// They grant nothing: the mode, the permission prompts and every refusal are enforced below
+    /// the prompt, whatever it says. Empty by default, which is every caller that read no flag.
+    pub system_prompts: SystemPrompts,
     /// How much this turn asks before it acts.
     ///
     /// Carried by the task because the planner has to be told about one of them: plan mode refuses
@@ -1018,6 +1036,7 @@ impl Task {
             // Nothing said about either destination, which is a caller that read no settings
             // file. Empty is a value the block can carry and this is not it.
             attribution: bravebot_config::Attribution::default(),
+            system_prompts: SystemPrompts::default(),
             delegate: None,
             addressing: None,
             model_outranks_a_definition: false,
@@ -1211,6 +1230,12 @@ impl Task {
     /// State what the settings say a commit message and a pull request may carry.
     pub fn with_attribution(mut self, attribution: bravebot_config::Attribution) -> Self {
         self.attribution = attribution;
+        self
+    }
+
+    /// State the words the command line put in the system prompt (CLI-19).
+    pub fn with_system_prompts(mut self, system_prompts: SystemPrompts) -> Self {
+        self.system_prompts = system_prompts;
         self
     }
 
@@ -2880,6 +2905,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             task.tick,
             task.working_towards.as_deref(),
             &task.attribution,
+            task.system_prompts.appending.as_deref(),
         );
         if let Some(rooted) = rooted {
             policy.exchange_file_authority(rooted);
@@ -3073,8 +3099,15 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             // An addressed definition's words go after this program's and ahead of the user's own, for
             // the same reason: its file says what this turn is for, and their instructions still have
             // the last word.
+            //
+            // `--system-prompt` stands in for the opening alone (CLI-19): what follows it is what
+            // the quarantine, the goal and the modes rest on.
             None => format!(
-                "{OPENING}{PLANNING}{FOR_A_PERSON}{}{}{}{mode}",
+                "{}{PLANNING}{FOR_A_PERSON}{}{}{}{mode}",
+                task.system_prompts
+                    .replacing
+                    .as_deref()
+                    .map_or(OPENING, str::trim),
                 preamble.for_a_person,
                 addressed
                     .as_ref()
@@ -4018,6 +4051,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     task.permission_mode,
                                     task.auto_vetting,
                                     &task.attribution,
+                                    task.system_prompts.appending.as_deref(),
                                     task.output_cap,
                                     task.deadlines,
                                     task.mcp.as_ref(),

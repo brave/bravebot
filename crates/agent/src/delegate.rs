@@ -495,6 +495,10 @@ pub fn run(
     // same tree for the same person, so a settings key that decided what the parent's carry and
     // said nothing about a delegate's would be answered by whichever of the two did the writing.
     attribution: &bravebot_config::Attribution,
+    // What `--append-system-prompt` named on the spawning turn, which a delegate reads after the
+    // project's instructions as that turn does (CLI-19). `--system-prompt` is not passed: a
+    // delegate has its own opening.
+    appended: Option<&str>,
     // The spawning turn's as well. A delegate runs programs into a conversation of its own, but the
     // budget is the person's answer about what a command's output is worth spending context on, and
     // it does not stop being their answer because the spending moved.
@@ -563,6 +567,10 @@ pub fn run(
         .with_permission_mode(permission_mode)
         .with_auto_vetting(auto_vetting)
         .with_attribution(attribution.clone())
+        .with_system_prompts(crate::turn::SystemPrompts {
+            replacing: None,
+            appending: appended.map(str::to_string),
+        })
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
         .with_mcp(mcp.cloned());

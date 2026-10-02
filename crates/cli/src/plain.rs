@@ -66,7 +66,14 @@ const CONTEXT: usize = 3;
 ///
 /// `agent` is the definition `--agent` named, which every prompt of the session is addressed to
 /// once the directory's trust is settled (CLI-17).
-pub fn session(skip_permissions: bool, agent: Option<String>) -> ExitCode {
+///
+/// `prompts` is what `--system-prompt` and `--append-system-prompt` named, carried by every prompt
+/// of the session (CLI-19).
+pub fn session(
+    skip_permissions: bool,
+    agent: Option<String>,
+    prompts: bravebot_agent::turn::SystemPrompts,
+) -> ExitCode {
     // Refused rather than read. The lines this reads are the person's own prompts, and a pipe has
     // nothing vouching for what it carries: CLI-3 quarantines piped bytes for exactly that reason,
     // so a session taking its prompts from one would be taking instruction from whatever fed it,
@@ -291,6 +298,7 @@ pub fn session(skip_permissions: bool, agent: Option<String>) -> ExitCode {
         permissions,
         mode,
         attribution: settings.attribution().clone(),
+        prompts,
         output_cap: settings.run_output_cap(),
         deadlines: bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines()),
         model,
@@ -425,6 +433,8 @@ struct Running<'a> {
     in_force: String,
     /// The definition every prompt is addressed to, where `--agent` named one.
     agent: Option<bravebot_tui::state::Addressed>,
+    /// The words the command line put in the system prompt of every prompt (CLI-19).
+    prompts: bravebot_agent::turn::SystemPrompts,
     /// Whether the model in force still reads an effort level.
     ///
     /// The listing answers it where the session is assembled, because that is where the listing is
@@ -503,6 +513,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             .with_permissions(self.permissions.clone())
             .with_permission_mode(self.mode)
             .with_attribution(self.attribution.clone())
+            .with_system_prompts(self.prompts.clone())
             .with_output_cap(self.output_cap)
             .with_deadlines(self.deadlines)
             .with_auto_vetting(self.auto_vetting)

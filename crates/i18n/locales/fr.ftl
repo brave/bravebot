@@ -92,6 +92,10 @@ cli-option-file = Inclure un fichier de l'espace de travail comme contexte (rép
 cli-option-add-dir = Accéder à un répertoire hors de celui de travail (répétable)
 cli-option-settings = Lire ce fichier de réglages pour cette exécution, au-dessus de ceux trouvés sur le disque
 cli-option-agent = Adresser chaque tour à cette définition, comme /agent le fait pour un seul
+cli-option-system-prompt =
+    Remplacer la phrase d'ouverture de l'invite système du planificateur à chaque tour. Le reste demeure
+cli-option-append-system-prompt =
+    Ajouter ce texte aux instructions permanentes du planificateur à chaque tour, après AGENTS.md
 cli-option-mode = turn (par défaut) décide étape par étape ; manifest planifie tout le déroulement d'abord
 cli-option-model = Le modèle demandé par cette exécution, à la place de celui mémorisé ou configuré
 cli-option-effort = L'effort de réflexion demandé par cette exécution, à la place de celui mémorisé ou configuré
@@ -127,6 +131,12 @@ cli-agent-not-for-a-command =
 cli-agent-not-with-a-manifest =
     --agent ne va pas avec --mode manifest : une exécution planifiée prévoit chaque étape avant
     qu'aucune ne s'exécute, et une définition est désignée un tour à la fois
+# Le drapeau est --system-prompt ou --append-system-prompt, tel qu'il a été tapé.
+cli-system-prompt-needs-text = { $flag } demande le texte à utiliser
+cli-system-prompt-not-for-a-command =
+    { $flag } donne des mots à une session ou à une tâche, et { $command } ne démarre ni l'une ni l'autre
+cli-system-prompt-not-with-a-manifest =
+    { $flag } ne va pas avec --mode manifest : le planificateur d'une exécution planifiée ne le lit pas
 cli-agent-no-such-definition = aucune définition ne s'appelle { $name } ; cette exécution a résolu { $names }
 cli-agent-no-such-definition-unread =
     { $count ->
