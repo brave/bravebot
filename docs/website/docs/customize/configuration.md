@@ -331,7 +331,7 @@ on what the planner does. Switching language changes what you read and never wha
 
 The environment wins when set, over both the built-in values and
 [`settings.json`](#settingsjson). That is how a released binary is pointed at a local backend
-without rebuilding it. The one exception is `BRAVE_AI_CHAT_DEFAULT_MODEL`, which a
+without rebuilding it. The one exception is `BRAVEBOT_DEFAULT_MODEL`, which a
 [`model`](#model) key outranks.
 
 | Variable | What it sets |
@@ -340,7 +340,7 @@ without rebuilding it. The one exception is `BRAVE_AI_CHAT_DEFAULT_MODEL`, which
 | `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the premium host, used once a subscription is imported |
 | `SERVICES_KEY_AICHAT` | the services key requests are signed with |
 | `BRAVE_SERVICES_KEY_ID` | the key id that goes with it |
-| `BRAVE_AI_CHAT_DEFAULT_MODEL` | the model to request when no settings file or `/model` choice names one |
+| `BRAVEBOT_DEFAULT_MODEL` | the model to request when no settings file or `/model` choice names one |
 | `BRAVEBOT_CONTEXT_BUDGET` | the token budget before a conversation is compacted |
 | `BRAVEBOT_OUTPUT_BUDGET` | how far one reply may run before the service cuts it off ([below](#how-long-a-reply-may-run)) |
 | `BRAVEBOT_LOCALE` | the language the interface is read in |
@@ -355,7 +355,7 @@ To point a release build at a backend running locally:
 BRAVE_AI_CHAT_ENDPOINT=http://127.0.0.1:8000 bravebot doctor
 ```
 
-`BRAVE_AI_CHAT_DEFAULT_MODEL` is a **default rather than the setting**: a [`model`](#model) key in any
+`BRAVEBOT_DEFAULT_MODEL` is a **default rather than the setting**: a [`model`](#model) key in any
 settings file and a choice made with `/model` both win over it, so this applies until somebody names
 one.
 
@@ -366,7 +366,7 @@ so it has to be set in the environment.
 spelling: seven of the nine above, plus the six AWS ones. The two exceptions are `BRAVEBOT_LOCALE` and
 `BRAVEBOT_SUBPROCESS_ENV_SCRUB`, which are read from the environment alone. Exporting a name wins over
 the file, except where an [administrator pinned it](#pinned-by-an-administrator), and except for
-`BRAVE_AI_CHAT_DEFAULT_MODEL`, which the top-level [`model`](#model) key outranks.
+`BRAVEBOT_DEFAULT_MODEL`, which the top-level [`model`](#model) key outranks.
 
 ## `settings.json`
 
@@ -512,7 +512,7 @@ from your home file alone and never from a checkout's.
 ```
 
 The model to request. This is the one key in the file that **outranks the model baked into the
-binary**, and it outranks an exported `BRAVE_AI_CHAT_DEFAULT_MODEL` too, since that variable names a
+binary**, and it outranks an exported `BRAVEBOT_DEFAULT_MODEL` too, since that variable names a
 default.
 
 A choice recorded by `/model` sits **between your own file and a checkout's**: it wins over the key in

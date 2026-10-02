@@ -260,7 +260,7 @@ rather than a way to get stuck.
 ### BACKEND-11: a settings file names the model above the build, and a pick above a checkout's
 
 Where a settings file names a model, that name is what a request uses, in preference to the model
-compiled into the binary and to one exported as `BRAVE_AI_CHAT_DEFAULT_MODEL`. The exported variable
+compiled into the binary and to one exported as `BRAVEBOT_DEFAULT_MODEL`. The exported variable
 answers where no file names one, above the build.
 
 A choice recorded with `/model` ranks as the person's own file, `~/.bravebot/settings.json`, does.
@@ -279,7 +279,9 @@ would change outside a source build.
 The variable is named as a default, and a default is how it is used: a `.envrc` that exports it for
 every checkout of a project is saying what answers when nothing else does. Ranked above the file it
 would outrank every `model` key on any machine that sources one. Claude Code ranks its counterpart,
-`ANTHROPIC_DEFAULT_MODEL`, last.
+`ANTHROPIC_DEFAULT_MODEL`, last. It carries this program's prefix rather than one for Brave's
+endpoint because it names the default for every service, Bedrock and a `provider` block's gateways
+included.
 
 A pick is recorded once per person and read back in every checkout. Ranked above a checkout's file,
 it is the one thing a checkout cannot override: two checkouts in one account cannot want different
@@ -299,6 +301,7 @@ and the pick is the later of the two.
 `verified-by: bravebot_tui::persist::a_recorded_model_answers_over_a_checkouts_file_and_the_persons_own`
 `verified-by: bravebot_cli::running::a_run_asks_for_the_recorded_model_ignoring_a_checkouts`
 `verified-by: bravebot_cli::running::a_run_asks_for_the_settings_model_over_an_exported_default`
+`verified-by: bravebot_cli::running::a_run_asks_for_an_exported_default_where_no_file_names_a_model`
 `verified-by: bravebot_cli::running::doctor_names_the_pick_a_checkouts_model_cannot_displace`
 
 <a id="BACKEND-12"></a>
@@ -1251,7 +1254,7 @@ something reads:
 | `BRAVE_SERVICES_KEY_ID` | which key that signature is checked against |
 | `BRAVE_AI_CHAT_ENDPOINT` | the host Brave's endpoint is reached at |
 | `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the host an imported subscription is spent against |
-| `BRAVE_AI_CHAT_DEFAULT_MODEL` | which model answers before anybody has chosen one |
+| `BRAVEBOT_DEFAULT_MODEL` | which model answers before anybody has chosen one |
 | `BRAVEBOT_CONTEXT_BUDGET` | how many prompt tokens a conversation may reach before it is shortened |
 | `BRAVEBOT_OUTPUT_BUDGET` | how many tokens one reply may run to before the service cuts it off |
 | `BRAVEBOT_USE_BEDROCK` | `1` to reach models through somebody's own AWS account |
@@ -1277,8 +1280,8 @@ behaviour is specified. Naming them is also what makes the set reviewable: a sev
 a change to this table, which a person reads, rather than a constant added to a file nobody is
 asked to look at.
 
-The AWS names keep the spelling another tool already gave them, and the switch and the two budgets
-carry this program's own prefix, for the reason BACKEND-24 gives about the file as a whole: a block
+The AWS names keep the spelling another tool already gave them, and the switch, the default model
+and the two budgets carry this program's own prefix, for the reason BACKEND-24 gives about the file as a whole: a block
 copied from elsewhere should work unedited, while a name that decides what *this* program does
 belongs to this program and must not collide with whatever else a shared shell profile wanted.
 
@@ -1992,7 +1995,7 @@ name a request would carry. It may not add a model to any roster, make one reach
 model is the default.
 
 A model it refuses is not requested by any route: the `model` key, an exported
-`BRAVE_AI_CHAT_DEFAULT_MODEL`, the baked-in default, a recorded `/model` pick, `--model`, and a
+`BRAVEBOT_DEFAULT_MODEL`, the baked-in default, a recorded `/model` pick, `--model`, and a
 delegate definition alike. The name is matched after a tier word is resolved
 ([BACKEND-12](#BACKEND-12)), so `opus` is checked as the model that tier names. `/model` does not
 offer a refused model, and neither does the desktop window's roster, the configured model included; a

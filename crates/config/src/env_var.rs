@@ -15,9 +15,11 @@ pub const PREMIUM_ENDPOINT: &str = "BRAVE_AI_CHAT_PREMIUM_ENDPOINT";
 /// The model to request when the user has not chosen one.
 ///
 /// A default rather than the model: `/model` picks one per user and that choice wins, so this
-/// applies until someone makes one. Prefixed like the other Brave variables, because an
-/// unqualified `MODEL` in a shared shell profile collides with whatever else wanted the name.
-pub const DEFAULT_MODEL: &str = "BRAVE_AI_CHAT_DEFAULT_MODEL";
+/// applies until someone makes one. It names the default for every service, Bedrock and a
+/// `provider` block's gateways as well as Brave's endpoint, so it is prefixed for this program
+/// rather than for that endpoint. An unqualified `MODEL` in a shared shell profile would collide
+/// with whatever else wanted the name.
+pub const DEFAULT_MODEL: &str = "BRAVEBOT_DEFAULT_MODEL";
 
 /// How many prompt tokens a conversation may reach before it is compacted.
 ///

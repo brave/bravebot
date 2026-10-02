@@ -113,7 +113,7 @@ run asks for the model a session opening in the same directory would: a
 [`model`](../customize/configuration.md#model) key in the checkout's settings or the file
 `--settings` names, then the choice [`/model`](../customize/configuration.md#choosing-a-model)
 recorded, then the key in `~/.bravebot/settings.json`, then an exported
-`BRAVE_AI_CHAT_DEFAULT_MODEL`, then the model the build was made with. So a script uses the model
+`BRAVEBOT_DEFAULT_MODEL`, then the model the build was made with. So a script uses the model
 you picked without your having to write it down twice, a checkout that names its model gets it, and
 the flag names a different one for a single run.
 
