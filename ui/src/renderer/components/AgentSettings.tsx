@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { SettingsGroup, matchesQuery } from './SettingsGroup'
+import { SettingsGroup } from './SettingsGroup'
 import type { AgentSettings as Report, Hook, HooksDocument, Limits, Refusal } from '../../shared/agent-settings'
 import { composeHooks } from '../../shared/agent-settings'
 import { Alert, Button, Collapse, Dropdown, Icon, Input, ProgressRing } from '../nala'
@@ -33,18 +33,13 @@ function LimitsInForce({ limits }: { limits: Limits }): React.JSX.Element {
   </>
 }
 
-/** The sections of the page, in the order they appear, which the settings search filters by title. */
-export const AGENT_SECTIONS = ['Connection', 'Hooks', 'Run settings'] as const
-
 /**
  * The agent's configuration, as one page of stacked sections.
  *
  * `onDirty` reports unsaved hook edits, so the page around it can ask before it is left.
  */
-export function AgentSettings({ session, query, onChanged, onDirty }: {
+export function AgentSettings({ session, onChanged, onDirty }: {
   session?: string
-  /** The settings search. A section whose title does not match it is not drawn. */
-  query: string
   onChanged: () => void
   onDirty: (dirty: boolean) => void
 }): React.JSX.Element {
@@ -112,12 +107,11 @@ export function AgentSettings({ session, query, onChanged, onDirty }: {
   // A file the agent passed over in part is the person's to edit: composing it back from the
   // entries it did read would drop the rest.
   const editable = !!document && document.entire
-  const shown = (name: string) => matchesQuery(name, query)
   return <div className="agent-settings settings-body" data-test="settings-body">
     {problem && <div className="settings-error"><Alert type="error" role="alert" data-test="settings-error">{problem}</Alert><Button size="small" kind="outline" isDisabled={busy} onClick={() => void load()}>Retry diagnostics</Button></div>}
     {status && <Alert type="success" size="small" role="status">{status}</Alert>}
     {busy && <p role="status" className="settings-busy"><ProgressRing mode="indeterminate" /> Working…</p>}
-    {shown('Connection') && <SettingsGroup title="Connection">
+    <SettingsGroup title="Connection">
       {report && <>
         <section className="settings-block settings-status"><h3>{report.configured ? 'Model service configured' : 'Choose a model service'}</h3>
           {report.problem && <p>{report.problem}</p>}
@@ -145,8 +139,8 @@ export function AgentSettings({ session, query, onChanged, onDirty }: {
         </section>
         <section className="settings-block"><h3>Managed configuration</h3>{report.managed.path ? <><p className="settings-path">{report.managed.path}</p><p>{report.managed.keys.length ? `Locked by your administrator: ${report.managed.keys.join(', ')}` : 'File found; no recognized values are pinned.'}</p></> : <p>No administrator-managed configuration found.</p>}<p>Administrator-pinned destinations take precedence over your settings and environment.</p></section>
       </>}
-    </SettingsGroup>}
-    {shown('Hooks') && <SettingsGroup title="Hooks" note={dirty ? 'Unsaved changes' : undefined}>
+    </SettingsGroup>
+    <SettingsGroup title="Hooks" note={dirty ? 'Unsaved changes' : undefined}>
       <section className="settings-block"><h3>Your hooks</h3>
         <p>Hooks are shared with the terminal client. Run your own programs at specific moments. These commands run with your account’s permissions in the project directory. They cannot approve or block the agent.</p>
         {document && <div className="settings-box">
@@ -186,8 +180,8 @@ export function AgentSettings({ session, query, onChanged, onDirty }: {
           <Button size="small" kind="plain-faint" isDisabled={busy} onClick={() => { if (!dirty || window.confirm('Discard unsaved hook changes and reload?')) void loadHooks() }}>Reload hooks</Button>
         </div>
       </section>
-    </SettingsGroup>}
-    {shown('Run settings') && <SettingsGroup title="Run settings">
+    </SettingsGroup>
+    <SettingsGroup title="Run settings">
       {report && <>
         <section className="settings-block"><h3>Model and connection override</h3>
           <p>Choose a JSON settings file for this app run. It applies to future turns and model discovery, and is cleared when the app exits. Running turns keep their configuration. Terminal preferences and settings-file permission grants do not change this app’s approval controls.</p>
@@ -209,6 +203,6 @@ export function AgentSettings({ session, query, onChanged, onDirty }: {
           {report.managed.keys.length > 0 && <p>Managed values: {report.managed.keys.join(', ')}. This override cannot change them.</p>}
         </section>
       </>}
-    </SettingsGroup>}
+    </SettingsGroup>
   </div>
 }

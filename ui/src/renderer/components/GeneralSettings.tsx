@@ -2,22 +2,17 @@ import { APPEARANCES, type Appearance } from '../../shared/theme'
 import type { Experience } from '../../shared/experience'
 import { ControlItem, Icon, SegmentedControl, type IconName } from '../nala'
 import { setExperience, useExperience } from '../experience'
-import { SettingsGroup, matchesQuery } from './SettingsGroup'
+import { SettingsGroup } from './SettingsGroup'
 
 const LABELS: Record<Appearance, string> = { system: 'System', light: 'Light', dark: 'Dark' }
 const ICONS: Record<Appearance, IconName> = { system: 'theme-system', light: 'theme-light', dark: 'theme-dark' }
 
-/** The sections of the page, which the settings search filters by title. */
-export const GENERAL_SECTIONS = ['Appearance'] as const
-
 /** How this window looks. Each choice applies and is kept as soon as it is made. */
-export function GeneralSettings({ chosen, onAppearance, query }: {
+export function GeneralSettings({ chosen, onAppearance }: {
   chosen: Appearance
   onAppearance: (appearance: Appearance) => void
-  query: string
 }): React.JSX.Element {
   const density = useExperience().density
-  if (!matchesQuery('Appearance', query)) return <div className="settings-body" />
   return (
     <div className="settings-body">
       <SettingsGroup title="Appearance">
