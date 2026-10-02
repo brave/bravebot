@@ -55,4 +55,4 @@ The same React Native app demonstrates a bounded on-device session and remote ho
 
 This is a high-level plan. Implementation will reveal gaps and new behavior; update the design, specs, and tests as those findings arise. Do not wait to predict every edge case, and resolve security gaps before enabling the affected feature.
 
-Details: [client contract](client-contract.md), [architecture](architecture.md), and [normative specs](../../specs/README.md). Editable diagram sources: [modes](mobile-modes.svg) and [delivery](mobile-delivery.svg).
+Details: [client contract](client-contract.md), [architecture](architecture.md), and [normative specs](../../specs/README.md).
