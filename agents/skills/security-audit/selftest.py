@@ -1979,6 +1979,66 @@ def test_every_lane_prompt_composes():
     check("every lane prompt composes with the rule and an output contract", name is None, f"{name}: {why}")
 
 
+def test_the_prompt_lane_starts_from_every_prompt():
+    """A prompt missing from the lane's list is one the lane never asks about.
+
+    The list is read off the files the prompting spec governs, so a prompt added to one of them, or a
+    file added to the spec, is on it without anybody remembering to put it there.
+    """
+    class Governing:
+        id = "PROMPT"
+        rel = "docs/specs/asking.md"
+        governs = ["crates/tui/src/asks.rs"]
+
+    sources = {
+        Path("crates/tui/src/asks.rs"): [
+            "pub fn ask<B: Backend>(terminal: &mut Terminal<B>) -> Answer {",
+            "pub fn ask_vet<B: Backend>(",
+            "fn draw_vet(frame: &mut Frame) {",
+            "pub(crate) fn ask_move(request: &MoveRequest) -> Answer {",
+        ],
+        Path("crates/tui/src/elsewhere.rs"): ["pub fn ask_other<B: Backend>() {}"],
+    }
+    found = [
+        (site["path"], site["line"], site["function"])
+        for site in audit.prompt_sites(sources, [Governing()])
+    ]
+    check(
+        "the prompt lane starts from every function the prompting spec's files ask with",
+        found
+        == [
+            ("crates/tui/src/asks.rs", 1, "ask"),
+            ("crates/tui/src/asks.rs", 2, "ask_vet"),
+            ("crates/tui/src/asks.rs", 4, "ask_move"),
+        ],
+        str(found),
+    )
+
+    real = with_cwd(
+        ROOT, lambda: audit.prompt_sites(audit.mechanics.load_sources(), audit.load_specs())
+    )
+    names = {(Path(site["path"]).name, site["function"]) for site in real}
+    wanted = {("confirm.rs", "ask"), ("confirm.rs", "ask_mcp_call"), ("trust_prompt.rs", "ask")}
+    check(
+        "the tree's write, call and trust prompts are on the lane's list",
+        wanted <= names,
+        str(sorted(names)),
+    )
+
+    was = audit.mechanics.changed_files
+    try:
+        for touched in ["crates/tui/src/asks.rs", "docs/specs/asking.md"]:
+            audit.mechanics.changed_files = lambda base, touched=touched: iter([touched])
+            lanes = audit.changed_lanes("base", [Governing()])
+            check(
+                f"a branch that touches {touched} runs the lane that asks about prompts",
+                "shown-before-answered" in lanes,
+                str(lanes),
+            )
+    finally:
+        audit.mechanics.changed_files = was
+
+
 def test_verifier_prompt_composes():
     candidate = {
         "summary": "a branch on a released value",
@@ -2434,6 +2494,7 @@ def main():
         test_guarantee_specs_are_read,
         test_declassify_counts_match_the_spec,
         test_every_lane_prompt_composes,
+        test_the_prompt_lane_starts_from_every_prompt,
         test_verifier_prompt_composes,
         test_impact_sets_severity,
         test_labels,
