@@ -171,14 +171,14 @@ onboarding-subscription-unusable = the subscription that is stored could not be 
 # running Ollama serves one, and nobody was there to be asked about it: a one-shot run, --json, a
 # pipe, or doctor.
 onboarding-import-one =
-    { $source } configures a model service bravebot can use: run `bravebot import-providers` in a terminal to import it.
+    { $source } configures a model service bravebot can use: run `bravebot auth login import` in a terminal to import it.
 # The same, where the one source is Ollama running on this machine.
 onboarding-import-running =
-    { $source } is running here with models bravebot can use: run `bravebot import-providers` in a terminal to import it.
+    { $source } is running here with models bravebot can use: run `bravebot auth login import` in a terminal to import it.
 onboarding-import-both =
-    { $first } and { $second } each have a model service bravebot can use: run `bravebot import-providers` in a terminal to import them.
+    { $first } and { $second } each have a model service bravebot can use: run `bravebot auth login import` in a terminal to import them.
 onboarding-import-three =
-    { $first }, { $second } and { $third } each have a model service bravebot can use: run `bravebot import-providers` in a terminal to import them.
+    { $first }, { $second } and { $third } each have a model service bravebot can use: run `bravebot auth login import` in a terminal to import them.
 # Said instead, where a service is configured and only the model in force is Brave's own. A
 # settings block copied out of another tool names its models and names no default, so this is
 # where somebody following that route lands, and what they have to do is name one of their own.
@@ -193,7 +193,7 @@ onboarding-openrouter =
 # gateway, which has open problems of its own. It is still the shortest route for somebody who
 # already subscribes, so it is offered rather than left out.
 onboarding-leo =
-    Brave Leo Premium, if you already subscribe: run `bravebot import-leo-creds` on a machine where Brave is signed in to that subscription. It reaches models through Brave's AI gateway, which has open issues being worked on, so prefer one of the two above for now.
+    Brave Leo Premium, if you already subscribe: run `bravebot auth login leo` on a machine where Brave is signed in to that subscription. It reaches models through Brave's AI gateway, which has open issues being worked on, so prefer one of the two above for now.
 # Said after either, so it reads after the three routes and after the one line alike.
 onboarding-where-to-read =
     There are worked examples in https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service
@@ -244,7 +244,7 @@ doctor-ends-aws-session =
 doctor-ends-gateway-token =
     a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file or unsetting the variable ends this machine's custody and leaves the token live there
 doctor-ends-subscription-batch =
-    an imported subscription's credential batch: minted by Brave's subscription service against the order this install registered as a device on; each credential is spent by one premium request and the batch stops working when its last window closes, and nothing revokes an unspent one, so `bravebot import-leo-creds --forget` ends this machine's custody and leaves the batch spendable by whatever copied the file
+    an imported subscription's credential batch: minted by Brave's subscription service against the order this install registered as a device on; each credential is spent by one premium request and the batch stops working when its last window closes, and nothing revokes an unspent one, so `bravebot auth logout leo` ends this machine's custody and leaves the batch spendable by whatever copied the file
 # Which tier the gate walk left a credential on, shown under the account of what would end it. One
 # sentence per tier rather than per credential: the tier is where the walk stopped, and what is
 # particular to a credential is the line above this one. Delegated is here although nothing stands

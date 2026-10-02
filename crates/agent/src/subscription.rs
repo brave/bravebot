@@ -156,7 +156,7 @@ impl ImportedSubscription {
         if (wallet.environment() == bravebot_skus::Environment::Production) != production {
             return Discovery::Refused(format!(
                 "the imported subscription is for {}, which this endpoint does not accept; \
-                 run `bravebot import-leo-creds` from the matching Brave channel",
+                 run `bravebot auth login leo` with the matching Brave channel",
                 wallet.environment().as_str()
             ));
         }

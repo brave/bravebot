@@ -230,7 +230,7 @@ fn a_first_run_with_no_service_configured_says_how_to_configure_one() {
         stdout.is_empty(),
         "the reply stream carried the explanation instead: {stdout}"
     );
-    for route in ["amazon-bedrock", "OpenRouter", "bravebot import-leo-creds"] {
+    for route in ["amazon-bedrock", "OpenRouter", "bravebot auth login leo"] {
         assert!(
             stderr.contains(route),
             "the run refused without saying that {route} is a way to configure one: {stderr}"
@@ -334,7 +334,7 @@ fn a_service_configured_with_no_model_of_its_own_named_says_to_name_one() {
         "the run refused without saying which key names a model: {stderr}"
     );
     assert!(
-        !stderr.contains("bravebot import-leo-creds"),
+        !stderr.contains("bravebot auth login leo"),
         "somebody who has configured a service was sent to configure another: {stderr}"
     );
 }
@@ -866,7 +866,7 @@ fn doctor_ends_on_the_configuration_status_where_nothing_will_serve_a_turn() {
     // reads and the routes out are what the person in front of the screen reads, so the fix is
     // not the report losing one to gain the other.
     assert!(
-        stdout.contains("bravebot import-leo-creds"),
+        stdout.contains("bravebot auth login leo"),
         "the report stopped saying how to configure a service: {stdout}"
     );
 }
@@ -1742,7 +1742,7 @@ fn a_session_in_lines_with_no_service_configured_says_how_to_configure_one() {
 
     let (transcript, _) = said(&output);
     assert_eq!(output.status.code(), Some(3), "{transcript}");
-    for route in ["amazon-bedrock", "OpenRouter", "bravebot import-leo-creds"] {
+    for route in ["amazon-bedrock", "OpenRouter", "bravebot auth login leo"] {
         assert!(
             transcript.contains(route),
             "the run refused without saying that {route} is a way to configure one: {transcript}"
@@ -1807,7 +1807,7 @@ fn a_session_in_lines_with_a_configured_gateway_opens() {
         "a configured gateway was refused as no service at all: {transcript}"
     );
     assert!(
-        !transcript.contains("bravebot import-leo-creds"),
+        !transcript.contains("bravebot auth login leo"),
         "somebody who has configured a service was sent to configure another: {transcript}"
     );
     // The end of the input in place of an answer to the startup question starts no session and
@@ -3357,7 +3357,7 @@ fn a_first_run_with_nothing_importable_refuses_as_before() {
     let (transcript, _) = said(&output);
     assert_eq!(output.status.code(), Some(3), "{transcript}");
     assert!(!transcript.contains("Import this"), "{transcript}");
-    assert!(!transcript.contains("import-providers"), "{transcript}");
+    assert!(!transcript.contains("auth login import"), "{transcript}");
     assert!(transcript.contains("amazon-bedrock"), "{transcript}");
 }
 
@@ -3379,7 +3379,7 @@ fn a_configured_service_with_a_brave_model_is_not_offered_an_import() {
     assert_eq!(output.status.code(), Some(3), "{transcript}");
     assert!(transcript.contains("`model` key"), "{transcript}");
     assert!(!transcript.contains("Import this"), "{transcript}");
-    assert!(!transcript.contains("import-providers"), "{transcript}");
+    assert!(!transcript.contains("auth login import"), "{transcript}");
 }
 
 /// IMPORT-7: an incognito session writes nothing, so it offers nothing to write.
@@ -3521,7 +3521,7 @@ fn nothing_is_asked_where_stderr_is_not_a_terminal() {
             }
             _ => {
                 assert_eq!(output.status.code(), Some(3), "{stderr}");
-                assert!(stderr.contains("bravebot import-providers"), "{stderr}");
+                assert!(stderr.contains("bravebot auth login import"), "{stderr}");
             }
         }
         assert!(!scratch.settings().exists(), "{arguments:?} wrote settings");
@@ -3550,7 +3550,7 @@ fn what_was_found_and_left_is_said_before_the_routes() {
         !stderr.contains("a-key-nobody-may-see"),
         "the value was shown: {stderr}"
     );
-    assert!(!stderr.contains("import-providers"), "{stderr}");
+    assert!(!stderr.contains("auth login import"), "{stderr}");
 }
 
 /// IMPORT-8: a one-shot run has nobody to ask, so it reads no answer and writes nothing, and its
@@ -3566,7 +3566,7 @@ fn a_one_shot_first_run_names_the_import_command_and_asks_nothing() {
     assert_eq!(output.status.code(), Some(3), "{stderr}");
     assert!(stdout.is_empty(), "{stdout}");
     assert!(
-        stderr.contains("Claude Code") && stderr.contains("bravebot import-providers"),
+        stderr.contains("Claude Code") && stderr.contains("bravebot auth login import"),
         "{stderr}"
     );
     assert!(!stderr.contains("Import this"), "{stderr}");
@@ -3610,7 +3610,7 @@ fn a_settings_file_the_import_cannot_write_is_named_in_place_of_the_command() {
         stderr.contains("does not hold a settings document"),
         "{stderr}"
     );
-    assert!(!stderr.contains("import-providers"), "{stderr}");
+    assert!(!stderr.contains("auth login import"), "{stderr}");
     assert_eq!(
         std::fs::read_to_string(scratch.settings()).expect("read"),
         broken
@@ -3960,7 +3960,7 @@ fn a_first_run_with_nothing_listening_refuses_as_before() {
     let (transcript, _) = said(&output);
     assert_eq!(output.status.code(), Some(3), "{transcript}");
     assert!(!transcript.contains("Import this"), "{transcript}");
-    assert!(!transcript.contains("import-providers"), "{transcript}");
+    assert!(!transcript.contains("auth login import"), "{transcript}");
     assert!(!transcript.contains("Ollama"), "{transcript}");
     assert!(transcript.contains("amazon-bedrock"), "{transcript}");
 }
@@ -4003,7 +4003,7 @@ fn a_one_shot_first_run_with_ollama_running_names_the_import_command() {
     assert!(stdout.is_empty(), "{stdout}");
     assert!(
         stderr.contains("Ollama is running here with models bravebot can use")
-            && stderr.contains("bravebot import-providers"),
+            && stderr.contains("bravebot auth login import"),
         "{stderr}"
     );
     assert!(!stderr.contains("Import this"), "{stderr}");

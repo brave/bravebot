@@ -80,7 +80,7 @@ impl fmt::Display for ChatError {
             Self::Cancelled => f.write_str("the reply was stopped while it was being waited for"),
             Self::Subscription(detail) => write!(
                 f,
-                "the Leo subscription could not be used: {detail}. Run `bravebot import-leo-creds` to \
+                "the Leo subscription could not be used: {detail}. Run `bravebot auth login leo` to \
                  refresh it, or unset the premium endpoint to send requests without one"
             ),
         }

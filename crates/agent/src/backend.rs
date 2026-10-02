@@ -1685,7 +1685,7 @@ mod tests {
         assert!(bedrock.contains("aws sso login"), "{bedrock}");
 
         let leo = BackendError::from(ChatError::Subscription("spent".into())).to_string();
-        assert!(leo.contains("import-leo-creds"), "{leo}");
+        assert!(leo.contains("bravebot auth login leo"), "{leo}");
     }
 
     /// A gateway nothing holds a token for is a setting somebody has not finished, not a service

@@ -76,12 +76,12 @@ impl std::fmt::Display for StoreError {
                 write!(f, "the stored credentials are unusable: {detail}")
             }
             Self::Exhausted => f.write_str(
-                "every credential valid today has been spent; run `bravebot import-leo-creds` again",
+                "every credential valid today has been spent; run `bravebot auth login leo` again",
             ),
             Self::Expired { until, unspent } => write!(
                 f,
                 "the imported credentials expired at {until} with {unspent} never used; \
-                 run `bravebot import-leo-creds` again"
+                 run `bravebot auth login leo` again"
             ),
         }
     }
@@ -983,7 +983,7 @@ fn decode(raw: &str) -> Result<StoredCredentials, StoreError> {
     if raw.trim().is_empty() {
         return Err(StoreError::Malformed {
             detail: "the file holds nothing, which an interrupted write leaves behind; \
-                     run `bravebot import-leo-creds` again"
+                     run `bravebot auth login leo` again"
                 .to_string(),
         });
     }
@@ -1988,7 +1988,7 @@ mod tests {
         for raw in ["", "   "] {
             let err = decode(raw).unwrap_err();
             assert!(matches!(err, StoreError::Malformed { .. }), "{err}");
-            assert!(err.to_string().contains("import-leo-creds"), "{err}");
+            assert!(err.to_string().contains("bravebot auth login leo"), "{err}");
         }
     }
 

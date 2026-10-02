@@ -170,7 +170,9 @@ machine-level file pinned and where that file is, how to configure a service whe
 configured will serve a turn, the model in force
 and whether it was chosen or defaulted, where the state directory is or that there is none, what a
 TLS handshake is validated against and what a request is routed through, the
-confinement available on this platform, and the state of any imported subscription. The signing key
+confinement available on this platform, and the state of any imported subscription. Where the
+report names a Bravebot command that signs in, or one that forgets an imported subscription, it is
+`bravebot auth login` or `bravebot auth logout` ([CLI-18](#CLI-18)). The signing key
 is named as never transmitted, and a value from a settings file is never printed: where a credential
 decides whether a backend works, what is reported is that one was found. A configuration error makes
 it fail rather than pass with a warning.
@@ -207,6 +209,9 @@ from and the path is the whole of what narrows it to one. Values are withheld be
 holds credentials on some machines, and a diagnostic that prints one is a diagnostic people paste
 into issues. Whether one was found still has to be said, because a backend nothing can authenticate
 is the case this is most often run to explain.
+
+The commands the report names are `auth`'s because it is the one command that lists every way to
+sign in. The older commands still work.
 
 A pinned name is named for a stronger version of the same reason. A value a person cannot change
 from anywhere they can write has to be explained somewhere, or the report shows a host they did not
@@ -294,6 +299,7 @@ the case a directory listing calls healthy, and it is the one the reader cannot 
 
 `verified-by: bravebot_cli::main::a_gateway_credential_is_reported_as_found_and_never_printed`
 `verified-by: bravebot_cli::main::a_gateway_with_no_credential_is_reported_as_having_none`
+`verified-by: bravebot_cli::running::doctor_ends_on_the_configuration_status_where_nothing_will_serve_a_turn`
 `verified-by: bravebot_cli::main::doctor_names_the_state_directory_it_resolved`
 `verified-by: bravebot_cli::main::doctor_says_when_the_files_are_left_unrestricted`
 `verified-by: bravebot_cli::main::a_missing_state_directory_is_reported_with_what_it_costs`
