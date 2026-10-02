@@ -19,7 +19,6 @@ import { activeBots, retiredBots, type Bot } from '../../shared/bots'
 import { newAvatarSeed } from '../../shared/avatar'
 import { BotAvatar, type Doing } from './BotAvatar'
 import { Fold } from './Fold'
-import { ModelPicker } from './ModelPicker'
 
 /** What a window may say about a bot. Everything else about one is the main process's. */
 export interface BotFormValue { slug?: string; avatar?: string; model?: string | null; name: string; purpose: string }
@@ -276,7 +275,6 @@ function BotForm({
 }): React.JSX.Element {
   // Keep the preview's face for this draft, including while its name changes.
   const [avatar, setAvatar] = useState(() => newAvatarSeed(crypto.randomUUID()))
-  const [model, setModel] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [purpose, setPurpose] = useState('')
 
@@ -342,7 +340,7 @@ function BotForm({
           if (!host.classList.contains('bot-save')) return
         }
         if (ready) {
-          void save({ avatar, model, name: name.trim(), purpose: purpose.trim() })
+          void save({ avatar, name: name.trim(), purpose: purpose.trim() })
         }
       }}
     >
@@ -376,11 +374,6 @@ function BotForm({
           onChange={({ value }) => setPurpose(value)}
           onKeyDown={onEscape}
         >Purpose</TextArea>
-      </div>
-
-      <div className="bot-field bot-form-model">
-        <span>Model</span>
-        <ModelPicker scope="bot" model={model} disabled={false} onChoose={setModel} />
       </div>
 
       <p className="bot-note">

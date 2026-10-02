@@ -371,19 +371,7 @@
 
    The recents rows are shared with the composer's project menu. */
 
-.recent-menu leo-menu-item { width: min(380px, calc(100vw - 24px)); box-sizing: border-box; overflow: hidden; }
-.recent-row { align-items: flex-start; }
-.recent-text { display: flex; flex-direction: column; min-width: 0; }
-.recent-name { font: var(--type-body); }
-.recent-path {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font: var(--type-code);
-  color: var(--ink-tertiary);
-}
-.recent-menu leo-menu-item[aria-disabled='true'] { color: var(--ink-disabled); cursor: default; }
+.recent-menu leo-menu-item { width: min(390px, calc(100vw - 24px)); box-sizing: border-box; overflow: hidden; }
 
 /* A plan run can be read and not continued, which its row says before it is opened. */
 .session-meta .plan-run { flex: none; color: var(--ink-accent); }

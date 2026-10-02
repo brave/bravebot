@@ -297,14 +297,6 @@ button.fresh-project:hover { color: var(--ink-accent); }
 button.fresh-project:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
 button.fresh-project:disabled { cursor: default; color: inherit; }
 .fresh-greeting .project-menu.title { display: inline-block; vertical-align: baseline; }
-/* The list is slotted from inside the heading, so its items would read the heading's type and the
-   greeting's centring. */
-.fresh-greeting .project-menu.title leo-menu-item {
-  font: var(--type-body);
-  color: var(--ink-primary);
-  text-align: start;
-  text-wrap: wrap;
-}
 .fresh-greeting p { margin: 0; font: var(--type-lede); color: var(--ink-secondary); text-wrap: pretty; }
 /* The notes under the greeting are centred lines in caption ink, 40px over the box. */
 .transcript.fresh .session-notices { align-items: center; margin-bottom: var(--leo-spacing-4xl); }
@@ -393,8 +385,3 @@ button.fresh-project:disabled { cursor: default; color: inherit; }
 .composer .mode-trigger { flex: none; --leo-button-color: var(--ink-tertiary); white-space: nowrap; }
 .composer .mode-trigger.planning { --leo-button-color: var(--ink-accent); }
 .mode-menu leo-menu-item { width: min(320px, calc(100vw - 24px)); box-sizing: border-box; }
-.mode-menu leo-menu-item[aria-disabled='true'] { color: var(--ink-disabled); cursor: default; }
-.mode-row { align-items: flex-start; }
-.mode-text { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-.mode-name { font: var(--type-body); }
-.mode-about { font: var(--type-caption); color: var(--ink-tertiary); white-space: normal; }

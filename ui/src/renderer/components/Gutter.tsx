@@ -229,7 +229,7 @@ export function Gutter({
       // the column back where it shipped is invisible until somebody does it by accident.
       // Dropped while the column is folded, along with every handler below: a seam that
       // promised a gesture it would ignore would be worse than a silent one.
-      title={collapsed ? undefined : 'Drag to resize · double-click to reset'}
+      data-tooltip={collapsed ? undefined : 'Drag to resize · double-click to reset'}
       aria-disabled={collapsed || undefined}
       aria-valuenow={width}
       aria-valuemin={SIDES[side].min}
