@@ -31,8 +31,8 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [dropping.md](dropping.md) | `DROP` | 10 | what dragging a file onto a window puts into a turn, and on what footing |
 | [shell-mode.md](shell-mode.md) | `SHELL` | 5 | the `!` prompt: a line the user typed, and why the planner can never reach it |
 | [skills.md](skills.md) | `SKILL` | 14 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for |
-| [instructions.md](instructions.md) | `INSTR` | 9 | which instruction files are looked for, where, in what order, and where what they say ends up |
-| [cli.md](cli.md) | `CLI` | 18 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth` |
+| [instructions.md](instructions.md) | `INSTR` | 10 | which instruction files are looked for, where, in what order, and where what they say ends up |
+| [cli.md](cli.md) | `CLI` | 19 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth` |
 | [manifest.md](manifest.md) | `MANIFEST` | 11 | plan the whole run first, then execute it with no model in the control path |
 | [terminal-input.md](terminal-input.md) | `INPUT` | 37 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 10 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, and what a slash word is offered |

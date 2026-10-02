@@ -87,6 +87,10 @@ cli-option-file = Include a workspace file as context (repeatable)
 cli-option-add-dir = Reach into a directory outside the working one (repeatable)
 cli-option-settings = Read this settings file for this run, above the ones found on disk
 cli-option-agent = Address every turn to this definition, as /agent does for one
+cli-option-system-prompt =
+    Replace the opening sentence of the planner's system prompt for every turn. The rest of it stays
+cli-option-append-system-prompt =
+    Add this text to the planner's standing instructions for every turn, after AGENTS.md
 cli-option-mode = turn (default) decides step by step; manifest plans the whole run first
 cli-option-model = The model this run asks for, in place of the remembered or configured one
 cli-option-effort = How hard this run asks the model to think, in place of the remembered or configured level
@@ -121,6 +125,14 @@ cli-agent-not-for-a-command =
 cli-agent-not-with-a-manifest =
     --agent does not go with --mode manifest: a manifest run plans every step before any runs,
     and a definition is addressed a turn at a time
+# The flag is --system-prompt or --append-system-prompt, as typed.
+cli-system-prompt-needs-text = { $flag } requires the text to use
+# The flag is --system-prompt or --append-system-prompt, and the command one of this program's own
+# subcommands.
+cli-system-prompt-not-for-a-command =
+    { $flag } gives words to a session or a task, and { $command } starts neither
+cli-system-prompt-not-with-a-manifest =
+    { $flag } does not go with --mode manifest: the planner of a manifest run does not read it
 # Said where a run with -p is given a --agent name it did not resolve, with the names it did.
 cli-agent-no-such-definition = there is no definition called { $name }; this run resolved { $names }
 # The same, where the project holds definitions the run did not read. It gives a count and never a

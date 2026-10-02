@@ -429,6 +429,7 @@ and the content has no say in it.
 | a picture or a PDF `vet_content` let through | trusted and private on the endorsement that let it through, as promoted text is, and the slot keeps what it had; it goes to the planner in a message of its own rather than joining the user's, so it takes a label where a paste takes none | `verified-by: bravebot_core::policy::a_picture_is_promoted_once_by_any_endorsement_and_attached_as_itself` |
 | a picture pasted at the keyboard | none, because it joins the user's own message, which carries none either, so it is recorded instead | `verified-by: bravebot_core::policy::a_pasted_image_is_recorded_in_the_audit_trail` |
 | a prompt typed while a turn is running | none, for the same reason, and recorded the same way | `verified-by: bravebot_core::policy::an_interjection_is_recorded_in_the_audit_trail` |
+| a system prompt named on the command line | none, for the reason the user's own message gets none: the person who typed the flag is the person the planner works for, and the words are plain text that grants no permission | `verified-by: bravebot_agent::turn::words_that_allow_writes_allow_none` |
 
 Where a path is known, integrity is the trust map's answer about that path rather than the
 capability's, which is what the three rows for reads say and why the first row is the label a read

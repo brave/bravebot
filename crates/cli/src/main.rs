@@ -16,7 +16,7 @@ use bravebot_agent::confirm::{
     Confirmer, Decision, FetchRequest, ManifestRequest, OutputRequest, RunDecision, RunRequest,
     ServerRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
-use bravebot_agent::turn::{self, Task};
+use bravebot_agent::turn::{self, SystemPrompts, Task};
 use bravebot_agent::{Mode, Workspace};
 use bravebot_config::{Config, Managed};
 use bravebot_core::ask::{Answer, Asking};
@@ -122,6 +122,20 @@ fn main() -> ExitCode {
         return stopped_before_the_turn(as_json, Ending::Argument, refused);
     }
 
+    // Taken out here for the same reason: a session, a session in lines, a resumed session and a
+    // one-shot run all carry the words the same way (CLI-19).
+    let prompts = match take_system_prompts(&mut args) {
+        Ok(prompts) => prompts,
+        Err(complaint) => {
+            return stopped_before_the_turn(as_json, Ending::Argument, complaint);
+        }
+    };
+    if let Some(flag) = flag_named(&prompts)
+        && let Some(refused) = without_a_prompt_to_give(flag, args.first().map(String::as_str))
+    {
+        return stopped_before_the_turn(as_json, Ending::Argument, refused);
+    }
+
     // After the flag above and after the layer named beside it, because a file `--settings` names is
     // one of the layers that may say this. MODE-5: the flag opens the bypass mode unless a layer in
     // force made it unreachable, and then the flag is refused with the file named rather than
@@ -158,18 +172,19 @@ fn main() -> ExitCode {
                 bravebot_tui::app::Start::Under,
             ),
             skip_permissions,
+            prompts,
         ),
         // Picking up where a session left off, chosen from a list or named outright.
         Some("--resume" | "-r") => match args.get(1) {
-            Some(id) => resume_named(id, skip_permissions),
-            None => interactive(bravebot_tui::app::Start::Choose, skip_permissions),
+            Some(id) => resume_named(id, skip_permissions, prompts),
+            None => interactive(bravebot_tui::app::Start::Choose, skip_permissions, prompts),
         },
         // The same, for the session somebody was in a moment ago, which is the one they mean
         // often enough that asking them to find its id is asking for nothing.
-        Some("--continue" | "-c") => continue_here(skip_permissions),
+        Some("--continue" | "-c") => continue_here(skip_permissions, prompts),
         // Fork a session, creating a new session record that starts with the same transcript.
         Some("--fork" | "-f") => match args.get(1) {
-            Some(id) => fork_named(id, skip_permissions),
+            Some(id) => fork_named(id, skip_permissions, prompts),
             // No result object here, and none is owed: reaching this arm means the arguments held
             // `--fork` and nothing after it, so the command line cannot also have carried `--json`.
             // `bravebot --fork --json` reads the flag as the session id and is refused by name in
@@ -181,7 +196,7 @@ fn main() -> ExitCode {
         // starting are the ones taken out above, and everything else on this list is another way of
         // starting.
         Some("--plain") => match args.len() {
-            1 => plain::session(skip_permissions, agent),
+            1 => plain::session(skip_permissions, agent, prompts),
             _ => refused_with_the_usage(as_json, t!(cli_plain_takes_nothing_else)),
         },
         // The task flags may lead: `bravebot -p "task"` and `bravebot --mode manifest "task"`
@@ -189,7 +204,7 @@ fn main() -> ExitCode {
         Some(
             "-p" | "--print" | "--mode" | "--model" | "--effort" | "--file" | "--add-dir"
             | "--trace" | "--json",
-        ) => run_task(&args, skip_permissions, agent),
+        ) => run_task(&args, skip_permissions, agent, prompts),
         Some("doctor") => doctor(),
         Some("auth") => auth::command(&args[1..]),
         Some("mcp") => mcp::command(&args[1..]),
@@ -199,7 +214,7 @@ fn main() -> ExitCode {
             refused_with_the_usage(as_json, t!(cli_unknown_option, flag = flag))
         }
         // Anything else is treated as the task prompt.
-        Some(_) => run_task(&args, skip_permissions, agent),
+        Some(_) => run_task(&args, skip_permissions, agent, prompts),
     }
 }
 
@@ -249,6 +264,73 @@ fn without_a_definition(first: Option<&str>) -> Option<String> {
         command @ ("doctor" | "auth" | "mcp" | "import-leo-creds" | "import-providers") => {
             Some(t!(cli_agent_not_for_a_command, command = command).to_string())
         }
+        _ => None,
+    }
+}
+
+/// Take `--system-prompt <prompt>` and `--append-system-prompt <prompt>` out of the arguments.
+///
+/// Removed before dispatch, like `--agent`, and the last of two is used (CLI-19). A blank value is
+/// refused, as `--model` refuses one, because a script whose variable expanded to nothing asked for
+/// words and would otherwise run without them. A value that opens with `-` and holds no whitespace
+/// is refused too: it is the next flag, and taken as the text it would be removed from the
+/// arguments and the run would answer in another format. A sentence opening with `-` holds a space
+/// and is text.
+fn take_system_prompts(args: &mut Vec<String>) -> Result<SystemPrompts, String> {
+    let mut prompts = SystemPrompts::default();
+    let mut kept = Vec::with_capacity(args.len());
+    let mut index = 0;
+    while index < args.len() {
+        let flag = args[index].as_str();
+        if flag != "--system-prompt" && flag != "--append-system-prompt" {
+            kept.push(args[index].clone());
+            index += 1;
+            continue;
+        }
+        let text = match args.get(index + 1).map(|text| text.trim()) {
+            Some(text)
+                if !text.is_empty()
+                    && !(text.starts_with('-') && !text.contains(char::is_whitespace)) =>
+            {
+                text.to_string()
+            }
+            _ => return Err(t!(cli_system_prompt_needs_text, flag = flag).to_string()),
+        };
+        match flag {
+            "--system-prompt" => prompts.replacing = Some(text),
+            _ => prompts.appending = Some(text),
+        }
+        index += 2;
+    }
+    *args = kept;
+    Ok(prompts)
+}
+
+/// The flag a run was given, where it was given either, for the message that refuses it.
+fn flag_named(prompts: &SystemPrompts) -> Option<&'static str> {
+    match (&prompts.replacing, &prompts.appending) {
+        (Some(_), _) => Some("--system-prompt"),
+        (None, Some(_)) => Some("--append-system-prompt"),
+        (None, None) => None,
+    }
+}
+
+/// Why the words a flag gave cannot go with the command line's first argument, or `None` where
+/// they can.
+///
+/// A resumed session takes them: the record stores no system prompt (INSTR-5), so the words apply to
+/// the turns this process sends. The commands that start neither a session nor a task are refused
+/// rather than ignored, for the reason CLI-13 gives about a settings file.
+fn without_a_prompt_to_give(flag: &str, first: Option<&str>) -> Option<String> {
+    match first? {
+        command @ ("doctor" | "auth" | "mcp" | "import-leo-creds" | "import-providers") => Some(
+            t!(
+                cli_system_prompt_not_for_a_command,
+                flag = flag,
+                command = command
+            )
+            .to_string(),
+        ),
         _ => None,
     }
 }
@@ -404,6 +486,11 @@ fn print_help() {
         ("--add-dir <path>", t!(cli_option_add_dir)),
         ("--settings <path>", t!(cli_option_settings)),
         ("--agent <name>", t!(cli_option_agent)),
+        ("--system-prompt <prompt>", t!(cli_option_system_prompt)),
+        (
+            "--append-system-prompt <prompt>",
+            t!(cli_option_append_system_prompt),
+        ),
         ("--mode <mode>", t!(cli_option_mode)),
         ("--model <name>", t!(cli_option_model)),
         ("--effort <level>", t!(cli_option_effort)),
@@ -651,7 +738,12 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     })
 }
 
-fn run_task(args: &[String], skip_permissions: bool, agent: Option<String>) -> ExitCode {
+fn run_task(
+    args: &[String],
+    skip_permissions: bool,
+    agent: Option<String>,
+    prompts: SystemPrompts,
+) -> ExitCode {
     let invocation = match parse_invocation(args) {
         Ok(invocation) => invocation,
         // Whether a result object was asked for is read off the raw arguments here, because the
@@ -696,6 +788,17 @@ fn run_task(args: &[String], skip_permissions: bool, agent: Option<String>) -> E
             as_json,
             Ending::Argument,
             t!(cli_agent_not_with_a_manifest),
+        );
+    }
+    // Neither reaches the planner of a manifest run, which is given no standing instructions from
+    // the command line, and words a run would drop are refused instead (CLI-19).
+    if let Some(flag) = flag_named(&prompts)
+        && mode == Mode::Manifest
+    {
+        return stopped_before_the_turn(
+            as_json,
+            Ending::Argument,
+            t!(cli_system_prompt_not_with_a_manifest, flag = flag),
         );
     }
 
@@ -852,6 +955,9 @@ fn run_task(args: &[String], skip_permissions: bool, agent: Option<String>) -> E
         // What the settings say this run may add to a commit message or a pull request it writes
         // (BACKEND-30). Read off the same resolved settings the permission rules came from.
         .with_attribution(settings.attribution().clone())
+        // The words the command line put in the planner's system prompt (CLI-19). A manifest run
+        // was refused above, so this task is a turn's.
+        .with_system_prompts(prompts)
         // And what they say a command's output may spend of this run's context (RUN-21), off the
         // same resolved settings.
         .with_output_cap(settings.run_output_cap())
@@ -1769,7 +1875,7 @@ fn print_trace(output: &mut impl Write, sink: &RecordingSink) {
     }
 }
 
-fn resume_named(id: &str, skip_permissions: bool) -> ExitCode {
+fn resume_named(id: &str, skip_permissions: bool, prompts: SystemPrompts) -> ExitCode {
     let Ok(directory) = std::env::current_dir() else {
         return fail(Ending::Failed, t!(cli_directory_unknown));
     };
@@ -1792,12 +1898,13 @@ fn resume_named(id: &str, skip_permissions: bool) -> ExitCode {
         Some(record) => interactive(
             bravebot_tui::app::Start::Resuming(Box::new(record)),
             skip_permissions,
+            prompts,
         ),
         None => fail(Ending::Argument, t!(cli_no_such_session, id = id)),
     }
 }
 
-fn fork_named(id: &str, skip_permissions: bool) -> ExitCode {
+fn fork_named(id: &str, skip_permissions: bool, prompts: SystemPrompts) -> ExitCode {
     let Ok(directory) = std::env::current_dir() else {
         return fail(Ending::Failed, t!(cli_directory_unknown));
     };
@@ -1817,6 +1924,7 @@ fn fork_named(id: &str, skip_permissions: bool) -> ExitCode {
             Some(record) => interactive(
                 bravebot_tui::app::Start::Resuming(Box::new(record)),
                 skip_permissions,
+                prompts,
             ),
             None => fail(Ending::Argument, t!(cli_no_such_session, id = id)),
         },
@@ -1829,19 +1937,23 @@ fn fork_named(id: &str, skip_permissions: bool) -> ExitCode {
 /// Where there is none, this says so and fails. Starting a fresh session instead would answer a
 /// different question than the one asked, and it would answer it by throwing away the request:
 /// somebody who meant to carry on and got an empty transcript has lost the thing they asked for.
-fn continue_here(skip_permissions: bool) -> ExitCode {
+fn continue_here(skip_permissions: bool, prompts: SystemPrompts) -> ExitCode {
     let Ok(directory) = std::env::current_dir() else {
         return fail(Ending::Failed, t!(cli_directory_unknown));
     };
     match bravebot_session::sessions::most_recent(&directory) {
         // By the id, so this arrives at the interface the way a named resume does, down to a
         // record that went away between the list and the read.
-        Some(session) => resume_named(&session.id, skip_permissions),
+        Some(session) => resume_named(&session.id, skip_permissions, prompts),
         None => fail(Ending::Failed, t!(cli_nothing_to_continue)),
     }
 }
 
-fn interactive(start: bravebot_tui::app::Start, skip_permissions: bool) -> ExitCode {
+fn interactive(
+    start: bravebot_tui::app::Start,
+    skip_permissions: bool,
+    prompts: SystemPrompts,
+) -> ExitCode {
     let mut config = match Config::from_env() {
         Ok(c) => c,
         Err(err) => {
@@ -1901,6 +2013,7 @@ fn interactive(start: bravebot_tui::app::Start, skip_permissions: bool) -> ExitC
         started,
         start,
         skip_permissions,
+        prompts,
     ) {
         // Printed after the terminal is handed back, so it survives on the screen the person is
         // left looking at rather than going onto the alternate screen with everything else. A
@@ -5350,6 +5463,125 @@ mod tests {
             Some("a task"),
         ] {
             assert_eq!(without_a_definition(first), None, "{first:?} was refused");
+        }
+    }
+
+    /// Each flag is removed wherever it is typed and the words it gave reach the right field, so
+    /// what remains is the task alone and `--system-prompt` does not become `--append-system-prompt`.
+    #[test]
+    fn the_system_prompt_flags_are_taken_out_with_the_words_they_gave() {
+        let mut arguments = args(&[
+            "--append-system-prompt",
+            "answer in French",
+            "-p",
+            "do a thing",
+            "--system-prompt",
+            "You are a reviewer.",
+        ]);
+        let prompts = take_system_prompts(&mut arguments).expect("both flags parse");
+        assert_eq!(prompts.replacing.as_deref(), Some("You are a reviewer."));
+        assert_eq!(prompts.appending.as_deref(), Some("answer in French"));
+        assert_eq!(arguments, args(&["-p", "do a thing"]));
+
+        let mut arguments = args(&["-p", "do a thing"]);
+        assert_eq!(
+            take_system_prompts(&mut arguments),
+            Ok(SystemPrompts::default())
+        );
+        assert_eq!(arguments, args(&["-p", "do a thing"]));
+    }
+
+    /// Of two of the same flag the last is used, for each flag independently.
+    #[test]
+    fn the_last_system_prompt_named_is_the_one_used() {
+        let mut arguments = args(&[
+            "--system-prompt",
+            "first opening",
+            "--append-system-prompt",
+            "first addition",
+            "--system-prompt",
+            "second opening",
+            "--append-system-prompt",
+            "second addition",
+            "-p",
+            "x",
+        ]);
+        let prompts = take_system_prompts(&mut arguments).expect("parses");
+        assert_eq!(prompts.replacing.as_deref(), Some("second opening"));
+        assert_eq!(prompts.appending.as_deref(), Some("second addition"));
+        assert_eq!(arguments, args(&["-p", "x"]));
+    }
+
+    /// A missing value, a blank one and a flag where the words should be are refused with the
+    /// arguments as typed. Taken as the words, `--json` would be removed and the run would answer
+    /// in the other format.
+    #[test]
+    fn a_system_prompt_flag_with_no_words_is_refused() {
+        for typed in [
+            &["-p", "do a thing", "--system-prompt"][..],
+            &["-p", "do a thing", "--append-system-prompt"][..],
+            &["--system-prompt", "  ", "-p", "do a thing"][..],
+            &["--append-system-prompt", "", "-p", "do a thing"][..],
+            &["--system-prompt", "--json", "-p", "do a thing"][..],
+            &["--append-system-prompt", "-p", "do a thing"][..],
+        ] {
+            let mut arguments = args(typed);
+            let refused =
+                take_system_prompts(&mut arguments).expect_err(&format!("{typed:?} was accepted"));
+            let typed_flag = typed
+                .iter()
+                .find(|part| part.ends_with("system-prompt"))
+                .expect("every case types a flag");
+            assert!(
+                refused.contains(typed_flag),
+                "the refusal does not name {typed_flag}: {refused}"
+            );
+            assert_eq!(arguments, args(typed), "the arguments changed: {typed:?}");
+        }
+    }
+
+    /// A sentence that opens with a dash holds a space and is words, which is what tells it from
+    /// the next flag.
+    #[test]
+    fn words_that_open_with_a_dash_are_taken_when_they_are_a_sentence() {
+        let mut arguments = args(&["--append-system-prompt", "- always use rust", "-p", "x"]);
+        let prompts = take_system_prompts(&mut arguments).expect("a sentence is words");
+        assert_eq!(prompts.appending.as_deref(), Some("- always use rust"));
+        assert_eq!(arguments, args(&["-p", "x"]));
+    }
+
+    /// The commands that start neither a session nor a task are refused, so the words are never
+    /// silently dropped. A session, a resumed one and a one-shot run take them.
+    #[test]
+    fn the_system_prompt_flags_are_refused_where_nothing_would_use_them() {
+        for first in [
+            "doctor",
+            "auth",
+            "mcp",
+            "import-leo-creds",
+            "import-providers",
+        ] {
+            let refused = without_a_prompt_to_give("--system-prompt", Some(first))
+                .unwrap_or_else(|| panic!("{first} took the words"));
+            assert!(
+                refused.contains("--system-prompt") && refused.contains(first),
+                "the refusal names neither the flag nor the command: {refused}"
+            );
+        }
+        for first in [
+            None,
+            Some("-p"),
+            Some("--plain"),
+            Some("--resume"),
+            Some("--continue"),
+            Some("--fork"),
+            Some("a task"),
+        ] {
+            assert_eq!(
+                without_a_prompt_to_give("--system-prompt", first),
+                None,
+                "{first:?} was refused"
+            );
         }
     }
 

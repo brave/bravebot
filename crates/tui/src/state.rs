@@ -1595,6 +1595,12 @@ pub struct Session {
     /// with no mode to leave (ADDRESS-10). Private, because only [`Session::address`] may set it:
     /// that is what keeps a loop's tick, a goal or a watch from ever carrying one (ADDRESS-3).
     addressing: Option<Addressed>,
+    /// The words `--system-prompt` and `--append-system-prompt` named, which every turn of this
+    /// session carries, loop ticks and goal rounds included (CLI-19).
+    ///
+    /// Held as the plain strings they were typed as. A turn reads them off the session, and nothing
+    /// stores them in the conversation or the record (INSTR-5).
+    system_prompts: bravebot_agent::turn::SystemPrompts,
     /// The definition `--agent` named, which every turn this session starts addresses unless a
     /// `/agent` line addressed another for one turn.
     ///
@@ -1857,6 +1863,7 @@ impl Session {
             watches: watch::Watches::new(),
             goal: None,
             addressing: None,
+            system_prompts: bravebot_agent::turn::SystemPrompts::default(),
             standing: None,
             rewind_points: Vec::new(),
             turn_start: TurnStart::default(),
@@ -7341,6 +7348,20 @@ impl Session {
             self.model = Some(model.clone());
         }
         self.standing = Some(definition);
+    }
+
+    /// Carry these words in the system prompt of every turn this session sends (CLI-19).
+    pub fn with_system_prompts(
+        mut self,
+        system_prompts: bravebot_agent::turn::SystemPrompts,
+    ) -> Self {
+        self.system_prompts = system_prompts;
+        self
+    }
+
+    /// The words the command line put in the system prompt of every turn this session sends.
+    pub fn system_prompts(&self) -> &bravebot_agent::turn::SystemPrompts {
+        &self.system_prompts
     }
 
     /// The definition every turn of this session addresses, where it was started under one.

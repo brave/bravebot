@@ -22,7 +22,7 @@ It does not cover what a skill file looks like or what any source is trusted for
 ## The sources
 
 <a id="INSTR-1"></a>
-### INSTR-1: six sources, and no others
+### INSTR-1: six sources kept as files, and no others
 
 | File | Applies to |
 |---|---|
@@ -36,6 +36,8 @@ It does not cover what a skill file looks like or what any source is trusted for
 The two roots are spelled differently on purpose: the user's own directory is already `.bravebot`,
 so its skills and definitions sit directly beneath it, while a project keeps its own out of the
 way in a dotted directory rather than at the root where `AGENTS.md` sits.
+
+The command line is a seventh source that is not a file, and [INSTR-10](#INSTR-10) is the whole of it.
 
 A skill is a directory because it has other material to keep beside its instructions. A delegate
 definition is one file, so `agents/` is flat: there is nothing for the directory to hold. What a
@@ -257,6 +259,39 @@ to `fetch_url` spends a round on a name that resolves to nothing.
 `verified-by: bravebot_agent::preamble::an_installed_github_cli_still_names_fetch_url_as_the_fallback`
 `verified-by: bravebot_agent::preamble::the_road_a_github_url_takes_is_not_in_the_block_a_delegate_reads`
 `verified-by: bravebot_agent::turn::the_road_for_a_github_url_goes_out_with_the_fact_it_rests_on`
+
+<a id="INSTR-10"></a>
+### INSTR-10: words from the command line are the last standing source, and a replacement reaches the opening alone
+
+`--append-system-prompt` ([CLI-19](cli.md#CLI-19)) adds its words to the standing instructions under
+the heading "From the command line", after the project's instructions, so the order of INSTR-4
+continues one place further and the words have the last word. They are trimmed, and they are in the
+text a delegate reads as well as the one a person's turn does.
+
+`--system-prompt` replaces the opening of the system prompt, which is the paragraph saying what kind
+of assistant this is, and leaves the rest of the prompt as it is: the instructions for reading a
+tool's output, the facts of INSTR-9, the mode, the goal and every source above.
+
+Both are held by the running process and resolved into each turn's system prompt like every other
+source, so INSTR-5 holds for them: they are never put in the stored conversation, and a session
+running many turns carries one copy. A recorded session stores no system prompt, so a resume
+without the flag runs without the words.
+
+They are not read through the trust gate, for the reason INSTR-9's facts are not. There is no file
+behind them, and the person who typed them is the one the planner works for. Nothing read out of the
+workspace may be added to them. This is also why a file's bytes passed in with
+`--append-system-prompt "$(cat notes.md)"` take on the person's authority: the gate was never asked
+about the file.
+
+**Why.** A standing instruction a person wants for one run should not have to be written into a file
+in the project first. Last place is the most specific source, as INSTR-4 orders them. Only the
+opening is replaceable because what follows it is what the other clauses rely on.
+
+`verified-by: bravebot_agent::preamble::words_from_the_command_line_follow_the_projects_file_in_what_a_delegate_reads`
+`verified-by: bravebot_agent::turn::appended_words_come_after_the_projects_instructions`
+`verified-by: bravebot_agent::turn::a_replaced_opening_takes_the_place_of_the_opening_alone`
+`verified-by: bravebot_agent::turn::system_prompt_words_reach_every_turn_and_are_not_stored`
+`verified-by: bravebot_agent::turn::a_delegate_reads_the_appended_words_and_not_the_replaced_opening`
 
 ## Known costs
 

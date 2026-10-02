@@ -32,6 +32,7 @@ fn running<'a>(config: &'a Config, workspace: &'a Workspace, trust: TrustStore) 
         permissions: Default::default(),
         mode: bravebot_agent::PermissionMode::default(),
         attribution: Default::default(),
+        prompts: Default::default(),
         output_cap: None,
         deadlines: bravebot_agent::exec::Deadlines::BUILT_IN,
         agent: None,

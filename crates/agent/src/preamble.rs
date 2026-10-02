@@ -97,10 +97,14 @@ pub fn compose<S: Sink>(
         tick,
         goal,
         attribution,
+        None,
     )
 }
 
 /// `compose` for a turn that works in `workspace` but reads its instructions from `sources`.
+///
+/// `appended` is what `--append-system-prompt` named (INSTR-10). It is the last standing source,
+/// after the project's file, and it is in `text`, which is what a delegate reads.
 #[allow(clippy::too_many_arguments)]
 pub fn compose_in<S: Sink>(
     policy: &mut Policy<'_, S>,
@@ -111,6 +115,7 @@ pub fn compose_in<S: Sink>(
     tick: Option<crate::turn::Tick>,
     goal: Option<&str>,
     attribution: &Attribution,
+    appended: Option<&str>,
 ) -> Preamble {
     let mut preamble = Preamble::default();
 
@@ -141,6 +146,12 @@ pub fn compose_in<S: Sink>(
         }
         Ok(None) => {}
         Err(notice) => preamble.notices.push(notice),
+    }
+    if let Some(appended) = appended {
+        standing.push_str(&format!(
+            "From the command line:\n\n{}\n\n",
+            appended.trim()
+        ));
     }
 
     if !standing.is_empty() {

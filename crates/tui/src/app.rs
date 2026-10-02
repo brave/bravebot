@@ -2395,6 +2395,7 @@ pub fn run(
     servers: crate::state::Servers,
     start: Start,
     skip_permissions: bool,
+    prompts: bravebot_agent::turn::SystemPrompts,
 ) -> io::Result<Ended> {
     // Before the terminal is taken, because the request for no colour decides whether it is asked
     // about its background on the way in, and that question happens inside the takeover.
@@ -2443,6 +2444,7 @@ pub fn run(
             servers,
             start,
             skip_permissions,
+            prompts,
         ),
         // Leaving at the picker resumed nothing and started nothing, so there is nothing to say
         // about picking anything up.
@@ -2905,6 +2907,7 @@ fn rewind(
 }
 
 /// Returns the session left behind, where there is one to pick up again.
+#[allow(clippy::too_many_arguments)]
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     config: &mut Config,
@@ -2913,6 +2916,7 @@ fn event_loop(
     mut mcp_servers: crate::state::Servers,
     start: Start,
     skip_permissions: bool,
+    prompts: bravebot_agent::turn::SystemPrompts,
 ) -> io::Result<Ended> {
     // Owned rather than borrowed, because `/add-dir` opens another directory partway through and
     // the turns after it must see one. The primary root never changes, so nothing keyed on it
@@ -2943,6 +2947,9 @@ fn event_loop(
     if skip_permissions {
         session = session.allowing_bypass();
     }
+    // Before the first turn, and kept until the session ends: a resumed record stores none, so
+    // these are the words of the turns this process sends (CLI-19).
+    session = session.with_system_prompts(prompts);
 
     // The model outlived the session that chose it, so the window that came with it has to be asked
     // for again: it is reported by the listing and nowhere else, and nothing on disk remembers it.
@@ -6510,6 +6517,9 @@ fn run_turn_animated(
         .with_permissions(permissions.clone())
         .with_permission_mode(permission_mode)
         .with_attribution(attribution.clone())
+        // The words `--system-prompt` and `--append-system-prompt` named, on every turn the session
+        // sends, ticks and goal rounds included (CLI-19).
+        .with_system_prompts(session.system_prompts().clone())
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
         // Whether a check that finds nothing answers in the person's place. Read off the session
@@ -13844,6 +13854,33 @@ mod tests {
             name: "rule-reviewer".to_string(),
             model: None,
         }
+    }
+
+    /// CLI-19. Words given on the command line belong to the session, not to the first turn, so a
+    /// second turn is built from the same words. The per-turn builder reads them from here.
+    #[test]
+    fn a_session_keeps_the_system_prompt_words_it_started_with_through_every_turn() {
+        let words = bravebot_agent::turn::SystemPrompts {
+            replacing: Some("You are a reviewer.".to_string()),
+            appending: Some("Answer in French.".to_string()),
+        };
+        let mut session = Session::new("none").with_system_prompts(words.clone());
+
+        for turn in ["first", "second"] {
+            type_line(&mut session, turn);
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit(turn.to_string())
+            );
+            assert_eq!(session.system_prompts(), &words, "lost before {turn:?}");
+            session.complete("done", Vec::new(), 0);
+        }
+        assert_eq!(session.system_prompts(), &words, "lost after the turns");
+        assert_eq!(
+            Session::new("none").system_prompts(),
+            &bravebot_agent::turn::SystemPrompts::default(),
+            "a session given no words holds some"
+        );
     }
 
     /// CLI-17. A session started under a definition addresses every turn to it, including a `/loop`
