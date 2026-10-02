@@ -7408,11 +7408,75 @@ mod tests {
         Move, Ask,
     );
 
+    /// What a question remembers between its draws: the rows of each kind that have been shown.
+    #[derive(Default)]
+    struct Memory {
+        seen: Seen,
+        shown: RowsShown,
+    }
+
+    /// What one draw of a question decided, whichever gate the question is under.
+    #[derive(Clone, Copy)]
+    enum Looked {
+        Pinned(Drawn),
+        Run(RunDrawn),
+    }
+
+    impl Default for Looked {
+        fn default() -> Self {
+            Looked::Pinned(Drawn::default())
+        }
+    }
+
+    impl Looked {
+        fn pinned(&self) -> &Drawn {
+            match self {
+                Looked::Pinned(drawn) => drawn,
+                Looked::Run(_) => panic!("a run prompt's draw was read as a pinned one"),
+            }
+        }
+
+        fn run(&self) -> &RunDrawn {
+            match self {
+                Looked::Run(drawn) => drawn,
+                Looked::Pinned(_) => panic!("a pinned draw was read as a run prompt's"),
+            }
+        }
+
+        /// The rows a page moves.
+        fn page(&self) -> i16 {
+            match self {
+                Looked::Pinned(drawn) => drawn.page(),
+                Looked::Run(drawn) => i16::try_from(drawn.page).unwrap_or(i16::MAX),
+            }
+        }
+
+        fn moved(&self, scroll: u16, by: i16) -> u16 {
+            match self {
+                Looked::Pinned(drawn) => drawn.moved(scroll, by),
+                Looked::Run(drawn) => drawn.moved(scroll, i32::from(by)),
+            }
+        }
+
+        /// Whether the question, its keys and a row of the body were all on the screen.
+        fn has_room(&self) -> bool {
+            match self {
+                Looked::Pinned(drawn) => drawn.rows() > 0,
+                Looked::Run(drawn) => drawn.whole,
+            }
+        }
+    }
+
     /// A question drawn scrolled this far.
-    type Draws = Box<dyn Fn(&mut ratatui::Frame, u16, &mut Seen) -> Drawn>;
+    type Draws = Box<dyn Fn(&mut ratatui::Frame, u16, &mut Memory) -> Looked>;
+
+    /// A question laid out by [`pinned::draw`], drawn scrolled this far.
+    fn pinned(draw: impl Fn(&mut ratatui::Frame, u16, &mut Memory) -> Drawn + 'static) -> Draws {
+        Box::new(move |frame, scroll, memory| Looked::Pinned(draw(frame, scroll, memory)))
+    }
 
     /// What a key did at a draw: `Some(true)` where it approved.
-    type Answers = Box<dyn Fn(KeyEvent, &Drawn) -> Option<bool>>;
+    type Answers = Box<dyn Fn(KeyEvent, &Looked) -> Option<bool>>;
 
     /// A question too long for the box, and what to look for while it is scrolled through.
     struct Case {
@@ -7422,6 +7486,8 @@ mod tests {
         refusing: char,
         /// Text that decides the question, all of which has to have been drawn before a yes.
         deciding: Vec<String>,
+        /// Text that only the key beside it grants anything by, so only that key waits on it.
+        grants: Vec<(char, Vec<String>)>,
     }
 
     /// Each question with its deciding fields grown past what one screen holds.
@@ -7443,17 +7509,58 @@ mod tests {
                 let mut deciding = findings;
                 deciding.extend([record.to_string(), "+d0000".to_string()]);
                 Some(Case {
-                    draw: Box::new(move |frame, scroll, seen| draw(frame, &drawn, scroll, seen)),
-                    answer: Box::new(move |key, drawn| {
-                        approves(write_answer_for(key, &request, drawn))
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw(frame, &drawn, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(move |key, looked| {
+                        approves(write_answer_for(key, &request, looked.pinned()))
                     }),
                     approving: vec!['y', 'a', 'r'],
                     refusing: 'n',
+                    grants: Vec::new(),
                     deciding,
                 })
             }
-            // #1129 brings the run prompt under the same rule.
-            Kind::Run => None,
+            Kind::Run => {
+                let request = a_run_with_a_long_argument_list();
+                let path = request.record.as_ref().expect("recordable").display();
+                let record = path.to_string();
+                let mut deciding = request
+                    .plan
+                    .steps()
+                    .iter()
+                    .flat_map(|step| step.args.clone())
+                    .collect::<Vec<_>>();
+                deciding.push(squeezed(t!(run_not_sandboxed)));
+                let drawn = request.clone();
+                Some(Case {
+                    draw: Box::new(move |frame, scroll, memory| {
+                        Looked::Run(draw_run(frame, &drawn, scroll, &mut memory.shown))
+                    }),
+                    answer: Box::new(move |key, looked| {
+                        match looked.run().response_to(key, &request)? {
+                            RunResponse::Answer(answer) => Some(answer.decision().approved()),
+                            RunResponse::Scroll(_) | RunResponse::Page(_) => None,
+                        }
+                    }),
+                    approving: vec!['y', 'a', 'r'],
+                    refusing: 'n',
+                    grants: vec![
+                        (
+                            'a',
+                            vec![
+                                squeezed(t!(run_always_output_trusted)),
+                                squeezed(t!(run_always_this_directory)),
+                            ],
+                        ),
+                        (
+                            'r',
+                            vec![squeezed(t!(run_remember_only_asking)), squeezed(&record)],
+                        ),
+                    ],
+                    deciding,
+                })
+            }
             Kind::ReadOutput => {
                 let reason = numbered('r', 500);
                 let request = OutputRequest {
@@ -7465,14 +7572,15 @@ mod tests {
                 let mut deciding = reason;
                 deciding.push("o0000".to_string());
                 Some(Case {
-                    draw: Box::new(move |frame, scroll, seen| {
-                        draw_output(frame, &drawn, scroll, seen)
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_output(frame, &drawn, scroll, &mut memory.seen)
                     }),
-                    answer: Box::new(move |key, drawn| {
-                        approves(output_answer_for(key, &request, drawn))
+                    answer: Box::new(move |key, looked| {
+                        approves(output_answer_for(key, &request, looked.pinned()))
                     }),
                     approving: vec!['y'],
                     refusing: 'n',
+                    grants: Vec::new(),
                     deciding,
                 })
             }
@@ -7487,14 +7595,15 @@ mod tests {
                 let mut deciding = reason;
                 deciding.push("c0000".to_string());
                 Some(Case {
-                    draw: Box::new(move |frame, scroll, seen| {
-                        draw_vet(frame, &drawn, scroll, None, seen)
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_vet(frame, &drawn, scroll, None, &mut memory.seen)
                     }),
-                    answer: Box::new(move |key, drawn| {
-                        approves(vet_answer_for(key, &request, drawn))
+                    answer: Box::new(move |key, looked| {
+                        approves(vet_answer_for(key, &request, looked.pinned()))
                     }),
                     approving: vec!['y'],
                     refusing: 'n',
+                    grants: Vec::new(),
                     deciding,
                 })
             }
@@ -7518,12 +7627,13 @@ mod tests {
                 deciding.extend(folders);
                 deciding.push("p0000".to_string());
                 Some(Case {
-                    draw: Box::new(move |frame, scroll, seen| {
-                        draw_vouch(frame, &drawn, scroll, seen)
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_vouch(frame, &drawn, scroll, &mut memory.seen)
                     }),
-                    answer: Box::new(|key, drawn| approves(answer_for(key, drawn))),
+                    answer: Box::new(|key, looked| approves(answer_for(key, looked.pinned()))),
                     approving: vec!['y'],
                     refusing: 'n',
+                    grants: Vec::new(),
                     deciding,
                 })
             }
@@ -7537,12 +7647,13 @@ mod tests {
                         .collect(),
                 };
                 Some(Case {
-                    draw: Box::new(move |frame, scroll, seen| {
-                        draw_exposure(frame, &request, scroll, seen)
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_exposure(frame, &request, scroll, &mut memory.seen)
                     }),
-                    answer: Box::new(|key, drawn| approves(answer_for(key, drawn))),
+                    answer: Box::new(|key, looked| approves(answer_for(key, looked.pinned()))),
                     approving: vec!['y'],
                     refusing: 'n',
+                    grants: Vec::new(),
                     deciding: findings,
                 })
             }
@@ -7558,12 +7669,13 @@ mod tests {
                 let mut deciding = program;
                 deciding.extend(workspace);
                 Some(Case {
-                    draw: Box::new(move |frame, scroll, seen| {
-                        draw_server(frame, &request, scroll, seen)
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_server(frame, &request, scroll, &mut memory.seen)
                     }),
-                    answer: Box::new(|key, drawn| approves(answer_for(key, drawn))),
+                    answer: Box::new(|key, looked| approves(answer_for(key, looked.pinned()))),
                     approving: vec!['y'],
                     refusing: 'n',
+                    grants: Vec::new(),
                     deciding,
                 })
             }
@@ -7577,12 +7689,13 @@ mod tests {
                         .collect(),
                 };
                 Some(Case {
-                    draw: Box::new(move |frame, scroll, seen| {
-                        draw_manifest(frame, &request, scroll, seen)
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_manifest(frame, &request, scroll, &mut memory.seen)
                     }),
-                    answer: Box::new(|key, drawn| approves(answer_for(key, drawn))),
+                    answer: Box::new(|key, looked| approves(answer_for(key, looked.pinned()))),
                     approving: vec!['y'],
                     refusing: 'n',
+                    grants: Vec::new(),
                     deciding: steps,
                 })
             }
@@ -7604,12 +7717,15 @@ mod tests {
                 let mut deciding = names;
                 deciding.extend(descriptions);
                 Some(Case {
-                    draw: Box::new(move |frame, scroll, seen| {
-                        draw_tool_list(frame, &request, scroll, seen)
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_tool_list(frame, &request, scroll, &mut memory.seen)
                     }),
-                    answer: Box::new(|key, drawn| approves(tool_list_answer_for(key, drawn))),
+                    answer: Box::new(|key, looked| {
+                        approves(tool_list_answer_for(key, looked.pinned()))
+                    }),
                     approving: vec!['1', 'y'],
                     refusing: '2',
+                    grants: Vec::new(),
                     deciding,
                 })
             }
@@ -7621,14 +7737,15 @@ mod tests {
                 };
                 let drawn = request.clone();
                 Some(Case {
-                    draw: Box::new(move |frame, scroll, seen| {
-                        draw_mcp_call(frame, &drawn, false, scroll, seen)
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_mcp_call(frame, &drawn, false, scroll, &mut memory.seen)
                     }),
-                    answer: Box::new(move |key, drawn| {
-                        approves(call_answer_for(key, &request, drawn))
+                    answer: Box::new(move |key, looked| {
+                        approves(call_answer_for(key, &request, looked.pinned()))
                     }),
                     approving: vec!['1', '2'],
                     refusing: '3',
+                    grants: Vec::new(),
                     deciding: words,
                 })
             }
@@ -7648,19 +7765,27 @@ mod tests {
         kind: Kind,
         case: &Case,
         (width, height): (u16, u16),
-        step: fn(&Drawn) -> i16,
+        step: fn(&Looked) -> i16,
     ) {
-        let mut seen = Seen::default();
+        let mut memory = Memory::default();
         let mut scroll = 0;
         let mut unseen: Vec<&String> = case.deciding.iter().collect();
+        let mut unseen_grants: Vec<(char, Vec<&String>)> = case
+            .grants
+            .iter()
+            .map(|(key, texts)| (*key, texts.iter().collect()))
+            .collect();
         let mut first = true;
         loop {
-            let mut drawn = Drawn::default();
+            let mut drawn = Looked::default();
             let rows = rows_of(width, height, |frame| {
-                drawn = (case.draw)(frame, scroll, &mut seen);
+                drawn = (case.draw)(frame, scroll, &mut memory);
             });
             let shown = box_text(&rows).replace('┃', "");
             unseen.retain(|text| !shown.contains(text.as_str()));
+            for (_, texts) in &mut unseen_grants {
+                texts.retain(|text| !shown.contains(text.as_str()));
+            }
             let screen = rows.join("\n");
             assert!(
                 !first || !unseen.is_empty(),
@@ -7677,7 +7802,13 @@ mod tests {
             let next = drawn.moved(scroll, step(&drawn));
             for &key in &case.approving {
                 let taken = (case.answer)(press(KeyCode::Char(key)), &drawn);
-                match unseen.first() {
+                let waiting = unseen.first().copied().or_else(|| {
+                    unseen_grants
+                        .iter()
+                        .filter(|(granting, _)| *granting == key)
+                        .find_map(|(_, texts)| texts.first().copied())
+                });
+                match waiting {
                     Some(unseen) => assert_eq!(
                         taken, None,
                         "{kind:?} at {width}x{height}, scrolled {scroll}: {key} was taken with \
@@ -7692,9 +7823,10 @@ mod tests {
                 }
             }
             if next == scroll {
+                let grants_unseen: Vec<_> = unseen_grants.iter().flat_map(|(_, t)| t).collect();
                 assert!(
-                    unseen.is_empty(),
-                    "{kind:?} at {width}x{height}: {unseen:?} never drawn:\n{screen}"
+                    unseen.is_empty() && grants_unseen.is_empty(),
+                    "{kind:?} at {width}x{height}: {unseen:?} {grants_unseen:?} never drawn:\n{screen}"
                 );
                 return;
             }
@@ -7713,7 +7845,7 @@ mod tests {
             };
             for size in [(80, 24), (60, 15)] {
                 scroll_through(kind, &case, size, |_| 1);
-                scroll_through(kind, &case, size, Drawn::page);
+                scroll_through(kind, &case, size, Looked::page);
             }
         }
     }
@@ -7726,16 +7858,15 @@ mod tests {
             let Some(case) = oversized(kind) else {
                 continue;
             };
-            let mut seen = Seen::default();
+            let mut memory = Memory::default();
             let mut scroll = 0;
             loop {
-                let mut drawn = Drawn::default();
+                let mut drawn = Looked::default();
                 let rows = rows_of(20, 6, |frame| {
-                    drawn = (case.draw)(frame, scroll, &mut seen);
+                    drawn = (case.draw)(frame, scroll, &mut memory);
                 });
-                assert_eq!(
-                    drawn.rows(),
-                    0,
+                assert!(
+                    !drawn.has_room(),
                     "{kind:?} found a row for the body, so this size tests nothing:\n{}",
                     rows.join("\n")
                 );
@@ -7761,12 +7892,12 @@ mod tests {
     #[test]
     fn a_question_read_at_one_width_takes_no_yes_at_another() {
         let case = oversized(Kind::Exposure).expect("the exposure prompt has a case");
-        let mut seen = Seen::default();
-        let mut drawn = Drawn::default();
+        let mut memory = Memory::default();
+        let mut drawn = Looked::default();
         let mut scroll = 0;
         loop {
             rows_of(90, 24, |frame| {
-                drawn = (case.draw)(frame, scroll, &mut seen)
+                drawn = (case.draw)(frame, scroll, &mut memory)
             });
             let next = drawn.moved(scroll, 1);
             if next == scroll {
@@ -7779,12 +7910,12 @@ mod tests {
         let wide = drawn;
 
         rows_of(80, 24, |frame| {
-            drawn = (case.draw)(frame, scroll, &mut seen)
+            drawn = (case.draw)(frame, scroll, &mut memory)
         });
         // The same number of rows at both widths, so only the width can start the count again.
         assert_eq!(
-            (drawn.furthest(), drawn.rows()),
-            (wide.furthest(), wide.rows())
+            (drawn.pinned().furthest(), drawn.pinned().rows()),
+            (wide.pinned().furthest(), wide.pinned().rows())
         );
         assert_eq!((case.answer)(yes, &drawn), None);
     }
@@ -7795,11 +7926,11 @@ mod tests {
     #[test]
     fn a_question_says_how_many_rows_are_left_to_read_before_a_yes() {
         let case = oversized(Kind::Vet).expect("the vet prompt has a case");
-        let mut seen = Seen::default();
-        let mut drawn = Drawn::default();
+        let mut memory = Memory::default();
+        let mut drawn = Looked::default();
         let mut scroll = 0;
         let mut rows = rows_of(80, 24, |frame| {
-            drawn = (case.draw)(frame, scroll, &mut seen)
+            drawn = (case.draw)(frame, scroll, &mut memory)
         });
         assert!(
             rows.iter()
@@ -7810,7 +7941,7 @@ mod tests {
         while drawn.moved(scroll, 1) != scroll {
             scroll = drawn.moved(scroll, 1);
             rows = rows_of(80, 24, |frame| {
-                drawn = (case.draw)(frame, scroll, &mut seen)
+                drawn = (case.draw)(frame, scroll, &mut memory)
             });
         }
         let bottom = rows;
