@@ -39,8 +39,8 @@ export interface Bot {
    * The name every file belonging to this bot is named after.
    *
    * Restricted to `[a-z0-9-]` and composed from the name once, at creation. Both matter: this
-   * becomes a path segment in three places — the ground file under `userData`, the home folder
-   * under `userData`, and the memory file inside each folder the bot works in — and a path segment
+   * becomes a path segment in three places (the ground file under `userData`, the home folder
+   * under `userData`, and the memory file inside each folder the bot works in), and a path segment
    * that arrived as free text is a path segment that can be `..`.
    */
   slug: string

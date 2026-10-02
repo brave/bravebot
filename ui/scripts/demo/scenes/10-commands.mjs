@@ -14,11 +14,11 @@ import { openNewest } from '../pick.mjs'
 
 const KEYS = [
   ['⌘N', 'New chat, in the project used last'],
-  ['⇧⌘W', 'Close the chat — ⌘W still closes the window'],
+  ['⇧⌘W', 'Close the chat, ⌘W still closes the window'],
   ['⌘↵', 'Send'],
   ['⌘.', 'Cancel the running turn'],
   ['⌥⌘← / ⌥⌘→', 'Fold the chat list / the context panel'],
-  ['Esc', 'Cancel from the composer — or clear the chat search'],
+  ['Esc', 'Cancel from the composer, or clear the chat search'],
 ]
 
 export default {

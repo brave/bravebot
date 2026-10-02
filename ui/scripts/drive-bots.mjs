@@ -297,7 +297,7 @@ check(
 )
 check(
   onDisk(MINE[0])?.remembered === seed.remembered && onDisk(MINE[0])?.quiet === seed.quiet,
-  'and saving the details does not disturb them — the window has no way to say either',
+  'and saving the details does not disturb them, the window has no way to say either',
 )
 
 // --- putting one away, and taking it back out ----------------------------------------------
@@ -394,7 +394,7 @@ check(
 await openBot(back, backMine)
 check(
   (await back.locator('[data-test="bot-details"]').getByText(/^(Forget|Delete)$/).count()) === 0,
-  'the details offer no way to delete a bot at all — archiving is what a row leaving means',
+  'the details offer no way to delete a bot at all, archiving is what a row leaving means',
 )
 await archiveOpen(back, 'Release Notes (weekly)')
 await openArchive()
@@ -439,7 +439,7 @@ await back.waitForTimeout(300)
 await second_app.close()
 
 // What this driver touched, put back. Only its own two keys — the rest of that file is somebody's
-// arrangement of this window — and the home folders the app made for its two bots.
+// arrangement of this window, and the home folders the app made for its two bots.
 putKey('bots', (readState().bots ?? []).filter((bot) => !MINE.includes(bot.slug)))
 putKey('view', { ...(hadView ?? { grouped: false, collapsed: [] }), tab: 'sessions' })
 for (const home of homes) rmSync(home, { recursive: true, force: true })

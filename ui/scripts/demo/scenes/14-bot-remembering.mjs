@@ -70,7 +70,7 @@ export default {
     // --- and the turn nobody asked for ---------------------------------------------------------
 
     const conversation = page.locator('[data-test="bot-conversations"] .bot-history-row').first()
-    if (!(await conversation.count())) s.skip(`"${NAME}" has no conversation yet — 13-bot-memory starts one`)
+    if (!(await conversation.count())) s.skip(`"${NAME}" has no conversation yet, 13-bot-memory starts one`)
     await s.click(conversation)
     await page.waitForTimeout(2200)
 

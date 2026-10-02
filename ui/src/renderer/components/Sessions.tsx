@@ -313,7 +313,7 @@ function Group({
  * showing different things about a session. Three lines: where it runs and when it was last
  * active, what it is called, and the branch it was started on.
  *
- * The leading mark says what asks something of the reader — working, waiting, failed — and
+ * The leading mark says what asks something of the reader, working, waiting, failed, and
  * otherwise whose conversation this is: a bot's face, or a folder for an ordinary chat.
  */
 const Session = memo(function Session({
