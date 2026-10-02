@@ -6836,7 +6836,7 @@ fn spawn_agent<S: Sink, R: Reporter>(
         };
         let made = match state {
             None => None,
-            Some(state) => match tools.workspace.checkout_for(policy, state) {
+            Some(state) => match tools.workspace.checkout_for(policy, state, id) {
                 Ok(made) => Some(made),
                 Err(refusal) => {
                     // Said as the definition's, since the call that met the refusal may not have

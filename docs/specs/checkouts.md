@@ -15,6 +15,8 @@ governs:
   - crates/core/src/file_authority.rs
   - crates/core/src/policy.rs
   - crates/core/src/trust.rs
+  - crates/tui/src/app.rs
+  - crates/tui/src/status.rs
 documented-by:
   - docs/website/docs/customize/agents.md
   - none (gap: a page on a spawn asking for a checkout, bringing its work back and removing it, owed until the design is built)
@@ -38,8 +40,9 @@ it ([CHECKOUT-7](#CHECKOUT-7)), and a checkout nothing was done in is removed
 ([CHECKOUT-15](#CHECKOUT-15)), and a definition can ask for one ([CHECKOUT-2](#CHECKOUT-2)).
 The driver records what was written in a checkout, and beside the report names the paths the
 planner typed and counts the writes made through a reference ([CHECKOUT-13](#CHECKOUT-13),
-[CHECKOUT-18](#CHECKOUT-18)). Bringing work back, keeping checkouts
-across a resume and the commands that list them are not built.
+[CHECKOUT-18](#CHECKOUT-18)), and `/status` lists each checkout the session has
+([CHECKOUT-21](#CHECKOUT-21)). Bringing work back, keeping checkouts across a resume and the
+`/checkouts` command are not built.
 
 **A checkout is not a sandbox.** It moves where a delegate's file tools reach and where its
 programs start. A program it runs is as unconfined as any other ([sandboxing.md](sandboxing.md)),
@@ -64,7 +67,8 @@ wrote ([SESSION-19](sessions.md#SESSION-19)).
 
 A spawn can ask for a checkout ([CHECKOUT-1](#CHECKOUT-1)), and so can a definition's `isolation:`
 key ([CHECKOUT-2](#CHECKOUT-2)). The planner is told the paths the delegate typed for what it wrote in a kept
-checkout ([CHECKOUT-18](#CHECKOUT-18)). Nothing brings that work back into the working directory, and a
+checkout ([CHECKOUT-18](#CHECKOUT-18)), and `/status` lists each checkout the session has
+([CHECKOUT-21](#CHECKOUT-21)). Nothing brings that work back into the working directory, and a
 checkout a delegate wrote in stays where it is until a person removes it.
 
 ## Asking for one
@@ -595,9 +599,9 @@ directory, and removes one. Removing one that has candidates asks first.
 
 Half built. A checkout the delegate given it and the delegates that one started did nothing in is
 removed as the delegate ends, with its `worktrees/<id>/` entry and its rules. Any other is kept,
-and the planner is told where. No session record holds it, nothing lists it, nothing removes it, and
-leaving the session names none, so a kept checkout stays until a person removes it and runs
-`git worktree prune`.
+the planner is told where, and `/status` lists it ([CHECKOUT-21](#CHECKOUT-21)). No session record
+holds it, there is no `/checkouts` to remove it, and leaving the session names none, so a kept
+checkout stays until a person removes it and runs `git worktree prune`.
 
 `verified-by: bravebot_agent::turn::a_checkout_nothing_was_done_in_is_removed_when_its_delegate_ends`
 `verified-by: bravebot_agent::workspace::a_checkout_is_removed_unless_something_was_done_in_it`
@@ -696,14 +700,25 @@ No test asks for `lsp` in a checkout.
 <a id="CHECKOUT-21"></a>
 ### CHECKOUT-21: `/status` lists the session's checkouts
 
-Each kept checkout is a line of its own, with its number, its path, its commit and the number of
-the delegate given it, as
-the session's own directory has one ([TRUST-14](trust-map.md#TRUST-14)). A checkout carries rules,
-so it is in the rules in force as well ([TRUST-12](trust-map.md#TRUST-12)).
+Each checkout the session made and has not removed is a line of its own, with its number, its
+path, its commit and the number of the delegate given it, as the session's own directory has one
+([TRUST-14](trust-map.md#TRUST-14)). A checkout carries rules, so it is in the rules in force as
+well ([TRUST-12](trust-map.md#TRUST-12)).
 
-Nothing builds this yet.
+Built. The lines follow the session's own directory, oldest checkout first, and show the first ten
+characters of the commit, as a log line does. One that could not be removed is listed, since it is
+still on disk, and one whose directory is gone, removed by hand or only half removed, is not. The
+rules copied for a checkout are in the trust map the turn hands back, which is the map `/status`
+lists. A delegate's number is its turn's, so two checkouts made in two turns can both name `d1`.
+The checkout's own number is the session's and tells them apart. The list is held in memory: a
+session `/clear` begins lists none of the checkouts made before it, and a resumed one lists none
+it made before it was left, until [CHECKOUT-16](#CHECKOUT-16) is built.
 
-`verified-by: none`
+`verified-by: bravebot_agent::workspace::the_session_lists_each_checkout_it_has_until_one_is_removed`
+`verified-by: bravebot_agent::workspace::a_session_begun_over_lists_none_of_the_checkouts_made_before_it`
+`verified-by: bravebot_agent::turn::the_session_lists_the_checkout_a_delegate_kept_and_the_rule_copied_for_it`
+`verified-by: bravebot_tui::status::each_checkout_the_session_has_is_a_line_of_its_own`
+`verified-by: bravebot_tui::status::a_session_with_no_checkout_reports_none`
 
 ## Roads not taken
 
@@ -771,7 +786,8 @@ Nothing builds this yet.
   cannot name was written and not which one ([CHECKOUT-13](#CHECKOUT-13)).
 - **No `lsp` in a checkout** ([CHECKOUT-20](#CHECKOUT-20)).
 - **Nothing brings a checkout's work back yet** ([CHECKOUT-14](#CHECKOUT-14)), and a kept checkout
-  stays until a person removes it ([CHECKOUT-15](#CHECKOUT-15)).
+  stays until a person removes it ([CHECKOUT-15](#CHECKOUT-15)). `/status` says where it is
+  ([CHECKOUT-21](#CHECKOUT-21)).
 - **In a session that keeps nothing, a checkout goes with the session**, with whatever was not
   brought back.
 - **A checker that ran a program keeps its checkout**, since it started a program there
