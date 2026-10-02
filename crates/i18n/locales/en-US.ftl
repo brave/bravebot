@@ -944,6 +944,9 @@ servers-no-confinement-here =
     { $alias } was not started: this platform has no confinement for a local MCP server yet
 servers-no-home =
     { $alias } was not started: a directory of its own could not be made in { $path }: { $reason }
+servers-paths-left-out =
+    { $alias } was started without paths it was granted, since confinement here names no path that
+    is not on disk: { $paths }
 servers-no-handshake = { $alias } was started and did not complete its handshake: { $reason }
 servers-too-slow = { $alias } did not complete its handshake within { $seconds } seconds
 

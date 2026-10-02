@@ -24,7 +24,7 @@ use bravebot_core::value::Labelled;
 use bravebot_i18n::t;
 use bravebot_mcp::{HttpServer, McpError, McpResult, StdioServer};
 use bravebot_sandbox::base::{Prelude, base};
-use bravebot_sandbox::policy::SandboxPolicy;
+use bravebot_sandbox::policy::{Capabilities, SandboxPolicy};
 use bravebot_sandbox::{Stream, Variables};
 use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, IsTerminal, Write};
@@ -1259,7 +1259,8 @@ fn start(
                     notes.push(t!(servers_no_confinement_here, alias = alias).to_string());
                     continue;
                 };
-                let policy = policy.nameable_under(&sandbox.capabilities()).policy;
+                let (policy, left_out) = nameable(&alias, policy, &sandbox.capabilities());
+                notes.extend(left_out);
                 let launched = StdioServer::launch(
                     alias.as_str(),
                     program.to_str().unwrap_or_default(),
@@ -1426,6 +1427,41 @@ fn temporary_directory() -> PathBuf {
     temporary.canonicalize().unwrap_or(temporary)
 }
 
+/// The part of `policy` this backend can be asked for, and the note saying what that left out.
+///
+/// A backend that cannot name a path missing from the disk is asked for the rest of the policy
+/// rather than refusing the server over a toolchain the machine never had (SANDBOX-9), so the
+/// server starts holding fewer paths than were granted it. The note is how that is said: without
+/// it, a person reading a refusal from the server cannot tell a path it was refused from one it
+/// was never granted, and neither can the person who declared it.
+///
+/// Every path it left out, rather than how many. The prelude names spellings a distribution may
+/// lack, so the list is long and usually of no interest, and a count hides the one path somebody
+/// is looking for, which is the whole of what this is for. Each is drawn as a word from a
+/// declaration is drawn, since a `PATH` the declaration names is granted as written and is left
+/// out here where it is not on disk.
+fn nameable(
+    alias: &str,
+    policy: SandboxPolicy,
+    capabilities: &Capabilities,
+) -> (SandboxPolicy, Option<String>) {
+    let resolved = policy.nameable_under(capabilities);
+    let left_out = (!resolved.omitted.is_empty()).then(|| {
+        let paths: Vec<String> = resolved
+            .omitted
+            .iter()
+            .map(|path| shown(&path.display().to_string()))
+            .collect();
+        t!(
+            servers_paths_left_out,
+            alias = alias,
+            paths = paths.join(", ")
+        )
+        .to_string()
+    });
+    (resolved.policy, left_out)
+}
+
 /// [`confinement`] on this machine: its platform's base, and the person's own profile directory as
 /// the home kept out, which is not the state directory inside it.
 fn confinement_here(
@@ -1574,6 +1610,7 @@ mod tests {
     use super::*;
     use bravebot_agent::mcp::entry;
     use bravebot_config::Rule;
+    use bravebot_sandbox::policy::ConfinementLevel;
 
     /// A state directory of its own under the build directory, emptied first.
     fn scratch(name: &str) -> PathBuf {
@@ -2694,6 +2731,66 @@ mod tests {
         assert_eq!(in_home, [&key], "more of the home directory was granted");
     }
 
+    /// A capability set whose backend grants a path that is not on disk, or one whose backend
+    /// cannot. Written here rather than read off this machine, so both answers are checked on
+    /// every platform that runs the suite.
+    fn a_backend_naming_an_absent_path(grants: bool) -> Capabilities {
+        Capabilities {
+            level: ConfinementLevel::Partial,
+            mechanisms: vec!["test"],
+            network_denial_enforced: false,
+            grants_paths_that_do_not_exist: grants,
+        }
+    }
+
+    /// SANDBOX-9: a server started under fewer paths than were granted it will be refused one
+    /// somebody meant it to reach, and nothing else tells the person reading that refusal apart
+    /// from a path that was never granted. Each path by name, since a count hides the one they are
+    /// looking for.
+    #[test]
+    fn a_server_started_without_paths_its_backend_cannot_name_has_a_note_naming_each_one() {
+        let root = scratch("cli-servers-left-out");
+        let there = root.join("there");
+        std::fs::create_dir_all(&there).expect("there");
+        let absent = root.join("absent");
+        let blurred = root.join("absent directory");
+        let wanted = SandboxPolicy::strict()
+            .allow_read(&there)
+            .allow_read(&absent)
+            .allow_write(&blurred);
+
+        let (policy, note) = nameable("weather", wanted, &a_backend_naming_an_absent_path(false));
+
+        assert_eq!(policy.readable, vec![there]);
+        assert!(policy.writable.is_empty());
+        assert_eq!(
+            note,
+            Some(
+                t!(
+                    servers_paths_left_out,
+                    alias = "weather",
+                    paths = format!("{}, {:?}", absent.display(), blurred.display().to_string())
+                )
+                .to_string()
+            ),
+            "the note did not name both paths as the launch left them"
+        );
+    }
+
+    /// Resolution leaves a path out only where the backend cannot name one, so a backend that can
+    /// leaves none out and there is nothing to say. A note on every launch there is a note nobody
+    /// reads.
+    #[test]
+    fn a_server_whose_backend_names_an_absent_path_is_started_with_no_such_note() {
+        let absent = scratch("cli-servers-nothing-left-out").join("absent");
+        let wanted = SandboxPolicy::strict().allow_read(&absent);
+
+        let (policy, note) = nameable("weather", wanted, &a_backend_naming_an_absent_path(true));
+
+        assert_eq!(policy.readable, vec![absent]);
+        assert_eq!(note, None);
+    }
+
     /// SERVERS-10: a stored value reaches the server as the declaration holds it, and this
     /// process's environment is read only for the names it declares. A stored `PATH` is the one a
     /// bare name is looked for in.
@@ -2868,6 +2965,21 @@ done
         ))
     }
 
+    /// The note a launch of `program` from `work` with `own` as its home leaves about what this
+    /// machine's confinement left out, and nothing where it left out nothing.
+    ///
+    /// Which of the prelude's spellings a distribution lacks is the machine's, so the note is built
+    /// from the policy the launch built rather than written down here. Only the launch's other
+    /// notes are what the tests below are about. Takes the same program and declared reads the
+    /// launch does, since a row that is on disk is not one the resolution leaves out.
+    #[cfg(unix)]
+    fn left_out_of(program: &Path, reads: &[PathBuf], work: &Path, own: &Path) -> Vec<String> {
+        let sandbox = bravebot_sandbox::for_current_platform().expect("a backend");
+        let policy = confinement_here(program, &[], reads, Some(work), own)
+            .expect("a policy to start under");
+        Vec::from_iter(nameable("weather", policy, &sandbox.capabilities()).1)
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_started_server_writes_its_own_files_in_the_home_kept_for_it() {
@@ -2885,9 +2997,12 @@ done
             return;
         };
 
-        assert_eq!(notes, Vec::<String>::new());
-        assert_eq!(started.len(), 1);
         let own = mcp::server_home(&state, &digested(&["weather-mcp"]));
+        assert_eq!(
+            notes,
+            left_out_of(&root.join("bin").join("weather-mcp"), &[], &work, &own)
+        );
+        assert_eq!(started.len(), 1);
         assert_eq!(
             std::fs::read_to_string(work.join("home-was")).expect("where its home was"),
             own.display().to_string()
@@ -2916,11 +3031,14 @@ done
             return;
         };
 
-        assert_eq!(notes, Vec::<String>::new());
-        assert_eq!(started.len(), 1);
         let own = PathBuf::from(
             std::fs::read_to_string(work.join("home-was")).expect("where its home was"),
         );
+        assert_eq!(
+            notes,
+            left_out_of(&root.join("bin").join("weather-mcp"), &[], &work, &own)
+        );
+        assert_eq!(started.len(), 1);
         assert!(own.join("was-here").exists());
         assert!(own.starts_with(temporary_directory()));
         assert_eq!(std::fs::read_dir(&state).expect("state").count(), 0);
@@ -3261,17 +3379,18 @@ done
         let approvals = state.join("mcp-approvals.json");
         std::fs::write(&approvals, "{}").expect("a file in the state directory");
         let home = Home {
-            directory: Some(state),
+            directory: Some(state.clone()),
             writable: true,
         };
+        let reads = vec![key.clone(), argument.clone(), approvals.clone()];
         let plan = Plan::Stdio {
-            program,
+            program: program.clone(),
             arguments: vec![argument.to_str().unwrap().to_string()],
             variables: Variables::new()
                 .with("KEY_FILE", &key)
                 .with("STATE_FILE", &approvals),
             searched: Vec::new(),
-            reads: vec![key.clone(), argument.clone(), approvals.clone()],
+            reads: reads.clone(),
             directory: Some(work.clone()),
             declared: digested(&["weather-mcp"]),
         };
@@ -3285,7 +3404,8 @@ done
             &mut Vec::new(),
         );
 
-        assert_eq!(notes, Vec::<String>::new());
+        let own = mcp::server_home(&state, &digested(&["weather-mcp"]));
+        assert_eq!(notes, left_out_of(&program, &reads, &work, &own));
         assert_eq!(started.len(), 1);
         let read = |name: &str| std::fs::read_to_string(work.join(name)).expect("what it read");
         assert_eq!(read("key-was"), "the key");
