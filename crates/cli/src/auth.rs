@@ -10,10 +10,11 @@ use crate::progress::printable;
 use bravebot_agent::backend::Backend;
 use bravebot_agent::confirm::Decision;
 use bravebot_agent::home;
-use bravebot_config::bedrock::Bedrock;
+use bravebot_config::bedrock::{Bedrock, Tier};
+use bravebot_config::import::{Destination, Unwritable};
 use bravebot_config::keys::{self, Keys};
 use bravebot_config::provider::Provider;
-use bravebot_config::{Config, env_var};
+use bravebot_config::{Config, ConfigError, Managed, Settings, env_var};
 use bravebot_i18n::t;
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::Path;
@@ -194,7 +195,7 @@ fn held(way: Way) -> Option<String> {
             )
         }),
         Way::Bedrock => {
-            let config = Config::from_env().ok()?;
+            let config = bedrock_config(&Settings::load(), &Managed::load()).ok()?;
             let accounts = accounts(&config, inherited_profile().as_deref());
             (!accounts.is_empty()
                 && accounts
@@ -267,8 +268,19 @@ fn unexpected(way: Way, argument: &str) -> ExitCode {
 ///
 /// The sign-in a session would make before its first turn (BACKEND-9), made now, so the URL and
 /// the code are on a terminal somebody is looking at for that purpose.
+///
+/// Picking this way is the opt-in [`env_var::USE_BEDROCK`] states, so the accounts are the ones
+/// [`bedrock_config`] reads, and it is recorded in the person's own settings file once the account
+/// it turns on is signed in.
 fn bedrock() -> ExitCode {
-    let config = match Config::from_env() {
+    let settings = Settings::load();
+    let managed = Managed::load();
+    let switch = switch(
+        managed.get(env_var::USE_BEDROCK),
+        std::env::var(env_var::USE_BEDROCK).ok().as_deref(),
+        settings.get(env_var::USE_BEDROCK),
+    );
+    let config = match bedrock_config(&settings, &managed) {
         Ok(config) => config,
         Err(problem) => return fail(Ending::Configuration, problem),
     };
@@ -276,16 +288,25 @@ fn bedrock() -> ExitCode {
     if accounts.is_empty() {
         return fail(
             Ending::Configuration,
-            t!(
-                auth_no_aws_account,
-                switch = env_var::USE_BEDROCK,
-                region = env_var::AWS_REGION
-            ),
+            match switch {
+                Switch::PinnedOff => t!(
+                    auth_bedrock_pinned_off,
+                    path = printable(&bravebot_config::managed_file().display().to_string()),
+                    switch = env_var::USE_BEDROCK
+                ),
+                Switch::Off => t!(auth_bedrock_off, switch = env_var::USE_BEDROCK),
+                _ => t!(
+                    auth_no_aws_account,
+                    region = env_var::AWS_REGION,
+                    tiers = listed(Tier::ALL.into_iter().map(Tier::env_var))
+                ),
+            },
         );
     }
     // Every account, past one that fails: each is a session of its own, and a profile that cannot
     // sign in says nothing about the next.
     let mut ending = ExitCode::SUCCESS;
+    let mut switched_on = false;
     for (profile, account) in accounts {
         let signed_in = match Backend::sign_in_to(account, |line| println!("{line}")) {
             Err(failure) => Err(failure.to_string()),
@@ -294,6 +315,14 @@ fn bedrock() -> ExitCode {
             Ok(()) if !Backend::signed_in_to(account) => Err(t!(auth_aws_still_signed_out).into()),
             Ok(()) => Ok(()),
         };
+        if signed_in.is_ok()
+            && config
+                .bedrock
+                .as_ref()
+                .is_some_and(|tier| std::ptr::eq(tier, account))
+        {
+            switched_on = true;
+        }
         let profile = profile.as_deref().map(printable);
         match (signed_in, profile) {
             (Ok(()), Some(profile)) => {
@@ -318,7 +347,144 @@ fn bedrock() -> ExitCode {
             }
         }
     }
+    // An account a provider block names is used without the switch, so only the tier variables'
+    // account signing in is a reason to record it.
+    if !switched_on {
+        return ending;
+    }
+    match switch {
+        Switch::Pinned | Switch::PinnedOff | Switch::Off => {}
+        Switch::Overruled => eprintln!(
+            "{}",
+            t!(auth_bedrock_overruled, switch = env_var::USE_BEDROCK)
+        ),
+        // INCOG-7: a session that leaves nothing behind records nothing either.
+        Switch::Recordable if bravebot_core::incognito::engaged() => eprintln!(
+            "{}",
+            t!(
+                auth_bedrock_not_recorded_incognito,
+                switch = env_var::USE_BEDROCK
+            )
+        ),
+        Switch::Recordable => {
+            if let Err(problem) = record() {
+                ending = fail(
+                    Ending::Failed,
+                    t!(
+                        auth_bedrock_not_recorded,
+                        switch = env_var::USE_BEDROCK,
+                        problem = problem
+                    ),
+                );
+            }
+        }
+    }
     ending
+}
+
+/// The configuration `bravebot auth login bedrock` signs in to: the one a session reads, with
+/// [`env_var::USE_BEDROCK`] on where nothing sets it, so long as that names a model to use.
+///
+/// Without the model the tier variables' account is not one a session could use, and switching it
+/// on would sign in to the default AWS profile for someone whose Bedrock is a provider block.
+fn bedrock_config(settings: &Settings, managed: &Managed) -> Result<Config, ConfigError> {
+    let defaulted = settings.clone().with_env_default(env_var::USE_BEDROCK, "1");
+    match Config::from_env_and_settings(&defaulted, managed) {
+        Ok(config)
+            if config
+                .bedrock
+                .as_ref()
+                .is_some_and(|tier| tier.default_model().is_some()) =>
+        {
+            Ok(config)
+        }
+        _ => Config::from_env_and_settings(settings, managed),
+    }
+}
+
+/// What the configuration already says about [`env_var::USE_BEDROCK`], as far as recording it goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Switch {
+    /// Nothing turns Bedrock off, so the person's own file may record it on.
+    Recordable,
+    /// The machine-level layer turns Bedrock on for every user of this machine.
+    Pinned,
+    /// The machine-level layer turns Bedrock off for every user of this machine.
+    PinnedOff,
+    /// An export turns Bedrock on over a settings file that turns it off, which is left as it says.
+    Overruled,
+    /// An export or a settings file turns Bedrock off, whatever is signed in.
+    Off,
+}
+
+/// [`Switch`] from the three places that may set the name, in the order `Config` ranks them: the
+/// machine-level pin, then the export, then the settings files.
+///
+/// An export of any other value turns Bedrock off, a blank one included: the name is not baked in,
+/// so a blank is not passed over for a value under it. A settings file that turns it on may be a
+/// checkout's, which a session started elsewhere does not read, so it leaves the switch recordable.
+fn switch(pinned: Option<&str>, exported: Option<&str>, recorded: Option<&str>) -> Switch {
+    let on = |value: &str| value.trim() == "1";
+    match (pinned, exported, recorded) {
+        (Some(pin), _, _) if on(pin) => Switch::Pinned,
+        (Some(_), _, _) => Switch::PinnedOff,
+        (None, Some(export), _) if !on(export) => Switch::Off,
+        (None, _, Some(file)) if on(file) => Switch::Recordable,
+        (None, Some(_), Some(_)) => Switch::Overruled,
+        (None, None, Some(_)) => Switch::Off,
+        (None, _, None) => Switch::Recordable,
+    }
+}
+
+/// Set [`env_var::USE_BEDROCK`] to 1 in the person's own settings file, which is what every session
+/// reads and the lowest layer, so a project file that turns Bedrock off still does.
+///
+/// A value the person wrote there is theirs, so the file is written only where it names nothing.
+fn record() -> Result<(), String> {
+    let Some(directory) = home::writable() else {
+        return Err(t!(import_no_home).to_string());
+    };
+    let file = bravebot_config::user_settings_file(&directory);
+    let shown = printable(&file.display().to_string());
+    let mut destination = Destination::open(&file).map_err(|why| unrecordable(why, &file))?;
+    let held = destination.env(env_var::USE_BEDROCK);
+    if held.is_some_and(|held| held.trim() == "1") {
+        return Ok(());
+    }
+    if held.is_none() && destination.holds_env(env_var::USE_BEDROCK) {
+        return Err(t!(auth_bedrock_env_not_a_block, file = shown));
+    }
+    if destination.names_env(env_var::USE_BEDROCK) {
+        eprintln!(
+            "{}",
+            t!(
+                auth_bedrock_left,
+                file = shown,
+                switch = env_var::USE_BEDROCK
+            )
+        );
+        return Ok(());
+    }
+    destination.add_env(env_var::USE_BEDROCK, "1");
+    crate::import::write(&destination, unrecordable)?;
+    println!(
+        "{}",
+        t!(
+            auth_bedrock_recorded,
+            file = shown,
+            switch = env_var::USE_BEDROCK
+        )
+    );
+    Ok(())
+}
+
+fn unrecordable(why: Unwritable, file: &Path) -> String {
+    let file = printable(&file.display().to_string());
+    match why {
+        Unwritable::NotADocument => t!(mcp_settings_not_a_document, path = file),
+        Unwritable::TooLarge => t!(mcp_settings_too_large, path = file),
+        Unwritable::Changed => t!(auth_bedrock_settings_changed, file = file),
+    }
 }
 
 /// The profile an `aws` started with no `--profile` uses: the one `AWS_PROFILE` names, which it
@@ -859,6 +1025,35 @@ mod tests {
                 (None, "us-west-2".to_string())
             ]
         );
+    }
+
+    /// CLI-18: the switch is recordable where nothing ranked above the person's own file turns it
+    /// off, and the place that answers is the one `Config` ranks first: a machine-level pin over an
+    /// export, and an export over a settings file, a blank one included.
+    #[test]
+    fn the_switch_is_recordable_where_nothing_ranked_above_the_persons_file_turns_it_off() {
+        for (pinned, exported, recorded, expected) in [
+            (None, None, None, Switch::Recordable),
+            (None, Some("1"), None, Switch::Recordable),
+            (None, Some(" 1 "), None, Switch::Recordable),
+            (None, None, Some("1"), Switch::Recordable),
+            (None, Some("1"), Some("1"), Switch::Recordable),
+            (Some("1"), None, None, Switch::Pinned),
+            (Some("1"), Some("0"), Some("0"), Switch::Pinned),
+            (None, Some("1"), Some("0"), Switch::Overruled),
+            (None, None, Some("0"), Switch::Off),
+            (None, Some("0"), None, Switch::Off),
+            (None, Some(""), Some("1"), Switch::Off),
+            (None, Some("0"), Some("1"), Switch::Off),
+            (Some("0"), Some("1"), Some("1"), Switch::PinnedOff),
+            (Some("0"), None, None, Switch::PinnedOff),
+        ] {
+            assert_eq!(
+                switch(pinned, exported, recorded),
+                expected,
+                "pinned {pinned:?}, exported {exported:?}, recorded {recorded:?}"
+            );
+        }
     }
 
     /// The gateways two provider blocks configure, and a Bedrock block, which is not one.

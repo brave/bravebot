@@ -1273,6 +1273,16 @@ impl Destination {
         self.root.0.get("env")?.get(name)?.as_str()
     }
 
+    /// Whether `env` has an entry for `name`, whatever its value, or is something other than a
+    /// block.
+    pub fn names_env(&self, name: &str) -> bool {
+        match self.root.0.get("env") {
+            None => false,
+            Some(Value::Object(block)) => block.contains_key(name),
+            Some(_) => true,
+        }
+    }
+
     /// Whether `provider` already has an entry for `id`, or is something other than a block.
     pub fn holds_gateway(&self, id: &str) -> bool {
         match self.root.0.get("provider") {
@@ -2225,6 +2235,8 @@ mod tests {
         let mut destination = Destination::open(&path).expect("a document");
         assert!(!destination.holds_env("AWS_REGION"));
         assert!(destination.holds_env("AWS_PROFILE"));
+        assert!(destination.names_env("AWS_REGION"));
+        assert!(!destination.names_env("AWS_DEFAULT_REGION"));
         assert!(!destination.holds_model());
         destination.add_env("AWS_REGION", "us-west-2");
         destination.add_model("opus");
@@ -2246,6 +2258,13 @@ mod tests {
         assert!(!absent.changed());
         home.write("absent.json", "{}");
         assert!(absent.changed());
+
+        home.write("settings.json", r#"{"env": "AWS_REGION"}"#);
+        let destination = Destination::open(&path).expect("a document");
+        assert!(
+            destination.names_env("AWS_PROFILE"),
+            "an env that is not a block"
+        );
 
         home.write("settings.json", r#"{"env": {"#);
         assert_eq!(

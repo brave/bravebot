@@ -149,7 +149,7 @@ fn at_the_start(a_service_is_configured: bool) -> Start {
     if offered.imported.is_empty() {
         return Start::Refuse(Looked::default());
     }
-    if let Err(problem) = write(&destination) {
+    if let Err(problem) = write(&destination, unwritable) {
         return Start::Ended(fail(Ending::Failed, problem));
     }
     for source in &offered.imported {
@@ -278,7 +278,7 @@ pub(crate) fn providers(args: &[String]) -> ExitCode {
     if offered.imported.is_empty() {
         return ExitCode::SUCCESS;
     }
-    if let Err(problem) = write(&destination) {
+    if let Err(problem) = write(&destination, unwritable) {
         return fail(Ending::Failed, problem);
     }
     for source in &offered.imported {
@@ -754,8 +754,11 @@ fn unset_line(provider: &Provider, file: &Path, later: bool) -> String {
 /// Written beside it under a name of its own at STATE-1's mode, then renamed over it, so a failed
 /// write leaves the old file as it was and no copy of a key is readable by another user in between.
 /// Through a link rather than over it, so a settings file kept among somebody's dotfiles stays
-/// where they keep it.
-fn write(destination: &Destination) -> Result<(), String> {
+/// where they keep it. `unwritable` words a refusal of the document for the command writing it.
+pub(crate) fn write(
+    destination: &Destination,
+    unwritable: fn(import::Unwritable, &Path) -> String,
+) -> Result<(), String> {
     let path = destination.path();
     let said = |problem: String| {
         t!(
@@ -863,7 +866,7 @@ mod tests {
             let mut destination = Destination::open(&scratch.settings()).expect("a document");
             let offered = offer(&mut asking, found, &mut destination, managed, environment);
             if !offered.imported.is_empty() {
-                write(&destination).expect("written");
+                write(&destination, unwritable).expect("written");
             }
             offered
         };
@@ -1199,7 +1202,7 @@ mod tests {
 
         let meanwhile = r#"{"theme": "light"}"#;
         scratch.write(".bravebot/settings.json", meanwhile);
-        let problem = write(&destination).expect_err("written over");
+        let problem = write(&destination, unwritable).expect_err("written over");
 
         assert!(
             problem.contains("changed while the import was asking"),

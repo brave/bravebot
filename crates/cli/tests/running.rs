@@ -3732,7 +3732,7 @@ fn auth_login_in_an_incognito_session_refuses_what_its_command_refuses() {
     );
     let (_, stderr) = said(&output);
     assert_eq!(output.status.code(), Some(3), "{stderr}");
-    assert!(stderr.contains("BRAVEBOT_USE_BEDROCK"), "{stderr}");
+    assert!(stderr.contains("AWS_REGION"), "{stderr}");
 }
 
 /// A stand-in for the AWS CLI on profiles `work` and `lapsed`. `aws sso login` succeeds on both,
@@ -3759,21 +3759,14 @@ esac
 #[cfg(unix)]
 #[test]
 fn auth_login_bedrock_signs_in_to_every_profile_and_names_the_one_that_failed() {
-    use std::os::unix::fs::PermissionsExt;
     let scratch = Scratch::new("cli-running-auth-bedrock").with_settings(
         r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2", "profile": "work"}}}}"#,
     );
-    let bin = scratch.path.join("bin");
-    std::fs::create_dir_all(&bin).expect("create the bin directory");
-    let aws = bin.join("aws");
-    std::fs::write(&aws, AWS_WITH_A_LAPSED_PROFILE).expect("write the stand-in aws");
-    std::fs::set_permissions(&aws, std::fs::Permissions::from_mode(0o755))
-        .expect("make it executable");
-    let path = bin.to_str().expect("a UTF-8 path");
+    let path = aws_stand_in(&scratch);
 
     let mut environment = NOTHING_CONFIGURED.to_vec();
     environment.extend([
-        ("PATH", path),
+        ("PATH", path.as_str()),
         ("BRAVEBOT_USE_BEDROCK", "1"),
         ("AWS_REGION", "us-east-1"),
         ("AWS_PROFILE", "lapsed"),
@@ -3798,6 +3791,254 @@ fn auth_login_bedrock_signs_in_to_every_profile_and_names_the_one_that_failed() 
         stderr.contains("profile lapsed is not signed in"),
         "the failure does not name its profile: {stderr}"
     );
+    // The account the switch turns on did not sign in, and the block's needs no switch.
+    let settings = std::fs::read_to_string(scratch.settings()).expect("the settings file");
+    assert!(
+        !settings.contains("BRAVEBOT_USE_BEDROCK"),
+        "the switch was recorded for an account that failed: {settings}"
+    );
+}
+
+/// Put the stand-in AWS CLI under `scratch`, and return the `PATH` that finds it.
+#[cfg(unix)]
+fn aws_stand_in(scratch: &Scratch) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = scratch.path.join("bin");
+    std::fs::create_dir_all(&bin).expect("create the bin directory");
+    let aws = bin.join("aws");
+    std::fs::write(&aws, AWS_WITH_A_LAPSED_PROFILE).expect("write the stand-in aws");
+    std::fs::set_permissions(&aws, std::fs::Permissions::from_mode(0o755))
+        .expect("make it executable");
+    bin.to_str().expect("a UTF-8 path").to_string()
+}
+
+/// CLI-18: picking Bedrock is the opt-in, so once the account the tier variables name signs in the
+/// switch is recorded in the person's own settings file, beside what it says already, and a session
+/// that does not export it uses the account. Recorded once: a second sign-in writes nothing.
+#[cfg(unix)]
+#[test]
+fn auth_login_bedrock_records_the_opt_in_once_its_account_signs_in() {
+    let scratch =
+        Scratch::new("cli-running-auth-bedrock-records").with_settings(r#"{"model": "opus"}"#);
+    let path = aws_stand_in(&scratch);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([
+        ("PATH", path.as_str()),
+        ("AWS_REGION", "us-east-1"),
+        ("AWS_PROFILE", "work"),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+    ]);
+
+    let output = bravebot(&scratch.path, &environment, &["auth", "login", "bedrock"]);
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stdout}{stderr}");
+    assert!(stdout.contains("profile work is signed in"), "{stdout}");
+    assert!(
+        stdout.contains("sets BRAVEBOT_USE_BEDROCK=1 now"),
+        "the record was not reported: {stdout}"
+    );
+    // What the file says is read back by the `doctor` run below, so this is only what it holds.
+    let recorded = std::fs::read_to_string(scratch.settings()).expect("the settings file");
+    assert!(
+        recorded.contains(r#""BRAVEBOT_USE_BEDROCK": "1""#),
+        "{recorded}"
+    );
+    assert!(
+        recorded.contains(r#""model": "opus""#),
+        "the record lost what the file said: {recorded}"
+    );
+
+    let doctor = bravebot(&scratch.path, &environment, &["doctor"]);
+    let (stdout, stderr) = said(&doctor);
+    assert!(doctor.status.success(), "{stdout}{stderr}");
+    let lines: Vec<&str> = stdout.lines().map(str::trim).collect();
+    let at = lines
+        .iter()
+        .position(|line| *line == "profile   work")
+        .unwrap_or_else(|| panic!("a session without the export has no account: {stdout}"));
+    assert_eq!(
+        lines.get(at + 1).copied(),
+        Some("session   signed in"),
+        "{stdout}"
+    );
+
+    let again = bravebot(&scratch.path, &environment, &["auth", "login", "bedrock"]);
+    let (stdout, stderr) = said(&again);
+    assert!(again.status.success(), "{stdout}{stderr}");
+    assert!(
+        !stdout.contains("BRAVEBOT_USE_BEDROCK") && !stderr.contains("BRAVEBOT_USE_BEDROCK"),
+        "a second sign-in had something to say about the switch: {stdout}{stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.settings()).expect("the settings file"),
+        recorded,
+        "a second sign-in wrote the file"
+    );
+}
+
+/// CLI-18: a checkout's settings turning the switch on are read only in that checkout, so the
+/// person's own file is where it is recorded.
+#[cfg(unix)]
+#[test]
+fn auth_login_bedrock_records_the_opt_in_where_only_a_checkout_turns_it_on() {
+    let scratch = Scratch::new("cli-running-auth-bedrock-checkout")
+        .with_settings(r#"{"model": "opus"}"#)
+        .with_file(
+            "checkout/.bravebot/settings.json",
+            r#"{"env": {"BRAVEBOT_USE_BEDROCK": "1"}}"#,
+        );
+    let path = aws_stand_in(&scratch);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([
+        ("PATH", path.as_str()),
+        ("AWS_REGION", "us-east-1"),
+        ("AWS_PROFILE", "work"),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+    ]);
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path.join("checkout"),
+        &environment,
+        &["auth", "login", "bedrock"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stdout}{stderr}");
+    assert!(stdout.contains("profile work is signed in"), "{stdout}");
+    let recorded = std::fs::read_to_string(scratch.settings()).expect("the settings file");
+    assert!(
+        recorded.contains(r#""BRAVEBOT_USE_BEDROCK": "1""#),
+        "the checkout's switch kept the person's file from recording it: {recorded}"
+    );
+}
+
+/// CLI-18: where no tier variable names a model, the tier variables' account is not one a session
+/// could use, so only a provider block's account is signed in, and nothing is recorded.
+#[cfg(unix)]
+#[test]
+fn auth_login_bedrock_signs_in_only_a_provider_block_where_no_tier_names_a_model() {
+    let block = r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2", "profile": "work"}}}}"#;
+    let scratch = Scratch::new("cli-running-auth-bedrock-block-only").with_settings(block);
+    let path = aws_stand_in(&scratch);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([("PATH", path.as_str()), ("AWS_REGION", "us-east-1")]);
+
+    let output = bravebot(&scratch.path, &environment, &["auth", "login", "bedrock"]);
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stdout}{stderr}");
+    assert!(stdout.contains("profile work is signed in"), "{stdout}");
+    assert!(
+        !stdout.contains("default AWS profile") && !stderr.contains("default AWS profile"),
+        "an account no session uses was signed in to: {stdout}{stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.settings()).expect("the settings file"),
+        block,
+        "the switch was recorded for a provider block"
+    );
+}
+
+/// CLI-18: an incognito session signs in and records nothing, and says the switch is still needed.
+#[cfg(unix)]
+#[test]
+fn auth_login_bedrock_in_an_incognito_session_records_nothing() {
+    let scratch = Scratch::new("cli-running-auth-bedrock-incognito");
+    let path = aws_stand_in(&scratch);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([
+        ("PATH", path.as_str()),
+        ("AWS_REGION", "us-east-1"),
+        ("AWS_PROFILE", "work"),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+    ]);
+
+    let output = bravebot(
+        &scratch.path,
+        &environment,
+        &["--incognito", "auth", "login", "bedrock"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stdout}{stderr}");
+    assert!(stdout.contains("profile work is signed in"), "{stdout}");
+    assert!(
+        stderr.contains("records nothing, so BRAVEBOT_USE_BEDROCK=1 still has to be exported"),
+        "{stderr}"
+    );
+    assert!(
+        !scratch.settings().exists(),
+        "an incognito session wrote settings"
+    );
+}
+
+/// CLI-18: a settings file the switch cannot be added to, that turns Bedrock off under an export
+/// that turns it on, or that names the switch with a value the settings reader does not take, is
+/// left byte for byte as it was, and the sign-in says why. Only a file that cannot be written fails
+/// the command: the others hold the person's own setting.
+#[cfg(unix)]
+#[test]
+fn auth_login_bedrock_leaves_a_settings_file_it_cannot_record_in_as_it_is() {
+    for (name, contents, exported, status, said_why) in [
+        (
+            "not-a-document",
+            "not a settings document",
+            None,
+            1,
+            "does not hold a settings document",
+        ),
+        ("env-not-a-block", r#"{"env": "x"}"#, None, 1, "env in "),
+        (
+            "off-under-an-export",
+            r#"{"env": {"BRAVEBOT_USE_BEDROCK": "0"}}"#,
+            Some("1"),
+            0,
+            "a settings file sets BRAVEBOT_USE_BEDROCK to something other than 1",
+        ),
+        (
+            "not-a-string",
+            r#"{"env": {"BRAVEBOT_USE_BEDROCK": 0}}"#,
+            None,
+            0,
+            "already names BRAVEBOT_USE_BEDROCK, so it was left as it is",
+        ),
+    ] {
+        let scratch =
+            Scratch::new(&format!("cli-running-auth-bedrock-{name}")).with_settings(contents);
+        let path = aws_stand_in(&scratch);
+        let mut environment = NOTHING_CONFIGURED.to_vec();
+        environment.extend([
+            ("PATH", path.as_str()),
+            ("AWS_REGION", "us-east-1"),
+            ("AWS_PROFILE", "work"),
+            ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+        ]);
+        environment.extend(exported.map(|value| ("BRAVEBOT_USE_BEDROCK", value)));
+
+        let output = bravebot(&scratch.path, &environment, &["auth", "login", "bedrock"]);
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(
+            output.status.code(),
+            Some(status),
+            "{name}: {stdout}{stderr}"
+        );
+        assert!(
+            stdout.contains("profile work is signed in"),
+            "{name}: {stdout}"
+        );
+        assert!(stderr.contains(said_why), "{name}: {stderr}");
+        assert!(
+            !stdout.contains("BRAVEBOT_USE_BEDROCK=1 now"),
+            "{name} reported a record: {stdout}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.settings()).expect("the settings file"),
+            contents,
+            "{name} was rewritten"
+        );
+    }
 }
 
 /// CLI-7: `doctor` says of each AWS account whether the AWS CLI gives its profile a credential, and
@@ -3944,7 +4185,9 @@ fn auth_logout_leo_forgets_the_import_in_an_incognito_session() {
 }
 
 /// CLI-18: the Bedrock way signs in to an account the configuration names, so where it names none
-/// it is a configuration failure that says what to set, and no AWS command is run.
+/// it is a configuration failure that says what to set, and no AWS command is run. The switch is not
+/// among what to set, since picking the way is the opt-in, unless a file or an export sets it to
+/// something that turns Bedrock off.
 #[test]
 fn auth_login_bedrock_is_refused_where_no_aws_account_is_configured() {
     let scratch = Scratch::new("cli-running-auth-no-aws");
@@ -3959,7 +4202,25 @@ fn auth_login_bedrock_is_refused_where_no_aws_account_is_configured() {
     assert_eq!(output.status.code(), Some(3), "{stderr}");
     assert!(stdout.is_empty(), "{stdout}");
     assert!(
-        stderr.contains("BRAVEBOT_USE_BEDROCK") && stderr.contains("AWS_REGION"),
+        stderr.contains("AWS_REGION")
+            && stderr.contains("ANTHROPIC_DEFAULT_OPUS_MODEL")
+            && !stderr.contains("BRAVEBOT_USE_BEDROCK"),
+        "{stderr}"
+    );
+
+    let scratch = Scratch::new("cli-running-auth-bedrock-off")
+        .with_settings(r#"{"env": {"BRAVEBOT_USE_BEDROCK": "0", "AWS_REGION": "us-east-1"}}"#);
+    let output = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["auth", "login", "bedrock"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("BRAVEBOT_USE_BEDROCK is set to something other than 1"),
         "{stderr}"
     );
 }

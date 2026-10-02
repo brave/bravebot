@@ -381,7 +381,7 @@ which to run. It needs a terminal for that. A script names the way instead:
 | Way | What it runs |
 |---|---|
 | `leo [channel]` | what `import-leo-creds [channel]` runs |
-| `bedrock` | the AWS sign-in a session would make on its first turn, for every account the configuration names |
+| `bedrock` | the AWS sign-in a session would make on its first turn, for every account the configuration names, then sets `BRAVEBOT_USE_BEDROCK` to `1` in `~/.bravebot/settings.json` once the `AWS_PROFILE` account signs in, unless that file names it, something turns Bedrock off, or the session is incognito |
 | `import` | what `import-providers` runs |
 | `gateway [id]` | asks for the key of a gateway a provider block names, with nothing shown as it is typed, and keeps it in `~/.bravebot/gateway-keys.json` |
 

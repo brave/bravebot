@@ -852,9 +852,23 @@ writes where `import-providers` does. The Bedrock way signs in once per AWS prof
 account the tier variables name, then each `amazon-bedrock` provider block. An account naming no
 profile is on the one `AWS_PROFILE` names, which the `aws` it starts inherits. Every account is
 tried, past one that fails. One is reported signed in only where its credentials can be exported
-after the sign-in. One that cannot is named, and the command exits with the failure status. Where
-the configuration names no account, it exits with the configuration status and names
-`BRAVEBOT_USE_BEDROCK` and `AWS_REGION`.
+after the sign-in. One that cannot is named, and the command exits with the failure status.
+
+Picking the Bedrock way is the opt-in `BRAVEBOT_USE_BEDROCK=1` states. Where nothing sets the name,
+the accounts are the ones the configuration names with it set, if a tier variable then names a
+model, and the ones it names as it is otherwise. Once the tier variables' account signs in, the
+command adds `"BRAVEBOT_USE_BEDROCK": "1"` to the `env` block of the person's own `settings.json`,
+keeping what the file says, and says it did. Nothing is written where the machine-level layer sets
+the name, where an export or a settings file sets it to something other than 1, where the person's
+own file names it already, or where only a provider block's account signed in. A checkout's file
+setting it to 1 does not stop the record. Where an export sets it to 1 over a settings file that sets
+something else, the file is left as it is, and the command says a session uses Bedrock only with the
+export. Where the person's own file names it with a value other than 1, the command says it left the
+file as it is. Where the switch cannot be recorded, the command exits with the failure status: there
+is no home directory, the file holds no settings document, or its `env` is not a block. Where the
+configuration names no account, it exits with the configuration status and names `AWS_REGION` and
+the tier variables. Where the name is set to something other than 1, it says that turns Bedrock off
+instead, and names the machine-level file where that file is what sets it.
 
 `bravebot auth login gateway [id]` stores a key for the gateway whose provider block has that id.
 Bedrock blocks are not gateways here. With no id, one configured gateway is used, and several are
@@ -880,7 +894,8 @@ directory, created 0600 on Unix and granted to this account alone on Windows, be
 flushed to disk and renamed over it. The command names the host the key is sent to.
 
 In an incognito session the Leo and import ways are refused by the checks `import-leo-creds` and
-`import-providers` make, with their words. The Bedrock way is not refused.
+`import-providers` make, with their words. The Bedrock way is not refused. It records nothing, and
+says `BRAVEBOT_USE_BEDROCK=1` still has to be exported.
 `bravebot auth logout leo` forgets the stored subscription, as `import-leo-creds --forget` does, and
 is allowed in an incognito session. `bravebot auth logout gateway [id]` forgets the key stored for
 that id, or the only one stored where none is named, and is allowed in an incognito session too.
@@ -923,18 +938,34 @@ account on the same profile would check the same session again and report it twi
 made again after `aws sso login`, because that command can finish for a profile whose credentials
 still cannot be exported, and the export is what a turn signs with.
 
+Picking Bedrock is read as the opt-in because an account signed in to that no session then uses is a
+sign-in that did nothing. The switch names a destination, which a settings file may name
+([BACKEND-1](backends.md#BACKEND-1)), and `import-providers` writes the same entry for an account it
+imports ([IMPORT-3](import.md#IMPORT-3)). It goes in the person's own file, the lowest layer, so a
+checkout's file or the machine-level layer that turns Bedrock off still does. A checkout's file
+turning it on is read only in that checkout, so it is no record. The switch is read as on only where
+a tier variable names a model: without one the tier variables' account is not one a session could
+use, and an `AWS_REGION` exported for a provider block would bring a sign-in to the default AWS
+profile nobody asked for. It is written only once the tier variables' account signs in. A provider
+block's account needs no switch, and a switch written for an account that failed would turn on a
+backend that cannot sign. A value a file already holds is never changed: a file turning Bedrock off
+is somebody's decision, and an export over it is for that shell.
+
 **Known costs.** A stored gateway key is read when the program starts, so a session already running
 does not send one stored after it began. The key is held in a file the account can read, not in the
 platform's keychain, which a later change can move it to. Two sign-ins storing keys at the same time
-can lose one, since each rewrites the file. The Bedrock way does not record the opt-in, so `BRAVEBOT_USE_BEDROCK=1` must still be set
-for a session to use the account. The list asks the AWS CLI about each account before it is
-shown, which takes most of a second per account whose session has not been checked yet.
+can lose one, since each rewrites the file. The Bedrock way records the switch and not `AWS_REGION`
+or `AWS_PROFILE`, so a region exported only for the sign-in has to be exported for a session too.
+The list asks the AWS CLI about each account before it is shown, which takes most of a second per
+account whose session has not been checked yet.
 
 `verified-by: bravebot_cli::auth::every_way_is_listed_and_only_a_held_one_says_what_it_holds`
 `verified-by: bravebot_cli::auth::a_way_is_picked_by_its_number_or_its_name`
 `verified-by: bravebot_cli::auth::leo_is_asked_which_channel_and_passes_the_word_on`
 `verified-by: bravebot_cli::auth::a_held_leo_sign_in_is_repeated_only_when_asked_to`
 `verified-by: bravebot_cli::auth::each_aws_profile_is_signed_in_to_once`
+`verified-by: bravebot_cli::auth::the_switch_is_recordable_where_nothing_ranked_above_the_persons_file_turns_it_off`
+`verified-by: bravebot_config::settings::a_default_answers_only_where_no_layer_names_it`
 `verified-by: bravebot_cli::auth::a_gateway_is_picked_by_its_number_or_its_id`
 `verified-by: bravebot_cli::auth::one_gateway_or_a_named_one_is_not_asked_about`
 `verified-by: bravebot_cli::auth::a_stored_key_is_replaced_only_when_asked_to`
@@ -959,6 +990,11 @@ shown, which takes most of a second per account whose session has not been check
 `verified-by: bravebot_cli::running::auth_logout_leo_forgets_the_import_in_an_incognito_session`
 `verified-by: bravebot_cli::running::auth_login_bedrock_is_refused_where_no_aws_account_is_configured`
 `verified-by: bravebot_cli::running::auth_login_bedrock_signs_in_to_every_profile_and_names_the_one_that_failed`
+`verified-by: bravebot_cli::running::auth_login_bedrock_records_the_opt_in_once_its_account_signs_in`
+`verified-by: bravebot_cli::running::auth_login_bedrock_records_the_opt_in_where_only_a_checkout_turns_it_on`
+`verified-by: bravebot_cli::running::auth_login_bedrock_signs_in_only_a_provider_block_where_no_tier_names_a_model`
+`verified-by: bravebot_cli::running::auth_login_bedrock_in_an_incognito_session_records_nothing`
+`verified-by: bravebot_cli::running::auth_login_bedrock_leaves_a_settings_file_it_cannot_record_in_as_it_is`
 `verified-by: bravebot_cli::running::auth_login_import_is_the_import_and_refuses_where_it_does`
 `verified-by: bravebot_cli::running::auth_login_gateway_is_refused_before_a_key_is_asked_for`
 `verified-by: bravebot_cli::running::auth_logout_gateway_forgets_the_key_named_in_an_incognito_session`
