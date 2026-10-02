@@ -327,6 +327,17 @@ pub struct CheckoutInfo {
     /// (CHECKOUT-15).
     worked_in: AtomicBool,
     listed: Arc<Mutex<Vec<PathBuf>>>,
+    written: Mutex<Candidates>,
+}
+
+/// The writes in a checkout, as the driver recorded them (CHECKOUT-13).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Candidates {
+    /// The names a planner typed for files it wrote in the checkout, relative to it.
+    pub named: std::collections::BTreeSet<String>,
+    /// How many writes went through a reference. Only the planner's own count: where they landed
+    /// is a name out of a directory nobody vouched for (WRITE-4), and nothing here compares it.
+    pub referenced: usize,
 }
 
 /// What became of a checkout when its delegate ended (CHECKOUT-15).
@@ -371,6 +382,56 @@ impl CheckoutInfo {
 
     pub fn worked_in(&self) -> bool {
         self.worked_in.load(Ordering::SeqCst)
+    }
+
+    /// Record a write to `typed`, the name a planner gave the file, where it names one inside the
+    /// checkout (CHECKOUT-13).
+    ///
+    /// Placed by its spelling alone. Following a link to where the file landed would record the
+    /// link's target, a name the planner never typed and the repository supplied.
+    pub fn record_typed(&self, typed: &str) {
+        let mut placed = self.path.clone();
+        for component in Path::new(typed).components() {
+            match component {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    placed.pop();
+                }
+                other => placed.push(other),
+            }
+        }
+        let Ok(inside) = placed.strip_prefix(&self.path) else {
+            return;
+        };
+        let relative: Vec<String> = inside
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        if relative.is_empty() {
+            return;
+        }
+        self.mark_worked_in();
+        self.written
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .named
+            .insert(relative.join("/"));
+    }
+
+    /// Record a write a planner made through a reference (CHECKOUT-13).
+    pub fn record_through_a_reference(&self) {
+        self.mark_worked_in();
+        self.written
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .referenced += 1;
+    }
+
+    pub fn candidates(&self) -> Candidates {
+        self.written
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// End the checkout: remove it unless the record shows something was done in it. Its rules go
@@ -2959,8 +3020,21 @@ impl Workspace {
             source: self.clone(),
             worked_in: AtomicBool::new(false),
             listed: self.checkouts.clone(),
+            written: Mutex::default(),
         }));
         Ok(delegate)
+    }
+
+    /// Record a write in the checkout this workspace is, where it is one: by the name the planner
+    /// typed, or as one more write through a reference where it gave none.
+    pub(crate) fn record_write(&self, typed: Option<&str>) {
+        let Some(checkout) = &self.checkout else {
+            return;
+        };
+        match typed {
+            Some(typed) => checkout.record_typed(typed),
+            None => checkout.record_through_a_reference(),
+        }
     }
 
     /// Collect workspace-relative paths of regular files beneath `directory`.

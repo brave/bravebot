@@ -36,8 +36,10 @@ clause says how much of it is built. A spawn can ask for a checkout ([CHECKOUT-1
 the driver makes it ([CHECKOUT-4](#CHECKOUT-4), [CHECKOUT-5](#CHECKOUT-5)), the delegate works in
 it ([CHECKOUT-7](#CHECKOUT-7)), and a checkout nothing was done in is removed
 ([CHECKOUT-15](#CHECKOUT-15)), and a definition can ask for one ([CHECKOUT-2](#CHECKOUT-2)).
-Bringing work back, keeping checkouts across a resume and the commands that list them are not
-built.
+The driver records what was written in a checkout, and beside the report names the paths the
+planner typed and counts the writes made through a reference ([CHECKOUT-13](#CHECKOUT-13),
+[CHECKOUT-18](#CHECKOUT-18)). Bringing work back, keeping checkouts
+across a resume and the commands that list them are not built.
 
 **A checkout is not a sandbox.** It moves where a delegate's file tools reach and where its
 programs start. A program it runs is as unconfined as any other ([sandboxing.md](sandboxing.md)),
@@ -61,8 +63,9 @@ and a rewind puts back what the file tools wrote and nothing a formatter or code
 wrote ([SESSION-19](sessions.md#SESSION-19)).
 
 A spawn can ask for a checkout ([CHECKOUT-1](#CHECKOUT-1)), and so can a definition's `isolation:`
-key ([CHECKOUT-2](#CHECKOUT-2)). Nothing brings a checkout's work back into the
-working directory, and a checkout a delegate wrote in stays where it is until a person removes it.
+key ([CHECKOUT-2](#CHECKOUT-2)). The planner is told the paths the delegate typed for what it wrote in a kept
+checkout ([CHECKOUT-18](#CHECKOUT-18)). Nothing brings that work back into the working directory, and a
+checkout a delegate wrote in stays where it is until a person removes it.
 
 ## Asking for one
 
@@ -511,17 +514,29 @@ checkout declines: it is not routed through the driver's record of the entry.
 
 A checkout's candidate paths are, first, every path the driver recorded a file effect on in it: a
 `write_file`, an `edit_file`, and a redirection a command line wrote through
-([CMDLINE-5](tools/command-line.md#CMDLINE-5)). A planner holding nothing untrusted chose those, so
-they are routing. Second, where a status over the checkout would be answered
+([CMDLINE-5](tools/command-line.md#CMDLINE-5)). A name the planner typed was chosen by a planner
+holding nothing untrusted, so it is routing. A name a `path_ref` gave came out of a directory
+nobody vouched for, and no planner is shown it ([WRITE-4](tools/write-file.md#WRITE-4)), so a
+write through one is counted and its path never named. Second, where a status over the checkout would be answered
 ([GIT-11](tools/read-git.md#GIT-11)), the paths it lists. Where it would not, a file a program
 wrote is not found, and wherever the candidates are given they say the status could not be read.
 
 No path is a candidate for differing from HEAD on a comparison of bytes the driver made. A path a
 deny rule covers is never one.
 
-Nothing builds this yet.
+Half built. The driver records the name the planner typed for each file a `write_file` or an
+`edit_file` wrote in the checkout. It records a redirection's name once the line has ended, where
+the line left a file there and the credential scan did not take it back out. A name is placed by
+its spelling, with `.` and `..` resolved and nothing on disk read, so a link is recorded by its own
+name and not by its target's. A write through a reference is counted. A name outside the checkout,
+in scratch or an added directory, is not recorded. A path a deny rule covered when it was written is
+never recorded, since that write was refused. One a rule added later covers stays recorded, and
+that rule would refuse bringing it back ([CHECKOUT-14](#CHECKOUT-14)). No status is read in a
+checkout, because `read_git` declines there ([CHECKOUT-12](#CHECKOUT-12)), so the candidates always
+say it could not be read.
 
-`verified-by: none`
+`verified-by: bravebot_agent::workspace::a_checkout_records_the_paths_written_in_it`
+`verified-by: bravebot_agent::turn::a_kept_checkout_is_named_with_the_paths_written_in_it`
 
 <a id="CHECKOUT-14"></a>
 ### CHECKOUT-14: a file comes back as a write through the gate, one path at a time
@@ -639,12 +654,16 @@ words where the delegate's checkout is, the commit it holds, and its candidate p
 removed. It is one more item the driver writes beside the report
 ([DELEGATE-9](delegation.md#DELEGATE-9)), and all of it is the driver's record.
 
-Half built. Beside the report the driver says where a kept checkout is and the commit it holds, or
-that it was removed. It names no candidate paths, since nothing finds them
+Built. Beside the report the driver says where a kept checkout is and the commit it holds, the
+same for one that could not be removed, or that it was removed. For a kept one it names each
+candidate path whose name the planner typed, the first twenty and then how many more, counts the
+writes made through a reference, and says the status could not be read
 ([CHECKOUT-13](#CHECKOUT-13)).
 
 `verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory`
 `verified-by: bravebot_agent::turn::a_checkout_nothing_was_done_in_is_removed_when_its_delegate_ends`
+`verified-by: bravebot_agent::turn::a_kept_checkout_is_named_with_the_paths_written_in_it`
+`verified-by: bravebot_agent::delegate::a_kept_checkouts_note_names_twenty_paths_and_counts_the_rest`
 
 <a id="CHECKOUT-19"></a>
 ### CHECKOUT-19: the trail records each checkout made, applied from and removed
@@ -745,8 +764,11 @@ Nothing builds this yet.
   home directory ([CHECKOUT-7](#CHECKOUT-7)).
 - **A killed session that kept nothing leaves `worktrees/<id>/` entries** in the person's `.git`
   ([CHECKOUT-6](#CHECKOUT-6)). `git worktree prune` removes them.
-- **A file a program wrote is not found where a status is not answered.** The driver's record holds
-  only what the file tools and redirections wrote ([CHECKOUT-13](#CHECKOUT-13)).
+- **A file a program wrote is not found where a status is not answered**, and no status is answered
+  in a checkout yet ([CHECKOUT-12](#CHECKOUT-12)). The driver's record holds only what the file
+  tools and redirections wrote ([CHECKOUT-13](#CHECKOUT-13)).
+- **A write through a reference is counted, not named**, so the planner learns that a file it
+  cannot name was written and not which one ([CHECKOUT-13](#CHECKOUT-13)).
 - **No `lsp` in a checkout** ([CHECKOUT-20](#CHECKOUT-20)).
 - **Nothing brings a checkout's work back yet** ([CHECKOUT-14](#CHECKOUT-14)), and a kept checkout
   stays until a person removes it ([CHECKOUT-15](#CHECKOUT-15)).

@@ -4111,6 +4111,7 @@ fn write_file<S: Sink, C: Confirmer>(
 
     match workspace.write_endorsed_at_revision(policy, &path, &body, Some(approved_revision)) {
         Ok(_) => {
+            workspace.record_write((destination == Destination::Named).then_some(&shown_path));
             let Reviewed { note, changes, .. } = reviewed;
 
             // What the model is told, which is what its own account of the turn will repeat. It
@@ -4327,6 +4328,7 @@ fn edit_file<S: Sink, C: Confirmer>(
     // on a promoted value would be routed by the model's own proposal.
     match workspace.write_endorsed_if_unchanged(policy, &proposed, &body, &current) {
         Ok(_) => {
+            workspace.record_write((destination == Destination::Named).then_some(&shown_path));
             let Reviewed { note, changes, .. } = reviewed;
             let note = carried_note(note, &scanned);
             let headline = format!("edited {shown_path}: {occurrences} replacement(s)");
@@ -6119,6 +6121,16 @@ fn run<S: Sink, C: Confirmer>(
     }
     for destination in &standing {
         crate::memory::after_write(policy, tools.workspace.memories(), &destination.key, folds);
+        // The line is the planner's own words, so the name in it is one it typed. Recorded only
+        // where the line left a file, so a destination it failed to open, or one the scan took
+        // back out, is not reported as written.
+        let refused = left
+            .refused_at
+            .iter()
+            .any(|refused| refused.key == destination.key);
+        if !refused && std::fs::symlink_metadata(&destination.resolved).is_ok() {
+            tools.workspace.record_write(Some(&destination.shown));
+        }
     }
     if !left.scanned.refused().is_empty() {
         return credential_refusal_after_a_line(&displayed, &left, &stuck);

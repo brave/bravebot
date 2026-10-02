@@ -6483,6 +6483,74 @@ fn a_checkout_is_removed_unless_something_was_done_in_it() {
     );
 }
 
+/// CHECKOUT-13. A checkout's candidates are the names a planner typed for files it wrote inside it,
+/// placed by their spelling, and a count of the writes it made through a reference. A name outside
+/// the checkout is not recorded, and a link is recorded by its own name and not its target's.
+#[test]
+fn a_checkout_records_the_paths_written_in_it() {
+    use bravebot_agent::workspace::Candidates;
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-candidates", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace.checkout_for(&policy, &state.path).expect("made");
+    let idle = workspace.checkout_for(&policy, &state.path).expect("idle");
+    let info = made.checkout().unwrap();
+    assert_eq!(info.candidates(), Candidates::default());
+
+    info.record_typed("src/new.rs");
+    assert!(
+        info.worked_in(),
+        "a write by a typed name did not keep the checkout"
+    );
+    info.record_typed("./README");
+    info.record_typed("README");
+    info.record_typed("notes/../README");
+    info.record_typed(&info.path().join("docs/whole.md").to_string_lossy());
+    info.record_through_a_reference();
+    info.record_through_a_reference();
+
+    assert!(info.worked_in());
+    let named: std::collections::BTreeSet<String> = ["README", "docs/whole.md", "src/new.rs"]
+        .map(String::from)
+        .into();
+    assert_eq!(
+        info.candidates(),
+        Candidates {
+            named,
+            referenced: 2,
+        }
+    );
+
+    #[cfg(unix)]
+    {
+        let root = info.path();
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::fs::create_dir_all(root.join("vendor")).unwrap();
+        std::fs::write(root.join("vendor/HIDDEN.js"), "theirs").unwrap();
+        std::os::unix::fs::symlink("../vendor/HIDDEN.js", root.join("docs/link")).unwrap();
+        info.record_typed("docs/link");
+        let named = info.candidates().named;
+        assert!(
+            named.contains("docs/link"),
+            "the link was not recorded: {named:?}"
+        );
+        assert!(
+            !named.iter().any(|name| name.contains("HIDDEN")),
+            "the link's target was recorded: {named:?}"
+        );
+    }
+
+    let idle = idle.checkout().unwrap();
+    idle.record_typed(&workspace.root().join("README").to_string_lossy());
+    idle.record_typed(&state.path.join("elsewhere.txt").to_string_lossy());
+    idle.record_typed(&info.path().join("README").to_string_lossy());
+    idle.record_typed("../README");
+    idle.record_typed(".");
+    assert!(!idle.worked_in(), "a write outside the checkout kept it");
+    assert_eq!(idle.candidates(), Candidates::default());
+}
+
 /// CHECKOUT-12. A rule that distrusts a path in a checkout outlives the checkout, and a history
 /// answer that shows the path is labelled by it, kept or removed.
 #[test]

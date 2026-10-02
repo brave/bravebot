@@ -251,6 +251,43 @@ pub(crate) fn checkout_notice(checkout: &crate::workspace::CheckoutInfo) -> Stri
     notice
 }
 
+/// What the driver says of a kept checkout's candidate paths beside the report (CHECKOUT-13,
+/// CHECKOUT-18).
+///
+/// A name is given only where a planner typed it, and past the first few they are counted, so the
+/// note stays short. Writes through a reference are counted. No status is read in a checkout, so
+/// the note says a file a program wrote is not named.
+pub(crate) fn checkout_candidates(candidates: &crate::workspace::Candidates) -> String {
+    const SHOWN: usize = 20;
+    let mut items: Vec<String> = candidates
+        .named
+        .iter()
+        .take(SHOWN)
+        .map(|path| format!("`{path}`"))
+        .collect();
+    let unnamed = candidates.named.len() - items.len();
+    if unnamed > 0 {
+        items.push(format!("{unnamed} more"));
+    }
+    let items: Vec<&str> = items.iter().map(String::as_str).collect();
+    let mut note = match items.is_empty() {
+        true => "The driver recorded no write there by a name the delegate typed.".to_string(),
+        false => format!("The driver recorded writes there to {}.", listed(&items)),
+    };
+    if candidates.referenced > 0 {
+        note.push_str(&format!(
+            " It also recorded {} through a reference, and does not name the file a reference \
+             holds.",
+            crate::tools::tally(candidates.referenced, "write", "writes")
+        ));
+    }
+    note.push_str(
+        " The checkout's status could not be read, so a file a program wrote there other than by a \
+         redirection is not named.",
+    );
+    note
+}
+
 /// The whole of what a delegate is told.
 ///
 /// Its own introduction, including whether it sits where it may delegate again, then the
@@ -930,5 +967,34 @@ mod tests {
                 "a {name} with an empty body was told something a blank line wrote"
             );
         }
+    }
+
+    /// CHECKOUT-18. Past twenty names the rest are counted, a checkout written only through a
+    /// reference says no typed name was recorded, and a count of none says nothing about references.
+    #[test]
+    fn a_kept_checkouts_note_names_twenty_paths_and_counts_the_rest() {
+        use crate::workspace::Candidates;
+        let many = Candidates {
+            named: (0..23).map(|n| format!("f{n:02}.rs")).collect(),
+            referenced: 0,
+        };
+        let note = checkout_candidates(&many);
+        assert!(note.contains("`f19.rs` and 3 more."), "{note}");
+        assert!(!note.contains("f20.rs"), "{note}");
+        assert!(!note.contains("reference"), "{note}");
+
+        let referenced = Candidates {
+            referenced: 2,
+            ..Candidates::default()
+        };
+        let note = checkout_candidates(&referenced);
+        assert!(
+            note.starts_with(
+                "The driver recorded no write there by a name the delegate typed. It also \
+                 recorded 2 writes through a reference"
+            ),
+            "{note}"
+        );
+        assert!(note.ends_with("is not named."), "{note}");
     }
 }
