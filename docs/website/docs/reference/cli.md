@@ -19,7 +19,7 @@ Usage:
   bravebot --fork <id>                   Fork a session and start exploring a different path
   bravebot doctor                        Check configuration and confinement
   bravebot auth login [way]              Sign in to a model service, listing every way when none is named
-  bravebot auth logout leo               Forget an imported Leo Premium subscription
+  bravebot auth logout <way>             Forget an imported Leo Premium subscription or a stored gateway key
   bravebot import-leo-creds [channel]    Import a Leo Premium subscription
   bravebot import-providers              Import a model service Claude Code or opencode configured
   bravebot mcp <command>                 Declare, list and approve MCP servers
@@ -39,6 +39,7 @@ Usage:
 | `bravebot doctor` | report configuration and confinement, changing nothing |
 | `bravebot auth login [way]` | sign in to a model service, listing the ways when none is named ([below](#auth)) |
 | `bravebot auth logout leo` | forget an imported Leo Premium subscription |
+| `bravebot auth logout gateway [id]` | forget a gateway key `auth login gateway` stored |
 | `bravebot import-leo-creds [channel]` | import a Leo Premium subscription |
 | `bravebot import-providers` | import a model service Claude Code or opencode configured, asking first |
 | `bravebot mcp <command>` | declare, list, approve and remove MCP servers ([below](#mcp)) |
@@ -369,8 +370,9 @@ what was already true.
 ## `auth`
 
 ```sh
-bravebot auth login [leo [channel] | bedrock | import]
+bravebot auth login [leo [channel] | bedrock | import | gateway [id]]
 bravebot auth logout leo
+bravebot auth logout gateway [id]
 ```
 
 With no way named, `auth login` lists the ways to sign in, marks the ones already in use, and asks
@@ -381,9 +383,14 @@ which to run. It needs a terminal for that. A script names the way instead:
 | `leo [channel]` | what `import-leo-creds [channel]` runs |
 | `bedrock` | the AWS sign-in a session would make on its first turn, for every account the configuration names |
 | `import` | what `import-providers` runs |
+| `gateway [id]` | asks for the key of a gateway a provider block names, with nothing shown as it is typed, and keeps it in `~/.bravebot/gateway-keys.json` |
 
-`auth logout leo` runs `import-leo-creds --forget`. In an incognito session the `leo` and `import`
-ways are refused as their commands are, and `bedrock` and `auth logout leo` are allowed. See
+`gateway` needs a terminal even with the id named, since the key is typed rather than given as an
+argument. With one gateway configured it asks for no id.
+
+`auth logout leo` runs `import-leo-creds --forget`. `auth logout gateway [id]` forgets a stored key,
+and the id can be left off when only one is stored. In an incognito session the `leo`, `import` and
+`gateway` ways are refused, and `bedrock` and both forms of `auth logout` are allowed. See
 [Signing in](../customize/signing-in.md).
 
 ## `import-leo-creds`

@@ -8,6 +8,8 @@ governs:
   - crates/cli/src/exit.rs
   - crates/cli/src/json.rs
   - crates/cli/src/plain.rs
+  - crates/config/src/keys.rs
+  - crates/tui/src/hidden.rs
 documented-by:
   - docs/website/docs/reference/cli.md
   - docs/website/docs/customize/signing-in.md
@@ -828,10 +830,11 @@ each by a number and by the word that names it:
 - `leo` imports a Brave Leo Premium subscription, as `import-leo-creds` does.
 - `bedrock` signs in to every AWS account the configuration names for Amazon Bedrock.
 - `import` reads model services out of other tools, as `import-providers` does.
+- `gateway` stores a key for a gateway a provider block names.
 
 A way that already holds a sign-in says so on its line. For Leo that is the line `doctor` prints
 for the stored subscription. For Bedrock it is shown where every account named has a usable
-session. The credential itself is never printed.
+session. For a gateway it is the ids keys are stored for. The credential itself is never printed.
 
 The answer is a number or a name, in any case. If nothing is typed, or the input ends, the command exits
 successfully having run nothing. An answer that names no listed way is refused with the argument
@@ -853,11 +856,39 @@ after the sign-in. One that cannot is named, and the command exits with the fail
 the configuration names no account, it exits with the configuration status and names
 `BRAVEBOT_USE_BEDROCK` and `AWS_REGION`.
 
+`bravebot auth login gateway [id]` stores a key for the gateway whose provider block has that id.
+Bedrock blocks are not gateways here. With no id, one configured gateway is used, and several are
+listed with the host each sends to, to be picked by number or id. Everything that needs no answer is
+checked before the key is asked for, and each refusal writes nothing:
+
+- an incognito session, with the failure status;
+- no gateway configured, with the configuration status;
+- an id no block has, naming the ids that are configured and not the word given, with the argument
+  status;
+- no terminal on stdin and on stderr, with the argument status;
+- a file of keys that cannot be read, which is left as it is, with the failure status.
+
+A word after the id is refused with the argument status and is not repeated, and an option is named
+without what follows its `=`, since either is most likely the key
+([CRED-24](credential-protection.md#CRED-24)). A key already stored for the gateway is replaced only
+on a yes. Before the key is asked for, the command names a variable in the block's `env` that is
+set, since that is sent instead ([BACKEND-16](backends.md#BACKEND-16)). The key is typed with
+nothing drawn: Enter takes it, and Escape, Ctrl-C, Ctrl-D or Enter on nothing stores nothing and
+exits successfully. The file is read again once the key is typed, so a key another command forgot
+while this one waited is not written back. It is written to `gateway-keys.json` in the state
+directory, created 0600 on Unix and granted to this account alone on Windows, beside the file,
+flushed to disk and renamed over it. The command names the host the key is sent to.
+
 In an incognito session the Leo and import ways are refused by the checks `import-leo-creds` and
 `import-providers` make, with their words. The Bedrock way is not refused.
 `bravebot auth logout leo` forgets the stored subscription, as `import-leo-creds --forget` does, and
-is allowed in an incognito session. `auth logout bedrock` and `auth logout import` are refused and
-say what to run instead, since neither way keeps a credential of its own.
+is allowed in an incognito session. `bravebot auth logout gateway [id]` forgets the key stored for
+that id, or the only one stored where none is named, and is allowed in an incognito session too.
+With several stored and none named, or an id with none stored, it is refused with the argument
+status and names the ids that hold one. The file is removed with its last key. It says the key still
+works at the host its block names until it is revoked there. `auth logout bedrock` and
+`auth logout import` are refused and say what to run instead, since neither way keeps a credential
+of its own.
 
 **Why.** Each service had its own route: two commands, an environment variable, and a session that
 signs in to AWS on its first turn. Nobody who had not read the documentation could find them, and
@@ -871,9 +902,17 @@ passes through it.
 
 A held Leo sign-in is confirmed before it is repeated because a second import registers this
 machine with Brave as one more device. A repeated Bedrock sign-in leaves a good session alone, and
-a repeated import says when it has nothing new, so neither is asked about.
+a repeated import says when it has nothing new, so neither is asked about. A stored gateway key is
+confirmed before it is replaced, because the file is rewritten and nothing else holds the old one.
 
-Leo and the import are refused in an incognito session for the reason in
+A gateway key is kept out of `settings.json` because a settings file is one people paste into issues
+and copy between machines, and the program rewrites it for reasons that have nothing to do with a
+credential. It is typed rather than passed as an argument because an argument is readable by other
+programs on the machine and kept in the shell's history. The file holds an id and a key and no host,
+so the block decides where the key goes, and a file of keys that will not parse is refused rather
+than read as empty, because the next write would make it empty.
+
+Leo, the import and the gateway key are refused in an incognito session for the reason in
 [INCOG-7](incognito.md#INCOG-7): each writes to the directory this program owns. The AWS session is
 the AWS CLI's, a subprocess [INCOG-8](incognito.md#INCOG-8) leaves outside the mode, and a session
 in that mode signs in to it on its first turn, so refusing it here would refuse nothing the session
@@ -884,9 +923,10 @@ account on the same profile would check the same session again and report it twi
 made again after `aws sso login`, because that command can finish for a profile whose credentials
 still cannot be exported, and the export is what a turn signs with.
 
-**Known costs.** A gateway API key still has no way here. It is set in the environment or a settings
-file ([BACKEND-16](backends.md#BACKEND-16)), because storing one needs a store this program does not
-have yet. The Bedrock way does not record the opt-in, so `BRAVEBOT_USE_BEDROCK=1` must still be set
+**Known costs.** A stored gateway key is read when the program starts, so a session already running
+does not send one stored after it began. The key is held in a file the account can read, not in the
+platform's keychain, which a later change can move it to. Two sign-ins storing keys at the same time
+can lose one, since each rewrites the file. The Bedrock way does not record the opt-in, so `BRAVEBOT_USE_BEDROCK=1` must still be set
 for a session to use the account. The list asks the AWS CLI about each account before it is
 shown, which takes most of a second per account whose session has not been checked yet.
 
@@ -895,6 +935,23 @@ shown, which takes most of a second per account whose session has not been check
 `verified-by: bravebot_cli::auth::leo_is_asked_which_channel_and_passes_the_word_on`
 `verified-by: bravebot_cli::auth::a_held_leo_sign_in_is_repeated_only_when_asked_to`
 `verified-by: bravebot_cli::auth::each_aws_profile_is_signed_in_to_once`
+`verified-by: bravebot_cli::auth::a_gateway_is_picked_by_its_number_or_its_id`
+`verified-by: bravebot_cli::auth::one_gateway_or_a_named_one_is_not_asked_about`
+`verified-by: bravebot_cli::auth::a_stored_key_is_replaced_only_when_asked_to`
+`verified-by: bravebot_cli::auth::the_key_forgotten_is_the_one_named_or_the_only_one`
+`verified-by: bravebot_cli::auth::a_set_variable_is_named_as_the_one_sent_instead`
+`verified-by: bravebot_cli::auth::stored_keys_are_written_private_and_read_back`
+`verified-by: bravebot_cli::auth::the_padding_counts_an_id_in_characters`
+`verified-by: bravebot_config::keys::a_stored_key_is_read_back_under_its_id`
+`verified-by: bravebot_config::keys::a_file_that_is_not_one_of_keys_is_refused`
+`verified-by: bravebot_config::keys::no_file_is_no_keys`
+`verified-by: bravebot_config::keys::a_key_json_escapes_is_read_back_unchanged`
+`verified-by: bravebot_tui::hidden::enter_takes_what_was_typed_and_backspace_takes_one_off`
+`verified-by: bravebot_tui::hidden::escape_and_control_c_stop_without_a_key`
+`verified-by: bravebot_tui::hidden::a_release_and_a_control_letter_type_nothing`
+`verified-by: bravebot_tui::hidden::control_u_starts_the_key_again`
+`verified-by: bravebot_tui::hidden::a_character_typed_with_altgr_is_part_of_the_key`
+`verified-by: bravebot_tui::hidden::a_key_longer_than_the_room_made_for_it_is_kept_whole`
 `verified-by: bravebot_cli::main::a_definition_is_refused_where_nothing_would_work_under_it`
 `verified-by: bravebot_cli::running::auth_login_naming_no_way_is_refused_where_nobody_can_pick_one`
 `verified-by: bravebot_cli::running::auth_refuses_what_names_no_way_to_sign_in`
@@ -903,3 +960,5 @@ shown, which takes most of a second per account whose session has not been check
 `verified-by: bravebot_cli::running::auth_login_bedrock_is_refused_where_no_aws_account_is_configured`
 `verified-by: bravebot_cli::running::auth_login_bedrock_signs_in_to_every_profile_and_names_the_one_that_failed`
 `verified-by: bravebot_cli::running::auth_login_import_is_the_import_and_refuses_where_it_does`
+`verified-by: bravebot_cli::running::auth_login_gateway_is_refused_before_a_key_is_asked_for`
+`verified-by: bravebot_cli::running::auth_logout_gateway_forgets_the_key_named_in_an_incognito_session`

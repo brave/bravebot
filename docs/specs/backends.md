@@ -423,25 +423,36 @@ the model or the messages a turn built would be deciding what was asked rather t
 ### BACKEND-16: a gateway credential is named rather than resolved ahead of time
 
 Where a gateway's credential lives is named by its block: variables that may hold it, or a value
-written in the file. It is read at the point a request needs it, and a request whose block named a
-credential that nothing holds is refused with the remedy named rather than sent.
+written in the file. A key `bravebot auth login gateway` stored for the block's id is a third place,
+kept in a file of its own rather than in settings ([CLI-18](cli.md#CLI-18)). A variable is read
+first, then the stored key, then the value in the file. It is read at the point a request needs it,
+and a request whose block named a credential that nothing holds is refused with the remedy named
+rather than sent.
 
 **Why.** Read once at startup, a credential goes stale in a session where somebody exported a new
 one. Sent without one, the request fails at the far end for a reason nothing local could explain,
 which is the same argument that stops a model name being guessed for an unconfigured tier. Naming a
 variable is also the only way to keep a long-lived token out of a file people paste into issues,
 which is why it is preferred where the block offers both and why a value in the file never displaces
-one a variable holds.
+one a variable holds. A stored key is out of the settings file too, so it comes before the value in
+it. A variable still comes first, because one exported for a single session is the more specific
+thing somebody said.
+
+**The stored key is read when the program starts**, not at each request, so a key stored while a
+session is running is sent by the sessions started after it. The key is only stored, and never
+named by the block, so a key stored for an id no block names configures nothing, and the managed
+layer's gateways ([BACKEND-38](#BACKEND-38)) take one as a person's own do.
 
 **An entry naming AWS is the exception**, and not a token kept somewhere else: Bedrock takes a
 signature over the request, so there is no credential for a block to name and none is read from one.
 Which set of AWS credentials to sign with comes from the profile the block names, resolved when a
 request needs it, which is the same moment and the same reason a token is read.
 
-**A block naming no credential is the second exception.** An empty `env` and no `options.apiKey` is
-the person saying this gateway wants none, so its requests carry no `authorization` header and its
-roster is asked for without one. A block that does name somewhere for a credential to live, and finds
-nothing there, is a stale or missing token and is still refused.
+**A block naming no credential is the second exception.** An empty `env`, no `options.apiKey` and no
+key stored for its id is the person saying this gateway wants none, so its requests carry no
+`authorization` header and its roster is asked for without one. A key stored for such a block is
+sent, because storing one is somebody saying the gateway wants one. A block that does name somewhere
+for a credential to live, and finds nothing there, is a stale or missing token and is still refused.
 
 **Why the distinction is where it is.** The reason above holds for the second case and not the first:
 a gateway that wants no credential answers an unauthenticated request, so nothing fails at the far end
@@ -453,6 +464,10 @@ across a LAN or through a reverse proxy. BACKEND-5 is unaffected: such a gateway
 offering its models is not offering rows that fail when picked.
 
 `verified-by: bravebot_config::provider::a_named_variable_holds_the_token_before_the_file_does`
+`verified-by: bravebot_config::provider::a_stored_key_is_read_after_a_variable_and_before_the_file`
+`verified-by: bravebot_config::provider::a_stored_key_is_sent_to_a_block_naming_no_credential`
+`verified-by: bravebot_config::lib::a_stored_key_reaches_the_gateway_its_id_names`
+`verified-by: bravebot_cli::running::a_run_sends_the_key_stored_for_its_gateway`
 `verified-by: bravebot_config::provider::a_token_written_into_the_file_is_still_read`
 `verified-by: bravebot_config::provider::a_provider_with_nothing_holding_a_token_has_none`
 `verified-by: bravebot_config::provider::a_provider_naming_no_credential_needs_none`
@@ -1489,7 +1504,8 @@ reaches or the command a program runs, and a session starts none the lists refus
 from starting and never add one.
 
 No credential is read from this file. A gateway entry's `apiKey` is dropped, and the entry's host,
-models and variable names are honoured without it.
+models and variable names are honoured without it. A key the person stored for the entry's id with
+`bravebot auth login gateway` is sent to it, as a variable it names is.
 
 The `provider` block is pinned whole rather than a name at a time, and a block that is present and
 empty says that there are no gateways. A file that does not have the block, or that spells it as

@@ -33,7 +33,7 @@ cli-usage-doctor = Check configuration and confinement
 cli-usage-import = Import a Leo Premium subscription
 cli-usage-import-providers = Import a model service Claude Code or opencode configured
 cli-usage-auth-login = Sign in to a model service, listing every way when none is named
-cli-usage-auth-logout = Forget an imported Leo Premium subscription
+cli-usage-auth-logout = Forget an imported Leo Premium subscription or a stored gateway key
 cli-usage-mcp = Declare, list and approve MCP servers
 
 cli-keys-heading = Interactive keys:
@@ -243,7 +243,7 @@ doctor-ends-aws-access-key =
 doctor-ends-aws-session =
     a session credential: issued by AWS STS for the profile, and this program asks the AWS CLI for another as it builds each request, so the expiry ends that copy rather than this program's access; ended at its issuer, since `aws sso logout` clears this machine's copy rather than the session behind it, and the next one is minted from whatever the profile chains to, for as long as that lasts
 doctor-ends-gateway-token =
-    a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file or unsetting the variable ends this machine's custody and leaves the token live there
+    a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file, unsetting the variable or running `bravebot auth logout gateway` ends this machine's custody and leaves the token live there
 doctor-ends-subscription-batch =
     an imported subscription's credential batch: minted by Brave's subscription service against the order this install registered as a device on; each credential is spent by one premium request and the batch stops working when its last window closes, and nothing revokes an unspent one, so `bravebot auth logout leo` ends this machine's custody and leaves the batch spendable by whatever copied the file
 # Which tier the gate walk left a credential on, shown under the account of what would end it. One
@@ -304,7 +304,7 @@ doctor-dropped-gateway-token-nothing-decides-each-use =
 doctor-dropped-gateway-token-no-bound-fixed-before-issue =
     gate { $gate }, { $answer }: no bound on what the token may do is fixed before it is issued, since the block names a host and a variable and never an issuer, so there is nothing here to ask for a narrower one
 doctor-dropped-gateway-token-not-minted-for-one-step =
-    gate { $gate }, { $answer }: it is not minted for one step, since the token is whatever the settings file carries or the variable holds, and it is held for the whole run
+    gate { $gate }, { $answer }: it is not minted for one step, since the token is whatever the settings file carries, the variable holds or `bravebot auth login gateway` stored, and it is held for the whole run
 doctor-dropped-subscription-batch-nothing-decides-each-use =
     gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this process presents a credential from the batch itself and nothing is asked to authorise the request
 # Both are reported when both are reachable, so this names one of the two rather than the backend.
@@ -315,8 +315,14 @@ doctor-backend-gateway = { $gateway } (gateway)
 # Whether one was found, never the value: on this path it is a bearer token, and a diagnostic that
 # printed one is a diagnostic people paste into issues.
 doctor-gateway-token = found (never printed)
-doctor-gateway-token-absent = none found (set a variable its `env` names)
+doctor-gateway-token-stored = stored by bravebot auth login gateway (never printed)
+# The id is the provider block's.
+doctor-gateway-token-absent =
+    none found (set a variable its `env` names, or run bravebot auth login gateway { $id })
 doctor-gateway-token-not-needed = none needed (the block names none)
+doctor-gateway-keys = gateway keys
+doctor-gateway-keys-unreadable =
+    { $path } cannot be read, so no key in it is sent (bravebot auth login gateway leaves it as it is)
 doctor-gateway-models-absent = none configured (the gateway is asked what it serves)
 doctor-gateway-models-compiled = { $models } (built in, since this service has no listing; name any other the same way)
 doctor-region = region
@@ -623,12 +629,16 @@ auth-unexpected-argument = { $command } does not take { $argument }
 auth-needs-a-terminal =
     bravebot auth login asks which way to sign in, so it needs a terminal to ask on, or the name of a way
 auth-logout-needs-a-way = bravebot auth logout needs the name of the way to sign out of
-# The heading over the list. Each line under it starts with a number and a word, leo, bedrock or
-# import, which a script types and which are not translated.
+# The heading over the list. Each line under it starts with a number and a word, leo, bedrock,
+# import or gateway, which a script types and which are not translated.
 auth-ways-heading = Ways to sign in to a model service:
 auth-way-leo = Brave Leo Premium, from a Brave install that subscribes
 auth-way-bedrock = An AWS account, for Amazon Bedrock
 auth-way-import = A model service Claude Code, opencode or Ollama has, imported into settings
+auth-way-gateway = A key for a gateway a provider block in settings names, typed here and kept by bravebot
+# The status of the gateway way where keys are stored. The ids are provider ids.
+auth-gateway-held = a key stored for { $ids }
+auth-gateway-held-unreadable = the file of gateway keys cannot be read
 # A way that is already signed in, with what it holds.
 auth-way-held = { $description } ({ $status })
 auth-signed-in = signed in
@@ -656,6 +666,46 @@ auth-logout-bedrock =
     bravebot keeps no AWS session of its own: the AWS CLI keeps it, and aws sso logout ends it
 auth-logout-import =
     an import keeps no credential of its own: it wrote entries to the settings file, and removing them there undoes it
+# The id is the word typed after gateway. The word after it is not repeated, because it is most
+# likely the key.
+auth-gateway-key-argument =
+    a key is never a command-line argument, where other programs can read it and the shell keeps it: run bravebot auth login gateway { $id } and type the key when asked
+auth-gateway-not-while-incognito =
+    an incognito session writes nothing to disk, and storing a key is a write: run bravebot auth login gateway without --incognito
+auth-gateway-none-configured =
+    no gateway is configured: add a provider block to settings.json, or run bravebot auth login import, then store its key here
+auth-gateway-not-configured = that is not the id of a provider block; the gateways configured are { $ids }
+auth-gateway-needs-a-terminal =
+    a gateway key is typed at a terminal with nothing drawn, so bravebot auth login gateway needs a terminal
+auth-gateway-no-home = there is no home directory to store the key in
+auth-gateway-keys-unreadable =
+    { $path } is not a file of keys bravebot wrote, so it was left as it is and nothing was changed
+auth-gateways-heading = Gateways configured:
+# Beside a gateway in the list under auth-gateways-heading.
+auth-gateway-key-stored = a key stored
+auth-which-gateway = Which one? Type its number or its id, or nothing to stop:
+auth-not-a-listed-gateway = { $answer } is not one of the gateways listed
+auth-gateway-key-held = A key is already stored for { $id }.
+auth-gateway-replace = Replace it?
+# Asked with echo off, so nothing appears as the key is typed or pasted.
+auth-gateway-key-question = Key for { $id }, sent to { $host } (not shown as you type):
+auth-gateway-nothing-stored = nothing was stored
+auth-gateway-not-read = the key could not be read from the terminal: { $error }
+auth-gateway-not-stored = the key was not stored: { $path }: { $error }
+auth-gateway-stored =
+    the key for { $id } is stored in { $path }, and sessions started from now on send it to { $host }
+# The variable is one the provider block's env names.
+auth-gateway-variable-wins =
+    { $variable } is set, and while it is, a session sends its value instead of the stored key
+auth-logout-gateway-none = no gateway key is stored
+auth-logout-gateway-which =
+    keys are stored for { $ids }: name the one to forget, as bravebot auth logout gateway <id>
+auth-logout-gateway-not-stored = no key is stored for { $id }; keys are stored for { $ids }
+auth-logout-gateway-not-written = the key was not forgotten: { $path }: { $error }
+auth-logout-gateway-forgotten =
+    the key for { $id } is forgotten here, and still works at { $host } until it is revoked there
+auth-logout-gateway-forgotten-elsewhere =
+    the key for { $id } is forgotten here, and still works at the service that issued it until it is revoked there
 
 
 ## Declaring an MCP server, and approving one

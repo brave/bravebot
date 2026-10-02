@@ -374,8 +374,11 @@ fn prepare_directory(path: &Path) -> Result<(), StoreError> {
 ///
 /// Created 0600 before anything is written to it, rather than written and then chmod'ed: the other
 /// order leaves the secret world-readable for the moment in between.
+///
+/// Public because this is the one crate whose root may name the Win32 calls the Windows version
+/// makes, and the gateway keys `bravebot auth login gateway` stores are a bearer token too.
 #[cfg(unix)]
-fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
+pub fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::fs::PermissionsExt;
 
@@ -398,7 +401,7 @@ fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
 /// for as the file is created rather than set afterwards: the other order leaves the secret readable
 /// by whatever the directory grants for the moment in between. [`dacl_granting_only`] is the list.
 #[cfg(windows)]
-fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
+pub fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
     acl::create_granted_to_this_account_only(path)
 }
 
@@ -429,7 +432,7 @@ fn dacl_granting_only(account: &str) -> String {
 /// Reading stays available: an existing file is no less safe for being read, and a batch imported
 /// elsewhere should still work here.
 #[cfg(not(any(unix, windows)))]
-fn create_private(_path: &Path) -> std::io::Result<std::fs::File> {
+pub fn create_private(_path: &Path) -> std::io::Result<std::fs::File> {
     Err(std::io::Error::other(
         "this platform has no way to restrict the file to your account, and the credentials are a \
          bearer token, so they were not written",
