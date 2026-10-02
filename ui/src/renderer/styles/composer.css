@@ -297,6 +297,16 @@ button.fresh-project:hover { color: var(--ink-accent); }
 button.fresh-project:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
 button.fresh-project:disabled { cursor: default; color: inherit; }
 .fresh-greeting .project-menu.title { display: inline-block; vertical-align: baseline; }
+/* Leo sizes the list to the room inside the scrolling area, which ends at the composer, and flips
+   it above the heading into less. Opened below, it is sized by what it holds. */
+.project-menu.title { --leo-menu-max-height: min(400px, 70vh); }
+/* The scroller contains layout, which makes it the containing block of a fixed list and clips the
+   list to itself, so a list reaching down to the box was cut off at its edge. There is no
+   transcript here to protect. The dock is positioned and later in the tree, so while the list is open
+   the scroller is lifted above the box the list is meant to cover, and only then: the dock's own
+   project list has to stay above the greeting. */
+.transcript.fresh .entries { contain: none; }
+.transcript.fresh .entries:has(.fresh-project[aria-expanded='true']) { position: relative; z-index: 1; }
 .fresh-greeting p { margin: 0; font: var(--type-lede); color: var(--ink-secondary); text-wrap: pretty; }
 /* The notes under the greeting are centred lines in caption ink, 40px over the box. */
 .transcript.fresh .session-notices { align-items: center; margin-bottom: var(--leo-spacing-4xl); }

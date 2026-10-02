@@ -23,7 +23,7 @@
 /* Leo's Navigation lays its items and the actions slot out as one column the height of the host. */
 .settings-navigation { display: block; flex: 1; min-height: 0; }
 .settings-nav-list { padding: var(--leo-spacing-m) 0; overflow-y: auto; }
-.settings-nav-foot { margin-top: auto; padding-top: var(--leo-spacing-m); border-top: 1px solid var(--border-subtle); }
+.settings-nav-foot { margin-top: auto; border-top: 1px solid var(--border-subtle); }
 
 .settings-main {
   display: flex;

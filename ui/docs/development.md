@@ -131,7 +131,7 @@ so a shortcut is said once, in the platform's form. `pressed`, `expanded`, `cont
 alone carries.
 
 `TooltipLayer` is the only tooltip in the window: one Leo `Tooltip` laid over whichever
-`[data-tooltip]` element the pointer rests on or the keyboard reaches, with a 500ms first delay
+`[data-tooltip]` element the pointer rests on or the keyboard reaches, with a 1s first delay
 and no delay while moving along a toolbar. Use `data-tooltip` on anything else that needs one
 rather than a native `title`, which would draw a second box. A tooltip supplements the accessible
 name and never replaces it, and a disabled control shows none.
