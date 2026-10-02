@@ -620,8 +620,22 @@ impl<'a> Backend<'a> {
         let Some(bedrock) = config.bedrock_for(model) else {
             return Ok(());
         };
+        Self::sign_in_to(bedrock, say)
+    }
+
+    /// [`Backend::sign_in_if_needed`] for one AWS account, named by the account rather than by a
+    /// model it serves, for a command that signs in before any session exists.
+    pub fn sign_in_to(
+        bedrock: &bravebot_config::bedrock::Bedrock,
+        say: impl FnMut(String),
+    ) -> Result<(), BackendError> {
         bravebot_bedrock::credentials::sign_in_if_needed(bedrock.profile.as_deref(), say)
             .map_err(|failure| BedrockError::Credentials(failure).into())
+    }
+
+    /// Whether one AWS account has a usable session, without signing in to it.
+    pub fn signed_in_to(bedrock: &bravebot_config::bedrock::Bedrock) -> bool {
+        bravebot_bedrock::credentials::is_signed_in(bedrock.profile.as_deref())
     }
 
     /// Whether the name a request carries and the name its reply reports are from the same roster.
@@ -665,9 +679,9 @@ impl<'a> Backend<'a> {
     /// having the sign-in report back, because what it would return is "nothing happened", and a
     /// caller that has already dismantled its display to find that out has paid the whole cost.
     pub fn needs_sign_in(config: &Config, model: &str) -> bool {
-        config.bedrock_for(model).is_some_and(|bedrock| {
-            !bravebot_bedrock::credentials::is_signed_in(bedrock.profile.as_deref())
-        })
+        config
+            .bedrock_for(model)
+            .is_some_and(|bedrock| !Self::signed_in_to(bedrock))
     }
 
     /// Whether an imported subscription would be spent on this backend's requests.

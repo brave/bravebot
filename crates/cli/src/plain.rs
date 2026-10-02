@@ -785,6 +785,14 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
     pub(crate) fn ask(&mut self, lines: &[String], question: &str) -> Decision {
         self.put(lines, question).unwrap_or(Decision::Reject)
     }
+
+    /// Ask a question answered with a word rather than a yes, and read the word back trimmed, or
+    /// `None` at the end of the input.
+    pub(crate) fn answer(&mut self, question: &str) -> Option<String> {
+        let _ = write!(self.output, "{question} ");
+        let _ = self.output.flush();
+        self.line().map(|typed| typed.trim().to_string())
+    }
 }
 
 /// One line of quarantined text, made safe to put on a terminal.

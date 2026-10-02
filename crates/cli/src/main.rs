@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+mod auth;
 mod exit;
 mod import;
 mod json;
@@ -190,6 +191,7 @@ fn main() -> ExitCode {
             | "--trace" | "--json",
         ) => run_task(&args, skip_permissions, agent),
         Some("doctor") => doctor(),
+        Some("auth") => auth::command(&args[1..]),
         Some("mcp") => mcp::command(&args[1..]),
         Some("import-leo-creds") => import_leo_creds(&args[1..]),
         Some("import-providers") => import::providers(&args[1..]),
@@ -244,7 +246,7 @@ fn without_a_definition(first: Option<&str>) -> Option<String> {
         flag @ ("--resume" | "-r" | "--continue" | "-c" | "--fork" | "-f") => {
             Some(t!(cli_agent_not_with_a_recorded_session, flag = flag).to_string())
         }
-        command @ ("doctor" | "mcp" | "import-leo-creds" | "import-providers") => {
+        command @ ("doctor" | "auth" | "mcp" | "import-leo-creds" | "import-providers") => {
             Some(t!(cli_agent_not_for_a_command, command = command).to_string())
         }
         _ => None,
@@ -356,6 +358,8 @@ fn print_help() {
         ("bravebot --continue", t!(cli_usage_continue)),
         ("bravebot --fork <id>", t!(cli_usage_fork)),
         ("bravebot doctor", t!(cli_usage_doctor)),
+        ("bravebot auth login [way]", t!(cli_usage_auth_login)),
+        ("bravebot auth logout leo", t!(cli_usage_auth_logout)),
         ("bravebot import-leo-creds [channel]", t!(cli_usage_import)),
         ("bravebot import-providers", t!(cli_usage_import_providers)),
         ("bravebot mcp <command>", t!(cli_usage_mcp)),
@@ -5206,6 +5210,7 @@ mod tests {
             "--fork",
             "-f",
             "doctor",
+            "auth",
             "mcp",
             "import-leo-creds",
             "import-providers",

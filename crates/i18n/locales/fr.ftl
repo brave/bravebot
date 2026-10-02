@@ -42,6 +42,8 @@ cli-usage-fork = Dupliquer une session pour explorer une autre voie
 cli-usage-doctor = Vérifier la configuration et le confinement
 cli-usage-import = Importer un abonnement Leo Premium
 cli-usage-import-providers = Importer un service de modèle configuré par Claude Code ou opencode
+cli-usage-auth-login = Se connecter à un service de modèle, en listant chaque façon si aucune n'est nommée
+cli-usage-auth-logout = Oublier un abonnement Leo Premium importé
 cli-usage-mcp = Déclarer, lister et approuver des serveurs MCP
 
 cli-keys-heading = Touches interactives :
@@ -487,6 +489,43 @@ import-nothing-found =
     ni Claude Code ni opencode ne configure de service de modèle que bravebot puisse utiliser, et aucun Ollama qui en serve un ne tourne ici
 import-nothing-new = il ne reste rien à importer : chaque nom trouvé est déjà défini, ou épinglé
 import-takes-nothing-else = import-providers ne prend aucun argument
+
+
+## Se connecter à un service de modèle, par l'une des façons du programme
+
+auth-forms-heading = bravebot auth prend l'une de ces formes :
+auth-needs-a-command = bravebot auth a besoin d'une commande
+auth-unknown-command = bravebot auth n'a pas de commande { $command }
+auth-unknown-way = aucune façon de se connecter ne s'appelle { $way }
+auth-unexpected-argument = { $command } ne prend pas { $argument }
+auth-needs-a-terminal =
+    bravebot auth login demande par quelle façon se connecter, il lui faut donc un terminal où demander, ou le nom d'une façon
+auth-logout-needs-a-way = bravebot auth logout a besoin du nom de la façon dont se déconnecter
+auth-ways-heading = Façons de se connecter à un service de modèle :
+auth-way-leo = Brave Leo Premium, depuis une installation de Brave abonnée
+auth-way-bedrock = Un compte AWS, pour Amazon Bedrock
+auth-way-import = Un service de modèle de Claude Code, opencode ou Ollama, importé dans les réglages
+auth-way-held = { $description } ({ $status })
+auth-signed-in = connecté
+auth-which-way = Laquelle ? Tapez son numéro ou son nom, ou rien pour arrêter :
+auth-not-a-listed-way = { $answer } n'est pas l'une des façons listées
+auth-which-channel =
+    Quel canal de Brave est abonné ? stable, beta, nightly ou development, ou rien pour stable :
+auth-leo-held =
+    Brave Leo Premium est connecté : { $status }. bravebot auth logout leo le déconnecte.
+auth-sign-in-again = Se connecter à nouveau, comme un nouvel appareil ?
+auth-no-aws-account =
+    aucun compte AWS n'est configuré pour Bedrock : définissez { $switch }=1 et { $region }, ou lancez bravebot auth login import si Claude Code ou opencode en utilise un
+auth-aws-profile-signed-in = le profil AWS { $profile } est connecté
+auth-aws-default-signed-in = le profil AWS par défaut est connecté
+auth-aws-profile-failed = le profil AWS { $profile } n'est pas connecté : { $failure }
+auth-aws-default-failed = le profil AWS par défaut n'est pas connecté : { $failure }
+auth-aws-still-signed-out =
+    aws sso login a terminé, et le profil ne donne toujours aucun identifiant pour signer une requête
+auth-logout-bedrock =
+    bravebot ne garde aucune session AWS : c'est l'AWS CLI qui la garde, et aws sso logout y met fin
+auth-logout-import =
+    un import ne garde aucun identifiant : il a écrit des entrées dans le fichier de réglages, et les y retirer l'annule
 
 
 ## Déclarer un serveur MCP, et l'approuver

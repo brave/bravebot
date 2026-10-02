@@ -18,6 +18,8 @@ Usage:
   bravebot --continue                    Pick up the most recent session in this directory
   bravebot --fork <id>                   Fork a session and start exploring a different path
   bravebot doctor                        Check configuration and confinement
+  bravebot auth login [way]              Sign in to a model service, listing every way when none is named
+  bravebot auth logout leo               Forget an imported Leo Premium subscription
   bravebot import-leo-creds [channel]    Import a Leo Premium subscription
   bravebot import-providers              Import a model service Claude Code or opencode configured
   bravebot mcp <command>                 Declare, list and approve MCP servers
@@ -35,6 +37,8 @@ Usage:
 | `bravebot --continue`, `-c` | pick up the most recent session in this directory |
 | `bravebot --fork <id>`, `-f` | copy a session into one of its own and open that, to try a second approach |
 | `bravebot doctor` | report configuration and confinement, changing nothing |
+| `bravebot auth login [way]` | sign in to a model service, listing the ways when none is named ([below](#auth)) |
+| `bravebot auth logout leo` | forget an imported Leo Premium subscription |
 | `bravebot import-leo-creds [channel]` | import a Leo Premium subscription |
 | `bravebot import-providers` | import a model service Claude Code or opencode configured, asking first |
 | `bravebot mcp <command>` | declare, list, approve and remove MCP servers ([below](#mcp)) |
@@ -359,6 +363,26 @@ In a Bravebot source checkout it also reports whether the root `AGENTS.md` resol
 change the exit status, and are shown in no ordinary workspace. Nothing is repaired: somebody runs
 this to learn what is wrong, and a report that fixed what it found would leave them unable to tell
 what was already true.
+
+## `auth`
+
+```sh
+bravebot auth login [leo [channel] | bedrock | import]
+bravebot auth logout leo
+```
+
+With no way named, `auth login` lists the ways to sign in, marks the ones already in use, and asks
+which to run. It needs a terminal for that. A script names the way instead:
+
+| Way | What it runs |
+|---|---|
+| `leo [channel]` | what `import-leo-creds [channel]` runs |
+| `bedrock` | the AWS sign-in a session would make on its first turn, for every account the configuration names |
+| `import` | what `import-providers` runs |
+
+`auth logout leo` runs `import-leo-creds --forget`. In an incognito session the `leo` and `import`
+ways are refused as their commands are, and `bedrock` and `auth logout leo` are allowed. See
+[Signing in](../customize/signing-in.md).
 
 ## `import-leo-creds`
 
