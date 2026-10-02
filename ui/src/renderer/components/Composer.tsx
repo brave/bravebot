@@ -272,9 +272,9 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
             <ContextMeter session={session} model={model} tokens={contextTokens} archived={archived} compacting={compacting} />
             <ModelPicker compact session={session} scope={scope} key={session} model={model} disabled={running} onChoose={onModel} />
             {onPlan && <ModeMenu mode={planBlocked ? 'agent' : mode} blocked={planBlocked} disabled={running} onMode={setMode} />}
-            <IconButton icon={running ? 'stop-filled' : 'arrow-up'} label={running ? 'Stop' : 'Send'}
+            <IconButton icon={running ? 'stop-circle' : 'arrow-up'} label={running ? 'Stop' : 'Send'}
               shortcut={running ? '⌘.' : '⌘↩'}
-              kind={running ? 'outline' : 'filled'} size="medium" className={running ? 'send stop' : 'send'}
+              kind={running ? 'plain' : 'filled'} size="medium" className={running ? 'send stop' : 'send'}
               onClick={() => { if (running) onCancel(); else submit() }}
               disabled={!running && !canSend}
               data-test={running ? 'stop-turn' : 'send-message'} />
