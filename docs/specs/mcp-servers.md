@@ -12,7 +12,7 @@ governs:
   - crates/config/src/settings.rs
   - crates/config/src/import.rs
   - crates/cli/src/mcp.rs
-  - crates/cli/src/servers.rs
+  - crates/agent/src/servers.rs
   - crates/core/src/capability.rs
   - crates/core/src/permissions.rs
   - crates/core/src/policy.rs
@@ -60,8 +60,10 @@ declaration is put to the person rather than followed ([SERVERS-10](#SERVERS-10)
 [SERVERS-11](#SERVERS-11)). Each server started completes its
 handshake and is held, with a grant naming it, for as long as the session runs
 ([SERVERS-9](#SERVERS-9)). The session's display names what it started, and how
-each one's tools stand ([SERVERS-14](#SERVERS-14)). `bravebot-cli` starts a server and
-`bravebot-agent` offers its tools and calls them, and both depend on `crates/mcp/`.
+each one's tools stand ([SERVERS-14](#SERVERS-14)). `bravebot-agent` starts a server, offers its
+tools and calls them, on `crates/mcp/`. The two questions put while servers start, whether to use
+one and whether one moved, go to an asker the front end supplies; `bravebot-cli` supplies the
+terminal.
 
 At the first turn a person asks for, each started server's list of tools is put to them as the
 client drew it, every description whole and behind the margin, and nothing of the list reaches the
@@ -326,8 +328,8 @@ as an import writes it, whichever scope named it. The links are looked at again 
 write, so one made while the question waited is refused too.
 
 `verified-by: bravebot_config::settings::every_layers_request_is_read_and_each_alias_is_kept_once`
-`verified-by: bravebot_cli::servers::a_request_nobody_declared_is_reported_and_nothing_is_started_for_it`
-`verified-by: bravebot_cli::servers::a_checkout_reached_through_a_link_names_its_settings_file_inside_it`
+`verified-by: bravebot_agent::servers::a_request_nobody_declared_is_reported_and_nothing_is_started_for_it`
+`verified-by: bravebot_agent::servers::a_checkout_reached_through_a_link_names_its_settings_file_inside_it`
 `verified-by: bravebot_session::sessions::a_desktop_session_names_the_servers_it_does_not_start`
 `verified-by: bravebot_ui_bridge::servers::every_way_a_desktop_session_opens_names_the_servers_its_project_requests`
 `verified-by: bravebot_cli::mcp::enable_requests_the_server_in_the_file_its_scope_names`
@@ -469,11 +471,11 @@ starts the server for that session and records nothing.
 A yes whose record cannot be written still starts the server, since the person said yes and a file
 that would not take the answer does not unsay it, and a line says which record was not kept.
 
-`verified-by: bravebot_cli::servers::answer_one_approves_the_digest_answer_two_the_project_and_three_nothing`
-`verified-by: bravebot_cli::servers::the_question_names_the_checkout_that_requested_it_and_where_the_program_resolved`
-`verified-by: bravebot_cli::servers::nobody_to_ask_leaves_the_server_absent_says_why_and_records_nothing`
-`verified-by: bravebot_cli::servers::an_approved_digest_starts_unasked_and_a_recorded_project_answers_only_an_unchanged_one`
-`verified-by: bravebot_cli::servers::an_incognito_yes_is_for_this_session_and_writes_nothing`
+`verified-by: bravebot_agent::servers::answer_one_approves_the_digest_answer_two_the_project_and_three_nothing`
+`verified-by: bravebot_agent::servers::the_question_names_the_checkout_that_requested_it_and_where_the_program_resolved`
+`verified-by: bravebot_agent::servers::nobody_to_ask_leaves_the_server_absent_says_why_and_records_nothing`
+`verified-by: bravebot_agent::servers::an_approved_digest_starts_unasked_and_a_recorded_project_answers_only_an_unchanged_one`
+`verified-by: bravebot_agent::servers::an_incognito_yes_is_for_this_session_and_writes_nothing`
 `verified-by: bravebot_config::mcp::a_project_reads_back_as_the_path_it_was_recorded_as`
 `verified-by: bravebot_config::mcp::forgetting_a_project_drops_it_and_no_other`
 `verified-by: bravebot_cli::mcp::forget_drops_a_projects_standing_answers_and_nobody_elses`
@@ -534,7 +536,7 @@ digest is kept of what was approved, and a digest names no field.
 `verified-by: bravebot_config::mcp::a_declaration_changed_since_its_approval_is_recorded_as_changed_and_approves_nothing`
 `verified-by: bravebot_config::mcp::a_digest_alone_on_its_line_takes_its_alias_when_rewritten`
 `verified-by: bravebot_cli::mcp::replacing_a_declaration_approved_under_no_alias_still_says_it_changed`
-`verified-by: bravebot_cli::servers::an_approved_digest_starts_unasked_and_a_recorded_project_answers_only_an_unchanged_one`
+`verified-by: bravebot_agent::servers::an_approved_digest_starts_unasked_and_a_recorded_project_answers_only_an_unchanged_one`
 
 <a id="SERVERS-6"></a>
 ### SERVERS-6: a command that fetches its own code is named as one at the prompt
@@ -570,9 +572,9 @@ asks. What is read is the words the person declared and nothing else, so this sa
 for and cannot say what the runner will find. A runner the list does not name, or a script that
 calls one, is drawn as a plain program.
 
-`verified-by: bravebot_cli::servers::a_runner_is_named_as_one_and_an_unpinned_package_as_unpinned`
-`verified-by: bravebot_cli::servers::a_runner_and_its_unpinned_package_are_drawn_at_the_question`
-`verified-by: bravebot_cli::servers::a_package_behind_a_flag_nobody_knows_is_drawn_as_not_known`
+`verified-by: bravebot_agent::servers::a_runner_is_named_as_one_and_an_unpinned_package_as_unpinned`
+`verified-by: bravebot_agent::servers::a_runner_and_its_unpinned_package_are_drawn_at_the_question`
+`verified-by: bravebot_agent::servers::a_package_behind_a_flag_nobody_knows_is_drawn_as_not_known`
 `verified-by: bravebot_cli::mcp::the_question_names_a_runner_and_the_package_it_leaves_unpinned`
 
 <a id="SERVERS-7"></a>
@@ -988,26 +990,26 @@ not started either, and the line says why.
 `verified-by: bravebot_cli::mcp::a_value_where_an_alias_a_scope_or_a_directory_goes_is_refused_and_never_repeated`
 `verified-by: bravebot_cli::mcp::a_stored_value_is_shown_by_its_name_and_never_as_itself`
 `verified-by: bravebot_cli::mcp::a_file_a_value_or_an_argument_names_is_declared_as_a_read_and_nothing_broader_is`
-`verified-by: bravebot_cli::servers::a_stored_value_is_handed_to_the_server_and_the_environment_is_not_read_for_it`
-`verified-by: bravebot_cli::servers::a_declared_read_grants_the_one_file_and_nothing_beside_it`
-`verified-by: bravebot_cli::servers::a_started_server_reads_the_files_it_was_declared_to_and_nothing_beside_them`
+`verified-by: bravebot_agent::servers::a_stored_value_is_handed_to_the_server_and_the_environment_is_not_read_for_it`
+`verified-by: bravebot_agent::servers::a_declared_read_grants_the_one_file_and_nothing_beside_it`
+`verified-by: bravebot_agent::servers::a_started_server_reads_the_files_it_was_declared_to_and_nothing_beside_them`
 `verified-by: bravebot_cli::mcp::a_program_named_by_a_bare_name_is_declared_with_path`
 `verified-by: bravebot_cli::mcp::the_question_shows_the_path_a_bare_name_was_given`
-`verified-by: bravebot_cli::servers::a_program_is_found_in_the_path_it_names_and_nowhere_else`
-`verified-by: bravebot_cli::servers::a_path_the_declaration_does_not_name_resolves_nothing`
-`verified-by: bravebot_cli::servers::a_local_server_is_not_asked_about_where_nothing_can_confine_it`
-`verified-by: bravebot_cli::servers::a_servers_confinement_reaches_its_installation_and_nothing_of_the_home_directory`
-`verified-by: bravebot_cli::servers::the_home_kept_out_of_a_launched_server_is_the_persons_and_not_the_state_directory`
-`verified-by: bravebot_cli::servers::a_home_reached_through_a_link_is_kept_out_of_a_servers_confinement`
-`verified-by: bravebot_cli::servers::a_programs_own_installation_deep_in_the_home_directory_is_read`
-`verified-by: bravebot_cli::servers::a_server_is_handed_its_own_home_unless_the_declaration_names_one`
-`verified-by: bravebot_cli::servers::a_server_keeps_a_home_of_its_own_under_the_state_directory`
-`verified-by: bravebot_cli::servers::a_started_server_writes_its_own_files_in_the_home_kept_for_it`
-`verified-by: bravebot_cli::servers::a_server_in_a_session_that_keeps_nothing_is_given_a_home_that_goes_with_it`
-`verified-by: bravebot_cli::servers::a_started_server_in_a_session_that_keeps_nothing_has_a_home_that_goes_with_it`
+`verified-by: bravebot_agent::servers::a_program_is_found_in_the_path_it_names_and_nowhere_else`
+`verified-by: bravebot_agent::servers::a_path_the_declaration_does_not_name_resolves_nothing`
+`verified-by: bravebot_agent::servers::a_local_server_is_not_asked_about_where_nothing_can_confine_it`
+`verified-by: bravebot_agent::servers::a_servers_confinement_reaches_its_installation_and_nothing_of_the_home_directory`
+`verified-by: bravebot_agent::servers::the_home_kept_out_of_a_launched_server_is_the_persons_and_not_the_state_directory`
+`verified-by: bravebot_agent::servers::a_home_reached_through_a_link_is_kept_out_of_a_servers_confinement`
+`verified-by: bravebot_agent::servers::a_programs_own_installation_deep_in_the_home_directory_is_read`
+`verified-by: bravebot_agent::servers::a_server_is_handed_its_own_home_unless_the_declaration_names_one`
+`verified-by: bravebot_agent::servers::a_server_keeps_a_home_of_its_own_under_the_state_directory`
+`verified-by: bravebot_agent::servers::a_started_server_writes_its_own_files_in_the_home_kept_for_it`
+`verified-by: bravebot_agent::servers::a_server_in_a_session_that_keeps_nothing_is_given_a_home_that_goes_with_it`
+`verified-by: bravebot_agent::servers::a_started_server_in_a_session_that_keeps_nothing_has_a_home_that_goes_with_it`
 `verified-by: bravebot_agent::mcp::a_servers_throwaway_home_lasts_as_long_as_the_session_holding_it`
 `verified-by: bravebot_mcp::stdio::a_server_receives_the_variables_it_was_handed_and_no_others`
-`verified-by: bravebot_cli::servers::a_declared_directory_holding_a_repository_is_refused`
+`verified-by: bravebot_agent::servers::a_declared_directory_holding_a_repository_is_refused`
 `verified-by: bravebot_cli::mcp::add_declares_no_directory_inside_a_repository`
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_a_git_directory_beneath_it`
 
@@ -1103,10 +1105,10 @@ session with nobody at the terminal and the mode that skips prompts refuse it un
 `verified-by: bravebot_agent::mcp::a_move_the_managed_layer_denies_is_refused_whatever_is_answered`
 `verified-by: bravebot_agent::mcp::a_move_in_a_session_that_writes_nothing_lasts_for_the_session`
 `verified-by: bravebot_agent::mcp::a_move_is_recorded_over_the_declaration_asked_about_and_nothing_else`
-`verified-by: bravebot_cli::servers::a_handshake_redirected_off_its_declaration_is_moved_on_a_yes`
-`verified-by: bravebot_cli::servers::a_handshake_redirected_off_its_declaration_starts_nothing_on_a_no`
-`verified-by: bravebot_cli::servers::a_move_in_a_session_that_writes_nothing_is_for_the_session`
-`verified-by: bravebot_cli::servers::a_project_that_answers_for_its_servers_does_not_answer_a_move`
+`verified-by: bravebot_agent::servers::a_handshake_redirected_off_its_declaration_is_moved_on_a_yes`
+`verified-by: bravebot_agent::servers::a_handshake_redirected_off_its_declaration_starts_nothing_on_a_no`
+`verified-by: bravebot_agent::servers::a_move_in_a_session_that_writes_nothing_is_for_the_session`
+`verified-by: bravebot_agent::servers::a_project_that_answers_for_its_servers_does_not_answer_a_move`
 `verified-by: bravebot_cli::plain::a_move_is_asked_in_lines_and_only_a_yes_moves_the_server`
 `verified-by: bravebot_tui::confirm::a_move_prompt_shows_the_declaration_the_destination_and_what_it_reaches`
 `verified-by: bravebot_tui::confirm::a_destination_longer_than_the_move_box_leaves_the_host_and_what_a_yes_does_on_screen`
@@ -1197,9 +1199,9 @@ not to request it.
 `verified-by: bravebot_config::managed::an_entry_in_neither_form_is_skipped`
 `verified-by: bravebot_config::managed::a_server_declared_or_requested_here_is_read_as_nothing`
 `verified-by: bravebot_config::settings::a_request_or_a_server_list_in_the_mcp_block_is_not_a_declaration`
-`verified-by: bravebot_cli::servers::a_server_the_managed_layer_refuses_is_started_in_no_mode_and_nothing_is_asked_or_recorded`
-`verified-by: bravebot_cli::servers::a_server_the_managed_layer_does_not_refuse_is_settled_as_before`
-`verified-by: bravebot_cli::servers::a_remote_server_is_refused_by_its_host`
+`verified-by: bravebot_agent::servers::a_server_the_managed_layer_refuses_is_started_in_no_mode_and_nothing_is_asked_or_recorded`
+`verified-by: bravebot_agent::servers::a_server_the_managed_layer_does_not_refuse_is_settled_as_before`
+`verified-by: bravebot_agent::servers::a_remote_server_is_refused_by_its_host`
 `verified-by: bravebot_cli::mcp::list_and_get_say_why_the_managed_layer_refuses_a_server_and_no_other`
 `verified-by: bravebot_cli::mcp::enabling_a_server_the_managed_layer_refuses_says_it_is_not_started`
 
@@ -1275,12 +1277,12 @@ rewritten. A `deny` rule still refuses a call
 same code in either mode. The display names the mode and the servers the session started. It does
 not say beside each one whether it started unasked because of the mode.
 
-`verified-by: bravebot_cli::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
+`verified-by: bravebot_agent::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
 `verified-by: bravebot_agent::mcp::bypassing_answers_both_prompts_and_records_nothing`
 `verified-by: bravebot_agent::mcp::a_list_offered_in_bypass_stays_offered_and_each_later_call_asks`
 `verified-by: bravebot_agent::mcp::bypassing_refuses_a_hop_and_asks_nobody`
 `verified-by: bravebot_agent::permission_mode::bypassing_refuses_to_move_a_server`
-`verified-by: bravebot_cli::servers::a_redirected_handshake_nobody_is_asked_about_starts_nothing`
+`verified-by: bravebot_agent::servers::a_redirected_handshake_nobody_is_asked_about_starts_nothing`
 
 <a id="SERVERS-14"></a>
 ### SERVERS-14: what is reachable is visible without running anything

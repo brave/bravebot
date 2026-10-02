@@ -11,11 +11,15 @@
 //! one labelled text it arrived as: nothing of it reaches the planner until a person has read it at
 //! the start of a turn and said yes, or said yes to the same list under the same declaration before
 //! (SERVERS-8). A session holds the servers it started, their lists, and a grant naming each.
+//!
+//! The two questions a session puts while it starts its servers, whether to use one (SERVERS-4) and
+//! whether one moved where its reply pointed (SERVERS-11), go to an [`Asker`]. A [`Person`] at a
+//! terminal is one, and a front end with its own screen is another.
 
-use crate::mcp::{self as command, Home, Person, say, shown};
-use bravebot_agent::SessionScratch;
-use bravebot_agent::mcp::{Connection, Session, Unmoved, managed_refusal};
-use bravebot_config::mcp::{self, Approvals, Declaration, Declarations, Digest, Projects};
+use crate::SessionScratch;
+use crate::confirm::MoveRequest;
+use crate::mcp::{Connection, Session, Unmoved, managed_refusal, shown, unreadable};
+use bravebot_config::mcp::{self, Approvals, Declaration, Declarations, Digest, Problem, Projects};
 use bravebot_config::{Managed, Server};
 use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
 use bravebot_core::event::RecordingSink;
@@ -41,8 +45,8 @@ const HANDSHAKE: Duration = Duration::from_secs(60);
 
 /// Who answers for a server no answer of the person's covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Asking {
-    /// Whoever is at the terminal, where somebody is.
+pub enum Asking {
+    /// Whoever the [`Asker`] reaches, where somebody is there.
     Person,
     /// Nobody: a one-shot run is not a conversation.
     OneShot,
@@ -51,17 +55,17 @@ pub(crate) enum Asking {
 }
 
 /// What a session reached, and what it has to say about the rest.
-pub(crate) struct Reached {
+pub struct Reached {
     /// The servers started, or `None` where none was.
     session: Option<Session>,
     /// A line for each requested server that is not reached, and each answer that could not be
     /// kept, in the order they arose.
-    pub(crate) notes: Vec<String>,
+    pub notes: Vec<String>,
 }
 
 impl Reached {
     /// The aliases started, in order.
-    pub(crate) fn aliases(&self) -> Vec<String> {
+    pub fn aliases(&self) -> Vec<String> {
         self.session
             .as_ref()
             .map(Session::aliases)
@@ -70,23 +74,58 @@ impl Reached {
 
     /// Whether any process the session started is confined, which a local server is and a
     /// remote one is not.
-    pub(crate) fn confined(&self) -> bool {
+    pub fn confined(&self) -> bool {
         self.session.as_ref().is_some_and(Session::confined)
     }
 
     /// The servers started, their lists and a grant naming each, for the turns to settle and call.
-    pub(crate) fn session(&self) -> Option<Session> {
+    pub fn session(&self) -> Option<Session> {
         self.session.clone()
     }
 }
 
+/// Where the files are, and whether this run may write them.
+pub struct Home {
+    /// The state directory, or `None` where the platform names no profile directory.
+    pub directory: Option<PathBuf>,
+    /// Whether anything may be written into it, which an incognito session answers no.
+    pub writable: bool,
+}
+
+/// Whoever answers the questions a session puts while it starts its servers.
+///
+/// Only a yes starts or moves anything, so an asker with nobody behind it answers no to both.
+pub trait Asker {
+    /// Whether anybody is there to answer. Where nobody is, neither question is put.
+    fn anybody_there(&self) -> bool;
+
+    /// SERVERS-4's question about one server.
+    fn ask_to_start(&mut self, question: &Question<'_>) -> Answer;
+
+    /// SERVERS-11's question about a remote server whose handshake was redirected. Whether it moved.
+    fn ask_to_move(&mut self, request: &MoveRequest) -> bool;
+}
+
+/// The other end of a question at a terminal: where an answer is read, where things are shown, and
+/// whether anybody is there to give one.
+pub struct Person<R, W> {
+    pub answers: R,
+    pub screen: W,
+    pub present: bool,
+}
+
+/// Write one line to the person's screen.
+pub fn say<R, W: Write>(person: &mut Person<R, W>, line: impl std::fmt::Display) {
+    let _ = writeln!(person.screen, "{line}");
+}
+
 /// Reach the servers the settings in force request for the workspace at `root`, putting a question
-/// to `person` where one is needed and they are there to answer it.
-pub(crate) fn for_this_session<R: BufRead, W: Write>(
+/// to `asker` where one is needed and somebody is there to answer it.
+pub fn for_this_session<A: Asker + ?Sized>(
     settings: &bravebot_config::Settings,
     root: &Path,
     asking: Asking,
-    person: &mut Person<R, W>,
+    asker: &mut A,
     diagnostics: Stream,
 ) -> Reached {
     let requested: Vec<(PathBuf, String)> = settings
@@ -95,8 +134,8 @@ pub(crate) fn for_this_session<R: BufRead, W: Write>(
         .collect();
     let project = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let home = Home {
-        directory: bravebot_agent::home::directory(),
-        writable: bravebot_agent::home::writable().is_some(),
+        directory: crate::home::directory(),
+        writable: crate::home::writable().is_some(),
     };
     reach(
         &requested,
@@ -104,15 +143,14 @@ pub(crate) fn for_this_session<R: BufRead, W: Write>(
         &home,
         &Managed::load(),
         asking,
-        person,
+        asker,
         diagnostics,
     )
 }
 
 /// Whoever is at this process's terminal: both ends, for the reason `bravebot mcp` asks for both. A
 /// question written into a pipe is one nobody read, and an answer read from one is one nobody gave.
-pub(crate) fn at_the_terminal() -> Person<std::io::StdinLock<'static>, std::io::StdoutLock<'static>>
-{
+pub fn at_the_terminal() -> Person<std::io::StdinLock<'static>, std::io::StdoutLock<'static>> {
     Person {
         answers: std::io::stdin().lock(),
         screen: std::io::stdout().lock(),
@@ -121,7 +159,7 @@ pub(crate) fn at_the_terminal() -> Person<std::io::StdinLock<'static>, std::io::
 }
 
 /// Nobody: what a one-shot run asks, which is no one.
-pub(crate) fn nobody() -> Person<std::io::Empty, std::io::Sink> {
+pub fn nobody() -> Person<std::io::Empty, std::io::Sink> {
     Person {
         answers: std::io::empty(),
         screen: std::io::sink(),
@@ -134,13 +172,13 @@ pub(crate) fn nobody() -> Person<std::io::Empty, std::io::Sink> {
 /// `requested` is each alias with the settings file that asked for it. `project` is the workspace
 /// root, which is what answer 2 records. `managed` is the machine's layer, whose refusals no answer
 /// reaches. `diagnostics` is where a local server's stderr goes.
-pub(crate) fn reach<R: BufRead, W: Write>(
+pub fn reach<A: Asker + ?Sized>(
     requested: &[(PathBuf, String)],
     project: &Path,
     home: &Home,
     managed: &Managed,
     asking: Asking,
-    person: &mut Person<R, W>,
+    asker: &mut A,
     diagnostics: Stream,
 ) -> Reached {
     let mut notes = Vec::new();
@@ -150,14 +188,14 @@ pub(crate) fn reach<R: BufRead, W: Write>(
         home,
         managed,
         asking,
-        person,
+        asker,
         &|name| std::env::var_os(name),
         Prelude::current(),
         &mut notes,
     );
     let mut hops = Vec::new();
     let mut started = start(plans, home, diagnostics, &mut notes, &mut hops);
-    let moving = moves(hops, home, managed, asking, person, &mut notes);
+    let moving = moves(hops, home, managed, asking, asker, &mut notes);
     if !moving.is_empty() {
         let plans = moving
             .iter()
@@ -225,18 +263,18 @@ struct Moving {
 /// with nobody at the terminal do, since a move rewrites a declaration (SERVERS-13). The destination
 /// is drawn and decides nothing before the yes: only then is it read as a url and held to the
 /// machine's managed layer.
-fn moves<R: BufRead, W: Write>(
+fn moves<A: Asker + ?Sized>(
     hops: Vec<Hop>,
     home: &Home,
     managed: &Managed,
     asking: Asking,
-    person: &mut Person<R, W>,
+    asker: &mut A,
     notes: &mut Vec<String>,
 ) -> Vec<Moving> {
     let mut moving = Vec::new();
     for hop in hops {
         let alias = hop.alias.as_str();
-        if asking != Asking::Person || !person.present {
+        if asking != Asking::Person || !asker.anybody_there() {
             notes.push(t!(mcp_move_not_started, alias = alias).to_string());
             continue;
         }
@@ -259,14 +297,14 @@ fn moves<R: BufRead, W: Write>(
             let proof = policy.authorise_display_release("where an MCP server's reply pointed");
             shaped.declassify(&proof)
         };
-        if !asked_to_move(
-            person,
-            alias,
-            &hop.url,
-            &destination,
-            &authority,
-            home.writable,
-        ) {
+        let request = MoveRequest {
+            alias: alias.to_string(),
+            declared: hop.url.clone(),
+            destination,
+            authority,
+            may_record: home.writable,
+        };
+        if !asker.ask_to_move(&request) {
             notes.push(t!(mcp_move_not_started, alias = alias).to_string());
             continue;
         }
@@ -284,7 +322,7 @@ fn moves<R: BufRead, W: Write>(
                     t!(
                         mcp_move_undeclarable,
                         alias = alias,
-                        problem = command::problem(&problem)
+                        problem = self::problem(&problem)
                     )
                     .to_string(),
                 );
@@ -305,51 +343,6 @@ fn moves<R: BufRead, W: Write>(
     moving
 }
 
-/// Draw where a server's reply pointed and read the answer. Only a yes moves it, and the end of the
-/// input is a no.
-fn asked_to_move<R: BufRead, W: Write>(
-    person: &mut Person<R, W>,
-    alias: &str,
-    declared: &str,
-    destination: &str,
-    authority: &str,
-    may_record: bool,
-) -> bool {
-    say(person, "");
-    say(
-        person,
-        format!(
-            "  {}",
-            t!(mcp_move_declared, alias = alias, url = shown(declared))
-        ),
-    );
-    say(
-        person,
-        format!("  {}", t!(mcp_move_destination, url = shown(destination))),
-    );
-    say(
-        person,
-        format!("  {}", t!(mcp_move_reaching, authority = shown(authority))),
-    );
-    say(person, format!("  {}", t!(mcp_move_explained)));
-    if !may_record {
-        say(person, format!("  {}", t!(mcp_move_this_session_only)));
-    }
-    say(person, "");
-    let _ = write!(
-        person.screen,
-        "  {} {} ",
-        t!(mcp_move_title),
-        t!(line_answer)
-    );
-    let _ = person.screen.flush();
-    let mut typed = String::new();
-    match person.answers.read_line(&mut typed) {
-        Ok(0) | Err(_) => false,
-        Ok(_) => typed.trim().to_lowercase() == t!(line_answer_yes),
-    }
-}
-
 /// Rewrite a moved server's declaration where the session may write, now that it answered where it
 /// moved to. Whether it is used.
 fn moved(home: &Home, moving: &Moving, notes: &mut Vec<String>) -> bool {
@@ -358,7 +351,7 @@ fn moved(home: &Home, moving: &Moving, notes: &mut Vec<String>) -> bool {
         notes.push(t!(mcp_move_moved, alias = alias).to_string());
         return true;
     };
-    match bravebot_agent::mcp::record_a_move(directory, alias, &moving.from, &moving.declaration) {
+    match crate::mcp::record_a_move(directory, alias, &moving.from, &moving.declaration) {
         Ok(()) => {
             notes.push(t!(mcp_move_moved, alias = alias).to_string());
             true
@@ -401,13 +394,13 @@ enum Plan {
 /// Returns the servers to start. Every request that will not be is a line in `notes` saying why.
 /// `prelude` is this platform's confinement base, and a local server is not asked about without one.
 #[allow(clippy::too_many_arguments)]
-fn settle<R: BufRead, W: Write>(
+fn settle<A: Asker + ?Sized>(
     requested: &[(PathBuf, String)],
     project: &Path,
     home: &Home,
     managed: &Managed,
     asking: Asking,
-    person: &mut Person<R, W>,
+    asker: &mut A,
     environment: &dyn Fn(&str) -> Option<OsString>,
     prelude: Option<Prelude>,
     notes: &mut Vec<String>,
@@ -420,7 +413,7 @@ fn settle<R: BufRead, W: Write>(
             t!(
                 servers_none_reached,
                 aliases = aliases(requested),
-                reason = command::no_state_directory()
+                reason = no_state_directory()
             )
             .to_string(),
         );
@@ -432,7 +425,7 @@ fn settle<R: BufRead, W: Write>(
             let reason = t!(
                 mcp_unreadable,
                 path = mcp::declarations_file(directory).display().to_string(),
-                reason = command::unreadable(&why)
+                reason = unreadable(&why)
             );
             notes.push(
                 t!(
@@ -468,7 +461,7 @@ fn settle<R: BufRead, W: Write>(
                     t!(
                         mcp_unusable,
                         alias = shown(alias),
-                        problem = command::problem(&found)
+                        problem = problem(&found)
                     )
                     .to_string(),
                 );
@@ -511,7 +504,9 @@ fn settle<R: BufRead, W: Write>(
         if !(covered || asking == Asking::Bypass) {
             let nobody = match asking {
                 Asking::OneShot => Some(t!(servers_nobody_in_a_one_shot, alias = alias)),
-                _ if !person.present => Some(t!(servers_nobody_at_a_terminal, alias = alias)),
+                _ if !asker.anybody_there() => {
+                    Some(t!(servers_nobody_at_a_terminal, alias = alias))
+                }
                 _ => None,
             };
             if let Some(reason) = nobody {
@@ -528,7 +523,7 @@ fn settle<R: BufRead, W: Write>(
                 },
                 changed,
             };
-            match question.put(person) {
+            match asker.ask_to_start(&question) {
                 Answer::No => {
                     notes.push(t!(servers_declined, alias = alias).to_string());
                     continue;
@@ -555,7 +550,7 @@ fn settle<R: BufRead, W: Write>(
 
 /// Why a requested server is not started, found before anybody is asked about it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Unstarted {
+pub enum Unstarted {
     /// The declaration does not resolve to anything to start here, and why.
     Unplanned(String),
     /// The machine's managed layer keeps it from starting, and why (SERVERS-12).
@@ -612,7 +607,7 @@ fn assess(
 ///
 /// A server may write its directory, and git runs commands a repository names, unconfined: in its
 /// configuration and hooks, and in files of its work tree a relative `core.hooksPath` points at.
-pub(crate) fn repository_holding(directory: &Path) -> Option<PathBuf> {
+pub fn repository_holding(directory: &Path) -> Option<PathBuf> {
     let directory = directory
         .canonicalize()
         .unwrap_or_else(|_| directory.to_path_buf());
@@ -652,7 +647,7 @@ pub(crate) fn outside_any_repository(name: &str) -> PathBuf {
 }
 
 /// Why a server is given no directory inside `repository`.
-pub(crate) fn in_a_repository(directory: &Path, repository: &Path) -> String {
+pub fn in_a_repository(directory: &Path, repository: &Path) -> String {
     t!(
         mcp_dir_in_a_repository,
         path = shown(&directory.display().to_string()),
@@ -664,7 +659,7 @@ pub(crate) fn in_a_repository(directory: &Path, repository: &Path) -> String {
 /// What a session started in `project` holds for a server its settings request, before anybody
 /// is asked anything (SERVERS-9, SERVERS-14).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Grant {
+pub enum Grant {
     /// An answer the person gave covers it, so the session starts it and holds the grant naming it.
     Held,
     /// Nothing covers it, so a session at a terminal asks, and holds the grant only after a yes.
@@ -674,7 +669,7 @@ pub(crate) enum Grant {
 }
 
 /// SERVERS-14's capability for one requested server, read without starting it.
-pub(crate) fn grant(
+pub fn grant(
     alias: &str,
     declaration: &Declaration,
     project: &Path,
@@ -710,7 +705,7 @@ fn aliases(requested: &[(PathBuf, String)]) -> String {
 /// A settings file as the person knows it: relative to the project where it is inside it.
 ///
 /// `project` has its links followed, so the file is compared with its own followed too.
-pub(crate) fn named(file: &Path, project: &Path) -> String {
+pub fn named(file: &Path, project: &Path) -> String {
     let file = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
     file.strip_prefix(project)
         .unwrap_or(&file)
@@ -767,7 +762,7 @@ fn planned(
         .unwrap_or_default();
     let (named, arguments) = argv
         .split_first()
-        .ok_or_else(|| command::problem(&mcp::Problem::Program))?;
+        .ok_or_else(|| problem(&mcp::Problem::Program))?;
     let program = resolve(named, path.as_deref(), &searched)?;
     Ok(Plan::Stdio {
         program,
@@ -787,7 +782,7 @@ fn planned(
 /// its own directory is made only when it starts. A program that is not found yet is taken as
 /// named, which grants less and so keeps more files. Where this platform has no base, every file is
 /// one, since nothing is known to reach it.
-pub(crate) fn unreached(
+pub fn unreached(
     declaration: &Declaration,
     files: Vec<PathBuf>,
     environment: &dyn Fn(&str) -> Option<OsString>,
@@ -835,7 +830,7 @@ fn refused(managed: &Managed, plan: &Plan) -> Option<String> {
 ///
 /// A local server is compared by the path its program resolves to here, and one that does not
 /// resolve by its argv as it was written.
-pub(crate) fn refused_declaration(
+pub fn refused_declaration(
     managed: &Managed,
     declaration: &Declaration,
     environment: &dyn Fn(&str) -> Option<OsString>,
@@ -882,9 +877,9 @@ fn startable(path: &Path) -> bool {
     }
 }
 
-/// What the person said.
+/// What the person said to SERVERS-4's question.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Answer {
+pub enum Answer {
     /// Approve this declaration.
     Once,
     /// Approve it, and every server a checkout in this project requests from now on.
@@ -894,23 +889,23 @@ enum Answer {
 }
 
 /// SERVERS-4's question about one server.
-struct Question<'a> {
-    alias: &'a str,
-    /// The settings file that requested it.
-    file: &'a str,
-    declaration: &'a Declaration,
+pub struct Question<'a> {
+    pub alias: &'a str,
+    /// The settings file that requested it, relative to the project where it is inside it.
+    pub file: &'a str,
+    pub declaration: &'a Declaration,
     /// Where a local server's program resolved to.
-    program: Option<&'a PathBuf>,
+    pub program: Option<&'a PathBuf>,
     /// Whether the person approved this alias as something else.
-    changed: bool,
+    pub changed: bool,
 }
 
 impl Question<'_> {
     /// Every line drawn above the answers.
-    fn lines(&self) -> Vec<String> {
+    pub fn lines(&self) -> Vec<String> {
         let digest = self.declaration.digest();
-        let indent = command::indent(self.alias);
-        let mut lines = command::drawn(self.alias, self.declaration, &digest.short());
+        let indent = indent(self.alias);
+        let mut lines = drawn(self.alias, self.declaration, &digest.short());
         let mut under = vec![format!(
             "{indent}{}",
             t!(servers_requested_by, file = self.file)
@@ -933,22 +928,28 @@ impl Question<'_> {
         lines.extend(fetching(self.alias, self.declaration));
         lines
     }
+}
+
+impl<R: BufRead, W: Write> Asker for Person<R, W> {
+    fn anybody_there(&self) -> bool {
+        self.present
+    }
 
     /// Draw the question and read the answer. Anything but 1 or 2, and the end of the input, is 3.
-    fn put<R: BufRead, W: Write>(&self, person: &mut Person<R, W>) -> Answer {
-        say(person, "");
-        for line in self.lines() {
-            say(person, line);
+    fn ask_to_start(&mut self, question: &Question<'_>) -> Answer {
+        say(self, "");
+        for line in question.lines() {
+            say(self, line);
         }
-        say(person, "");
-        say(person, format!("  {}", t!(mcp_question)));
-        say(person, format!("  1. {}", t!(servers_answer_once)));
-        say(person, format!("  2. {}", t!(servers_answer_project)));
-        say(person, format!("  3. {}", t!(servers_answer_no)));
-        let _ = write!(person.screen, "  {} ", t!(servers_answer));
-        let _ = person.screen.flush();
+        say(self, "");
+        say(self, format!("  {}", t!(mcp_question)));
+        say(self, format!("  1. {}", t!(servers_answer_once)));
+        say(self, format!("  2. {}", t!(servers_answer_project)));
+        say(self, format!("  3. {}", t!(servers_answer_no)));
+        let _ = write!(self.screen, "  {} ", t!(servers_answer));
+        let _ = self.screen.flush();
         let mut typed = String::new();
-        match person.answers.read_line(&mut typed) {
+        match self.answers.read_line(&mut typed) {
             Ok(0) | Err(_) => Answer::No,
             Ok(_) => match typed.trim() {
                 "1" => Answer::Once,
@@ -957,6 +958,156 @@ impl Question<'_> {
             },
         }
     }
+
+    /// Draw where a server's reply pointed and read the answer. Only a yes moves it, and the end of
+    /// the input is a no.
+    fn ask_to_move(&mut self, request: &MoveRequest) -> bool {
+        say(self, "");
+        say(
+            self,
+            format!(
+                "  {}",
+                t!(
+                    mcp_move_declared,
+                    alias = request.alias.as_str(),
+                    url = shown(&request.declared)
+                )
+            ),
+        );
+        say(
+            self,
+            format!(
+                "  {}",
+                t!(mcp_move_destination, url = shown(&request.destination))
+            ),
+        );
+        say(
+            self,
+            format!(
+                "  {}",
+                t!(mcp_move_reaching, authority = shown(&request.authority))
+            ),
+        );
+        say(self, format!("  {}", t!(mcp_move_explained)));
+        if !request.may_record {
+            say(self, format!("  {}", t!(mcp_move_this_session_only)));
+        }
+        say(self, "");
+        let _ = write!(self.screen, "  {} {} ", t!(mcp_move_title), t!(line_answer));
+        let _ = self.screen.flush();
+        let mut typed = String::new();
+        match self.answers.read_line(&mut typed) {
+            Ok(0) | Err(_) => false,
+            Ok(_) => typed.trim().to_lowercase() == t!(line_answer_yes),
+        }
+    }
+}
+
+/// A declaration as a person reads it: the alias, the transport and what it runs or reaches on the
+/// first line, and under it the names it receives, the files it may read, where it runs, and the
+/// digest.
+///
+/// Every argument is shown as the word it is, quoted where it holds a space or anything a terminal
+/// would not draw as itself, so `a b` and `"a b"` are told apart on the screen as they are in argv.
+/// A stored value is not shown: its name is, marked stored, and a file it names is shown as a read.
+pub fn drawn(alias: &str, declaration: &Declaration, digest: &str) -> Vec<String> {
+    let what = match declaration {
+        Declaration::Stdio { argv, .. } => argv
+            .iter()
+            .map(|word| shown(word))
+            .collect::<Vec<_>>()
+            .join(" "),
+        Declaration::Http { url } => shown(url),
+    };
+    let indent = indent(alias);
+    let mut lines = vec![format!(
+        "  {}   {}   {what}",
+        shown(alias),
+        declaration.transport()
+    )];
+    let names: Vec<String> = declaration
+        .stored()
+        .map(|name| t!(mcp_variable_stored, name = name).to_string())
+        .chain(declaration.variables().iter().cloned())
+        .collect();
+    if !names.is_empty() {
+        lines.push(format!(
+            "{indent}{}",
+            t!(mcp_variables, names = names.join(", "))
+        ));
+    }
+    for file in declaration.reads() {
+        lines.push(format!("{indent}{}", t!(mcp_may_read, path = shown(file))));
+    }
+    if let Declaration::Stdio {
+        directory: Some(directory),
+        ..
+    } = declaration
+    {
+        lines.push(format!(
+            "{indent}{}",
+            t!(mcp_directory, path = shown(directory))
+        ));
+    }
+    lines.push(format!("{indent}{}", t!(mcp_digest, digest = digest)));
+    lines
+}
+
+/// The margin the lines under a declaration's first one start at.
+pub fn indent(alias: &str) -> String {
+    " ".repeat(2 + shown(alias).chars().count() + 3)
+}
+
+/// What is wrong with a declaration, as a person reads it.
+pub fn problem(found: &Problem) -> String {
+    match found {
+        Problem::Alias => t!(mcp_problem_alias).to_string(),
+        Problem::NotAnObject => t!(mcp_problem_not_an_object).to_string(),
+        Problem::Transport => t!(mcp_problem_transport).to_string(),
+        Problem::Key(key) => t!(mcp_problem_key, key = shown(key)).to_string(),
+        Problem::Program => t!(mcp_problem_program).to_string(),
+        Problem::Name => t!(mcp_problem_name).to_string(),
+        Problem::Env => t!(mcp_problem_env).to_string(),
+        Problem::Value(name) => t!(mcp_problem_value, name = name).to_string(),
+        Problem::Twice(name) => t!(mcp_problem_twice, name = name).to_string(),
+        Problem::Reads => t!(mcp_problem_reads).to_string(),
+        Problem::Directory => t!(mcp_problem_directory).to_string(),
+        Problem::Url => t!(mcp_problem_url).to_string(),
+        Problem::Credentials => t!(mcp_problem_credentials).to_string(),
+        Problem::Remote(key) => t!(mcp_problem_remote, key = *key).to_string(),
+    }
+}
+
+/// Why nothing is declared or recorded on a machine with no state directory.
+pub fn no_state_directory() -> String {
+    t!(
+        mcp_no_state_directory,
+        variables = crate::home::PROFILE_VARIABLES.join(" or ")
+    )
+    .to_string()
+}
+
+/// Record the approval of `declaration`'s digest, and of nothing else: the alias is kept beside it
+/// as the name it was asked about under, and is not what was approved. The error is why the file
+/// was not written.
+pub fn record(
+    directory: &Path,
+    declarations: &Declarations,
+    approvals: &mut Approvals,
+    alias: &str,
+    declaration: &Declaration,
+) -> Result<(), String> {
+    approvals.approve(alias, declaration.digest());
+    approvals.keep_only(declarations);
+    let path = mcp::approvals_file(directory);
+    crate::mcp::replace(&path, approvals.to_text()).map_err(|error| {
+        t!(
+            mcp_not_written,
+            path = path.display().to_string(),
+            error = error.to_string()
+        )
+        .to_string()
+    })
 }
 
 /// Keep a yes: the approval of this digest, and the project where answer 2 gave one.
@@ -978,14 +1129,12 @@ fn keep(
         return vec![t!(servers_for_this_session_only, alias = alias).to_string()];
     }
     let mut unkept = Vec::new();
-    if let Err((_, reason)) =
-        command::record(directory, declarations, approvals, alias, declaration)
-    {
+    if let Err(reason) = record(directory, declarations, approvals, alias, declaration) {
         unkept.push(t!(servers_not_kept, alias = alias, reason = reason).to_string());
     }
     if let Some(project) = project {
         let recorded = projects.add(project)
-            && command::replace(&mcp::projects_file(directory), &projects.to_text()).is_ok();
+            && crate::mcp::replace(&mcp::projects_file(directory), projects.to_text()).is_ok();
         if !recorded {
             unkept.push(
                 t!(
@@ -1001,14 +1150,14 @@ fn keep(
 
 /// The lines a question about `declaration` draws where its program fetches what it runs, under the
 /// margin `alias` sets (SERVERS-6). None for any other.
-pub(crate) fn fetching(alias: &str, declaration: &Declaration) -> Vec<String> {
+pub fn fetching(alias: &str, declaration: &Declaration) -> Vec<String> {
     let Declaration::Stdio { argv, .. } = declaration else {
         return Vec::new();
     };
     let Some(fetched) = fetches(argv) else {
         return Vec::new();
     };
-    let indent = command::indent(alias);
+    let indent = indent(alias);
     let mut lines = vec![format!(
         "{indent}{}",
         t!(servers_fetches, runner = shown(&fetched.runner))
@@ -1193,12 +1342,12 @@ fn start(
     diagnostics: Stream,
     notes: &mut Vec<String>,
     hops: &mut Vec<Hop>,
-) -> Vec<bravebot_agent::mcp::Reached> {
+) -> Vec<crate::mcp::Reached> {
     if plans.is_empty() {
         return Vec::new();
     }
     let (sender, received) =
-        mpsc::channel::<(String, McpResult<bravebot_agent::mcp::Reached>, Option<Hop>)>();
+        mpsc::channel::<(String, McpResult<crate::mcp::Reached>, Option<Hop>)>();
     let mut waiting: Vec<String> = Vec::new();
     let sandbox = plans
         .iter()
@@ -1349,14 +1498,11 @@ fn start(
 }
 
 /// A local server's handshake, and then its list.
-fn handshake_local(
-    mut server: StdioServer,
-    declared: Digest,
-) -> McpResult<bravebot_agent::mcp::Reached> {
+fn handshake_local(mut server: StdioServer, declared: Digest) -> McpResult<crate::mcp::Reached> {
     server.initialize("bravebot", env!("CARGO_PKG_VERSION"))?;
     let alias = server.name().to_string();
     let listing = bravebot_mcp::listed_or_none(&alias, server.list_tools())?;
-    Ok(bravebot_agent::mcp::Reached::new(
+    Ok(crate::mcp::Reached::new(
         Connection::Stdio(server),
         listing,
         declared,
@@ -1372,10 +1518,7 @@ fn handshake_remote(
     alias: &str,
     url: String,
     declared: Digest,
-) -> (
-    McpResult<bravebot_agent::mcp::Reached>,
-    Option<Labelled<String>>,
-) {
+) -> (McpResult<crate::mcp::Reached>, Option<Labelled<String>>) {
     let mut sink = RecordingSink::new();
     let mut routing = Routing::new();
     routing.insert_trusted("server", alias);
@@ -1406,11 +1549,11 @@ fn handshake_at(
     alias: &str,
     url: String,
     declared: Digest,
-) -> McpResult<bravebot_agent::mcp::Reached> {
+) -> McpResult<crate::mcp::Reached> {
     let mut server = HttpServer::new(alias, url);
     server.initialize(policy, egress, "bravebot", env!("CARGO_PKG_VERSION"))?;
     let listing = bravebot_mcp::listed_or_none(alias, server.list_tools(policy, egress))?;
-    Ok(bravebot_agent::mcp::Reached::new(
+    Ok(crate::mcp::Reached::new(
         Connection::Http(server),
         listing,
         declared,
@@ -1443,7 +1586,7 @@ fn confinement_here(
         directory,
         own,
         &temporary_directory(),
-        bravebot_agent::home::profile().as_deref(),
+        crate::home::profile().as_deref(),
     )
 }
 
@@ -1463,7 +1606,7 @@ fn own_home(
             .map_err(|error| (temporary_directory(), error));
     };
     let own = mcp::server_home(state, declared);
-    let made = bravebot_agent::home::create_directory(&own).and_then(|()| own.canonicalize());
+    let made = crate::home::create_directory(&own).and_then(|()| own.canonicalize());
     match made {
         Ok(made) => Ok((made, None)),
         Err(error) => Err((own.parent().map(Path::to_path_buf).unwrap_or(own), error)),
@@ -1572,7 +1715,7 @@ fn confinement(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bravebot_agent::mcp::entry;
+    use crate::mcp::entry;
     use bravebot_config::Rule;
 
     /// A state directory of its own under the build directory, emptied first.
@@ -2586,7 +2729,7 @@ mod tests {
         if Prelude::current().is_none() {
             return;
         }
-        let profile = bravebot_agent::home::profile().expect("a test runs with a home directory");
+        let profile = crate::home::profile().expect("a test runs with a home directory");
         let own = profile.join(".cargo").join("bin");
 
         let kept = scratch("cli-servers-kept-here");
@@ -2842,7 +2985,7 @@ done
         work: &Path,
         home: &Home,
         notes: &mut Vec<String>,
-    ) -> Option<Vec<bravebot_agent::mcp::Reached>> {
+    ) -> Option<Vec<crate::mcp::Reached>> {
         if Prelude::current().is_none() || bravebot_sandbox::for_current_platform().is_err() {
             eprintln!("SKIPPED (no confinement here)");
             return None;

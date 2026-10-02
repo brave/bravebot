@@ -13,6 +13,9 @@
 use crate::exit::{Ending, fail};
 use crate::progress::printable;
 pub(crate) use bravebot_agent::mcp::{shown, unreadable};
+pub(crate) use bravebot_agent::servers::{
+    Home, Person, drawn, indent, no_state_directory, problem, say,
+};
 use bravebot_config::Managed;
 use bravebot_config::import::{Destination, Unwritable};
 use bravebot_config::mcp::{
@@ -25,22 +28,6 @@ use std::ffi::OsString;
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-
-/// Where the files are, and whether this run may write them.
-pub(crate) struct Home {
-    /// The state directory, or `None` where the platform names no profile directory.
-    pub(crate) directory: Option<PathBuf>,
-    /// Whether anything may be written into it, which an incognito session answers no.
-    pub(crate) writable: bool,
-}
-
-/// The other end of the question: where an answer is read, where things are shown, and whether
-/// anybody is there to give one.
-pub(crate) struct Person<R, W> {
-    pub(crate) answers: R,
-    pub(crate) screen: W,
-    pub(crate) present: bool,
-}
 
 /// How a command ended, where it did not end done.
 pub(crate) type Stopped = (Ending, String);
@@ -478,7 +465,7 @@ fn with_reads(
             files.push(file);
         }
     }
-    let reads = crate::servers::unreached(&declaration, files, environment)
+    let reads = bravebot_agent::servers::unreached(&declaration, files, environment)
         .into_iter()
         .filter_map(|file| file.into_os_string().into_string().ok())
         .collect();
@@ -590,8 +577,8 @@ fn place(typed: &str) -> Result<String, Stopped> {
             true => argument(t!(mcp_dir_not_a_directory_unshown)),
             false => argument(t!(mcp_dir_not_a_directory, path = shown(typed))),
         })?;
-    if let Some(repository) = crate::servers::repository_holding(&resolved) {
-        return Err(argument(crate::servers::in_a_repository(
+    if let Some(repository) = bravebot_agent::servers::repository_holding(&resolved) {
+        return Err(argument(bravebot_agent::servers::in_a_repository(
             &resolved,
             &repository,
         )));
@@ -640,8 +627,10 @@ fn get<R: BufRead, W: Write>(
 /// that stops an approved server looking reachable when no session will start it (SERVERS-12,
 /// SERVERS-14).
 fn refused(managed: &Managed, declaration: &Declaration) -> Option<String> {
-    crate::servers::refused_declaration(managed, declaration, &|name| std::env::var_os(name))
-        .map(|reason| t!(mcp_refused_by_managed, reason = reason).to_string())
+    bravebot_agent::servers::refused_declaration(managed, declaration, &|name| {
+        std::env::var_os(name)
+    })
+    .map(|reason| t!(mcp_refused_by_managed, reason = reason).to_string())
 }
 
 /// SERVERS-14's `list`: [`report`] under the file it read and the directory it was read for.
@@ -724,7 +713,7 @@ pub(crate) fn examined(
 /// A declaration's row is its transport, its approval, its digest, and where the managed layer
 /// refuses it, why. Under it, which checkout requested it and whether a session started `here`
 /// holds the grant to call it, read from the one place a session decides that
-/// ([`crate::servers::grant`]), and then what was answered about it here. An entry that cannot be
+/// ([`bravebot_agent::servers::grant`]), and then what was answered about it here. An entry that cannot be
 /// used is listed with its problem rather than left out, since a list that dropped it would make a
 /// declaration somebody wrote look like one nobody read.
 pub(crate) fn report(
@@ -733,7 +722,7 @@ pub(crate) fn report(
     managed: &Managed,
     here: &Here,
 ) -> (Vec<String>, usize) {
-    use crate::servers::{Grant, Unstarted, grant, named};
+    use bravebot_agent::servers::{Grant, Unstarted, grant, named};
 
     let entries = declarations.entries();
     let undeclared: Vec<&(PathBuf, String)> = here
@@ -1153,7 +1142,9 @@ fn kept_from_starting<R, W: Write>(
     person: &mut Person<R, W>,
 ) {
     let environment = |name: &str| std::env::var_os(name);
-    if let Some(reason) = crate::servers::refused_declaration(managed, declaration, &environment) {
+    if let Some(reason) =
+        bravebot_agent::servers::refused_declaration(managed, declaration, &environment)
+    {
         say(
             person,
             t!(mcp_enabled_not_started, alias = alias, reason = reason),
@@ -1348,7 +1339,7 @@ fn ask<R: BufRead, W: Write>(
             ),
         );
     }
-    for line in crate::servers::fetching(alias, declaration) {
+    for line in bravebot_agent::servers::fetching(alias, declaration) {
         say(person, line);
     }
     say(person, "");
@@ -1362,73 +1353,17 @@ fn ask<R: BufRead, W: Write>(
     }
 }
 
-/// Record the approval of `declaration`'s digest, and of nothing else: the alias is kept beside it
-/// as the name it was asked about under, and is not what was approved.
-pub(crate) fn record(
+/// Record the approval of `declaration`'s digest, ending failed where the approvals file was not
+/// written.
+fn record(
     directory: &Path,
     declarations: &Declarations,
     approvals: &mut Approvals,
     alias: &str,
     declaration: &Declaration,
 ) -> Result<(), Stopped> {
-    approvals.approve(alias, declaration.digest());
-    approvals.keep_only(declarations);
-    replace(&mcp::approvals_file(directory), &approvals.to_text())
-}
-
-/// A declaration as a person reads it: the alias, the transport and what it runs or reaches on the
-/// first line, and under it the names it receives, the files it may read, where it runs, and the
-/// digest.
-///
-/// Every argument is shown as the word it is, quoted where it holds a space or anything a terminal
-/// would not draw as itself, so `a b` and `"a b"` are told apart on the screen as they are in argv.
-/// A stored value is not shown: its name is, marked stored, and a file it names is shown as a read.
-pub(crate) fn drawn(alias: &str, declaration: &Declaration, digest: &str) -> Vec<String> {
-    let what = match declaration {
-        Declaration::Stdio { argv, .. } => argv
-            .iter()
-            .map(|word| shown(word))
-            .collect::<Vec<_>>()
-            .join(" "),
-        Declaration::Http { url } => shown(url),
-    };
-    let indent = indent(alias);
-    let mut lines = vec![format!(
-        "  {}   {}   {what}",
-        shown(alias),
-        declaration.transport()
-    )];
-    let names: Vec<String> = declaration
-        .stored()
-        .map(|name| t!(mcp_variable_stored, name = name).to_string())
-        .chain(declaration.variables().iter().cloned())
-        .collect();
-    if !names.is_empty() {
-        lines.push(format!(
-            "{indent}{}",
-            t!(mcp_variables, names = names.join(", "))
-        ));
-    }
-    for file in declaration.reads() {
-        lines.push(format!("{indent}{}", t!(mcp_may_read, path = shown(file))));
-    }
-    if let Declaration::Stdio {
-        directory: Some(directory),
-        ..
-    } = declaration
-    {
-        lines.push(format!(
-            "{indent}{}",
-            t!(mcp_directory, path = shown(directory))
-        ));
-    }
-    lines.push(format!("{indent}{}", t!(mcp_digest, digest = digest)));
-    lines
-}
-
-/// The margin the lines under a declaration's first one start at.
-pub(crate) fn indent(alias: &str) -> String {
-    " ".repeat(2 + shown(alias).chars().count() + 3)
+    bravebot_agent::servers::record(directory, declarations, approvals, alias, declaration)
+        .map_err(|reason| (Ending::Failed, reason))
 }
 
 /// `text` padded to `width` characters, counted as characters for the reason `doctor`'s columns are.
@@ -1467,18 +1402,6 @@ fn not_declared(alias: &str) -> Stopped {
         Ending::Argument,
         t!(mcp_not_declared, alias = shown(alias)).to_string(),
     )
-}
-
-pub(crate) fn say<R, W: Write>(person: &mut Person<R, W>, line: impl std::fmt::Display) {
-    let _ = writeln!(person.screen, "{line}");
-}
-
-pub(crate) fn no_state_directory() -> String {
-    t!(
-        mcp_no_state_directory,
-        variables = bravebot_agent::home::PROFILE_VARIABLES.join(" or ")
-    )
-    .to_string()
 }
 
 /// The state directory, where this run of `command` may write to it.
@@ -1550,28 +1473,34 @@ pub(crate) fn replace(path: &Path, text: &str) -> Result<(), Stopped> {
     })
 }
 
-pub(crate) fn problem(found: &Problem) -> String {
-    match found {
-        Problem::Alias => t!(mcp_problem_alias).to_string(),
-        Problem::NotAnObject => t!(mcp_problem_not_an_object).to_string(),
-        Problem::Transport => t!(mcp_problem_transport).to_string(),
-        Problem::Key(key) => t!(mcp_problem_key, key = shown(key)).to_string(),
-        Problem::Program => t!(mcp_problem_program).to_string(),
-        Problem::Name => t!(mcp_problem_name).to_string(),
-        Problem::Env => t!(mcp_problem_env).to_string(),
-        Problem::Value(name) => t!(mcp_problem_value, name = name).to_string(),
-        Problem::Twice(name) => t!(mcp_problem_twice, name = name).to_string(),
-        Problem::Reads => t!(mcp_problem_reads).to_string(),
-        Problem::Directory => t!(mcp_problem_directory).to_string(),
-        Problem::Url => t!(mcp_problem_url).to_string(),
-        Problem::Credentials => t!(mcp_problem_credentials).to_string(),
-        Problem::Remote(key) => t!(mcp_problem_remote, key = *key).to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A new directory under the system temporary directory, which no repository holds, for a test
+    /// to declare a server's directory in. The scratch directory under `target/` is inside this
+    /// checkout.
+    fn outside_any_repository(name: &str) -> PathBuf {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default();
+        // Named for this process and moment, and made with create_dir so a name another run holds
+        // is refused rather than shared.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let temporary = std::env::temp_dir();
+        let path = temporary.join(format!("bravebot-{name}-{}-{stamp}", std::process::id()));
+        std::fs::create_dir(&path).expect("a directory of its own under the temporary directory");
+        let path = path
+            .canonicalize()
+            .expect("the directory just made resolves");
+        assert_eq!(
+            bravebot_agent::servers::repository_holding(&path),
+            None,
+            "the temporary directory is inside a repository"
+        );
+        path
+    }
 
     fn approved(directory: &Path, declaration: &Declaration) -> bool {
         Approvals::read(directory).approves(&declaration.digest())
@@ -2085,7 +2014,7 @@ mod tests {
     /// spells it, with the flags before it read the same and every word after it the server's.
     #[test]
     fn a_bare_double_dash_declares_the_program_after_it() {
-        let directory = crate::servers::outside_any_repository("cli-mcp-bare-dashes");
+        let directory = outside_any_repository("cli-mcp-bare-dashes");
         let place = directory.to_str().unwrap();
         let declared_by = |flags: &[&str]| declared(&words(flags), 1, &mut None).ok();
 
@@ -2123,7 +2052,7 @@ mod tests {
     /// which repository, rather than leaving the refusal to the first session.
     #[test]
     fn add_declares_no_directory_inside_a_repository() {
-        let root = crate::servers::outside_any_repository("cli-mcp-dir-in-a-repository");
+        let root = outside_any_repository("cli-mcp-dir-in-a-repository");
         let inside = root.join("checkout").join("server");
         std::fs::create_dir_all(&inside).unwrap();
         std::fs::create_dir_all(root.join("checkout").join(".git")).unwrap();
@@ -2132,7 +2061,7 @@ mod tests {
         match declared(&words(&["--dir", typed, "--", "/opt/srv"]), 1, &mut None) {
             Err(Refusal::Said((Ending::Argument, said))) => assert_eq!(
                 said,
-                crate::servers::in_a_repository(&inside, &root.join("checkout"))
+                bravebot_agent::servers::in_a_repository(&inside, &root.join("checkout"))
             ),
             _ => panic!("a directory inside a repository was not refused as an argument"),
         }

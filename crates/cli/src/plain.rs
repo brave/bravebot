@@ -222,12 +222,12 @@ pub fn session(skip_permissions: bool, agent: Option<String>) -> ExitCode {
 
     // After that question, and put on the same two streams every other question here is. Held for
     // the length of the session, since dropping one stops its server.
-    let mut reached = crate::servers::for_this_session(
+    let mut reached = bravebot_agent::servers::for_this_session(
         &settings,
         workspace.root(),
         match skip_permissions {
-            true => crate::servers::Asking::Bypass,
-            false => crate::servers::Asking::Person,
+            true => bravebot_agent::servers::Asking::Bypass,
+            false => bravebot_agent::servers::Asking::Person,
         },
         &mut crate::mcp::Person {
             answers: &mut asking.input,
