@@ -851,7 +851,8 @@ A word asks what the session has cost and is answered with the total, and under 
 turn with that turn's share of the total beside it. What was spent before the first turn is
 reported too and is not given a turn's number, since no turn did it. A record that holds a total
 and no breakdown says the breakdown is missing, which is not the answer a session that has spent
-nothing gives.
+nothing gives. A turn is charged when it ends, so asked while one runs
+([commands.md](commands.md#CMD-8)), the answer adds what that turn has spent so far under its number.
 
 The figures are tokens. Nothing here states a price: no model listing carries one, and a prompt a
 service answered out of its own cache is billed at a fraction of a fresh one while the breakdown
@@ -868,6 +869,7 @@ what makes the second one visible without the reader dividing each row by the to
 `verified-by: bravebot_tui::state::a_total_with_no_breakdown_does_not_read_as_a_session_that_spent_nothing`
 `verified-by: bravebot_tui::state::a_session_that_has_spent_nothing_says_so`
 `verified-by: bravebot_tui::app::typing_the_cost_command_reports_rather_than_prompting`
+`verified-by: bravebot_tui::app::cost_asked_mid_turn_counts_what_the_running_turn_has_spent`
 
 <a id="SESSION-28"></a>
 ### SESSION-28: a second front end reads and writes the same store, and adds only the question of which projects exist

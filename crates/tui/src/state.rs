@@ -1543,6 +1543,12 @@ pub struct Session {
     /// Held as it arrived. What is drawn from it is [`Session::reply_so_far`], since a model
     /// that has nowhere else to put its working writes it in here.
     streaming: String,
+    /// What the commands carried out during the turn in flight have said, drawn at the tail.
+    ///
+    /// Not in the transcript until the turn has ended (CMD-8). A stopped turn gives its prompt
+    /// back only where the transcript has nothing after it, and a failed one hangs its trail on the
+    /// last entry, so a note put there mid-turn would cost a person the prompt they stopped.
+    said_while_working: Vec<Entry>,
     /// The call the model is writing, named as the model named it, until the round's calls start.
     ///
     /// Beside the spinner rather than in the transcript for the reason the reply taking shape is
@@ -1766,6 +1772,7 @@ impl Session {
             turn_start: TurnStart::default(),
             pending: crate::remote_confirm::Interjections::new(),
             streaming: String::new(),
+            said_while_working: Vec::new(),
             composing: None,
             attributed_to: None,
             answers: Vec::new(),
@@ -6696,7 +6703,11 @@ impl Session {
         self.pasted.clear();
         self.previews.clear();
         self.attached.clear();
-        self.clear_input();
+        // Not through [`Session::clear_input`], which keeps a line typed mid-turn: a command carried
+        // out while a turn runs (CMD-8) leaves the box as one carried out at rest does.
+        self.history.leave();
+        self.set_input(String::new());
+        self.shell = false;
         Commanded {
             line,
             pasted,
@@ -6754,6 +6765,14 @@ impl Session {
     /// anywhere, and nothing about it is in the conversation while it waits.
     pub fn queue_command(&mut self) -> bool {
         self.queue_line(Waiting::Command)
+    }
+
+    /// The commands waiting for the turn to end, as they were typed and in that order.
+    pub fn commands_waiting(&self) -> impl Iterator<Item = &str> {
+        self.queued
+            .iter()
+            .filter(|line| line.waiting == Waiting::Command)
+            .map(|line| line.prompt.as_str())
     }
 
     /// Take the current line as a command line to run when the turn in flight has finished.
@@ -6873,7 +6892,9 @@ impl Session {
         self.stopping = true;
     }
 
-    fn a_turn_is_running(&self) -> bool {
+    /// Whether what the session is working on is a turn, rather than a compaction, an aside or
+    /// another of the loops that share the working status.
+    pub fn a_turn_is_running(&self) -> bool {
         self.status == Status::Working && self.turn_in_flight
     }
 
@@ -8076,6 +8097,31 @@ impl Session {
         self.transcript.push(Entry::system(message));
     }
 
+    /// Carry out a command while a turn is working, holding what it says until the turn has ended.
+    ///
+    /// Everything `answer` notes is moved off the transcript into [`Session::said_while_working`],
+    /// which is drawn under the turn. A command answered here only appends, so what it put on the
+    /// end is all of what it said.
+    pub fn answer_while_working<R>(&mut self, answer: impl FnOnce(&mut Self) -> R) -> R {
+        let before = self.transcript.len();
+        let answered = answer(self);
+        let said = self.transcript.split_off(before);
+        self.said_while_working.extend(said);
+        self.scroll = 0;
+        answered
+    }
+
+    /// What the commands carried out during the turn in flight have said, oldest first.
+    pub fn said_while_working(&self) -> &[Entry] {
+        &self.said_while_working
+    }
+
+    /// Put what was said during the turn into the transcript, now that the turn has been folded in.
+    pub fn settle_what_was_said(&mut self) {
+        let said = std::mem::take(&mut self.said_while_working);
+        self.transcript.extend(said);
+    }
+
     /// Put what each turn has spent in the transcript.
     ///
     /// What `/cost` answers, and the question the session total cannot: a total tells twenty even
@@ -8088,10 +8134,21 @@ impl Session {
     /// at a fraction of a fresh one while the record keeps no cache split per turn, so a figure in
     /// money would be composed here rather than measured.
     pub fn report_spend(&mut self) {
-        let total = self.tokens;
+        // A turn still running is charged when it ends, so what it has spent so far is added here:
+        // asked mid-turn (CMD-8), the count of turns already includes it.
+        let mut spend = self.spend.clone();
+        let running = if self.a_turn_is_running() {
+            self.progress.tokens
+        } else {
+            0
+        };
+        if running > 0 {
+            *spend.entry(self.turns).or_default() += running;
+        }
+        let total = self.tokens + running;
         let mut lines = vec![crate::status::Line::new(
             t!(status_this_session),
-            if total == 0 && self.spend.is_empty() {
+            if total == 0 && spend.is_empty() {
                 t!(cost_nothing_spent).to_string()
             } else {
                 format!(
@@ -8102,7 +8159,7 @@ impl Session {
             },
         )];
 
-        for (turn, spent) in &self.spend {
+        for (turn, spent) in &spend {
             let label = match turn {
                 0 => t!(cost_before_the_first_turn).to_string(),
                 number => t!(cost_turn, number = number),
@@ -8119,7 +8176,7 @@ impl Session {
         // the part it spent before the resume, so an empty breakdown is the far end of this case
         // rather than a case of its own. Left out, the rows would read as an account of the total
         // that quietly does not add up to it.
-        let unattributed = total.saturating_sub(self.spend.values().sum());
+        let unattributed = total.saturating_sub(spend.values().sum());
         if unattributed > 0 {
             lines.push(
                 crate::status::Line::new("", crate::status::tokens(unattributed))

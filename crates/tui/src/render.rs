@@ -1959,6 +1959,20 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> (Vec<Line<'static
         lines.push(Line::raw(""));
     }
 
+    // What a command typed during the turn answered, under the turn and drawn as a note is. Kept
+    // off the transcript until the turn ends (CMD-8), and the session's rather than a delegate's.
+    if !session.said_while_working().is_empty() && !session.watching_a_delegate() {
+        for entry in session.said_while_working() {
+            for text in entry.text.lines() {
+                lines.push(Line::from(Span::styled(
+                    format!("{:LEAD$}{text}", ""),
+                    Style::default().fg(theme::note()),
+                )));
+            }
+        }
+        lines.push(Line::raw(""));
+    }
+
     // One blank above it and no more. Every entry already leaves a trailing blank behind it, so
     // an invitation that carried its own would sit two rows below whatever startup reported.
     if opening {
@@ -7334,6 +7348,23 @@ mod tests {
             assert!(output.contains(&key), "{key} missing");
             assert!(output.contains(meaning), "{key} has no meaning on screen");
         }
+    }
+
+    /// A command carried out mid-turn answers into a list the transcript does not hold until the
+    /// turn ends (CMD-8), so the screen has to draw that list itself: otherwise `/loop stop` typed
+    /// during a turn would stop the loop and say so to nobody.
+    #[test]
+    fn what_a_command_answered_mid_turn_is_drawn_under_the_turn() {
+        let mut session = Session::new("none");
+        session.type_char('a');
+        session.submit().expect("the prompt is sent");
+        session.answer_while_working(|session| session.note("no loop is running"));
+
+        let output = rendered_at(&session, 120, 40);
+        assert!(
+            output.contains("no loop is running"),
+            "the answer was not drawn: {output}"
+        );
     }
 
     /// When keybindings are customized, the shortcut list reflects the configured chords rather

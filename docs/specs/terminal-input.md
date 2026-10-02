@@ -326,7 +326,7 @@ named here and nowhere else:
 
 | Key | Why it may differ |
 |---|---|
-| Enter | sends, which is the whole of what is refused (INPUT-10), and a line that is one of the words a slash may begin waits to be carried out rather than to be sent ([commands.md](commands.md)) |
+| Enter | sends, which is the whole of what is refused (INPUT-10), and a line that is one of the words a slash may begin is carried out as it is typed or waits to be, never sent ([commands.md](commands.md#CMD-8)) |
 | Escape, Ctrl-C | stop the turn in flight (INPUT-4), Escape in vi's style only from NORMAL mode with nothing waiting, and Ctrl-`[` with it ([INPUT-24](#INPUT-24)) |
 | Ctrl-Enter | queues the line as Enter does, then stops the turn in flight so what is waiting goes now (INPUT-36) |
 | Ctrl-D | leaves, which is not something the box does |
@@ -375,11 +375,13 @@ attached to no press.
 Enter mid-turn takes the line out of the box and holds it. It is drawn under the box, marked, so
 the person can see that what they sent went somewhere.
 
-**A line that is a command is taken the same way, and waits to be carried out rather than to be
-sent.** It comes off the box and is drawn under it like anything else waiting, but it is not offered
-to the turn in flight, so nothing about it reaches the planner. What carries it out is the queue
-being reached once the turn has ended, and a prompt behind it goes when it has, as any waiting prompt
-does. Which lines are commands is [commands.md](commands.md)'s.
+**A line that is a command is never sent.** Most are taken the same way and wait to be carried
+out: such a line comes off the box and is drawn under it like anything else waiting, but it is not
+offered to the turn in flight, so nothing about it reaches the planner. What carries it out is the
+queue being reached once the turn has ended, and a prompt behind it goes when it has, as any waiting
+prompt does. A command that reads or ends only what the session keeps for itself is carried out as
+it is typed instead. Which lines are commands, and which of them wait, is
+[commands.md](commands.md#CMD-8)'s.
 
 **The turn in flight takes it.** A turn asks between rounds, after the round's tool calls have run
 and before the next request goes out, and everything waiting goes into the conversation there, in

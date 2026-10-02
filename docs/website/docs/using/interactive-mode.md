@@ -256,7 +256,7 @@ can see that what you sent went somewhere. Beside the mark is where it is going:
 | into this turn, next round | the running turn reads it once the calls in its current round are done |
 | a new turn after this | nothing running will read it, so it starts a turn when that ends: behind `/compact`, a plan or a goal check, or a turn you have asked to stop |
 | into the next turn | a prompt behind one that will start a turn, which that turn reads once the calls in its first round are done |
-| carried out after this | a slash command, carried out when what is running ends rather than sent into it |
+| carried out after this | a slash command that waits for what is running to end rather than being sent into it |
 | run in your shell | a command line, which your shell runs when what is running ends, and whose output the model then reads |
 
 A turn that answers without another round never reaches the one its prompts were waiting for, so
@@ -270,10 +270,14 @@ you typed it. So "no, the other file" reaches the planner while the work it is a
 happening, instead of arriving after the thing it was meant to prevent. A prompt still waiting when
 the turn ends becomes a turn of its own.
 
-**A [slash command](../reference/commands.md) waits to be carried out rather than to be sent.** It
+**A [slash command](../reference/commands.md) is never sent.** Most wait to be carried out: one
 comes off the box and is drawn under it like anything else waiting, but it is not offered to the turn
 in flight, so nothing about it reaches the planner. It runs when the queue is reached after the turn
-has ended, and a prompt behind it goes once it has.
+has ended, and a prompt behind it goes once it has. During a turn, `/cost`, `/watch`, `/loop` and
+`/goal` are carried out as you press Enter instead, except a `/loop` that starts a loop and a `/goal`
+that sets one, which wait. What they answer is drawn under the turn and joins the transcript after it,
+and nothing waiting moves. During a compaction, a `/btw` question, a `/manifest` run or a goal check,
+every command waits.
 
 **The turn in flight is the one on the screen.** Work handed out to a [delegate](#watching-a-delegate-reading-a-command-and-asking-something-aside)
 is a turn of its own, and you may not know one is running, so what you type waits for the turn you are

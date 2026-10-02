@@ -176,6 +176,22 @@ pub struct Command {
     pub argument: &'static str,
     /// One line, for the list shown while a command is being typed.
     pub description: &'static str,
+    /// What Enter on it does while a turn is running (CMD-8).
+    pub mid_turn: MidTurn,
+}
+
+/// What Enter on a command does while a turn is running, which turns on what the command touches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MidTurn {
+    /// Carried out as it is typed. It reads or ends what the session keeps for itself, and the
+    /// turn holds none of that.
+    Runs,
+    /// Carried out as it is typed where it reads or ends what is standing, and waiting where it
+    /// would start something: a loop or a goal armed mid-turn needs a look of its own.
+    RunsUnlessItStarts,
+    /// Waits for the turn to end, because it acts on the conversation, the workspace, the
+    /// terminal or the network, and the turn holds all four.
+    Waits,
 }
 
 /// Every command, in the order they are offered.
@@ -189,111 +205,133 @@ pub fn commands() -> [Command; 22] {
             name: STATUS_COMMAND,
             argument: "",
             description: t!(command_status),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: COST_COMMAND,
             argument: "",
             description: t!(command_cost),
+            mid_turn: MidTurn::Runs,
         },
         Command {
             name: MODEL_COMMAND,
             argument: "",
             description: t!(command_model),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: THEME_COMMAND,
             argument: "[name]",
             description: t!(command_theme),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: EFFORT_COMMAND,
             argument: "[level]",
             description: t!(command_effort),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: CONFIG_COMMAND,
             argument: "",
             description: t!(command_config),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: ADD_DIR_COMMAND,
             argument: "<path>",
             description: t!(command_add_dir),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: CD_COMMAND,
             argument: "<path>",
             description: t!(command_cd),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: RENAME_COMMAND,
             argument: "<name>",
             description: t!(command_rename),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: COMPACT_COMMAND,
             argument: "",
             description: t!(command_compact),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: BTW_COMMAND,
             argument: "<question>",
             description: t!(command_btw),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: CLEAR_COMMAND,
             argument: "",
             description: t!(command_clear),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: FORGET_TRUST_COMMAND,
             argument: "",
             description: t!(command_forget_trust),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: LOOP_COMMAND,
             argument: "[[interval] <prompt> | stop]",
             description: t!(command_loop),
+            mid_turn: MidTurn::RunsUnlessItStarts,
         },
         Command {
             name: GOAL_COMMAND,
             argument: "[<condition> | clear]",
             description: t!(command_goal),
+            mid_turn: MidTurn::RunsUnlessItStarts,
         },
         Command {
             name: WATCH_COMMAND,
             argument: "[stop <n>]",
             description: t!(command_watch),
+            mid_turn: MidTurn::Runs,
         },
         Command {
             name: MANIFEST_COMMAND,
             argument: "<task>",
             description: t!(command_manifest),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: AGENT_COMMAND,
             argument: "<name> <task>",
             description: t!(command_agent),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: EXPORT_COMMAND,
             argument: "[path]",
             description: t!(command_export),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: UNDO_COMMAND,
             argument: "",
             description: t!(command_undo),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: REWIND_COMMAND,
             argument: "[turns]",
             description: t!(command_rewind),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: EXIT_COMMAND,
             argument: "",
             description: t!(command_exit),
+            mid_turn: MidTurn::Waits,
         },
     ]
 }
@@ -341,13 +379,44 @@ fn argument_to<'a>(line: &'a str, command: &str) -> Option<&'a str> {
 /// argument the table names is what says which of the two a word is, so the two agree by reading
 /// the same column rather than by anybody keeping two lists in step.
 pub(crate) fn command_typed(line: &str) -> Option<&'static str> {
+    row_typed(line).map(|command| command.name)
+}
+
+/// The table's row for the command word the line is, or `None` where the line is a prompt.
+fn row_typed(line: &str) -> Option<Command> {
     commands()
         .into_iter()
         .find(|command| match argument_to(line, command.name) {
             Some(argument) => !command.argument.is_empty() || argument.is_empty(),
             None => false,
         })
-        .map(|command| command.name)
+}
+
+/// Whether the command a line is gets carried out as it is typed while a turn runs (CMD-8).
+///
+/// Read off the table's column, and for the two words that both read and start, off the form the
+/// argument takes: `/loop stop` ends what is standing, and `/loop 5m check the deploy` would start
+/// a loop while the turn in flight is still the session's work.
+fn runs_while_working(line: &str) -> bool {
+    let Some(command) = row_typed(line) else {
+        return false;
+    };
+    match command.mid_turn {
+        MidTurn::Runs => true,
+        MidTurn::Waits => false,
+        MidTurn::RunsUnlessItStarts => {
+            let argument = argument_to(line, command.name).unwrap_or_default();
+            match command.name {
+                LOOP_COMMAND => {
+                    !matches!(crate::loops::parse(argument), crate::loops::Asked::Start(_))
+                }
+                GOAL_COMMAND => {
+                    !matches!(crate::goals::parse(argument), crate::goals::Asked::Set(_))
+                }
+                _ => false,
+            }
+        }
+    }
 }
 
 /// What a key press asked for.
@@ -427,8 +496,6 @@ pub enum Action {
     /// Withdraw the remembered answer about the working directory. Needs the workspace, which the
     /// loop owns, and leaves this session's map as it is.
     ForgetTrust,
-    /// Report what each turn has spent. Reads nothing the session does not already hold.
-    Cost,
     /// Run a command the user typed in shell mode. Needs the workspace and the conversation.
     Run(String),
     /// Put the transcript in front of the user in their editor. Needs the terminal, which the
@@ -1402,7 +1469,8 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         return Action::ForgetTrust;
     }
     if line.trim() == COST_COMMAND {
-        return Action::Cost;
+        session.report_spend();
+        return Action::Redraw;
     }
     if line.trim() == COMPACT_COMMAND {
         return Action::Compact;
@@ -2004,6 +2072,31 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // watch firing, which leaves the mode armed over a line that was typed at rest to be run.
     if key.code == KeyCode::Enter && session.shell && session.queue_shell() {
         return queued(session, key);
+    }
+
+    // Before the arm that queues a command, because these commands need not wait: each reads or
+    // ends only what the session keeps for itself, a loop, a goal, a watch or the spend so far, and
+    // the turn holds none of it (CMD-8). Ahead of everything queued too, so `/cost` typed behind a
+    // waiting prompt answers for the moment it was typed. What it says is held off the transcript
+    // until the turn ends, since the transcript is how a stopped turn tells whether it did anything.
+    //
+    // A turn only. The other loops that run while the session works, a compaction among them, keep
+    // every command waiting. Ctrl-Enter here stops nothing: the command has already been carried
+    // out, and stopping the turn would send prompts waiting behind it that nobody asked to hurry.
+    //
+    // Not past a waiting line of the same command: `/loop stop` typed after a waiting
+    // `/loop 5m check the deploy` would find no loop to stop, and the loop would start after it.
+    if key.code == KeyCode::Enter
+        && !session.shell
+        && session.a_turn_is_running()
+        && runs_while_working(session.input())
+        && !session
+            .commands_waiting()
+            .any(|waiting| command_typed(waiting) == command_typed(session.input()))
+    {
+        let commanded = session.take_command();
+        session.answer_while_working(|session| dispatch_command(session, commanded));
+        return Action::Redraw;
     }
 
     // Before the arm that queues a prompt, because the two do the same thing to the box and differ
@@ -3355,10 +3448,6 @@ fn event_loop(
                     bravebot_agent::home::directory().as_deref(),
                     workspace.root(),
                 ));
-                needs_draw = true;
-            }
-            Action::Cost => {
-                session.report_spend();
                 needs_draw = true;
             }
             Action::Compact => {
@@ -6751,8 +6840,8 @@ fn run_turn_animated(
         workspace,
         Line {
             text: prompt,
-            wrote,
             addressed: addressed.as_ref(),
+            offered_a_later_look: looking_again,
         },
         finished,
         retained,
@@ -6833,6 +6922,9 @@ fn finish_turn(
             workspace,
         )
     };
+    // After the turn is folded in, so the prompt a stop gives back and the trail a failure keeps
+    // are decided over a transcript holding only the turn.
+    session.settle_what_was_said();
     let Carried {
         trust,
         programs,
@@ -6978,15 +7070,20 @@ enum Wrote {
 
 /// The wait that starts a loop nobody typed `/loop` for, where there is one.
 ///
-/// `None` where the turn asked for nothing, and where the line the loop would repeat is not the
-/// person's. A loop repeats a line somebody endorsed, and the sentence this program writes to
-/// carry a goal on is not one: a turn under a goal asking for a later look would otherwise leave
-/// behind a loop sending the driver's own words back every quarter of an hour.
+/// `None` where the turn asked for nothing, and where it was not offered a later look before it
+/// ran ([`will_look_again`]). That refuses a line that is not the person's: a loop repeats a line
+/// somebody endorsed, and the sentence this program writes to carry a goal on is not one, so a
+/// turn under a goal asking for a later look would otherwise leave behind a loop sending the
+/// driver's own words back every quarter of an hour.
+///
+/// It refuses a tick as well. A self-paced tick asks for its loop's next wait, and a `/loop stop`
+/// typed while it ran leaves no loop for that wait to pace: kept, it would start a new loop on the
+/// line the person had just stopped.
 ///
 /// Split out from `fold_outcome` so it can be tested. That function's answer to a finished turn
 /// needs a whole [`turn::Outcome`], and the field holding the released reply is its own crate's.
-fn watch_to_start(wakeup: Option<turn::Wakeup>, wrote: Wrote) -> Option<turn::Wakeup> {
-    wakeup.filter(|_| wrote == Wrote::ThePerson)
+fn watch_to_start(wakeup: Option<turn::Wakeup>, offered: bool) -> Option<turn::Wakeup> {
+    wakeup.filter(|_| offered)
 }
 
 /// Whether a wait this turn asks for would become a later look at its own line.
@@ -6996,10 +7093,10 @@ fn watch_to_start(wakeup: Option<turn::Wakeup>, wrote: Wrote) -> Option<turn::Wa
 /// whose confirmation says a later look is arranged and needs nothing from the person would be
 /// describing a watch nothing is keeping.
 ///
-/// The same refusals [`watch_to_start`] and [`crate::state::Session::watch_again`] make once the
-/// turn has ended, in one place ahead of it: the line has to be the person's, and the session has
-/// to have nothing else of its own already running, since it does one of a watch, a loop and a
-/// goal at a time. A turn that is a tick of a loop is not this question at all, the loop being
+/// The same refusals [`crate::state::Session::watch_again`] makes once the turn has ended, in one
+/// place ahead of it, and the answer [`watch_to_start`] reads then: the line has to be the
+/// person's, and the session has to have nothing else of its own already running, since it does
+/// one of a watch, a loop and a goal at a time. A turn that is a tick of a loop is not this question at all, the loop being
 /// already the thing that asks again, and the agent reads this only where there is no tick.
 fn will_look_again(session: &Session, wrote: Wrote) -> bool {
     wrote == Wrote::ThePerson
@@ -7079,16 +7176,18 @@ struct Occupied {
     last_request_tokens: u64,
 }
 
-/// The line a turn ran, and whose it was.
+/// The line a turn ran, and whether it may be repeated.
 ///
 /// One value rather than two because neither says anything alone here: a loop repeats a line, and
-/// whether this one may be repeated is a question about who wrote it rather than about the words.
+/// whether this one may be repeated is a question about who wrote it and what the session was
+/// doing when it went, rather than about the words.
 #[derive(Clone, Copy)]
 struct Line<'a> {
     text: &'a str,
-    wrote: Wrote,
     // The definition a person's `/agent` line addressed, which `text` does not carry.
     addressed: Option<&'a crate::state::Addressed>,
+    // Whether the turn was offered a later look at this line before it ran ([`will_look_again`]).
+    offered_a_later_look: bool,
 }
 
 impl Line<'_> {
@@ -7214,7 +7313,7 @@ fn fold_outcome(
 
             if session.looping().is_some() {
                 session.loop_turn_ended(outcome.wakeup);
-            } else if let Some(wakeup) = watch_to_start(outcome.wakeup, line.wrote) {
+            } else if let Some(wakeup) = watch_to_start(outcome.wakeup, line.offered_a_later_look) {
                 session.watch_again(line.text, wakeup);
             }
 
@@ -13048,17 +13147,18 @@ mod tests {
     }
 
     /// The same ending asked for during a turn, which is where a loop worth ending usually is. The
-    /// line waits, the way every line typed mid-turn waits, and ends the loop when the queue is
-    /// reached rather than reaching the turn in flight. No tick goes out ahead of it either, which is
-    /// `a_tick_waits_for_the_turn_in_flight_and_for_what_is_queued`'s half of this.
+    /// line reads and ends the loop alone, and the tick in flight holds nothing of the loop, so it
+    /// ends it on the press rather than when the queue is reached (CMD-8). The tick goes on, and the
+    /// ending is said once that tick has ended.
     #[test]
-    fn asking_to_stop_a_loop_during_a_turn_ends_it_when_the_queue_is_reached() {
+    fn asking_to_stop_a_loop_during_a_turn_ends_it_as_it_is_typed() {
         let mut session = Session::new("none");
         session.start_loop(
             crate::loops::request("5m check the deploy"),
             Vec::new(),
             Vec::new(),
         );
+        assert!(session.a_turn_is_running(), "the loop sent no first tick");
         for c in "/loop stop".chars() {
             handle_key_while_working(&mut session, key(KeyCode::Char(c)));
         }
@@ -13068,13 +13168,14 @@ mod tests {
             Action::Redraw
         );
         assert!(
-            session.looping().is_some(),
-            "the queued line ended the loop out from under the tick in flight"
+            session.looping().is_none(),
+            "the loop outlived the line that stopped it"
         );
+        assert!(session.a_turn_is_running(), "the ending stopped the tick");
+        assert!(session.queued.is_empty(), "the ending waited as well");
 
         session.complete("done", Vec::new(), 0);
-        assert_eq!(queued_next(&mut session), Some(Action::Redraw));
-        assert!(session.looping().is_none(), "the queued ending did nothing");
+        session.settle_what_was_said();
         assert!(
             session
                 .transcript
@@ -13436,8 +13537,8 @@ mod tests {
             &workspace_for_test(),
             Line {
                 text: "review the diff",
-                wrote: Wrote::ThePerson,
                 addressed: addressed.as_ref(),
+                offered_a_later_look: false,
             },
             FinishedTurn {
                 decisions: None,
@@ -13484,8 +13585,8 @@ mod tests {
         };
         let line = |addressed| Line {
             text: "review the diff",
-            wrote: Wrote::ThePerson,
             addressed,
+            offered_a_later_look: false,
         };
 
         assert_eq!(
@@ -13811,8 +13912,8 @@ mod tests {
         };
         let line = |addressed| Line {
             text: "review the diff",
-            wrote: Wrote::ThePerson,
             addressed,
+            offered_a_later_look: false,
         };
 
         assert_eq!(
@@ -14002,8 +14103,8 @@ mod tests {
             },
             Line {
                 text: "",
-                wrote: Wrote::TheDriver,
                 addressed: None,
+                offered_a_later_look: false,
             },
             &workspace_for_test(),
         );
@@ -14556,11 +14657,23 @@ mod tests {
             handle_key(&mut session, key(KeyCode::Char(c)));
         }
 
-        assert_eq!(handle_key(&mut session, key(KeyCode::Enter)), Action::Cost);
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
         assert!(session.input().is_empty(), "the command stayed on the line");
         assert!(
-            session.transcript.is_empty(),
+            session
+                .transcript
+                .iter()
+                .all(|entry| entry.speaker == crate::state::Speaker::System),
             "the command was sent as a prompt"
+        );
+        assert!(
+            said_in_the_transcript(&session)
+                .iter()
+                .any(|said| said.contains(t!(cost_nothing_spent))),
+            "the command did not report what the session has spent"
         );
     }
 
@@ -15330,12 +15443,15 @@ mod tests {
         assert!(!session.shell, "the line brought the mode back with it");
     }
 
-    /// Every word in the table rather than the one that was reported. The arm reads the same table the
-    /// idle path dispatches from, so a command added there waits as a command here without anybody
-    /// having to remember a second list.
+    /// Every word in the table that waits, rather than the one that was reported. The arm reads the
+    /// same table the idle path dispatches from, so a command added there waits as a command here
+    /// without anybody having to remember a second list.
     #[test]
     fn no_command_is_sent_as_a_prompt_while_a_turn_runs() {
-        for command in commands() {
+        for command in commands()
+            .into_iter()
+            .filter(|command| command.mid_turn == MidTurn::Waits)
+        {
             let mut session = Session::new("none");
             type_line(&mut session, "first");
             handle_key(&mut session, key(KeyCode::Enter));
@@ -15417,6 +15533,261 @@ mod tests {
         assert_eq!(
             dispatch_command(&mut session, queued),
             Action::Rename("the parser work".to_string())
+        );
+    }
+
+    /// The words that skip the queue, and no others. Every other row acts on the conversation,
+    /// the workspace, the terminal or the network, all of which the turn holds, so a row moved off
+    /// `Waits` would carry out mid-turn something the turn is still using.
+    #[test]
+    fn only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue() {
+        let mut skipping: Vec<&str> = commands()
+            .into_iter()
+            .filter(|command| command.mid_turn != MidTurn::Waits)
+            .map(|command| command.name)
+            .collect();
+        skipping.sort_unstable();
+        assert_eq!(
+            skipping,
+            vec![COST_COMMAND, GOAL_COMMAND, LOOP_COMMAND, WATCH_COMMAND]
+        );
+    }
+
+    /// A session that has typed one prompt and has a turn in flight on it.
+    fn a_turn_running_on(prompt: &str) -> Session {
+        let mut session = Session::new("none");
+        type_line(&mut session, prompt);
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert!(session.a_turn_is_running());
+        session
+    }
+
+    fn type_while_working(session: &mut Session, line: &str) -> Action {
+        for c in line.chars() {
+            handle_key_while_working(session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(session, key(KeyCode::Enter))
+    }
+
+    /// What issue #1128 asks for: a word that reads or ends a loop, a goal, a watch or the spend
+    /// answers when it is typed, because the turn holds none of those. Ahead of a prompt already
+    /// waiting, too, which is left where it was and still within the turn's reach, while the
+    /// command is never handed to the turn and its answer is kept out of the turn's transcript.
+    #[test]
+    fn a_command_that_reads_or_ends_what_the_session_keeps_answers_mid_turn() {
+        for line in [
+            "/cost",
+            "/watch",
+            "/watch stop 1",
+            "/watch everything",
+            "/loop",
+            "/loop stop",
+            "/goal",
+            "/goal clear",
+        ] {
+            let mut session = a_turn_running_on("first");
+            type_while_working(&mut session, "second");
+            let transcript = session.transcript.len();
+
+            assert_eq!(type_while_working(&mut session, line), Action::Redraw);
+
+            assert!(
+                !session.said_while_working().is_empty(),
+                "{line} said nothing while the turn ran"
+            );
+            assert_eq!(
+                session.transcript.len(),
+                transcript,
+                "{line} wrote into the transcript of the turn in flight"
+            );
+            let waiting: Vec<&str> = session
+                .queued
+                .iter()
+                .map(|queued| queued.prompt.as_str())
+                .collect();
+            assert_eq!(waiting, vec!["second"], "{line} waited for the turn");
+            assert_eq!(
+                session.interjections().take().as_deref(),
+                Some("second"),
+                "the running turn was handed {line}"
+            );
+            assert_eq!(session.input(), "", "{line} was left in the box");
+        }
+    }
+
+    /// The form that would start something waits, though its word does not. A loop or a goal
+    /// armed while the turn runs would have that turn judged or repeated without having been
+    /// sent under either.
+    #[test]
+    fn a_command_that_would_start_a_loop_or_a_goal_waits_for_the_turn() {
+        for line in ["/loop 5m check the deploy", "/goal cargo test exits 0"] {
+            let mut session = a_turn_running_on("first");
+            type_while_working(&mut session, line);
+
+            assert!(
+                session.said_while_working().is_empty(),
+                "{line} was carried out mid-turn"
+            );
+            assert!(session.looping().is_none() && session.goal().is_none());
+            session.complete("answered", Vec::new(), 0);
+            assert_eq!(
+                session.take_queued_command().map(|taken| taken.line),
+                Some(line.to_string()),
+                "{line} did not wait to be carried out"
+            );
+        }
+    }
+
+    /// An ending typed after a start that is waiting comes after it. Carried out at once, it would
+    /// find nothing to end, and the start behind it would arm what the person had just ended. A
+    /// different command still answers at once.
+    #[test]
+    fn a_command_typed_behind_a_waiting_one_of_its_own_waits_with_it() {
+        for (start, stop) in [
+            ("/loop 5m check the deploy", "/loop stop"),
+            ("/goal cargo test exits 0", "/goal clear"),
+        ] {
+            let mut session = a_turn_running_on("first");
+            type_while_working(&mut session, start);
+            type_while_working(&mut session, COST_COMMAND);
+            assert!(
+                !session.said_while_working().is_empty(),
+                "{COST_COMMAND} waited behind {start}"
+            );
+            let said = session.said_while_working().len();
+
+            type_while_working(&mut session, stop);
+
+            assert_eq!(
+                session.said_while_working().len(),
+                said,
+                "{stop} ran ahead of {start}"
+            );
+            session.complete("answered", Vec::new(), 0);
+            queued_next(&mut session);
+            // A loop's first tick goes as it starts, and what is waiting behind it waits for that.
+            if session.a_turn_is_running() {
+                session.complete("ticked", Vec::new(), 0);
+            }
+            queued_next(&mut session);
+            assert!(
+                session.looping().is_none() && session.goal().is_none(),
+                "{stop} typed after {start} left it running"
+            );
+            assert!(session.queued.is_empty());
+        }
+    }
+
+    /// A turn only. A compaction shares the working status but folds in no turn, and folding one
+    /// in is when what a command said mid-turn joins the transcript, so a word typed during one
+    /// waits.
+    #[test]
+    fn a_command_typed_during_a_compaction_waits() {
+        let mut session = Session::new("none");
+        session.begin_aside();
+        type_while_working(&mut session, "/cost");
+
+        assert!(
+            session.said_while_working().is_empty(),
+            "/cost was carried out during a compaction"
+        );
+        assert_eq!(session.queued.len(), 1, "/cost did not wait");
+    }
+
+    /// A stopped turn gives its prompt back only where the transcript holds nothing after it, so
+    /// an answer put there mid-turn would cost the person the line they stopped. Held until the
+    /// turn is folded in, the prompt comes back and the answer is kept as well.
+    #[test]
+    fn a_stopped_prompt_comes_back_after_a_command_answered_mid_turn() {
+        let mut session = a_turn_running_on("first");
+        type_while_working(&mut session, "/cost");
+
+        finish_turn(
+            &mut session,
+            &a_config_needing_no_sign_in(),
+            &workspace_for_test(),
+            Line {
+                text: "first",
+                addressed: None,
+                offered_a_later_look: false,
+            },
+            FinishedTurn {
+                decisions: None,
+                outcome: Err(turn::TurnError::Cancelled { attempts: Some(0) }),
+                conversation: Conversation::new(),
+                sink: Trail::new(),
+                servers: None,
+            },
+            RetainedTurn {
+                files: bravebot_core::file_authority::FileAuthority::new(TrustStore::new("/work")),
+                programs: TrustedPrograms::new(),
+                asked: AskedAbout::new(),
+                exposed: bravebot_core::credentials::Exposed::new(),
+            },
+        );
+
+        assert_eq!(
+            session.input(),
+            "first",
+            "the stopped prompt did not come back"
+        );
+        assert!(session.said_while_working().is_empty());
+        assert!(
+            said_in_the_transcript(&session)
+                .iter()
+                .any(|said| said.contains(t!(cost_nothing_spent))),
+            "what /cost said was lost with the turn: {:?}",
+            said_in_the_transcript(&session)
+        );
+    }
+
+    /// A turn is charged when it ends, so `/cost` asked during one has to add what the turn has
+    /// spent so far: the count of turns it gives already includes the one running.
+    #[test]
+    fn cost_asked_mid_turn_counts_what_the_running_turn_has_spent() {
+        let mut session = a_turn_running_on("first");
+        session.progressed(bravebot_agent::Spent {
+            tokens: 4_200,
+            ..Default::default()
+        });
+        type_while_working(&mut session, "/cost");
+
+        let turn = t!(cost_turn, number = 1);
+        let spent = crate::status::tokens(4_200);
+        assert!(
+            session
+                .said_while_working()
+                .iter()
+                .any(|said| said.text.contains(&turn) && said.text.contains(&spent)),
+            "/cost left out what the running turn has spent: {:?}",
+            session
+                .said_while_working()
+                .iter()
+                .map(|said| said.text.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Ctrl-Enter on a command carried out as it is typed stops nothing. The command is done, and
+    /// stopping the turn would send a prompt waiting behind it that nobody asked to hurry.
+    #[test]
+    fn ctrl_enter_on_a_command_answered_mid_turn_hurries_nothing() {
+        let mut session = a_turn_running_on("first");
+        type_while_working(&mut session, "second");
+        for c in COST_COMMAND.chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key_while_working(&mut session, ctrl_enter()),
+            Action::Redraw,
+            "Ctrl-Enter on /cost stopped the turn"
+        );
+        assert!(!session.said_while_working().is_empty());
+        assert_eq!(
+            session.queued.len(),
+            1,
+            "the prompt waiting behind /cost moved"
         );
     }
 
@@ -18854,8 +19225,8 @@ mod tests {
             asked,
             Line {
                 text: "",
-                wrote: Wrote::ThePerson,
                 addressed: None,
+                offered_a_later_look: false,
             },
             &workspace_for_test(),
         );
@@ -18967,13 +19338,42 @@ mod tests {
     #[test]
     fn only_a_line_the_person_wrote_becomes_a_watch_the_turn_asked_for() {
         let wakeup = turn::Wakeup::asked(900, false);
+        let idle = Session::new("none");
         assert_eq!(
-            watch_to_start(Some(wakeup), Wrote::ThePerson),
+            watch_to_start(Some(wakeup), will_look_again(&idle, Wrote::ThePerson)),
             Some(wakeup),
             "a turn on the person's own line could not arrange a later look"
         );
-        assert_eq!(watch_to_start(Some(wakeup), Wrote::TheDriver), None);
-        assert_eq!(watch_to_start(None, Wrote::ThePerson), None);
+        assert_eq!(
+            watch_to_start(Some(wakeup), will_look_again(&idle, Wrote::TheDriver)),
+            None
+        );
+        assert_eq!(
+            watch_to_start(None, will_look_again(&idle, Wrote::ThePerson)),
+            None
+        );
+    }
+
+    /// A self-paced tick asks for its loop's next wait, and `/loop stop` may be typed while it
+    /// runs (CMD-8). The tick was offered no later look of its own, its loop being what asks
+    /// again, so the wait it asks for once its loop is gone starts nothing: kept, it would start
+    /// a new loop on the line the person had just stopped.
+    #[test]
+    fn a_tick_whose_loop_was_stopped_mid_turn_starts_no_loop() {
+        let mut ticking = Session::new("none");
+        ticking.start_loop(
+            crate::loops::request("5m watch the build"),
+            Vec::new(),
+            Vec::new(),
+        );
+        let offered = will_look_again(&ticking, Wrote::ThePerson);
+        ticking.stop_loop();
+
+        assert_eq!(
+            watch_to_start(Some(turn::Wakeup::asked(900, false)), offered),
+            None,
+            "the wait a stopped loop's tick asked for started another loop"
+        );
     }
 
     /// And the turn is asked before it runs, not only answered afterwards. A turn whose wait is
@@ -19058,8 +19458,8 @@ mod tests {
             asked,
             Line {
                 text: "",
-                wrote: Wrote::ThePerson,
                 addressed: None,
+                offered_a_later_look: false,
             },
             &workspace_for_test(),
         );
@@ -19111,8 +19511,8 @@ mod tests {
             asked,
             Line {
                 text: "",
-                wrote: Wrote::ThePerson,
                 addressed: None,
+                offered_a_later_look: false,
             },
             &workspace_for_test(),
         );
@@ -19152,8 +19552,8 @@ mod tests {
             asked,
             Line {
                 text: "",
-                wrote: Wrote::ThePerson,
                 addressed: None,
+                offered_a_later_look: false,
             },
             &workspace_for_test(),
         );
@@ -19199,8 +19599,8 @@ mod tests {
             },
             Line {
                 text: "read a file",
-                wrote: Wrote::ThePerson,
                 addressed: None,
+                offered_a_later_look: false,
             },
             &workspace_for_test(),
         );
@@ -19357,8 +19757,8 @@ mod tests {
                     },
                     Line {
                         text: "second",
-                        wrote: Wrote::ThePerson,
                         addressed: None,
+                        offered_a_later_look: false,
                     },
                     &workspace_for_test(),
                 );
@@ -19415,8 +19815,8 @@ mod tests {
             },
             Line {
                 text: "work",
-                wrote: Wrote::ThePerson,
                 addressed: None,
+                offered_a_later_look: false,
             },
             &workspace_for_test(),
         );

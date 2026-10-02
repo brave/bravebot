@@ -211,7 +211,7 @@ never has and tells the user it is missing. Both were observed before this claus
 
 | What | When |
 |---|---|
-| the person asks | `/loop stop`, which leaves the turn in flight running; typed during one it ends the loop when the queue reaches it |
+| the person asks | `/loop stop`, which leaves the turn in flight running; typed during one it ends the loop as it is typed, unless a `/loop` is waiting for that turn, which it waits behind ([commands.md](commands.md#CMD-8)) |
 | the person interrupts | Ctrl-C, read against the loop after the turn in flight and the line in the box, and before leaving |
 | a turn is stopped | any turn cancelled while a loop runs, whether or not it was a tick |
 | the session moves on | `/clear`, and leaving |
@@ -228,14 +228,15 @@ seen enough of a loop but not of the turn it is in the middle of. It is also the
 that can be typed, so it is the ending a person reaches for after the sentence announcing the loop
 has scrolled away: the others are a key nobody named, a session ending, and a week.
 
-**Why it may arrive a turn later.** A line typed during a turn waits in the queue, the way every
-line typed during a turn waits, so an ending asked for mid-tick happens when the queue is reached
-rather than on the press. Nothing is lost in the wait: a tick waits on an empty queue as well as on
-an idle session, so the loop cannot send one more turn out ahead of its own ending.
+**Why it ends the loop on the press.** It reads and ends the loop alone, and the turn in flight
+holds nothing of the loop, so the line does not wait in the queue with the rest
+([commands.md](commands.md#CMD-8)). The tick in flight finishes, and the wait it asks for starts
+nothing: a tick is offered no later look of its own, its loop being what asks again, so a wait
+arriving after its loop has gone would otherwise start a new loop on the line just stopped.
 
 `verified-by: bravebot_tui::app::the_loop_command_ends_the_loop_when_asked_to_stop`
-`verified-by: bravebot_tui::app::asking_to_stop_a_loop_during_a_turn_ends_it_when_the_queue_is_reached`
-`verified-by: bravebot_tui::state::a_tick_waits_for_the_turn_in_flight_and_for_what_is_queued`
+`verified-by: bravebot_tui::app::asking_to_stop_a_loop_during_a_turn_ends_it_as_it_is_typed`
+`verified-by: bravebot_tui::app::a_tick_whose_loop_was_stopped_mid_turn_starts_no_loop`
 `verified-by: bravebot_tui::app::asking_to_stop_a_loop_that_is_not_running_says_so`
 `verified-by: bravebot_tui::app::interrupting_stops_the_loop_before_it_leaves`
 `verified-by: bravebot_tui::app::interrupting_clears_the_line_before_it_stops_the_loop`
