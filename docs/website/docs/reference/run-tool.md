@@ -430,9 +430,10 @@ before the move: [`job_output`](tools.md#job_output) reads all of it, under the 
 always going to carry.
 
 **Only a line a job can hold is offered.** That is one pipeline with no redirection, the same lines
-`background: true` accepts. A line that reads its input from an earlier result, one that asked for
-its output in the same result with `read: true`, and one a delegate is running are waited for to the
-end, and the hint does not name the key while they run.
+`background: true` accepts. A line that reads its input from an earlier result and one a delegate is
+running are waited for to the end, and the hint does not name the key while they run. A line that
+asked for its output with `read: true` can be moved: the result for the call is then the move, and
+[`job_output`](tools.md#job_output) returns the output.
 
 **The deadline goes with the wait.** A moved line is not killed when its `deadline_seconds` would
 have run out, because a deadline is how long the turn will wait and the turn is no longer waiting.

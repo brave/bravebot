@@ -6025,13 +6025,12 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         .workspace
         .mark_rewind_gap(crate::rewind::CoverageGap::Command);
     // Offered to the person only for a line a job can hold, and only where they are watching it.
-    // A line fed a reference would have its bytes written into a job nobody waits for, one that
-    // asked to read what it printed would be handed nothing to read, and a delegate's line is not
-    // the one the screen shows running.
-    let movable = !tools.delegated
-        && supplied.is_none()
-        && !read_asked
-        && plan.steps.unrouted_pipeline().is_some();
+    // A line fed a reference would have its bytes written into a job nobody waits for, and a
+    // delegate's line is not the one the screen shows running. A line that asked to read what it
+    // printed is offered: the moved result says where its output is, so the planner reads it with
+    // `job_output`.
+    let movable =
+        !tools.delegated && supplied.is_none() && plan.steps.unrouted_pipeline().is_some();
     let ran = if movable {
         let handoff = bravebot_core::cancel::Handoff::new();
         reporter.movable(handoff.clone());

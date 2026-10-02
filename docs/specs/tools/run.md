@@ -1387,10 +1387,15 @@ nothing else about the line.
 **Only a line a job can hold.** One pipeline with no redirection, which is RUN-15's shape and for
 the same reasons: a line with `&&` or `||` waits on its own first part to decide on the second, and
 a route, including `2>&1`, is something the background does not honour. A line fed a reference
-through `stdin_ref`, one that asked to read what it printed ([RUN-22](#RUN-22)), and a delegate's
-line are not offered either. The first would be writing a value into a job nobody waits for, the
-second asked for an answer a job does not give, and the third is not the line the screen shows
-running. Such a line is waited for as before, whatever key is pressed.
+through `stdin_ref` and a delegate's line are not offered either. The first would be writing a value
+into a job nobody waits for, and the second is not the line the screen shows running. Such a line
+is waited for as before, whatever key is pressed.
+
+**A line that asked to read what it printed is offered.** `read: true` ([RUN-22](#RUN-22)) asks for
+the output in the result of the call that ran the line. When the person moves the line, the call
+returns the move instead, which holds nothing the line printed, and the planner reads the output
+with `job_output`. The model asks to read a line whenever it wants the result, so excluding these
+lines would leave out the slow test and check runs the key is for.
 
 **What the planner is told.** That the user moved the command, after how many seconds, and the job
 it is running as; that it should not run the line again; and that nothing it printed has been read,
@@ -1426,6 +1431,7 @@ whenever it guessed wrong.
 `verified-by: bravebot_agent::exec::a_line_with_a_join_or_a_route_is_waited_for_even_when_asked_to_move`
 `verified-by: bravebot_agent::exec::a_token_nobody_pressed_leaves_the_line_waited_for`
 `verified-by: bravebot_agent::turn::a_line_the_user_moves_to_the_background_goes_on_as_a_job_the_turn_owns`
+`verified-by: bravebot_agent::turn::a_line_that_asked_to_be_read_can_be_moved_to_the_background`
 `verified-by: bravebot_agent::turn::only_a_line_a_job_can_hold_is_offered_to_be_moved`
 `verified-by: bravebot_agent::turn::a_delegates_line_is_not_offered_to_be_moved`
 `verified-by: bravebot_core::command::only_a_pipeline_without_a_route_is_one_a_job_can_hold`
