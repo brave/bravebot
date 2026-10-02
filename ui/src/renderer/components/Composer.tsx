@@ -333,7 +333,7 @@ export function ProjectMenu({ directory, choices, onChoose, disabled = false, va
   const choose = (choice: ProjectChoice) => { setOpen(false); onChoose(choice) }
   return (
     <ButtonMenu className={`project-menu recent-menu ${variant}`} isOpen={open} placement={variant === 'title' ? 'bottom' : 'top-start'}
-      positionStrategy="fixed" onChange={({ isOpen }) => setOpen(isOpen)}>
+      flip={variant === 'footer'} positionStrategy="fixed" onChange={({ isOpen }) => setOpen(isOpen)}>
       {variant === 'footer' ? (
         <Button slot="anchor-content" kind="plain-faint" size="tiny" className="project-trigger" isDisabled={disabled}
           aria-haspopup="menu" aria-expanded={open} aria-label={`Project: ${label}`} data-tooltip={directory ?? 'This bot’s own folder'}

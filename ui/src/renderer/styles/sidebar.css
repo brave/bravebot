@@ -355,7 +355,7 @@
 
 .sidebar-foot {
   flex: none;
-  padding: var(--leo-spacing-m) 0 0;
+  padding: 0;
   border-top: 1px solid var(--border-subtle);
 }
 /* Leo's navigation item draws at 16px inside a Navigation and at its own size outside one; the
