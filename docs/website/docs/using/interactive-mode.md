@@ -40,7 +40,7 @@ works**, in every terminal and in shell mode too.
 With [vi editing](#editing-the-way-vi-does) chosen, Escape enters NORMAL mode instead of discarding
 the line, and the letters do what they do in vi.
 
-Seven of these chords can be [moved to keys of your own](#moving-a-key). Every chord named on this
+Eight of these chords can be [moved to keys of your own](#moving-a-key). Every chord named on this
 page, and every one the interface names on your screen, is the default.
 
 ## Editing the way vi does
@@ -59,7 +59,7 @@ objects, VISUAL selection and REPLACE mode, and how each treats a [marker](#mark
 
 A `keybindings` block in [`settings.json`](../customize/configuration.md) names an action and the
 chord you want to answer it. Write a chord as `ctrl-x`, `alt-o` or `ctrl+x`. The block layers per
-action the way `env` does, so a project file moving one action says nothing about the other six.
+action the way `env` does, so a project file moving one action says nothing about the other seven.
 
 ```json
 {
@@ -70,10 +70,11 @@ action the way `env` does, so a project file moving one action says nothing abou
 }
 ```
 
-**Seven actions can be moved, and nothing else can:**
+**Eight actions can be moved, and nothing else can:**
 
 | Action | Default | What it does |
 |---|---|---|
+| `background` | `ctrl-b` | move the command a turn is waiting on to the background |
 | `editor` | `ctrl-g` | open your editor on the prompt |
 | `watch` | `ctrl-l` | open what a delegate did, a command printed, or an aside answered |
 | `scroller` | `ctrl-o` | open the transcript scroller |
@@ -400,6 +401,26 @@ session turns that flow control off for as long as it holds the terminal. Behind
 or `ssh` configured to keep flow control, the key can be taken before it arrives, and then it does
 nothing here. Nothing is lost when that happens, because the line stays in the box.
 :::
+
+## Moving a command to the background
+
+While the turn waits on a command, the hint line beneath the box says `ctrl-b to background`. Press it
+and the turn stops waiting: the command goes on running as a job, the model is told you moved it and
+the job's name, and the turn carries on. The model reads what it printed with `job_output` when it
+needs to. The command is not restarted and keeps everything it printed. It has no deadline once
+moved, and it still ends when the turn does. See
+[background jobs](../reference/run-tool.md#moving-a-running-command-to-the-background) for which
+lines can be moved.
+
+The hint is there only while a press would move something. A command joined to another with `&&`
+or `||`, one with a redirection such as `2>&1`, and one a delegate is running cannot be moved, and
+the hint does not appear for them.
+
+The key works from the box. In the transcript view and the scroller, Ctrl-B pages back. In the box
+it is the move key and not a word back; Alt-B and Ctrl-Left move the caret a word back.
+
+Ctrl-B is also the prefix key tmux waits for. Inside tmux, press it twice, or
+[move it](#moving-a-key) to another chord with `"background": "alt-b"`.
 
 ## The rows beneath the box
 

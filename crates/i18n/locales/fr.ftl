@@ -1996,6 +1996,9 @@ watching-calls = { $count ->
 # au tour qui l'a dessinee. Le compte y est car une touche sans rien derriere ne vaut pas la
 # peine. Delegues et commandes sont comptes ensemble, une seule touche ouvrant la liste des deux.
 watching-hint = { $chord } { $count } a ouvrir
+# Dit sur la ligne du bas tant qu'une commande attendue par le tour peut passer en arrière-plan,
+# et retiré dès qu'elle se termine ou y passe. Court, car il partage la ligne avec tout le reste.
+background-hint = { $chord } en arrière-plan
 
 # Vérifications indicatives affichées uniquement dans un dépôt de sources de Bravebot.
 doctor-development = environnement de développement { $path }

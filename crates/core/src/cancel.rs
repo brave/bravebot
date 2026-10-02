@@ -50,6 +50,33 @@ impl Cancel {
     }
 }
 
+/// A one-way flag asking a waited-for command to go on running in the background.
+///
+/// The same shape as [`Cancel`], for the same reason: the person presses the key on the interface
+/// thread and the run reading it is on the turn's. Each run gets a fresh one, so a press meant for
+/// one command can never reach the next.
+#[derive(Debug, Clone, Default)]
+pub struct Handoff {
+    flag: Arc<AtomicBool>,
+}
+
+impl Handoff {
+    /// A token nobody has pressed.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Ask the run to stop waiting and keep the command as a job.
+    pub fn request(&self) {
+        self.flag.store(true, Ordering::Release);
+    }
+
+    /// Whether the move has been asked for.
+    pub fn is_requested(&self) -> bool {
+        self.flag.load(Ordering::Acquire)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +138,35 @@ mod tests {
         for _ in 0..10 {
             assert!(cancel.is_cancelled());
         }
+    }
+
+    #[test]
+    fn a_fresh_handoff_is_not_requested() {
+        assert!(!Handoff::new().is_requested());
+    }
+
+    /// The interface holds one clone and the run reads another, so the press has to cross. The
+    /// wait is bounded so a press that never arrives fails here instead of spinning forever.
+    #[test]
+    fn a_handoff_requested_on_one_thread_is_seen_on_another() {
+        let handoff = Handoff::new();
+        let run = handoff.clone();
+
+        let handle = thread::spawn(move || {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !run.is_requested() {
+                if std::time::Instant::now() >= until {
+                    return false;
+                }
+                std::hint::spin_loop();
+            }
+            true
+        });
+
+        handoff.request();
+        assert!(
+            handle.join().expect("run finished"),
+            "the press never reached the other thread"
+        );
     }
 }

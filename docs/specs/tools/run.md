@@ -1376,6 +1376,67 @@ program choosing to print nothing chose what the planner is told no more than it
 `verified-by: bravebot_agent::turn::a_run_that_printed_nothing_says_so_and_hands_back_no_reference`
 `verified-by: bravebot_agent::turn::a_look_at_a_job_that_printed_nothing_new_says_so_and_hands_back_no_reference`
 
+<a id="RUN-25"></a>
+### RUN-25: a person may move a running line to the background, and the turn goes on
+
+While the turn waits on a line it runs in the foreground, the person may press a key that stops the
+wait. The line is not stopped: it goes on as a job exactly as one [RUN-15](#RUN-15) started, under a
+name the driver mints, and the call returns at once. Moving changes when the turn stops waiting and
+nothing else about the line.
+
+**Only a line a job can hold.** One pipeline with no redirection, which is RUN-15's shape and for
+the same reasons: a line with `&&` or `||` waits on its own first part to decide on the second, and
+a route, including `2>&1`, is something the background does not honour. A line fed a reference
+through `stdin_ref`, one that asked to read what it printed ([RUN-22](#RUN-22)), and a delegate's
+line are not offered either. The first would be writing a value into a job nobody waits for, the
+second asked for an answer a job does not give, and the third is not the line the screen shows
+running. Such a line is waited for as before, whatever key is pressed.
+
+**What the planner is told.** That the user moved the command, after how many seconds, and the job
+it is running as; that it should not run the line again; and that nothing it printed has been read,
+including what it printed before the move. All of it is the driver's own words, a name it minted
+and a count read off a clock, so it is trusted text. What the line printed is in the job, from its
+first byte, at the label [RUN-4](#RUN-4) gave the plan ([RUN-16](#RUN-16)), and reaches the planner
+only through `job_output`. A press says nothing about what a program printed, so it changes no
+label.
+
+**The deadline goes with the wait.** A moved line has no deadline, as no job has: [RUN-11](#RUN-11)'s
+limit bounds how long the turn waits on one command, and the turn no longer waits on this one.
+
+**The turn still owns it.** A moved line is ended when the turn ends, like any job. Moving it is a
+way to get on with the turn, never a way to leave something running after it.
+
+**Cancellation wins.** The press and the stop are read on the same pass, the stop first, so a stop
+asked for in the same moment as a move ends the line rather than keeping it. The press is read off
+a token the call makes for itself, so a press made after the line ended, or between two lines,
+reaches neither: the next line gets a token of its own.
+
+**Whose choice it was is recorded.** The move is a `handoff` entry in the trail naming the job and
+how long the line had run, since what the turn did next depends on it and nothing else in the
+session says it was the person's doing. It asserts nothing about what the line printed, so it is
+not one of [TRACE-3](../trace.md#TRACE-3)'s assertions and moves no label.
+
+**Why.** A person waiting on a ten-minute check had two choices: watch the turn sit idle until the
+check ended, or stop it and lose the check. The planner cannot know which lines will take long, so
+asking it to choose `background: true` ahead of time leaves the person with the same two choices
+whenever it guessed wrong.
+
+`verified-by: bravebot_agent::exec::a_line_moved_part_way_keeps_running_and_keeps_all_it_printed`
+`verified-by: bravebot_agent::exec::a_cancellation_wins_over_a_move_asked_for_at_the_same_time`
+`verified-by: bravebot_agent::exec::a_line_with_a_join_or_a_route_is_waited_for_even_when_asked_to_move`
+`verified-by: bravebot_agent::exec::a_token_nobody_pressed_leaves_the_line_waited_for`
+`verified-by: bravebot_agent::turn::a_line_the_user_moves_to_the_background_goes_on_as_a_job_the_turn_owns`
+`verified-by: bravebot_agent::turn::only_a_line_a_job_can_hold_is_offered_to_be_moved`
+`verified-by: bravebot_agent::turn::a_delegates_line_is_not_offered_to_be_moved`
+`verified-by: bravebot_core::command::only_a_pipeline_without_a_route_is_one_a_job_can_hold`
+`verified-by: bravebot_core::cancel::a_handoff_requested_on_one_thread_is_seen_on_another`
+`verified-by: bravebot_core::policy::moving_a_command_to_the_background_is_recorded_in_the_audit_trail`
+`verified-by: bravebot_tui::state::a_press_moves_the_turns_command_once`
+`verified-by: bravebot_tui::state::a_press_after_a_command_ends_does_not_reach_the_next_one`
+`verified-by: bravebot_tui::state::a_turn_ending_takes_the_offer_with_it`
+`verified-by: bravebot_tui::state::a_delegate_offers_nothing_to_move`
+`verified-by: bravebot_tui::state::a_delegates_call_ending_leaves_the_turns_command_movable`
+
 ## Open questions
 
 - Whether output can ever be trusted by proof rather than by assertion is issue #3, and it may not

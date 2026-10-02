@@ -5,7 +5,7 @@
 //! wrong comes back with what it produced instead of nothing.
 
 use bravebot_agent::exec::{self, ExecError};
-use bravebot_core::cancel::Cancel;
+use bravebot_core::cancel::{Cancel, Handoff};
 use bravebot_core::{Pipeline, Stage};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -1327,6 +1327,135 @@ fn background_stages_are_chained_so_one_feeds_the_next() {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     assert_eq!(job.printed().trim(), "3");
+}
+
+/// Compile a line for `at` and wait for it the way the tool waits for one a person may move.
+fn movable(
+    text: &str,
+    at: &std::path::Path,
+    cancel: &Cancel,
+    handoff: &Handoff,
+) -> Result<exec::Waited, ExecError> {
+    let plan = bravebot_agent::cmdline::compile(text, at, None, &mut |_, _| Ok(()))
+        .unwrap_or_else(|e| panic!("`{text}` should compile: {e}"));
+    past_text_file_busy(|| exec::run_plan_movable(&plan, cancel, handoff, exec::LIMIT, None))
+}
+
+/// Waits for a moved job to end, so a test can read the whole of what it printed.
+fn until_ended(job: &mut exec::Background) {
+    let until = std::time::Instant::now() + Duration::from_secs(20);
+    while !job.ended() {
+        assert!(
+            std::time::Instant::now() < until,
+            "the moved job never ended"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The press arrives while the wait is under way, from another thread, as it does from the
+/// interface. The token is read on every pass of the wait, so the line comes back as moved long
+/// before the program ends, and the same process goes on to print the rest and exit with its own
+/// code: what it printed before the move is not lost to the handover.
+#[test]
+fn a_line_moved_part_way_keeps_running_and_keeps_all_it_printed() {
+    let scratch = Scratch::new("moved-part-way");
+    script(
+        &scratch.path,
+        "build",
+        "#!/bin/sh\necho before\nsleep 10\necho after\nexit 3\n",
+    );
+    let handoff = Handoff::new();
+    let pressed = handoff.clone();
+    let press = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        pressed.request();
+    });
+
+    let waited = movable("./build", &scratch.path, &Cancel::new(), &handoff).expect("it runs");
+    press.join().unwrap();
+
+    let exec::Waited::Moved(mut moved) = waited else {
+        panic!("a line asked to move was waited for to its end: {waited:?}");
+    };
+    assert!(
+        moved.after < Duration::from_secs(8),
+        "the move waited {:?}, so the press was not read while the line ran",
+        moved.after
+    );
+    assert!(
+        !moved.running.ended(),
+        "a program ten seconds from its end was reported ended at the move"
+    );
+    until_ended(&mut moved.running);
+    let printed = moved.running.printed();
+    assert!(
+        printed.contains("before") && printed.contains("after"),
+        "the job lost part of what it printed: {printed:?}"
+    );
+    assert_eq!(moved.running.codes(), [Some(3)]);
+}
+
+/// A person who asked the turn to stop asked for everything in it to stop, including a command
+/// they had also asked to keep. A pass that finds both tokens set kills the line.
+#[test]
+fn a_cancellation_wins_over_a_move_asked_for_at_the_same_time() {
+    let scratch = Scratch::new("moved-and-cancelled");
+    script(&scratch.path, "slow", "#!/bin/sh\nsleep 30\n");
+    let cancel = Cancel::new();
+    let handoff = Handoff::new();
+    cancel.cancel();
+    handoff.request();
+
+    let waited = movable("./slow", &scratch.path, &cancel, &handoff);
+
+    assert!(
+        matches!(waited, Err(ExecError::Cancelled)),
+        "a cancelled line was not killed: {waited:?}"
+    );
+}
+
+/// A job is one pipeline whose output a reader drains. A join decides its next part by waiting
+/// on the one before, and a redirection sends a stream where no job reads it, so neither shape
+/// is moved however the token is set: each is waited for to its end with its output intact.
+#[test]
+fn a_line_with_a_join_or_a_route_is_waited_for_even_when_asked_to_move() {
+    let scratch = Scratch::new("not-movable");
+    script(&scratch.path, "slow", "#!/bin/sh\nsleep 1\necho slow\n");
+    for (text, printed) in [
+        ("./slow && echo joined", "joined"),
+        ("./slow 2>&1", "slow"),
+        ("./slow 2>/dev/null", "slow"),
+    ] {
+        let handoff = Handoff::new();
+        handoff.request();
+
+        let waited = movable(text, &scratch.path, &Cancel::new(), &handoff)
+            .unwrap_or_else(|e| panic!("`{text}` should run: {e}"));
+
+        let exec::Waited::Ran(ran) = waited else {
+            panic!("`{text}` was moved: {waited:?}");
+        };
+        assert!(ran.succeeded(), "`{text}`: {ran:?}");
+        assert!(ran.stdout.contains(printed), "`{text}`: {ran:?}");
+    }
+}
+
+/// Offering the key changes nothing until it is pressed. A line nobody moved is waited for to its
+/// end and handed back exactly as a line that was never offered the key.
+#[test]
+fn a_token_nobody_pressed_leaves_the_line_waited_for() {
+    let scratch = Scratch::new("not-moved");
+    script(&scratch.path, "slow", "#!/bin/sh\nsleep 1\necho done\n");
+
+    let waited =
+        movable("./slow", &scratch.path, &Cancel::new(), &Handoff::new()).expect("it runs");
+
+    let exec::Waited::Ran(ran) = waited else {
+        panic!("a line nobody moved was moved: {waited:?}");
+    };
+    assert!(ran.succeeded(), "{ran:?}");
+    assert_eq!(ran.stdout.trim(), "done");
 }
 
 /// The credentials rule is not relaxed by moving to the background. A long-lived program is a

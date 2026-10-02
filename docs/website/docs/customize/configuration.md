@@ -856,10 +856,11 @@ own.
 { "keybindings": { "stash": "alt-s", "scroller": "alt-o" } }
 ```
 
-Seven actions can be moved and nothing else can. A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
+Eight actions can be moved and nothing else can. A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
 
 | Action | Default | What it does |
 |---|---|---|
+| `background` | `ctrl-b` | move the command a turn is waiting on to the background |
 | `editor` | `ctrl-g` | open the current prompt in your editor |
 | `watch` | `ctrl-l` | watch a background delegate, or inspect what is running |
 | `scroller` | `ctrl-o` | open the [transcript scroller](../using/transcript.md) |
@@ -880,7 +881,7 @@ rather than one winning, since which won would come down to the order the file w
 actions *trading* chords is not a conflict and both get what they asked for.
 
 The block layers per action the way `env` does, so a project file moving one action says nothing about
-the other six. See [Interactive mode](../using/interactive-mode.md) for what the keys do.
+the other seven. See [Interactive mode](../using/interactive-mode.md) for what the keys do.
 
 ### `search`
 

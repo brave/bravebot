@@ -1451,6 +1451,12 @@ pub struct Session {
     /// to name it, and scanning back through the transcript for the tail would be a worse way
     /// to answer a question the session already knows the answer to.
     pub running: Option<Activity>,
+    /// The token that moves the turn's command in flight to the background, while one can be.
+    ///
+    /// Held only between the driver offering it and that call finishing, and only for the turn's
+    /// own call. Delegates run alongside the turn, so a delegate's call finishing while the turn's
+    /// command is running must not take the turn's token with it.
+    movable: Option<bravebot_core::cancel::Handoff>,
     /// Prompts typed and sent while a turn was running, in the order they were typed.
     ///
     /// Not in the transcript: they have not happened. They are drawn under the box as waiting,
@@ -1746,6 +1752,7 @@ impl Session {
             phase: None,
             checking: None,
             running: None,
+            movable: None,
             queued: Vec::new(),
             turn_in_flight: false,
             stopping: false,
@@ -2263,6 +2270,7 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.running = None;
+        self.movable = None;
         self.started = None;
         self.scroll = 0;
         self.selection = None;
@@ -2923,6 +2931,9 @@ impl Session {
     /// happened is worse than an unpaired line.
     pub fn finish_activity(&mut self, activity: Activity) {
         self.running = None;
+        if self.attributed_to.is_none() {
+            self.movable = None;
+        }
         let target = self
             .working_lines()
             .iter_mut()
@@ -2950,6 +2961,36 @@ impl Session {
 
     fn still_running(entry: &Entry) -> bool {
         entry.activity.as_ref().is_some_and(Activity::is_running)
+    }
+
+    /// Hold the token that moves the turn's command in flight to the background.
+    ///
+    /// A delegate's is dropped. Its call is not the one the screen shows running, and the driver
+    /// offers it none, so a token attributed to one is not a token anybody here could mean.
+    pub fn movable(&mut self, handoff: bravebot_core::cancel::Handoff) {
+        if self.attributed_to.is_none() {
+            self.movable = Some(handoff);
+        }
+    }
+
+    /// Whether the turn's command in flight can be moved to the background now.
+    pub fn can_move_to_background(&self) -> bool {
+        self.movable.is_some()
+    }
+
+    /// Ask for the turn's command in flight to go on in the background, where one can.
+    ///
+    /// Taken as it is requested, so the hint goes and a second press does nothing. A press with
+    /// no command that can be moved does nothing either, which is the key being pressed between
+    /// two calls: the next call gets a token of its own, and this press does not reach it.
+    ///
+    /// Whether a command was moved.
+    pub fn move_to_background(&mut self) -> bool {
+        let Some(handoff) = self.movable.take() else {
+            return false;
+        };
+        handoff.request();
+        true
     }
 
     /// Accept a typed character.
@@ -6330,6 +6371,7 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.running = None;
+        self.movable = None;
         // A prompt is English and a command line is not, so the line coming back must not land
         // behind a marker that would run it. Belt and braces with the guard in
         // [`Session::type_char`]: this is the state the returning text lands in, and it has to be
@@ -7658,6 +7700,7 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.running = None;
+        self.movable = None;
         self.started = Some(Instant::now());
         prompt
     }
@@ -7682,6 +7725,7 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.running = None;
+        self.movable = None;
         self.streaming.clear();
         self.composing = None;
     }
@@ -7952,6 +7996,7 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.running = None;
+        self.movable = None;
         self.started = Some(Instant::now());
     }
 
@@ -7982,6 +8027,7 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.running = None;
+        self.movable = None;
         self.tokens += tokens;
         // Zero before the first turn, which is the leading entry: whatever is spent there is spent
         // outside every turn, and that is what the number says.
@@ -8013,6 +8059,7 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.running = None;
+        self.movable = None;
         self.tokens += tokens;
         // To the leading entry before the first turn, for the reason an aside is.
         *self.spend.entry(self.turns).or_insert(0) += tokens;
@@ -9954,6 +10001,130 @@ mod tests {
                 "a command from the forgotten conversation is still openable"
             );
         }
+
+        /// A delegate's call finishing while the turn's command still runs says nothing about the
+        /// turn's command. Taking the token there would leave a build running with no key to move
+        /// it, for no reason the person could see.
+        #[test]
+        fn a_delegates_call_ending_leaves_the_turns_command_movable() {
+            let mut session = session();
+            session.type_char('a');
+            session.submit();
+            session.start_activity(Activity::running("Run", "make check"));
+            let handoff = bravebot_core::cancel::Handoff::new();
+            session.movable(handoff.clone());
+
+            spawn(&mut session, "explore", "look around");
+            session.start_activity(Activity::running("Read", "src/main.rs"));
+            session.finish_activity(Activity::running("Read", "src/main.rs").done("1 line"));
+            session.reporting_for(None);
+
+            assert!(
+                session.can_move_to_background(),
+                "a delegate's call took the turn's command's token"
+            );
+            session.move_to_background();
+            assert!(
+                handoff.is_requested(),
+                "the press did not reach the turn's command"
+            );
+        }
+
+        /// The screen shows the turn's command running, never a delegate's, so a token reported
+        /// for a delegate is one no press here means.
+        #[test]
+        fn a_delegate_offers_nothing_to_move() {
+            let mut session = session();
+            session.type_char('a');
+            session.submit();
+            spawn(&mut session, "checker", "run the build");
+            let handoff = bravebot_core::cancel::Handoff::new();
+            session.movable(handoff.clone());
+            session.reporting_for(None);
+
+            assert!(!session.can_move_to_background());
+            session.move_to_background();
+            assert!(
+                !handoff.is_requested(),
+                "a press moved a delegate's command"
+            );
+        }
+    }
+
+    /// One press moves the command and the offer goes with it, so the hint is gone and a second
+    /// press has nothing to ask.
+    #[test]
+    fn a_press_moves_the_turns_command_once() {
+        let mut session = session();
+        session.type_char('a');
+        session.submit();
+        let handoff = bravebot_core::cancel::Handoff::new();
+        session.movable(handoff.clone());
+        assert!(session.can_move_to_background());
+
+        session.move_to_background();
+        assert!(handoff.is_requested(), "the press did not ask for the move");
+        assert!(
+            !session.can_move_to_background(),
+            "the hint still offers a move already asked for"
+        );
+    }
+
+    /// A press a moment after a command ended is about that command. Reaching the next one, which
+    /// the person has not seen start, would move a line nobody chose to move.
+    #[test]
+    fn a_press_after_a_command_ends_does_not_reach_the_next_one() {
+        let mut session = session();
+        session.type_char('a');
+        session.submit();
+        session.start_activity(Activity::running("Run", "make check"));
+        let first = bravebot_core::cancel::Handoff::new();
+        session.movable(first.clone());
+        session.finish_activity(Activity::running("Run", "make check").done("passed"));
+
+        assert!(!session.can_move_to_background());
+        session.move_to_background();
+
+        session.start_activity(Activity::running("Run", "make test"));
+        let second = bravebot_core::cancel::Handoff::new();
+        session.movable(second.clone());
+        assert!(
+            !first.is_requested(),
+            "a press moved a command that had ended"
+        );
+        assert!(
+            !second.is_requested(),
+            "a press made before the command started moved it"
+        );
+    }
+
+    /// A turn that ends takes its offer with it, so the next turn's first moment is not one where
+    /// the key answers for a command from the last.
+    #[test]
+    fn a_turn_ending_takes_the_offer_with_it() {
+        let mut session = session();
+        session.type_char('a');
+        session.submit();
+        session.movable(bravebot_core::cancel::Handoff::new());
+        session.fail("went wrong", went_wrong());
+
+        assert!(!session.can_move_to_background());
+    }
+
+    /// A stopped turn ends without the finish that would take the offer down, and an offer left
+    /// standing is a hint on an idle screen for a press that moves nothing.
+    #[test]
+    fn a_stopped_turn_takes_the_offer_with_it() {
+        let mut session = session();
+        session.type_char('a');
+        session.submit();
+        session.movable(bravebot_core::cancel::Handoff::new());
+        session.restore("a");
+
+        assert!(
+            !session.can_move_to_background(),
+            "a stopped turn left its command movable"
+        );
     }
 
     /// The endpoint substitutes rather than refusing, so a session that asked for one model and was

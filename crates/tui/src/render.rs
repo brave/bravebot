@@ -3161,9 +3161,9 @@ const COMPACTED_CONTEXT: &str = "context compacted";
 /// Every other row means the same thing either way.
 ///
 /// The chords a settings file can move are asked of the bindings rather than written here, so the
-/// list names the key that answers rather than the key that used to. The seven the file can move are
+/// list names the key that answers rather than the key that used to. The eight the file can move are
 /// the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
-fn shortcuts(editing: crate::vim::Editing, bindings: &Keybindings) -> [(String, &'static str); 22] {
+fn shortcuts(editing: crate::vim::Editing, bindings: &Keybindings) -> [(String, &'static str); 23] {
     let escape = match editing {
         crate::vim::Editing::Ordinary => "clear the line",
         crate::vim::Editing::Vi => "letters as commands, then stop",
@@ -3190,6 +3190,7 @@ fn shortcuts(editing: crate::vim::Editing, bindings: &Keybindings) -> [(String, 
         (bindings.stash_name(), "stash, bring it back, or search"),
         (bindings.trail_name(), "show what a turn did"),
         (bindings.paste_name(), "paste, pictures too"),
+        (bindings.background_name(), "background a running command"),
         ("drag".to_string(), "select, copy on release"),
     ]
 }
@@ -3395,6 +3396,18 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         (true, false) => format!("{} show trail", session.bindings().trail_name()),
     };
 
+    // Only while the command the turn is waiting on can be moved, for the reason the trail is only
+    // named once there is one: offered at any other moment, the press does nothing.
+    let movable = if session.can_move_to_background() {
+        t!(
+            background_hint,
+            chord = session.bindings().background_name()
+        )
+        .to_string()
+    } else {
+        String::new()
+    };
+
     // In shell mode the usual bindings are beside the point: the line goes to a shell, so what a
     // user needs to know is which shell and how to get back out again.
     if session.shell {
@@ -3405,6 +3418,9 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
             ),
             Span::styled("  ·  esc to cancel  ·  output goes to the model", dim()),
         ];
+        if !movable.is_empty() {
+            spans.push(Span::styled(format!("  ·  {movable}"), dim()));
+        }
         if !looping.is_empty() {
             spans.push(Span::styled(format!("  ·  {looping}"), dim()));
         }
@@ -3500,6 +3516,7 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         cache,
         looping,
         watchable,
+        movable,
         SHORTCUTS_HINT.to_string(),
     ];
     // Indices into `parts`, in the order they are given up: the way to the bindings first, then the
@@ -3515,10 +3532,13 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // is still in the list: a part nothing may give up makes `fitted` clear the whole line on a
     // narrow terminal, which would take the mode with it, and a mode nobody can read is worse than
     // a loop they can still find with `/loop` or `/status`.
+    //
+    // The way to move a command goes just before the loop. It is up only while somebody is waiting
+    // on that command, which is the moment they are reading this line for a way out of the wait.
     let expendable: &[usize] = if context_is_unmeasured {
-        &[3, 7, 2, 4, 6, 5]
+        &[3, 8, 2, 4, 6, 7, 5]
     } else {
-        &[7, 2, 3, 4, 6, 5]
+        &[8, 2, 3, 4, 6, 7, 5]
     };
     // A note is drawn over the right of this same row, so what the parts may occupy is the width
     // less that note. Fitted against the whole width instead, the last part that fits is one the
@@ -6824,6 +6844,38 @@ mod tests {
             hint.contains("ctrl-l") && hint.contains("1 to open"),
             "the hint line does not say a delegate can be opened: {hint}"
         );
+    }
+
+    /// Named for as long as a press would move the command, and gone the moment it would not: a
+    /// key offered after the command ended, or after it was moved, is one that does nothing. The
+    /// chord a settings file moved it to is the one named.
+    #[test]
+    fn the_hint_line_offers_the_move_only_while_a_command_can_be_moved() {
+        let mut session = Session::new("kernel-enforced");
+        session.type_char('a');
+        session.submit().expect("the prompt is sent");
+        assert!(
+            !hint_row_at(&session, 120, 24).contains("to background"),
+            "the move was offered with no command running"
+        );
+
+        session.movable(bravebot_core::cancel::Handoff::new());
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(hint.contains("ctrl-b to background"), "{hint}");
+
+        session.move_to_background();
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(
+            !hint.contains("to background"),
+            "the move was still offered after it was asked for: {hint}"
+        );
+
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("background".to_string(), "alt-b".to_string());
+        session.adopt_keybindings(&moved);
+        session.movable(bravebot_core::cancel::Handoff::new());
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(hint.contains("alt-b to background"), "{hint}");
     }
 
     /// A session that ran commands and spawned no delegate has a key that opens something, and

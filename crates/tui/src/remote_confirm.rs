@@ -135,6 +135,9 @@ pub enum ToMain {
     Started(Activity),
     /// The tool call last announced has finished. No reply.
     Finished(Activity),
+    /// The command the call last announced runs can be moved to the background with this token.
+    /// No reply.
+    Movable(bravebot_core::cancel::Handoff),
     /// A check has begun over this many lines of quarantined content. No reply.
     CheckStarted(bravebot_core::vetting::Checking),
     /// The check last announced is over, whatever it decided. No reply.
@@ -388,6 +391,10 @@ impl Reporter for RemoteReporter {
 
     fn tool_finished(&mut self, activity: Activity) {
         let _ = self.outbound.send(ToMain::Finished(activity));
+    }
+
+    fn movable(&mut self, handoff: bravebot_core::cancel::Handoff) {
+        let _ = self.outbound.send(ToMain::Movable(handoff));
     }
 
     fn check_started(&mut self, checking: bravebot_core::vetting::Checking) {
@@ -988,6 +995,7 @@ mod tests {
                     ToMain::Composing(_) => seen.push("composing"),
                     ToMain::Started(_) => seen.push("started"),
                     ToMain::Finished(_) => seen.push("finished"),
+                    ToMain::Movable(_) => seen.push("movable"),
                     ToMain::CheckStarted(_) => seen.push("check started"),
                     ToMain::CheckFinished => seen.push("check finished"),
                     ToMain::Quarantined(_) => seen.push("quarantined"),

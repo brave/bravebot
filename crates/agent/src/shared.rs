@@ -221,6 +221,7 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         fn landed(&mut self, landing: Landing);
         fn tool_started(&mut self, activity: Activity);
         fn tool_finished(&mut self, activity: Activity);
+        fn movable(&mut self, handoff: bravebot_core::cancel::Handoff);
         fn check_started(&mut self, checking: bravebot_core::vetting::Checking);
         fn check_finished(&mut self);
         fn interjected(&mut self, said: String);

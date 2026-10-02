@@ -572,10 +572,12 @@ and push the hint line off the screen.
 The hint line carries what the session is doing (the mode in force where it is not asking, the
 trail, how full the context is and on what footing it knows that, INPUT-22, a loop that is running
 and when its next tick is due, [loop.md](loop.md), the key that opens the delegates where the
-session has spawned any) and then `? for shortcuts`. It lists no other binding of its own, and it does not report the
+session has spawned any, the key that moves the command the turn is waiting on to the background
+while it can be moved, [RUN-25](tools/run.md#RUN-25)) and then `? for shortcuts`. It lists no other binding of its own, and it does not report the
 confinement. The trail key is named only **once a turn has left a trail to look at**: a trail is
 recorded when the turn it belongs to ends, so before then the line would be offering a press that
-changes nothing on screen.
+changes nothing on screen. The move key is named for the same reason **only while there is a
+command it would move**, and is gone once it has been pressed or the command has ended.
 
 The mode leads the line and is the only part of it drawn in a colour, and asking takes no room at
 all: what is drawn is a mode somebody chose, named in [permission-modes.md](permission-modes.md). A
@@ -583,8 +585,10 @@ marker standing there on every session is one people stop reading, and being rea
 what this one is for.
 
 **What does not fit is dropped whole, at a separator.** The parts are given up in order (a reading
-with no figure in it, then the way to the bindings, then the trail key, then the figures, and a
-running loop after all of them), and the mode is the last to go. The loop is kept that late because
+with no figure in it, then the way to the bindings, then the trail key, then the figures, then the
+move key, and a running loop after all of them), and the mode is the last to go. The move key is
+kept that late because it is up only while somebody is waiting on a command, which is when they read
+this line for a way out of the wait. The loop is kept that late because
 it is the only part of the line spending something while nobody is watching, and it is given up at
 all because a part nothing may give up would have a narrow terminal clear the whole row and take the
 mode with it. In shell mode the line is the shell's own, and the loop is said there too, since a loop
@@ -627,6 +631,7 @@ prevent, and a mode read off `/status` after the write is a mode read too late.
 `verified-by: bravebot_tui::render::the_hint_line_does_not_report_the_confinement`
 `verified-by: bravebot_tui::render::the_hint_line_names_the_delegate_key_once_one_has_run`
 `verified-by: bravebot_tui::render::the_hint_names_the_trail_key_only_once_there_is_a_trail`
+`verified-by: bravebot_tui::render::the_hint_line_offers_the_move_only_while_a_command_can_be_moved`
 `verified-by: bravebot_tui::render::the_hint_line_fits_a_narrow_terminal_whole`
 `verified-by: bravebot_tui::render::the_hint_and_the_list_name_the_same_key`
 `verified-by: bravebot_tui::render::the_hint_line_names_a_mode_that_is_not_asking`
@@ -1815,13 +1820,15 @@ rendering fault rather than as a border with no room for all of it.
 `verified-by: bravebot_tui::render::a_border_gives_up_the_ways_in_one_at_a_time`
 
 <a id="INPUT-32"></a>
-### INPUT-32: a settings file can move seven chords, and nothing else
+### INPUT-32: a settings file can move eight chords, and nothing else
 
 A `keybindings` block in `settings.json` names an action and the chord it is to answer, spelled
 `ctrl-x`, `alt-o` or `ctrl+x`. It layers per action the way `env` does: a project file moving one
-action's key says nothing about the other six. There is no second file and no other spelling of the
-block, so one place answers what a key does. Seven actions can be moved, and nothing else can:
+action's key says nothing about the other seven. There is no second file and no other spelling of the
+block, so one place answers what a key does. Eight actions can be moved, and nothing else can:
 
+- `background` (default: `ctrl-b`): move the command the turn is waiting on to the background
+  ([RUN-25](tools/run.md#RUN-25)).
 - `editor` (default: `ctrl-g`): open external editor for the current prompt.
 - `watch` (default: `ctrl-l`): watch background delegate or inspect running actions.
 - `scroller` (default: `ctrl-o`): open the transcript scroller.
@@ -1860,6 +1867,8 @@ view of what a delegate is doing, the chord that opened the view leaves it. Ctrl
 meaning in both, and the chord an action was moved off of does nothing. In the view so does every
 other key held with a modifier but Shift, the chord an action was moved onto among them, save the
 scroller's Ctrl-U, Ctrl-D and Ctrl-B ([SCROLL-3](scroller.md#SCROLL-3)), which the view borrows.
+The move key at its default is therefore a page back in the view and in the scroller, and moves a
+command only from the box.
 
 **Why.** Every character narrows the prompt search and bare letters walk the delegate list, so a
 chord these modes did not ask the bindings about is not merely unanswered: it is read as the letter
@@ -1871,14 +1880,14 @@ readline editing keys (such as `ctrl-u` or `alt-b`), the action answers rather t
 editing arm. In vi's normal mode, `/` translates to the chord configured for history search.
 
 **The screen names the chord that answers.** `?` lists the keys from the one place they are written
-down (INPUT-13), and the seven rows above are asked of the chord in force rather than spelled out
+down (INPUT-13), and the eight rows above are asked of the chord in force rather than spelled out
 there. So is every other line that names one: the row saying what brings a stashed line back
 (INPUT-17), the border while an older prompt is being walked back to (INPUT-31), the keys under the
 search (INPUT-19), the hint saying there is something to watch, the note left where a picture on the
 clipboard needs a key of its own, and the scroller's way out
 ([SCROLL-7](scroller.md#SCROLL-7)). A translated line names the chord by taking it as an argument, so
 no catalog has to be revisited when a default moves. Where a clause of this spec or another names one
-of the seven, it names the default.
+of the eight, it names the default.
 
 **Why.** A list is worth having only where it is right, and a person reads it at the moment a key
 they pressed did nothing. Keeping a second copy for the defaults is the same list twice: the copy
@@ -1898,6 +1907,7 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::keybindings::two_actions_can_trade_chords`
 `verified-by: bravebot_tui::keybindings::unknown_actions_in_map_are_ignored`
 `verified-by: bravebot_tui::keybindings::custom_chords_override_defaults`
+`verified-by: bravebot_tui::keybindings::the_background_chord_is_ctrl_b_and_can_be_moved`
 `verified-by: bravebot_config::settings::a_keybindings_block_is_read_from_settings`
 `verified-by: bravebot_config::settings::a_keybindings_entry_that_is_not_a_chord_is_dropped`
 `verified-by: bravebot_config::settings::a_project_layer_overrides_keybindings_per_name`

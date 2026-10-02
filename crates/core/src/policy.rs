@@ -5674,6 +5674,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow("ambient", named.join(", "));
     }
 
+    /// Record that a person moved a waited-for command to the background, and which job it became.
+    ///
+    /// A decision only a person can make: the planner cannot press the key and is told afterwards.
+    /// It changes what the turn does next, since the planner goes on while the command still runs,
+    /// so somebody reading the session back has to be able to see whose choice that was. The job's
+    /// name ties the entry to the line's own, which is already in the trail beside its approval.
+    pub fn record_handoff(&mut self, job: &str, after: std::time::Duration) {
+        self.allow(
+            "handoff",
+            format!(
+                "moved to the background by the user after {:.1}s, as {job}",
+                after.as_secs_f64()
+            ),
+        );
+    }
+
     /// The gate a command line passes immediately before anything executes. Returns the label its
     /// output will carry.
     ///
@@ -12668,6 +12684,29 @@ five
                     if detail.contains("git status") && detail.contains("the user typed")
             )),
             "the provenance decision left no trace: {:?}",
+            sink.events()
+        );
+    }
+
+    /// The planner carries on after a move because a person chose that, so the trail has to say
+    /// who, and which job the line became, or the rest of the turn reads as the planner's doing.
+    #[test]
+    fn moving_a_command_to_the_background_is_recorded_in_the_audit_trail() {
+        let mut sink = RecordingSink::new();
+        {
+            let mut policy = policy_trusting(&mut sink, &[]);
+            policy.record_handoff("job:3", std::time::Duration::from_millis(42_500));
+        }
+
+        assert!(
+            sink.events().iter().any(|e| matches!(
+                e,
+                Event::GatePassed { gate: "handoff", detail }
+                    if detail.contains("job:3")
+                        && detail.contains("by the user")
+                        && detail.contains("42.5s")
+            )),
+            "the move left no trace: {:?}",
             sink.events()
         );
     }

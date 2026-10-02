@@ -1187,6 +1187,9 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
             session.quit();
             Action::Quit
         }
+        // Nothing is waiting at rest, so there is nothing to move. Answered all the same, so the
+        // chord, which the box does not read, is not typed into it either.
+        _ if session.bindings().is_background(&key) => Action::None,
         // Reading back through what happened, rather than typing at it. The transcript already
         // scrolls; what needs a mode is everything a person does once they are reading, since the
         // keys for it are letters and the box takes letters.
@@ -1969,6 +1972,18 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     if session.bindings().is_history(&key) {
         session.open_history_search();
         return Action::Redraw;
+    }
+
+    // Answered whether or not a command can be moved, so the chord never falls through to the
+    // ladder and moves the caret instead: a person pressing it a moment after the command ended
+    // asked for nothing the box should do. With nothing moved it is answered as the idle path
+    // answers it.
+    if session.bindings().is_background(&key) {
+        return if session.move_to_background() {
+            Action::Redraw
+        } else {
+            Action::None
+        };
     }
 
     // For the reason the idle ladder refuses first: queueing is sending with a wait in front of it,
@@ -6674,6 +6689,7 @@ fn run_turn_animated(
             crate::remote_confirm::ToMain::Composing(call) => session.composing(call),
             crate::remote_confirm::ToMain::Started(activity) => session.start_activity(activity),
             crate::remote_confirm::ToMain::Finished(activity) => session.finish_activity(activity),
+            crate::remote_confirm::ToMain::Movable(handoff) => session.movable(handoff),
             crate::remote_confirm::ToMain::CheckStarted(checking) => session.checking(checking),
             crate::remote_confirm::ToMain::CheckFinished => session.checked(),
             crate::remote_confirm::ToMain::Quarantined(shown) => session.show(shown),
@@ -7986,6 +8002,63 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::CONTROL)
     }
 
+    /// The chord asks for the move while the turn's command can be moved, and once it has there
+    /// is nothing left for it to do. Either way the line is left as typed: Ctrl-B was a word back
+    /// in the box, and a press meant for the command must not walk the caret through a half-typed
+    /// line.
+    #[test]
+    fn the_background_chord_moves_the_command_and_never_edits_the_line() {
+        let mut session = Session::new("kernel-enforced");
+        session.status = Status::Working;
+        for c in "two words".chars() {
+            session.type_char(c);
+        }
+        let caret = session.caret();
+        let handoff = bravebot_core::cancel::Handoff::new();
+        session.movable(handoff.clone());
+
+        assert_eq!(
+            handle_key_while_working(&mut session, ctrl('b')),
+            Action::Redraw
+        );
+        assert!(handoff.is_requested(), "the chord did not ask for the move");
+        assert!(!session.can_move_to_background());
+
+        handle_key_while_working(&mut session, ctrl('b'));
+        assert_eq!(
+            (session.input(), session.caret()),
+            ("two words", caret),
+            "a press with nothing to move edited the line"
+        );
+    }
+
+    /// At rest there is nothing to move, and the chord is still not the box's: moved to Alt-B, a
+    /// press neither types a letter nor walks the caret a word back.
+    #[test]
+    fn the_background_chord_at_rest_leaves_the_line_as_typed() {
+        let mut session = Session::new("kernel-enforced");
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("background".to_string(), "alt-b".to_string());
+        session.adopt_keybindings(&moved);
+        for c in "two words".chars() {
+            session.type_char(c);
+        }
+        let caret = session.caret();
+
+        assert_eq!(
+            handle_key(
+                &mut session,
+                KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT)
+            ),
+            Action::None
+        );
+        assert_eq!(
+            (session.input(), session.caret()),
+            ("two words", caret),
+            "the chord edited the line at rest"
+        );
+    }
+
     /// The same chord on the way up. A terminal asked for disambiguated keys sends these as well as
     /// presses, so every loop that reads a key has to tell them apart.
     fn released(key: KeyEvent) -> KeyEvent {
@@ -8112,10 +8185,12 @@ mod tests {
         /// Somebody who moved Watch off Ctrl-L presses it from habit, and the view walks the list
         /// with bare letters: read as the `l` it carries, the chord opened the delegate the list
         /// was on, or closed the view from the session row. Every default is vacated, so a letter
-        /// the view comes to read is held to this too.
+        /// the view comes to read is held to this too. Ctrl-B is the one not pressed: the view
+        /// pages back on it whoever holds it, the way the scroller does.
         #[test]
         fn the_chord_an_action_was_moved_off_does_nothing_inside_the_view() {
             let moved = [
+                ("background", "alt-b"),
                 ("editor", "alt-e"),
                 ("history", "alt-r"),
                 ("paste", "alt-v"),
@@ -8148,13 +8223,14 @@ mod tests {
             }
         }
 
-        /// The view asks the bindings about Watch alone, so the other six chords are nobody's in
+        /// The view asks the bindings about Watch alone, so the other seven chords are nobody's in
         /// here. Moved onto the keys the view walks with, one read as its key would open, close or
         /// move the view on a chord the person gave to something else. The second set is the
         /// view's own chords with Alt added, and keys that are not letters.
         #[test]
         fn a_chord_moved_onto_a_key_the_view_reads_is_not_that_key() {
             let onto_letters = [
+                ("background", "alt-b"),
                 ("editor", "alt-l"),
                 ("history", "alt-q"),
                 ("paste", "alt-j"),
@@ -8164,6 +8240,7 @@ mod tests {
                 ("watch", "alt-w"),
             ];
             let onto_the_rest = [
+                ("background", "ctrl-alt-b"),
                 ("editor", "ctrl-alt-u"),
                 ("history", "ctrl-alt-d"),
                 ("paste", "ctrl-alt-c"),
