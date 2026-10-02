@@ -178,6 +178,7 @@ forms this reader knows is the range from `A.` to `.B`, and `HEAD^@` is `HEAD^`,
 come back as a confident answer to something else. A pattern or a path dropped without a word is
 the same guess: a log with its pattern dropped is every commit, read as the ones that matched.
 
+`verified-by: bravebot_agent::tools::a_query_off_the_list_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::turn::read_git_answers_status_and_refuses_a_query_off_the_list`
 `verified-by: bravebot_agent::turn::read_git_searches_the_files_at_a_revision_and_pages_the_lines`
 `verified-by: bravebot_agent::turn::read_git_lists_the_tags_a_revision_reaches_newest_version_first`

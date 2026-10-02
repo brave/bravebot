@@ -12064,6 +12064,40 @@ mod tests {
             );
         }
 
+        /// GIT-5 and TOOL-6. A word off the list is refused by name whoever asked, and only the
+        /// sentence sending the planner to git turns on whether this turn holds `run`. Asserted
+        /// whole rather than by what it contains, because the refusal by name is the half the turn
+        /// acts on and a test reading only that half would pass with either sentence appended.
+        #[test]
+        fn a_query_off_the_list_names_run_only_where_the_turn_holds_one() {
+            let scratch = Scratch::new("read-git-off-list");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let refused = |running: Running| {
+                let mut sink = RecordingSink::new();
+                let mut policy = policy(&mut sink);
+                let produced = with_tools(&workspace, |tools| {
+                    tools.running = running;
+                    read_git(
+                        &mut policy,
+                        tools,
+                        &mut crate::confirm::Unattended,
+                        &json!({"query": "blame"}),
+                    )
+                });
+                told(&mut policy, &produced.text)
+            };
+
+            assert_eq!(
+                refused(Running::Offered),
+                "error: read_git answers log, show, diff, status, tags and search, not blame. Use \
+                 run to ask git for anything else."
+            );
+            assert_eq!(
+                refused(Running::Withheld),
+                "error: read_git answers log, show, diff, status, tags and search, not blame."
+            );
+        }
+
         /// The property the gate exists for. A planner whose context has met untrusted content is
         /// writing a command line an attacker may have steered, and compiling one decides which
         /// program runs and which files a redirection opens. So the read is refused and nothing
