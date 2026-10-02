@@ -88,7 +88,7 @@ const roles = (title) =>
 // --- it is ours ---------------------------------------------------------------------
 check(titles.includes('File'), `there is a File menu (${titles.join(', ')})`)
 check(titles.includes('View'), 'there is a View menu')
-check(titles.includes('Chat'), 'there is a Chat menu — the app has its own verbs')
+check(titles.includes('Chat'), 'there is a Chat menu, the app has its own verbs')
 check(titles.includes('Help'), 'there is a Help menu')
 check(
   !every.some((i) => /learn more/i.test(i.label ?? '')),

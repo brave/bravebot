@@ -6,7 +6,7 @@ import { Alert, Button, Icon, Input, TextArea } from '../nala'
  * The other list in the left column: the bots somebody has defined.
  *
  * A session is a conversation and is named after whatever was asked first. A bot is somebody who
- * has them — a name, a purpose and a memory — so the list here is a list of *people* where the one
+ * has them, a name, a purpose and a memory, so the list here is a list of *people* where the one
  * next door is a list of *occasions*. That is the whole reason it is a separate tab rather than a
  * filter over the same rows.
  *

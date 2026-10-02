@@ -530,7 +530,7 @@ export function App(): React.JSX.Element {
     // Recent, the recents the composer's project menu and New chat read, which the main process
     // keeps, a group heading in the chat list, whose path came off a session the bridge reported,
     // or a bot's home and recorded folders, which the main process wrote. Never a path the
-    // renderer composed — which is the promise `chooseDirectory` makes.
+    // renderer composed, which is the promise `chooseDirectory` makes.
     const chosen = directory ?? (await window.bravebot.chooseDirectory())
     if (!chosen) return null
     try {

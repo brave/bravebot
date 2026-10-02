@@ -18,7 +18,7 @@ are in [setup](setup.md) and [development](development.md); the protocol underne
 
 Three columns, each side one resizable and foldable:
 
-- **Chats** — saved conversations under `~/.bravebot/sessions`, bots' conversations included,
+- **Chats**: saved conversations under `~/.bravebot/sessions`, bots' conversations included,
   with buttons to start one in the project used last or in a folder you pick. A second tab beside
   it holds the **bots**: named, persistent agents with a purpose and a memory, whose conversations
   run in a project picked for each one or in none. Switching tabs opens the first item of the
@@ -37,7 +37,7 @@ Three columns, each side one resizable and foldable:
   turn blocks until one is answered. Window close and app shutdown refuse outstanding
   questions. For the last of the nine that means *no answers at all* rather than a decline per question: a decline
   somebody made and a question that never reached them must not look alike.
-- **Context** — an inspector with **Overview** and **Files** tabs, folded from the header's toggle.
+- **Context**: an inspector with **Overview** and **Files** tabs, folded from the header's toggle.
   Overview summarises the plan, reads and confined material; Changes distinguishes
   pending decisions, approved writes and their actual execution outcomes. Files
   provides a lazily loaded tree and project-wide filename search, including folders
@@ -479,7 +479,7 @@ and an item is greyed when its `requires` tag is not met. (On Windows and Linux,
 | Key | Menu item | What |
 | --- | --- | --- |
 | `⌘N` | File › New Chat | Start a chat in the project used last, or pick a folder when there is none |
-| `⇧⌘W` | File › Close Chat | Close the chat — `⌘W` still closes the window |
+| `⇧⌘W` | File › Close Chat | Close the chat, `⌘W` still closes the window |
 | `⌘F` | View › Find in Conversation | Open the find bar and focus its field; needs a session |
 | `⌘L` | View › Focus Composer | Move focus to the message box; needs a session |
 | `⌘↩` | Chat › Send | Send the draft; greyed while a turn runs or the draft is empty |

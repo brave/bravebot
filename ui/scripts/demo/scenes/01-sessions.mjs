@@ -1,5 +1,5 @@
 // The left column: every chat under `~/.bravebot/sessions`, and the three things you can do
-// to that list — search it, group it by checkout, and start a chat from a heading.
+// to that list, search it, group it by checkout, and start a chat from a heading.
 //
 // The `+` on a heading is pressed and then *declined* at the trust prompt, as `drive.mjs`
 // does. The point of the shot is the question, not the answer: saying yes on camera would be
@@ -15,9 +15,9 @@ export default {
     const { page } = s
     const rows = page.locator('.session')
     const total = await rows.count()
-    if (total === 0) s.skip('no chats are stored — nothing to list')
+    if (total === 0) s.skip('no chats are stored, nothing to list')
 
-    await s.say('Chats', `Every chat under ~/.bravebot, newest first — ${total} here.`, 1.6)
+    await s.say('Chats', `Every chat under ~/.bravebot, newest first, ${total} here.`, 1.6)
     await s.spotlight('.session-list', 1.4)
     await s.unspot()
 

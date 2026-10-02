@@ -1,6 +1,6 @@
 // Bots: the other list in the left column.
 //
-// Every scene before this one is about a *chat* — an occasion, named after whatever was asked
+// Every scene before this one is about a *chat*, an occasion, named after whatever was asked
 // first, and finished with. A bot is somebody who has them: a name, a purpose and a memory, with
 // conversations started in any project or in none. So the shot is the tab first, because the
 // column having two lists is the thing a viewer has to be told before anything else here makes
@@ -111,7 +111,7 @@ export default {
       .filter({ has: page.locator('.bot-name', { hasText: new RegExp(`^${NAME}$`) }) })
     if (!(await row.count())) s.skip('the bot was not added to the list')
 
-    await s.say('And there it is', 'No conversations yet — a bot writes no session until it has something to say.', 2.6)
+    await s.say('And there it is', 'No conversations yet, a bot writes no session until it has something to say.', 2.6)
     await s.spotlight(row, 1.8)
     await s.unspot()
     await s.shot('12-bot-made')
@@ -163,7 +163,7 @@ export default {
     const memory = page.locator('[data-test="bot-details"] [data-test="bot-memory"]')
     if (await memory.count()) {
       await s.glideTo(memory)
-      await s.say('Its memory', 'A real file in each folder it works in — empty until the bot has something to keep.', 3.0)
+      await s.say('Its memory', 'A real file in each folder it works in, empty until the bot has something to keep.', 3.0)
       await s.spotlight(memory, 2.2)
       await s.unspot()
     }
@@ -201,7 +201,7 @@ export default {
         await s.shot('12-bot-memory')
       }
 
-      await s.say('One conversation, resumed', 'Opening it from the bot’s page resumes it — not a new one each time.', 2.6)
+      await s.say('One conversation, resumed', 'Opening it from the bot’s page resumes it, not a new one each time.', 2.6)
       await s.click(page.locator('[data-test="bot-conversations"] .bot-history-row').first())
       await page.waitForTimeout(1800)
       const wrote = page.locator('.tool').filter({ hasText: '.bravebot-ui/bots/' }).last()
