@@ -752,6 +752,9 @@ servers-no-confinement-here =
     { $alias } n'a pas été démarré : cette plateforme n'a pas encore de confinement pour un serveur MCP local
 servers-no-home =
     { $alias } n'a pas été démarré : aucun répertoire à lui n'a pu être créé dans { $path } : { $reason }
+servers-paths-left-out =
+    { $alias } a été démarré sans certains chemins qui lui étaient accordés, le confinement ici ne
+    nommant aucun chemin absent du disque : { $paths }
 servers-no-handshake = { $alias } a été démarré et n'a pas terminé sa poignée de main : { $reason }
 servers-too-slow = { $alias } n'a pas terminé sa poignée de main en { $seconds } secondes
 
