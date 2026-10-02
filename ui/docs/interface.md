@@ -682,7 +682,7 @@ resolve to System.
 ## Agent 0.9 controls
 
 **Settings** at the foot of the sidebar replaces the chat view with the settings: pages on the
-left (**General** and **Agent settings**, with a search over their sections) and **Back to
+left (**General** and **Agent settings**) and **Back to
 BraveBot**, which `Esc` also does. The chat view stays as it was underneath. The setup button on
 the backend notice opens Agent settings.
 

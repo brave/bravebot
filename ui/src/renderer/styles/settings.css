@@ -20,7 +20,6 @@
 
 .settings-nav { display: flex; flex-direction: column; min-height: 0; margin-top: calc(-1 * var(--card-gap)); }
 .settings-nav-titlebar { flex: none; height: var(--titlebar); -webkit-app-region: drag; }
-.settings-nav-search { flex: none; padding: var(--leo-spacing-m); border-bottom: 1px solid var(--border-subtle); }
 /* Leo's Navigation lays its items and the actions slot out as one column the height of the host. */
 .settings-navigation { display: block; flex: 1; min-height: 0; }
 .settings-nav-list { padding: var(--leo-spacing-m) 0; overflow-y: auto; }

@@ -1,11 +1,5 @@
 import { useId, type ReactNode } from 'react'
 
-/** Whether a section title answers the settings search. Every term has to appear in it. */
-export function matchesQuery(title: string, query: string): boolean {
-  const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
-  return terms.every((term) => title.toLowerCase().includes(term))
-}
-
 /** One section of a settings page: a heading over a card. */
 export function SettingsGroup({ title, note, children }: {
   title: string

@@ -1,17 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import type { Appearance } from '../../shared/theme'
 import { Navigation, NavigationItem, type IconName } from '../nala'
-import { AGENT_SECTIONS, AgentSettings } from './AgentSettings'
-import { GENERAL_SECTIONS, GeneralSettings } from './GeneralSettings'
+import { AgentSettings } from './AgentSettings'
+import { GeneralSettings } from './GeneralSettings'
 import { IconButton } from './IconButton'
-import { matchesQuery } from './SettingsGroup'
-import { SidebarSearch } from './SidebarTools'
 
 export type SettingsPage = 'general' | 'agent'
 
-const PAGES: readonly { id: SettingsPage; label: string; icon: IconName; subtitle: string; sections: readonly string[] }[] = [
-  { id: 'general', label: 'General', icon: 'settings', subtitle: 'How this window looks', sections: GENERAL_SECTIONS },
-  { id: 'agent', label: 'Agent settings', icon: 'product-brave-leo', subtitle: 'Configuration and automation for this app', sections: AGENT_SECTIONS },
+const PAGES: readonly { id: SettingsPage; label: string; icon: IconName; subtitle: string }[] = [
+  { id: 'general', label: 'General', icon: 'settings', subtitle: 'How this window looks' },
+  { id: 'agent', label: 'Agent settings', icon: 'product-brave-leo', subtitle: 'Configuration and automation for this app' },
 ]
 
 /**
@@ -30,7 +28,6 @@ export function SettingsView({ page, onPage, onBack, session, chosen, onAppearan
   onAppearance: (appearance: Appearance) => void
   onChanged: () => void
 }): React.JSX.Element {
-  const [query, setQuery] = useState('')
   const dirty = useRef(false)
   const onDirty = useCallback((value: boolean) => { dirty.current = value }, [])
   const leave = useCallback((then: () => void) => {
@@ -52,27 +49,20 @@ export function SettingsView({ page, onPage, onBack, session, chosen, onAppearan
   }, [back])
 
   const current = PAGES.find((each) => each.id === page) ?? PAGES[0]!
-  const found = PAGES.filter((each) => each.sections.some((title) => matchesQuery(title, query)) || matchesQuery(each.label, query))
-  // A page found by its own name shows all of it; one found by a section shows that section.
-  const sectionQuery = matchesQuery(current.label, query) ? '' : query
 
   return (
     <div className="settings-view" data-test="settings-view">
       <div className="settings-nav">
         <div className="settings-nav-titlebar" />
-        <div className="settings-nav-search">
-          <SidebarSearch query={query} onQuery={setQuery} label="Search settings" placeholder="Search" />
-        </div>
         <Navigation className="settings-navigation" aria-label="Settings">
           <div className="settings-nav-list">
-            {found.map((each) => (
+            {PAGES.map((each) => (
               <NavigationItem key={each.id} outsideList icon={each.icon} isCurrent={each.id === page}
                 aria-current={each.id === page ? 'page' : undefined} data-test={`settings-page-${each.id}`}
                 onClick={() => { if (each.id !== page) leave(() => onPage(each.id)) }}>
                 {each.label}
               </NavigationItem>
             ))}
-            {found.length === 0 && <p className="sidebar-empty">No setting matches “{query}”.</p>}
           </div>
           <div slot="actions" className="settings-nav-foot">
             <NavigationItem outsideList icon="arrow-left" className="settings-back" onClick={back} data-test="settings-back">
@@ -96,8 +86,8 @@ export function SettingsView({ page, onPage, onBack, session, chosen, onAppearan
             <h1 id="settings-title">{current.label}</h1>
             <p className="settings-subtitle">{current.subtitle}</p>
             {page === 'agent'
-              ? <AgentSettings session={session} query={sectionQuery} onChanged={onChanged} onDirty={onDirty} />
-              : <GeneralSettings chosen={chosen} onAppearance={onAppearance} query={sectionQuery} />}
+              ? <AgentSettings session={session} onChanged={onChanged} onDirty={onDirty} />
+              : <GeneralSettings chosen={chosen} onAppearance={onAppearance} />}
           </div>
         </div>
       </main>
