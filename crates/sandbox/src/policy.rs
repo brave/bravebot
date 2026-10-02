@@ -173,6 +173,11 @@ impl SandboxPolicy {
     /// not a row and is not among them, and one made for a file that then could not be
     /// created is left where it is, since removing a directory this did not find empty
     /// is a worse thing to get wrong than leaving an empty one behind.
+    ///
+    /// Nothing calls this on a run, and every row a run builds says neither, so a call
+    /// put in before [`SandboxPolicy::nameable_under`] today would create nothing. The
+    /// rows that would say which of the two they are come from a per-program write list,
+    /// which is not built, so wiring this needs that list first. SANDBOX-11 says the same.
     pub fn create_missing_write_rows(&self, capabilities: &Capabilities) -> Vec<PathBuf> {
         if capabilities.grants_paths_that_do_not_exist
             || capabilities.level == ConfinementLevel::None
