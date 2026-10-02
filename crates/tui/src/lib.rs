@@ -19,6 +19,7 @@ pub mod editor;
 pub mod effort_prompt;
 pub mod entries;
 pub mod goals;
+pub mod hidden;
 pub mod history;
 pub mod history_search;
 pub mod indicator;

@@ -6,6 +6,7 @@ governs:
   - crates/core/src/ambient.rs
   - crates/config/src/lib.rs
   - crates/config/src/env_var.rs
+  - crates/config/src/keys.rs
   - crates/config/src/provider.rs
   - crates/config/src/settings.rs
   - crates/ui-bridge/src/settings.rs
@@ -18,6 +19,7 @@ governs:
   - crates/skus/src/profile.rs
   - crates/skus/src/secret.rs
   - crates/skus/src/store.rs
+  - crates/tui/src/hidden.rs
 guards:
   - symbol: Secret::expose
 documented-by:
@@ -119,7 +121,7 @@ features anything here implements.
 
 | Group | Where it lives |
 | --- | --- |
-| Its own auth | the signing key and key id that sign a request to the default backend, baked into the binary at build time and masked rather than encrypted, so one build's key is every install's key; `~/.bravebot/leo-premium.json`, kept to the account that wrote it by a mode of 0600 on Unix and a protected one-account access-control list on Windows, the imported subscription's signed credential batch, deliberately not the OS keychain. With Bedrock opted into instead, the AWS CLI's own cache, listed under Cloud above |
+| Its own auth | the signing key and key id that sign a request to the default backend, baked into the binary at build time and masked rather than encrypted, so one build's key is every install's key; `~/.bravebot/leo-premium.json`, kept to the account that wrote it by a mode of 0600 on Unix and a protected one-account access-control list on Windows, the imported subscription's signed credential batch, deliberately not the OS keychain; `~/.bravebot/gateway-keys.json`, kept the same way, the gateway keys `bravebot auth login gateway` stored, one per provider id. With Bedrock opted into instead, the AWS CLI's own cache, listed under Cloud above |
 | What it keeps beside that | `~/.bravebot/history`, every submitted prompt across runs; `~/.bravebot/sessions/<project-key>/<id>.json` and its trail beside it, and the record holds the conversation rather than a title, so it carries whatever file content the planner was shown; `~/.bravebot/mcp.json`, which holds each value `bravebot mcp add -e NAME=value` stored for a server, often an API key, at a mode of 0600 on Unix; `/export`, which writes a transcript as markdown inside the working directory |
 | Its own project settings | `.bravebot/settings.json` and `.bravebot/settings.local.json` in a checkout, a layer over the one at home, which on some machines carries credentials |
 | Minted access, by a turn | `~/.ssh/`, then deploy key or `authorized_keys`; `gh auth login`, `~/.config/gh/hosts.yml`; `aws iam create-access-key` → `~/.aws/credentials`; `gcloud iam service-accounts keys create`; `az ad sp create-for-rbac`; `npm token create`, `docker login`, `helm registry login` |
@@ -137,8 +139,8 @@ deliberate, recorded choice, and the walk below is what records it.
 the only answer that costs no one a decision, and the only one that works before anybody is asked.
 Everything outside the working tree has it already: `read_file`, `write_file`, `edit_file` and
 `search` resolve a path and refuse one that lands outside, symlinks included. Its strict form
-covers what the agent authenticates with, `~/.bravebot/leo-premium.json` and the credentials that
-sign a model request, which CRED-14 puts out of reach of every program, prompt and record with no
+covers what the agent authenticates with, `~/.bravebot/leo-premium.json`,
+`~/.bravebot/gateway-keys.json` and the credentials that sign a model request, which CRED-14 puts out of reach of every program, prompt and record with no
 legitimate exception. Two things get past it: a command a turn runs, and `/add-dir`, which makes a
 named directory reachable for the session.
 
@@ -844,8 +846,8 @@ defend against a debugger attached to a live process, which is the same account 
 the authority holding the value instead.
 
 **What holds today.** The core dumps, the pages a `Secret` is held in, the buffers reading a
-settings file makes on the way to one, and the buffers an imported subscription's credentials pass
-through.
+settings file makes on the way to one, the buffers an imported subscription's credentials pass
+through, and the buffers a stored gateway key passes through.
 The process lowers its core dump limit to nothing before it reads the first credential, and every
 credential the backend configuration resolves is kept in a `Secret`, the gateway token in a settings
 file included. Reading that file fills buffers of its own: the text it was read into, the document
@@ -869,6 +871,18 @@ carries a region and a model name, and what a person may put in it is anything. 
 `Settings` for the length of the run, which would be a map that never goes: the one place that used
 to, the list of variables a subprocess is not handed, keeps the names it read out of one rather than
 the settings themselves, and a name is not a credential.
+
+A gateway key stored with `bravebot auth login gateway` is in a `Secret` from the Enter that ends
+it until it is written, and every buffer it passes through on either side is overwritten. The
+reader that takes it at the terminal holds what is typed in an allocation of four kilobytes, so
+typing a key does not move it; a longer one moves to an allocation twice the size, and the one it
+leaves is overwritten first. Ctrl-U and the end of the read overwrite the
+whole allocation rather than the part in use, since a character Backspace took off is still in the
+bytes past the end. Reading `gateway-keys.json` clears the text it was read into and the document
+the parse made, whatever the parse answered, and writing it clears the document it serialised and
+holds the text in a `Secret`, written into a buffer sized so it is never moved. The copy of a
+variable read to say which one is sent in place of a stored key is overwritten once it has been
+checked for a value. Printing the stored keys names the ids and none of the values.
 
 A `Secret` holds its value in pages of its own, locked out of swap. `bravebot-config` forbids
 `unsafe`, so the mapping and the lock are `bravebot-sandbox`'s: the value is copied into an
@@ -895,8 +909,9 @@ overwriting out itself, for the reason `bravebot-skus` does, since
 
 Only a `Secret`'s pages are kept off swap. What holds a credential on its way into one is on the
 ordinary heap: the text of a settings file and the document parsed from it, the bytes the AWS CLI
-replied with, and the SigV4 seed. Each is overwritten once it has been read, and locking it would
-take an allocator for everything the parse allocates, which this program does not own. A
+replied with, the SigV4 seed, and a gateway key as it is typed and as the file of them is read and
+written. Each is overwritten once it has been read, and locking it would take an allocator for
+everything the parse allocates, which this program does not own. A
 credential exported into the environment stays in the process's environment block, which the C
 library owns and nothing here overwrites. The process-wide form, `mlockall` with `MCL_FUTURE`, is
 worse than the thing it prevents: where the memory lock limit allows it at all, every later
@@ -944,6 +959,9 @@ region on one day, so what each step hands back is not the access key it started
 `verified-by: bravebot_bedrock::credentials::the_bytes_a_reply_was_read_from_are_cleared_whatever_the_read_answered`
 `verified-by: bravebot_bedrock::credentials::scrubbing_a_parsed_reply_overwrites_the_credential_rather_than_dropping_it`
 `verified-by: bravebot_signing::sigv4::scrubbing_the_signing_seed_overwrites_the_key_where_it_lies`
+`verified-by: bravebot_config::keys::printing_the_keys_names_the_ids_alone`
+`verified-by: bravebot_tui::hidden::control_u_starts_the_key_again`
+`verified-by: bravebot_tui::hidden::a_key_longer_than_the_room_made_for_it_is_kept_whole`
 `verified-by: bravebot_sandbox::crash::disabling_core_dumps_leaves_the_kernel_unable_to_write_one`
 `verified-by: bravebot_sandbox::crash::disabling_core_dumps_does_not_lower_the_hard_limit`
 `verified-by: by-construction (the pages a Secret holds its value in are unmapped once it is gone, so what a test can run is the clearing rather than the drop; the drop body is one call to the clearing the test above pins and then the unmapping, after which the test above finds the lock gone, and does nothing else)`
@@ -953,6 +971,7 @@ region on one day, so what each step hands back is not the access key it started
 `verified-by: by-construction (a parsed settings document clears itself when it goes, its drop being one call to each of the two scrubs the tests above pin and nothing else; the four readers of a settings file, the layered read, the single-file parse, the managed layer and the front end's check of a chosen file, each hold one of these and so clear what they parsed by going out of scope)`
 `verified-by: by-construction (the env block a Settings holds is unreachable once the Settings is gone, so what a test can run is the overwriting rather than the drop; the drop body is one call to the method the test above pins and does nothing else)`
 `verified-by: by-construction (the document a credential reply was parsed into and the buffer a SigV4 signing key is seeded from are each unreachable once the value owning them is gone, so what a test can run is the overwriting rather than the drop; each drop body is one call to a scrub the tests above pin and does nothing else)`
+`verified-by: by-construction (the terminal reader's buffer is unreachable once the read ends, so what a test can run is the Ctrl-U wipe rather than the drop; the drop body is one call to that wipe, which resizes the buffer to its whole allocation and calls the byte scrub the tests above pin, and a move to a larger allocation hands the one it leaves to the same overwrite before it is dropped; reading and writing the file of gateway keys each call the text or document scrub the tests above pin on every way out of the call)`
 
 <a id="CRED-24"></a>
 ### CRED-24: a credential never travels as a command-line argument
@@ -994,7 +1013,11 @@ hold. CRED-15's scan of what a turn reads reports the same way and reaches this 
 than the other one does. What exists is the record and one surface that reads it, `doctor`, which
 reports
 what would end each credential this configuration holds, a gateway's bearer token and an imported
-subscription's credential batch included. A scan reaching it later reads that record rather than
+subscription's credential batch included. A gateway key stored with `bravebot auth login gateway`
+is named as stored, since neither the environment nor a settings file shows where it came from, and
+the account of ending it names `bravebot auth logout gateway` beside revoking it at the gateway. A
+file of those keys it cannot read is named, and the report ends on the failure status, since every
+key in the file has stopped being sent. A scan reaching it later reads that record rather than
 writing a second one.
 
 `verified-by: bravebot_config::lib::a_build_that_cannot_sign_for_itself_holds_no_signing_key_to_account_for`
@@ -1005,6 +1028,9 @@ writing a second one.
 `verified-by: bravebot_cli::main::every_held_credential_has_its_own_account_of_what_would_end_it`
 `verified-by: bravebot_cli::main::a_gateway_token_is_accounted_for_at_the_gateway_that_would_end_it`
 `verified-by: bravebot_cli::main::what_survives_revoking_is_reported_for_exactly_the_credentials_that_have_one`
+`verified-by: bravebot_cli::main::a_stored_gateway_key_is_named_as_stored_and_never_printed`
+`verified-by: bravebot_cli::running::doctor_names_a_stored_gateway_key_without_printing_it`
+`verified-by: bravebot_cli::running::doctor_fails_on_a_file_of_gateway_keys_it_cannot_read`
 
 ## Why the gate safehouse builds is not available here
 

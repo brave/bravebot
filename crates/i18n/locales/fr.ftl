@@ -43,7 +43,7 @@ cli-usage-doctor = Vérifier la configuration et le confinement
 cli-usage-import = Importer un abonnement Leo Premium
 cli-usage-import-providers = Importer un service de modèle configuré par Claude Code ou opencode
 cli-usage-auth-login = Se connecter à un service de modèle, en listant chaque façon si aucune n'est nommée
-cli-usage-auth-logout = Oublier un abonnement Leo Premium importé
+cli-usage-auth-logout = Oublier un abonnement Leo Premium importé ou une clé de passerelle enregistrée
 cli-usage-mcp = Déclarer, lister et approuver des serveurs MCP
 
 cli-keys-heading = Touches interactives :
@@ -219,7 +219,7 @@ doctor-ends-aws-access-key =
 doctor-ends-aws-session =
     une identification de session : émise par AWS STS pour le profil, et ce programme en demande une autre à l'AWS CLI à chaque requête qu'il construit, de sorte que l'expiration met fin à cette copie et non à l'accès de ce programme ; on y met fin auprès de son émetteur, car `aws sso logout` efface la copie de cette machine et non la session elle-même, et la suivante est émise à partir de ce à quoi le profil se rattache, tant que cela dure
 doctor-ends-gateway-token =
-    un jeton porteur de passerelle : émis par { $gateway }, qui est aussi la seule surface qui le révoque ; le supprimer du fichier de réglages ou effacer la variable met fin à la garde de cette machine et laisse le jeton actif là-bas
+    un jeton porteur de passerelle : émis par { $gateway }, qui est aussi la seule surface qui le révoque ; le supprimer du fichier de réglages, effacer la variable ou lancer `bravebot auth logout gateway` met fin à la garde de cette machine et laisse le jeton actif là-bas
 doctor-ends-subscription-batch =
     le lot d'identifiants d'un abonnement importé : émis par le service d'abonnement de Brave pour la commande sur laquelle cette installation s'est enregistrée comme appareil ; chaque identifiant est dépensé par une requête premium et le lot cesse de fonctionner à la fermeture de sa dernière fenêtre, et rien ne révoque un identifiant non dépensé, donc `bravebot auth logout leo` met fin à la garde de cette machine et laisse le lot dépensable par tout ce qui a copié le fichier
 doctor-tier = niveau
@@ -263,7 +263,7 @@ doctor-dropped-gateway-token-nothing-decides-each-use =
 doctor-dropped-gateway-token-no-bound-fixed-before-issue =
     porte { $gate }, { $answer } : aucune limite sur ce que le jeton peut faire n'est fixée avant son émission, car le bloc nomme un hôte et une variable et jamais un émetteur, donc rien ici ne peut en demander un plus étroit
 doctor-dropped-gateway-token-not-minted-for-one-step =
-    porte { $gate }, { $answer } : il n'est pas émis pour une seule étape, car le jeton est ce que porte le fichier de réglages ou la variable, et il est gardé pendant toute l'exécution
+    porte { $gate }, { $answer } : il n'est pas émis pour une seule étape, car le jeton est ce que porte le fichier de réglages, la variable ou ce que `bravebot auth login gateway` a enregistré, et il est gardé pendant toute l'exécution
 doctor-dropped-subscription-batch-nothing-decides-each-use =
     porte { $gate }, { $answer } : rien que l'agent ne puisse usurper ne décide de chaque usage, car ce processus présente lui-même un identifiant du lot et rien n'est sollicité pour autoriser la requête
 doctor-backend = service
@@ -271,8 +271,13 @@ doctor-backend-bedrock = AWS Bedrock
 doctor-backend-aichat = Brave Leo
 doctor-backend-gateway = { $gateway } (passerelle)
 doctor-gateway-token = trouvé (jamais affiché)
-doctor-gateway-token-absent = aucun trouvé (définissez une variable nommée dans `env`)
+doctor-gateway-token-stored = enregistré par bravebot auth login gateway (jamais affiché)
+doctor-gateway-token-absent =
+    aucun trouvé (définissez une variable nommée dans `env`, ou lancez bravebot auth login gateway { $id })
 doctor-gateway-token-not-needed = aucun requis (le bloc n'en nomme aucun)
+doctor-gateway-keys = clés de passerelle
+doctor-gateway-keys-unreadable =
+    { $path } ne peut pas être lu, donc aucune clé qu'il contient n'est envoyée (bravebot auth login gateway le laisse tel quel)
 doctor-gateway-models-absent = aucun configuré (la passerelle est interrogée)
 doctor-gateway-models-compiled = { $models } (intégrés, ce service n'ayant pas de liste ; nommez tout autre modèle de la même façon)
 doctor-region = région
@@ -512,6 +517,9 @@ auth-ways-heading = Façons de se connecter à un service de modèle :
 auth-way-leo = Brave Leo Premium, depuis une installation de Brave abonnée
 auth-way-bedrock = Un compte AWS, pour Amazon Bedrock
 auth-way-import = Un service de modèle de Claude Code, opencode ou Ollama, importé dans les réglages
+auth-way-gateway = Une clé pour une passerelle nommée par un bloc provider des réglages, saisie ici et gardée par bravebot
+auth-gateway-held = une clé enregistrée pour { $ids }
+auth-gateway-held-unreadable = le fichier des clés de passerelle ne peut pas être lu
 auth-way-held = { $description } ({ $status })
 auth-signed-in = connecté
 auth-which-way = Laquelle ? Tapez son numéro ou son nom, ou rien pour arrêter :
@@ -533,6 +541,41 @@ auth-logout-bedrock =
     bravebot ne garde aucune session AWS : c'est l'AWS CLI qui la garde, et aws sso logout y met fin
 auth-logout-import =
     un import ne garde aucun identifiant : il a écrit des entrées dans le fichier de réglages, et les y retirer l'annule
+auth-gateway-key-argument =
+    une clé n'est jamais un argument de la ligne de commande, que d'autres programmes peuvent lire et que le shell garde : lancez bravebot auth login gateway { $id } et tapez la clé quand elle est demandée
+auth-gateway-not-while-incognito =
+    une session incognito n'écrit rien sur le disque, et enregistrer une clé est une écriture : lancez bravebot auth login gateway sans --incognito
+auth-gateway-none-configured =
+    aucune passerelle n'est configurée : ajoutez un bloc provider à settings.json, ou lancez bravebot auth login import, puis enregistrez sa clé ici
+auth-gateway-not-configured = ce n'est pas l'id d'un bloc provider ; les passerelles configurées sont { $ids }
+auth-gateway-needs-a-terminal =
+    une clé de passerelle se tape dans un terminal sans rien afficher, donc bravebot auth login gateway a besoin d'un terminal
+auth-gateway-no-home = il n'y a pas de répertoire personnel où enregistrer la clé
+auth-gateway-keys-unreadable =
+    { $path } n'est pas un fichier de clés écrit par bravebot, il a donc été laissé tel quel et rien n'a changé
+auth-gateways-heading = Passerelles configurées :
+auth-gateway-key-stored = une clé enregistrée
+auth-which-gateway = Laquelle ? Tapez son numéro ou son identifiant, ou rien pour arrêter :
+auth-not-a-listed-gateway = { $answer } n'est pas l'une des passerelles listées
+auth-gateway-key-held = Une clé est déjà enregistrée pour { $id }.
+auth-gateway-replace = La remplacer ?
+auth-gateway-key-question = Clé pour { $id }, envoyée à { $host } (non affichée pendant la saisie) :
+auth-gateway-nothing-stored = rien n'a été enregistré
+auth-gateway-not-read = la clé n'a pas pu être lue depuis le terminal : { $error }
+auth-gateway-not-stored = la clé n'a pas été enregistrée : { $path } : { $error }
+auth-gateway-stored =
+    la clé pour { $id } est enregistrée dans { $path }, et les sessions démarrées à partir de maintenant l'envoient à { $host }
+auth-gateway-variable-wins =
+    { $variable } est définie, et tant qu'elle l'est, une session envoie sa valeur au lieu de la clé enregistrée
+auth-logout-gateway-none = aucune clé de passerelle n'est enregistrée
+auth-logout-gateway-which =
+    des clés sont enregistrées pour { $ids } : nommez celle à oublier, comme bravebot auth logout gateway <id>
+auth-logout-gateway-not-stored = aucune clé n'est enregistrée pour { $id } ; des clés sont enregistrées pour { $ids }
+auth-logout-gateway-not-written = la clé n'a pas été oubliée : { $path } : { $error }
+auth-logout-gateway-forgotten =
+    la clé pour { $id } est oubliée ici, et fonctionne encore chez { $host } jusqu'à sa révocation là-bas
+auth-logout-gateway-forgotten-elsewhere =
+    la clé pour { $id } est oubliée ici, et fonctionne encore auprès du service qui l'a émise jusqu'à sa révocation là-bas
 
 
 ## Déclarer un serveur MCP, et l'approuver

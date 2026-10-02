@@ -3656,6 +3656,7 @@ fn auth_login_naming_no_way_is_refused_where_nobody_can_pick_one() {
         "bravebot auth login leo",
         "bravebot auth login bedrock",
         "bravebot auth login import",
+        "bravebot auth login gateway",
     ] {
         assert!(stderr.contains(form), "{form} is not offered: {stderr}");
     }
@@ -3984,6 +3985,277 @@ fn auth_login_import_is_the_import_and_refuses_where_it_does() {
         !scratch.settings().exists(),
         "a piped import wrote settings"
     );
+}
+
+/// Two gateways a settings file configures, one naming a variable for its credential and one
+/// naming none.
+const TWO_GATEWAYS: &str = r#"{"provider": {
+    "openrouter": {"env": ["OPENROUTER_API_KEY"],
+        "options": {"baseURL": "https://openrouter.example/api/v1"}},
+    "work": {"options": {"baseURL": "https://gateway.work.example/v1"}}
+}}"#;
+
+/// The placeholder a file of gateway keys holds in these tests.
+const A_STORED_KEY: &str = "placeholder-stored-key";
+
+/// A file of gateway keys holding [`A_STORED_KEY`] for each of `ids`.
+fn stored_keys(ids: &[&str]) -> String {
+    let entries: Vec<String> = ids
+        .iter()
+        .map(|id| format!(r#""{id}": "{A_STORED_KEY}""#))
+        .collect();
+    format!(r#"{{"gateways": {{{}}}}}"#, entries.join(", "))
+}
+
+fn gateway_keys(scratch: &Scratch) -> PathBuf {
+    scratch.path.join(".bravebot").join("gateway-keys.json")
+}
+
+/// CLI-18 and INCOG-7: every refusal the gateway way can make without asking anything is made
+/// before the key is asked for, and none of them writes a file of keys. A word that names no
+/// gateway, a word after the id and what follows `--key=` are not repeated, since each is most
+/// likely the key, typed where somebody took it for the argument.
+#[test]
+fn auth_login_gateway_is_refused_before_a_key_is_asked_for() {
+    let scratch = Scratch::new("cli-running-auth-gateway-refused").with_settings(TWO_GATEWAYS);
+    let key_as_a_flag = format!("--key={A_STORED_KEY}");
+
+    for (arguments, code, said_this) in [
+        (
+            &["auth", "login", "gateway", A_STORED_KEY][..],
+            2,
+            "openrouter, work",
+        ),
+        (
+            &["auth", "login", "gateway", "work", A_STORED_KEY][..],
+            2,
+            "never a command-line argument",
+        ),
+        (&["auth", "login", "gateway", "--key"][..], 2, "--key"),
+        (
+            &["auth", "login", "gateway", key_as_a_flag.as_str()][..],
+            2,
+            "--key",
+        ),
+        (&["auth", "login", "gateway"][..], 2, "needs a terminal"),
+        (
+            &["auth", "login", "gateway", "work"][..],
+            2,
+            "needs a terminal",
+        ),
+        (
+            &["--incognito", "auth", "login", "gateway", "work"][..],
+            1,
+            "incognito",
+        ),
+    ] {
+        let output = bravebot(&scratch.path, NOTHING_CONFIGURED, arguments);
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(code), "{arguments:?}: {stderr}");
+        assert!(stdout.is_empty(), "{arguments:?}: {stdout}");
+        assert!(stderr.contains(said_this), "{arguments:?}: {stderr}");
+        assert!(
+            !stderr.contains(A_STORED_KEY),
+            "{arguments:?} repeated the key: {stderr}"
+        );
+    }
+    assert!(
+        !gateway_keys(&scratch).exists(),
+        "a refused sign-in stored a key"
+    );
+
+    let unconfigured = Scratch::new("cli-running-auth-gateway-none");
+    let output = bravebot(
+        &unconfigured.path,
+        NOTHING_CONFIGURED,
+        &["auth", "login", "gateway"],
+    );
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("provider block"), "{stderr}");
+}
+
+/// CLI-18 and INCOG-7: logout forgets the key named and leaves the rest, says the key is still
+/// good at the host its block sends it to, and is allowed in an incognito session since it leaves
+/// less behind. With several stored and none named it forgets nothing.
+#[test]
+fn auth_logout_gateway_forgets_the_key_named_in_an_incognito_session() {
+    let scratch = Scratch::new("cli-running-auth-gateway-logout")
+        .with_settings(TWO_GATEWAYS)
+        .with_state("gateway-keys.json", &stored_keys(&["openrouter", "work"]));
+    let keys = gateway_keys(&scratch);
+    let logout = |more: &[&str]| {
+        let mut arguments = vec!["--incognito", "auth", "logout", "gateway"];
+        arguments.extend(more);
+        let output = bravebot(&scratch.path, NOTHING_CONFIGURED, &arguments);
+        let (stdout, stderr) = said(&output);
+        assert!(
+            !stdout.contains(A_STORED_KEY) && !stderr.contains(A_STORED_KEY),
+            "{more:?} printed the key: {stdout}{stderr}"
+        );
+        (output.status.code(), stdout, stderr)
+    };
+
+    let (code, _, stderr) = logout(&[]);
+    assert_eq!(code, Some(2), "{stderr}");
+    assert!(stderr.contains("openrouter, work"), "{stderr}");
+    let (code, _, stderr) = logout(&["elsewhere"]);
+    assert_eq!(code, Some(2), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(&keys).expect("the keys"),
+        stored_keys(&["openrouter", "work"]),
+        "a refused logout rewrote the keys"
+    );
+
+    let (code, stdout, stderr) = logout(&["work"]);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stdout.contains("gateway.work.example"), "{stdout}");
+    let left = std::fs::read_to_string(&keys).expect("the key left");
+    assert!(
+        left.contains("openrouter") && !left.contains("work"),
+        "{left}"
+    );
+
+    // The one left is the one meant where none is named.
+    let (code, stdout, stderr) = logout(&[]);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stdout.contains("openrouter.example"), "{stdout}");
+    assert!(!keys.exists(), "the last key forgotten left a file");
+
+    let (code, _, stderr) = logout(&[]);
+    assert_eq!(code, Some(2), "{stderr}");
+}
+
+/// CRED-25: `doctor` names a stored key as stored and never prints it, and a file of keys it cannot
+/// read is named, since every gateway a key in it was for then reports none.
+#[test]
+fn doctor_names_a_stored_gateway_key_without_printing_it() {
+    let scratch = Scratch::new("cli-running-doctor-stored-key")
+        .with_settings(TWO_GATEWAYS)
+        .with_state("gateway-keys.json", &stored_keys(&["work"]));
+
+    let (stdout, stderr) = said(&bravebot(&scratch.path, NOTHING_CONFIGURED, &["doctor"]));
+    assert!(!stdout.contains(A_STORED_KEY), "{stdout}");
+    assert!(
+        stdout.contains("stored by bravebot auth login gateway"),
+        "{stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains("bravebot auth login gateway openrouter"),
+        "the gateway with no key was not told how to store one: {stdout}"
+    );
+    assert!(!stdout.contains("gateway keys"), "{stdout}");
+
+    std::fs::write(gateway_keys(&scratch), "not a file of keys").expect("spoil the keys");
+    let (stdout, _) = said(&bravebot(&scratch.path, NOTHING_CONFIGURED, &["doctor"]));
+    assert!(!stdout.contains("stored by"), "{stdout}");
+    let line = stdout
+        .lines()
+        .find(|line| line.trim_start().starts_with("gateway keys"))
+        .unwrap_or_else(|| panic!("the unreadable file is not named: {stdout}"));
+    assert!(line.contains("gateway-keys.json"), "{line}");
+}
+
+/// CRED-25: a file of gateway keys doctor cannot read is a fault it ends on, as an unreadable rule
+/// is, since every key in it has stopped being sent; the model in force here is keyed by a
+/// variable, so the file is the only thing wrong.
+#[test]
+fn doctor_fails_on_a_file_of_gateway_keys_it_cannot_read() {
+    let settings = TWO_GATEWAYS.replacen('{', r#"{"model": "openrouter/z-ai/glm-4.6", "#, 1);
+    let scratch = Scratch::new("cli-running-doctor-unreadable-keys")
+        .with_settings(&settings)
+        .with_state("gateway-keys.json", &stored_keys(&["work"]));
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("OPENROUTER_API_KEY", "placeholder-variable-key"));
+
+    let output = bravebot(&scratch.path, &environment, &["doctor"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+
+    std::fs::write(gateway_keys(&scratch), "not a file of keys").expect("spoil the keys");
+    let output = bravebot(&scratch.path, &environment, &["doctor"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+}
+
+/// A gateway on loopback that answers every chat request with one short reply and hands over the
+/// `Authorization` header each one carried.
+fn a_gateway_seeing_bearers() -> (u16, mpsc::Receiver<String>) {
+    let listing = r#"{"data": [{"id": "reasons-only", "context_length": 262144}]}"#;
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, seen) = mpsc::channel();
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut request = String::new();
+            let _ = reader.read_line(&mut request);
+            let (mut length, mut bearer) = (0usize, String::new());
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':') {
+                    match name.trim().to_ascii_lowercase().as_str() {
+                        "content-length" => length = value.trim().parse().unwrap_or(0),
+                        "authorization" => bearer = value.trim().to_string(),
+                        _ => {}
+                    }
+                }
+            }
+            let mut body = vec![0u8; length];
+            let _ = reader.read_exact(&mut body);
+            let reply = match request.starts_with("GET") {
+                true => http(200, listing),
+                false => {
+                    let _ = sender.send(bearer);
+                    streamed("ok")
+                }
+            };
+            let _ = stream.write_all(reply.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (port, seen)
+}
+
+/// BACKEND-16: a key stored for a gateway's id is the bearer a run sends it where no variable the
+/// block names is set, and one that is set is sent instead.
+#[test]
+fn a_run_sends_the_key_stored_for_its_gateway() {
+    for (exported, expected) in [
+        (None, A_STORED_KEY),
+        (Some("placeholder-exported-key"), "placeholder-exported-key"),
+    ] {
+        let (port, seen) = a_gateway_seeing_bearers();
+        let scratch = Scratch::new("cli-running-stored-key-sent")
+            .with_settings(&format!(
+                r#"{{"provider": {{"openrouter": {{"env": ["OPENROUTER_API_KEY"],
+                    "options": {{"baseURL": "http://127.0.0.1:{port}/api/v1"}}}}}},
+                    "model": "openrouter/reasons-only"}}"#
+            ))
+            .with_state("gateway-keys.json", &stored_keys(&["openrouter"]));
+        let mut environment = vec![
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ];
+        environment.extend(exported.map(|key| ("OPENROUTER_API_KEY", key)));
+
+        let output = bravebot(&scratch.path, &environment, &["-p", "say something"]);
+
+        let (_, stderr) = said(&output);
+        let bearer = seen
+            .recv_timeout(Duration::from_secs(60))
+            .unwrap_or_else(|_| panic!("the run did not reach the gateway: {stderr}"));
+        assert_eq!(
+            bearer,
+            format!("Bearer {expected}"),
+            "{exported:?}: {stderr}"
+        );
+    }
 }
 
 /// What `ollama list` shows on a machine with one model that can call tools and one that cannot,

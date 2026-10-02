@@ -1888,7 +1888,7 @@ pub(crate) const PROFILE_VARIABLES: &[&str] = &["HOME"];
 /// than by a home directory going missing. Resolving the weakest layer to the strongest one's
 /// location would silently read a checkout's file as though a person had put it in their own
 /// directory.
-fn home() -> Option<PathBuf> {
+pub(crate) fn home() -> Option<PathBuf> {
     home_named(PROFILE_VARIABLES.iter().map(std::env::var_os))
 }
 

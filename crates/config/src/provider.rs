@@ -6,9 +6,9 @@
 //! and a field this crate does not know is read past rather than refused.
 //!
 //! What this does not hold is a resolved credential. A block says where a token lives, in the
-//! variables `env` names or in `options.apiKey`, and it is read when a request needs signing. A block
-//! that says neither names no credential and is asked without one, which is what a local Ollama
-//! wants.
+//! variables `env` names or in `options.apiKey`, and it is read when a request needs signing. A key
+//! `bravebot auth login gateway` stored for the block's id is a third place. A block with none of the
+//! three names no credential and is asked without one, which is what a local Ollama wants.
 
 use crate::Secret;
 use std::fmt;
@@ -152,6 +152,11 @@ pub struct Provider {
     /// printed, and so that the buffer holding it is cleared when the block goes
     /// ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)).
     pub api_key: Option<Secret>,
+    /// The key `bravebot auth login gateway` stored for this id, where one is.
+    ///
+    /// Never read out of the block: the store is a file of its own ([`crate::keys`]), and
+    /// configuration fills this in by id once the blocks are read.
+    pub stored_key: Option<Secret>,
     /// The models this provider offers, in the order the file listed them.
     ///
     /// Possibly empty, because opencode does not require `models`. A provider offering nothing is
@@ -223,6 +228,7 @@ impl Provider {
             api_key: options
                 .and_then(|options| string(options.get("apiKey")))
                 .map(Secret::new),
+            stored_key: None,
             models: models(entry.get("models")),
             bedrock: None,
         })
@@ -250,6 +256,7 @@ impl Provider {
             base_url,
             env: vec![crate::env_var::GOOGLE_API_KEY.to_string()],
             api_key: Some(token),
+            stored_key: None,
             models: Vec::new(),
             bedrock: None,
         })
@@ -277,6 +284,7 @@ impl Provider {
             base_url: format!("https://bedrock-runtime.{region}.amazonaws.com"),
             env: Vec::new(),
             api_key: None,
+            stored_key: None,
             models,
             bedrock: Some(crate::bedrock::Bedrock::from_provider(
                 region, profile, entries,
@@ -378,12 +386,23 @@ impl Provider {
     /// The bearer token for this gateway, or why there is none.
     ///
     /// A variable first, so that a file naming one does not have the value read out from under it by
-    /// a stale `apiKey`.
+    /// a stale `apiKey`. A stored key next, since storing one is a thing somebody did on purpose and
+    /// later than writing a block, and a key left in the block is what it replaces.
     pub fn credential(&self, lookup: impl Fn(&str) -> Option<String>) -> Credential {
+        self.credential_and_source(lookup).0
+    }
+
+    /// The bearer token with the place it was found, for a report that names the place and never
+    /// the value. `None` beside a credential that is not a token.
+    pub fn credential_and_source(
+        &self,
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> (Credential, Option<Source>) {
         if !self.names_a_credential() {
-            return Credential::NotNeeded;
+            return (Credential::NotNeeded, None);
         }
-        self.env
+        let exported = self
+            .env
             .iter()
             .filter_map(|name| lookup(name))
             .find_map(|mut value| {
@@ -393,14 +412,20 @@ impl Provider {
                 // the token. A buffer that lived for two statements is still one this program owns.
                 crate::scrub(&mut value);
                 (!token.is_empty()).then_some(token)
-            })
-            .or_else(|| self.api_key.clone())
-            .map_or(Credential::Absent, Credential::Token)
+            });
+        let found = exported
+            .map(|token| (token, Source::Variable))
+            .or_else(|| self.stored_key.clone().map(|token| (token, Source::Stored)))
+            .or_else(|| self.api_key.clone().map(|token| (token, Source::File)));
+        match found {
+            Some((token, source)) => (Credential::Token(token), Some(source)),
+            None => (Credential::Absent, None),
+        }
     }
 
-    /// Whether the block says anywhere a token could live.
+    /// Whether anywhere a token could live is named, by the block or by a key stored for its id.
     pub(crate) fn names_a_credential(&self) -> bool {
-        !self.env.is_empty() || self.api_key.is_some()
+        !self.env.is_empty() || self.api_key.is_some() || self.stored_key.is_some()
     }
 }
 
@@ -424,6 +449,17 @@ pub enum Credential {
     Absent,
     /// The block names nowhere for a token to live, so its requests carry none.
     NotNeeded,
+}
+
+/// Where a gateway's token was found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// A variable the block's `env` names.
+    Variable,
+    /// The key `bravebot auth login gateway` stored for the block's id.
+    Stored,
+    /// The block's own `options.apiKey`.
+    File,
 }
 
 /// Redacting rather than derived: the value is a long-lived bearer token, and a `Debug` that printed
@@ -1023,6 +1059,45 @@ mod tests {
             _ => None,
         });
         assert_eq!(token(&credential), Some("from-the-environment"));
+    }
+
+    /// BACKEND-16: a variable the block names is read first, a stored key before a value written
+    /// into the block, and the place each was found is what is reported, never the value.
+    #[test]
+    fn a_stored_key_is_read_after_a_variable_and_before_the_file() {
+        let mut provider = one(r#"{"provider": {"gw": {
+                "env": ["PRESENT_ONE"],
+                "options": {"baseURL": "https://example.invalid/v1", "apiKey": "in-the-file"}
+            }}}"#);
+        provider.stored_key = Some(Secret::new("stored-placeholder"));
+        let exported = |name: &str| (name == "PRESENT_ONE").then(|| "from-the-environment".into());
+
+        let (credential, source) = provider.credential_and_source(exported);
+        assert_eq!(token(&credential), Some("from-the-environment"));
+        assert_eq!(source, Some(Source::Variable));
+
+        let (credential, source) = provider.credential_and_source(|_| None);
+        assert_eq!(token(&credential), Some("stored-placeholder"));
+        assert_eq!(source, Some(Source::Stored));
+
+        provider.stored_key = None;
+        let (credential, source) = provider.credential_and_source(|_| None);
+        assert_eq!(token(&credential), Some("in-the-file"));
+        assert_eq!(source, Some(Source::File));
+    }
+
+    /// BACKEND-16: a block naming nowhere for a token wants none until a key is stored for its id,
+    /// which is somebody saying it does.
+    #[test]
+    fn a_stored_key_is_sent_to_a_block_naming_no_credential() {
+        let mut provider = one(r#"{"provider": {"ollama": {
+                "options": {"baseURL": "http://localhost:11434/v1"}
+            }}}"#);
+        provider.stored_key = Some(Secret::new("stored-placeholder"));
+        assert_eq!(
+            token(&provider.credential(|_| None)),
+            Some("stored-placeholder")
+        );
     }
 
     /// Supported because it is opencode's field. A copied block that authenticates this way has to
