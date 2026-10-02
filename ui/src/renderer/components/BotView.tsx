@@ -18,7 +18,9 @@ const noop = () => {}
  * in the bot's home folder. Only folders this bot has worked in, or one picked here, are offered,
  * because those are the only ones the main process lets a bot work in.
  */
-export function BotView({ bot, history, filtering, backendReady, onOpen, onStart, onModel, onSetup, onCheckBackend, onDiagnostics }: {
+export function BotView({ notices, bot, history, filtering, backendReady, onOpen, onStart, onModel, onSetup, onCheckBackend, onDiagnostics }: {
+  /** Errors and confirmations, shown above the composer. */
+  notices: React.ReactNode
   bot: Bot
   history: BotConversation[]
   /** Whether the header's search is open, which filters the list. */
@@ -109,7 +111,7 @@ export function BotView({ bot, history, filtering, backendReady, onOpen, onStart
             <h1>{bot.name} is ready</h1>
             <p>Get started with your bot. Add it to a project or just chat with it.</p>
           </div>
-          <div className="composer-dock">{composer}</div>
+          <div className="composer-dock"><div className="dock-float">{notices}</div>{composer}</div>
         </div>
       </div>
     )
@@ -158,7 +160,7 @@ export function BotView({ bot, history, filtering, backendReady, onOpen, onStart
           </div>
         </div>
       </div>
-      <div className="composer-dock">{composer}</div>
+      <div className="composer-dock"><div className="dock-float">{notices}</div>{composer}</div>
     </>
   )
 }

@@ -11,7 +11,8 @@
   display: flex;
   flex-direction: column;
   gap: var(--leo-spacing-l);
-  padding-inline: max(var(--leo-spacing-2xl), calc((100% - var(--reading-width)) / 2));
+  --dock-inset: max(var(--leo-spacing-2xl), calc((100% - var(--reading-width)) / 2));
+  padding-inline: var(--dock-inset);
   padding-bottom: var(--leo-spacing-xl);
   isolation: isolate;
 }
@@ -61,13 +62,14 @@
 
 .composer leo-textarea {
   /* Plain mode: no chrome of Leo's own, because the box around it carries the border and the
-     focus state. It has no padding either, so the host supplies it. */
-  --leo-control-font: var(--leo-font-large-regular);
+     focus state. It has no padding and inherits its type from the host, so the host supplies
+     both: 16/24 text, 12px above it and 16px either side. The toolbar's own padding sits under it. */
   --leo-control-focus-effect: none;
   display: block;
   min-width: 0;
-  padding: var(--leo-spacing-l) var(--leo-spacing-xl) var(--leo-spacing-s);
+  padding: var(--leo-spacing-l) var(--leo-spacing-xl) 0;
   box-sizing: border-box;
+  font: var(--leo-font-large-regular);
 }
 
 .composer-toolbar {
@@ -86,30 +88,45 @@
   align-items: center;
   gap: var(--leo-spacing-m);
   padding: var(--leo-spacing-m);
-  font: var(--type-meta);
-  color: var(--ink-secondary);
+  font: var(--type-meta-strong);
+  color: var(--ink-tertiary);
   --leo-icon-size: var(--icon-control);
-  --leo-icon-color: var(--ink-secondary);
+  --leo-icon-color: var(--ink-tertiary);
 }
-.project-trigger { --leo-button-color: var(--ink-secondary); max-width: 100%; }
+.project-trigger { --leo-button-color: var(--ink-tertiary); max-width: 100%; }
 .project-menu { min-width: 0; }
+/* The project and branch when they are only shown take the geometry of the pill buttons beside
+   them: 28px tall, 8px either side, the icon 4px from its text. */
 .composer-project,
 .composer-branch {
   display: inline-flex;
   align-items: center;
-  gap: var(--leo-spacing-xs);
+  gap: var(--leo-spacing-s);
   min-width: 0;
-  padding: 0 var(--leo-spacing-s);
+  min-height: var(--hit);
+  padding: var(--leo-spacing-s) var(--leo-spacing-m);
+  box-sizing: border-box;
 }
 .composer-branch { flex: 0 1 auto; }
 .composer-branch-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-toolbar .model-picker { flex: 0 1 auto; min-width: 0; max-width: 220px; margin: 0; }
 .composer .model-trigger { width: auto; max-width: 100%; --leo-button-color: var(--ink-tertiary); }
 .composer .model-current { max-width: 180px; }
-.composer .attach-files { --leo-button-color: var(--ink-secondary); }
+/* The icon is 20px in a 28px target. */
+.composer .attach-files {
+  --leo-button-color: var(--ink-secondary);
+  --leo-button-padding: var(--leo-spacing-s);
+  --leo-icon-xs: var(--icon-hero);
+  --leo-icon-s: var(--icon-hero);
+  --leo-icon-size: var(--icon-hero);
+  /* The glyph lines up with the text above it; the target reaches out past it. */
+  margin-inline-start: calc(-1 * var(--leo-spacing-s));
+}
+/* A 36px circle round a 20px icon. */
 .composer .send {
   flex: none;
-  --leo-icon-size: var(--icon-control);
+  --leo-icon-size: var(--icon-hero);
+  --leo-button-padding: var(--leo-spacing-m);
   --leo-button-radius: var(--radius-pill);
 }
 
@@ -122,9 +139,12 @@
   width: var(--hit);
   height: var(--hit);
   border-radius: var(--radius-control);
-  --leo-progressring-size: var(--icon-meta);
+  --leo-progressring-size: var(--icon-control);
   --leo-progressring-stroke-width: 2px;
   --leo-progressring-color: var(--ink-tertiary);
+  /* The ring is 16px and sits the toolbar's gap from its neighbours. The rest of the 28px target
+     reaches into that gap. */
+  margin-inline: calc((var(--icon-control) - var(--hit)) / 2);
 }
 .context-meter:hover { background: var(--surface-hover); }
 .context-meter:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
@@ -227,18 +247,26 @@
 .composer-notice .notice-text { flex: 1 1 16em; min-width: 0; }
 .composer-notice .notice-actions { display: flex; gap: var(--leo-spacing-xs); margin-left: auto; }
 
-/* ---- attention pills: centred over the top of the box, and only when there is something */
+/* ---- above the box: the alerts and pills that float over the end of the transcript.
+   They stand on the box's top edge, take no height in the dock, and have the box's width. */
 
-.attention-pills {
+.dock-float {
   position: absolute;
   bottom: 100%;
-  left: 0;
-  right: 0;
+  inset-inline: var(--dock-inset);
   z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-m);
+  padding-bottom: var(--leo-spacing-m);
+  pointer-events: none;
+}
+
+/* Centred over the top of the box, and only when there is something. */
+.attention-pills {
   display: flex;
   justify-content: center;
   gap: var(--leo-spacing-m);
-  padding-bottom: var(--leo-spacing-m);
   pointer-events: none;
 }
 .attention-pill {

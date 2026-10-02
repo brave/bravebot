@@ -579,8 +579,8 @@ export function Transcript({
     return (
       <main className="transcript bot-view">
         {head}
-        <div className="toast-stack">{toast}<Toasts /></div>
         <BotView
+          notices={<>{toast}<Toasts /></>}
           bot={viewing.bot}
           history={viewing.history}
           filtering={searching}
@@ -638,7 +638,6 @@ export function Transcript({
     <main className={`transcript${fresh ? ' fresh' : ''}`}>
       {head}
       {findBar}
-      <div className="toast-stack">{toast}<Toasts /></div>
 
       <div className="entries" ref={scroller} onScroll={(event) => {
         const element = event.currentTarget
@@ -699,22 +698,25 @@ export function Transcript({
       </div>
 
       <div className="composer-dock">
-        {/* Kept in the tree while empty, so what arrives in it is announced. */}
-        <div className="attention-pills" aria-live="polite">
-          {pending && (
-            <button type="button" className="attention-pill warning pending-jump" data-tooltip={waitingOn(pending.kind)} onClick={() => {
-              document.dispatchEvent(new CustomEvent('bravebot:reveal-entry', { detail: pending.id }))
-              const element = scroller.current?.querySelector<HTMLElement>(`[data-entry-id="${pending.id}"]`)
-              jump(element ?? bottom.current)
-            }}>
-              {pending.kind === 'ask' ? 'Answer needed' : 'Approval needed'}<Icon name="arrow-up" />
-            </button>
-          )}
-          {unseen && (
-            <button type="button" className="attention-pill" onClick={latest}>
-              Jump to latest<Icon name="arrow-down" />
-            </button>
-          )}
+        <div className="dock-float">
+          {/* Kept in the tree while empty, so what arrives in it is announced. */}
+          <div className="attention-pills" aria-live="polite">
+            {pending && (
+              <button type="button" className="attention-pill warning pending-jump" data-tooltip={waitingOn(pending.kind)} onClick={() => {
+                document.dispatchEvent(new CustomEvent('bravebot:reveal-entry', { detail: pending.id }))
+                const element = scroller.current?.querySelector<HTMLElement>(`[data-entry-id="${pending.id}"]`)
+                jump(element ?? bottom.current)
+              }}>
+                {pending.kind === 'ask' ? 'Answer needed' : 'Approval needed'}<Icon name="arrow-up" />
+              </button>
+            )}
+            {unseen && (
+              <button type="button" className="attention-pill" onClick={latest}>
+                Jump to latest<Icon name="arrow-down" />
+              </button>
+            )}
+          </div>
+          {toast}<Toasts />
         </div>
         <Composer
           input={input}

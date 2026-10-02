@@ -87,8 +87,7 @@ export function Bots({
         {inUse.map((bot) => <BotRow key={bot.slug} bot={bot} open={bot.slug === openSlug}
           doing={bot.slug === openSlug ? openDoing : bot.session === null ? 'waiting' : 'idle'}
           onOpen={onOpen} />)}
-        {creating && <Modal title="Create bot" size="lg" onClose={() => setCreating(false)} className="bot-editor"
-          subtitle="A name, a purpose and a memory. Each conversation runs in a project you pick, or in none.">
+        {creating && <Modal title="Create bot" size="md" onClose={() => setCreating(false)} className="bot-editor">
           <BotForm onCancel={() => setCreating(false)}
             onSave={async (next) => { const saved = await onSave(next); if (saved) setCreating(false); return saved }} />
         </Modal>}
@@ -344,10 +343,12 @@ function BotForm({
         }
       }}
     >
+      <p className="bot-intro">A name, a purpose and a memory. Each conversation runs in a project you pick, or in none.</p>
+
       <div className="bot-form-identity">
         <div className="bot-form-avatar">
           <BotAvatar seed={avatar} size={76} doing="waiting" />
-          <IconButton icon="refresh" label="Refresh avatar" tooltip="Try a new avatar appearance" kind="outline" size="tiny"
+          <IconButton icon="refresh" label="Refresh avatar" tooltip="Try a new avatar appearance" kind="filled" size="tiny"
             className="bot-avatar-refresh" onClick={() => setAvatar(newAvatarSeed(crypto.randomUUID()))} />
         </div>
 
@@ -384,10 +385,10 @@ function BotForm({
       {saveError && <Alert type="error" size="small" role="alert">{saveError}</Alert>}
       <div className="bot-actions">
         <span className="bot-spacer" />
-        <Button kind="plain-faint" size="medium" onClick={onCancel}>
+        <Button kind="plain-faint" onClick={onCancel}>
           Cancel
         </Button>
-        <Button kind="filled" size="medium" type="submit" className="bot-save" isDisabled={!ready || saving} onClick={submitForm}>
+        <Button kind="filled" type="submit" className="bot-save" isDisabled={!ready || saving} onClick={submitForm}>
           {saving ? 'Saving…' : 'Create'}
         </Button>
       </div>

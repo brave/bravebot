@@ -21,7 +21,7 @@ export function FilePreview({ session, path, onClose }: { session: string; path:
   }
   return <Modal title={`Preview ${path}`} size="xl" onClose={onClose} className="file-preview"
     subtitle="For your review only. Previewing a file does not put its contents in the agent’s context."
-    actions={<Button kind="filled" size="small" onClick={onClose}>Done</Button>}>
+    actions={<Button kind="filled" onClick={onClose}>Done</Button>}>
     {problem && <Alert type="error" size="small" role="alert">{problem}</Alert>}
     <div className="code-block preview-code">
       <div className="code-toolbar">
