@@ -16,6 +16,8 @@
 
 export type Intent = 'create' | 'overwrite' | 'edit'
 export type Phase = 'planning' | 'thinking' | 'compacting' | 'reconnecting'
+/** A wait the window shows: the agent's phase, or a first turn starting the session's MCP servers. */
+export type Waiting = Phase | 'starting-servers'
 
 /** What a running confined check was given: lines of text, or one picture or PDF, which has none. */
 export type Checking = { lines: number } | { file: 'picture' | 'pdf' }
@@ -176,8 +178,6 @@ export interface OpenedSession {
   buildNote: string | null
   /** Said when the other front end wrote the transcript above: it drew it, and this one will not draw it the same way. */
   frontNote: string | null
-  /** Names the MCP servers the settings here request, which this app starts none of (SERVERS-2). */
-  serversNote: string | null
   /**
    * How many messages compaction has taken out of this conversation, in total.
    *
@@ -240,8 +240,6 @@ export interface ForkedSession {
   autoVetting: boolean
   /** Absent from an older bridge, which read no rules. */
   settingsRules?: SettingsRules | null
-  /** As on `OpenedSession`, read again for the child. */
-  serversNote: string | null
   parent: {
     id: string
     directory: string
@@ -497,6 +495,86 @@ export interface ExposureRequest {
   summary: string
 }
 
+/** One variable an MCP server receives: its name, and whether the declaration stores its value. */
+export interface McpVariable { name: string; stored: boolean }
+
+/**
+ * Whether to use an MCP server a project requests, asked before it is started (SERVERS-4).
+ *
+ * Everything the declaration says, as fields. A local server has `command`, the words it is
+ * started with, and `program` where that resolved somewhere other than its first word; a remote
+ * one has `url`. A stored value is named and never sent. `fetching` is the agent's own lines
+ * about a runner that fetches what it runs when it starts (SERVERS-6), empty for any other
+ * program. `digest` is what an approval binds to, so editing the declaration asks again.
+ *
+ * Three answers: no, yes, and yes for every server a checkout in this project requests from now
+ * on, which is `remember` on the reply.
+ */
+export interface McpServerRequest {
+  request: number
+  alias: string
+  transport: 'stdio' | 'http'
+  command: string[] | null
+  url: string | null
+  program: string | null
+  variables: McpVariable[]
+  reads: string[]
+  directory: string | null
+  digest: string
+  requestedBy: string
+  changed: boolean
+  fetching: string[]
+}
+
+/** One tool on an MCP server's list, as the client drew it. `description` is the server's text. */
+export interface McpTool { name: string; arguments: string[]; description: string | null }
+
+/**
+ * The tools an MCP server lists, put to the person before any is offered to the model
+ * (SERVERS-8). `refused` counts tools the client would not draw, and `changed` says a different
+ * list was approved under this declaration before. A yes is remembered for this exact list.
+ */
+export interface McpToolsRequest {
+  request: number
+  alias: string
+  tools: McpTool[]
+  refused: number
+  changed: boolean
+  vetting: Vetting
+}
+
+/**
+ * One call to an MCP server's tool (SERVERS-7). `name` is `alias:tool`. Each argument's value is
+ * JSON, as the model wrote it. Three answers: no, yes, and yes without asking again about this
+ * tool in this project, which is `remember` on the reply and offered only where `mayStand`.
+ */
+export interface McpCallRequest {
+  request: number
+  alias: string
+  tool: string
+  name: string
+  arguments: { name: string; value: string }[]
+  description: string | null
+  mayStand: boolean
+}
+
+/**
+ * A remote MCP server whose reply pointed somewhere it is not declared (SERVERS-11). Nothing was
+ * sent there. `authority` is the host and port the destination reaches, taken from it by the
+ * agent, and is what a yes agrees to. `mayRecord` says whether a yes outlasts this session.
+ */
+export interface McpMoveRequest {
+  request: number
+  alias: string
+  declared: string
+  destination: string
+  authority: string
+  mayRecord: boolean
+}
+
+/** What starting a session's MCP servers came to: the ones started, and why each other was not. */
+export interface McpStarted { servers: string[]; confined: boolean; notes: string[] }
+
 /** A pipeline the planner wants to run. */
 export interface RunRequest {
   request: number
@@ -642,6 +720,13 @@ export interface EventMap {
   'server.request': ServerRequest
   'manifest.request': ManifestRequest
   'exposure.request': ExposureRequest
+  'mcp-server.request': McpServerRequest
+  'mcp-tools.request': McpToolsRequest
+  'mcp-call.request': McpCallRequest
+  'mcp-move.request': McpMoveRequest
+  /** Sent as a session's first turn starts the MCP servers its project requests. */
+  'mcp.starting': { servers: string[] }
+  'mcp.started': McpStarted
   'manifest.started': { run: number }
   'manifest.done': ManifestDone
   'manifest.error': ManifestError

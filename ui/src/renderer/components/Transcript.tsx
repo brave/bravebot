@@ -6,7 +6,7 @@ import { useEvent } from '../hooks'
 import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
 import { CopyButton } from './CopyButton'
-import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
+import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import type { Side } from '../columns'
 import type { Asked } from '../App'
@@ -38,7 +38,7 @@ interface Live {
   turns: Turns
   todos: TodoRow[]
   quarantine: Shown[]
-  phase: Phase | null
+  phase: Waiting | null
   checking: Checking | null
   composing: string | null
   contextTokens?: number
@@ -426,7 +426,7 @@ export function Transcript({
     (document.querySelector('.composer .model-trigger') as HTMLButtonElement | null)?.click()
   })
 
-  const activitySnapshot = useRef<{ handle?: string; entries?: t.Entry[]; phase?: Phase | null }>({})
+  const activitySnapshot = useRef<{ handle?: string; entries?: t.Entry[]; phase?: Waiting | null }>({})
   useEffect(() => {
     const previous = activitySnapshot.current
     activitySnapshot.current = { handle: live?.handle, entries: live?.entries, phase: live?.phase }
@@ -777,8 +777,9 @@ function ExportMenu({
   )
 }
 
-function phaseWord(phase: Phase): string {
+function phaseWord(phase: Waiting): string {
   // The agent's own words, so the two interfaces say the same thing about the same wait.
+  if (phase === 'starting-servers') return 'Starting MCP servers'
   return phase === 'planning'
     ? 'Planning'
     : phase === 'thinking'
@@ -805,7 +806,7 @@ function waitedWord(waited: number | null): string {
  * change, and one function serves both places the word is drawn so they cannot disagree. A call
  * being written follows the check: the phase is the same for the whole wait, which can be minutes.
  */
-export function workingWord(phase: Phase | null, checking: Checking | null, composing: string | null = null): string {
+export function workingWord(phase: Waiting | null, checking: Checking | null, composing: string | null = null): string {
   if (checking !== null && 'file' in checking) return checking.file === 'pdf' ? 'Checking a PDF' : 'Checking a picture'
   if (checking !== null) return `Checking ${checking.lines} ${checking.lines === 1 ? 'line' : 'lines'}`
   if (composing !== null) return `Preparing a call: ${composing}`
@@ -1334,6 +1335,67 @@ function YesOrNo({
       <button className="reject" onClick={() => onDecide(kind, request, false)}>
         {reject}
       </button>
+      <button className="approve" onClick={() => onDecide(kind, request, true)}>
+        {approve}
+      </button>
+    </div>
+  )
+}
+
+/**
+ * The answers to a question with a standing third one: no, yes, and yes without asking again.
+ *
+ * The standing answer is its own button rather than a checkbox beside yes, as on a run, because
+ * it answers questions not yet asked and should take its own deliberate press. `always` is null
+ * where it cannot be given.
+ */
+function ThreeAnswers({
+  kind,
+  request,
+  answerable,
+  decision,
+  remember,
+  onDecide,
+  reject,
+  approve,
+  always,
+  alwaysTooltip,
+  approved,
+  approvedAlways,
+  rejected,
+}: {
+  kind: Asked
+  request: number
+  answerable: boolean
+  decision: 'approve' | 'reject' | null
+  remember: boolean
+  onDecide: Answer
+  reject: string
+  approve: string
+  always: string | null
+  alwaysTooltip: string
+  approved: string
+  approvedAlways: string
+  rejected: string
+}): React.JSX.Element {
+  if (!answerable) return <Unanswered />
+  if (decision !== null) {
+    return (
+      <div className={`decided ${decision}`}>
+        {decision === 'reject' ? rejected : remember ? approvedAlways : approved}
+      </div>
+    )
+  }
+  return (
+    <div className="confirm-actions">
+      <button className="reject" onClick={() => onDecide(kind, request, false)}>
+        {reject}
+      </button>
+      {always && (
+        <button className="approve always" data-tooltip={alwaysTooltip} onClick={() => onDecide(kind, request, true, true)}>
+          {always}
+        </button>
+      )}
       <button className="approve" onClick={() => onDecide(kind, request, true)}>
         {approve}
       </button>
@@ -2060,6 +2122,316 @@ function Card({
       )
     }
 
+    case 'mcp-server': {
+      const { request, decision, remember } = entry
+      const local = request.transport === 'stdio'
+      return (
+        <div className={`confirm mcp-server ${request.fetching.length || request.changed ? 'fetches' : ''}`}>
+          <div className="confirm-head">
+            <span className="intent">use MCP server</span>
+            <code className="path">{request.alias}</code>
+            <span className="counts">{local ? 'runs on this computer' : 'remote'}</span>
+          </div>
+
+          <p className="permission-scope">
+            <strong>Requested by:</strong> <code>{request.requestedBy}</code>
+          </p>
+
+          {/* What the declaration runs or reaches, word by word as it was declared. A word is
+              drawn as itself, so two that differ only in a space are told apart. */}
+          {local ? (
+            <p className="permission-scope">
+              <strong>Runs:</strong>{' '}
+              <code className="mcp-command">{(request.command ?? []).map((word) => /\s|^$/.test(word) ? JSON.stringify(word) : word).join(' ')}</code>
+            </p>
+          ) : (
+            <p className="permission-scope">
+              <strong>Reaches:</strong> <code className="mcp-url">{request.url}</code>
+            </p>
+          )}
+          {request.program && (
+            <p className="permission-scope">
+              <strong>Program:</strong> <code>{request.program}</code>
+            </p>
+          )}
+          {request.variables.length > 0 && (
+            <p className="permission-scope">
+              <strong>Receives:</strong>{' '}
+              {request.variables.map((variable, index) => (
+                <span key={variable.name}>
+                  {index > 0 && ', '}
+                  <code>{variable.name}</code>
+                  {variable.stored && ' (stored)'}
+                </span>
+              ))}
+            </p>
+          )}
+          {request.reads.length > 0 && (
+            <div className="permission-scope">
+              <strong>May read:</strong>
+              <ul className="mcp-list">
+                {request.reads.map((path) => (
+                  <li key={path}>
+                    <code>{path}</code>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {request.directory && (
+            <p className="permission-scope">
+              <strong>Runs in, and may write:</strong> <code>{request.directory}</code>
+            </p>
+          )}
+          <p className="permission-scope mcp-digest">
+            <strong>Declaration:</strong> <code>{request.digest}</code>
+          </p>
+
+          {request.changed && (
+            <p className="warn">
+              This server’s declaration changed since you approved it. What it runs or reaches
+              may not be what you said yes to.
+            </p>
+          )}
+          {request.fetching.length > 0 && (
+            <div className="warn">
+              <ul className="mcp-list">
+                {request.fetching.map((line, index) => (
+                  <li key={index}>{line}</li>
+                ))}
+              </ul>
+              Approving a server that fetches what it runs approves whatever it fetches each time
+              it starts.
+            </div>
+          )}
+
+          <p className="permission-scope">
+            {local
+              ? 'It runs confined: it reads and writes its own directory, receives only the variables named above, and starts with none of this app’s environment. '
+              : 'Every request to it goes through the same network checks as any other. '}
+            What it returns is kept from the model until you approve its list of tools, and each
+            call to one of its tools is put to you.
+          </p>
+
+          <ThreeAnswers
+            kind="mcp-server"
+            request={request.request}
+            answerable={answerable}
+            decision={decision}
+            remember={remember}
+            onDecide={onDecide}
+            reject="Continue without it"
+            approve="Use this server"
+            always="Use it and all future servers in this project"
+            alwaysTooltip="Servers this project requests from now on start without asking, until you run bravebot mcp forget here"
+            approved="You approved this server"
+            approvedAlways="You approved this server and every server this project requests"
+            rejected="You left this server out of the conversation"
+          />
+        </div>
+      )
+    }
+
+    case 'mcp-tools': {
+      const { request, decision } = entry
+      const count = request.tools.length
+      return (
+        <div className={`confirm mcp-tools ${request.vetting.verdict === 'unsafe' ? 'unsafe' : ''}`}>
+          <div className="confirm-head">
+            <span className="intent">offer tools</span>
+            <code className="path">{request.alias}</code>
+            <span className="counts">
+              {count} tool{count === 1 ? '' : 's'}
+            </span>
+            <VettingVerdict vetting={request.vetting} />
+          </div>
+
+          {request.changed && (
+            <p className="warn">This is not the list you approved before: the tools it offers have changed.</p>
+          )}
+
+          <p className="permission-scope">
+            The model will read each tool’s name, its arguments and what the server says about
+            it, exactly as shown here. The descriptions are the server’s own text. Say no if one
+            gives instructions.
+          </p>
+
+          {/* Each description is the server's text, drawn as text in a marked block, so it never
+              reads as this app's own words (SERVERS-8). */}
+          <ul className="mcp-tools-list">
+            {request.tools.map((tool) => (
+              <li key={tool.name}>
+                <code className="mcp-tool-name">{tool.name}</code>
+                {tool.arguments.length > 0 && (
+                  <ul className="mcp-tool-arguments">
+                    {tool.arguments.map((argument, index) => (
+                      <li key={index}>
+                        <code>{argument}</code>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {tool.description && (
+                  <blockquote className="mcp-tool-description" data-tooltip="Written by the server">
+                    {tool.description}
+                  </blockquote>
+                )}
+              </li>
+            ))}
+          </ul>
+          {request.refused > 0 && (
+            <p className="permission-scope">
+              {request.refused} more tool{request.refused === 1 ? ' is' : 's are'} not listed:
+              {request.refused === 1 ? ' its' : ' their'} name or arguments cannot be offered.
+            </p>
+          )}
+
+          <p className="permission-scope">
+            Every call to one of these tools is still put to you. Your answer is remembered for
+            this exact list, so the same list is not asked about again.
+          </p>
+
+          <YesOrNo
+            kind="mcp-tools"
+            request={request.request}
+            answerable={answerable}
+            decision={decision}
+            onDecide={onDecide}
+            reject="Continue without them"
+            approve="Offer these tools"
+            approved="You offered these tools to the model"
+            rejected="You kept these tools from the model"
+          />
+        </div>
+      )
+    }
+
+    case 'mcp-call': {
+      const { request, decision, remember } = entry
+      return (
+        <div className="confirm mcp-call">
+          <div className="confirm-head">
+            <span className="intent">call tool</span>
+            <code className="path">{request.name}</code>
+            <span className="counts">MCP</span>
+          </div>
+
+          {request.description && (
+            <blockquote className="mcp-tool-description" data-tooltip="Written by the server">
+              {request.description}
+            </blockquote>
+          )}
+
+          {/* What the model wrote, argument by argument, as JSON. The call sends exactly this. */}
+          {request.arguments.length > 0 ? (
+            <dl className="mcp-arguments">
+              {request.arguments.map((argument) => (
+                <div key={argument.name}>
+                  <dt>
+                    <code>{argument.name}</code>
+                  </dt>
+                  <dd>
+                    <pre className="mcp-argument">{argument.value}</pre>
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          ) : (
+            <p className="permission-scope">No arguments.</p>
+          )}
+
+          <p className="permission-scope">
+            The call sends these arguments to the server. What it returns is confined: it is not
+            put in the model’s context.
+            {!request.mayStand && ' Nothing answered in this conversation can be recorded, so it cannot stop asking.'}
+          </p>
+
+          <ThreeAnswers
+            kind="mcp-call"
+            request={request.request}
+            answerable={answerable}
+            decision={decision}
+            remember={remember}
+            onDecide={onDecide}
+            reject="Don’t call"
+            approve="Call once"
+            always={request.mayStand ? `Call, and stop asking for ${request.tool} here` : null}
+            alwaysTooltip="Later calls to this tool in this project are made without asking, until you run bravebot mcp forget here"
+            approved="You allowed this call"
+            approvedAlways="You allowed this call and later ones to this tool in this project"
+            rejected="You refused this call"
+          />
+        </div>
+      )
+    }
+
+    case 'mcp-move': {
+      const { request, decision } = entry
+      return (
+        <div className="confirm mcp-move">
+          <div className="confirm-head">
+            <span className="intent">move server</span>
+            <code className="path">{request.alias}</code>
+          </div>
+
+          <p className="permission-scope">
+            <strong>Declared at:</strong> <code>{request.declared}</code>
+          </p>
+          {/* Where the reply pointed is the server's own bytes, released for this screen, so it is
+              drawn in a container of its own and decides nothing until the answer. */}
+          <p className="permission-scope">
+            <strong>Its reply points to:</strong> <code className="mcp-destination">{request.destination}</code>
+          </p>
+          {/* The host and port, taken out of the address by the agent, as a fetch's host is. */}
+          <p className="permission-scope fetch-host">
+            <strong>Reaching:</strong> <code>{request.authority}</code>
+          </p>
+
+          <p className="warn">
+            Nothing was sent there. A yes declares the server at that address and sends it what
+            was being sent, and every later request to the server goes there too
+            {request.mayRecord ? ', in this conversation and the next' : ' until this conversation ends'}.
+            Say no unless you know the server moved.
+          </p>
+
+          <YesOrNo
+            kind="mcp-move"
+            request={request.request}
+            answerable={answerable}
+            decision={decision}
+            onDecide={onDecide}
+            reject="Don’t move it"
+            approve="It moved there"
+            approved="You moved this server"
+            rejected="You did not move this server"
+          />
+        </div>
+      )
+    }
+
+    case 'mcp-started': {
+      const { servers, notes } = entry.started
+      return (
+        <div className="mcp-started">
+          <div className="mcp-started-head">
+            <Icon name="plug" />
+            <strong>
+              {servers.length
+                ? `MCP server${servers.length === 1 ? '' : 's'} started: ${servers.join(', ')}`
+                : 'No MCP server started'}
+            </strong>
+          </div>
+          {notes.length > 0 && (
+            <ul className="mcp-list">
+              {notes.map((note, index) => (
+                <li key={index}>{note}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )
+    }
+
     case 'plan-task':
       return (
         <div className="bubble user plan-task">
@@ -2227,6 +2599,14 @@ function waitingOn(kind: t.Asking['kind']): string {
       return 'Answer the plan'
     case 'exposure':
       return 'Answer the file with a credential'
+    case 'mcp-server':
+      return 'Answer the MCP server'
+    case 'mcp-tools':
+      return 'Answer the MCP tools'
+    case 'mcp-call':
+      return 'Answer the MCP call'
+    case 'mcp-move':
+      return 'Answer the moved MCP server'
     case 'vouch':
       return 'Answer the vouch'
     case 'ask':

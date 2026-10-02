@@ -8,8 +8,8 @@
 //! failing, the question is not how to make it pass.
 
 use bravebot_agent::confirm::{
-    Confirmer, Decision, Intent, OutputRequest, RunDecision, RunRequest, VouchRequest,
-    WriteDecision, WriteRequest,
+    CallDecision, Confirmer, Decision, Intent, OutputRequest, RunDecision, RunRequest,
+    VouchRequest, WriteDecision, WriteRequest,
 };
 // `Question` is also the bridge's name for an outstanding request, so this one stays
 // qualified as `ask::Question` rather than shadowing it.
@@ -484,52 +484,200 @@ fn cancelling_before_a_question_cannot_leave_it_waiting() {
 
 /// The questions the window has no card for are refused, and refusing one takes no answer that
 /// was sent for another question.
+fn a_tool_list() -> bravebot_agent::confirm::ToolListRequest {
+    bravebot_agent::confirm::ToolListRequest {
+        alias: "weather".into(),
+        tools: Vec::new(),
+        refused: 0,
+        changed: false,
+        verdict: bravebot_core::vetting::Verdict::Safe,
+        reason: None,
+    }
+}
+
+fn a_call(may_stand: bool) -> bravebot_agent::confirm::McpCallRequest {
+    bravebot_agent::confirm::McpCallRequest {
+        alias: "weather".into(),
+        tool: "get_forecast".into(),
+        arguments: Vec::new(),
+        description: None,
+        may_stand,
+    }
+}
+
+fn a_move() -> bravebot_agent::confirm::MoveRequest {
+    bravebot_agent::confirm::MoveRequest {
+        alias: "weather".into(),
+        declared: "https://weather.example/mcp".into(),
+        destination: "https://elsewhere.example/mcp".into(),
+        authority: "elsewhere.example:443".into(),
+        may_record: true,
+    }
+}
+
+/// Answer the next question that is registered with `reply`, as the dispatch thread would.
+fn answering(running: Running, reply: Reply) -> std::thread::JoinHandle<bool> {
+    std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            let waiting = *running.pending.lock().expect("not poisoned");
+            if let Some(question) = waiting {
+                return running.answer(question.id, reply);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("no question was registered as pending");
+    })
+}
+
+/// The MCP questions are put to the window, each under its own event, and with nobody left to
+/// answer every one of them is a no (SERVERS-4, SERVERS-7, SERVERS-8, SERVERS-11).
 #[test]
-fn unsupported_approvals_refuse_without_consuming_other_answers() {
-    use bravebot_agent::confirm::{McpCallRequest, MoveRequest, ToolListRequest};
+fn an_unanswerable_mcp_question_refuses() {
+    use bravebot_agent::servers::{Answer, Asker, Question as Start};
+    let declaration = bravebot_config::mcp::Declaration::http("https://weather.example/mcp".into())
+        .expect("a declaration");
     let mut h = harness();
-    h.running
-        .answers
-        .send(Reply::Write(Decision::Approve))
-        .unwrap();
+    drop(h.running);
+
     assert_eq!(
-        h.confirmer.confirm_tool_list(&ToolListRequest {
-            alias: "weather".into(),
-            tools: Vec::new(),
-            refused: 0,
+        h.confirmer.confirm_tool_list(&a_tool_list()),
+        Decision::Reject
+    );
+    let call = h.confirmer.confirm_mcp_call(&a_call(true));
+    assert_eq!(call.decision, Decision::Reject);
+    assert!(!call.stand);
+    assert_eq!(h.confirmer.confirm_move(&a_move()), Decision::Reject);
+    assert_eq!(
+        h.confirmer.ask_to_start(&Start {
+            alias: "weather",
+            file: ".bravebot/settings.json",
+            declaration: &declaration,
+            program: None,
             changed: false,
-            verdict: bravebot_core::vetting::Verdict::Safe,
-            reason: None,
         }),
-        Decision::Reject
+        Answer::No
     );
+    assert!(!h.confirmer.ask_to_move(&a_move()));
+
+    let asked: Vec<String> = h
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|event| event.name.to_string())
+        .collect();
     assert_eq!(
-        h.confirmer
-            .confirm_mcp_call(&McpCallRequest {
-                alias: "weather".into(),
-                tool: "get_forecast".into(),
-                arguments: Vec::new(),
-                description: None,
-                may_stand: true,
-            })
-            .decision,
-        Decision::Reject
+        asked,
+        [
+            "mcp-tools.request",
+            "mcp-call.request",
+            "mcp-move.request",
+            "mcp-server.request",
+            "mcp-move.request",
+        ]
     );
-    assert_eq!(
-        h.confirmer.confirm_move(&MoveRequest {
-            alias: "weather".into(),
-            declared: "https://weather.example/mcp".into(),
-            destination: "https://elsewhere.example/mcp".into(),
-            authority: "elsewhere.example:443".into(),
-            may_record: true,
-        }),
-        Decision::Reject
-    );
-    assert!(h.events.lock().unwrap().is_empty());
-    assert_eq!(
-        h.confirmer.confirm_write(&a_write()),
-        WriteDecision::approve()
-    );
+}
+
+/// Each MCP question takes an answer of its own kind and no other, so a yes about a write cannot
+/// start a server or make a call.
+#[test]
+fn an_mcp_question_takes_no_answer_of_another_kind() {
+    use bravebot_agent::servers::Answer;
+    let h = harness();
+    let running = h.running;
+    for (kind, wrong, right) in [
+        (
+            Kind::McpServer,
+            Reply::McpCall(CallDecision::approve()),
+            Reply::McpServer(Answer::Once),
+        ),
+        (
+            Kind::McpTools,
+            Reply::McpMove(Decision::Approve),
+            Reply::McpTools(Decision::Approve),
+        ),
+        (
+            Kind::McpCall,
+            Reply::Run(RunDecision::approve()),
+            Reply::McpCall(CallDecision::approve()),
+        ),
+        (
+            Kind::McpMove,
+            Reply::McpTools(Decision::Approve),
+            Reply::McpMove(Decision::Approve),
+        ),
+    ] {
+        *running.pending.lock().expect("not poisoned") = Some(Question { id: 1, kind });
+        assert!(
+            !running.answer(1, Reply::Write(Decision::Approve)),
+            "{kind:?}"
+        );
+        assert!(!running.answer(1, wrong), "{kind:?}");
+        assert!(running.answer(1, right), "{kind:?}");
+    }
+}
+
+/// Refusing a waiting MCP question refuses it in its own shape, so the turn hears a no rather than
+/// waiting on an answer that was discarded for its kind.
+#[test]
+fn refusing_an_mcp_question_is_a_no_in_its_own_shape() {
+    use bravebot_agent::servers::Answer;
+    assert!(matches!(
+        Kind::McpServer.refusal(),
+        Reply::McpServer(Answer::No)
+    ));
+    assert!(matches!(
+        Kind::McpTools.refusal(),
+        Reply::McpTools(Decision::Reject)
+    ));
+    assert!(matches!(
+        Kind::McpCall.refusal(),
+        Reply::McpCall(CallDecision {
+            decision: Decision::Reject,
+            stand: false
+        })
+    ));
+    assert!(matches!(
+        Kind::McpMove.refusal(),
+        Reply::McpMove(Decision::Reject)
+    ));
+}
+
+/// Stop asking is kept only where the question offered it. A window that sends it for a call that
+/// cannot record it gets a yes to that one call (SERVERS-7).
+#[test]
+fn a_call_answer_that_cannot_stand_is_a_yes_to_the_one_call() {
+    for (may_stand, expected) in [
+        (true, CallDecision::approve_and_stand()),
+        (false, CallDecision::approve()),
+    ] {
+        let mut h = harness();
+        let answerer = answering(h.running, Reply::McpCall(CallDecision::approve_and_stand()));
+        assert_eq!(h.confirmer.confirm_mcp_call(&a_call(may_stand)), expected);
+        assert!(answerer.join().expect("the answerer should not panic"));
+    }
+}
+
+/// The three answers to whether to use a server reach the agent as they were given.
+#[test]
+fn a_server_question_gets_the_answer_that_was_sent() {
+    use bravebot_agent::servers::{Answer, Asker, Question as Start};
+    let declaration = bravebot_config::mcp::Declaration::http("https://weather.example/mcp".into())
+        .expect("a declaration");
+    for sent in [Answer::Once, Answer::Project, Answer::No] {
+        let mut h = harness();
+        let answerer = answering(h.running, Reply::McpServer(sent));
+        let answered = h.confirmer.ask_to_start(&Start {
+            alias: "weather",
+            file: ".bravebot/settings.json",
+            declaration: &declaration,
+            program: None,
+            changed: false,
+        });
+        assert!(answerer.join().expect("the answerer should not panic"));
+        assert_eq!(answered, sent);
+    }
 }
 
 #[test]

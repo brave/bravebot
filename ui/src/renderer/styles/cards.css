@@ -99,6 +99,41 @@
 .confirm.server.builds { border-color: var(--warn); border-width: 2px; }
 .confirm.server .confirm-head .server-language { font-family: inherit; }
 .confirm.server .permission-scope code { overflow-wrap: anywhere; }
+/* MCP servers. A server whose program fetches what it runs, or whose declaration changed since it
+   was approved, gets the warning border: what a yes approves is not fixed by what it shows. */
+.confirm.mcp-server.fetches,
+.confirm.mcp-tools.unsafe,
+.confirm.mcp-move { border-color: var(--warn); border-width: 2px; }
+.confirm[class*="mcp-"] .confirm-head .path,
+.confirm[class*="mcp-"] .permission-scope code { overflow-wrap: anywhere; }
+.mcp-list { margin: var(--leo-spacing-xs) 0 0; padding-left: var(--leo-spacing-2xl); }
+.mcp-tools-list { display: flex; flex-direction: column; gap: var(--leo-spacing-m); margin: 0; padding: 0; list-style: none; }
+.mcp-tool-name { font: var(--type-code); font-weight: 600; }
+.mcp-tool-arguments { margin: var(--leo-spacing-xs) 0 0; padding-left: var(--leo-spacing-2xl); }
+.mcp-tool-arguments code { font: var(--type-code); }
+/* A server's own words, set apart so they never read as the app's. */
+.mcp-tool-description {
+  margin: var(--leo-spacing-xs) 0 0;
+  padding: var(--leo-spacing-s) var(--leo-spacing-l);
+  border-left: 3px solid var(--confine);
+  color: var(--ink-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.mcp-arguments { display: flex; flex-direction: column; gap: var(--leo-spacing-s); margin: 0; }
+.mcp-arguments dd { margin: 0; }
+/* Not `pre.preview`: that is released content, and a card holding one keeps its answers pinned. */
+.mcp-argument {
+  margin: var(--leo-spacing-xs) 0 0;
+  padding: var(--leo-spacing-s) var(--leo-spacing-m);
+  border-radius: var(--leo-radius-s);
+  background: var(--surface-sunken);
+  font: var(--type-code);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.mcp-started { display: flex; flex-direction: column; gap: var(--leo-spacing-xs); color: var(--ink-secondary); }
+.mcp-started-head { display: flex; align-items: center; gap: var(--leo-spacing-m); }
 
 /* ------------------------------------------------------------------ body */
 

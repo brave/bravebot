@@ -16,8 +16,9 @@ use crate::emit::Emitter;
 use crate::protocol::Event;
 use crate::wire;
 use bravebot_agent::confirm::{
-    Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest, OutputRequest,
-    RunDecision, RunRequest, ServerRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
+    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest,
+    McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
+    ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
 use bravebot_agent::report::{Activity, Landing, Phase, Reporter, Shown};
 use bravebot_core::ask::{Answer, Asking};
@@ -49,6 +50,14 @@ pub enum Kind {
     Manifest,
     /// Whether the planner may be given a vouched file the scan found a credential in.
     Exposure,
+    /// Whether to use an MCP server a project requests, asked before it is started (SERVERS-4).
+    McpServer,
+    /// Whether to offer an MCP server's tools to the model (SERVERS-8).
+    McpTools,
+    /// Whether to make one call to an MCP server's tool (SERVERS-7).
+    McpCall,
+    /// Whether a remote MCP server moved where its reply pointed (SERVERS-11).
+    McpMove,
     Ask,
 }
 
@@ -85,6 +94,12 @@ pub enum Reply {
     Server(Decision),
     Manifest(Decision),
     Exposure(Decision),
+    /// Three answers: no, yes, and yes for every server this project requests from now on.
+    McpServer(bravebot_agent::servers::Answer),
+    McpTools(Decision),
+    /// Three answers: no, yes, and yes without asking again about this tool in this project.
+    McpCall(CallDecision),
+    McpMove(Decision),
     /// One answer per question, in the order they were asked. Empty means nobody could be
     /// asked — see [`Confirmer::ask_user`].
     Ask(Vec<Answer>),
@@ -102,15 +117,20 @@ impl Reply {
             Reply::Server(_) => Kind::Server,
             Reply::Manifest(_) => Kind::Manifest,
             Reply::Exposure(_) => Kind::Exposure,
+            Reply::McpServer(_) => Kind::McpServer,
+            Reply::McpTools(_) => Kind::McpTools,
+            Reply::McpCall(_) => Kind::McpCall,
+            Reply::McpMove(_) => Kind::McpMove,
             Reply::Ask(_) => Kind::Ask,
         }
     }
 
     /// The yes or no this reply carries, where a yes or a no is all it is.
     ///
-    /// `None` for the two that carry more: a run's answer is a decision and whether to remember
-    /// it, and a series of questions has an answer per question. Reading either as a bare
-    /// decision would drop the half that makes it the answer it is, so neither has one here.
+    /// `None` for the ones that carry more: a run's answer is a decision and whether to remember
+    /// it, an MCP server's and an MCP call's are each one of three, and a series of questions has
+    /// an answer per question. Reading any of them as a bare decision would drop the part that
+    /// makes it the answer it is, so none has one here.
     pub fn decision(&self) -> Option<Decision> {
         match self {
             Reply::Write(decision)
@@ -120,8 +140,10 @@ impl Reply {
             | Reply::Fetch(decision)
             | Reply::Server(decision)
             | Reply::Manifest(decision)
-            | Reply::Exposure(decision) => Some(*decision),
-            Reply::Run(_) | Reply::Ask(_) => None,
+            | Reply::Exposure(decision)
+            | Reply::McpTools(decision)
+            | Reply::McpMove(decision) => Some(*decision),
+            Reply::Run(_) | Reply::McpServer(_) | Reply::McpCall(_) | Reply::Ask(_) => None,
         }
     }
 }
@@ -146,6 +168,10 @@ impl Kind {
             Kind::Server => Reply::Server(Decision::Reject),
             Kind::Manifest => Reply::Manifest(Decision::Reject),
             Kind::Exposure => Reply::Exposure(Decision::Reject),
+            Kind::McpServer => Reply::McpServer(bravebot_agent::servers::Answer::No),
+            Kind::McpTools => Reply::McpTools(Decision::Reject),
+            Kind::McpCall => Reply::McpCall(CallDecision::reject()),
+            Kind::McpMove => Reply::McpMove(Decision::Reject),
             // No answers at all, which is how this question says nobody was asked.
             Kind::Ask => Reply::Ask(Vec::new()),
         }
@@ -517,26 +543,41 @@ impl Confirmer for BridgeConfirmer {
         })
     }
 
-    // The questions below are about MCP servers, which this application does not start. It
-    // has no card for them, so each is refused.
-
-    fn confirm_tool_list(
-        &mut self,
-        _request: &bravebot_agent::confirm::ToolListRequest,
-    ) -> bravebot_agent::confirm::Decision {
-        bravebot_agent::confirm::Decision::Reject
+    /// Ask whether to offer an MCP server's tools to the model (SERVERS-8).
+    ///
+    /// The request carries each tool as the client drew it, the server's descriptions among them.
+    /// A yes offers the list and is recorded beside the server's approval, so the same list is
+    /// offered unasked in a later session. A no offers none of its tools for the rest of this one.
+    fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
+        self.yes_or_no(Kind::McpTools, "mcp-tools.request", |id| {
+            wire::mcp_tools_request(id, request)
+        })
     }
 
-    fn confirm_mcp_call(
-        &mut self,
-        _request: &bravebot_agent::confirm::McpCallRequest,
-    ) -> bravebot_agent::confirm::CallDecision {
-        bravebot_agent::confirm::CallDecision::reject()
+    /// Ask whether to make one call to an MCP server's tool (SERVERS-7).
+    ///
+    /// Answer 2, stop asking about this tool in this project, is kept only where the request says
+    /// it can be recorded. A front end that sent it anyway gets answer 1, which is the narrower.
+    fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
+        match self.ask(Kind::McpCall, "mcp-call.request", |id| {
+            wire::mcp_call_request(id, request)
+        }) {
+            Some(Reply::McpCall(decision)) if decision.stand && !request.may_stand => {
+                CallDecision::approve()
+            }
+            Some(Reply::McpCall(decision)) => decision,
+            _ => CallDecision::reject(),
+        }
     }
 
-    /// Refuses: this application starts no server, so there is none whose reply could move it.
-    fn confirm_move(&mut self, _request: &bravebot_agent::confirm::MoveRequest) -> Decision {
-        Decision::Reject
+    /// Ask whether a remote MCP server moved where its reply pointed (SERVERS-11).
+    ///
+    /// Nothing was sent there. A yes declares the server at the new address, and every later
+    /// request to it goes there.
+    fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
+        self.yes_or_no(Kind::McpMove, "mcp-move.request", |id| {
+            wire::mcp_move_request(id, request)
+        })
     }
 
     /// Ask whether to start a language server.
@@ -650,5 +691,36 @@ impl Confirmer for BridgeConfirmer {
             Some(Reply::Ask(answers)) => wire::fitted(answers, asking),
             _ => Vec::new(),
         }
+    }
+}
+
+/// The questions put while a session's MCP servers start, through the same channel a turn's
+/// questions take.
+///
+/// A window is always there to answer, so nobody being present is never the reason a server is
+/// left out. A turn stopped while one of these is waiting answers it no, as every other question
+/// here is answered.
+impl bravebot_agent::servers::Asker for BridgeConfirmer {
+    fn anybody_there(&self) -> bool {
+        true
+    }
+
+    /// Ask whether to use a server a project requests (SERVERS-4).
+    fn ask_to_start(
+        &mut self,
+        question: &bravebot_agent::servers::Question<'_>,
+    ) -> bravebot_agent::servers::Answer {
+        match self.ask(Kind::McpServer, "mcp-server.request", |id| {
+            wire::mcp_server_request(id, question)
+        }) {
+            Some(Reply::McpServer(answer)) => answer,
+            _ => bravebot_agent::servers::Answer::No,
+        }
+    }
+
+    /// Ask whether a server whose handshake was redirected moved there (SERVERS-11). The same
+    /// question, and the same card, as [`Confirmer::confirm_move`].
+    fn ask_to_move(&mut self, request: &MoveRequest) -> bool {
+        self.confirm_move(request) == Decision::Approve
     }
 }

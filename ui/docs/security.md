@@ -76,9 +76,19 @@ and a mask. The value is not sent to the window, so it is never drawn. An approv
 file to the model and covers that file until the conversation closes. It is not saved and
 does not change whether the file is trusted. A refusal keeps the file's text from the model.
 
-The agent also asks before starting or calling an MCP server. The desktop app starts no MCP
-server, and the bridge refuses those requests without taking an answer intended for another
-pending question.
+MCP servers a project requests are started on a session's first turn, after the trust
+question, and only on a yes to a card that shows the whole declaration: what it runs or
+reaches, the variables it receives (a stored value by name only), the files it may read, the
+directory it may write, its digest, and a warning where its program fetches what it runs. A
+second card shows the server's list of tools before any of it reaches the model. The tool
+descriptions are the server's own text and are drawn as text inside a marked block, never as
+the app's words. Every call is then put to the window with its arguments. The third answer on
+the server and call cards ("use all future servers in this project", "stop asking for this
+tool here") is a separate button, as on a command, and the call card does not offer it where
+it cannot be recorded. The bridge also refuses a stand-alone "stop asking" the question did not
+offer. A redirected remote server is put to the window with the host and port a yes would
+reach. Each of these questions takes an answer of its own kind only, and every failure to
+answer is a no.
 
 Vetted-content approval releases only the displayed bytes once; it does not create a trust
 rule for future reads. Checker verdicts are advisory. Checking already sends the content

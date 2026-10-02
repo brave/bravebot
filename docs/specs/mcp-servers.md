@@ -22,6 +22,7 @@ governs:
   - crates/cli/src/plain.rs
   - crates/tui/src/confirm.rs
   - crates/tui/src/status.rs
+  - crates/ui-bridge/src/turn.rs
 documented-by:
   - docs/website/docs/customize/mcp-servers.md
   - docs/website/docs/customize/mcp/gmail.md
@@ -73,9 +74,12 @@ one is asked about again. Each call is then put to them with three answers, afte
 rule naming the server or the tool ([SERVERS-7](#SERVERS-7)). Bypassing answers both questions and
 records neither ([SERVERS-13](#SERVERS-13)).
 
-The desktop application starts no server, and says so as a session opens where one is requested
-([SERVERS-2](#SERVERS-2)). That is a cost it pays on purpose, and the known costs at the end give the
-reason.
+The desktop application starts a session's servers on its first turn, after the person has said
+whether the directory is trusted, on the same road as the terminal. It puts the server question, the
+tool list, each call and a moved server to the window as cards, each with the answers the terminal
+offers ([SERVERS-4](#SERVERS-4), [SERVERS-8](#SERVERS-8), [SERVERS-7](#SERVERS-7),
+[SERVERS-11](#SERVERS-11)), and holds what it started until the session closes
+([SERVERS-9](#SERVERS-9)).
 
 Issue #83 is where the unwired client was written down, and it names the four things wiring needs
 decided first: where a server is declared, what a name and an argv is trusted for, how the untrusted
@@ -300,10 +304,10 @@ saying that `bravebot mcp add` declares one. The file is named relative to the c
 inside it, a checkout reached through a link included. A declared alias no checkout requested is
 not started, approved or not.
 
-The desktop application starts none of what is requested (see the known costs). A session it
-starts, reopens or forks where the settings request servers names them, and says the desktop app
-does not start them and that `bravebot mcp list`, run there in a terminal, says which a session
-there would, so a request it passed over does not read as one it honoured. A requested name that is not an alias is shown quoted, with its escapes.
+The desktop application reads the same requests, and resolves them on a session's first turn rather
+than as the session opens. What that turn starts, and a line for each request it did not, such as one
+nobody declared, is said in the window as it starts them. A requested name that is not an alias is
+shown quoted, with its escapes.
 
 `bravebot mcp enable <alias>` writes the request into the file its scope names, the one the reader
 takes that layer from: `.bravebot/settings.local.json` in the current directory where `-s` is absent
@@ -330,8 +334,7 @@ write, so one made while the question waited is refused too.
 `verified-by: bravebot_config::settings::every_layers_request_is_read_and_each_alias_is_kept_once`
 `verified-by: bravebot_agent::servers::a_request_nobody_declared_is_reported_and_nothing_is_started_for_it`
 `verified-by: bravebot_agent::servers::a_checkout_reached_through_a_link_names_its_settings_file_inside_it`
-`verified-by: bravebot_session::sessions::a_desktop_session_names_the_servers_it_does_not_start`
-`verified-by: bravebot_ui_bridge::servers::every_way_a_desktop_session_opens_names_the_servers_its_project_requests`
+`verified-by: bravebot_ui_bridge::servers::a_request_nobody_declared_is_said_when_the_first_turn_starts_servers`
 `verified-by: bravebot_cli::mcp::enable_requests_the_server_in_the_file_its_scope_names`
 `verified-by: bravebot_cli::mcp::enable_adds_the_alias_once_and_keeps_the_rest_of_the_file`
 `verified-by: bravebot_cli::mcp::enable_leaves_a_settings_file_it_cannot_add_to_as_it_is`
@@ -482,6 +485,11 @@ that would not take the answer does not unsay it, and a line says which record w
 `verified-by: bravebot_agent::turn::a_turn_holds_a_grant_per_server_it_was_handed_and_only_its_worker_holds_them_too`
 `verified-by: bravebot_cli::mcp::a_stored_value_is_shown_by_its_name_and_never_as_itself`
 `verified-by: bravebot_cli::running::a_servers_own_install_line_naming_a_key_file_declares_a_read_of_that_file`
+`verified-by: bravebot_ui_bridge::servers::a_server_the_window_approves_is_started_offered_and_called`
+`verified-by: bravebot_ui_bridge::servers::a_server_the_window_refuses_is_not_started_and_the_turn_says_so`
+`verified-by: bravebot_ui_bridge::refusal::a_server_question_gets_the_answer_that_was_sent`
+`verified-by: bravebot_ui_bridge::refusal::an_unanswerable_mcp_question_refuses`
+`verified-by: bravebot_ui_bridge::wire::a_standing_mcp_answer_takes_an_approval_and_a_literal_true`
 
 <a id="SERVERS-5"></a>
 ### SERVERS-5: an approval binds to a digest of the declaration
@@ -576,6 +584,7 @@ calls one, is drawn as a plain program.
 `verified-by: bravebot_agent::servers::a_runner_and_its_unpinned_package_are_drawn_at_the_question`
 `verified-by: bravebot_agent::servers::a_package_behind_a_flag_nobody_knows_is_drawn_as_not_known`
 `verified-by: bravebot_cli::mcp::the_question_names_a_runner_and_the_package_it_leaves_unpinned`
+`verified-by: bravebot_ui_bridge::wire::a_server_question_carries_the_declaration_and_no_stored_value`
 
 <a id="SERVERS-7"></a>
 ### SERVERS-7: every call to a server's tool is put to the person, with three answers
@@ -702,6 +711,9 @@ the content out ends it. A workspace file the planner reads does not reach it.
 `verified-by: bravebot_tui::confirm::a_call_prompt_answers_by_its_rows_and_never_by_enter`
 `verified-by: bravebot_tui::confirm::a_call_answer_says_what_the_turn_is_told`
 `verified-by: bravebot_tui::remote_confirm::a_call_answer_travels_back_with_its_stand`
+`verified-by: bravebot_ui_bridge::servers::a_server_the_window_approves_is_started_offered_and_called`
+`verified-by: bravebot_ui_bridge::refusal::a_call_answer_that_cannot_stand_is_a_yes_to_the_one_call`
+`verified-by: bravebot_ui_bridge::refusal::an_mcp_question_takes_no_answer_of_another_kind`
 
 <a id="SERVERS-8"></a>
 ### SERVERS-8: a server's own words are never an identifier
@@ -798,6 +810,8 @@ servers it holds a grant for, and another server's list waits for a turn that ho
 `verified-by: bravebot_tui::confirm::a_tool_list_draws_every_description_row_behind_the_margin`
 `verified-by: bravebot_tui::confirm::a_tool_list_answers_by_its_rows`
 `verified-by: bravebot_tui::remote_confirm::a_yes_to_a_list_and_a_yes_to_a_call_do_not_stand_in_for_each_other`
+`verified-by: bravebot_ui_bridge::servers::a_server_the_window_approves_is_started_offered_and_called`
+`verified-by: bravebot_ui_bridge::wire::the_mcp_questions_carry_what_a_card_draws`
 
 <a id="SERVERS-9"></a>
 ### SERVERS-9: the capability is granted per server, not per protocol
@@ -1114,6 +1128,8 @@ session with nobody at the terminal and the mode that skips prompts refuse it un
 `verified-by: bravebot_tui::confirm::a_destination_longer_than_the_move_box_leaves_the_host_and_what_a_yes_does_on_screen`
 `verified-by: bravebot_tui::confirm::the_end_of_a_long_destination_can_be_scrolled_to_with_the_host_still_shown`
 `verified-by: bravebot_tui::confirm::a_move_question_takes_a_yes_only_from_a_draw_showing_the_host_and_the_keys`
+`verified-by: bravebot_ui_bridge::wire::the_mcp_questions_carry_what_a_card_draws`
+`verified-by: bravebot_ui_bridge::refusal::refusing_an_mcp_question_is_a_no_in_its_own_shape`
 
 <a id="SERVERS-12"></a>
 ### SERVERS-12: the managed layer may keep a server from starting and never add one
@@ -1572,10 +1588,10 @@ This spec cannot land without these. Each is named by what the clause says rathe
   a name, so a link, a copy or another name for the same machine is not denied, and a command match
   leaves out the variables a server starts with. The allow list is the form that holds
   ([SERVERS-12](#SERVERS-12)).
-- **The desktop application starts no server.** It has none of the three questions a server is put
-  through: the server question ([SERVERS-4](#SERVERS-4)), the tool list
-  ([SERVERS-8](#SERVERS-8)) and the call ([SERVERS-7](#SERVERS-7)). It answers each of them no, so
-  a server it started would be one nobody was asked about. A desktop session reads the same
-  settings file as the terminal's three sessions, starts nothing for a request, and names what was
-  requested as it opens ([SERVERS-2](#SERVERS-2)), so a person who needs the servers knows to start
-  the session in a terminal.
+- **The desktop application starts its servers on a session's first turn.** That turn waits for
+  the server question and for every handshake, up to the 60 seconds above, before the model is
+  asked anything, and the window says it is starting servers while it does. A turn stopped while
+  they start starts none of them, and the next turn asks again. A reopened or forked session starts
+  its own, since what a session started is not written to its record. A server's stderr is
+  discarded, as the full-screen interface discards it, and a plan-first run is offered no server's
+  tools.
