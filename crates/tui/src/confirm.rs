@@ -2193,9 +2193,30 @@ fn draw_pinned(
     frame: &mut ratatui::Frame,
     inside: Rect,
     above: Vec<Line<'static>>,
-    (scrolled, needed): (Vec<Line<'static>>, u16),
+    middle: (Vec<Line<'static>>, u16),
     below: Vec<Line<'static>>,
     (yes, no): (&str, &str),
+    scroll: u16,
+) -> PinnedDrawn {
+    draw_pinned_keyed(
+        frame,
+        inside,
+        above,
+        middle,
+        below,
+        |answerable| answer_keys(yes, no, answerable),
+        scroll,
+    )
+}
+
+/// [`draw_pinned`], with the keys drawn by `keys`, which is told whether a yes is taken.
+fn draw_pinned_keyed(
+    frame: &mut ratatui::Frame,
+    inside: Rect,
+    above: Vec<Line<'static>>,
+    (scrolled, needed): (Vec<Line<'static>>, u16),
+    below: Vec<Line<'static>>,
+    keys: impl Fn(bool) -> Line<'static>,
     scroll: u16,
 ) -> PinnedDrawn {
     let wrapped = |lines: Vec<Line<'static>>| Paragraph::new(lines).wrap(Wrap { trim: false });
@@ -2209,7 +2230,7 @@ fn draw_pinned(
             rows_in(&header, inside.width),
             rest,
             rows_in(&footer, inside.width),
-            rows_in(&wrapped(vec![answer_keys(yes, no, true)]), inside.width),
+            rows_in(&wrapped(vec![keys(true)]), inside.width),
         ),
         scroll,
     );
@@ -2225,7 +2246,7 @@ fn draw_pinned(
         body,
         hint,
         footer,
-        wrapped(vec![answer_keys(yes, no, answerable)]),
+        wrapped(vec![keys(answerable)]),
     );
 
     PinnedDrawn {
@@ -2318,7 +2339,26 @@ impl Pinned {
 
 /// A question's keys, with `y` muted where a yes is not taken from this draw.
 fn answer_keys(yes: &str, no: &str, answerable: bool) -> Line<'static> {
-    Line::from(vec![
+    let mut keys = yes_and_no(yes, no, answerable);
+    keys.extend([
+        Span::raw("    "),
+        Span::styled(
+            "ctrl-c",
+            Style::default()
+                .fg(theme::muted())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {}", t!(stop_the_turn)),
+            Style::default().fg(theme::muted()),
+        ),
+    ]);
+    Line::from(keys)
+}
+
+/// The `y` and `n` of a question's keys, `y` muted where a yes is not taken from this draw.
+fn yes_and_no(yes: &str, no: &str, answerable: bool) -> Vec<Span<'static>> {
+    vec![
         Span::styled(
             "  y",
             Style::default()
@@ -2336,18 +2376,8 @@ fn answer_keys(yes: &str, no: &str, answerable: bool) -> Line<'static> {
                 .fg(theme::fail())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(format!(" {no}    ")),
-        Span::styled(
-            "ctrl-c",
-            Style::default()
-                .fg(theme::muted())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" {}", t!(stop_the_turn)),
-            Style::default().fg(theme::muted()),
-        ),
-    ])
+        Span::raw(format!(" {no}")),
+    ]
 }
 
 /// Draw the fetch question.
@@ -2494,6 +2524,102 @@ fn draw_move(frame: &mut ratatui::Frame, request: &MoveRequest, scroll: u16) -> 
         (destination, needed),
         below,
         (t!(mcp_move_yes), t!(mcp_move_no)),
+        scroll,
+    )
+}
+
+/// Ask whether to remove a checkout something was done in, blocking until answered (CHECKOUT-15).
+///
+/// Asked with no turn running, so anything but a yes keeps the checkout and nothing is stopped.
+pub fn ask_remove_checkout<B: Backend>(
+    terminal: &mut Terminal<B>,
+    checkout: &bravebot_agent::workspace::SessionCheckout,
+) -> Answer {
+    let mut scroll = 0u16;
+    loop {
+        let mut drawn = PinnedDrawn::default();
+        if terminal
+            .draw(|frame| drawn = draw_remove_checkout(frame, checkout, scroll))
+            .is_err()
+        {
+            return Answer::Reject;
+        }
+
+        match input::read() {
+            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
+            Ok(TermEvent::Key(key)) => match drawn.response_to(key) {
+                Some(Response::Answer(answer)) => return answer,
+                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
+                None => continue,
+            },
+            Ok(_) => continue,
+            Err(_) => return Answer::Reject,
+        }
+    }
+}
+
+/// Draw the question of whether to remove a checkout.
+///
+/// Which checkout and what removing it deletes are pinned. The names written in it scroll, since a
+/// delegate can write any number of files.
+fn draw_remove_checkout(
+    frame: &mut ratatui::Frame,
+    checkout: &bravebot_agent::workspace::SessionCheckout,
+    scroll: u16,
+) -> PinnedDrawn {
+    let area = centred(frame.area());
+    let inside = panel(frame, area, theme::note(), t!(remove_checkout_title));
+    let width = inside.width as usize;
+    let muted = Style::default().fg(theme::muted());
+
+    let id = checkout.id.as_str();
+    let mut above = indented(
+        t!(
+            remove_checkout_which,
+            id = id,
+            delegate = checkout.delegate.to_string()
+        ),
+        muted,
+        width,
+    );
+    above.extend(indented(
+        checkout.path.display().to_string(),
+        Style::default().add_modifier(Modifier::BOLD),
+        width,
+    ));
+    above.push(Line::raw(""));
+
+    let mut written = Vec::new();
+    for name in &checkout.candidates.named {
+        written.extend(indented(name.clone(), Style::default(), width));
+    }
+    let referenced = checkout.candidates.referenced;
+    if referenced > 0 {
+        written.extend(indented(
+            t!(checkouts_referenced, id = id, count = referenced),
+            muted,
+            width,
+        ));
+    }
+    written.extend(indented(t!(checkouts_unread, id = id), muted, width));
+
+    let mut below = vec![Line::raw("")];
+    below.extend(indented(
+        t!(remove_checkout_explained),
+        Style::default().fg(theme::fail()),
+        width,
+    ));
+
+    let (yes, no) = (t!(remove_checkout_yes), t!(remove_checkout_no));
+    draw_pinned_keyed(
+        frame,
+        inside,
+        above,
+        (written, 1),
+        below,
+        |answerable| Line::from(yes_and_no(yes, no, answerable)),
         scroll,
     )
 }
@@ -5042,6 +5168,103 @@ mod tests {
             reason: reason.map(str::to_string),
             picture: None,
         }
+    }
+
+    fn a_checkout_forty_files_were_written_in() -> bravebot_agent::workspace::SessionCheckout {
+        bravebot_agent::workspace::SessionCheckout {
+            id: "c2".into(),
+            path: "/state/checkouts/work/c2".into(),
+            commit: "0123456789abcdef0123456789abcdef01234567".into(),
+            delegate: bravebot_core::delegate::DelegateId::nth(1),
+            worked_in: true,
+            candidates: bravebot_agent::workspace::Candidates {
+                named: (0..40).map(|n| format!("src/{n:02}.rs")).collect(),
+                referenced: 2,
+            },
+        }
+    }
+
+    fn remove_checkout_screen(
+        checkout: &bravebot_agent::workspace::SessionCheckout,
+        size: (u16, u16),
+        scroll: u16,
+    ) -> (Vec<String>, PinnedDrawn) {
+        pinned_screen(size, |frame| draw_remove_checkout(frame, checkout, scroll))
+    }
+
+    /// What a person answering whether to remove a checkout has to see, squeezed.
+    fn remove_checkout_pinned() -> Vec<String> {
+        [
+            t!(remove_checkout_which, id = "c2", delegate = "d1").to_string(),
+            "/state/checkouts/work/c2".to_string(),
+            t!(remove_checkout_explained).to_string(),
+            format!("y {} n {}", t!(remove_checkout_yes), t!(remove_checkout_no)),
+        ]
+        .iter()
+        .map(|text| squeezed(text))
+        .collect()
+    }
+
+    /// CHECKOUT-15. The question names the checkout, where it is and what removing it deletes, and
+    /// the names written in it scroll beneath. No turn runs at rest, so the keys offer none to stop.
+    #[test]
+    fn the_remove_checkout_question_names_the_checkout_and_what_removing_it_deletes() {
+        let checkout = a_checkout_forty_files_were_written_in();
+        let (rows, drawn) = remove_checkout_screen(&checkout, (100, 30), 0);
+        let screen = rows.join("\n");
+        let shown = box_text(&rows);
+        for pinned in remove_checkout_pinned() {
+            assert!(shown.contains(&pinned), "{pinned}: {screen}");
+        }
+        assert!(shown.contains("src/00.rs"), "{screen}");
+        assert!(!shown.contains("src/39.rs"), "forty names fitted: {screen}");
+        assert!(
+            !shown.contains(&squeezed(t!(stop_the_turn))),
+            "the keys offer to stop a turn: {screen}"
+        );
+        assert!(!shown.contains("ctrl-c"), "{screen}");
+        assert!(drawn.answerable, "{screen}");
+
+        let (end, _) = remove_checkout_screen(&checkout, (100, 30), drawn.furthest);
+        let screen = end.join("\n");
+        let shown = box_text(&end);
+        for at_the_end in [
+            "src/39.rs".to_string(),
+            squeezed(&t!(checkouts_referenced, id = "c2", count = 2)),
+            squeezed(&t!(checkouts_unread, id = "c2")),
+        ] {
+            assert!(shown.contains(&at_the_end), "{at_the_end}: {screen}");
+        }
+        for pinned in remove_checkout_pinned() {
+            assert!(shown.contains(&pinned), "{pinned}: {screen}");
+        }
+    }
+
+    /// CHECKOUT-15. `y` is not taken from a draw that cut off which checkout it is, what removing
+    /// it deletes or the keys, whatever the size of the terminal.
+    #[test]
+    fn a_remove_checkout_question_takes_a_yes_only_from_a_draw_showing_what_it_removes() {
+        let checkout = a_checkout_forty_files_were_written_in();
+        let pinned = remove_checkout_pinned();
+        let mut answered = 0;
+        for width in [1, 2, 24, 40, 56, 80, 100] {
+            for height in 1..=30 {
+                let (rows, drawn) = remove_checkout_screen(&checkout, (width, height), 0);
+                if !drawn.answerable {
+                    continue;
+                }
+                answered += 1;
+                let screen = rows.join("\n");
+                let shown = box_text(&rows);
+                for expected in &pinned {
+                    assert!(
+                        shown.contains(expected),
+                        "{width}x{height}: {expected}: {screen}"
+                    );
+                }
+            }
+        }
+        assert!(answered > 0, "no draw took a yes");
     }
 
     fn rendered_vet(request: &VetRequest) -> String {

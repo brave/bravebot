@@ -309,7 +309,7 @@ pub struct Workspace {
     checkouts: Arc<Mutex<Vec<PathBuf>>>,
     /// The checkouts the session made and has not removed, oldest first (CHECKOUT-21). Shared for
     /// the reason `checkouts` is.
-    session_checkouts: Arc<Mutex<Vec<SessionCheckout>>>,
+    session_checkouts: Arc<Mutex<Vec<Made>>>,
     /// The number the next checkout takes, shared for the reason `checkouts` is.
     checkout_numbers: Arc<AtomicU64>,
 }
@@ -324,26 +324,91 @@ pub struct SessionCheckout {
     pub commit: String,
     /// The delegate it was made for.
     pub delegate: bravebot_core::delegate::DelegateId,
+    /// Whether the driver recorded a file effect in it or a program started in it (CHECKOUT-15).
+    pub worked_in: bool,
+    pub candidates: Candidates,
+}
+
+/// What the driver recorded doing in a checkout. One record for the delegate's workspace and the
+/// session's list, so the list reads what the delegate did.
+#[derive(Debug, Default)]
+struct Record {
+    worked_in: AtomicBool,
+    written: Mutex<Candidates>,
+}
+
+/// A checkout the session made, with what removing it takes.
+#[derive(Debug, Clone)]
+struct Made {
+    id: String,
+    path: PathBuf,
+    key: String,
+    commit: String,
+    delegate: bravebot_core::delegate::DelegateId,
+    /// The repository it was made from, recorded so `/cd` does not change which one removes it.
+    git_dir: PathBuf,
+    record: Arc<Record>,
+}
+
+impl Made {
+    fn listed(&self) -> SessionCheckout {
+        SessionCheckout {
+            id: self.id.clone(),
+            path: self.path.clone(),
+            commit: self.commit.clone(),
+            delegate: self.delegate,
+            worked_in: self.record.worked_in.load(Ordering::SeqCst),
+            candidates: self
+                .record
+                .written
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
+        }
+    }
+
+    /// Remove the checkout and its entry. Its rules go with it, except those that distrust a
+    /// path, and its root leaves the history list once no rule of its own is left (CHECKOUT-8,
+    /// CHECKOUT-12). `withdraw` takes them out of the map and says whether any remain.
+    fn remove(
+        &self,
+        withdraw: impl FnOnce(&str) -> bool,
+        listed: &Mutex<Vec<PathBuf>>,
+        session_checkouts: &Mutex<Vec<Made>>,
+    ) -> Result<(), crate::git::checkout::Refused> {
+        crate::git::checkout::remove(&self.git_dir, &self.path, &self.id)?;
+        session_checkouts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|made| made.path != self.path);
+        if !withdraw(&self.key)
+            && let Ok(mut listed) = listed.lock()
+        {
+            listed.retain(|root| root != &self.path);
+        }
+        Ok(())
+    }
+}
+
+/// Why `/checkouts remove` removed nothing (CHECKOUT-15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unremoved {
+    /// The session keeps no checkout by that number.
+    NoSuch,
+    /// It is there and could not be removed.
+    Stuck,
 }
 
 /// A checkout a delegate works in, as the driver recorded it (CHECKOUT-5, CHECKOUT-7).
 #[derive(Debug)]
 pub struct CheckoutInfo {
-    id: String,
-    path: PathBuf,
-    key: String,
-    commit: String,
+    made: Made,
     left_out: Vec<String>,
-    git_dir: PathBuf,
     /// The workspace the delegate's parent had, which is where sources are read from
     /// (CHECKOUT-9).
     source: Workspace,
-    /// Whether the driver recorded a file effect in the checkout or a program started in it
-    /// (CHECKOUT-15).
-    worked_in: AtomicBool,
     listed: Arc<Mutex<Vec<PathBuf>>>,
-    session_checkouts: Arc<Mutex<Vec<SessionCheckout>>>,
-    written: Mutex<Candidates>,
+    session_checkouts: Arc<Mutex<Vec<Made>>>,
 }
 
 /// The writes in a checkout, as the driver recorded them (CHECKOUT-13).
@@ -370,20 +435,20 @@ pub enum Retired {
 impl CheckoutInfo {
     /// The number the session gave it, `c1` and on.
     pub fn key(&self) -> &str {
-        &self.key
+        &self.made.key
     }
 
     pub fn id(&self) -> &str {
-        &self.id
+        &self.made.id
     }
 
     pub fn path(&self) -> &Path {
-        &self.path
+        &self.made.path
     }
 
     /// The commit it holds, in full.
     pub fn commit(&self) -> &str {
-        &self.commit
+        &self.made.commit
     }
 
     /// The repository-relative paths a deny rule covered, which were not written.
@@ -393,11 +458,11 @@ impl CheckoutInfo {
 
     /// Record that a file effect or a program happened in the checkout.
     pub fn mark_worked_in(&self) {
-        self.worked_in.store(true, Ordering::SeqCst);
+        self.made.record.worked_in.store(true, Ordering::SeqCst);
     }
 
     pub fn worked_in(&self) -> bool {
-        self.worked_in.load(Ordering::SeqCst)
+        self.made.record.worked_in.load(Ordering::SeqCst)
     }
 
     /// Record a write to `typed`, the name a planner gave the file, where it names one inside the
@@ -406,7 +471,7 @@ impl CheckoutInfo {
     /// Placed by its spelling alone. Following a link to where the file landed would record the
     /// link's target, a name the planner never typed and the repository supplied.
     pub fn record_typed(&self, typed: &str) {
-        let mut placed = self.path.clone();
+        let mut placed = self.made.path.clone();
         for component in Path::new(typed).components() {
             match component {
                 std::path::Component::CurDir => {}
@@ -416,7 +481,7 @@ impl CheckoutInfo {
                 other => placed.push(other),
             }
         }
-        let Ok(inside) = placed.strip_prefix(&self.path) else {
+        let Ok(inside) = placed.strip_prefix(&self.made.path) else {
             return;
         };
         let relative: Vec<String> = inside
@@ -427,27 +492,25 @@ impl CheckoutInfo {
             return;
         }
         self.mark_worked_in();
-        self.written
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .named
-            .insert(relative.join("/"));
+        self.written().named.insert(relative.join("/"));
     }
 
     /// Record a write a planner made through a reference (CHECKOUT-13).
     pub fn record_through_a_reference(&self) {
         self.mark_worked_in();
-        self.written
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .referenced += 1;
+        self.written().referenced += 1;
     }
 
     pub fn candidates(&self) -> Candidates {
-        self.written
+        self.written().clone()
+    }
+
+    fn written(&self) -> std::sync::MutexGuard<'_, Candidates> {
+        self.made
+            .record
+            .written
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .clone()
     }
 
     /// End the checkout: remove it unless the record shows something was done in it. Its rules go
@@ -457,19 +520,14 @@ impl CheckoutInfo {
         if self.worked_in() {
             return Retired::Kept;
         }
-        if crate::git::checkout::remove(&self.git_dir, &self.path, &self.id).is_err() {
-            return Retired::Stuck;
+        match self.made.remove(
+            |key| authority.withdraw_beneath(key),
+            &self.listed,
+            &self.session_checkouts,
+        ) {
+            Ok(()) => Retired::Removed,
+            Err(_) => Retired::Stuck,
         }
-        self.session_checkouts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .retain(|made| made.path != self.path);
-        if !authority.withdraw_beneath(&self.key)
-            && let Ok(mut listed) = self.listed.lock()
-        {
-            listed.retain(|root| root != &self.path);
-        }
-        Retired::Removed
     }
 }
 
@@ -2945,8 +3003,34 @@ impl Workspace {
             .unwrap_or_else(|e| e.into_inner())
             .iter()
             .filter(|made| made.path.exists())
-            .cloned()
+            .map(Made::listed)
             .collect()
+    }
+
+    /// Remove the session's checkout `id`, one [`Workspace::session_checkouts`] lists, and take
+    /// its rules out of `trust` the way a delegate's ending does (CHECKOUT-15).
+    ///
+    /// Whether to ask first is the caller's, from what the list says: nothing here reads the
+    /// checkout.
+    pub fn remove_session_checkout(
+        &self,
+        id: &str,
+        trust: &mut bravebot_core::trust::TrustStore,
+    ) -> Result<(), Unremoved> {
+        let made = self
+            .session_checkouts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|made| made.id == id && made.path.exists())
+            .cloned()
+            .ok_or(Unremoved::NoSuch)?;
+        made.remove(
+            |key| trust.withdraw_beneath(key),
+            &self.checkouts,
+            &self.session_checkouts,
+        )
+        .map_err(|_| Unremoved::Stuck)
     }
 
     /// For starting over inside one process: the session beginning here has made no checkout, so
@@ -3047,34 +3131,31 @@ impl Workspace {
         if let Ok(mut listed) = self.checkouts.lock() {
             listed.push(target.clone());
         }
-        let commit = made.commit.to_string();
+        let entry = Made {
+            id,
+            path: target.clone(),
+            key,
+            commit: made.commit.to_string(),
+            delegate: made_for,
+            git_dir: self.root.join(".git"),
+            record: Arc::default(),
+        };
         self.session_checkouts
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push(SessionCheckout {
-                id: id.clone(),
-                path: target.clone(),
-                commit: commit.clone(),
-                delegate: made_for,
-            });
+            .push(entry.clone());
 
         let mut delegate = self.clone();
-        delegate.root = target.clone();
+        delegate.root = target;
         delegate.backups = Arc::new(Mutex::new(Vec::new()));
         delegate.rewind = Arc::default();
         delegate.memories = None;
         delegate.checkout = Some(Arc::new(CheckoutInfo {
-            id,
-            path: target,
-            key,
-            commit,
+            made: entry,
             left_out: made.left_out,
-            git_dir: self.root.join(".git"),
             source: self.clone(),
-            worked_in: AtomicBool::new(false),
             listed: self.checkouts.clone(),
             session_checkouts: self.session_checkouts.clone(),
-            written: Mutex::default(),
         }));
         Ok(delegate)
     }

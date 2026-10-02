@@ -1588,6 +1588,7 @@ command-forget-trust = Ne plus retenir que ce répertoire est approuvé, pour qu
 command-loop = Renvoyer une consigne encore et encore, dire ce qui se répète, ou l'arrêter
 command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie
 command-watch = Lister les fichiers que cette session surveille, et en arrêter un par son numéro
+command-checkouts = Lister les copies de travail gardées par les délégués, et en supprimer une par son numéro
 command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
 command-agent = Exécuter l'une de vos définitions sur une tâche, par son nom
 command-export = Exporter la transcription de la session vers un fichier markdown
@@ -1876,6 +1877,39 @@ watches-cleared = { $count ->
     [one] { $count } veille active a pris fin avec la conversation où elle a été posée
    *[other] { $count } veilles actives ont pris fin avec la conversation où elles ont été posées
     }
+
+## Les copies de travail gardées par un délégué
+
+checkouts-listed = { $id } : faite pour le délégué { $delegate } du commit { $commit }, dans { $path }
+checkouts-nothing-done = { $id } : rien n'y a été fait, d'après ce qui est enregistré
+checkouts-written = { $id } : fichiers écrits : { $paths }
+checkouts-more = { $count } de plus
+checkouts-referenced = { $count ->
+    [one] { $id } : { $count } écriture par une référence, dont le chemin n'a pas été enregistré
+   *[other] { $id } : { $count } écritures par une référence, dont les chemins n'ont pas été enregistrés
+    }
+checkouts-unread =
+    { $id } : son état n'a pas été lu, donc un fichier modifié autrement que par une écriture
+    n'est pas nommé ici
+checkouts-none =
+    cette session ne garde aucune copie de travail. Un délégué qui en reçoit une la garde quand
+    quelque chose y a été fait
+checkouts-no-such =
+    cette session ne garde pas de copie de travail { $id }. /checkouts liste celles qu'elle garde
+checkouts-command-takes =
+    /checkouts liste les copies de travail que cette session garde, et /checkouts remove <n>
+    supprime celle qui porte ce numéro
+checkouts-removed = la copie de travail { $id } dans { $path } est supprimée
+checkouts-not-removed =
+    la copie de travail { $id } dans { $path } n'a pas pu être supprimée, et reste gardée
+checkouts-kept = la copie de travail { $id } est gardée
+remove-checkout-title = supprimer cette copie de travail ?
+remove-checkout-which = la copie de travail { $id }, faite pour le délégué { $delegate }, se trouve dans
+remove-checkout-explained =
+    Quelque chose y a été fait, et rien ne ramène ce travail ici. La supprimer efface le
+    répertoire et tout ce qu'il contient.
+remove-checkout-yes = la supprimer
+remove-checkout-no = la garder
 
 
 ## Où va une ligne envoyée pendant que quelque chose tourne, à côté de sa marque

@@ -11,6 +11,7 @@ mod testutil;
 
 pub mod app;
 pub mod ask;
+pub mod checkouts_command;
 pub mod clipboard;
 pub mod config_prompt;
 pub mod confirm;

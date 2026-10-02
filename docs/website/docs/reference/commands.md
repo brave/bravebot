@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Slash commands
-description: The twenty-two commands the interface acts on itself, and the rules every one of them shares.
+description: The twenty-three commands the interface acts on itself, and the rules every one of them shares.
 ---
 
 # Slash commands
@@ -26,6 +26,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/loop` | `[[interval] <prompt> \| stop]` | Send a prompt again and again, say what is repeating, or stop it |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
+| `/checkouts` | `[remove <n>]` | List the checkouts delegates kept, and remove one by its number |
 | `/manifest` | `<task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
 | `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
 | `/export` | `[path]` | Export the session transcript to a markdown file |
@@ -410,6 +411,28 @@ Seven things end a watch and each says so: `/watch stop <n>`, Ctrl-C with nothin
 time), the path ceasing to be readable, `/clear` and leaving, and age.
 
 **A watch is never written down**, so `--resume` restores none and none outlives the process.
+
+## `/checkouts [remove <n>]`
+
+Lists the checkouts this session keeps for its delegates, and removes one by its number.
+
+```
+/checkouts            # each kept checkout, numbered, with what was written in it
+/checkouts remove 2   # delete checkout c2, and its entry in your repository's .git
+```
+
+A delegate's [checkout](../customize/agents.md#a-checkout-of-its-own) is kept when it did something
+there. The list names the paths the delegate typed for the files it wrote, twenty at most, and counts
+the writes it made through a reference. Nothing reads a checkout's status, so a file a program
+changed there is not named.
+
+**Removing one something was done in asks first**, since nothing brings its work back into your tree
+yet and removing it deletes that work. Anything but `y` keeps it. `2` and `c2` name the same
+checkout. The rules copied for it go with it, except one marking a file there untrusted, which stays
+so that history showing the file keeps its label.
+
+**The list is held in memory.** After `/clear` it starts empty and the earlier checkouts stay on disk,
+and `--resume` brings none back.
 
 ## `/manifest <task>`
 
