@@ -146,8 +146,19 @@ question, the row above the keys says how many have not, and `y`, `a` and `r` ar
 runs the line. Reaching the bottom is not reading what was passed over, and a row read at one width
 is not a row of the plan wrapped to another. What `a` and `r` grant besides is said below the plan,
 and each of them also waits until the rows saying what it grants have been on the screen.
-A processor's remark is bounded in **drawn rows**, so a claim cannot push the bytes it is a claim
-about below the fold, and the block says how many lines it is not showing.
+In the full-screen interface, the write, output, vetting, vouch, exposure, server, tool list, call
+and plan prompts take no key that approves until every row that decides the question has been drawn
+whole at the box's width, in one draw or over several as the body scrolls. What decides it is what
+the prompt says about the content it shows and that content's first row; for a call it is the tool
+and every argument, and for the exposure, server, tool list and plan prompts and a vetted picture it
+is all of it, the picture's rows counting only at a draw that paints it whole. Until
+then the row under the body says how many of those rows are left, and a draw at another width
+starts the count again. A page moves one row fewer than the body shows, a box with no row for the
+body beside keys drawn whole takes no yes, and a refusal and the key that stops the turn are taken
+at every draw.
+A processor's remark is bounded in **drawn rows**, so on a terminal of 80x24 or more a claim cannot
+push the bytes it is a claim about below the fold, and the block says how many lines it is not
+showing. On a smaller one the yes waits until those bytes have been drawn.
 
 **Why.** Reviewing a whole file body on a terminal is not review, which is why `edit_file` exists
 on a passage rather than a whole body. A prompt that scrolled the question away would be collecting a keypress, not a decision.
@@ -168,6 +179,12 @@ on a passage rather than a whole body. A prompt that scrolled the question away 
 `verified-by: bravebot_tui::confirm::a_run_prompt_too_small_for_its_question_takes_no_key_that_runs_the_line`
 `verified-by: bravebot_tui::confirm::a_plan_read_at_one_width_is_unread_again_at_another`
 `verified-by: bravebot_tui::confirm::paging_through_a_long_plan_in_a_short_box_puts_every_row_on_the_screen`
+`verified-by: bravebot_tui::confirm::no_question_takes_a_yes_before_every_row_deciding_it_has_been_drawn`
+`verified-by: bravebot_tui::confirm::a_box_with_no_room_for_the_body_beside_the_keys_takes_no_yes`
+`verified-by: bravebot_tui::confirm::a_question_read_at_one_width_takes_no_yes_at_another`
+`verified-by: bravebot_tui::confirm::a_question_says_how_many_rows_are_left_to_read_before_a_yes`
+`verified-by: bravebot_tui::confirm::a_picture_the_box_cannot_paint_takes_no_yes`
+`verified-by: bravebot_tui::confirm::a_tiny_terminal_draws_the_write_keys_and_takes_no_yes`
 `verified-by: bravebot_tui::trust_prompt::a_list_longer_than_the_box_keeps_the_question_and_the_keys_and_says_how_many_rules_are_below`
 `verified-by: bravebot_tui::trust_prompt::the_rest_of_a_long_list_can_be_scrolled_to`
 `verified-by: bravebot_tui::trust_prompt::a_directory_question_longer_than_the_box_keeps_its_keys_and_scrolls_to_the_rest`

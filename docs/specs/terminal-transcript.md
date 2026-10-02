@@ -110,11 +110,13 @@ because it is trusted, and it still cannot draw its own escapes.
 <a id="VIEW-5"></a>
 ### VIEW-5: a tiny terminal still renders
 
-Every prompt and the session view render at small sizes rather than panicking or truncating the
-question out of view.
+Every prompt and the session view render at small sizes rather than panicking. A prompt keeps its
+question in view where the box has room for it beside the keys. Where the box has not, the prompts
+[PROMPT-4](prompting.md#PROMPT-4) holds to its keys draw the keys and take no yes, so none of them
+approves a question that was never on the screen.
 
 `verified-by: bravebot_tui::trust_prompt::a_tiny_terminal_still_renders`
-`verified-by: bravebot_tui::confirm::a_tiny_terminal_still_renders_the_prompt`
+`verified-by: bravebot_tui::confirm::a_tiny_terminal_draws_the_write_keys_and_takes_no_yes`
 `verified-by: bravebot_tui::render::a_tiny_terminal_renders`
 
 <a id="VIEW-6"></a>

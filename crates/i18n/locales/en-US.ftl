@@ -1190,6 +1190,13 @@ resume-manifest-run = that was a manifest run, which cannot be continued; start 
 stop-the-turn = stop the turn
 scroll-more = ↑↓ { $count } more
 scroll-back = ↑↓ back
+# Under a question's body in place of the scroll hint while rows that decide the question have not
+# been drawn yet. No key that approves is taken until they have.
+prompt-unseen =
+    { $count ->
+        [one] ↑↓ { $count } more row to read before a yes
+       *[other] ↑↓ { $count } more rows to read before a yes
+    }
 
 
 ## Approving a write
