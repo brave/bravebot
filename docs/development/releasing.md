@@ -60,13 +60,18 @@ GitHub release rather than the version in the tree, which may already be bumped 
 workflow, not the target, refuses a tag that does not match its tree or a release missing an
 asset. OIDC trusted publishing; there is no `NPM_TOKEN`. The trusted publisher on npmjs.com must
 name that workflow file. The npm `postinstall` verifies the binary against its published
-`.sha256` before writing it.
+`.sha256` before writing it, and then its signature: the `.sha256` on Linux, the code signature
+on macOS and Windows. `install.sh` does the same except on Windows, which it does not install.
 
 `BRAVEBOT_ALLOW_UNCONFIGURED_BUILD` is set in GitHub Actions so forks and PRs compile without
 secrets. Jenkins does not set it on an upload, so a missing credential fails the release
 instead of shipping a binary that cannot reach the backend.
 
-Darwin binaries are codesigned and notarised, Windows binaries are Authenticode-signed.
+Darwin binaries are codesigned and notarised, Windows binaries are Authenticode-signed, and the
+installers hold each to that: the Developer ID team `KL8N8XSYF4` on macOS, the signer
+`Brave Software, Inc.` on Windows. A change of certificate or team has to be made in `install.sh`
+and `npm/scripts/postinstall.js` before the first release signed by the new one is published, or
+installs of it are refused. The commands for checking a download by hand are in the quickstart.
 
 ## The desktop application
 

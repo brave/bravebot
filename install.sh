@@ -10,6 +10,11 @@
 # one. Running this again is also how an install made this way is updated, so it writes down where
 # the binary went: that is what lets bravebot name the command that updates this copy, and what
 # puts a later run in the same place rather than beside it.
+#
+# Nor is the signature check. The checksum is published beside the binary, so whoever can replace
+# one can replace both. On Linux the checksum carries a signature that has to verify against the key
+# embedded below (skipped, with a note, when gpg is not installed). On macOS the binary has to be
+# signed by Brave's Developer ID team and pass Gatekeeper's assessment.
 
 set -eu
 
@@ -18,6 +23,9 @@ API_URL="https://api.github.com/repos/${REPO}/releases/latest"
 # The key a Linux checksum has to be signed by. This is the public half, embedded so it has no
 # external dependency. The fingerprint ensures only this specific key is trusted.
 SIGNING_KEY_FINGERPRINT="13F28F0405C49B0B232DBA1BC1E827646A2DE416"
+# The Developer ID team that signs each macOS binary. codesign alone accepts a valid signature from
+# any team Apple issued a certificate to, so a signature from another team is a refusal.
+APPLE_TEAM_ID="KL8N8XSYF4"
 BIN_NAME="bravebot"
 DEFAULT_INSTALL_DIR="/usr/local/bin"
 RELEASE_PUBKEY="$(cat <<'PUBKEY'
@@ -114,6 +122,17 @@ verify_checksum_signature() {
   return "$rc"
 }
 
+# The requirement holds the signature to a certificate Apple issued to APPLE_TEAM_ID, and spctl
+# is the Gatekeeper assessment a double-click would get, which is where notarization is checked.
+# A shell started from a terminal is never assessed by Gatekeeper, so this asks for it. `-t install`
+# because the asset is a bare executable: `-t execute` rejects anything that is not an app bundle,
+# however it is signed.
+verify_code_signature() {
+  codesign --verify --deep --strict \
+    -R "=anchor apple generic and certificate leaf[subject.OU] = \"${APPLE_TEAM_ID}\"" "$1" &&
+    spctl -a -t install "$1"
+}
+
 main() {
   need_cmd curl
   need_cmd mktemp
@@ -146,6 +165,13 @@ main() {
   fi
 
   ASSET_NAME="${BIN_NAME}-${OS_KEY}-${ARCH_KEY}"
+
+  # Asked before anything is downloaded, so a Mac that cannot check a signature is told so rather
+  # than handed a binary nobody vouched for.
+  if [ "$OS_KEY" = "darwin" ]; then
+    need_cmd codesign
+    need_cmd spctl
+  fi
 
   # Where the last install put it, so running this again updates that copy instead of leaving a
   # second one somewhere else on the PATH. INSTALL_DIR wins, for a person who is moving it.
@@ -208,6 +234,11 @@ main() {
     else
       echo "note: gpg not found; skipping signature verification (the checksum above was still verified)."
     fi
+  fi
+
+  if [ "$OS_KEY" = "darwin" ]; then
+    verify_code_signature "$BIN_PATH" ||
+      fail "${ASSET_NAME} is not signed by Brave Software (team ${APPLE_TEAM_ID}), or Gatekeeper rejected it (checking notarization may need the network); refusing to install"
   fi
 
   chmod +x "$BIN_PATH"

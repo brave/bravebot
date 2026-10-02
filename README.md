@@ -36,7 +36,8 @@ curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh | IN
 ```
 
 Either way, run `bravebot` in a repository afterwards. Both installers verify the release
-checksum, and a session started on an old version says so and gives the line that updates it. See
+checksum and the signature on the binary (see "Check a download by hand" in the
+[quickstart](docs/website/docs/quickstart.md)), and a session started on an old version says so and gives the line that updates it. See
 [docs/getting-started.md](docs/getting-started.md) for installing, running, and what it asks you.
 
 The documentation site at

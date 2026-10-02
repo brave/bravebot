@@ -166,9 +166,10 @@ no executable when the two differ or the checksum is not well formed. Well forme
 and nothing else: sixty-four hex digits, with no filename beside them.
 
 **Why.** Without this the binary runs on the strength of the transport alone, and a substituted
-release asset is indistinguishable from a good one. Signing proves who produced the Darwin and
-Windows binaries; the checksum is what an installer can check on every platform, including
-Linux.
+release asset is indistinguishable from a good one. The checksum is what an installer can check
+on every platform. It is published beside the binary, so it shows that the download arrived
+intact and not who produced it; [RELEASE-14](#RELEASE-14) and [RELEASE-15](#RELEASE-15) are what
+check that.
 
 `verified-by: by-construction (each installer hashes what it downloaded, compares it against the published value, and exits without writing when they differ or the published value is not sixty-four hex digits)`
 
@@ -249,7 +250,8 @@ checksum and checks it over the checksum exactly as it was fetched, against the 
 it carries embedded. The signature counts only when it was made by the key the installer names by
 its fingerprint. When the signature cannot be fetched, or does not verify, or was made by any other
 key, no executable is written. Where `gpg` cannot be run, the installer says it skipped the check
-and installs on the checksum alone. Darwin and Windows are not checked this way.
+and installs on the checksum alone. Darwin and Windows publish no such signature and are checked
+as [RELEASE-15](#RELEASE-15) says.
 
 **Why.** The Linux binary carries no signature of its own, and its checksum is uploaded beside it,
 so whoever can replace the one can replace the other: the checksum proves the download arrived
@@ -274,15 +276,60 @@ serve an older release's binary, checksum and signature together, and they verif
 `verified-by: bravebot_cli::installer_signature::a_checksum_signed_by_any_key_but_the_release_key_installs_nothing`
 `verified-by: bravebot_cli::installer_signature::a_linux_checksum_with_no_signature_installs_nothing`
 `verified-by: bravebot_cli::installer_signature::without_gpg_a_linux_install_says_it_skipped_the_signature_and_installs`
-`verified-by: bravebot_cli::installer_signature::a_darwin_or_windows_install_neither_fetches_nor_needs_a_signature`
+`verified-by: bravebot_cli::installer_signature::a_darwin_binary_signed_by_brave_and_notarized_installs`
+`verified-by: bravebot_cli::installer_signature::a_windows_binary_signed_by_brave_installs`
+
+<a id="RELEASE-15"></a>
+### RELEASE-15: on macOS and Windows, a binary not signed by Brave installs nothing
+
+Before an executable is written, each installer checks the code signature the binary carries.
+On macOS the binary has to satisfy a `codesign` requirement that names Brave's Developer ID team,
+and has to pass `spctl` as an installer package, which is where notarization is checked. On
+Windows, in the npm installer, Authenticode has to report the signature as valid and the signing
+certificate's name has to be `Brave Software, Inc.`. When the signature is missing, is from any
+other signer, or does not verify, or when the tool that checks it cannot be run, no executable is
+written. Linux binaries carry no code signature and are checked as [RELEASE-14](#RELEASE-14)
+says. The install script does not install Windows.
+
+**Why.** The checksum is published beside the binary, so whoever can replace one can replace the
+other, and the checksum cannot say who produced the binary. The macOS and Windows binaries are
+already signed and the operating systems can check that, but a binary run from a terminal is not
+assessed by Gatekeeper, so an installer that does not ask never finds out. `codesign` and
+Authenticode on their own accept a valid signature from any signer whose certificate a trusted
+authority issued, which includes anybody with a developer account, so the requirement names
+Brave's team and the Windows check names the signer. A missing tool is refused rather than skipped
+because, unlike `gpg` on Linux, these tools ship with the operating system, so a machine without
+one is not a machine the installer should trust an unchecked binary on. `spctl -t install` is used
+because `-t execute` rejects any bare executable that is not an app bundle, however it is signed.
+
+**Note.** The macOS check was run by hand against the published arm64 release and accepted it. The
+Windows check has not been run on Windows: the signer name was read from the certificate with
+`openssl`, and the PowerShell that reads it is exercised here only through a stand-in. It
+compares the certificate's common name and pins no thumbprint, so a certificate carrying that
+name from another authority the machine trusts would pass; a thumbprint would refuse every install
+at the next certificate renewal. The tests replace `codesign`, `spctl` and `powershell.exe` with
+programs that answer from a marker in the binary, so they hold the installers to what they ask and
+how they treat the answer, and not to what the real tools say. `spctl` can need the network to check notarization, so an offline macOS
+install may be refused.
+
+`verified-by: bravebot_cli::installer_signature::a_darwin_binary_signed_by_brave_and_notarized_installs`
+`verified-by: bravebot_cli::installer_signature::a_darwin_binary_signed_by_another_team_installs_nothing`
+`verified-by: bravebot_cli::installer_signature::an_unsigned_darwin_binary_installs_nothing`
+`verified-by: bravebot_cli::installer_signature::a_darwin_binary_that_is_not_notarized_installs_nothing`
+`verified-by: bravebot_cli::installer_signature::a_darwin_install_without_codesign_installs_nothing`
+`verified-by: bravebot_cli::installer_signature::a_windows_binary_signed_by_brave_installs`
+`verified-by: bravebot_cli::installer_signature::a_windows_binary_signed_by_someone_else_installs_nothing`
+`verified-by: bravebot_cli::installer_signature::a_windows_binary_whose_signature_is_not_valid_installs_nothing`
+`verified-by: bravebot_cli::installer_signature::a_windows_install_without_powershell_installs_nothing`
+`verified-by: bravebot_cli::installer_signature::a_linux_install_runs_neither_codesign_nor_powershell`
 
 ## Known costs
 
-- **The signature check is pinned by a Rust test, and the npm origin by a Node one.** Every
-  clause but [RELEASE-13](#RELEASE-13) and [RELEASE-14](#RELEASE-14) is by-construction, which
-  means a refusal can be removed and only a reader will notice. The test for
-  [RELEASE-14](#RELEASE-14) runs on Linux alone and skips where `gpg` or `node`
-  is missing, so on a macOS checkout it passes having checked nothing; the Linux job in CI has
+- **The signature checks are pinned by a Rust test, and the npm origin by a Node one.** Every
+  clause but [RELEASE-13](#RELEASE-13), [RELEASE-14](#RELEASE-14) and [RELEASE-15](#RELEASE-15) is
+  by-construction, which means a refusal can be removed and only a reader will notice. The tests
+  for [RELEASE-14](#RELEASE-14) and [RELEASE-15](#RELEASE-15) run on Linux alone and skip where
+  `gpg` or `node` is missing, so on a macOS checkout it passes having checked nothing; the Linux job in CI has
   both. The tagging path is shell in a makefile,
   publication is a Jenkins job in another repository, and a test that shelled out to a real tag
   push would have to publish something to prove anything. Three checks hold part of it from outside
@@ -312,7 +359,8 @@ serve an older release's binary, checksum and signature together, and they verif
   working while that release is served. The install script is served from the trunk and installs
   the newest release, so the key it carries has to change at the moment the first release signed
   by the new key is published, and either order leaves a window in which Linux installs with `gpg`
-  are refused. An embedded key cannot be revoked or updated after it is published: a revocation or
+  are refused. The macOS team and the Windows signer name are embedded the same way, so a change
+  of either reaches only the installers shipped after it. An embedded key cannot be revoked or updated after it is published: a revocation or
   a new signing subkey reaches only the installers shipped after it.
 
 - **The refusals before a tag guard the tag, not the branch.** Tagging checks the branch, the

@@ -1,7 +1,8 @@
-//! What each installer does with the signature published beside a Linux checksum, observed by
-//! running the installer itself against a release served from a directory.
+//! What each installer does with the signature published beside a Linux checksum, and with the
+//! code signature a macOS or Windows binary carries, observed by running the installer itself
+//! against a release served from a directory.
 //!
-//! [RELEASE-14] is the clause. Both installers are shell and JavaScript, so nothing in this
+//! [RELEASE-14] is the clause for Linux and [RELEASE-15] the one for macOS and Windows. Both installers are shell and JavaScript, so nothing in this
 //! workspace calls them, and running them is the only way a Rust test can hold them to it. Nothing
 //! is fetched from the network: `install.sh` finds a `curl` made here first on its `PATH`, and the
 //! npm installer's requests are answered from the same directory. The release key, and the key of
@@ -9,11 +10,18 @@
 //! key it carries and pointed at it by fingerprint, as the published installers carry and name
 //! Brave's.
 //!
+//! `codesign`, `spctl` and `powershell.exe` are made here too, and stand in for the real ones in
+//! the way a real one answers for a binary: `codesign` reads the team a binary says it is signed by
+//! from a marker line in it, and refuses when the requirement it is given names another team. What
+//! the real tools say about Brave's binaries was checked by hand and is not something these tests
+//! can show.
+//!
 //! Linux only, because the Linux path is what is under test and a macOS checkout's path is long
 //! enough to overrun the socket name limit of a keyring kept beside it. Skipped where `gpg`, `node`
 //! or `sha256sum` is not on `PATH`, and says so.
 //!
 //! [RELEASE-14]: ../../../docs/specs/releases.md
+//! [RELEASE-15]: ../../../docs/specs/releases.md
 
 #![cfg(target_os = "linux")]
 
@@ -66,6 +74,53 @@ case "$1" in
 esac
 "#;
 
+/// Checks a signature as `codesign --verify -R` does: a binary that says nothing about who signed
+/// it is unsigned, and a requirement that names a team other than the binary's is not satisfied.
+/// Without a requirement, any team's signature is valid, which is how the real tool behaves.
+const FAKE_CODESIGN: &str = r#"#!/bin/sh
+requirement=""
+file=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -R) requirement="$2"; shift 2 ;;
+    -*) shift ;;
+    *) file="$1"; shift ;;
+  esac
+done
+[ -f "$file" ] || { echo "codesign: $file: No such file" >&2; exit 1; }
+team="$(sed -n 's/^# signed-by: //p' "$file")"
+[ -n "$team" ] || { echo "$file: code object is not signed at all" >&2; exit 1; }
+if [ -n "$requirement" ]; then
+  case "$requirement" in
+    *"\"$team\""*) ;;
+    *) echo "$file: does not satisfy its designated Requirement" >&2; exit 3 ;;
+  esac
+fi
+"#;
+
+/// Assesses as Gatekeeper does for an installer package: a bare executable is only accepted as
+/// `-t install`, and only when the binary says it was notarized.
+const FAKE_SPCTL: &str = r#"#!/bin/sh
+type=""
+file=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -t) type="$2"; shift 2 ;;
+    -*) shift ;;
+    *) file="$1"; shift ;;
+  esac
+done
+[ "$type" = install ] || { echo "$file: rejected (the code is valid but does not seem to be an app)" >&2; exit 3; }
+grep -q '^# notarized$' "$file" || { echo "$file: rejected" >&2; exit 3; }
+"#;
+
+/// Reports what `FAKE_AUTH_STATUS` and `FAKE_AUTH_SIGNER` say, as the script the installer sends
+/// prints a status and then a signer, and fails when it is not given the flags it should be.
+const FAKE_POWERSHELL: &str = r#"#!/bin/sh
+[ "$1" = "-NoProfile" ] && [ "$2" = "-NonInteractive" ] && [ "$3" = "-EncodedCommand" ] && [ -n "$4" ] || exit 64
+printf '%s\r\n%s\r\n' "$FAKE_AUTH_STATUS" "$FAKE_AUTH_SIGNER"
+"#;
+
 /// Answers the npm installer's requests from the served directory, then installs.
 ///
 /// The installer reads `https.get` off the shared module each time it fetches, so replacing it
@@ -76,7 +131,7 @@ const path = require("node:path");
 const https = require("node:https");
 const { Readable } = require("node:stream");
 const { EventEmitter } = require("node:events");
-const [served, script, asset, destination, fingerprint, key] = process.argv.slice(1);
+const [served, script, asset, platform, destination, fingerprint, key] = process.argv.slice(1);
 https.get = (url, options, callback) => {
   const file = path.join(served, new URL(url).pathname.split("/").pop());
   const found = fs.existsSync(file);
@@ -88,7 +143,7 @@ https.get = (url, options, callback) => {
 };
 require(script)
   .install({
-    target: { asset, binaryName: "bravebot-bin" },
+    target: { asset, platform, binaryName: "bravebot-bin" },
     tag: "v0.0.0",
     destination,
     fingerprint,
@@ -313,6 +368,10 @@ struct Install<'a> {
     root: PathBuf,
     platform: Platform,
     gpg_on_path: bool,
+    /// Programs the installer looks for by name that are left off its `PATH`.
+    absent: Vec<&'static str>,
+    /// What the stand-in for `powershell.exe` reports.
+    authenticode: (&'static str, &'static str),
 }
 
 /// What an install left behind.
@@ -325,6 +384,9 @@ struct Outcome {
     left_in_temporary: Vec<PathBuf>,
     /// Anything written to the keyring the environment names as the person's own.
     left_in_own_keyring: Vec<PathBuf>,
+    /// Anything in the directory the executable goes to besides the executable, where the npm
+    /// installer stages a download before it has been checked.
+    left_beside_destination: Vec<PathBuf>,
 }
 
 impl<'a> Install<'a> {
@@ -338,6 +400,8 @@ impl<'a> Install<'a> {
             root,
             platform: Platform::Linux,
             gpg_on_path: true,
+            absent: Vec::new(),
+            authenticode: ("Valid", "Brave Software, Inc."),
         }
     }
 
@@ -349,6 +413,24 @@ impl<'a> Install<'a> {
     fn without_gpg(mut self) -> Self {
         self.gpg_on_path = false;
         self
+    }
+
+    fn without(mut self, program: &'static str) -> Self {
+        self.absent.push(program);
+        self
+    }
+
+    fn authenticode(mut self, status: &'static str, signer: &'static str) -> Self {
+        self.authenticode = (status, signer);
+        self
+    }
+
+    fn node_platform(&self) -> &'static str {
+        match self.platform {
+            Platform::Linux => "linux",
+            Platform::Darwin => "darwin",
+            Platform::Windows => "win32",
+        }
     }
 
     fn asset(&self) -> &'static str {
@@ -374,7 +456,16 @@ impl<'a> Install<'a> {
         if self.gpg_on_path {
             symlink(&self.tools.gpg, directory.join("gpg")).expect("link gpg");
         }
-        for (name, body) in [("curl", FAKE_CURL), ("uname", FAKE_UNAME)] {
+        for (name, body) in [
+            ("curl", FAKE_CURL),
+            ("uname", FAKE_UNAME),
+            ("codesign", FAKE_CODESIGN),
+            ("spctl", FAKE_SPCTL),
+            ("powershell.exe", FAKE_POWERSHELL),
+        ] {
+            if self.absent.contains(&name) {
+                continue;
+            }
             let path = directory.join(name);
             std::fs::write(&path, body).expect("write a stand-in");
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
@@ -433,6 +524,7 @@ impl<'a> Install<'a> {
                     .arg(&served)
                     .arg(workspace().join("npm/scripts/postinstall.js"))
                     .arg(self.asset())
+                    .arg(self.node_platform())
                     .arg(&destination)
                     .arg(self.fingerprint)
                     .arg(self.release_key);
@@ -444,6 +536,8 @@ impl<'a> Install<'a> {
             .env("HOME", &home)
             .env("TMPDIR", &temporary)
             .env("GNUPGHOME", &own_keyring)
+            .env("FAKE_AUTH_STATUS", self.authenticode.0)
+            .env("FAKE_AUTH_SIGNER", self.authenticode.1)
             .output()
             .expect("run the installer");
 
@@ -463,6 +557,10 @@ impl<'a> Install<'a> {
             installed: std::fs::read(&destination).ok(),
             left_in_temporary: entries(&temporary),
             left_in_own_keyring: entries(&own_keyring),
+            left_beside_destination: entries(&bin)
+                .into_iter()
+                .filter(|path| *path != destination)
+                .collect(),
         }
     }
 
@@ -504,6 +602,11 @@ fn assert_refused(installer: Installer, outcome: &Outcome, because: &str) {
         Vec::<PathBuf>::new(),
         "{installer:?} left its keyring behind"
     );
+    assert_eq!(
+        outcome.left_beside_destination,
+        Vec::<PathBuf>::new(),
+        "{installer:?} left a download beside the destination"
+    );
 }
 
 fn assert_installed(installer: Installer, outcome: &Outcome, binary: &[u8]) {
@@ -521,6 +624,11 @@ fn assert_installed(installer: Installer, outcome: &Outcome, binary: &[u8]) {
         outcome.left_in_temporary,
         Vec::<PathBuf>::new(),
         "{installer:?} left its keyring behind"
+    );
+    assert_eq!(
+        outcome.left_beside_destination,
+        Vec::<PathBuf>::new(),
+        "{installer:?} left a download beside the destination"
     );
 }
 
@@ -700,30 +808,209 @@ fn without_gpg_a_linux_install_says_it_skipped_the_signature_and_installs() {
     }
 }
 
-/// Darwin and Windows binaries carry a signature of their own and no signature is published beside
-/// their checksums, so an installer that asked for one there would fail every install on them.
+/// A macOS binary as the stand-in tools read one: signed by `team` and notarized, or neither.
+fn mac_binary(team: Option<&str>, notarized: bool) -> Vec<u8> {
+    let mut bytes = b"#!/bin/sh\necho released\n".to_vec();
+    if let Some(team) = team {
+        bytes.extend(format!("# signed-by: {team}\n").into_bytes());
+    }
+    if notarized {
+        bytes.extend(b"# notarized\n");
+    }
+    bytes
+}
+
+/// The checksum file for `bytes`, made without the keyring directory the Linux release is made in.
+fn checksum_of(tools: &Tools, bytes: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let sha256sum = tools
+        .utilities
+        .iter()
+        .find(|(name, _)| *name == "sha256sum")
+        .map(|(_, path)| path)
+        .expect("sha256sum was resolved");
+    let mut child = Command::new(sha256sum)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("run sha256sum");
+    child
+        .stdin
+        .take()
+        .expect("sha256sum stdin")
+        .write_all(bytes)
+        .expect("feed sha256sum");
+    let output = child.wait_with_output().expect("wait for sha256sum");
+    let digest = String::from_utf8(output.stdout).expect("utf-8 digest");
+    format!("{}\n", digest.split_whitespace().next().expect("a digest")).into_bytes()
+}
+
+const DARWIN_ASSET: &str = "bravebot-darwin-arm64";
+const WINDOWS_ASSET: &str = "bravebot-windows-arm64.exe";
+const BRAVE_TEAM: &str = "KL8N8XSYF4";
+
+/// Run both installers on macOS against `binary`, whose checksum matches it, so that the signature
+/// is the only thing that can be wrong with it.
+fn install_on_darwin(
+    tools: &Tools,
+    release: &Release,
+    name: &str,
+    binary: &[u8],
+    customize: impl FnOnce(Install) -> Install,
+) -> Vec<(Installer, Outcome)> {
+    let install = customize(Install::new(tools, release, name).on(Platform::Darwin));
+    let checksum = checksum_of(tools, binary);
+    install.each(&[
+        (DARWIN_ASSET, binary),
+        ("bravebot-darwin-arm64.sha256", &checksum),
+    ])
+}
+
+fn install_on_windows(
+    tools: &Tools,
+    release: &Release,
+    name: &str,
+    customize: impl FnOnce(Install) -> Install,
+) -> Vec<(Installer, Outcome)> {
+    let install = customize(Install::new(tools, release, name).on(Platform::Windows));
+    let checksum = checksum_of(tools, &release.binary);
+    install.each(&[
+        (WINDOWS_ASSET, &release.binary),
+        ("bravebot-windows-arm64.exe.sha256", &checksum),
+    ])
+}
+
+/// Nothing is published beside a macOS or Windows checksum, so an installer that asked for a
+/// signature there would fail every install. A binary that is signed by Brave and notarized
+/// installs, and leaves nothing beside the executable.
 #[test]
-fn a_darwin_or_windows_install_neither_fetches_nor_needs_a_signature() {
+fn a_darwin_binary_signed_by_brave_and_notarized_installs() {
     let Some((tools, release)) = setup() else {
         return;
     };
-    for (platform, asset, checksum) in [
-        (
-            Platform::Darwin,
-            "bravebot-darwin-arm64",
-            "bravebot-darwin-arm64.sha256",
-        ),
-        (
-            Platform::Windows,
-            "bravebot-windows-arm64.exe",
-            "bravebot-windows-arm64.exe.sha256",
-        ),
-    ] {
-        let install = Install::new(tools, release, asset).on(platform);
-        for (installer, outcome) in
-            install.each(&[(asset, &release.binary), (checksum, &release.checksum)])
-        {
-            assert_installed(installer, &outcome, &release.binary);
+    let binary = mac_binary(Some(BRAVE_TEAM), true);
+    for (installer, outcome) in install_on_darwin(tools, release, "mac-good", &binary, |i| i) {
+        assert_installed(installer, &outcome, &binary);
+    }
+}
+
+/// A valid Developer ID signature from another team is what anybody with an Apple developer
+/// account can make, and `codesign --verify` without a requirement accepts it.
+#[test]
+fn a_darwin_binary_signed_by_another_team_installs_nothing() {
+    let Some((tools, release)) = setup() else {
+        return;
+    };
+    let binary = mac_binary(Some("ABCDE12345"), true);
+    for (installer, outcome) in install_on_darwin(tools, release, "mac-team", &binary, |i| i) {
+        assert_refused(installer, &outcome, "not signed by brave software");
+    }
+}
+
+#[test]
+fn an_unsigned_darwin_binary_installs_nothing() {
+    let Some((tools, release)) = setup() else {
+        return;
+    };
+    let binary = mac_binary(None, false);
+    for (installer, outcome) in install_on_darwin(tools, release, "mac-unsigned", &binary, |i| i) {
+        assert_refused(installer, &outcome, "not signed by brave software");
+    }
+}
+
+/// Signed by Brave and not notarized is what a binary signed with the right certificate but never
+/// submitted to Apple looks like. It would run from a terminal and be refused on a double-click.
+#[test]
+fn a_darwin_binary_that_is_not_notarized_installs_nothing() {
+    let Some((tools, release)) = setup() else {
+        return;
+    };
+    let binary = mac_binary(Some(BRAVE_TEAM), false);
+    for (installer, outcome) in install_on_darwin(tools, release, "mac-plain", &binary, |i| i) {
+        assert_refused(installer, &outcome, "gatekeeper rejected");
+    }
+}
+
+/// A Mac without the tool cannot check the signature, and installing anyway is what a check that
+/// treats the tool's absence as a pass would do.
+#[test]
+fn a_darwin_install_without_codesign_installs_nothing() {
+    let Some((tools, release)) = setup() else {
+        return;
+    };
+    let binary = mac_binary(Some(BRAVE_TEAM), true);
+    for (installer, outcome) in install_on_darwin(tools, release, "mac-no-codesign", &binary, |i| {
+        i.without("codesign")
+    }) {
+        assert_refused(installer, &outcome, "codesign");
+    }
+}
+
+#[test]
+fn a_windows_binary_signed_by_brave_installs() {
+    let Some((tools, release)) = setup() else {
+        return;
+    };
+    for (installer, outcome) in install_on_windows(tools, release, "win-good", |i| i) {
+        assert_installed(installer, &outcome, &release.binary);
+    }
+}
+
+/// A valid Authenticode signature by anybody is what a status of `Valid` alone would accept.
+#[test]
+fn a_windows_binary_signed_by_someone_else_installs_nothing() {
+    let Some((tools, release)) = setup() else {
+        return;
+    };
+    for (installer, outcome) in install_on_windows(tools, release, "win-signer", |i| {
+        i.authenticode("Valid", "Someone Else Ltd")
+    }) {
+        assert_refused(installer, &outcome, "not signed by brave software, inc.");
+    }
+}
+
+#[test]
+fn a_windows_binary_whose_signature_is_not_valid_installs_nothing() {
+    let Some((tools, release)) = setup() else {
+        return;
+    };
+    for status in ["NotSigned", "HashMismatch", "NotTrusted"] {
+        for (installer, outcome) in install_on_windows(tools, release, "win-status", |i| {
+            i.authenticode(status, "Brave Software, Inc.")
+        }) {
+            assert_refused(installer, &outcome, &status.to_lowercase());
         }
+    }
+}
+
+#[test]
+fn a_windows_install_without_powershell_installs_nothing() {
+    let Some((tools, release)) = setup() else {
+        return;
+    };
+    for (installer, outcome) in install_on_windows(tools, release, "win-no-powershell", |i| {
+        i.without("powershell.exe")
+    }) {
+        assert_refused(installer, &outcome, "powershell.exe could not be run");
+    }
+}
+
+/// Linux binaries carry no code signature, so neither tool is asked and none need be installed.
+#[test]
+fn a_linux_install_runs_neither_codesign_nor_powershell() {
+    let Some((tools, release)) = setup() else {
+        return;
+    };
+    let install = Install::new(tools, release, "linux-no-tools")
+        .without("codesign")
+        .without("spctl")
+        .without("powershell.exe");
+    for (installer, outcome) in install.each(&[
+        ("bravebot-linux-arm64", &release.binary),
+        ("bravebot-linux-arm64.sha256", &release.checksum),
+        ("bravebot-linux-arm64.sha256.asc", &release.signature),
+    ]) {
+        assert_installed(installer, &outcome, &release.binary);
     }
 }

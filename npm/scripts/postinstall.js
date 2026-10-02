@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 
-// Downloads the release binary for this platform and verifies its checksum and, on Linux, its
-// detached GPG signature.
+// Downloads the release binary for this platform and verifies its checksum and its signature:
+// a detached GPG signature over the checksum on Linux, the code signature on the binary on macOS
+// and Windows.
 //
 // The checksum check is not optional: without it, a network-fetched executable would
 // run on the strength of TLS alone, and a compromised or substituted release asset
 // would be indistinguishable from a good one.
+//
+// Nor is the signature check. The checksum is published beside the binary, so whoever can replace
+// one can replace both. On macOS the binary has to be signed by Brave's team and pass Gatekeeper's
+// assessment, which running it from a terminal would not ask for. On Windows its Authenticode
+// signature has to be valid and made by Brave.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -22,6 +28,11 @@ const SKIP_ENV = "BRAVEBOT_INSTALL_SKIP_DOWNLOAD";
 // install.sh states the same repository the same way.
 const REPO = "brave/bravebot";
 const MAX_REDIRECTS = 5;
+// Who a macOS or Windows binary has to be signed by. codesign and Authenticode alone accept a
+// valid signature from any signer a trusted authority issued a certificate to, so a signature
+// from anyone else is a refusal. install.sh names the same team.
+const APPLE_TEAM_ID = "KL8N8XSYF4";
+const WINDOWS_SIGNER = "Brave Software, Inc.";
 // The key a Linux checksum has to be signed by. This is the public half, embedded so it has no
 // external dependency. The fingerprint ensures only this specific key is trusted.
 const SIGNING_KEY_FINGERPRINT = "13F28F0405C49B0B232DBA1BC1E827646A2DE416";
@@ -126,8 +137,20 @@ async function install({
     }
   }
 
-  fs.mkdirSync(path.dirname(destination), { recursive: true });
-  fs.writeFileSync(destination, bytes, { mode: 0o755 });
+  // codesign and Authenticode read a file, so the bytes are staged beside the destination,
+  // unexecutable, and become the binary only once that check passes.
+  const directory = path.dirname(destination);
+  const staged = path.join(directory, `.download-${path.basename(destination)}`);
+  fs.mkdirSync(directory, { recursive: true });
+  fs.rmSync(staged, { force: true });
+  fs.writeFileSync(staged, bytes, { mode: 0o600, flag: "wx" });
+  try {
+    verifyCodeSignature(target, staged);
+    fs.chmodSync(staged, 0o755);
+    fs.renameSync(staged, destination);
+  } finally {
+    fs.rmSync(staged, { force: true });
+  }
   console.log(`Installed bravebot ${tag} (${target.asset})`);
 }
 
@@ -148,6 +171,7 @@ function resolveTarget(platform, arch) {
   }
   return {
     asset,
+    platform,
     binaryName: platform === "win32" ? "bravebot-bin.exe" : "bravebot-bin",
   };
 }
@@ -220,6 +244,79 @@ function get(url, redirects, callback) {
       callback(null, response);
     })
     .on("error", callback);
+}
+
+// A tool that cannot be run is a refusal like a signature that does not verify, since an install
+// that skipped the check for want of the tool would be the one an attacker arranges.
+function verifyCodeSignature(target, file) {
+  switch (target.platform) {
+    case "darwin": {
+      // The requirement holds the signature to a certificate Apple issued to the team, and spctl
+      // is the Gatekeeper assessment a double-click would get, where notarization is checked.
+      // `-t install` because the asset is a bare executable: `-t execute` rejects anything that
+      // is not an app bundle, however it is signed.
+      const requirement = `=anchor apple generic and certificate leaf[subject.OU] = "${APPLE_TEAM_ID}"`;
+      const signed = spawnSync(
+        "codesign",
+        ["--verify", "--deep", "--strict", "-R", requirement, file],
+        { stdio: "inherit" }
+      );
+      requireTool(signed, "codesign", target);
+      let accepted = signed.status === 0;
+      if (accepted) {
+        const assessed = spawnSync("spctl", ["-a", "-t", "install", file], { stdio: "inherit" });
+        requireTool(assessed, "spctl", target);
+        accepted = assessed.status === 0;
+      }
+      if (!accepted) {
+        throw new Error(
+          `${target.asset} is not signed by Brave Software (team ${APPLE_TEAM_ID}), or Gatekeeper rejected it (checking notarization may need the network); refusing to install`
+        );
+      }
+      return;
+    }
+    case "win32": {
+      const result = spawnSync(
+        "powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-EncodedCommand", authenticodeCommand(file)],
+        { encoding: "utf8" }
+      );
+      requireTool(result, "powershell.exe", target);
+      const [status, signer] = (result.stdout || "").split(/\r?\n/).map((line) => line.trim());
+      if (result.status !== 0 || status !== "Valid" || signer !== WINDOWS_SIGNER) {
+        throw new Error(
+          `${target.asset} is not signed by ${WINDOWS_SIGNER} (Authenticode reports ${status || "no status"}, signer ${signer || "none"}); refusing to install`
+        );
+      }
+      return;
+    }
+    default:
+      // Linux: its checksum carries the signature, which was checked above.
+      return;
+  }
+}
+
+// A tool that could not be started says nothing about the file, and installing anyway would
+// pass it unchecked.
+function requireTool(result, name, target) {
+  if (result.error) {
+    throw new Error(
+      `${name} could not be run (${result.error.code || result.error.message}), so ${target.asset} cannot be checked for Brave's signature; refusing to install`
+    );
+  }
+}
+
+// Prints the signature's status, then the signing certificate's common name. The path travels as
+// base64, so no character in it can end the string it is quoted in.
+function authenticodeCommand(file) {
+  const encodedPath = Buffer.from(file, "utf8").toString("base64");
+  const script = [
+    `$file = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedPath}'))`,
+    "$signature = Get-AuthenticodeSignature -LiteralPath $file",
+    "[Console]::Out.WriteLine([string]$signature.Status)",
+    "if ($signature.SignerCertificate) { [Console]::Out.WriteLine($signature.SignerCertificate.GetNameInfo('SimpleName', $false)) }",
+  ].join("; ");
+  return Buffer.from(script, "utf16le").toString("base64");
 }
 
 function hasGpg() {
