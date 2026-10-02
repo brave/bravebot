@@ -12,9 +12,10 @@ and network diagnostics include every certificate trust problem reported upstrea
 The bridge uses policy-audited model-list decoding and Bedrock's per-model names and
 context windows. Trust maps are rooted in the session project. Resuming a terminal
 session preserves its saved side conversations and rewind checkpoints.
-The UI presents fetch, language-server, plan and credential-exposure approvals. It does not
-present MCP approvals; those requests are refused without consuming another pending
-approval.
+The UI presents fetch, language-server, plan, credential-exposure and MCP approvals. A
+session's first turn starts the MCP servers its settings request.
+`crates/ui-bridge/tests/servers.rs` drives that turn through the binary against a stub HTTP MCP
+server and a stub model.
 
 Vetted reads now have one-time approval cards, existing output/path approvals include checker
 advice, and write approvals show the processor's remark beside the diff.

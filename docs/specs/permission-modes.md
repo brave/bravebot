@@ -218,7 +218,7 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_tui::trust_prompt::bypassing_trusts_the_workspace_instead_of_asking`
 `verified-by: bravebot_tui::trust_prompt::every_other_mode_leaves_the_question_to_the_person`
 `verified-by: bravebot_tui::app::bypassing_opens_the_directories_a_file_named_without_asking`
-`verified-by: bravebot_cli::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
+`verified-by: bravebot_agent::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
 `verified-by: bravebot_agent::mcp::bypassing_answers_both_prompts_and_records_nothing`
 `verified-by: bravebot_agent::permission_mode::bypassing_refuses_to_move_a_server`
 `verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_credential_write_to_the_person_and_bypassing_answers_it`

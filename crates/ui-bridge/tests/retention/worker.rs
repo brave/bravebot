@@ -45,6 +45,7 @@ fn take_turn(
             output_cap: None,
             deadlines: bravebot_agent::exec::Deadlines::BUILT_IN,
             auto_vetting: false,
+            mcp_requested: Vec::new(),
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             model: None,
             prompt: if first {

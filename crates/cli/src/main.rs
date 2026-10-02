@@ -9,7 +9,7 @@ mod json;
 mod mcp;
 mod plain;
 mod progress;
-mod servers;
+use bravebot_agent::servers;
 
 use crate::exit::{Ending, fail};
 use bravebot_agent::confirm::{

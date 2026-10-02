@@ -1727,11 +1727,6 @@ session-build-differs = that session ran on bravebot { $was }; this is { $now }
 session-front-differs = that session was written in { $was }; this is { $now }
 session-front-terminal = the terminal
 session-front-desktop = the desktop app
-# Said when a desktop session opens in a directory whose settings request MCP servers, since the
-# desktop app starts none and a request it passed over in silence would look like one it honoured.
-session-servers-not-started =
-    the settings here request the MCP servers { $servers }, which the desktop app does not start:
-    bravebot mcp list, run here in a terminal, says which of them a session there would start
 
 
 ## Themes

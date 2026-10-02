@@ -1806,22 +1806,6 @@ pub fn front_note(was: Option<&str>, now: Front) -> Option<String> {
     })
 }
 
-/// What a desktop session says where the settings it opened under request MCP servers: the desktop
-/// app starts none, and a request it passed over in silence would read as one it honoured.
-///
-/// Silent where nothing is requested. A requested name is a checkout's own words, so one that is not
-/// an alias is quoted with its escapes rather than drawn as the list's own punctuation.
-pub fn servers_note<'a>(requested: impl IntoIterator<Item = &'a str>) -> Option<String> {
-    let servers: Vec<String> = requested
-        .into_iter()
-        .map(|alias| match bravebot_config::mcp::is_alias(alias) {
-            true => alias.to_string(),
-            false => format!("{alias:?}"),
-        })
-        .collect();
-    (!servers.is_empty()).then(|| t!(session_servers_not_started, servers = servers.join(", ")))
-}
-
 pub fn branch_of(directory: &Path) -> Option<String> {
     let git = find_git(directory)?;
     let head = std::fs::read_to_string(git.join("HEAD")).ok()?;
@@ -2949,23 +2933,6 @@ mod tests {
         let unknown = front_note(Some("hologram"), Front::Terminal)
             .expect("a front end this build has never heard of is worth saying");
         assert!(unknown.contains("hologram"), "{unknown}");
-    }
-
-    /// The desktop app starts no MCP server, so a session opened where some are requested names
-    /// them, and one opened where none are says nothing. A name that is not an alias is quoted, so
-    /// a checkout cannot write words the note would draw as its own.
-    #[test]
-    fn a_desktop_session_names_the_servers_it_does_not_start() {
-        assert_eq!(servers_note([]), None);
-
-        let note = servers_note(["weather", "docs", "x, and y"]).expect("requested servers");
-        assert_eq!(
-            note,
-            t!(
-                session_servers_not_started,
-                servers = r#"weather, docs, "x, and y""#
-            )
-        );
     }
 
     /// A point whose contents a rewind cannot produce must not read as a file that was never

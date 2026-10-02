@@ -102,6 +102,22 @@ pub struct State {
     /// asks before starting a server. Dropping this state stops the servers, which happens when
     /// the session closes or the process ends.
     pub servers: Option<bravebot_agent::lsp::LanguageServers>,
+    /// The MCP servers this session started, once its first turn has started them (SERVERS-9).
+    pub mcp: Mcp,
+}
+
+/// Where a session stands with the MCP servers its project requests.
+///
+/// Started once, by the first turn that runs to the end of starting them, and held until the
+/// session closes, since dropping one stops its server. Not saved to the record, so a reopened or
+/// forked session starts its own.
+#[derive(Default)]
+pub enum Mcp {
+    /// No turn has started them yet.
+    #[default]
+    Unstarted,
+    /// Started, where any was, with the lines saying why each other request was not.
+    Started(Option<bravebot_agent::mcp::Session>),
 }
 
 impl State {
@@ -126,6 +142,7 @@ impl State {
             rules: Default::default(),
             runs: 0,
             servers: None,
+            mcp: Mcp::Unstarted,
         }
     }
 
@@ -168,6 +185,7 @@ impl State {
             rules: Default::default(),
             runs: 0,
             servers: None,
+            mcp: Mcp::Unstarted,
         }
     }
 
@@ -227,6 +245,7 @@ impl State {
             rules: Default::default(),
             runs: 0,
             servers: None,
+            mcp: Mcp::Unstarted,
         }
     }
 }

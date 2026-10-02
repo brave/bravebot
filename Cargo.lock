@@ -342,6 +342,7 @@ dependencies = [
  "bravebot-config",
  "bravebot-core",
  "bravebot-net",
+ "bravebot-sandbox",
  "bravebot-session",
  "bravebot-stamp",
  "serde",

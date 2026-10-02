@@ -1053,3 +1053,171 @@ fn an_exposure_prompt_carries_the_file_and_the_findings_and_no_text_of_the_file(
         })
     );
 }
+
+// ---------------------------------------------------------------- MCP servers
+
+/// SERVERS-4's question crosses as the declaration's fields. A stored value is named and marked
+/// and never sent, the program is sent where it resolved somewhere other than its first word, and
+/// a runner that fetches what it runs carries the agent's own lines about it (SERVERS-6).
+#[test]
+fn a_server_question_carries_the_declaration_and_no_stored_value() {
+    use bravebot_agent::servers::Question;
+    use bravebot_config::mcp::Declaration;
+    let declaration = Declaration::stdio(
+        vec!["npx".into(), "-y".into(), "weather-mcp@latest".into()],
+        vec!["PATH".into()],
+        None,
+    )
+    .expect("a declaration")
+    .storing([("WEATHER_KEY".to_string(), "a-secret-value".to_string())].into())
+    .expect("a stored value");
+    let program = std::path::PathBuf::from("/usr/local/bin/npx");
+    let question = Question {
+        alias: "weather",
+        file: ".bravebot/settings.json",
+        declaration: &declaration,
+        program: Some(&program),
+        changed: true,
+    };
+
+    let sent = wire::mcp_server_request(3, &question);
+    assert_eq!(sent["request"], 3);
+    assert_eq!(sent["alias"], "weather");
+    assert_eq!(sent["transport"], "stdio");
+    assert_eq!(sent["command"], json!(["npx", "-y", "weather-mcp@latest"]));
+    assert_eq!(sent["url"], Value::Null);
+    assert_eq!(sent["program"], "/usr/local/bin/npx");
+    assert_eq!(
+        sent["variables"],
+        json!([{"name": "WEATHER_KEY", "stored": true}, {"name": "PATH", "stored": false}])
+    );
+    assert_eq!(sent["requestedBy"], ".bravebot/settings.json");
+    assert_eq!(sent["changed"], true);
+    assert_eq!(sent["digest"], declaration.digest().short());
+    let fetching = sent["fetching"].as_array().expect("lines");
+    assert!(
+        fetching
+            .iter()
+            .any(|line| line.as_str().is_some_and(|line| line.contains("npx"))),
+        "{fetching:?}"
+    );
+    assert!(
+        !sent.to_string().contains("a-secret-value"),
+        "a stored value crossed: {sent}"
+    );
+
+    // A program given as the path it resolved to is not sent twice.
+    let given = Declaration::stdio(vec!["/usr/local/bin/npx".into()], Vec::new(), None)
+        .expect("a declaration");
+    let question = Question {
+        declaration: &given,
+        ..question
+    };
+    assert_eq!(
+        wire::mcp_server_request(4, &question)["program"],
+        Value::Null
+    );
+}
+
+/// Answer 2 to the server question and to a call is read from an approval only, and from nothing
+/// but a literal `true`, so a malformed reply is the narrower answer (SERVERS-4, SERVERS-7).
+#[test]
+fn a_standing_mcp_answer_takes_an_approval_and_a_literal_true() {
+    use bravebot_agent::confirm::CallDecision;
+    use bravebot_agent::servers::Answer;
+    let approve = json!("approve");
+    let reject = json!("reject");
+    let yes = json!(true);
+    let no = json!(false);
+
+    assert_eq!(wire::start_answer(&approve, &no), Answer::Once);
+    assert_eq!(wire::start_answer(&approve, &yes), Answer::Project);
+    assert_eq!(wire::start_answer(&reject, &yes), Answer::No);
+    assert_eq!(wire::call_decision(&approve, &no), CallDecision::approve());
+    assert_eq!(
+        wire::call_decision(&approve, &yes),
+        CallDecision::approve_and_stand()
+    );
+    assert_eq!(wire::call_decision(&reject, &yes), CallDecision::reject());
+    for value in [Value::Null, json!("true"), json!(1), json!({})] {
+        assert_eq!(
+            wire::start_answer(&approve, &value),
+            Answer::Once,
+            "{value}"
+        );
+        assert_eq!(
+            wire::call_decision(&approve, &value),
+            CallDecision::approve(),
+            "{value}"
+        );
+    }
+    for value in [Value::Null, json!("APPROVE"), json!(true)] {
+        assert_eq!(wire::start_answer(&value, &yes), Answer::No, "{value}");
+        assert_eq!(
+            wire::call_decision(&value, &yes),
+            CallDecision::reject(),
+            "{value}"
+        );
+    }
+}
+
+/// A tool list crosses as the client drew it, a call with each argument as JSON, and a move with
+/// the authority the agent took out of the destination (SERVERS-7, SERVERS-8, SERVERS-11).
+#[test]
+fn the_mcp_questions_carry_what_a_card_draws() {
+    use bravebot_agent::confirm::{ListedTool, McpCallRequest, MoveRequest, ToolListRequest};
+    let tools = wire::mcp_tools_request(
+        1,
+        &ToolListRequest {
+            alias: "weather".into(),
+            tools: vec![ListedTool {
+                name: "weather:get_forecast".into(),
+                arguments: vec!["city (string, required)".into()],
+                description: Some("the forecast".into()),
+            }],
+            refused: 2,
+            changed: true,
+            verdict: bravebot_core::vetting::Verdict::Unsafe,
+            reason: Some("it gives instructions".into()),
+        },
+    );
+    assert_eq!(
+        tools["tools"],
+        json!([{"name": "weather:get_forecast", "arguments": ["city (string, required)"],
+            "description": "the forecast"}])
+    );
+    assert_eq!(tools["refused"], 2);
+    assert_eq!(tools["changed"], true);
+    assert_eq!(tools["vetting"]["verdict"], "unsafe");
+
+    let call = wire::mcp_call_request(
+        2,
+        &McpCallRequest {
+            alias: "weather".into(),
+            tool: "get_forecast".into(),
+            arguments: vec![("city".into(), "\"Paris\"".into())],
+            description: None,
+            may_stand: false,
+        },
+    );
+    assert_eq!(call["name"], "weather:get_forecast");
+    assert_eq!(
+        call["arguments"],
+        json!([{"name": "city", "value": "\"Paris\""}])
+    );
+    assert_eq!(call["mayStand"], false);
+
+    let moved = wire::mcp_move_request(
+        3,
+        &MoveRequest {
+            alias: "weather".into(),
+            declared: "https://weather.example/mcp".into(),
+            destination: "https://user@elsewhere.example/mcp".into(),
+            authority: "elsewhere.example:443".into(),
+            may_record: true,
+        },
+    );
+    assert_eq!(moved["authority"], "elsewhere.example:443");
+    assert_eq!(moved["destination"], "https://user@elsewhere.example/mcp");
+    assert_eq!(moved["mayRecord"], true);
+}

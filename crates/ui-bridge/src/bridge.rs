@@ -14,7 +14,7 @@
 
 use crate::emit::{Emitter, Listener};
 use crate::protocol::{ErrorCode, Event, Failure, Request};
-use crate::running::{Running, State};
+use crate::running::{Mcp, Running, State};
 use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink, Reply};
 use crate::{store, wire};
 use bravebot_agent::Workspace;
@@ -142,6 +142,22 @@ impl Bridge {
             "manifest.read" => crate::manifest::read(request),
             "manifest.reply" => self.reply_decision(request, Reply::Manifest),
             "exposure.reply" => self.reply_decision(request, Reply::Exposure),
+            "mcp-server.reply" => self.deliver(
+                request,
+                Reply::McpServer(wire::start_answer(
+                    request.param("decision"),
+                    request.param("remember"),
+                )),
+            ),
+            "mcp-tools.reply" => self.reply_decision(request, Reply::McpTools),
+            "mcp-call.reply" => self.deliver(
+                request,
+                Reply::McpCall(wire::call_decision(
+                    request.param("decision"),
+                    request.param("remember"),
+                )),
+            ),
+            "mcp-move.reply" => self.reply_decision(request, Reply::McpMove),
             "ask.reply" => self.reply_ask(request),
             "trust.reply" => self.reply_trust(request),
             "permissions.list" => self.permissions(request, false),
@@ -161,6 +177,11 @@ impl Bridge {
                 self.settings = path;
                 Ok(crate::settings::report(None, self.settings.as_deref()))
             }
+            "connectors.list" => crate::connectors::list(),
+            "connectors.preview" => crate::connectors::preview(request),
+            "connectors.connect" => crate::connectors::connect(request),
+            "connectors.disconnect" => crate::connectors::disconnect(request),
+            "connectors.remove" => crate::connectors::remove(request),
             "hooks.inspect" => crate::hooks::inspect(),
             "doctor" => Ok(
                 json!({"found": true, "structured": true, "text": serde_json::to_string_pretty(&crate::settings::report(None, self.settings.as_deref())).unwrap_or_default()}),
@@ -382,15 +403,7 @@ impl Bridge {
                 crate::FRONT,
             ),
             "autoVetting": auto_vetting,
-            "serversNote": self.servers_note(directory),
         })
-    }
-
-    /// The MCP servers the settings a session in `directory` opens under request, none of which
-    /// this front end starts (SERVERS-2).
-    fn servers_note(&self, directory: &Path) -> Option<String> {
-        let settings = crate::settings::layers(Some(directory), self.settings.as_deref());
-        bravebot_session::sessions::servers_note(settings.mcp_requested().map(|(_, alias)| alias))
     }
 
     fn new_session(&mut self, request: &Request) -> Result<Value, Failure> {
@@ -439,7 +452,6 @@ impl Bridge {
             "directory": directory.display().to_string(),
             "branch": branch,
             "autoVetting": auto_vetting,
-            "serversNote": self.servers_note(&directory),
         });
         merge(&mut made, reported);
         Ok(made)
@@ -598,7 +610,6 @@ impl Bridge {
             "trust": { "known": known, "rules": if known { Value::from(rules) } else { Value::Null } },
             "autoVetting": auto_vetting,
             "settingsRules": settings_rules,
-            "serversNote": self.servers_note(&project),
             "parent": {
                 "id": parent_id,
                 "directory": project.display().to_string(),
@@ -722,6 +733,12 @@ impl Bridge {
         let output_cap = settings.run_output_cap();
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
         let auto_vetting = open.auto_vetting;
+        // Each MCP server the settings request, with the file that requested it (SERVERS-2). Read
+        // on every turn and used by the first, which is the one that starts them.
+        let mcp_requested: Vec<(PathBuf, String)> = settings
+            .mcp_requested()
+            .map(|(file, alias)| (file.to_path_buf(), alias.to_string()))
+            .collect();
         let mut workspace = turn_workspace(
             open.project.clone(),
             &settings,
@@ -798,6 +815,7 @@ impl Bridge {
                 output_cap,
                 deadlines,
                 auto_vetting,
+                mcp_requested,
                 workspace,
                 prompt,
                 composed,
@@ -1493,6 +1511,8 @@ struct Work {
     deadlines: bravebot_agent::exec::Deadlines,
     /// The session's, settled when it opened.
     auto_vetting: bool,
+    /// Each MCP server the settings request, with the file that requested it.
+    mcp_requested: Vec<(PathBuf, String)>,
     watches: Arc<Mutex<bravebot_agent::watch::Watches>>,
     model: Option<String>,
     workspace: Workspace,
@@ -1541,6 +1561,7 @@ fn work(work: Work) {
         output_cap,
         deadlines,
         auto_vetting,
+        mcp_requested,
         watches,
         model,
         workspace,
@@ -1565,6 +1586,28 @@ fn work(work: Work) {
 
     let history =
         bravebot_session::store::Entry::sent(&prompt, Some(project.display().to_string()));
+    let mut confirmer =
+        BridgeConfirmer::new(emitter.clone(), &session, pending, answers, cancel.clone());
+
+    // The session's MCP servers (SERVERS-9), started by its first turn and held until it closes.
+    // Here rather than when the session opened, so that the questions about them come after the
+    // person has said whether the directory is trusted, and reach the window through this turn.
+    if matches!(state.mcp, Mcp::Unstarted)
+        && let Some(started) = start_mcp(
+            &emitter,
+            &session,
+            &project,
+            &mcp_requested,
+            &mut confirmer,
+            &cancel,
+        )
+    {
+        state.mcp = Mcp::Started(started);
+    }
+    let mcp = match &state.mcp {
+        Mcp::Started(started) => started.clone(),
+        Mcp::Unstarted => None,
+    };
     let mut task = Task::new(&prompt)
         .already_asked_about(state.asked_about.clone())
         .already_exposed(state.exposed.clone())
@@ -1580,7 +1623,8 @@ fn work(work: Work) {
         .with_deadlines(deadlines)
         .with_auto_vetting(auto_vetting)
         // The rules the session opened under, and not the files as they are now (PERM-12).
-        .with_permissions(state.rules.permissions.clone());
+        .with_permissions(state.rules.permissions.clone())
+        .with_mcp(mcp);
     if let Some(composed) = composed {
         task = task.composed_rather_than_typed(composed);
     }
@@ -1601,8 +1645,6 @@ fn work(work: Work) {
         bravebot_agent::watch::Arming::Allowed { free }
     });
     let mut reporter = BridgeReporter::new(emitter.clone(), &session);
-    let mut confirmer =
-        BridgeConfirmer::new(emitter.clone(), &session, pending, answers, cancel.clone());
     let mut sink = BridgeSink::new(emitter.clone(), &session, turn);
     let egress = Egress::new();
 
@@ -1765,6 +1807,66 @@ fn work(work: Work) {
     drop(state);
     finished.store(true, std::sync::atomic::Ordering::Release);
     emitter.send(event);
+}
+
+/// Start the MCP servers `requested` names, putting the questions about them to the window.
+///
+/// The terminal's own road (SERVERS-4, SERVERS-10, SERVERS-11, SERVERS-12): each request resolves
+/// against the person's declarations, one the managed layer refuses goes no further, the rest are
+/// asked about where no answer of theirs covers them, and each is started confined or reached
+/// through the egress gate. A server's stderr is discarded, as the full-screen terminal discards
+/// it, because this process has no screen of its own to put it on.
+///
+/// `mcp.starting` goes out first, since a server has up to a minute to answer its handshake and
+/// the turn says nothing else while it waits, and `mcp.started` after, naming what started and
+/// saying why each other request did not. `None` where the turn was stopped part way, which
+/// starts nothing and leaves the servers to the next turn, so a stop is not read as a no.
+fn start_mcp(
+    emitter: &Emitter,
+    session: &str,
+    project: &Path,
+    requested: &[(PathBuf, String)],
+    confirmer: &mut BridgeConfirmer,
+    cancel: &Cancel,
+) -> Option<Option<bravebot_agent::mcp::Session>> {
+    if requested.is_empty() {
+        return Some(None);
+    }
+    let aliases: Vec<&str> = requested.iter().map(|(_, alias)| alias.as_str()).collect();
+    emitter.send(Event::new(
+        "mcp.starting",
+        session,
+        json!({ "servers": aliases }),
+    ));
+    let home = bravebot_agent::servers::Home {
+        directory: bravebot_agent::home::directory(),
+        writable: bravebot_agent::home::writable().is_some(),
+    };
+    let project = project
+        .canonicalize()
+        .unwrap_or_else(|_| project.to_path_buf());
+    let reached = bravebot_agent::servers::reach(
+        requested,
+        &project,
+        &home,
+        &bravebot_config::Managed::load(),
+        bravebot_agent::servers::Asking::Person,
+        confirmer,
+        bravebot_sandbox::Stream::Null,
+    );
+    if cancel.is_cancelled() {
+        return None;
+    }
+    emitter.send(Event::new(
+        "mcp.started",
+        session,
+        json!({
+            "servers": reached.aliases(),
+            "confined": reached.confined(),
+            "notes": reached.notes,
+        }),
+    ));
+    Some(reached.session())
 }
 
 /// How a failure is reported to a front end: `kind`, `message`, `category`, `attempts`, `status`.

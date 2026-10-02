@@ -1,4 +1,5 @@
 import { AgentSettings } from './components/AgentSettings'
+import { Connectors } from './components/Connectors'
 import type { FileAttachment } from '../shared/files'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
@@ -10,7 +11,7 @@ import type {
   OpenedSession,
   RunRecord,
   SettingsRules,
-  Phase,
+  Waiting,
   SessionSummary,
   Shown,
   TodoRow,
@@ -65,7 +66,7 @@ interface Live {
   turns: Turns
   todos: TodoRow[]
   quarantine: Shown[]
-  phase: Phase | null
+  phase: Waiting | null
   /** What a running confined check was given. Beside the phase, which a check does not change. */
   checking: Checking | null
   /** The word of the tool call the model is writing, while it is; the call itself is not yet drawn. */
@@ -207,6 +208,7 @@ async function callBot(request: {
 
 export function App(): React.JSX.Element {
   const [agentSettings, setAgentSettings] = useState(false)
+  const [connectors, setConnectors] = useState(false)
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [live, renderLive] = useState<Live | null>(null)
   /** A saved manifest run being read. Shown in place of a session, and only while none is. */
@@ -496,7 +498,7 @@ export function App(): React.JSX.Element {
         autoVetting: opened.autoVetting,
         rules: opened.settingsRules ?? null,
       })
-      const notes = [opened.branchNote, opened.buildNote, opened.frontNote, opened.serversNote].filter(Boolean) as string[]
+      const notes = [opened.branchNote, opened.buildNote, opened.frontNote].filter(Boolean) as string[]
       setProblem(notes.length ? notes.join(' · ') : null)
     } catch (error) {
       setProblem(String(error))
@@ -520,7 +522,6 @@ export function App(): React.JSX.Element {
         model: string | null
         autoVetting: boolean
         settingsRules?: SettingsRules | null
-        serversNote: string | null
         remembered?: KeptTrust | null
         keeping?: string | null
       }>('session.new', {
@@ -558,7 +559,7 @@ export function App(): React.JSX.Element {
         autoVetting: made.autoVetting,
         rules: made.settingsRules ?? null,
       })
-      setProblem(made.serversNote)
+      setProblem(null)
     } catch (error) {
       setProblem(String(error))
     }
@@ -1154,7 +1155,7 @@ export function App(): React.JSX.Element {
         // From the agent rather than from `entry.text`: what the composer opens with should be
         // the prompt that was actually cut out, not the one this window thought it clicked.
         setDraft(forked.prefill)
-        setProblem(forked.serversNote)
+        setProblem(null)
         void refresh()
         void readForks()
       } catch (error) {
@@ -1233,6 +1234,7 @@ export function App(): React.JSX.Element {
   const stableShowSession = useEvent(showSession)
   const stableCreate = useEvent(create)
   const openSettings = useEvent(() => setAgentSettings(true))
+  const openConnectors = useEvent(() => setConnectors(true))
   const closeContext = useEvent(() => toggle('right'))
   const stableCloseAudit = useEvent(closeAudit)
   const auditTurn = selectedAudit && selectedAudit.turn !== null ? live?.turns[selectedAudit.turn] : undefined
@@ -1282,6 +1284,7 @@ export function App(): React.JSX.Element {
         onRemoveBot={removeBot}
         build={build}
         onSettings={openSettings}
+        onConnectors={openConnectors}
       /></SessionInfo.Provider>
       <Gutter
         side="left"
@@ -1366,6 +1369,7 @@ export function App(): React.JSX.Element {
         <Notice title={notice.title} body={notice.body} onClose={() => setNotice(null)} />
       )}
       {unconfigured && <Unconfigured detail={unconfigured} onClose={() => setUnconfigured(null)} />}
+      {connectors && <Connectors onClose={() => setConnectors(false)} />}
       {agentSettings && <AgentSettings session={live?.handle} onClose={() => setAgentSettings(false)} onChanged={() => { void checkBackend() }} />}
       {live?.askingTrust && (
         <TrustPrompt directory={live.askingTrust} keeping={live.keepingTrust} onAnswer={answerTrust} />
@@ -1455,6 +1459,20 @@ export function apply(
         return { ...old, entries: [...old.entries, t.askedManifest(message.data, t.narrowing(old.rules))] }
       case 'exposure.request':
         return { ...old, entries: [...old.entries, t.askedExposure(message.data)] }
+      case 'mcp-server.request':
+        return { ...old, entries: [...old.entries, t.askedMcpServer(message.data)] }
+      case 'mcp-tools.request':
+        return { ...old, entries: [...old.entries, t.askedMcpTools(message.data)] }
+      case 'mcp-call.request':
+        return { ...old, entries: [...old.entries, t.askedMcpCall(message.data)] }
+      case 'mcp-move.request':
+        return { ...old, entries: [...old.entries, t.askedMcpMove(message.data)] }
+      // A server has up to a minute to answer its handshake, and the turn says nothing else
+      // while it waits, so the wait is named where the phase is.
+      case 'mcp.starting':
+        return { ...old, phase: 'starting-servers' }
+      case 'mcp.started':
+        return { ...old, phase: null, entries: [...old.entries, t.mcpStarted(message.data)] }
       // A run is not a turn, so it adds no turn marker and no reply to the conversation.
       case 'manifest.started':
         return { ...old, running: true, phase: null, checking: null, tokens: 0 }
