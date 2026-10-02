@@ -1853,7 +1853,7 @@ fn draw_vet(
 pub fn ask_fetch<B: Backend>(terminal: &mut Terminal<B>, request: &FetchRequest) -> Answer {
     let mut scroll = 0u16;
     loop {
-        let mut drawn = FetchDrawn::default();
+        let mut drawn = PinnedDrawn::default();
         if terminal
             .draw(|frame| drawn = draw_fetch(frame, request, scroll))
             .is_err()
@@ -1987,17 +1987,17 @@ fn draw_server(frame: &mut ratatui::Frame, request: &ServerRequest) {
     frame.render_widget(Paragraph::new(keys), rows[1]);
 }
 
-/// What one draw of the fetch question decided for the keys that answer it.
+/// What one draw of a question laid out by [`draw_pinned`] decided for the keys that answer it.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct FetchDrawn {
-    /// How far the URL and what follows it can be scrolled.
+struct PinnedDrawn {
+    /// How far the part that scrolls can be scrolled.
     furthest: u16,
-    /// Whether a yes may be taken. It may where the host, the metadata warning when there is one,
-    /// and the keys are all whole on the screen, with at least one row of the URL.
+    /// Whether a yes may be taken. It may where the rows above and below the part that scrolls
+    /// and the keys are all whole on the screen, with the first rows of the part that scrolls.
     answerable: bool,
 }
 
-impl FetchDrawn {
+impl PinnedDrawn {
     /// One key pressed at the question this draw put on the screen.
     fn response_to(&self, key: KeyEvent) -> Option<Response> {
         match answer_for(key) {
@@ -2006,7 +2006,7 @@ impl FetchDrawn {
         }
     }
 
-    /// Where the URL starts once moved `by` rows from `scroll`.
+    /// Where the part that scrolls starts once moved `by` rows from `scroll`.
     ///
     /// Moved from where this draw put it rather than from `scroll`, which a terminal made taller
     /// since can leave past the bottom, where a press of Up would move nothing.
@@ -2018,6 +2018,113 @@ impl FetchDrawn {
     }
 }
 
+/// Draw a question whose middle, which came from somewhere else, can be longer than the box.
+///
+/// What the person is answering about is in `above` and `below`, so those claim their rows first
+/// and the keys next, and `scrolled` takes the rows left between them. A middle longer than that
+/// scrolls, and a row under it says how much of it is below. A yes needs the first `needed` rows
+/// of the middle drawn, or all of it where it is shorter.
+fn draw_pinned(
+    frame: &mut ratatui::Frame,
+    inside: Rect,
+    above: Vec<Line<'static>>,
+    (scrolled, needed): (Vec<Line<'static>>, u16),
+    below: Vec<Line<'static>>,
+    (yes, no): (&str, &str),
+    scroll: u16,
+) -> PinnedDrawn {
+    let wrapped = |lines: Vec<Line<'static>>| Paragraph::new(lines).wrap(Wrap { trim: false });
+    let rows_of = |paragraph: &Paragraph| {
+        u16::try_from(paragraph.line_count(inside.width)).unwrap_or(u16::MAX)
+    };
+    let header = wrapped(above);
+    let body = wrapped(scrolled);
+    let footer = wrapped(below);
+    let heading = rows_of(&header);
+    let rest = rows_of(&body);
+    let footing = rows_of(&footer);
+    let answering = rows_of(&wrapped(vec![answer_keys(yes, no, true)]));
+
+    // Claimed in this order, so keys drawn whole have everything pinned drawn whole with them.
+    let header_rows = heading.min(inside.height);
+    let footer_rows = footing.min(inside.height - header_rows);
+    let keys_rows = answering.min(inside.height - header_rows - footer_rows);
+    let between = inside.height - header_rows - footer_rows - keys_rows;
+    // A row saying how much of the middle is below, where that leaves the middle a row of its own.
+    // The keys wrap and this does not share their row, so neither cuts off the other.
+    let hint_rows = u16::from(rest > between && between > 1);
+    // Only the rows the middle fills, so what is pinned below it is drawn right under it.
+    let body_rows = rest.min(between - hint_rows);
+    let furthest = rest - body_rows;
+    let offset = scroll.min(furthest);
+    // A box with no column to draw in takes no rows for any of it, so the keys count as whole there.
+    let answerable = inside.width > 0
+        && keys_rows == answering
+        && body_rows > 0
+        && body_rows >= needed.min(rest);
+
+    let row = |y: u16, height: u16| Rect {
+        y,
+        height,
+        ..inside
+    };
+    let header_area = row(inside.y, header_rows);
+    let body_area = row(header_area.bottom(), body_rows);
+    let hint_area = row(body_area.bottom(), hint_rows);
+    let footer_area = row(hint_area.bottom(), footer_rows);
+    let keys_area = row(inside.bottom() - keys_rows, keys_rows);
+    frame.render_widget(header, header_area);
+    frame.render_widget(body.scroll((offset, 0)), body_area);
+    frame.render_widget(
+        Paragraph::new(Line::styled(
+            scroll_hint(furthest - offset),
+            Style::default().fg(theme::brand_primary()),
+        )),
+        hint_area,
+    );
+    frame.render_widget(footer, footer_area);
+    frame.render_widget(wrapped(vec![answer_keys(yes, no, answerable)]), keys_area);
+
+    PinnedDrawn {
+        furthest,
+        answerable,
+    }
+}
+
+/// A question's keys, with `y` muted where a yes is not taken from this draw.
+fn answer_keys(yes: &str, no: &str, answerable: bool) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            "  y",
+            Style::default()
+                .fg(if answerable {
+                    theme::ok()
+                } else {
+                    theme::muted()
+                })
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!(" {yes}    ")),
+        Span::styled(
+            "n",
+            Style::default()
+                .fg(theme::fail())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!(" {no}    ")),
+        Span::styled(
+            "ctrl-c",
+            Style::default()
+                .fg(theme::muted())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {}", t!(stop_the_turn)),
+            Style::default().fg(theme::muted()),
+        ),
+    ])
+}
+
 /// Draw the fetch question.
 ///
 /// The host is drawn on its own line rather than left inside the URL. A person skimming
@@ -2026,7 +2133,7 @@ impl FetchDrawn {
 ///
 /// It is drawn above the URL, in rows the URL cannot take. A userinfo segment can be longer than
 /// the box, and a host drawn below it would be pushed off the screen while the keys stayed on it.
-fn draw_fetch(frame: &mut ratatui::Frame, request: &FetchRequest, scroll: u16) -> FetchDrawn {
+fn draw_fetch(frame: &mut ratatui::Frame, request: &FetchRequest, scroll: u16) -> PinnedDrawn {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::ok(), t!(fetch_title));
     let width = inside.width as usize;
@@ -2070,94 +2177,26 @@ fn draw_fetch(frame: &mut ratatui::Frame, request: &FetchRequest, scroll: u16) -
         width,
     ));
 
-    let wrapped = |lines: Vec<Line<'static>>| Paragraph::new(lines).wrap(Wrap { trim: false });
-    let rows_of = |paragraph: &Paragraph| {
-        u16::try_from(paragraph.line_count(inside.width)).unwrap_or(u16::MAX)
-    };
-    let header = wrapped(header);
-    let body = wrapped(lines);
-    let heading = rows_of(&header);
-    let rest = rows_of(&body);
-    let answering = rows_of(&wrapped(vec![fetch_keys(true)]));
-
-    // The host and what it is claim their rows first and the keys next, so keys drawn whole have
-    // both whole above them.
-    let header_rows = heading.min(inside.height);
-    let keys_rows = answering.min(inside.height - header_rows);
-    let between = inside.height - header_rows - keys_rows;
-    // A row saying how much of the URL is below, where that leaves the URL a row of its own. The
-    // keys wrap and this does not share their row, so neither cuts off the other.
-    let hint_rows = u16::from(rest > between && between > 1);
-    let body_rows = between - hint_rows;
-    let furthest = rest.saturating_sub(body_rows);
-    let offset = scroll.min(furthest);
-    // A box with no column to draw in takes no rows for any of it, so the keys count as whole there.
-    let answerable = inside.width > 0 && keys_rows == answering && body_rows > 0;
-
-    let row = |y: u16, height: u16| Rect {
-        y,
-        height,
-        ..inside
-    };
-    let header_area = row(inside.y, header_rows);
-    let body_area = row(header_area.bottom(), body_rows);
-    let hint_area = row(body_area.bottom(), hint_rows);
-    let keys_area = row(hint_area.bottom(), keys_rows);
-    frame.render_widget(header, header_area);
-    frame.render_widget(body.scroll((offset, 0)), body_area);
-    frame.render_widget(
-        Paragraph::new(Line::styled(
-            scroll_hint(furthest - offset),
-            Style::default().fg(theme::brand_primary()),
-        )),
-        hint_area,
-    );
-    frame.render_widget(wrapped(vec![fetch_keys(answerable)]), keys_area);
-
-    FetchDrawn {
-        furthest,
-        answerable,
-    }
-}
-
-/// The fetch question's keys, with `y` muted where a yes is not taken from this draw.
-fn fetch_keys(answerable: bool) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            "  y",
-            Style::default()
-                .fg(if answerable {
-                    theme::ok()
-                } else {
-                    theme::muted()
-                })
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(" {}    ", t!(fetch_yes))),
-        Span::styled(
-            "n",
-            Style::default()
-                .fg(theme::fail())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(" {}    ", t!(fetch_no))),
-        Span::styled(
-            "ctrl-c",
-            Style::default()
-                .fg(theme::muted())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" {}", t!(stop_the_turn)),
-            Style::default().fg(theme::muted()),
-        ),
-    ])
+    draw_pinned(
+        frame,
+        inside,
+        header,
+        (lines, 1),
+        Vec::new(),
+        (t!(fetch_yes), t!(fetch_no)),
+        scroll,
+    )
 }
 
 /// Ask whether a remote MCP server is now where its reply pointed, blocking until answered.
 pub fn ask_move<B: Backend>(terminal: &mut Terminal<B>, request: &MoveRequest) -> Answer {
+    let mut scroll = 0u16;
     loop {
-        if terminal.draw(|frame| draw_move(frame, request)).is_err() {
+        let mut drawn = PinnedDrawn::default();
+        if terminal
+            .draw(|frame| drawn = draw_move(frame, request, scroll))
+            .is_err()
+        {
             return Answer::Reject;
         }
 
@@ -2165,10 +2204,9 @@ pub fn ask_move<B: Backend>(terminal: &mut Terminal<B>, request: &MoveRequest) -
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
-            Ok(TermEvent::Key(key)) => match answer_for(key) {
+            Ok(TermEvent::Key(key)) => match drawn.response_to(key) {
                 Some(Response::Answer(answer)) => return answer,
-                // Nothing here scrolls: two addresses and a host, and nothing was fetched.
-                Some(Response::Scroll(_)) => continue,
+                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
                 None => continue,
             },
             Ok(_) => continue,
@@ -2182,13 +2220,17 @@ pub fn ask_move<B: Backend>(terminal: &mut Terminal<B>, request: &MoveRequest) -
 /// The destination came from the server's reply, so every line goes through the margin that
 /// replaces control characters, and the host it reaches is drawn on its own line for the reason
 /// the fetch question draws one.
-fn draw_move(frame: &mut ratatui::Frame, request: &MoveRequest) {
+///
+/// That host and what a yes does are drawn under the destination in rows it cannot take. The
+/// server chose the destination's length, and one longer than the box would otherwise push them
+/// off the screen while the keys stayed on it.
+fn draw_move(frame: &mut ratatui::Frame, request: &MoveRequest, scroll: u16) -> PinnedDrawn {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::note(), t!(mcp_move_title));
     let width = inside.width as usize;
     let muted = Style::default().fg(theme::muted());
 
-    let mut lines = indented(
+    let declared = indented(
         t!(
             mcp_move_declared,
             alias = request.alias.as_str(),
@@ -2197,54 +2239,38 @@ fn draw_move(frame: &mut ratatui::Frame, request: &MoveRequest) {
         muted,
         width,
     );
-    lines.extend(indented(
+    let destination = indented(
         t!(mcp_move_destination, url = request.destination.as_str()),
         Style::default().add_modifier(Modifier::BOLD),
         width,
-    ));
-    lines.extend(indented(
+    );
+    // The url starts no later than the row after those the sentence takes without it, so a draw
+    // showing fewer rows can show the sentence and none of the url.
+    let sentence = indented(t!(mcp_move_destination, url = ""), Style::default(), width);
+    let needed = u16::try_from(sentence.len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(1);
+    let mut below = indented(
         t!(mcp_move_reaching, authority = request.authority.as_str()),
         Style::default().fg(theme::note()),
         width,
-    ));
-    lines.push(Line::raw(""));
-    lines.extend(indented(t!(mcp_move_explained), muted, width));
+    );
+    below.push(Line::raw(""));
+    below.extend(indented(t!(mcp_move_explained), muted, width));
     if !request.may_record {
-        lines.push(Line::raw(""));
-        lines.extend(indented(t!(mcp_move_this_session_only), muted, width));
+        below.push(Line::raw(""));
+        below.extend(indented(t!(mcp_move_this_session_only), muted, width));
     }
 
-    let keys = Line::from(vec![
-        Span::styled(
-            "  y",
-            Style::default()
-                .fg(theme::ok())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(" {}    ", t!(mcp_move_yes))),
-        Span::styled(
-            "n",
-            Style::default()
-                .fg(theme::fail())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(" {}    ", t!(mcp_move_no))),
-        Span::styled(
-            "ctrl-c",
-            Style::default()
-                .fg(theme::muted())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(format!(" {}", t!(stop_the_turn)), muted),
-    ]);
-
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(inside);
-
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), rows[0]);
-    frame.render_widget(Paragraph::new(keys), rows[1]);
+    draw_pinned(
+        frame,
+        inside,
+        declared,
+        (destination, needed),
+        below,
+        (t!(mcp_move_yes), t!(mcp_move_no)),
+        scroll,
+    )
 }
 
 /// Draw the offer to vouch for a quarantined file, and wait for an answer.
@@ -3303,21 +3329,26 @@ mod tests {
         fetch_screen(request, (160, 24), 0).0.concat()
     }
 
-    /// The fetch question drawn at this size and scroll, one string per row of the screen.
-    fn fetch_screen(
-        request: &FetchRequest,
+    /// A question laid out by [`draw_pinned`] drawn at this size, one string per row of the screen.
+    fn pinned_screen(
         (width, height): (u16, u16),
-        scroll: u16,
-    ) -> (Vec<String>, FetchDrawn) {
-        let mut drawn = FetchDrawn::default();
-        let rows = rows_of(width, height, |frame| {
-            drawn = draw_fetch(frame, request, scroll);
-        });
+        draw: impl Fn(&mut ratatui::Frame) -> PinnedDrawn,
+    ) -> (Vec<String>, PinnedDrawn) {
+        let mut drawn = PinnedDrawn::default();
+        let rows = rows_of(width, height, |frame| drawn = draw(frame));
         (rows, drawn)
     }
 
-    /// What each row of the fetch box holds between its borders.
-    fn fetch_box(rows: &[String]) -> Vec<String> {
+    fn fetch_screen(
+        request: &FetchRequest,
+        size: (u16, u16),
+        scroll: u16,
+    ) -> (Vec<String>, PinnedDrawn) {
+        pinned_screen(size, |frame| draw_fetch(frame, request, scroll))
+    }
+
+    /// What each row of the box holds between its borders.
+    fn box_rows(rows: &[String]) -> Vec<String> {
         rows.iter()
             .filter_map(|row| {
                 let first = row.find('│')?;
@@ -3328,8 +3359,8 @@ mod tests {
     }
 
     /// The box's words in order, however they wrapped.
-    fn fetch_words(rows: &[String]) -> String {
-        words(&fetch_box(rows).join(" "))
+    fn box_words(rows: &[String]) -> String {
+        words(&box_rows(rows).join(" "))
     }
 
     fn words(text: &str) -> String {
@@ -3337,13 +3368,8 @@ mod tests {
     }
 
     /// The keys' words in order, however they wrapped.
-    fn fetch_keys_words() -> String {
-        words(&format!(
-            "y {} n {} ctrl-c {}",
-            t!(fetch_yes),
-            t!(fetch_no),
-            t!(stop_the_turn)
-        ))
+    fn keys_words(yes: &str, no: &str) -> String {
+        words(&format!("y {yes} n {no} ctrl-c {}", t!(stop_the_turn)))
     }
 
     /// The issue's request: a userinfo of 1,500 characters naming a documentation site, in front
@@ -3359,16 +3385,88 @@ mod tests {
     }
 
     fn rendered_move(request: &MoveRequest) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(160, 24)).expect("terminal");
-        terminal
-            .draw(|frame| draw_move(frame, request))
-            .expect("draw");
-        terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
+        move_screen(request, (160, 24), 0).0.concat()
+    }
+
+    fn move_screen(
+        request: &MoveRequest,
+        size: (u16, u16),
+        scroll: u16,
+    ) -> (Vec<String>, PinnedDrawn) {
+        pinned_screen(size, |frame| draw_move(frame, request, scroll))
+    }
+
+    /// The issue's reply: a destination whose userinfo names the declared site for 1,500
+    /// characters, in front of the host it reaches.
+    fn a_move_behind_a_long_userinfo(may_record: bool) -> MoveRequest {
+        MoveRequest {
+            alias: "news".to_string(),
+            declared: "https://news.example/mcp".to_string(),
+            destination: format!("https://news.example{}@evil.test/mcp", "a".repeat(1_500)),
+            authority: "evil.test".to_string(),
+            may_record,
+        }
+    }
+
+    /// A destination a yes can declare, whose host is long enough to wrap the line naming it.
+    fn a_move_to_a_long_host(may_record: bool) -> MoveRequest {
+        let host = format!("{}.evil.test", vec!["a".repeat(60); 3].join("."));
+        MoveRequest {
+            alias: "news".to_string(),
+            declared: "https://news.example/mcp".to_string(),
+            destination: format!("https://{host}/mcp"),
+            authority: host,
+            may_record,
+        }
+    }
+
+    /// Text with its whitespace taken out, so a word broken across rows still matches.
+    fn squeezed(text: &str) -> String {
+        text.split_whitespace().collect()
+    }
+
+    /// The box's text, squeezed.
+    fn box_text(rows: &[String]) -> String {
+        squeezed(&box_rows(rows).concat())
+    }
+
+    /// What a person answering the move question has to see besides the destination, squeezed.
+    fn move_pinned(request: &MoveRequest) -> Vec<String> {
+        let mut pinned = vec![
+            t!(
+                mcp_move_declared,
+                alias = request.alias.as_str(),
+                url = request.declared.as_str()
+            )
+            .to_string(),
+            t!(mcp_move_reaching, authority = request.authority.as_str()).to_string(),
+            t!(mcp_move_explained).to_string(),
+            keys_words(t!(mcp_move_yes), t!(mcp_move_no)),
+        ];
+        if !request.may_record {
+            pinned.push(t!(mcp_move_this_session_only).to_string());
+        }
+        pinned.iter().map(|text| squeezed(text)).collect()
+    }
+
+    /// The rows the destination is laid out in, in a box this many columns wide.
+    fn destination_rows(request: &MoveRequest, columns: usize) -> Vec<String> {
+        indented(
+            t!(mcp_move_destination, url = request.destination.as_str()),
+            Style::default(),
+            columns,
+        )
+        .iter()
+        .map(|row| row.to_string().trim_end().to_string())
+        .collect()
+    }
+
+    /// Where in the box's rows a row of the destination is drawn.
+    fn destination_drawn_at(request: &MoveRequest, inside: &[String]) -> Vec<usize> {
+        let columns = inside.first().map_or(0, |row| row.chars().count());
+        let destination = destination_rows(request, columns);
+        (0..inside.len())
+            .filter(|&at| destination.contains(&inside[at].trim_end().to_string()))
             .collect()
     }
 
@@ -3383,8 +3481,8 @@ mod tests {
     }
 
     /// SERVERS-11: the person is shown where the server is declared, where its reply points, and
-    /// the host and port that reaches, since a yes declares the server there. A session that writes
-    /// nothing says the yes lasts until it ends.
+    /// the host and port that reaches, right under it, since a yes declares the server there. A
+    /// session that writes nothing says the yes lasts until it ends.
     #[test]
     fn a_move_prompt_shows_the_declaration_the_destination_and_what_it_reaches() {
         let drawn = rendered_move(&a_move(true));
@@ -3398,6 +3496,176 @@ mod tests {
         let only = t!(mcp_move_this_session_only).to_string();
         assert!(!drawn.contains(&only), "{drawn}");
         assert!(rendered_move(&a_move(false)).contains(&only));
+
+        let rows = box_rows(&move_screen(&a_move(true), (160, 24), 0).0);
+        let at = |text: &str| rows.iter().position(|row| row.contains(text));
+        assert_eq!(
+            at("reaching elsewhere.example:443"),
+            at("and its reply points to").map(|row| row + 1),
+            "the host is not drawn right under the destination: {rows:#?}"
+        );
+    }
+
+    /// SERVERS-11: the host a yes declares the server at, and what a yes does, are what a person
+    /// is answering about, so a destination that wraps past the bottom of the box scrolls above
+    /// them rather than pushing them off, and the box says how much of it is below.
+    #[test]
+    fn a_destination_longer_than_the_move_box_leaves_the_host_and_what_a_yes_does_on_screen() {
+        let request = a_move_behind_a_long_userinfo(true);
+        for width in [56, 64, 80] {
+            let (rows, drawn) = move_screen(&request, (width, 24), 0);
+            let screen = rows.join("\n");
+            let shown = box_text(&rows);
+
+            for pinned in move_pinned(&request) {
+                assert!(
+                    shown.contains(&pinned),
+                    "{width} columns: {pinned} was pushed off: {screen}"
+                );
+            }
+            let inside = box_rows(&rows);
+            let reaching =
+                t!(mcp_move_reaching, authority = request.authority.as_str()).to_string();
+            let reaching_row = inside.iter().position(|row| row.contains(&reaching));
+            let destination = destination_drawn_at(&request, &inside);
+            assert!(
+                matches!(
+                    (destination.last(), reaching_row),
+                    (Some(destination), Some(reaching)) if destination < &reaching
+                ),
+                "{width} columns: the host is not drawn under the destination: {screen}"
+            );
+            assert!(
+                drawn.furthest > 0,
+                "a destination of 1,534 characters fitted"
+            );
+            assert!(
+                inside
+                    .iter()
+                    .any(|row| row.contains(scroll_hint(drawn.furthest).trim())),
+                "{width} columns: the box does not say how much is below: {screen}"
+            );
+            assert!(drawn.answerable, "{width} columns: {screen}");
+        }
+    }
+
+    /// SERVERS-11: the rest of the destination is reachable by the arrows, and the host stays
+    /// where it was while it is read.
+    #[test]
+    fn the_end_of_a_long_destination_can_be_scrolled_to_with_the_host_still_shown() {
+        let request = a_move_behind_a_long_userinfo(true);
+        let end = "@evil.test/mcp";
+        let joined = |rows: &[String]| {
+            box_rows(rows)
+                .iter()
+                .map(|row| row.trim())
+                .collect::<String>()
+        };
+
+        let (top, drawn) = move_screen(&request, (80, 24), 0);
+        assert!(
+            !joined(&top).contains(end),
+            "the whole destination fitted, so nothing here scrolls"
+        );
+
+        let (rows, _) = move_screen(&request, (80, 24), drawn.furthest);
+        let screen = rows.join("\n");
+        assert!(
+            joined(&rows).contains(end),
+            "scrolling to the end did not reach the end of the destination: {screen}"
+        );
+        let shown = box_text(&rows);
+        for pinned in move_pinned(&request) {
+            assert!(shown.contains(&pinned), "{pinned}: {screen}");
+        }
+    }
+
+    /// SERVERS-11: `y` is not taken from a draw that cut off the declaration, the host,
+    /// what a yes does or the keys, that showed none of the destination's url, or that cut the
+    /// destination short without saying so, whatever the size of the terminal or the length of
+    /// the host; `n` is taken from any draw.
+    #[test]
+    fn a_move_question_takes_a_yes_only_from_a_draw_showing_the_host_and_the_keys() {
+        for may_record in [true, false] {
+            for request in [
+                a_move_behind_a_long_userinfo(may_record),
+                a_move_to_a_long_host(may_record),
+            ] {
+                let pinned = move_pinned(&request);
+                for width in [1, 2, 24, 40, 50, 56, 60, 64, 80, 160] {
+                    for height in 1..=30 {
+                        let (rows, drawn) = move_screen(&request, (width, height), 0);
+                        if !drawn.answerable {
+                            continue;
+                        }
+                        let screen = rows.join("\n");
+                        let shown = box_text(&rows);
+                        for expected in &pinned {
+                            assert!(
+                                shown.contains(expected),
+                                "{width}x{height}: {expected}: {screen}"
+                            );
+                        }
+                        let inside = box_rows(&rows);
+                        let columns = inside.first().map_or(0, |row| row.chars().count());
+                        let url = destination_rows(&request, columns)
+                            .into_iter()
+                            .find(|row| row.contains("https://"));
+                        assert!(
+                            url.is_some_and(|url| {
+                                inside.iter().any(|row| row.trim_end() == url)
+                            }),
+                            "{width}x{height}: none of the destination's url is drawn: {screen}"
+                        );
+                        assert!(
+                            drawn.furthest == 0
+                                || inside
+                                    .iter()
+                                    .any(|row| row.contains(scroll_hint(drawn.furthest).trim())),
+                            "{width}x{height}: the box does not say how much is below: {screen}"
+                        );
+                    }
+                }
+            }
+        }
+
+        let request = a_move_behind_a_long_userinfo(false);
+        // At 80x18 and 80x19 the destination is given one row, which holds the sentence alone.
+        for size in [
+            (80, 3),
+            (80, 4),
+            (80, 10),
+            (80, 18),
+            (80, 19),
+            (24, 6),
+            (2, 40),
+            (1, 1),
+        ] {
+            assert!(
+                !move_screen(&request, size, 0).1.answerable,
+                "{size:?} took a yes"
+            );
+        }
+        for size in [(80, 24), (50, 24)] {
+            assert!(
+                move_screen(&request, size, 0).1.answerable,
+                "{size:?} refused a yes"
+            );
+        }
+
+        let y = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+        let n = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
+        let (_, cut_off) = move_screen(&request, (80, 4), 0);
+        let (_, whole) = move_screen(&request, (80, 24), 0);
+        assert_eq!(cut_off.response_to(y), None);
+        assert_eq!(
+            cut_off.response_to(n),
+            Some(Response::Answer(Answer::Reject))
+        );
+        assert_eq!(
+            whole.response_to(y),
+            Some(Response::Answer(Answer::Approve))
+        );
     }
 
     /// A reviewer has to see the argv, the binary behind each name, and where it will run. All
@@ -3507,7 +3775,7 @@ mod tests {
             let (rows, drawn) = fetch_screen(&request, (width, 24), 0);
             let screen = rows.join("\n");
 
-            let inside = fetch_box(&rows);
+            let inside = box_rows(&rows);
             let host = t!(fetch_host, host = "docs.example.invalid").to_string();
             let host_row = inside.iter().position(|row| row.contains(&host));
             let url_row = inside
@@ -3519,7 +3787,7 @@ mod tests {
             );
             assert!(drawn.furthest > 0, "a URL of 2,000 characters fitted");
             assert!(
-                fetch_words(&rows).contains(&fetch_keys_words()),
+                box_words(&rows).contains(&keys_words(t!(fetch_yes), t!(fetch_no))),
                 "{width} columns: the keys were pushed off: {screen}"
             );
             assert!(
@@ -3539,7 +3807,7 @@ mod tests {
     fn a_userinfo_that_fills_the_fetch_box_leaves_the_host_and_what_it_is_on_screen() {
         let (rows, drawn) = fetch_screen(&a_metadata_fetch_behind_a_long_userinfo(), (80, 24), 0);
         let screen = rows.join("\n");
-        let shown = fetch_words(&rows);
+        let shown = box_words(&rows);
 
         assert!(
             shown.contains(&words(
@@ -3551,7 +3819,10 @@ mod tests {
             shown.contains(&words(t!(fetch_authority_metadata))),
             "the metadata warning is not on the screen: {screen}"
         );
-        assert!(shown.contains(&fetch_keys_words()), "{screen}");
+        assert!(
+            shown.contains(&keys_words(t!(fetch_yes), t!(fetch_no))),
+            "{screen}"
+        );
         assert!(drawn.answerable, "{screen}");
     }
 
@@ -3565,17 +3836,17 @@ mod tests {
 
         let (top, drawn) = fetch_screen(&request, (80, 24), 0);
         assert!(
-            !fetch_box(&top).concat().contains(end),
+            !box_rows(&top).concat().contains(end),
             "the whole URL fitted, so nothing here scrolls"
         );
 
         let (rows, _) = fetch_screen(&request, (80, 24), drawn.furthest);
         let screen = rows.join("\n");
         assert!(
-            fetch_box(&rows).concat().contains(end),
+            box_rows(&rows).concat().contains(end),
             "scrolling to the end did not reach the end of the URL: {screen}"
         );
-        assert!(fetch_words(&rows).contains(&host), "{screen}");
+        assert!(box_words(&rows).contains(&host), "{screen}");
     }
 
     /// FETCH-2: `y` is not taken from a draw that cut off the host, what it is, the keys, or the
@@ -3594,15 +3865,15 @@ mod tests {
                     continue;
                 }
                 let screen = rows.join("\n");
-                let shown = fetch_words(&rows);
+                let shown = box_words(&rows);
                 assert!(shown.contains(&host), "{width}x{height}: {screen}");
                 assert!(shown.contains(&warning), "{width}x{height}: {screen}");
                 assert!(
-                    shown.contains(&fetch_keys_words()),
+                    shown.contains(&keys_words(t!(fetch_yes), t!(fetch_no))),
                     "{width}x{height}: {screen}"
                 );
                 assert!(
-                    fetch_box(&rows)
+                    box_rows(&rows)
                         .iter()
                         .any(|row| row.trim_start().starts_with(t!(fetch_verb))),
                     "{width}x{height}: {screen}"
