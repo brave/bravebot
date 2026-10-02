@@ -39,6 +39,45 @@ Running the line again is how an install made this way is updated. The script re
 the binary, so a second run with no directory named replaces that one rather than leaving two on
 your `PATH`.
 
+### Check a download by hand
+
+Both installers check the binary before they write it, and refuse when it does not verify. To check
+a release yourself, download the asset for your platform from the
+[releases page](https://github.com/brave/bravebot/releases), then:
+
+On macOS, the binary has to be signed by Brave's Developer ID team (`KL8N8XSYF4`) and accepted by
+Gatekeeper. Both commands print nothing when they succeed:
+
+```sh
+codesign --verify --deep --strict \
+  -R '=anchor apple generic and certificate leaf[subject.OU] = "KL8N8XSYF4"' bravebot-darwin-arm64
+spctl -a -t install bravebot-darwin-arm64
+```
+
+On Windows, in PowerShell, `Status` has to be `Valid` and the signer `Brave Software, Inc.`:
+
+```powershell
+Get-AuthenticodeSignature .\bravebot-windows-amd64.exe |
+  Format-List Status, @{ n = 'Signer'; e = { $_.SignerCertificate.GetNameInfo('SimpleName', $false) } }
+```
+
+On Linux the binary carries no signature. Its `.sha256` file is signed, and the signature has to
+be from the key whose fingerprint is `13F28F0405C49B0B232DBA1BC1E827646A2DE416`. The installers carry
+that key themselves; the same key is published at
+`https://brave-browser-downloads.s3.brave.com/keys/bravebot-release.asc`. With the asset, its
+`.sha256` and its `.sha256.asc` in the current directory:
+
+```sh
+export GNUPGHOME="$(mktemp -d)"
+curl -fsSL https://brave-browser-downloads.s3.brave.com/keys/bravebot-release.asc | gpg --import
+gpg --fingerprint 13F28F0405C49B0B232DBA1BC1E827646A2DE416
+gpg --verify bravebot-linux-amd64.sha256.asc bravebot-linux-amd64.sha256
+echo "$(cat bravebot-linux-amd64.sha256)  bravebot-linux-amd64" | sha256sum --check
+```
+
+`gpg --verify` has to say `Good signature` from a key with that fingerprint, and `sha256sum` has
+to say `OK`.
+
 Configuration is baked into the released binary, so there is nothing to set up. Check what it will
 actually use:
 
