@@ -470,9 +470,10 @@ export function Transcript({
   // The search belongs to what is on screen: a bot's page filters its list, a conversation finds
   // in its transcript. Moving between them closes it.
   useEffect(() => { setSearching(false) }, [viewing?.bot.slug, live?.handle])
-  // A bot's conversation with no project has no context worth a column, so the right toggle goes
-  // with the column. See `.app.no-context`.
-  const contextless = !!live && noProject
+  // The right toggle goes with the column: a bot's conversation with no project has none worth
+  // drawing (`.app.no-context`), and neither does a window with nothing open, which is not a bot's
+  // page either (`.app.no-session`).
+  const contextless = live ? noProject : !botView
   const head = (
     <header className="transcript-head">
       <div className="drag" />
