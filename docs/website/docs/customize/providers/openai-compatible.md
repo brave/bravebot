@@ -62,6 +62,7 @@ reaches it:
 {
   "provider": {
     "google-vertex": {
+      "env": ["GOOGLE_API_KEY"],
       "options": { "project": "<your project id>", "location": "global" }
     }
   },
@@ -73,9 +74,9 @@ The host is built from `project` and `location`, which is `global` where you sta
 `project` is required. One holding a character a project id cannot hold, such as `/` or `@`, configures
 nothing rather than sending your key somewhere else. A stated `baseURL` still wins.
 
-The key is read from `GOOGLE_API_KEY` and sent in the `x-goog-api-key` header, which is the only
-place Google reads it from. Export it as `GOOGLE_API_KEY=<your key>`, or name another variable in
-`env`.
+The key is read from the variable `env` names and sent in the `x-goog-api-key` header, which is the
+only place Google reads it from. Export it as `GOOGLE_API_KEY=<your key>`, or name another variable in
+`env`. A block naming no `env` and no `options.apiKey` sends no key, and Vertex AI refuses it.
 
 With no block, exporting `GOOGLE_API_KEY` and `GOOGLE_CLOUD_PROJECT` is enough, and `VERTEX_LOCATION`
 sets a location other than `global`. Both of the first two are needed, and a block replaces this. The
@@ -83,8 +84,13 @@ service is only asked once a model named `google-vertex/...` is chosen. `GOOGLE_
 other Google tools read as well, so the key you exported for one of them is what is sent here once
 you choose such a model.
 
-Vertex AI has no model listing a key can call, so `/model` offers only the models the block lists.
-Name any other with the id in front, as above. Signing in with Google Cloud credentials instead of a
+Vertex AI has no model listing a key can call, so `/model` offers a short list of Gemini models
+built into bravebot, which `bravebot doctor` names. A block that lists `models` is offered those
+instead. No preview model is on the built-in list, because Google withdraws previews without notice.
+The list is what the `global` location serves, and another location may not serve all of it. A model
+on the built-in list is named with the id in front, as `google-vertex/google/gemini-2.5-pro`, in
+`--model` or the `model` key, and one off it is named the same way, as
+`google-vertex/google/gemini-3-flash-preview`. Signing in with Google Cloud credentials instead of a
 key is not supported.
 
 ### The credential
@@ -136,11 +142,12 @@ Ollama](../configuration.md#importing-from-claude-code-opencode-or-ollama)).
 trip. That is what keeps a configured gateway working with no network, and is the way to pin a short
 list out of a service offering hundreds.
 
-**A block that lists none has the gateway asked.** That is the ordinary case rather than a mistake:
-opencode resolves its roster from a registry it fetches, so the commonest block copied out of it names
-a credential and nothing else. What your credential may reach is asked for first, and the service's
-full catalogue answers only where a gateway does not offer the narrower question. Models that cannot
-call tools are left out.
+**A block that lists none has the gateway asked**, except on [Google Vertex AI](#google-vertex-ai),
+which has no listing to ask. That is the ordinary case rather than a mistake: opencode resolves its
+roster from a registry it fetches, so the commonest block copied out of it names a credential and
+nothing else. What your credential may reach is asked for first, and the service's full catalogue
+answers only where a gateway does not offer the narrower question. Models that cannot call tools are
+left out.
 
 Nothing is capped. Ordering does that work instead: the model a session would use comes first and the
 rest are sorted by name. A listing that cannot be fetched contributes nothing and takes nothing away

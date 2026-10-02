@@ -94,8 +94,9 @@ what it is read for.
 ## `/model`
 
 Opens a picker on the model in use. The list comes from the endpoint rather than a set compiled in, so
-it is whatever the backend offers today. The choice is written to `~/.bravebot`, so it outlives the
-session and applies in every directory, except one whose own settings name a
+it is whatever the backend offers today. Google Vertex AI, which has no listing to ask, is the
+exception: it is offered a short Gemini list built in. The choice is written to `~/.bravebot`, so it
+outlives the session and applies in every directory, except one whose own settings name a
 [`model`](../customize/configuration.md#model): that key outranks the choice, and the one in your own
 `~/.bravebot/settings.json` does not.
 

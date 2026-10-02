@@ -2878,20 +2878,33 @@ fn report_gateway(provider: &bravebot_config::provider::Provider) {
         );
         report_aws_session(profile.as_deref());
     }
-    match provider.models.is_empty() {
-        false => fact(
-            t!(doctor_tiers),
-            provider
-                .models
+    fact(t!(doctor_tiers), gateway_models(provider));
+}
+
+/// What `doctor` says a gateway offers: the models its block names, else the list compiled in for a
+/// service that cannot be asked, else that the service is asked.
+///
+/// A compiled id is shown with the service's id in front, as it has to be named: it is on no list
+/// a bare name is looked up in, which a model the block names is.
+fn gateway_models(provider: &bravebot_config::provider::Provider) -> String {
+    if !provider.models.is_empty() {
+        return provider
+            .models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+    }
+    match provider.compiled_roster() {
+        Some(compiled) => {
+            let models = compiled
                 .iter()
-                .map(|model| model.id.as_str())
+                .map(|id| format!("{}/{id}", provider.id))
                 .collect::<Vec<_>>()
-                .join(", "),
-        ),
-        true if !provider.has_roster() => {
-            fact(t!(doctor_tiers), t!(doctor_gateway_models_unlisted))
+                .join(", ");
+            t!(doctor_gateway_models_compiled, models = models).to_string()
         }
-        true => fact(t!(doctor_tiers), t!(doctor_gateway_models_absent)),
+        None => t!(doctor_gateway_models_absent).to_string(),
     }
 }
 
@@ -4270,6 +4283,35 @@ mod tests {
             gateway_credential(&names_one, |_| None),
             t!(doctor_gateway_token_absent)
         );
+    }
+
+    /// A Google Vertex block naming no models is offered the compiled list, so `doctor` names those
+    /// rather than saying the service is asked, which it never is, and names them as they are typed:
+    /// a bare compiled id routes nowhere. A block naming models is offered those alone, and is
+    /// reported so.
+    #[test]
+    fn doctor_names_the_compiled_models_a_google_vertex_service_is_offered() {
+        let names_none = configured_gateway(
+            r#"{"provider": {"google-vertex": {"options": {"project": "example-project-1"}}}}"#,
+        );
+        let reported = gateway_models(&names_none);
+        let compiled = names_none.compiled_roster().expect("a compiled list");
+        assert!(!compiled.is_empty());
+        for id in compiled {
+            let qualified = format!("google-vertex/{id}");
+            assert!(
+                reported.contains(&qualified),
+                "{qualified} is not in {reported:?}"
+            );
+        }
+
+        let names_one = configured_gateway(
+            r#"{"provider": {"google-vertex": {
+                "options": {"project": "example-project-1"},
+                "models": {"google/gemini-3-flash-preview": {}}
+            }}}"#,
+        );
+        assert_eq!(gateway_models(&names_one), "google/gemini-3-flash-preview");
     }
 
     /// An interactive `bravebot -p "task"` must not block waiting for a pipe that is not coming.

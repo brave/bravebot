@@ -3955,7 +3955,8 @@ fn list_models(
     // Additive on the same terms. A block that named its models is taken at its word and costs no
     // round trip, which is what keeps a configured gateway working offline. One that named none is
     // asked, because the alternative is a gateway configured exactly as the tool this block's shape
-    // came from configures it, offering nothing.
+    // came from configures it, offering nothing. A service with no listing to ask is offered the list
+    // compiled in instead.
     for provider in &config.providers {
         // An entry naming AWS reaches the Bedrock backend, so its rows are built the way that
         // backend's are: the models the block named, and nothing fetched. There is no listing
@@ -4054,7 +4055,9 @@ fn fetch_models(config: &Config) -> Result<Vec<bravebot_aichat::models::Model>, 
 ///
 /// A gateway whose block named a credential nothing holds is not asked. The listing would come back
 /// refused, and the useful thing to say about that gateway is what `doctor` already says: no
-/// credential found.
+/// credential found. A service with a compiled list is the exception: offering that list asks
+/// nothing, so it is offered with the key missing, and the missing key is said when a turn is sent,
+/// as it is for a model a block names.
 ///
 /// A block naming no credential at all is asked, unauthenticated. That is somebody saying the gateway
 /// wants none, and it is the block a local Ollama is configured with. That block lists no models
@@ -4065,6 +4068,9 @@ fn fetch_gateway_models(
     let token = match provider.credential(|name| std::env::var(name).ok()) {
         bravebot_config::provider::Credential::Token(token) => Some(token),
         bravebot_config::provider::Credential::NotNeeded => None,
+        bravebot_config::provider::Credential::Absent if provider.compiled_roster().is_some() => {
+            None
+        }
         bravebot_config::provider::Credential::Absent => {
             return Err(format!("no credential for {}", provider.display_name()));
         }
@@ -7821,6 +7827,75 @@ mod tests {
             .expect("the gateway models survive");
         assert_eq!(roster.len(), 1);
         assert_eq!(roster[0].key, "openrouter/z-ai/glm-4.6");
+    }
+
+    /// A configuration whose Brave credentials are blank and which reaches Google Vertex through a
+    /// block naming `models` where given. With a key, the key is in the block, so that it is found
+    /// whatever this process has exported. Without one, the block names a variable nothing sets.
+    fn a_config_with_google_vertex(key: Option<&str>, models: Option<&str>) -> Config {
+        let credential = match key {
+            Some(key) => {
+                format!(r#""options": {{"project": "example-project-1", "apiKey": "{key}"}}"#)
+            }
+            None => r#""options": {"project": "example-project-1"},
+                "env": ["BRAVEBOT_TEST_UNSET_VERTEX_KEY"]"#
+                .to_string(),
+        };
+        let models = models
+            .map(|models| format!(r#", "models": {models}"#))
+            .unwrap_or_default();
+        let mut config = a_config_with_a_named_roster();
+        config.providers = bravebot_config::Settings::parse(&format!(
+            r#"{{"provider": {{"google-vertex": {{{credential}{models}}}}}}}"#
+        ))
+        .providers()
+        .to_vec();
+        assert_eq!(config.providers.len(), 1, "the block configured no service");
+        config
+    }
+
+    /// The rows `/model` offers for the Google Vertex service.
+    fn google_vertex_rows(config: &Config) -> Vec<String> {
+        list_models(config, None)
+            .expect("a roster")
+            .into_iter()
+            .map(|model| model.key)
+            .filter(|key| key.starts_with("google-vertex/"))
+            .collect()
+    }
+
+    /// BACKEND-49: Vertex has no listing a key can call, so a service naming no models is offered the
+    /// list compiled in, in the order any fetched roster is read in. Offering it asks nothing, so a
+    /// key that is not found keeps no row out, as it keeps out none of the models a block names.
+    #[test]
+    fn the_picker_offers_the_compiled_models_for_a_google_vertex_service_naming_none() {
+        for key in [Some("placeholder-key"), None] {
+            let config = a_config_with_google_vertex(key, None);
+            let compiled = config.providers[0]
+                .compiled_roster()
+                .expect("a compiled list");
+            let mut expected: Vec<String> = compiled
+                .iter()
+                .map(|id| format!("google-vertex/{id}"))
+                .collect();
+            expected.sort();
+            assert!(!expected.is_empty());
+            assert_eq!(google_vertex_rows(&config), expected, "key {key:?}");
+        }
+    }
+
+    /// BACKEND-49: a block naming models is offered those and no others. The one named is on no
+    /// compiled list, so a picker adding the two together would offer more than this one row.
+    #[test]
+    fn a_google_vertex_block_naming_models_is_offered_those_alone() {
+        let config = a_config_with_google_vertex(
+            Some("placeholder-key"),
+            Some(r#"{"google/gemini-3-flash-preview": {}}"#),
+        );
+        assert_eq!(
+            google_vertex_rows(&config),
+            ["google-vertex/google/gemini-3-flash-preview"]
+        );
     }
 
     /// A model chosen in an earlier session is read back off disk, and the window that came with it

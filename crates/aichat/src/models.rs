@@ -189,7 +189,7 @@ pub fn list<S: Sink>(
 /// The OpenAI shape is `{"data": [{"id": ...}]}` and says nothing but the name. Everything else here
 /// is a field gateways add: read where present, absent without complaint, because a gateway that
 /// reports only what the shape requires still has a usable roster.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct ListedByGateway {
     /// What a request names. The only field the shape guarantees.
     id: String,
@@ -240,6 +240,9 @@ struct Architecture {
 ///
 /// With no credential there is no account to scope an answer to, so that request is not made at all.
 /// It would spend a round trip to be told the same thing the wide roster says.
+///
+/// A service that cannot be asked is answered from the list compiled in for it, with no request,
+/// and its rows are built as a listing's are, so a pick off them is recorded and routed the same.
 pub fn list_from_gateway<S: Sink>(
     policy: &mut Policy<'_, S>,
     provider: &bravebot_config::provider::Provider,
@@ -247,8 +250,15 @@ pub fn list_from_gateway<S: Sink>(
     egress: &Egress,
 ) -> Result<Vec<Model>, ChatError> {
     // Vertex AI has no listing a key can call, so asking would carry the key to be answered 404.
-    if !provider.has_roster() {
-        return Ok(Vec::new());
+    if let Some(compiled) = provider.compiled_roster() {
+        let listed = compiled
+            .iter()
+            .map(|id| ListedByGateway {
+                id: (*id).to_string(),
+                ..ListedByGateway::default()
+            })
+            .collect();
+        return Ok(offered_by_gateway(provider, listed));
     }
 
     if token.is_some() {
