@@ -85,8 +85,8 @@ that says what a value is *for* rather than for a Leo name:
 
 Light and dark come from Leo's own `prefers-color-scheme` and `data-theme` rules, so a role needs
 no dark-mode override of its own; the syntax colours in `syntax.css` are the exception, and pick
-the light or dark primitive by the same two conditions. `.app.compact` redefines the row heights and
-gaps, and `prefers-reduced-motion` zeroes the motion tokens. The legacy names at the foot of
+the light or dark primitive by the same two conditions. `prefers-reduced-motion` zeroes the motion
+tokens. The legacy names at the foot of
 `tokens.css` (`--bg`, `--ink-dim`, `--accent` and the rest) alias the roles until the last rule
 using them goes.
 
@@ -178,7 +178,7 @@ script prints shows both counts against their limits.
 
 ### The quality bar
 
-A surface is finished when it holds in light and dark, comfortable and compact, at 1440×900 and
+A surface is finished when it holds in light and dark at 1440×900 and
 at the minimum window size. In short:
 
 - **Grid.** Spacing comes from the Leo scale (4/8/12/16/24). Each column has one left text edge.

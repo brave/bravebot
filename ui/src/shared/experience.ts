@@ -8,7 +8,6 @@ export interface ConversationPreferences {
 
 export interface Experience {
   conversations: Record<string, ConversationPreferences>
-  density: 'comfortable' | 'compact'
   recentModels: string[]
 }
 
@@ -39,6 +38,6 @@ export function parseExperience(value: unknown): Experience {
       if (key.startsWith('[') && key.length <= 10000) conversations[key] = parseConversation(entry)
     }
   }
-  return { conversations, density: v.density === 'compact' ? 'compact' : 'comfortable',
+  return { conversations,
     recentModels: Array.isArray(v.recentModels) ? [...new Set(v.recentModels.filter((m): m is string => typeof m === 'string' && m.length < 1000))].slice(0, 8) : [] }
 }

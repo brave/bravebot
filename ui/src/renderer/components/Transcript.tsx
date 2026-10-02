@@ -614,16 +614,15 @@ export function Transcript({
             {backendReady === false && <BackendTray onSetup={setup} onCheckBackend={checkBackend} onDiagnostics={diagnostics} />}
             {!!recents.length && (
               <section className="welcome-recents" aria-labelledby="welcome-recents-title">
-                <h2 id="welcome-recents-title">Recent projects</h2>
-                {recents.slice(0, 5).map((directory) => (
-                  <button key={directory} type="button" className="welcome-recent" onClick={() => onNew(directory)}>
-                    <Icon name="folder" />
-                    <span className="recent-text">
-                      <strong>{projectLabel(directory)}</strong>
-                      <span className="recent-path" data-tooltip={directory}>{directory}</span>
-                    </span>
-                  </button>
-                ))}
+                <h2 id="welcome-recents-title" className="bot-view-title">Recent projects</h2>
+                <div className="bot-conversations">
+                  {recents.slice(0, 5).map((directory) => (
+                    <button key={directory} type="button" className="bot-history-row" onClick={() => onNew(directory)}>
+                      <span className="session-title"><span className="session-name">{projectLabel(directory)}</span></span>
+                      <span className="session-where" data-tooltip={directory}>{directory}</span>
+                    </button>
+                  ))}
+                </div>
               </section>
             )}
           </div>

@@ -1,4 +1,4 @@
-// The visual gallery: every surface, in light and dark, comfortable and compact, at the default
+// The visual gallery: every surface, in light and dark, at the default
 // and the minimum window size, plus forced-colours captures of the security markings.
 //
 // Real Electron renderer, isolated profile, and a mocked bridge: no provider requests and no
@@ -102,7 +102,7 @@ try {
     })
     for (const item of found) small.set(item, [...(small.get(item) ?? []), name])
   }
-  const variants = async (name, { dark = true, compact = false } = {}) => {
+  const variants = async (name, { dark = true } = {}) => {
     await settle()
     await audit(name)
     await page.screenshot({ path: join(output, `${name}-light.png`) })
@@ -111,12 +111,6 @@ try {
       await settle()
       await page.screenshot({ path: join(output, `${name}-dark.png`) })
       await page.evaluate(() => document.documentElement.removeAttribute('data-theme'))
-    }
-    if (compact) {
-      await page.evaluate(() => { const app = document.querySelector('.app'); app?.classList.replace('comfortable', 'compact') })
-      await settle()
-      await page.screenshot({ path: join(output, `${name}-compact.png`) })
-      await page.evaluate(() => { const app = document.querySelector('.app'); app?.classList.replace('compact', 'comfortable') })
     }
     console.log('VISUAL', name)
   }
@@ -136,7 +130,7 @@ try {
   await scene('02-conversation', async () => {
     await open('Refactor the session store')
     await page.locator('.bubble.assistant').first().waitFor()
-    await variants('02-conversation', { compact: true })
+    await variants('02-conversation')
   })
 
   // For layout work: VISUAL_PROBE is an expression evaluated in the page with the conversation
@@ -157,7 +151,7 @@ try {
     await emit('tool.started', tool('Search', 'lock', 'Find other lock users', null))
     await emit('todos', { rows: [{ content: 'Split the lock', status: 'done' }, { content: 'Move the migration', status: 'active' }, { content: 'Write migration tests', status: 'pending' }] })
     await emit('tokens', { written: 1834 })
-    await variants('03-running', { compact: true })
+    await variants('03-running')
   })
 
   await scene('04-confirm', async () => {
@@ -331,7 +325,7 @@ try {
     await page.setViewportSize({ width: 900, height: 560 })
     await page.reload()
     await page.locator('.session').first().waitFor()
-    await variants('24-stress-list', { compact: true })
+    await variants('24-stress-list')
     await page.locator('[data-test="view-options"]').click()
     await page.getByRole('menuitemcheckbox', { name: /Group by project/ }).click()
     await escape()

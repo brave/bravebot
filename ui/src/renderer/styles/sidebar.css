@@ -211,10 +211,6 @@
   font: var(--type-caption);
   color: var(--ink-tertiary);
 }
-/* Compact density drops the branch line; the row still says where and what. */
-.app.compact .session-where { display: none; }
-.app.compact .session { padding-block: var(--leo-spacing-s); }
-
 .session-time {
   flex: none;
   margin-left: auto;
@@ -334,7 +330,7 @@
 
 .sidebar-foot {
   flex: none;
-  padding: 0 0 var(--leo-spacing-m);
+  padding: var(--leo-spacing-m) 0 0;
   border-top: 1px solid var(--border-subtle);
 }
 /* Leo's navigation item draws at 16px inside a Navigation and at its own size outside one; the

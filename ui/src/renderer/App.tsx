@@ -1381,7 +1381,6 @@ export function App(): React.JSX.Element {
         // The column comes back while an audit is open, since that is where it is drawn.
         noProject && !selectedAudit ? 'no-context' : '',
         settings ? 'in-settings' : '',
-        preferences.density,
         dragging ? 'resizing' : '',
         folding ? 'folding' : '',
         collapsed.left ? 'left-folded' : '',
