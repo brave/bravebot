@@ -2965,18 +2965,18 @@ done
         ))
     }
 
-    /// The note a launch of [`HOME_WRITING_SERVER`] from `work` with `own` as its home leaves about
-    /// what this machine's confinement left out, and nothing where it left out nothing.
+    /// The note a launch of `program` from `work` with `own` as its home leaves about what this
+    /// machine's confinement left out, and nothing where it left out nothing.
     ///
     /// Which of the prelude's spellings a distribution lacks is the machine's, so the note is built
     /// from the policy the launch built rather than written down here. Only the launch's other
-    /// notes are what the two tests below are about.
+    /// notes are what the tests below are about. Takes the same program and declared reads the
+    /// launch does, since a row that is on disk is not one the resolution leaves out.
     #[cfg(unix)]
-    fn left_out_of(root: &Path, work: &Path, own: &Path) -> Vec<String> {
+    fn left_out_of(program: &Path, reads: &[PathBuf], work: &Path, own: &Path) -> Vec<String> {
         let sandbox = bravebot_sandbox::for_current_platform().expect("a backend");
-        let program = root.join("bin").join("weather-mcp");
-        let policy =
-            confinement_here(&program, &[], &[], Some(work), own).expect("a policy to start under");
+        let policy = confinement_here(program, &[], reads, Some(work), own)
+            .expect("a policy to start under");
         Vec::from_iter(nameable("weather", policy, &sandbox.capabilities()).1)
     }
 
@@ -2998,7 +2998,10 @@ done
         };
 
         let own = mcp::server_home(&state, &digested(&["weather-mcp"]));
-        assert_eq!(notes, left_out_of(&root, &work, &own));
+        assert_eq!(
+            notes,
+            left_out_of(&root.join("bin").join("weather-mcp"), &[], &work, &own)
+        );
         assert_eq!(started.len(), 1);
         assert_eq!(
             std::fs::read_to_string(work.join("home-was")).expect("where its home was"),
@@ -3031,7 +3034,10 @@ done
         let own = PathBuf::from(
             std::fs::read_to_string(work.join("home-was")).expect("where its home was"),
         );
-        assert_eq!(notes, left_out_of(&root, &work, &own));
+        assert_eq!(
+            notes,
+            left_out_of(&root.join("bin").join("weather-mcp"), &[], &work, &own)
+        );
         assert_eq!(started.len(), 1);
         assert!(own.join("was-here").exists());
         assert!(own.starts_with(temporary_directory()));
@@ -3373,17 +3379,18 @@ done
         let approvals = state.join("mcp-approvals.json");
         std::fs::write(&approvals, "{}").expect("a file in the state directory");
         let home = Home {
-            directory: Some(state),
+            directory: Some(state.clone()),
             writable: true,
         };
+        let reads = vec![key.clone(), argument.clone(), approvals.clone()];
         let plan = Plan::Stdio {
-            program,
+            program: program.clone(),
             arguments: vec![argument.to_str().unwrap().to_string()],
             variables: Variables::new()
                 .with("KEY_FILE", &key)
                 .with("STATE_FILE", &approvals),
             searched: Vec::new(),
-            reads: vec![key.clone(), argument.clone(), approvals.clone()],
+            reads: reads.clone(),
             directory: Some(work.clone()),
             declared: digested(&["weather-mcp"]),
         };
@@ -3397,7 +3404,8 @@ done
             &mut Vec::new(),
         );
 
-        assert_eq!(notes, Vec::<String>::new());
+        let own = mcp::server_home(&state, &digested(&["weather-mcp"]));
+        assert_eq!(notes, left_out_of(&program, &reads, &work, &own));
         assert_eq!(started.len(), 1);
         let read = |name: &str| std::fs::read_to_string(work.join(name)).expect("what it read");
         assert_eq!(read("key-was"), "the key");
