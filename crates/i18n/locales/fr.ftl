@@ -530,7 +530,22 @@ auth-leo-held =
     Brave Leo Premium est connecté : { $status }. bravebot auth logout leo le déconnecte.
 auth-sign-in-again = Se connecter à nouveau, comme un nouvel appareil ?
 auth-no-aws-account =
-    aucun compte AWS n'est configuré pour Bedrock : définissez { $switch }=1 et { $region }, ou lancez bravebot auth login import si Claude Code ou opencode en utilise un
+    aucun compte AWS n'est configuré pour Bedrock : définissez { $region } et un modèle dans l'une des variables { $tiers }, ou lancez bravebot auth login import si Claude Code ou opencode en utilise un
+auth-bedrock-off =
+    { $switch } a une autre valeur que 1, ce qui désactive Bedrock, et aucun bloc provider amazon-bedrock ne nomme de compte AWS
+auth-bedrock-pinned-off =
+    { $path } donne à { $switch } une autre valeur que 1 pour tous les utilisateurs de cette machine, ce qui désactive Bedrock, et aucun bloc provider amazon-bedrock ne nomme de compte AWS
+auth-bedrock-recorded = { $file } définit désormais { $switch }=1 : une session utilise Bedrock sans qu'il soit exporté
+auth-bedrock-not-recorded =
+    { $switch }=1 n'a pas été enregistré, il faut donc toujours l'exporter pour qu'une session utilise Bedrock : { $problem }
+auth-bedrock-not-recorded-incognito =
+    une session incognito n'enregistre rien, il faut donc toujours exporter { $switch }=1 pour qu'une session utilise Bedrock
+auth-bedrock-overruled =
+    un fichier de réglages donne à { $switch } une autre valeur que 1 : une session n'utilise Bedrock que là où { $switch }=1 est exporté
+auth-bedrock-left =
+    { $file } nomme déjà { $switch }, il a donc été laissé tel quel : une session n'utilise Bedrock que là où { $switch }=1 est exporté ou défini par les réglages d'un projet
+auth-bedrock-env-not-a-block = env dans { $file } n'est pas un bloc de noms, il a donc été laissé tel quel
+auth-bedrock-settings-changed = { $file } a changé pendant son écriture, il a donc été laissé tel quel
 auth-aws-profile-signed-in = le profil AWS { $profile } est connecté
 auth-aws-default-signed-in = le profil AWS par défaut est connecté
 auth-aws-profile-failed = le profil AWS { $profile } n'est pas connecté : { $failure }

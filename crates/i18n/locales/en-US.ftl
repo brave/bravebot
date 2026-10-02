@@ -652,9 +652,28 @@ auth-leo-held =
     Brave Leo Premium is signed in: { $status }. bravebot auth logout leo signs out.
 # A second sign-in registers this machine with Brave as one more device.
 auth-sign-in-again = Sign in again, as a new device?
-# The two variables are BRAVEBOT_USE_BEDROCK and AWS_REGION.
+# The region is AWS_REGION, and the tiers are the variables naming a model, such as
+# ANTHROPIC_DEFAULT_OPUS_MODEL.
 auth-no-aws-account =
-    no AWS account is configured for Bedrock: set { $switch }=1 and { $region }, or run bravebot auth login import where Claude Code or opencode uses one
+    no AWS account is configured for Bedrock: set { $region } and a model in one of { $tiers }, or run bravebot auth login import where Claude Code or opencode uses one
+# In every auth-bedrock message the switch is BRAVEBOT_USE_BEDROCK, and the file is the person's
+# own settings file.
+auth-bedrock-off =
+    { $switch } is set to something other than 1, which turns Bedrock off, and no amazon-bedrock provider block names an AWS account
+# The path is the machine-level settings file an administrator writes.
+auth-bedrock-pinned-off =
+    { $path } sets { $switch } for every user of this machine to something other than 1, which turns Bedrock off, and no amazon-bedrock provider block names an AWS account
+auth-bedrock-recorded = { $file } sets { $switch }=1 now, so a session uses Bedrock without it being exported
+auth-bedrock-not-recorded =
+    { $switch }=1 was not recorded, so it still has to be exported for a session to use Bedrock: { $problem }
+auth-bedrock-not-recorded-incognito =
+    an incognito session records nothing, so { $switch }=1 still has to be exported for a session to use Bedrock
+auth-bedrock-overruled =
+    a settings file sets { $switch } to something other than 1, so a session uses Bedrock only where { $switch }=1 is exported
+auth-bedrock-left =
+    { $file } already names { $switch }, so it was left as it is, and a session uses Bedrock only where { $switch }=1 is exported or a project's settings set it
+auth-bedrock-env-not-a-block = env in { $file } is not a block of names, so it was left as it is
+auth-bedrock-settings-changed = { $file } changed as it was being written, so it was left as it is
 auth-aws-profile-signed-in = the AWS profile { $profile } is signed in
 auth-aws-default-signed-in = the default AWS profile is signed in
 # The failure is what the AWS CLI or the check after it said.

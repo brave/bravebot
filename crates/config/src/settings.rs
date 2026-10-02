@@ -756,6 +756,14 @@ impl Settings {
         self.env.get(name).map(String::as_str)
     }
 
+    /// These settings with `name` set to `value` where no layer sets it.
+    pub fn with_env_default(mut self, name: &str, value: &str) -> Self {
+        self.env
+            .entry(name.to_string())
+            .or_insert_with(|| value.to_string());
+        self
+    }
+
     /// The model the settings in force asked for, if they asked for one.
     ///
     /// Not always the model: a choice `/model` saved ranks as the person's own file does, so it
@@ -2171,6 +2179,17 @@ mod tests {
     fn a_name_this_crate_does_not_know_is_still_read() {
         let settings = Settings::parse(r#"{"env": {"SOMETHING_ELSE": "value"}}"#);
         assert_eq!(settings.get("SOMETHING_ELSE"), Some("value"));
+    }
+
+    /// A value the person's own file would add is the lowest layer's, so every layer that already
+    /// names it still answers.
+    #[test]
+    fn a_default_answers_only_where_no_layer_names_it() {
+        let settings = Settings::parse(r#"{"env": {"BRAVEBOT_USE_BEDROCK": "0"}}"#)
+            .with_env_default("BRAVEBOT_USE_BEDROCK", "1")
+            .with_env_default("AWS_REGION", "us-east-1");
+        assert_eq!(settings.get("BRAVEBOT_USE_BEDROCK"), Some("0"));
+        assert_eq!(settings.get("AWS_REGION"), Some("us-east-1"));
     }
 
     /// Settings files carry other blocks. One this crate does not read must not stop it finding
