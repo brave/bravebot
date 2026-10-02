@@ -230,7 +230,7 @@ fn a_first_run_with_no_service_configured_says_how_to_configure_one() {
         stdout.is_empty(),
         "the reply stream carried the explanation instead: {stdout}"
     );
-    for route in ["amazon-bedrock", "OpenRouter", "bravebot import-leo-creds"] {
+    for route in ["amazon-bedrock", "OpenRouter", "bravebot auth login leo"] {
         assert!(
             stderr.contains(route),
             "the run refused without saying that {route} is a way to configure one: {stderr}"
@@ -334,7 +334,7 @@ fn a_service_configured_with_no_model_of_its_own_named_says_to_name_one() {
         "the run refused without saying which key names a model: {stderr}"
     );
     assert!(
-        !stderr.contains("bravebot import-leo-creds"),
+        !stderr.contains("bravebot auth login leo"),
         "somebody who has configured a service was sent to configure another: {stderr}"
     );
 }
@@ -866,7 +866,7 @@ fn doctor_ends_on_the_configuration_status_where_nothing_will_serve_a_turn() {
     // reads and the routes out are what the person in front of the screen reads, so the fix is
     // not the report losing one to gain the other.
     assert!(
-        stdout.contains("bravebot import-leo-creds"),
+        stdout.contains("bravebot auth login leo"),
         "the report stopped saying how to configure a service: {stdout}"
     );
 }
@@ -1041,8 +1041,8 @@ fn doctor_accounts_for_an_imported_subscription_at_the_tier_its_walk_stopped_at(
 /// would claim a window bounds a credential that has none.
 ///
 /// Both AWS arrangements are held wherever an account is configured, so an account is all the
-/// fixture needs; the AWS CLI is never run, since this is what the configuration holds rather
-/// than what a profile resolves to.
+/// fixture needs; what the AWS CLI answers changes neither, since this is what the configuration
+/// holds rather than what a profile resolves to.
 #[test]
 fn doctor_sizes_the_window_on_a_session_credential_and_on_nothing_else() {
     let scratch = Scratch::new("cli-running-brief-window");
@@ -1108,8 +1108,8 @@ fn doctor_sizes_the_window_on_a_session_credential_and_on_nothing_else() {
 /// the wrong credential.
 ///
 /// Both AWS arrangements are held wherever an account is configured, so an account is all the
-/// fixture needs; the AWS CLI is never run, since this is what the configuration holds rather
-/// than what a profile resolves to.
+/// fixture needs; what the AWS CLI answers changes neither, since this is what the configuration
+/// holds rather than what a profile resolves to.
 #[test]
 fn doctor_accounts_for_every_drop_of_each_credentials_walk() {
     let scratch = Scratch::new("cli-running-gate-walk");
@@ -1742,7 +1742,7 @@ fn a_session_in_lines_with_no_service_configured_says_how_to_configure_one() {
 
     let (transcript, _) = said(&output);
     assert_eq!(output.status.code(), Some(3), "{transcript}");
-    for route in ["amazon-bedrock", "OpenRouter", "bravebot import-leo-creds"] {
+    for route in ["amazon-bedrock", "OpenRouter", "bravebot auth login leo"] {
         assert!(
             transcript.contains(route),
             "the run refused without saying that {route} is a way to configure one: {transcript}"
@@ -1807,7 +1807,7 @@ fn a_session_in_lines_with_a_configured_gateway_opens() {
         "a configured gateway was refused as no service at all: {transcript}"
     );
     assert!(
-        !transcript.contains("bravebot import-leo-creds"),
+        !transcript.contains("bravebot auth login leo"),
         "somebody who has configured a service was sent to configure another: {transcript}"
     );
     // The end of the input in place of an answer to the startup question starts no session and
@@ -3357,7 +3357,7 @@ fn a_first_run_with_nothing_importable_refuses_as_before() {
     let (transcript, _) = said(&output);
     assert_eq!(output.status.code(), Some(3), "{transcript}");
     assert!(!transcript.contains("Import this"), "{transcript}");
-    assert!(!transcript.contains("import-providers"), "{transcript}");
+    assert!(!transcript.contains("auth login import"), "{transcript}");
     assert!(transcript.contains("amazon-bedrock"), "{transcript}");
 }
 
@@ -3379,7 +3379,7 @@ fn a_configured_service_with_a_brave_model_is_not_offered_an_import() {
     assert_eq!(output.status.code(), Some(3), "{transcript}");
     assert!(transcript.contains("`model` key"), "{transcript}");
     assert!(!transcript.contains("Import this"), "{transcript}");
-    assert!(!transcript.contains("import-providers"), "{transcript}");
+    assert!(!transcript.contains("auth login import"), "{transcript}");
 }
 
 /// IMPORT-7: an incognito session writes nothing, so it offers nothing to write.
@@ -3521,7 +3521,7 @@ fn nothing_is_asked_where_stderr_is_not_a_terminal() {
             }
             _ => {
                 assert_eq!(output.status.code(), Some(3), "{stderr}");
-                assert!(stderr.contains("bravebot import-providers"), "{stderr}");
+                assert!(stderr.contains("bravebot auth login import"), "{stderr}");
             }
         }
         assert!(!scratch.settings().exists(), "{arguments:?} wrote settings");
@@ -3550,7 +3550,7 @@ fn what_was_found_and_left_is_said_before_the_routes() {
         !stderr.contains("a-key-nobody-may-see"),
         "the value was shown: {stderr}"
     );
-    assert!(!stderr.contains("import-providers"), "{stderr}");
+    assert!(!stderr.contains("auth login import"), "{stderr}");
 }
 
 /// IMPORT-8: a one-shot run has nobody to ask, so it reads no answer and writes nothing, and its
@@ -3566,7 +3566,7 @@ fn a_one_shot_first_run_names_the_import_command_and_asks_nothing() {
     assert_eq!(output.status.code(), Some(3), "{stderr}");
     assert!(stdout.is_empty(), "{stdout}");
     assert!(
-        stderr.contains("Claude Code") && stderr.contains("bravebot import-providers"),
+        stderr.contains("Claude Code") && stderr.contains("bravebot auth login import"),
         "{stderr}"
     );
     assert!(!stderr.contains("Import this"), "{stderr}");
@@ -3610,7 +3610,7 @@ fn a_settings_file_the_import_cannot_write_is_named_in_place_of_the_command() {
         stderr.contains("does not hold a settings document"),
         "{stderr}"
     );
-    assert!(!stderr.contains("import-providers"), "{stderr}");
+    assert!(!stderr.contains("auth login import"), "{stderr}");
     assert_eq!(
         std::fs::read_to_string(scratch.settings()).expect("read"),
         broken
@@ -3799,6 +3799,124 @@ fn auth_login_bedrock_signs_in_to_every_profile_and_names_the_one_that_failed() 
     );
 }
 
+/// CLI-7: `doctor` says of each AWS account whether the AWS CLI gives its profile a credential, and
+/// names the command that signs in where it does not. What the CLI exported is never printed, and a
+/// signed-out account does not fail the report.
+#[cfg(unix)]
+#[test]
+fn doctor_says_whether_each_aws_account_is_signed_in_and_never_the_credential() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new("cli-running-doctor-aws-session")
+        .with_settings(
+            r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2", "profile": "work"}}},
+                "model": "opus"}"#,
+        )
+        // What the stand-in leaves after `aws sso login --profile work`.
+        .with_file("aws-work", "");
+    let bin = scratch.path.join("bin");
+    std::fs::create_dir_all(&bin).expect("create the bin directory");
+    let aws = bin.join("aws");
+    std::fs::write(&aws, AWS_WITH_A_LAPSED_PROFILE).expect("write the stand-in aws");
+    std::fs::set_permissions(&aws, std::fs::Permissions::from_mode(0o755))
+        .expect("make it executable");
+    let path = bin.to_str().expect("a UTF-8 path");
+
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([
+        ("PATH", path),
+        ("BRAVEBOT_USE_BEDROCK", "1"),
+        ("AWS_REGION", "us-east-1"),
+        ("AWS_PROFILE", "lapsed"),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+    ]);
+    let output = bravebot(&scratch.path, &environment, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stdout}{stderr}");
+    let lines: Vec<&str> = stdout.lines().map(str::trim).collect();
+    let sessions: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| line.starts_with("session "))
+        .collect();
+    assert_eq!(
+        sessions.len(),
+        2,
+        "one line per account, the tier variables' and the block's: {stdout}"
+    );
+    let after = |profile: &str| {
+        let at = lines
+            .iter()
+            .position(|line| *line == format!("profile   {profile}"))
+            .unwrap_or_else(|| panic!("no account on {profile}: {stdout}"));
+        lines.get(at + 1).copied().unwrap_or_default()
+    };
+    assert_eq!(
+        after("lapsed"),
+        "session   not signed in (run `bravebot auth login bedrock`)",
+        "{stdout}"
+    );
+    assert_eq!(after("work"), "session   signed in", "{stdout}");
+    assert!(
+        !stdout.contains("placeholder") && !stderr.contains("placeholder"),
+        "the exported credential was printed: {stdout}{stderr}"
+    );
+}
+
+/// CLI-7: `doctor` tells a missing AWS CLI and a profile the CLI does not have from a session that
+/// has run out, and names the sign-in command for neither, since signing in fixes neither. A block
+/// naming no profile is reported on the one `AWS_PROFILE` names, as the tier variables' account is.
+#[cfg(unix)]
+#[test]
+fn doctor_names_no_sign_in_for_a_missing_aws_cli_or_an_unknown_profile() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new("cli-running-doctor-aws-unknown").with_settings(
+        r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2"}}}, "model": "opus"}"#,
+    );
+    let empty = scratch.path.join("empty");
+    std::fs::create_dir_all(&empty).expect("create an empty bin directory");
+    let bin = scratch.path.join("bin");
+    std::fs::create_dir_all(&bin).expect("create the bin directory");
+    let aws = bin.join("aws");
+    std::fs::write(&aws, AWS_WITH_A_LAPSED_PROFILE).expect("write the stand-in aws");
+    std::fs::set_permissions(&aws, std::fs::Permissions::from_mode(0o755))
+        .expect("make it executable");
+
+    let session = |path: &std::path::Path, profile: &str| {
+        let mut environment = NOTHING_CONFIGURED.to_vec();
+        environment.extend([
+            ("PATH", path.to_str().expect("a UTF-8 path")),
+            ("BRAVEBOT_USE_BEDROCK", "1"),
+            ("AWS_REGION", "us-east-1"),
+            ("AWS_PROFILE", profile),
+            ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+        ]);
+        let output = bravebot(&scratch.path, &environment, &["doctor"]);
+        let (stdout, stderr) = said(&output);
+        assert!(output.status.success(), "{stdout}{stderr}");
+        let lines: Vec<String> = stdout.lines().map(|line| line.trim().to_string()).collect();
+        let on = format!("profile   {profile}");
+        assert_eq!(
+            lines.iter().filter(|line| **line == on).count(),
+            2,
+            "both accounts are on {profile}: {stdout}"
+        );
+        lines
+            .into_iter()
+            .filter(|line| line.starts_with("session "))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        session(&empty, "work"),
+        ["session   unknown (the AWS CLI is not installed)"; 2]
+    );
+    assert_eq!(
+        session(&bin, "missing"),
+        ["session   no such profile in the AWS CLI (it has work, lapsed)"; 2]
+    );
+}
+
 /// CLI-18: signing out of Leo is forgetting the import, which an incognito session allows since it
 /// leaves less behind.
 #[test]
@@ -3960,7 +4078,7 @@ fn a_first_run_with_nothing_listening_refuses_as_before() {
     let (transcript, _) = said(&output);
     assert_eq!(output.status.code(), Some(3), "{transcript}");
     assert!(!transcript.contains("Import this"), "{transcript}");
-    assert!(!transcript.contains("import-providers"), "{transcript}");
+    assert!(!transcript.contains("auth login import"), "{transcript}");
     assert!(!transcript.contains("Ollama"), "{transcript}");
     assert!(transcript.contains("amazon-bedrock"), "{transcript}");
 }
@@ -4003,7 +4121,7 @@ fn a_one_shot_first_run_with_ollama_running_names_the_import_command() {
     assert!(stdout.is_empty(), "{stdout}");
     assert!(
         stderr.contains("Ollama is running here with models bravebot can use")
-            && stderr.contains("bravebot import-providers"),
+            && stderr.contains("bravebot auth login import"),
         "{stderr}"
     );
     assert!(!stderr.contains("Import this"), "{stderr}");

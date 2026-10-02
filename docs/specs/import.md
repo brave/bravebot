@@ -359,9 +359,10 @@ These never ask, because where nobody can be asked the answer is no ([prompting.
 a one-shot run, `--json`, a stdin, stdout or stderr that is not a terminal, and `doctor`.
 
 In those cases, if [IMPORT-2](#IMPORT-2) finds something importable, the refusal gains one line
-naming the source and `bravebot import-providers`. `doctor` repeats the refusal, so it gets the same
-line. Where the settings file is one the import would refuse to write ([IMPORT-7](#IMPORT-7)), the
-line names that file and the reason instead, because the command would only refuse.
+naming the source and `bravebot auth login import`, which runs `bravebot import-providers`
+([CLI-18](cli.md#CLI-18)). `doctor` repeats the refusal, so it gets the same line. Where the
+settings file is one the import would refuse to write ([IMPORT-7](#IMPORT-7)), the line names that
+file and the reason instead, because the command would only refuse.
 
 `bravebot import-providers` asks the [IMPORT-5](#IMPORT-5) questions at any time, whether or not a
 service is configured. It refuses where stdin or stderr is not a terminal, and it refuses while incognito.

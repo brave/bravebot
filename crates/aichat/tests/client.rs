@@ -1277,7 +1277,7 @@ fn an_exhausted_subscription_fails_rather_than_downgrading() {
     let shown = err.to_string();
     assert!(shown.contains("subscription"), "unclear error: {shown}");
     assert!(
-        shown.contains("import-leo-creds"),
+        shown.contains("bravebot auth login leo"),
         "no remedy offered: {shown}"
     );
 }

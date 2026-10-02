@@ -326,6 +326,8 @@ bravebot doctor
 Answers "what will this actually use", and changes nothing. It reports:
 
 - every backend this build can reach and what identifies it, which names the settings set;
+- for each AWS account, whether it is signed in, and `bravebot auth login bedrock` where signing in
+  is what is missing;
 - which settings files are in force, and which of them won a name more than one set;
 - any settings file that tries to declare an [MCP server](../customize/mcp-servers.md), which fails
   the report, since only `~/.bravebot/mcp.json` declares one;
