@@ -3638,6 +3638,236 @@ fn import_providers_is_refused_while_incognito() {
     );
 }
 
+/// CLI-18: with no way named there is a list to pick from, and a pipe has nobody behind it to pick,
+/// so the refusal is the argument status with every form a script could type instead.
+#[test]
+fn auth_login_naming_no_way_is_refused_where_nobody_can_pick_one() {
+    let scratch = Scratch::new("cli-running-auth-piped");
+
+    let output = bravebot(&scratch.path, NOTHING_CONFIGURED, &["auth", "login"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        stdout.is_empty(),
+        "the list was printed for nobody: {stdout}"
+    );
+    for form in [
+        "bravebot auth login leo",
+        "bravebot auth login bedrock",
+        "bravebot auth login import",
+    ] {
+        assert!(stderr.contains(form), "{form} is not offered: {stderr}");
+    }
+}
+
+/// CLI-18: a word that names no way, a flag after `leo` or a second channel, and a word after a way
+/// that takes none are refused before anything runs, each naming what it refused.
+#[test]
+fn auth_refuses_what_names_no_way_to_sign_in() {
+    let scratch = Scratch::new("cli-running-auth-refused");
+
+    for (arguments, refused) in [
+        (&["auth"][..], "bravebot auth login"),
+        (&["auth", "signin"][..], "signin"),
+        (&["auth", "login", "openrouter"][..], "openrouter"),
+        (&["auth", "login", "LEO", "--forget"][..], "--forget"),
+        (&["auth", "login", "leo", "beta", "nightly"][..], "nightly"),
+        (&["auth", "login", "bedrock", "us-east-1"][..], "us-east-1"),
+        (&["auth", "logout"][..], "bravebot auth logout leo"),
+        (&["auth", "logout", "bedrock"][..], "aws sso logout"),
+        (&["auth", "logout", "openrouter", "now"][..], "openrouter"),
+        (&["auth", "logout", "leo", "now"][..], "now"),
+    ] {
+        let output = bravebot(&scratch.path, NOTHING_CONFIGURED, arguments);
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+        assert!(stdout.is_empty(), "{arguments:?} started work: {stdout}");
+        assert!(
+            stderr.contains(refused),
+            "{arguments:?} did not say {refused}: {stderr}"
+        );
+    }
+    assert!(
+        !scratch.credentials().exists(),
+        "a refused sign-in left credentials behind"
+    );
+}
+
+/// CLI-18: in an incognito session Leo and the import are refused by the checks their own commands
+/// make, with the same words, and the Bedrock way is not, since the AWS session it starts is the
+/// AWS CLI's and a session in that mode starts one too.
+#[test]
+fn auth_login_in_an_incognito_session_refuses_what_its_command_refuses() {
+    let scratch = Scratch::new("cli-running-auth-incognito");
+
+    for (way, command) in [("leo", "import-leo-creds"), ("import", "import-providers")] {
+        let through_auth = bravebot(
+            &scratch.path,
+            NOTHING_CONFIGURED,
+            &["--incognito", "auth", "login", way],
+        );
+        let direct = bravebot(&scratch.path, NOTHING_CONFIGURED, &["--incognito", command]);
+
+        let (stdout, stderr) = said(&through_auth);
+        assert_eq!(through_auth.status.code(), Some(1), "{way}: {stderr}");
+        assert!(stdout.is_empty(), "{way} started work: {stdout}");
+        assert!(stderr.contains("incognito"), "{way}: {stderr}");
+        assert_eq!(
+            stderr,
+            said(&direct).1,
+            "{way} is not refused as {command} is"
+        );
+    }
+    assert!(!scratch.credentials().exists());
+    assert!(!scratch.settings().exists());
+
+    // Past any refusal for the mode, to the check that there is an account to sign in to.
+    let output = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["--incognito", "auth", "login", "bedrock"],
+    );
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("BRAVEBOT_USE_BEDROCK"), "{stderr}");
+}
+
+/// A stand-in for the AWS CLI on profiles `work` and `lapsed`. `aws sso login` succeeds on both,
+/// and afterwards `work` exports a credential and `lapsed` still does not, as a profile whose role
+/// is gone would. The credential is a placeholder.
+#[cfg(unix)]
+const AWS_WITH_A_LAPSED_PROFILE: &str = r#"#!/bin/sh
+case "$1 $2" in
+  "configure list-profiles") printf 'work\nlapsed\n' ;;
+  "sso login") printf 'open the page and enter the code PLACEHOLDER\n'; : > "$HOME/aws-$4" ;;
+  "configure export-credentials")
+    if [ "$6" = work ] && [ -e "$HOME/aws-work" ]; then
+      printf '{"Version":1,"AccessKeyId":"placeholder","SecretAccessKey":"placeholder"}\n'
+    else
+      exit 255
+    fi ;;
+  *) exit 2 ;;
+esac
+"#;
+
+/// CLI-18: every AWS account is signed in to, past one that fails, and one is reported signed in
+/// only where it can be signed with afterwards. A failure names its profile and makes the exit
+/// status a failure.
+#[cfg(unix)]
+#[test]
+fn auth_login_bedrock_signs_in_to_every_profile_and_names_the_one_that_failed() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new("cli-running-auth-bedrock").with_settings(
+        r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2", "profile": "work"}}}}"#,
+    );
+    let bin = scratch.path.join("bin");
+    std::fs::create_dir_all(&bin).expect("create the bin directory");
+    let aws = bin.join("aws");
+    std::fs::write(&aws, AWS_WITH_A_LAPSED_PROFILE).expect("write the stand-in aws");
+    std::fs::set_permissions(&aws, std::fs::Permissions::from_mode(0o755))
+        .expect("make it executable");
+    let path = bin.to_str().expect("a UTF-8 path");
+
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([
+        ("PATH", path),
+        ("BRAVEBOT_USE_BEDROCK", "1"),
+        ("AWS_REGION", "us-east-1"),
+        ("AWS_PROFILE", "lapsed"),
+    ]);
+    let output = bravebot(&scratch.path, &environment, &["auth", "login", "bedrock"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("enter the code PLACEHOLDER"),
+        "the sign-in was not shown: {stdout}"
+    );
+    assert!(
+        stdout.contains("profile work is signed in"),
+        "work was not signed in after lapsed failed: {stdout}{stderr}"
+    );
+    assert!(
+        !stdout.contains("lapsed is signed in"),
+        "lapsed was reported signed in: {stdout}"
+    );
+    assert!(
+        stderr.contains("profile lapsed is not signed in"),
+        "the failure does not name its profile: {stderr}"
+    );
+}
+
+/// CLI-18: signing out of Leo is forgetting the import, which an incognito session allows since it
+/// leaves less behind.
+#[test]
+fn auth_logout_leo_forgets_the_import_in_an_incognito_session() {
+    let scratch = Scratch::new("cli-running-auth-logout");
+    let stored = scratch.credentials();
+    std::fs::create_dir_all(stored.parent().expect("the state directory"))
+        .expect("create the state directory");
+    std::fs::write(&stored, "{}").expect("write credentials to forget");
+
+    let output = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["--incognito", "auth", "logout", "leo"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert!(output.status.success(), "signing out was refused: {stderr}");
+    assert!(
+        !stored.exists(),
+        "the credentials are still at {}",
+        stored.display()
+    );
+}
+
+/// CLI-18: the Bedrock way signs in to an account the configuration names, so where it names none
+/// it is a configuration failure that says what to set, and no AWS command is run.
+#[test]
+fn auth_login_bedrock_is_refused_where_no_aws_account_is_configured() {
+    let scratch = Scratch::new("cli-running-auth-no-aws");
+
+    let output = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["auth", "login", "bedrock"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("BRAVEBOT_USE_BEDROCK") && stderr.contains("AWS_REGION"),
+        "{stderr}"
+    );
+}
+
+/// CLI-18: the import way is `import-providers` itself, so it is refused where that is, with the
+/// same words, and writes nothing.
+#[test]
+fn auth_login_import_is_the_import_and_refuses_where_it_does() {
+    let scratch = Scratch::new("cli-running-auth-import")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK);
+
+    let through_auth = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["auth", "login", "import"],
+    );
+    let direct = bravebot(&scratch.path, NOTHING_CONFIGURED, &["import-providers"]);
+
+    let (_, stderr) = said(&through_auth);
+    assert_eq!(through_auth.status.code(), Some(2), "{stderr}");
+    assert_eq!(stderr, said(&direct).1);
+    assert!(
+        !scratch.settings().exists(),
+        "a piped import wrote settings"
+    );
+}
+
 /// What `ollama list` shows on a machine with one model that can call tools and one that cannot,
 /// as `/api/tags` answers it.
 const OLLAMA_LISTING: &str = r#"{"models": [

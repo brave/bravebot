@@ -4,18 +4,20 @@ title: The command line
 status: normative
 governs:
   - crates/cli/src/main.rs
+  - crates/cli/src/auth.rs
   - crates/cli/src/exit.rs
   - crates/cli/src/json.rs
   - crates/cli/src/plain.rs
 documented-by:
   - docs/website/docs/reference/cli.md
+  - docs/website/docs/customize/signing-in.md
   - docs/website/docs/using/headless.md
 ---
 
 ## Scope
 
-Running bravebot without the interface that draws: a one-shot task, piped input, `doctor`, a
-session in lines, and what goes where on the way out. The interface that draws is
+Running bravebot without the interface that draws: a one-shot task, piped input, `doctor`, `auth`,
+a session in lines, and what goes where on the way out. The interface that draws is
 [terminal-input.md](terminal-input.md) and [terminal-transcript.md](terminal-transcript.md).
 
 A one-shot run has nobody to ask, and most of what makes it different follows from that. A session
@@ -791,3 +793,88 @@ key for the definition, so a checkout that always wants one has to pass `--agent
 `verified-by: bravebot_tui::app::a_name_from_the_command_line_is_worked_under_where_it_was_written_and_refused_where_not`
 `verified-by: bravebot_tui::app::a_session_under_a_definition_naming_a_model_works_on_it_and_refuses_the_picker`
 `verified-by: bravebot_tui::status::the_report_names_the_definition_every_turn_is_addressed_to`
+
+<a id="CLI-18"></a>
+### CLI-18: `auth login` lists every way to sign in to a model service and runs the one picked
+
+`bravebot auth login` with no way named lists the ways this program signs in to a model service,
+each by a number and by the word that names it:
+
+- `leo` imports a Brave Leo Premium subscription, as `import-leo-creds` does.
+- `bedrock` signs in to every AWS account the configuration names for Amazon Bedrock.
+- `import` reads model services out of other tools, as `import-providers` does.
+
+A way that already holds a sign-in says so on its line. For Leo that is the line `doctor` prints
+for the stored subscription. For Bedrock it is shown where every account named has a usable
+session. The credential itself is never printed.
+
+The answer is a number or a name, in any case. If nothing is typed, or the input ends, the command exits
+successfully having run nothing. An answer that names no listed way is refused with the argument
+status (CLI-6). Picking Leo asks which channel, and nothing typed means stable. Where a subscription
+is already imported, it first asks whether to sign in again, names `bravebot auth logout leo`, and
+runs nothing without a yes.
+
+`bravebot auth login <way>` runs that way without the list. A word after `leo` is the channel and
+is checked as `import-leo-creds` checks it. A word opening with `-` is refused there, and so are a
+second word and any word after `bedrock` or `import`. The list needs a terminal on stdin and on stderr. Without one, the
+command is refused with the argument status and the forms a script can type instead.
+
+Each way is run by the function its own command runs, so `auth login import` prompts, refuses and
+writes where `import-providers` does. The Bedrock way signs in once per AWS profile: first the
+account the tier variables name, then each `amazon-bedrock` provider block. An account naming no
+profile is on the one `AWS_PROFILE` names, which the `aws` it starts inherits. Every account is
+tried, past one that fails. One is reported signed in only where its credentials can be exported
+after the sign-in. One that cannot is named, and the command exits with the failure status. Where
+the configuration names no account, it exits with the configuration status and names
+`BRAVEBOT_USE_BEDROCK` and `AWS_REGION`.
+
+In an incognito session the Leo and import ways are refused by the checks `import-leo-creds` and
+`import-providers` make, with their words. The Bedrock way is not refused.
+`bravebot auth logout leo` forgets the stored subscription, as `import-leo-creds --forget` does, and
+is allowed in an incognito session. `auth logout bedrock` and `auth logout import` are refused and
+say what to run instead, since neither way keeps a credential of its own.
+
+**Why.** Each service had its own route: two commands, an environment variable, and a session that
+signs in to AWS on its first turn. Nobody who had not read the documentation could find them, and
+`bravebot auth login` was refused as an unexpected argument. The list names the routes that exist
+and shows which are already in use.
+
+Each way calls the function its old command calls rather than a copy of it, so the refusals and
+prompts cannot drift between the two, and nothing that scripts the old commands breaks. The command
+runs before any session exists, so no planner or driver context is involved and no labelled value
+passes through it.
+
+A held Leo sign-in is confirmed before it is repeated because a second import registers this
+machine with Brave as one more device. A repeated Bedrock sign-in leaves a good session alone, and
+a repeated import says when it has nothing new, so neither is asked about.
+
+Leo and the import are refused in an incognito session for the reason in
+[INCOG-7](incognito.md#INCOG-7): each writes to the directory this program owns. The AWS session is
+the AWS CLI's, a subprocess [INCOG-8](incognito.md#INCOG-8) leaves outside the mode, and a session
+in that mode signs in to it on its first turn, so refusing it here would refuse nothing the session
+does not do. Signing out is allowed because it leaves less behind.
+
+An account is signed in to once per profile because the AWS session belongs to the profile. A second
+account on the same profile would check the same session again and report it twice. The check is
+made again after `aws sso login`, because that command can finish for a profile whose credentials
+still cannot be exported, and the export is what a turn signs with.
+
+**Known costs.** A gateway API key still has no way here. It is set in the environment or a settings
+file ([BACKEND-16](backends.md#BACKEND-16)), because storing one needs a store this program does not
+have yet. The Bedrock way does not record the opt-in, so `BRAVEBOT_USE_BEDROCK=1` must still be set
+for a session to use the account. The list asks the AWS CLI about each account before it is
+shown, which takes most of a second per account whose session has not been checked yet.
+
+`verified-by: bravebot_cli::auth::every_way_is_listed_and_only_a_held_one_says_what_it_holds`
+`verified-by: bravebot_cli::auth::a_way_is_picked_by_its_number_or_its_name`
+`verified-by: bravebot_cli::auth::leo_is_asked_which_channel_and_passes_the_word_on`
+`verified-by: bravebot_cli::auth::a_held_leo_sign_in_is_repeated_only_when_asked_to`
+`verified-by: bravebot_cli::auth::each_aws_profile_is_signed_in_to_once`
+`verified-by: bravebot_cli::main::a_definition_is_refused_where_nothing_would_work_under_it`
+`verified-by: bravebot_cli::running::auth_login_naming_no_way_is_refused_where_nobody_can_pick_one`
+`verified-by: bravebot_cli::running::auth_refuses_what_names_no_way_to_sign_in`
+`verified-by: bravebot_cli::running::auth_login_in_an_incognito_session_refuses_what_its_command_refuses`
+`verified-by: bravebot_cli::running::auth_logout_leo_forgets_the_import_in_an_incognito_session`
+`verified-by: bravebot_cli::running::auth_login_bedrock_is_refused_where_no_aws_account_is_configured`
+`verified-by: bravebot_cli::running::auth_login_bedrock_signs_in_to_every_profile_and_names_the_one_that_failed`
+`verified-by: bravebot_cli::running::auth_login_import_is_the_import_and_refuses_where_it_does`

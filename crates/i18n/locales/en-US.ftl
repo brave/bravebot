@@ -32,6 +32,8 @@ cli-usage-fork = Fork a session and start exploring a different path
 cli-usage-doctor = Check configuration and confinement
 cli-usage-import = Import a Leo Premium subscription
 cli-usage-import-providers = Import a model service Claude Code or opencode configured
+cli-usage-auth-login = Sign in to a model service, listing every way when none is named
+cli-usage-auth-logout = Forget an imported Leo Premium subscription
 cli-usage-mcp = Declare, list and approve MCP servers
 
 cli-keys-heading = Interactive keys:
@@ -596,6 +598,52 @@ import-nothing-found =
     neither Claude Code nor opencode configures a model service bravebot can use, and no Ollama serving one is running here
 import-nothing-new = nothing is left to import: every name found is already set, or pinned
 import-takes-nothing-else = import-providers takes no arguments
+
+
+## Signing in to a model service, by any of the ways the program has
+
+# Printed under a refusal that named no command, or one this does not have.
+auth-forms-heading = bravebot auth takes one of:
+auth-needs-a-command = bravebot auth needs a command
+auth-unknown-command = bravebot auth has no command { $command }
+auth-unknown-way = there is no way to sign in called { $way }
+auth-unexpected-argument = { $command } does not take { $argument }
+auth-needs-a-terminal =
+    bravebot auth login asks which way to sign in, so it needs a terminal to ask on, or the name of a way
+auth-logout-needs-a-way = bravebot auth logout needs the name of the way to sign out of
+# The heading over the list. Each line under it starts with a number and a word, leo, bedrock or
+# import, which a script types and which are not translated.
+auth-ways-heading = Ways to sign in to a model service:
+auth-way-leo = Brave Leo Premium, from a Brave install that subscribes
+auth-way-bedrock = An AWS account, for Amazon Bedrock
+auth-way-import = A model service Claude Code, opencode or Ollama has, imported into settings
+# A way that is already signed in, with what it holds.
+auth-way-held = { $description } ({ $status })
+auth-signed-in = signed in
+auth-which-way = Which one? Type its number or its name, or nothing to stop:
+# Said where the answer to auth-which-way names none of the ways listed.
+auth-not-a-listed-way = { $answer } is not one of the ways listed
+auth-which-channel =
+    Which Brave channel subscribes? stable, beta, nightly or development, or nothing for stable:
+# Said before auth-sign-in-again. The status is doctor-subscription.
+auth-leo-held =
+    Brave Leo Premium is signed in: { $status }. bravebot auth logout leo signs out.
+# A second sign-in registers this machine with Brave as one more device.
+auth-sign-in-again = Sign in again, as a new device?
+# The two variables are BRAVEBOT_USE_BEDROCK and AWS_REGION.
+auth-no-aws-account =
+    no AWS account is configured for Bedrock: set { $switch }=1 and { $region }, or run bravebot auth login import where Claude Code or opencode uses one
+auth-aws-profile-signed-in = the AWS profile { $profile } is signed in
+auth-aws-default-signed-in = the default AWS profile is signed in
+# The failure is what the AWS CLI or the check after it said.
+auth-aws-profile-failed = the AWS profile { $profile } is not signed in: { $failure }
+auth-aws-default-failed = the default AWS profile is not signed in: { $failure }
+auth-aws-still-signed-out =
+    aws sso login finished, and the profile still gives no credentials to sign a request with
+auth-logout-bedrock =
+    bravebot keeps no AWS session of its own: the AWS CLI keeps it, and aws sso logout ends it
+auth-logout-import =
+    an import keeps no credential of its own: it wrote entries to the settings file, and removing them there undoes it
 
 
 ## Declaring an MCP server, and approving one
