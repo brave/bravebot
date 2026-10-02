@@ -405,8 +405,10 @@ check-ui: check-ui-build
 check-extension:
 	ls extension/tests/*.test.mjs >/dev/null && node --test extension/tests/*.test.mjs
 
+# CI sets UI_INSTALL to ui/scripts/ci-install.sh, which reuses a cached build of Leo.
+UI_INSTALL ?= npm --prefix ui ci
 check-ui-build: check-extension
-	npm --prefix ui ci
+	$(UI_INSTALL)
 	npm --prefix ui run typecheck
 	BRAVEBOT_BUILD_UNCONFIGURED=1 npm --prefix ui run build
 	cd ui && ls scripts/*.test.mjs >/dev/null && node --test scripts/*.test.mjs
