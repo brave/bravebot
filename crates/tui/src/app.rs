@@ -306,6 +306,7 @@ pub fn commands() -> [Command; 23] {
             name: CHECKOUTS_COMMAND,
             argument: "[remove <n>]",
             description: t!(command_checkouts),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: MANIFEST_COMMAND,
