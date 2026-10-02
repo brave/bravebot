@@ -19,7 +19,7 @@ try {
     const rows = ['A', 'B'].map((id) => ({ id, directory, title: `Conversation ${id}`,
       project: 'model-picker-project', branch: null, updated: 1, bytes: 1 }))
     globalThis.modelTest = { sent: [], fail: false, loading: false }
-    // The native picker is what grants a folder to a new bot, so answer the dialog rather than the channel.
+    // The native picker opens a project; it is answered here rather than through the channel.
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] })
     ipcMain.removeHandler('bravebot:request')
     ipcMain.handle('bravebot:request', async (_, method, params) => {
@@ -50,7 +50,7 @@ try {
     })
   })
   await page.reload()
-  await page.locator('[data-test="new-session"]').click()
+  await page.locator('[data-test="new-project"]').click()
   await page.getByRole('button', { name: "Don't trust", exact: true }).click()
   const trigger = page.locator('.model-trigger')
   await trigger.waitFor()
@@ -150,7 +150,6 @@ try {
   const form = page.locator('.bot-form')
   await form.getByRole('textbox', { name: 'Name', exact: true }).fill('Web dev model test')
   await form.getByRole('textbox', { name: 'Purpose', exact: true }).fill('Build accessible websites.')
-  await form.getByRole('button', { name: 'Choose a folder…' }).click()
   const preview = form.locator('[data-avatar]')
   const firstFace = await preview.getAttribute('data-avatar')
   await form.getByRole('button', { name: 'Refresh avatar', exact: true }).click()
@@ -172,10 +171,9 @@ try {
   const stored = await page.evaluate(async () => (await window.bravebot.readBots())[0])
   assert.equal(stored.model, 'openrouter/anthropic/claude-sonnet-4.5')
   assert.equal(await botRow.locator('[data-avatar]').getAttribute('data-avatar'), chosenFace)
-  await botRow.click()
-  await page.getByRole('button', { name: 'New conversation', exact: true }).click()
-  await page.getByRole('button', { name: "Don't trust", exact: true }).click()
-  await page.getByRole('dialog').waitFor({state:'hidden'})
+  // The bot's own page has a composer that starts its next conversation, with the bot's model.
+  await botRow.locator('.bot-open-button').click()
+  await page.locator('[data-test="bot-conversations"]').waitFor()
   const botTrigger = page.locator('.composer .model-trigger')
   assert.match(await botTrigger.getAttribute('aria-label'), /sonnet/)
   await botTrigger.click()
@@ -184,13 +182,13 @@ try {
   await page.waitForFunction(async () => (await window.bravebot.readBots())[0]?.model?.includes('haiku'))
   await page.reload()
   await page.locator('[data-test="sidebar-tabs"]').getByText('Bots', { exact: true }).click()
-  await botRow.click()
-  await page.getByRole('button', { name: 'New conversation', exact: true }).click()
-  await page.getByRole('button', { name: "Don't trust", exact: true }).click()
-  await page.getByRole('dialog').waitFor({state:'hidden'})
-  assert.match(await botTrigger.getAttribute('aria-label'), /haiku/)
+  await botRow.locator('.bot-open-button').click()
+  await page.locator('[data-test="bot-conversations"]').waitFor()
+  await page.waitForFunction(() => /haiku/.test(document.querySelector('.composer .model-trigger')?.getAttribute('aria-label') ?? ''))
   await page.locator('.composer textarea').fill('Use the saved bot model')
   await page.locator('.composer .send').click()
+  await page.getByRole('button', { name: "Don't trust", exact: true }).click()
+  await page.getByRole('dialog').waitFor({state:'hidden'})
   await page.waitForFunction(() => document.querySelector('.composer .model-trigger')?.shadowRoot?.querySelector('button')?.disabled)
   const botSent = await app.evaluate(() => globalThis.modelTest.botSent)
   assert.equal(botSent.model, 'openrouter/anthropic/claude-haiku-4.5')

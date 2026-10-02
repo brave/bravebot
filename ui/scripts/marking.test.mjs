@@ -398,7 +398,7 @@ test('a link is drawn as one only where its parsed scheme is openable', () => {
     assert.ok(drawn.includes(`href="${href}"`), `${href} was refused:\n${drawn}`)
     // The destination in the tooltip: the text of the link was written by the model, and nothing
     // obliges it to describe where the link goes.
-    assert.ok(drawn.includes(`title="${href}"`), drawn)
+    assert.ok(drawn.includes(`data-tooltip="${href}"`), drawn)
     assert.ok(drawn.includes('rel="noopener noreferrer nofollow"'), drawn)
   }
 })

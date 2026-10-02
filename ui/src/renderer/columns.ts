@@ -24,13 +24,15 @@ export type Side = keyof typeof SIDES
 const CENTER_MIN = 480
 
 /**
- * The two 1px dividers, which are part of the window even though nobody sizes them.
+ * The two dividers, which are part of the window even though nobody sizes them: the 1px seam
+ * beside the sidebar, and the gap between the conversation and the context card, which is
+ * `--card-gap` (8px) in `shell.css`.
  *
- * They sit in the same grid as the columns, so a window's worth of room is two pixels
- * short of what the columns may divide between them. Left out of the arithmetic, the
- * transcript's floor was quietly two pixels lower than [`CENTER_MIN`] claims.
+ * They sit in the same grid as the columns, so a window's worth of room is that much short of
+ * what the columns may divide between them. Left out of the arithmetic, the transcript's floor
+ * would be quietly lower than [`CENTER_MIN`] claims.
  */
-const DIVIDERS = 2
+const DIVIDERS = 1 + 8
 
 export interface Widths {
   left: number

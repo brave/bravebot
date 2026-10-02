@@ -85,8 +85,8 @@ that says what a value is *for* rather than for a Leo name:
 
 Light and dark come from Leo's own `prefers-color-scheme` and `data-theme` rules, so a role needs
 no dark-mode override of its own; the syntax colours in `syntax.css` are the exception, and pick
-the light or dark primitive by the same two conditions. `.app.compact` redefines the row heights and
-gaps, and `prefers-reduced-motion` zeroes the motion tokens. The legacy names at the foot of
+the light or dark primitive by the same two conditions. `prefers-reduced-motion` zeroes the motion
+tokens. The legacy names at the foot of
 `tokens.css` (`--bg`, `--ink-dim`, `--accent` and the rest) alias the roles until the last rule
 using them goes.
 
@@ -131,7 +131,7 @@ so a shortcut is said once, in the platform's form. `pressed`, `expanded`, `cont
 alone carries.
 
 `TooltipLayer` is the only tooltip in the window: one Leo `Tooltip` laid over whichever
-`[data-tooltip]` element the pointer rests on or the keyboard reaches, with a 500ms first delay
+`[data-tooltip]` element the pointer rests on or the keyboard reaches, with a 1s first delay
 and no delay while moving along a toolbar. Use `data-tooltip` on anything else that needs one
 rather than a native `title`, which would draw a second box. A tooltip supplements the accessible
 name and never replaces it, and a disabled control shows none.
@@ -178,7 +178,7 @@ script prints shows both counts against their limits.
 
 ### The quality bar
 
-A surface is finished when it holds in light and dark, comfortable and compact, at 1440×900 and
+A surface is finished when it holds in light and dark at 1440×900 and
 at the minimum window size. In short:
 
 - **Grid.** Spacing comes from the Leo scale (4/8/12/16/24). Each column has one left text edge.

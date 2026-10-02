@@ -19,10 +19,10 @@ export function RunRecord({ run, onNew }: { run: Saved; onNew: (directory?: stri
       <div className="run-record-notice" role="note">
         <strong>Plan run · read only</strong>
         <p>
-          A plan run has no conversation, so it cannot be continued. Start a session in this
+          A plan run has no conversation, so it cannot be continued. Start a chat in this
           project to ask again.
         </p>
-        <button onClick={() => onNew(record.directory)}>New session here</button>
+        <button onClick={() => onNew(record.directory)}>New chat here</button>
       </div>
 
       <section>

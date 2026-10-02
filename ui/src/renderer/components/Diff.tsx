@@ -51,7 +51,7 @@ export function Diff({ changes, path, untrusted = false }: { changes: Change[]; 
     {body}
     {expanded && <Modal title="Review proposed changes" size="xl" onClose={() => setExpanded(false)} className="expanded-diff"
       subtitle="Review the supplied changes here, then return to the approval card to decide."
-      actions={<Button kind="filled" size="small" onClick={() => setExpanded(false)}>Done</Button>}>
+      actions={<Button kind="filled" onClick={() => setExpanded(false)}>Done</Button>}>
       <div className="diff-review">
         <div className="code-toolbar"><span className="code-language">{path ?? 'Proposed changes'}</span>{wrapToggle}</div>
         {body}

@@ -11,7 +11,8 @@
   display: flex;
   flex-direction: column;
   gap: var(--leo-spacing-l);
-  padding-inline: max(var(--leo-spacing-2xl), calc((100% - var(--reading-width)) / 2));
+  --dock-inset: max(var(--leo-spacing-2xl), calc((100% - var(--reading-width)) / 2));
+  padding-inline: var(--dock-inset);
   padding-bottom: var(--leo-spacing-xl);
   isolation: isolate;
 }
@@ -35,6 +36,11 @@
 }
 .composer-stack { display: flex; flex-direction: column; min-width: 0; }
 
+/* The white box sits in a sunken shell that also carries the footer strip under it. The box's
+   border lies over the shell's on three sides, so the two read as one object. */
+.composer-shell { display: flex; flex-direction: column; min-width: 0; border-radius: var(--radius-field); }
+.composer-shell.with-footer { border: 1px solid var(--border-subtle); background: var(--surface-app); }
+.composer-shell.with-footer > .composer-box { margin: -1px -1px 0; }
 .composer-box {
   display: flex;
   flex-direction: column;
@@ -42,44 +48,85 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-field);
   background: var(--surface-raised);
-  box-shadow: var(--shadow-raised);
   transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
 }
 .composer-box:hover { border-color: var(--border-strong); }
 .composer-box:focus-within {
   border-color: var(--border-focus);
-  box-shadow: var(--shadow-raised), var(--shadow-focus);
+  box-shadow: var(--shadow-focus);
 }
 /* A tray above takes the top corners: the two read as one object. */
-.composer-tray + .composer-box,
+.composer-tray + .composer-shell,
+.composer-tray + .composer-shell > .composer-box,
 .composer-tray + .composer-tray { border-top-left-radius: 0; border-top-right-radius: 0; }
 
 .composer leo-textarea {
   /* Plain mode: no chrome of Leo's own, because the box around it carries the border and the
-     focus state. It has no padding either, so the host supplies it. */
-  --leo-control-font: var(--leo-font-large-regular);
+     focus state. It has no padding and inherits its type from the host, so the host supplies
+     both: 16/24 text, 12px above it and 16px either side. The toolbar's own padding sits under it. */
   --leo-control-focus-effect: none;
   display: block;
   min-width: 0;
-  padding: var(--leo-spacing-l) var(--leo-spacing-xl) var(--leo-spacing-s);
+  padding: var(--leo-spacing-l) var(--leo-spacing-xl) 0;
   box-sizing: border-box;
+  font: var(--leo-font-large-regular);
 }
 
 .composer-toolbar {
   display: flex;
   align-items: center;
-  gap: var(--leo-spacing-s);
+  gap: var(--leo-spacing-m);
   min-width: 0;
-  padding: var(--leo-spacing-m);
+  padding: var(--leo-spacing-m) var(--leo-spacing-m) var(--leo-spacing-m) var(--leo-spacing-xl);
 }
 .toolbar-spacer { flex: 1; min-width: 0; }
+
+/* The strip under the box, on the shell's ground: the project on the left, the pull request and
+   branch on the right. */
+.composer-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  padding: var(--leo-spacing-m);
+  font: var(--type-meta-strong);
+  color: var(--ink-tertiary);
+  --leo-icon-size: var(--icon-control);
+  --leo-icon-color: var(--ink-tertiary);
+}
+.project-trigger { --leo-button-color: var(--ink-tertiary); max-width: 100%; }
+.project-menu { min-width: 0; }
+/* The project and branch when they are only shown take the geometry of the pill buttons beside
+   them: 28px tall, 8px either side, the icon 4px from its text. */
+.composer-project,
+.composer-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--leo-spacing-s);
+  min-width: 0;
+  min-height: var(--hit);
+  padding: var(--leo-spacing-s) var(--leo-spacing-m);
+  box-sizing: border-box;
+}
+.composer-branch { flex: 0 1 auto; }
+.composer-branch-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-toolbar .model-picker { flex: 0 1 auto; min-width: 0; max-width: 220px; margin: 0; }
 .composer .model-trigger { width: auto; max-width: 100%; --leo-button-color: var(--ink-tertiary); }
 .composer .model-current { max-width: 180px; }
-.composer .attach-files { --leo-button-color: var(--ink-secondary); }
+/* The icon is 20px in a 28px target. */
+.composer .attach-files {
+  --leo-button-color: var(--ink-secondary);
+  --leo-button-padding: var(--leo-spacing-s);
+  --leo-icon-xs: var(--icon-hero);
+  --leo-icon-s: var(--icon-hero);
+  --leo-icon-size: var(--icon-hero);
+  /* The glyph lines up with the text above it; the target reaches out past it. */
+  margin-inline-start: calc(-1 * var(--leo-spacing-s));
+}
+/* A 36px circle round a 20px icon. */
 .composer .send {
   flex: none;
-  --leo-icon-size: var(--icon-control);
+  --leo-icon-size: var(--icon-hero);
+  --leo-button-padding: var(--leo-spacing-m);
   --leo-button-radius: var(--radius-pill);
 }
 
@@ -92,9 +139,12 @@
   width: var(--hit);
   height: var(--hit);
   border-radius: var(--radius-control);
-  --leo-progressring-size: var(--icon-meta);
+  --leo-progressring-size: var(--icon-control);
   --leo-progressring-stroke-width: 2px;
   --leo-progressring-color: var(--ink-tertiary);
+  /* The ring is 16px and sits the toolbar's gap from its neighbours. The rest of the 28px target
+     reaches into that gap. */
+  margin-inline: calc((var(--icon-control) - var(--hit)) / 2);
 }
 .context-meter:hover { background: var(--surface-hover); }
 .context-meter:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
@@ -197,18 +247,26 @@
 .composer-notice .notice-text { flex: 1 1 16em; min-width: 0; }
 .composer-notice .notice-actions { display: flex; gap: var(--leo-spacing-xs); margin-left: auto; }
 
-/* ---- attention pills: centred over the top of the box, and only when there is something */
+/* ---- above the box: the alerts and pills that float over the end of the transcript.
+   They stand on the box's top edge, take no height in the dock, and have the box's width. */
 
-.attention-pills {
+.dock-float {
   position: absolute;
   bottom: 100%;
-  left: 0;
-  right: 0;
+  inset-inline: var(--dock-inset);
   z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-m);
+  padding-bottom: var(--leo-spacing-m);
+  pointer-events: none;
+}
+
+/* Centred over the top of the box, and only when there is something. */
+.attention-pills {
   display: flex;
   justify-content: center;
   gap: var(--leo-spacing-m);
-  padding-bottom: var(--leo-spacing-m);
   pointer-events: none;
 }
 .attention-pill {
@@ -249,33 +307,37 @@
   transition: flex-grow var(--motion-panel);
 }
 .transcript.fresh .composer-spacer { flex-grow: 1; }
-.transcript.fresh .entries { justify-content: flex-end; }
-.fresh-greeting { text-align: center; padding-bottom: var(--leo-spacing-xl); }
-.fresh-greeting h1 { margin: 0 0 var(--leo-spacing-m); font: var(--leo-font-heading-h2); color: var(--ink-primary); }
-.fresh-project { font: inherit; color: var(--ink-secondary); }
-.fresh-greeting p { margin: 0; font: var(--type-body); color: var(--ink-tertiary); }
-.suggestions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: var(--leo-spacing-m);
-  animation: pill-in var(--motion-panel);
-}
-.suggestion {
-  flex: none;
-  height: var(--hit);
-  padding: 0 var(--leo-spacing-l);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-pill);
-  background: var(--surface-raised);
-  font: var(--type-meta);
-  color: var(--ink-secondary);
+.transcript.fresh .entries { justify-content: flex-end; contain: none; }
+.fresh-greeting { text-align: center; padding-bottom: var(--leo-spacing-4xl); }
+.fresh-greeting h1 { margin: 0 0 var(--leo-spacing-xl); font: var(--type-page-title); color: var(--ink-primary); text-wrap: balance; }
+.fresh-project { font: inherit; color: inherit; text-decoration: underline; text-underline-offset: 0.12em; }
+/* In the greeting the project's name opens the same menu as the composer's project button. */
+button.fresh-project {
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: none;
   cursor: pointer;
-  transition: background-color var(--motion-fast), color var(--motion-fast);
+  text-decoration-thickness: 2px;
+  transition: color var(--motion-fast);
 }
-.suggestion:hover { background: var(--surface-hover); color: var(--ink-primary); }
-.suggestion:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
-
+button.fresh-project:hover { color: var(--ink-accent); }
+button.fresh-project:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+button.fresh-project:disabled { cursor: default; color: inherit; }
+.fresh-greeting .project-menu.title { display: inline-block; vertical-align: baseline; }
+/* Leo sizes the list to the room inside the scrolling area, which ends at the composer, and flips
+   it above the heading into less. Opened below, it is sized by what it holds. */
+.project-menu.title { --leo-menu-max-height: min(400px, 70vh); }
+/* The scroller contains layout, which makes it the containing block of a fixed list and clips the
+   list to itself, so a list reaching down to the box was cut off at its edge. There is no
+   transcript here to protect. The dock is positioned and later in the tree, so while the list is open
+   the scroller is lifted above the box the list is meant to cover, and only then: the dock's own
+   project list has to stay above the greeting. */
+.transcript.fresh .entries:has(.fresh-project[aria-expanded='true']) { position: relative; z-index: 1; }
+.fresh-greeting p { margin: 0; font: var(--type-lede); color: var(--ink-secondary); text-wrap: pretty; }
+/* The notes under the greeting are centred lines in caption ink, 40px over the box. */
+.transcript.fresh .session-notices { align-items: center; margin-bottom: var(--leo-spacing-4xl); }
+.transcript.fresh .session-notice { justify-content: center; gap: var(--leo-spacing-s); font: var(--type-meta); color: var(--ink-tertiary); --leo-icon-size: var(--icon-control); }
 /* ---- no session: the welcome */
 
 .empty-body {
@@ -306,37 +368,6 @@
 .welcome-shortcut { font: var(--type-caption); color: var(--ink-tertiary); }
 .welcome .composer-tray { margin: 0; border-bottom: 1px solid var(--border-subtle); border-radius: var(--radius-card); }
 .welcome-recents { display: flex; flex-direction: column; margin-top: var(--leo-spacing-2xl); }
-.welcome-recents h2 {
-  margin: 0 0 var(--leo-spacing-s);
-  padding: 0 var(--leo-spacing-m);
-  font: var(--type-caption-strong);
-  color: var(--ink-tertiary);
-}
-.welcome-recent {
-  display: flex;
-  align-items: center;
-  gap: var(--leo-spacing-l);
-  min-height: var(--leo-spacing-5xl);
-  padding: 0 var(--leo-spacing-m);
-  border: 0;
-  border-radius: var(--radius-control);
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-  --leo-icon-size: var(--icon-control);
-  --leo-icon-color: var(--ink-tertiary);
-}
-.welcome-recent:hover { background: var(--surface-hover); }
-.welcome-recent:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
-.recent-text { display: flex; flex-direction: column; min-width: 0; }
-.recent-text strong { font: var(--type-body-strong); color: var(--ink-primary); }
-.recent-path {
-  overflow: hidden;
-  font: var(--type-caption);
-  color: var(--ink-tertiary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 /* Text for a screen reader and a search, drawn nowhere. */
 .visually-hidden {
@@ -351,9 +382,12 @@
 @media (forced-colors: active) {
   .composer-tray,
   .attention-pill,
-  .suggestion { border: 1px solid CanvasText; }
   .composer-box:focus-within { outline: 2px solid Highlight; }
 }
 
 /* Beside Send, so it reads as the other way to send what is written. */
-.composer-toolbar .plan-first { flex: none; white-space: nowrap; }
+/* Agent or Plan for the next message. In caption ink like the model beside it; the accent while
+   Plan is chosen, since the next Send does something other than the usual. */
+.composer .mode-trigger { flex: none; --leo-button-color: var(--ink-tertiary); white-space: nowrap; }
+.composer .mode-trigger.planning { --leo-button-color: var(--ink-accent); }
+.mode-menu leo-menu-item { width: min(320px, calc(100vw - 24px)); box-sizing: border-box; }

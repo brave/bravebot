@@ -1,27 +1,51 @@
 /* ------------------------------------------------------------------ menus
 
-   Leo ButtonMenu owns the popup, the focus handling and the item chrome. What is here arranges
-   what goes inside an item: a leading icon, or a leading check column for checkable items so
-   ticked and unticked rows keep their labels aligned. */
+   Leo ButtonMenu and Dropdown own the popup: its border, radius, elevation, the 4px inset and the
+   4px between items. These rules set what Leo leaves to the page, to the Dropdown List in the
+   design: an item is 8px of padding all round with 14/22 text, a leading icon at 20px tied to the
+   label, and a trailing 20px slot reserved for an action or a status such as a tick. A second
+   line is 12/18 in tertiary ink.
+
+   Leo's items reset every property and inherit the rest, so a menu opened from inside a heading
+   would otherwise be set in the heading's type. The font is stated here, once, for every item. */
+
+leo-menu-item,
+leo-option {
+  --leo-menu-item-padding: var(--leo-spacing-m);
+  font: var(--type-body);
+  text-align: start;
+  text-wrap: wrap;
+}
+/* Not while pressed or chosen, when Leo colours the item itself. */
+leo-menu-item:not(:active, [aria-selected]),
+leo-option:not(:active, [aria-selected]) { color: var(--ink-primary); }
+leo-menu-item[aria-disabled='true'] { color: var(--ink-disabled); cursor: default; }
 
 .icon-menu { flex: none; }
 
-.menu-icon-row,
-.menu-check-row {
+/* The icon, the text and the trailing slot of one item. The text sits 4px in from each neighbour
+   in the design and the row gap is 8px, so the two make the 12px used here. */
+.menu-icon-row {
   display: flex;
   align-items: center;
-  gap: var(--leo-spacing-m);
+  gap: var(--leo-spacing-l);
   min-width: 0;
-  --leo-icon-size: var(--icon-control);
-  --leo-icon-color: var(--ink-secondary);
+  --leo-icon-size: var(--icon-hero);
+  --leo-icon-color: var(--leo-color-icon-default);
 }
+.menu-text { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.menu-title { font: var(--type-body); color: inherit; overflow-wrap: anywhere; }
+.menu-subtitle { font: var(--type-meta); color: var(--ink-tertiary); overflow-wrap: anywhere; }
+.menu-subtitle.menu-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The trailing slot. Always 20px square, so ticked and unticked rows keep their text aligned. */
 .menu-check {
   flex: none;
   display: grid;
   place-items: center;
-  width: var(--icon-control);
-  height: var(--icon-control);
+  width: var(--icon-hero);
+  height: var(--icon-hero);
+  margin-inline-start: auto;
+  --leo-icon-size: var(--icon-hero);
   --leo-icon-color: var(--ink-accent);
 }
-.menu-icon-row .menu-check { margin-inline-start: auto; }
 .menu-detail { color: var(--ink-tertiary); }

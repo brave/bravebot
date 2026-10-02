@@ -45,35 +45,40 @@ export default {
       .filter({ has: page.locator('.bot-name', { hasText: new RegExp(`^${NAME}$`) }) })
     if (!(await row.count())) s.skip(`"${NAME}" is not in the list — 12-bots makes it`)
 
-    await s.say('Open it', 'A bot with no session yet begins one, in the checkout it is pinned to.', 2.4)
+    await s.say('Open it', 'Its page lists its conversations and starts a new one from the composer.', 2.4)
     await s.click(row.locator('.bot-open-button'))
-    await page.waitForTimeout(1600)
+    await page.locator('[data-test="bot-conversations"]').waitFor()
 
-    if (await page.locator('.trust').isVisible().catch(() => false)) {
-      await s.say('Trust the directory', 'The same question any new session asks, once per checkout.', 2.2)
-      await s.click('[data-test="trust-approve"]')
-      await page.waitForTimeout(800)
-    }
-
-    // The header names the bot rather than the session's title, which is the small thing that
-    // says whose conversation this is. The face beside the name is the same one as in the list,
-    // and now that this is the bot on screen it looks at the reader rather than about the room.
-    const head = page.locator('.transcript-head h1')
-    if (await head.count()) {
-      await s.glideTo(head)
-      await s.say('It is the bot speaking', 'The header says who, where a session would say what it was asked first.', 2.6)
-      await s.spotlight(head, 1.8)
-      await s.unspot()
-      if (await head.locator('.bot-avatar').count()) {
-        await s.say('And it looks at you', 'The one on screen faces the reader. The others, in the list, look about.', 2.6)
-      }
-    }
+    // The project is picked per conversation, in the composer's footer. The stage answers the
+    // native picker with one of the world's fixture checkouts.
+    await s.say('Pick a project', 'Or none: a bot can talk without a checkout too.', 2.2)
+    await s.click('[data-test="project-trigger"]')
+    await s.click('[data-test="project-pick"]')
+    await page.waitForTimeout(600)
 
     // --- the purpose, which nobody typed ----------------------------------------------------
 
     await s.say('Ask it something ordinary', 'Nothing in the prompt says what this bot is for.')
     await s.slowType('.composer textarea', 'What should I know about this checkout?')
     await s.click('.composer .send')
+    await page.waitForTimeout(1200)
+
+    if (await page.locator('.trust').isVisible().catch(() => false)) {
+      await s.say('Trust the directory', 'The same question any new chat asks, once per checkout.', 2.2)
+      await s.click('[data-test="trust-approve"]')
+      await page.waitForTimeout(800)
+    }
+
+    // The bot's face in the header says whose conversation this is, beside the project and the
+    // title. Now that this is the bot on screen it looks at the reader rather than about the room.
+    const head = page.locator('.transcript-head .head-titles')
+    if (await head.locator('.bot-avatar').count()) {
+      await s.glideTo(head)
+      await s.say('It is the bot speaking', 'Its face leads the header, before the project and the title.', 2.6)
+      await s.spotlight(head, 1.8)
+      await s.unspot()
+      await s.say('And it looks at you', 'The one on screen faces the reader. The others, in the list, look about.', 2.6)
+    }
 
     // While the turn runs, the bot's own face stands where the spinner would, at the foot of the
     // transcript, looking down at the page — the one place in the conversation its face says
@@ -155,12 +160,14 @@ export default {
 
     // --- resumed -----------------------------------------------------------------------------
 
-    await s.say('Leave, and come back', 'A bot is one session, resumed — not a new one each time.', 2.6)
+    await s.say('Leave, and come back', 'Its page lists the conversation, and opening it resumes it.', 2.6)
     await s.click(page.locator('.sidebar-tabs [role="option"]').first())
     await page.waitForTimeout(600)
     await s.click(page.locator('.sidebar-tabs [role="option"]').nth(1))
     await page.waitForTimeout(500)
     await s.click(row.locator('.bot-open-button'))
+    await page.locator('[data-test="bot-conversations"] .bot-history-row').first().waitFor()
+    await s.click(page.locator('[data-test="bot-conversations"] .bot-history-row').first())
     await page.waitForTimeout(2000)
 
     await s.say('The same conversation', 'With its purpose and its memory read back in at the top.', 2.6)

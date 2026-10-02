@@ -1,4 +1,9 @@
-import { AgentSettings } from './components/AgentSettings'
+import { SettingsView, type SettingsPage } from './components/SettingsView'
+import { BotDetails } from './components/BotDetails'
+import type { BotFormValue } from './components/Bots'
+import type { ComposerFooterProps, ProjectChoice } from './components/Composer'
+import { botHistory } from '../shared/bot-history'
+import type { Tab } from '../shared/view'
 import type { FileAttachment } from '../shared/files'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
@@ -16,7 +21,7 @@ import type {
   TodoRow,
 } from '../shared/protocol'
 import { Sidebar } from './components/Sidebar'
-import { SessionInfo, type SessionInfoValue, type SessionStatus } from './components/Sessions'
+import { SessionInfo, firstChat, type SessionInfoValue, type SessionStatus } from './components/Sessions'
 import { FIND_EVENT, FOCUS_COMPOSER_EVENT, Transcript } from './components/Transcript'
 import { Context } from './components/Context'
 import { Gutter, useColumns } from './components/Gutter'
@@ -31,7 +36,7 @@ import { conversationModel, rememberModel } from './models'
 import type { ExportFormat } from '../shared/export'
 import { useCommandRouter, usePublishedState } from './commands'
 import { type Fork, forkOf, forkedSessions } from '../shared/forks'
-import { type Bot } from '../shared/bots'
+import { activeBots, botProjects, type Bot } from '../shared/bots'
 import { projectLabel } from '../shared/recents'
 import type { Doing } from './components/BotAvatar'
 import * as t from './transcript'
@@ -40,7 +45,6 @@ import { AuditInspector } from './components/AuditInspector'
 import { conversationKey } from '../shared/experience'
 import { useExperience, conversationPreferences, setConversation, experienceError } from './experience'
 import { showToast } from './toasts'
-import { AppearancePicker } from './components/AppearancePicker'
 import { applyAppearance } from './theme'
 import { SYSTEM, parseAppearance, type Appearance } from '../shared/theme'
 
@@ -163,6 +167,17 @@ function cameFrom(
   }
 }
 
+/** Whether a bot has recorded this conversation, in the folder it ran in. */
+function hadConversation(bot: Bot, summary: { id: string; directory: string }): boolean {
+  return bot.conversations.some((each) => each.id === summary.id && each.directory === summary.directory)
+}
+
+/** What a chat is called until its first prompt names it. */
+const NEW_CHAT = 'New Chat'
+
+/** What a chat in a bot's home folder is listed under. */
+const NO_PROJECT = 'No project'
+
 /** Raised for the one failure that needs its own screen rather than a line of text. */
 class Unconfigurable extends Error {}
 
@@ -206,7 +221,11 @@ async function callBot(request: {
 }
 
 export function App(): React.JSX.Element {
-  const [agentSettings, setAgentSettings] = useState(false)
+  /** Settings take the place of the chat view while open; which page was last open is kept. */
+  const [settings, setSettings] = useState(false)
+  const [settingsPage, setSettingsPage] = useState<SettingsPage>('general')
+  /** A bot's own page, shown in place of a conversation. */
+  const [botView, setBotView] = useState<string | null>(null)
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [live, renderLive] = useState<Live | null>(null)
   /** A saved manifest run being read. Shown in place of a session, and only while none is. */
@@ -228,8 +247,8 @@ export function App(): React.JSX.Element {
     liveRef.current = next
     handleRef.current = next?.handle ?? null
     if (next) openedLives.current.set(next.handle, next)
-    // A session on screen takes the place of a run being read.
-    if (next) setReading(null)
+    // A session on screen takes the place of a run being read, and of a bot's own page.
+    if (next) { setReading(null); setBotView(null) }
     renderLive(next)
   }, [])
   const updateSession = useCallback((handle: string, action: React.SetStateAction<Live | null>) => {
@@ -291,7 +310,6 @@ export function App(): React.JSX.Element {
    * seed `useState`.
    */
   const [chosen, setChosen] = useState<Appearance>(SYSTEM)
-  const [picking, setPicking] = useState(false)
 
   // Read inside the event handler, which is installed once and must not close over a
   // stale session handle.
@@ -438,7 +456,7 @@ export function App(): React.JSX.Element {
         if (cached) setLive(cached)
         else {
           const slug = conversationPreferences(conversationKey(summary.directory, summary.id)).botSlug
-          const savedBot = botsRef.current.find((item) => item.slug === slug && item.directory === summary.directory && item.retired === 0)
+          const savedBot = botsRef.current.find((item) => item.slug === slug && item.retired === 0)
           await create(summary.directory, savedBot, summary.id)
         }
         return
@@ -450,7 +468,7 @@ export function App(): React.JSX.Element {
         setProblem(null)
         return
       }
-      bot ??= botsRef.current.find((item) => item.directory === summary.directory && (item.conversations.includes(summary.id) || item.slug === conversationPreferences(conversationKey(summary.directory, summary.id)).botSlug))
+      bot ??= botsRef.current.find((item) => hadConversation(item, summary) || item.slug === conversationPreferences(conversationKey(summary.directory, summary.id)).botSlug)
       const opened = await call<OpenedSession>('session.open', {
         directory: summary.directory,
         id: summary.id,
@@ -505,14 +523,14 @@ export function App(): React.JSX.Element {
     [],
   )
 
-  const create = useCallback(async (directory?: string, bot?: { slug: string; model: string | null }, draftId = `draft:${crypto.randomUUID()}`) => {
+  const create = useCallback(async (directory?: string, bot?: { slug: string; model: string | null }, draftId = `draft:${crypto.randomUUID()}`): Promise<string | null> => {
     // A directory only ever arrives here from a list somebody else handed over: File > Open
-    // Recent and the chevron beside New session, which the main process keeps, or a group
-    // heading in the session list, whose path came off a session the bridge reported. Never
-    // a path the renderer composed — which is the promise `chooseDirectory` makes, and the
-    // reason a plus on a heading needs no new way in.
+    // Recent, the recents the composer's project menu and New chat read, which the main process
+    // keeps, a group heading in the chat list, whose path came off a session the bridge reported,
+    // or a bot's home and recorded folders, which the main process wrote. Never a path the
+    // renderer composed, which is the promise `chooseDirectory` makes.
     const chosen = directory ?? (await window.bravebot.chooseDirectory())
-    if (!chosen) return
+    if (!chosen) return null
     try {
       const made = await call<{
         session: string
@@ -533,7 +551,7 @@ export function App(): React.JSX.Element {
         model: bot?.model ?? made.model,
         summary: {
           id: null,
-          title: 'New session',
+          title: NEW_CHAT,
           project: projectLabel(chosen),
           branch: made.branch,
           directory: chosen,
@@ -559,8 +577,10 @@ export function App(): React.JSX.Element {
         rules: made.settingsRules ?? null,
       })
       setProblem(made.serversNote)
+      return made.session
     } catch (error) {
       setProblem(String(error))
+      return null
     }
   }, [])
 
@@ -581,7 +601,7 @@ export function App(): React.JSX.Element {
       } : old))
       // Still a yes, for this session. Said, because the next session here will ask after all.
       if (kept === false) {
-        setProblem(`Trusting this directory for this session only: the answer could not be written to ${path}, so the next session here will ask.`)
+        setProblem(`Trusting this directory for this chat only: the answer could not be written to ${path}, so the next chat here will ask.`)
       }
     } catch (error) {
       setProblem(String(error))
@@ -606,7 +626,7 @@ export function App(): React.JSX.Element {
       old
         ? {
             ...old,
-            summary: old.summary.title === 'New session' ? { ...old.summary, title: prompt.slice(0, 70) } : old.summary,
+            summary: old.summary.title === NEW_CHAT ? { ...old.summary, title: prompt.slice(0, 70) } : old.summary,
             attachments: selectedFiles ? old.attachments : [],
             entries: [...old.entries, ...attachments.map((file): t.Entry => ({ kind: 'attached', id: crypto.randomUUID(), path: file.path })), said],
             awaitingOrdinal: said.id,
@@ -751,29 +771,35 @@ export function App(): React.JSX.Element {
   // Unrecorded sessions are stamped to the minute so the list serialises the same between
   // keystrokes and the column is not re-rendered for a clock that nobody can see move.
   const now = Math.floor(Date.now() / 60000) * 60
+  // A bot's home folder is not a project, so a conversation there is listed as having none.
+  const homes = useMemo(() => new Set(bots.map((bot) => bot.home)), [bots])
+  const placed = (summary: SessionSummary): SessionSummary =>
+    homes.has(summary.directory) ? { ...summary, project: NO_PROJECT, branch: null } : summary
   const unstableSessions = sessions.map((summary) => {
     const current = [...openedLives.current.values()].find((item) => item.summary.id === summary.id && item.summary.directory === summary.directory)
-    return current ? { ...summary, title: current.summary.title } : summary
+    return placed(current ? { ...summary, title: current.summary.title } : summary)
   })
   for (const current of openedLives.current.values()) {
     const id = current.summary.id ?? current.draftId
     if (!id || unstableSessions.some((summary) => summary.id === id && summary.directory === current.summary.directory)) continue
-    unstableSessions.unshift({ ...current.summary, id, updated: now, bytes: 0 })
+    unstableSessions.unshift(placed({ ...current.summary, id, updated: now, bytes: 0 }))
   }
   for (const [key, preference] of Object.entries(preferences.conversations)) {
     if (!preference.draft.trim()) continue
     try {
       const [directory, id]: unknown[] = JSON.parse(key)
       if (typeof directory !== 'string' || typeof id !== 'string' || !id.startsWith('draft:') || unstableSessions.some((session) => session.directory === directory && session.id === id)) continue
-      unstableSessions.unshift({ id, directory, title: `Draft · ${preference.draft.slice(0, 60)}`, project: projectLabel(directory), branch: null, updated: now, bytes: 0 })
+      unstableSessions.unshift(placed({ id, directory, title: `Draft · ${preference.draft.slice(0, 60)}`, project: projectLabel(directory), branch: null, updated: now, bytes: 0 }))
     } catch { /* Ignore malformed preference keys. */ }
   }
   const ownSessions = useStableValue(unstableSessions)
+  const ownSessionsRef = useRef(ownSessions)
+  ownSessionsRef.current = ownSessions
   const unstableInfo: Record<string, SessionInfoValue> = {}
   for (const summary of ownSessions) {
     const current = [...openedLives.current.values()].find((item) => (item.summary.id ?? item.draftId) === summary.id && item.summary.directory === summary.directory)
     const owner = preferences.conversations[conversationKey(summary.directory, summary.id)]?.botSlug
-    const bot = bots.find((item) => (item.conversations.includes(summary.id) || item.slug === owner) && item.directory === summary.directory)
+    const bot = bots.find((item) => hadConversation(item, summary) || item.slug === owner)
       ?? bots.find((item) => item.slug === current?.bot?.slug)
     const outstanding = current ? t.outstanding(current.entries) : undefined
     // Only what asks something of the reader. "Ready" and "Completed" were true of nearly
@@ -834,7 +860,7 @@ export function App(): React.JSX.Element {
       : 'open'
 
   const saveBot = useCallback(
-    async (bot: { slug?: string; avatar?: string; model?: string | null; name: string; purpose: string; directory: string }) => {
+    async (bot: BotFormValue) => {
       try {
         const saved = await window.bravebot.writeBot(bot)
         if (!saved) throw new Error('Could not save bot.')
@@ -945,6 +971,7 @@ export function App(): React.JSX.Element {
   const retireBot = useCallback(
     async (slug: string, retired: boolean) => {
       if (retired && live?.bot?.slug === slug) await closeSession()
+      if (retired) setBotView((open) => (open === slug ? null : open))
       await window.bravebot.retireBot(slug, retired).catch(() => null)
       await readBots()
     },
@@ -1172,7 +1199,7 @@ export function App(): React.JSX.Element {
       (session) => session.id === from.id && session.directory === from.directory,
     )
     if (found) void showSession(found, from.prompt)
-    else setProblem('the session this was forked from is no longer in the list')
+    else setProblem('the chat this was forked from is no longer in the list')
   }, [live, sessions, showSession])
 
   /** Stop marking the prompt a fork link landed on, so the transcript behaves normally again. */
@@ -1189,8 +1216,89 @@ export function App(): React.JSX.Element {
     [live, copy],
   )
 
+  /** Show a bot's own page in place of whatever conversation is open. The conversation stays open. */
+  const openBot = useCallback((bot: Bot) => {
+    setLive(null)
+    setReading(null)
+    setBotView(bot.slug)
+  }, [setLive])
+
+  /**
+   * Start a conversation with a bot from its page, in a project or in its home folder.
+   *
+   * The prompt is queued rather than sent, so it waits for the trust question a new folder asks,
+   * the same as any queued message.
+   */
+  const startBotChat = useCallback(async (bot: Bot, prompt: string, directory: string | null) => {
+    const handle = await create(directory ?? bot.home, { slug: bot.slug, model: bot.model })
+    if (!handle) return
+    updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt, attachments: [] }] } : old)
+  }, [create, updateSession])
+
+  /** A new chat in the project used last, or the picker when there is none yet. */
+  const newChat = useCallback(async () => {
+    const [last] = await window.bravebot.readRecents().catch((): string[] => [])
+    await create(last)
+  }, [create])
+
+  /**
+   * Switching the sidebar's tab opens the first item of that list, unless what is open already
+   * belongs to it.
+   */
+  const conversationsRef = useRef(preferences.conversations)
+  conversationsRef.current = preferences.conversations
+  const switchTab = useCallback((tab: Tab) => {
+    const open = liveRef.current
+    if (tab === 'sessions') {
+      if (open) return
+      const first = firstChat(ownSessionsRef.current, conversationsRef.current)
+      if (first) void showSession(first)
+      return
+    }
+    if (open?.bot) return
+    const first = activeBots(botsRef.current)[0]
+    if (first) openBot(first)
+  }, [showSession, openBot])
+
+  /**
+   * Move a chat nothing has been said in to another folder.
+   *
+   * A session belongs to the folder it was opened in, so this opens a new one there and lets go of
+   * the old one. The draft text comes along.
+   */
+  const switchProject = useCallback(async (choice: ProjectChoice) => {
+    const current = liveRef.current
+    if (!current || current.entries.length > 0 || current.running) return
+    const owner = current.bot ? botsRef.current.find((each) => each.slug === current.bot?.slug) ?? null : null
+    let directory: string | null
+    if (choice.kind === 'pick') directory = await window.bravebot.chooseDirectory()
+    else if (choice.kind === 'none') directory = owner?.home ?? null
+    else directory = choice.directory
+    if (!directory || directory === current.summary.directory) return
+    const oldKey = conversationKey(current.summary.directory, current.draftId ?? current.handle)
+    const text = conversationPreferences(oldKey).draft
+    const handle = await create(directory, owner ? { slug: owner.slug, model: current.model } : undefined)
+    if (!handle) return
+    await call('session.close', { session: current.handle }).catch(() => undefined)
+    openedLives.current.delete(current.handle)
+    setConversation(oldKey, { draft: '', botSlug: null })
+    if (text) setDraft(text)
+    refreshLives((n) => n + 1)
+  }, [create, setDraft])
+
+  const writeAppearance = useCallback((appearance: Appearance) => {
+    applyAppearance(appearance)
+    window.bravebot.writeTheme(appearance)
+    setChosen(appearance)
+  }, [])
+
+  const openSettingsPage = useCallback((page?: SettingsPage) => {
+    if (page) setSettingsPage(page)
+    setSettings(true)
+  }, [])
+
   useCommandRouter({
-    create,
+    create: (directory) => { void (directory ? create(directory) : newChat()) },
     closeSession: () => void closeSession(),
     send: submit,
     cancel: () => void cancel(),
@@ -1207,9 +1315,7 @@ export function App(): React.JSX.Element {
     forkEntry: (id) => void forkFrom(id),
     exportSession: (format) => void exportSession(format),
     toggleExportTools: () => setIncludeTools((on) => !on),
-    theme: () => {
-      setPicking(true)
-    },
+    theme: () => openSettingsPage('general'),
   })
 
   // What the menu is allowed to offer. Assembled here because this is the only component
@@ -1228,24 +1334,53 @@ export function App(): React.JSX.Element {
   usePublishedState(menuState)
 
   // Stable, so the memoised columns either side of the transcript are not re-drawn by typing.
-  const newBotConversation = useEvent((bot: Bot) => { void create(bot.directory, { slug: bot.slug, model: bot.model }) })
-  const botConversation = useEvent((bot: Bot, summary: SessionSummary) => { void showSession(summary, undefined, { slug: bot.slug, model: bot.model }) })
   const stableShowSession = useEvent(showSession)
   const stableCreate = useEvent(create)
-  const openSettings = useEvent(() => setAgentSettings(true))
-  const closeContext = useEvent(() => toggle('right'))
+  const stableNewChat = useEvent(() => { void newChat() })
+  const stableSwitchTab = useEvent(switchTab)
+  const stableOpenBot = useEvent(openBot)
+  const openSettings = useEvent(() => openSettingsPage())
   const stableCloseAudit = useEvent(closeAudit)
+  const stableSwitchProject = useEvent((choice: ProjectChoice) => { void switchProject(choice) })
   const auditTurn = selectedAudit && selectedAudit.turn !== null ? live?.turns[selectedAudit.turn] : undefined
   const auditPanel = useMemo(() => selectedAudit
     ? <AuditInspector key={`${selectedAudit.handle}:${selectedAudit.turn}`} details={auditTurn} onClose={stableCloseAudit} />
     : null, [selectedAudit, auditTurn, stableCloseAudit])
 
+  // A bot's own page, while no conversation is open over it.
+  const viewedBot = !live && !reading && botView ? bots.find((each) => each.slug === botView && each.retired === 0) ?? null : null
+  const viewedHistory = useMemo(() => viewedBot ? botHistory(viewedBot, ownSessions, preferences) : [], [viewedBot, ownSessions, preferences])
+  const botPage = useMemo(() => viewedBot ? { bot: viewedBot, history: viewedHistory } : null, [viewedBot, viewedHistory])
+  const details = useMemo(() => viewedBot
+    ? <BotDetails bot={viewedBot} onSave={saveBot} onArchive={() => void retireBot(viewedBot.slug, true)} />
+    : null, [viewedBot, saveBot, retireBot])
+
+  // A conversation in a bot's home folder has no project, so no branch and no context column.
+  const noProject = !!live && homes.has(live.summary.directory)
+  const [recents, setRecents] = useState<string[]>([])
+  useEffect(() => { void window.bravebot.readRecents().then(setRecents).catch(() => undefined) }, [live?.handle])
+  const fresh = !!live && live.entries.length === 0 && !live.running
+  const footer = useMemo((): ComposerFooterProps | undefined => {
+    if (!live) return undefined
+    return {
+      directory: noProject ? null : live.summary.directory,
+      branch: noProject ? null : live.summary.branch,
+      // Only a bot is offered no project, and only the folders it may work in; see `worksIn`.
+      choices: !fresh ? null : openBotRecord
+        ? { folders: botProjects(openBotRecord).filter((each) => each !== live.summary.directory), noProject: !noProject }
+        : { folders: recents.filter((each) => each !== live.summary.directory), noProject: false },
+      onChoose: stableSwitchProject,
+    }
+  }, [live, noProject, fresh, openBotRecord, recents, stableSwitchProject])
+
   return (
     <div
       className={[
         'app',
-        !live ? 'no-session' : '',
-        preferences.density,
+        !live && !viewedBot ? 'no-session' : '',
+        // The column comes back while an audit is open, since that is where it is drawn.
+        noProject && !selectedAudit ? 'no-context' : '',
+        settings ? 'in-settings' : '',
         dragging ? 'resizing' : '',
         folding ? 'folding' : '',
         collapsed.left ? 'left-folded' : '',
@@ -1266,17 +1401,20 @@ export function App(): React.JSX.Element {
         } as React.CSSProperties
       }
     >
+      {/* Kept mounted under the settings, so a filter, a fold or a draft survives a look at them. */}
+      <div className="app-main" inert={settings}>
       <SessionInfo.Provider value={sessionInfo}><Sidebar
         sessions={ownSessions}
-        onNewBotConversation={newBotConversation}
-        onBotConversation={botConversation}
         openId={live?.summary.id ?? live?.draftId ?? reading?.record.id ?? undefined}
         forked={forked}
         onOpen={stableShowSession}
         onNew={stableCreate}
+        onNewChat={stableNewChat}
+        onTab={stableSwitchTab}
         bots={bots}
-        openSlug={live?.bot?.slug ?? null}
-        openDoing={openDoing}
+        openSlug={live?.bot?.slug ?? viewedBot?.slug ?? null}
+        openDoing={live ? openDoing : 'open'}
+        onOpenBot={stableOpenBot}
         onSaveBot={saveBot}
         onRetireBot={retireBot}
         onRemoveBot={removeBot}
@@ -1292,8 +1430,9 @@ export function App(): React.JSX.Element {
         onReset={reset}
         onNudge={nudge}
       />
-      {/* The conversation and the inspector share one raised card. A subgrid, so its columns
-          are still the window's tracks and a fold or a drag moves them without this knowing. */}
+      {/* The conversation and the inspector are two cards with ground between them. A subgrid, so
+          their columns are still the window's tracks and a fold or a drag moves them without this
+          knowing. */}
       <div className="workspace">
       <Transcript
         onAudit={openAudit}
@@ -1301,7 +1440,7 @@ export function App(): React.JSX.Element {
         backendReady={backendReady}
         onCheckBackend={() => void checkBackend()}
         onDiagnostics={() => void doctor()}
-        onSetup={() => setAgentSettings(true)}
+        onSetup={() => openSettingsPage('agent')}
         storageKey={draftKey}
         attachments={live?.attachments ?? []}
         onAttach={() => {
@@ -1349,6 +1488,12 @@ export function App(): React.JSX.Element {
         onFocused={clearFocus}
         onDecide={answer}
         onAnswer={answerQuestions}
+        botView={botPage}
+        onOpenBotConversation={(bot, summary) => void showSession(summary, undefined, { slug: bot.slug, model: bot.model })}
+        onStartBotChat={(bot, prompt, directory) => void startBotChat(bot, prompt, directory)}
+        onBotModel={(bot, model) => { void window.bravebot.writeBotModel(bot.slug, model).then(() => readBots()) }}
+        footer={footer}
+        noProject={noProject}
       />
       <Gutter
         side="right"
@@ -1359,27 +1504,31 @@ export function App(): React.JSX.Element {
         onReset={reset}
         onNudge={nudge}
       />
-      <Context live={live} onClose={closeContext} audit={auditPanel} />
+      <Context live={live} audit={auditPanel} details={details} />
       </div>
+      </div>
+      {settings && (
+        <SettingsView
+          page={settingsPage}
+          onPage={setSettingsPage}
+          onBack={() => {
+            setSettings(false)
+            // Back to the control that opened the page, once the chat view is no longer inert.
+            requestAnimationFrame(() => document.querySelector('.agent-settings-open')?.shadowRoot?.querySelector<HTMLElement>('button')?.focus())
+          }}
+          session={live?.handle}
+          chosen={chosen}
+          onAppearance={writeAppearance}
+          onChanged={() => { void checkBackend() }}
+        />
+      )}
       {aboutInfo && <About info={aboutInfo} onClose={() => setAboutInfo(null)} />}
       {notice && (
         <Notice title={notice.title} body={notice.body} onClose={() => setNotice(null)} />
       )}
       {unconfigured && <Unconfigured detail={unconfigured} onClose={() => setUnconfigured(null)} />}
-      {agentSettings && <AgentSettings session={live?.handle} onClose={() => setAgentSettings(false)} onChanged={() => { void checkBackend() }} />}
       {live?.askingTrust && (
         <TrustPrompt directory={live.askingTrust} keeping={live.keepingTrust} onAnswer={answerTrust} />
-      )}
-      {picking && (
-        <AppearancePicker
-          chosen={chosen}
-          onKeep={(appearance) => {
-            window.bravebot.writeTheme(appearance)
-            setChosen(appearance)
-            setPicking(false)
-          }}
-          onClose={() => setPicking(false)}
-        />
       )}
       <TooltipLayer />
     </div>

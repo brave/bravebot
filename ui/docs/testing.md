@@ -214,8 +214,7 @@ npx electron-vite build && node scripts/drive-visual.mjs
 ```
 
 Screenshots go to `VISUAL_OUTPUT`, or `bravebot-visual/` under the system temp folder when it is
-unset, as `<scene>-light.png` and `<scene>-dark.png`, plus `<scene>-compact.png` for the scenes
-that vary by density. The scenes are numbered, and cover the welcome screen, a conversation with
+unset, as `<scene>-light.png` and `<scene>-dark.png`. The scenes are numbered, and cover the welcome screen, a conversation with
 markdown, tables and code, a running turn with tool calls, each decision card (trusted and
 untrusted), a command's output and the vouch question, a series of questions, a finished and a
 failed turn, the inspector's file tree, the model and export menus, the find bar, Permissions,

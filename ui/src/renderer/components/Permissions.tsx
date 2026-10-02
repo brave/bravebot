@@ -33,7 +33,7 @@ export function Permissions({ session, onClose, onRemembered }: { session: strin
     subtitle="Grants saved with this conversation. Revoking one affects future actions only."
     headerAction={<IconButton icon="refresh" label="Refresh" tooltip={busy ? 'Loading…' : 'Refresh permissions'} disabled={busy}
       onClick={() => void request('permissions.list')} data-test="permissions-refresh" />}
-    actions={<Button size="small" kind="filled" onClick={onClose} data-test="permissions-done">Done</Button>}>
+    actions={<Button kind="filled" onClick={onClose} data-test="permissions-done">Done</Button>}>
     <p className="grant-lede">Revocation cannot remove content already read by the model.</p>
     {problem && <Alert type="error" data-test="permissions-error">{problem}</Alert>}
     <PathPermissions paths={grants?.paths ?? []} busy={busy} onRevoke={(path) => void request('permissions.revoke', { kind: 'path', path })} />

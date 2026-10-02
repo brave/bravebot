@@ -40,7 +40,7 @@
   position: relative;
   display: flex;
   align-items: center;
-  gap: var(--leo-spacing-m);
+  gap: var(--leo-spacing-xl);
   height: var(--titlebar);
 }
 
@@ -64,29 +64,27 @@
   font: var(--type-body-strong);
   color: var(--ink-primary);
 }
+/* The project the conversation runs in, as a Leo label before the title. It gives way before the
+   title does; the whole path is its tooltip. */
 .head-titles .where {
   flex: 0 100 auto;
   min-width: 0;
+  display: flex;
+  align-items: center;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font: var(--type-meta);
-  color: var(--ink-tertiary);
   -webkit-app-region: no-drag;
 }
+/* Leo's label host is inline-block, which sits on the text baseline and leaves the descender's
+   space under it, so it rides high in a row. As a flex box it centres with the rest. */
+.head-titles leo-label { display: flex; max-width: 100%; }
+.plan-run-chip { flex: none; font: var(--type-caption-strong); color: var(--ink-accent); }
 
 .vetting-chip {
   flex: none;
-  display: inline-flex;
+  margin-left: auto;
+  display: flex;
   align-items: center;
-  gap: var(--leo-spacing-s);
-  padding: var(--leo-spacing-xs) var(--leo-spacing-m);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-pill);
-  font: var(--type-caption-strong);
-  color: var(--ink-secondary);
-  --leo-icon-size: var(--icon-meta);
-  --leo-icon-color: var(--leo-color-systemfeedback-success-icon);
+  border-radius: var(--radius-chip);
   -webkit-app-region: no-drag;
 }
 .vetting-chip:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
@@ -148,14 +146,14 @@
 }
 
 /* ---- toasts
-   Bottom-right of the card, above where the composer sits. Confirmations go by themselves;
-   errors are not dismissed for you. */
+   Above the composer, in the box's width (see .dock-float). Where there is no composer they stand
+   bottom-right of the card. Confirmations go by themselves; errors are not dismissed for you. */
 
 .toast-stack {
   position: absolute;
   z-index: 4;
   right: var(--leo-spacing-xl);
-  bottom: var(--leo-spacing-9xl);
+  bottom: var(--leo-spacing-xl);
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -164,7 +162,6 @@
   pointer-events: none;
 }
 .toast-stack:empty { display: none; }
-.transcript.empty-state > .toast-stack { bottom: var(--leo-spacing-xl); }
 .problem-toast, .status-toast {
   width: 100%;
   pointer-events: auto;
@@ -251,7 +248,14 @@
 }
 .session-notice > leo-icon { flex: none; }
 .session-notice .notice-text { min-width: 0; }
-.session-notice code { font-family: var(--mono); overflow-wrap: anywhere; }
+.session-notice code {
+  padding: 0 var(--leo-spacing-s);
+  border-radius: var(--radius-control);
+  background: var(--surface-sunken);
+  font: var(--type-meta);
+  color: var(--ink-secondary);
+  overflow-wrap: anywhere;
+}
 .session-notice .link { flex: none; }
 
 /* The fork is history, so it reads as a divider across the column rather than a note in it. */
@@ -288,8 +292,8 @@
   margin-top: calc(var(--turn-gap) - var(--part-gap));
 }
 .bubble.user .bubble-text {
-  padding: var(--leo-spacing-m) var(--leo-spacing-l);
-  border-radius: var(--radius-field);
+  padding: var(--leo-spacing-l) var(--leo-spacing-2xl);
+  border-radius: var(--radius-bubble);
   background: var(--surface-sunken);
   white-space: pre-wrap;
 }
@@ -435,3 +439,68 @@
 .run-record-outcome.stopped strong { color: var(--removed); }
 .run-record-outcome.finished strong { color: var(--added); }
 .run-record-meta { margin-top: 18px; font: var(--type-caption); color: var(--ink-tertiary); overflow-wrap: anywhere; }
+
+/* ---- a bot's own page
+
+   Its recent conversations in one card, with the composer docked under them. The rows reuse the
+   sidebar's three lines. */
+.bot-view-body { flex: 1; min-height: 0; overflow-y: auto; }
+.bot-view-column {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--reading-width);
+  margin: 0 auto;
+  padding: var(--leo-spacing-xl) var(--leo-spacing-2xl);
+}
+.bot-view-title { margin: 0 0 var(--leo-spacing-m); font: var(--type-body-strong); color: var(--ink-tertiary); }
+
+/* A bot nobody has talked to yet: its face and a line, 16px apart, then the box 40px under them,
+   the whole of it centred in the column. */
+.bot-first { display: grid; place-items: center; }
+.bot-first-column {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--leo-spacing-4xl);
+  width: 100%;
+  max-width: calc(var(--reading-width) + 2 * var(--leo-spacing-2xl));
+  padding: var(--leo-spacing-2xl);
+}
+.bot-first-hero { display: flex; flex-direction: column; align-items: center; gap: var(--leo-spacing-xl); text-align: center; }
+.bot-first-hero h1 { margin: 0; font: var(--type-page-title); color: var(--ink-primary); text-wrap: balance; }
+.bot-first-hero p { margin: 0; font: var(--type-lede); color: var(--ink-secondary); text-wrap: pretty; }
+.bot-first .composer-dock { --dock-inset: 0px; padding: 0; }
+.bot-first .composer-dock::before { display: none; }
+.bot-history-search { display: block; margin-bottom: var(--leo-spacing-l); }
+.bot-conversations {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-field);
+  overflow: hidden;
+}
+.bot-history-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  width: 100%;
+  padding: var(--leo-spacing-m) var(--leo-spacing-xl);
+  border: 0;
+  background: transparent;
+  color: var(--ink-primary);
+  font: inherit;
+  text-align: left;
+}
+.bot-history-row + .bot-history-row { border-top: 1px solid var(--border-subtle); }
+.bot-history-row:hover { background: var(--surface-hover); }
+button.bot-history-row { cursor: pointer; }
+.bot-history-row:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+.bot-history-row.unavailable { color: var(--ink-tertiary); }
+.bot-history-row.unavailable code { font: var(--type-code); }
+.bot-history-archived { flex: none; color: var(--ink-tertiary); }
+.bot-history-empty { display: flex; align-items: center; gap: var(--leo-spacing-m); margin: 0; padding: var(--leo-spacing-l); font: var(--type-caption); color: var(--ink-tertiary); --leo-icon-size: var(--icon-meta); }
+@media (forced-colors: active) {
+  .bot-conversations { border-color: CanvasText; }
+}

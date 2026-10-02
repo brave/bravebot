@@ -34,6 +34,12 @@ is neither named nor quoted in it: the briefing says where the memory is and the
 it under whatever the trust map says about that path. See
 [how a purpose reaches the model](interface.md#how-a-purpose-reaches-the-model).
 
+A bot's turn is sent only in a folder the agent confirmed its session runs in, and only when that
+folder is the bot's home folder, one the native picker handed over in this run, or one the bot's
+store records a conversation in. The main process records a folder only when a turn sent there
+under that rule ends, so a window cannot widen the set by opening a session somewhere. Memory reads
+and edits from the window name a folder from that recorded set and are refused for any other.
+
 ## Decisions and refusal
 
 The transcript presents write, command, command-output, path-vouch, fetch, language-server,

@@ -1,7 +1,8 @@
-import { memo, useLayoutEffect, useRef, type RefObject } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import type { FileAttachment } from '../../shared/files'
+import { projectLabel } from '../../shared/recents'
 import { useContextWindow } from '../context-window'
-import { Button, Icon, ProgressRing, TextArea } from '../nala'
+import { Button, ButtonMenu, Icon, ProgressRing, TextArea } from '../nala'
 import { FileGlyph } from './FileGlyph'
 import { IconButton } from './IconButton'
 import { ModelPicker } from './ModelPicker'
@@ -43,6 +44,81 @@ export interface ComposerProps {
   onSetup: () => void
   onCheckBackend: () => void
   onDiagnostics: () => void
+  /** Whether files can be attached. A bot view has no session yet, so nothing to attach them to. */
+  canAttach?: boolean
+  /** The strip under the box: which project this chat runs in, and its branch. */
+  footer?: ComposerFooterProps
+}
+
+/** How the next message is handled: as an ordinary turn, or as one manifest run. */
+type Mode = 'agent' | 'plan'
+
+const PLAN_BLOCKED: Record<'unavailable' | 'bot' | 'attachments', string> = {
+  unavailable: 'A plan run cannot start here.',
+  bot: 'A bot answers in turns, so it has no plan mode.',
+  attachments: 'A plan is fixed before anything is read, so it cannot take attached files. Remove them, and name the file in the task.',
+}
+
+/**
+ * The choice between Agent and Plan for the next message.
+ *
+ * Plan goes back to Agent once that message is sent, so it reads as a choice about one message and
+ * never as a mode the conversation is in.
+ */
+function ModeMenu({ mode, blocked, disabled, onMode }: {
+  mode: Mode
+  blocked: keyof typeof PLAN_BLOCKED | null
+  disabled: boolean
+  onMode: (mode: Mode) => void
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const choose = (next: Mode) => { setOpen(false); onMode(next) }
+  const label = mode === 'plan' ? 'Plan' : 'Agent'
+  return (
+    <ButtonMenu className="mode-menu" isOpen={open} placement="top-end" positionStrategy="fixed" onChange={({ isOpen }) => setOpen(isOpen)}>
+      <Button slot="anchor-content" kind="plain-faint" size="tiny" className={`mode-trigger${mode === 'plan' ? ' planning' : ''}`}
+        isDisabled={disabled} aria-haspopup="menu" aria-expanded={open} aria-label={`Mode: ${label}`} data-test="composer-mode"
+        data-tooltip={mode === 'plan' ? 'The next message starts a plan run' : 'Choose how the next message is handled'}>
+        {label}
+        <Icon name="carat-down" slot="icon-after" />
+      </Button>
+      <leo-menu-item onClick={() => choose('agent')} data-test="mode-agent" aria-checked={mode === 'agent' ? 'true' : 'false'}>
+        <span className="menu-icon-row">
+          <span className="menu-text">
+            <span className="menu-title">Agent</span>
+            <span className="menu-subtitle">Works in turns, deciding each step after reading</span>
+          </span>
+          <span className="menu-check" aria-hidden="true">{mode === 'agent' && <Icon name="check-normal" />}</span>
+        </span>
+      </leo-menu-item>
+      <leo-menu-item onClick={() => { if (!blocked) choose('plan') }} data-test="mode-plan"
+        aria-disabled={blocked ? 'true' : undefined} aria-checked={mode === 'plan' ? 'true' : 'false'}
+        data-tooltip={blocked ? PLAN_BLOCKED[blocked] : undefined}>
+        <span className="menu-icon-row">
+          <span className="menu-text">
+            <span className="menu-title">Plan</span>
+            <span className="menu-subtitle">{blocked ? PLAN_BLOCKED[blocked] : 'Plans the whole task, shows you the plan, then runs it'}</span>
+          </span>
+          <span className="menu-check" aria-hidden="true">{mode === 'plan' && <Icon name="check-normal" />}</span>
+        </span>
+      </leo-menu-item>
+    </ButtonMenu>
+  )
+}
+
+/** Chosen from the project menu: a folder, no project, or the picker. */
+export type ProjectChoice = { kind: 'folder'; directory: string } | { kind: 'none' } | { kind: 'pick' }
+
+export interface ComposerFooterProps {
+  /** The folder the chat runs in, or `null` for a bot's conversation with no project. */
+  directory: string | null
+  branch: string | null
+  /**
+   * What the project menu offers, or `null` once the conversation has started and the project is
+   * fixed. `noProject` is offered to a bot only.
+   */
+  choices: { folders: string[]; noProject: boolean } | null
+  onChoose: (choice: ProjectChoice) => void
 }
 
 /**
@@ -56,8 +132,9 @@ export interface ComposerProps {
 export const Composer = memo(function Composer(props: ComposerProps): React.JSX.Element {
   const {
     input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
-    draft, onDraft, onSend, onCancel, onPlan, onModel, attachments, onAttach, onRemoveAttachment, onPreview,
+    draft, onDraft, onCancel, onPlan, onModel, attachments, onAttach, onRemoveAttachment, onPreview,
     queued, queuePaused, onResumeQueued, onRemoveQueued, backendReady, onSetup, onCheckBackend, onDiagnostics,
+    canAttach = true, footer,
   } = props
   // Read by the key handler, which Leo may keep from the first render.
   const latest = useRef(props)
@@ -107,6 +184,22 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
   const blocked = askingTrust || backendReady === false
   const canSend = !blocked && draft.trim().length > 0
 
+  // Agent or Plan, for the next message only. Plan starts one manifest run and the menu goes back
+  // to Agent, because a session may not hold the mode (MANIFEST-9).
+  const [mode, setMode] = useState<Mode>('agent')
+  const planBlocked = !onPlan ? 'unavailable' : scope === 'bot' ? 'bot' : attachments.length > 0 ? 'attachments' : null
+  useEffect(() => { setMode('agent') }, [session])
+  useEffect(() => { if (planBlocked) setMode('agent') }, [planBlocked])
+  const modeNow = useRef(mode)
+  modeNow.current = planBlocked ? 'agent' : mode
+  const submit = () => {
+    const now = latest.current
+    if (modeNow.current === 'plan' && now.onPlan) {
+      setMode('agent')
+      now.onPlan()
+    } else now.onSend()
+  }
+
   return (
     <footer className="composer">
       <div className="composer-stack">
@@ -130,6 +223,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
             ))}
           </div>
         )}
+        <div className={`composer-shell${footer ? ' with-footer' : ''}`}>
         <div className="composer-box">
           {attachments.length > 0 && (
             <div className="attachment-chips">
@@ -149,7 +243,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
             </div>
           )}
           <TextArea ref={input} mode="plain" minRows={1} maxRows={FIELD_MAX_ROWS} value={draft} aria-label="Message the agent"
-            placeholder={pending ? 'Draft your next message while you review…' : 'How can I help you today?'}
+            placeholder={pending ? 'Draft your next message while you review…' : 'Let’s do something great'}
             onInput={({ value }) => onDraft(value)}
             onKeyDown={({ innerEvent }) => {
               const event = innerEvent as unknown as KeyboardEvent
@@ -166,43 +260,117 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                 // queues a follow-up, which is the path the button used to offer as "Queue message".
                 if (!event.repeat && !now.askingTrust && now.backendReady !== false && now.draft.trim()) {
                   if (now.running) now.onQueue()
-                  else now.onSend()
+                  else submit()
                 }
               }
             }} />
           <div className="composer-toolbar">
             <IconButton icon="attachment" label="Attach files" className="attach-files" onClick={onAttach}
-              disabled={attachments.length >= 5} tooltip={attachments.length >= 5 ? 'Five files at most' : 'Attach files'} />
+              disabled={!canAttach || attachments.length >= 5}
+              tooltip={!canAttach ? 'Send a first message, then attach files' : attachments.length >= 5 ? 'Five files at most' : 'Attach files'} />
             <span className="toolbar-spacer" />
             <ContextMeter session={session} model={model} tokens={contextTokens} archived={archived} compacting={compacting} />
             <ModelPicker compact session={session} scope={scope} key={session} model={model} disabled={running} onChoose={onModel} />
-            {/* One run per press, and no setting that stays on: a session starts a run and
-                comes back to ordinary turns (MANIFEST-9). */}
-            {onPlan && !running && (
-              <Button kind="outline" size="small" className="plan-first" onClick={onPlan} data-test="plan-first"
-                isDisabled={!canSend || attachments.length > 0 || scope === 'bot'}
-                data-tooltip={
-                  attachments.length > 0
-                    ? 'A plan is fixed before anything is read, so it cannot take attached files. Remove them, and name the file in the task.'
-                    : scope === 'bot'
-                      ? 'A bot answers in turns. Plan first is for a conversation.'
-                      : 'Plan the whole task, show you the plan, then run it with nothing re-planned'
-                }>
-                Plan first
-              </Button>
-            )}
-            <IconButton icon={running ? 'stop-filled' : 'arrow-up'} label={running ? 'Stop' : 'Send'}
+            {onPlan && <ModeMenu mode={planBlocked ? 'agent' : mode} blocked={planBlocked} disabled={running} onMode={setMode} />}
+            <IconButton icon={running ? 'stop-circle' : 'arrow-up'} label={running ? 'Stop' : 'Send'}
               shortcut={running ? '⌘.' : '⌘↩'}
-              kind={running ? 'outline' : 'filled'} className={running ? 'send stop' : 'send'}
-              onClick={() => { if (running) onCancel(); else onSend() }}
+              kind={running ? 'plain' : 'filled'} size="medium" className={running ? 'send stop' : 'send'}
+              onClick={() => { if (running) onCancel(); else submit() }}
               disabled={!running && !canSend}
               data-test={running ? 'stop-turn' : 'send-message'} />
           </div>
+        </div>
+        {footer && <ComposerFooter {...footer} disabled={running} />}
         </div>
       </div>
     </footer>
   )
 })
+
+/**
+ * The strip under the message box: the project on the left, the branch on the right.
+ *
+ * The project is a menu until the first message is sent, and plain text after that, because a
+ * conversation cannot move to another folder once it has started. The branch is read off the
+ * checkout and only shown.
+ */
+function ComposerFooter({ directory, branch, choices, onChoose, disabled }: ComposerFooterProps & { disabled: boolean }): React.JSX.Element {
+  const label = directory === null ? 'No project' : projectLabel(directory)
+  return (
+    <div className="composer-footer" data-test="composer-footer">
+      {choices ? (
+        <ProjectMenu directory={directory} choices={choices} onChoose={onChoose} disabled={disabled} variant="footer" />
+      ) : (
+        <span className="composer-project" data-tooltip={directory ?? 'This bot’s own folder'}>
+          <Icon name="folder-open" />{label}
+        </span>
+      )}
+      <span className="toolbar-spacer" />
+      {branch && (
+        <span className="composer-branch" data-tooltip={`Branch ${branch}`}>
+          <Icon name="fork-arrows" /><span className="composer-branch-name">{branch}</span>
+        </span>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The menu of projects a chat can move to before anything is said in it.
+ *
+ * One menu, opened from two places: the button in the composer's footer, and the project's name in
+ * the greeting over a new chat. Both show the same list and make the same choice.
+ */
+export function ProjectMenu({ directory, choices, onChoose, disabled = false, variant }: {
+  directory: string | null
+  choices: NonNullable<ComposerFooterProps['choices']>
+  onChoose: (choice: ProjectChoice) => void
+  disabled?: boolean
+  variant: 'footer' | 'title'
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const label = directory === null ? 'No project' : projectLabel(directory)
+  const choose = (choice: ProjectChoice) => { setOpen(false); onChoose(choice) }
+  return (
+    <ButtonMenu className={`project-menu recent-menu ${variant}`} isOpen={open} placement={variant === 'title' ? 'bottom' : 'top-start'}
+      flip={variant === 'footer'} positionStrategy="fixed" onChange={({ isOpen }) => setOpen(isOpen)}>
+      {variant === 'footer' ? (
+        <Button slot="anchor-content" kind="plain-faint" size="tiny" className="project-trigger" isDisabled={disabled}
+          aria-haspopup="menu" aria-expanded={open} aria-label={`Project: ${label}`} data-tooltip={directory ?? 'This bot’s own folder'}
+          data-test="project-trigger">
+          <Icon name="folder-open" slot="icon-before" />
+          {label}
+          <Icon name="carat-down" slot="icon-after" />
+        </Button>
+      ) : (
+        <button type="button" slot="anchor-content" className="fresh-project" disabled={disabled}
+          aria-haspopup="menu" aria-expanded={open} aria-label={`Project: ${label}. Choose another`}
+          data-tooltip={directory ?? 'This bot’s own folder'} data-test="greeting-project">
+          {label}
+        </button>
+      )}
+      {choices.noProject && (
+        <leo-menu-item onClick={() => choose({ kind: 'none' })}>
+          <span className="menu-icon-row"><Icon name="message-bubble" />No project</span>
+        </leo-menu-item>
+      )}
+      {choices.folders.map((folder) => (
+        <leo-menu-item key={folder} onClick={() => choose({ kind: 'folder', directory: folder })}>
+          <span className="menu-icon-row">
+            <Icon name="folder" />
+            <span className="menu-text">
+              <span className="menu-title">{projectLabel(folder)}</span>
+              <span className="menu-subtitle menu-path">{folder}</span>
+            </span>
+          </span>
+        </leo-menu-item>
+      ))}
+      <leo-menu-item onClick={() => choose({ kind: 'pick' })} data-test="project-pick">
+        <span className="menu-icon-row"><Icon name="folder-open" />Select project…</span>
+      </leo-menu-item>
+    </ButtonMenu>
+  )
+}
 
 /**
  * Something else that Escape belongs to: the find bar, or a menu still open. Leo draws a

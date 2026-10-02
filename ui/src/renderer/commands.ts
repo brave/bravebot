@@ -60,7 +60,7 @@ export interface CommandActions {
   /** Flip whether an export carries the tool calls as well as the conversation. */
   toggleExportTools: () => void
   /**
-   * Open the appearance picker.
+   * Open the General settings page, where the appearance is chosen.
    *
    * Here rather than among the things this module may not reach, because an appearance is not an
    * answer: System / Light / Dark are drawn for a person, nothing about them is labelled,
