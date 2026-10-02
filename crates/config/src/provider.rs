@@ -67,6 +67,19 @@ pub(crate) fn known_variable(id: &str) -> Option<&'static str> {
 /// the location, so it is built from `options.project` and `options.location`.
 pub(crate) const GOOGLE_VERTEX_ID: &str = "google-vertex";
 
+/// The models a Vertex AI entry naming none is offered, since no listing will name them for a key.
+///
+/// Each was answered with a tool call, and answered again once the call came back with its result,
+/// at the `global` endpoint on 2026-10-02. No preview is here: Google withdraws one without notice,
+/// and a row that answers 404 stays in the picker until a release takes it out. Any model is still
+/// reachable named qualified.
+const VERTEX_MODELS: &[&str] = &[
+    "google/gemini-3.1-flash-lite",
+    "google/gemini-2.5-pro",
+    "google/gemini-2.5-flash",
+    "google/gemini-2.5-flash-lite",
+];
+
 /// The location Vertex AI is reached in where none is stated.
 const VERTEX_DEFAULT_LOCATION: &str = "global";
 
@@ -143,7 +156,8 @@ pub struct Provider {
     ///
     /// Possibly empty, because opencode does not require `models`. A provider offering nothing is
     /// reported as such rather than guessed at: a gateway roster is too large and too fluid to
-    /// enumerate, so there is nothing to fall back to.
+    /// enumerate, so the gateway is asked. A service with no listing to ask is offered
+    /// [`Self::compiled_roster`] instead, which is never copied in here.
     pub models: Vec<Model>,
     /// The AWS account this entry reaches, where it names Bedrock rather than a gateway.
     ///
@@ -289,12 +303,14 @@ impl Provider {
         format!("{}/models/user", self.base_url)
     }
 
-    /// Whether this service can be asked what it serves.
+    /// The models offered in place of asking this service what it serves, where it cannot be asked.
     ///
-    /// Not Vertex AI, which has no listing a key can call: the request would carry the key to be
-    /// answered 404.
-    pub fn has_roster(&self) -> bool {
-        self.id != GOOGLE_VERTEX_ID
+    /// Vertex AI only, which has no listing a key can call: the request would carry the key to be
+    /// answered 404. `None` for every other gateway, which is asked. Never part of [`Self::models`],
+    /// which a bare name is routed by: these are names to choose from, and a choice off a picker is
+    /// recorded qualified.
+    pub fn compiled_roster(&self) -> Option<&'static [&'static str]> {
+        (self.id == GOOGLE_VERTEX_ID).then_some(VERTEX_MODELS)
     }
 
     /// The header this service takes its credential in, and the value to put there.
@@ -671,8 +687,8 @@ mod tests {
             other.credential_header("a-token"),
             ("authorization", "Bearer a-token".to_string())
         );
-        assert!(!all[0].has_roster());
-        assert!(other.has_roster());
+        assert_eq!(all[0].compiled_roster(), Some(VERTEX_MODELS));
+        assert_eq!(other.compiled_roster(), None);
         assert!(all[0].takes_extra_content());
         assert!(!other.takes_extra_content());
     }
