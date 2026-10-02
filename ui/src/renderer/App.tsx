@@ -1,4 +1,5 @@
 import { AgentSettings } from './components/AgentSettings'
+import { Connectors } from './components/Connectors'
 import type { FileAttachment } from '../shared/files'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
@@ -207,6 +208,7 @@ async function callBot(request: {
 
 export function App(): React.JSX.Element {
   const [agentSettings, setAgentSettings] = useState(false)
+  const [connectors, setConnectors] = useState(false)
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [live, renderLive] = useState<Live | null>(null)
   /** A saved manifest run being read. Shown in place of a session, and only while none is. */
@@ -1232,6 +1234,7 @@ export function App(): React.JSX.Element {
   const stableShowSession = useEvent(showSession)
   const stableCreate = useEvent(create)
   const openSettings = useEvent(() => setAgentSettings(true))
+  const openConnectors = useEvent(() => setConnectors(true))
   const closeContext = useEvent(() => toggle('right'))
   const stableCloseAudit = useEvent(closeAudit)
   const auditTurn = selectedAudit && selectedAudit.turn !== null ? live?.turns[selectedAudit.turn] : undefined
@@ -1281,6 +1284,7 @@ export function App(): React.JSX.Element {
         onRemoveBot={removeBot}
         build={build}
         onSettings={openSettings}
+        onConnectors={openConnectors}
       /></SessionInfo.Provider>
       <Gutter
         side="left"
@@ -1365,6 +1369,7 @@ export function App(): React.JSX.Element {
         <Notice title={notice.title} body={notice.body} onClose={() => setNotice(null)} />
       )}
       {unconfigured && <Unconfigured detail={unconfigured} onClose={() => setUnconfigured(null)} />}
+      {connectors && <Connectors onClose={() => setConnectors(false)} />}
       {agentSettings && <AgentSettings session={live?.handle} onClose={() => setAgentSettings(false)} onChanged={() => { void checkBackend() }} />}
       {live?.askingTrust && (
         <TrustPrompt directory={live.askingTrust} keeping={live.keepingTrust} onAnswer={answerTrust} />

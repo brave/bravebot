@@ -643,6 +643,29 @@ session is running. Revocation can reduce existing grants; it cannot add trust.
 
 ### 7.3 Trust and diagnostics
 
+#### Connectors
+
+The MCP servers a person declares, approves and turns on from the window (SERVERS-3). Each method
+except `connectors.preview` returns what `connectors.list` returns.
+
+- `connectors.list` takes nothing and returns `{ home, state, writable, unavailable, connectors }`.
+  `home` is the person's home directory, which a `~/` in the window's catalog stands for. Each
+  connector carries `alias`, `transport`, `command` or `url`, `variables` (`{ name, stored }`; a
+  stored value is never sent), `reads`, `directory`, `digest`, `approved`, `requested` (in the home
+  settings file), `connected` (both), `changed` and `refused`, or `alias` and `problem` for a
+  declaration that cannot be used.
+- `connectors.preview` takes a form, `{ alias, transport, url }` or `{ alias, transport, command,
+  variables, directory }`, where a variable is `{ name, value }` to store a value, `{ name }` to
+  read it from the environment at launch, or `{ name, keep: true }` to keep the value the existing
+  declaration stores. It writes nothing, and returns the declaration drawn as above with
+  `fingerprint` (the whole digest), `exists`, `same` and `fetching`.
+- `connectors.connect` takes the same form and the `fingerprint` the person was shown, and
+  `replace: true` to write over a different declaration of the same name. It declares, approves and
+  requests the server in `~/.bravebot/settings.json`, and refuses with `bad_request` where the form
+  no longer resolves to that fingerprint.
+- `connectors.disconnect` takes `alias` and takes the request out of the home settings file,
+  keeping the declaration and its approval. `connectors.remove` also deletes those.
+
 #### `trust.reply`
 
 ```json

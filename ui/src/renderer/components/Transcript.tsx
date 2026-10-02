@@ -8,6 +8,7 @@ import { IconMenu } from './IconMenu'
 import { CopyButton } from './CopyButton'
 import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
+import { drawCommand } from '../../shared/connectors'
 import type { Side } from '../columns'
 import type { Asked } from '../App'
 import type { ExportFormat } from '../../shared/export'
@@ -2142,7 +2143,7 @@ function Card({
           {local ? (
             <p className="permission-scope">
               <strong>Runs:</strong>{' '}
-              <code className="mcp-command">{(request.command ?? []).map((word) => /\s|^$/.test(word) ? JSON.stringify(word) : word).join(' ')}</code>
+              <code className="mcp-command">{drawCommand(request.command)}</code>
             </p>
           ) : (
             <p className="permission-scope">

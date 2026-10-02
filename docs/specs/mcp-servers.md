@@ -22,6 +22,7 @@ governs:
   - crates/cli/src/plain.rs
   - crates/tui/src/confirm.rs
   - crates/tui/src/status.rs
+  - crates/ui-bridge/src/connectors.rs
   - crates/ui-bridge/src/turn.rs
 documented-by:
   - docs/website/docs/customize/mcp-servers.md
@@ -379,7 +380,26 @@ before anything is written. So is a settings file [SERVERS-2](#SERVERS-2) refuse
 the request would take past the size a settings file may be, which `add` reads before the
 declaration, so a refused request leaves no declaration behind it.
 
+The desktop application's Connectors dialog is the same split in a window. Filling in a form
+writes nothing: the form is sent to the agent, which builds the declaration from it as `add` would,
+granting a read for each file a stored value or an argument names and giving `PATH` to a program
+found through it, and returns it drawn, with its digest, for the person to read. Only their
+"Connect" on that review writes anything, and it carries the digest back: the agent builds the
+declaration again and declares, approves and requests it, in the home settings file so every
+session starts it, only where the two digests agree. A form that resolves to something else by then,
+because a file or the form changed, connects nothing. Connecting cannot write over another
+declaration of the same name unless the page that sent it is that connector's own, and a stored
+value is never sent back to the window, so a settings page that leaves a secret blank keeps the
+stored one rather than resending it. Disconnecting takes the request out of the home settings file
+and keeps the declaration and its approval, as `disable -s user` does; removing deletes both, as
+`remove` does. In an incognito session each of these is refused.
+
 `verified-by: bravebot_cli::mcp::a_yes_at_the_question_records_the_digest_and_nothing_else_does`
+`verified-by: bravebot_ui_bridge::connectors::a_connector_is_declared_approved_and_requested_only_as_it_was_shown`
+`verified-by: bravebot_ui_bridge::connectors::a_connector_of_the_same_name_is_replaced_only_when_asked`
+`verified-by: bravebot_ui_bridge::connectors::a_stored_value_is_kept_and_never_shown`
+`verified-by: bravebot_ui_bridge::connectors::a_form_the_declarations_cannot_hold_is_refused`
+`verified-by: bravebot_ui_bridge::connectors::a_connector_turned_on_again_from_its_listing_is_the_same_declaration`
 `verified-by: bravebot_cli::mcp::approve_records_only_on_a_yes_and_a_no_ends_refused`
 `verified-by: bravebot_cli::mcp::the_question_shows_every_argument_as_the_word_it_is`
 `verified-by: bravebot_cli::mcp::a_bare_double_dash_declares_the_program_after_it`

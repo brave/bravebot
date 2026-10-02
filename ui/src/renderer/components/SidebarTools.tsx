@@ -57,7 +57,7 @@ export function SidebarSearch({ query, onQuery, label, placeholder, children }: 
  * that does the same thing, in caption ink on the right.
  */
 export function SidebarRow({ icon, label, hint, className, onClick, 'data-test': dataTest }: {
-  icon: 'plus-add' | 'settings'
+  icon: 'plus-add' | 'settings' | 'plug'
   label: string
   hint?: string
   className?: string

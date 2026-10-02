@@ -87,7 +87,14 @@ the server and call cards ("use all future servers in this project", "stop askin
 tool here") is a separate button, as on a command, and the call card does not offer it where
 it cannot be recorded. The bridge also refuses a stand-alone "stop asking" the question did not
 offer. A redirected remote server is put to the window with the host and port a yes would
-reach. Each of these questions takes an answer of its own kind only, and every failure to
+reach.
+
+The Connectors dialog declares and approves servers. Its forms write nothing; the agent resolves a
+form and shows the declaration with its fingerprint, and only "Connect" on that review writes, and
+only where the declaration still has that fingerprint. A stored token is written to
+`~/.bravebot/mcp.json` and is never sent back to the window, so it is not drawn after it is typed.
+The catalog's forms are plain data in `src/shared/connectors.ts`; nothing in them is trusted, and
+every one goes through the same review. Each of these questions takes an answer of its own kind only, and every failure to
 answer is a no.
 
 Vetted-content approval releases only the displayed bytes once; it does not create a trust

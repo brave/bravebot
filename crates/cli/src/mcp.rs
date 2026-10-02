@@ -24,7 +24,6 @@ use bravebot_config::mcp::{
 };
 use bravebot_i18n::t;
 use std::collections::BTreeMap;
-use std::ffi::OsString;
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -215,7 +214,8 @@ fn add<R: BufRead, W: Write>(
 
     let directory = writable(home, "add")?;
     let declaration =
-        with_reads(declaration, directory, &|name| std::env::var_os(name)).map_err(not_added)?;
+        bravebot_agent::servers::with_reads(declaration, directory, &|name| std::env::var_os(name))
+            .map_err(not_added)?;
     let mut declarations = read(directory)?;
     // Read before anything is written, so a settings file the request cannot go in stops the
     // declaration too rather than leaving half of what was typed done.
@@ -388,7 +388,7 @@ fn declared(
         Some(Transport::Stdio(argv)) => {
             // A bare name is looked for only in the PATH a declaration gives it (SERVERS-10), so
             // one typed with neither would be a server that can never start.
-            if is_a_bare_name(&argv[0]) && !env.contains_key("PATH") {
+            if bravebot_agent::servers::is_a_bare_name(&argv[0]) && !env.contains_key("PATH") {
                 variables.push("PATH".to_string());
             }
             Declaration::stdio(argv, variables, directory)
@@ -433,51 +433,6 @@ fn given(
         }
         _ => Err(argument(t!(mcp_env_word_refused, position = position)).into()),
     }
-}
-
-/// `declaration` with a read granted for each file one of its stored values or arguments names,
-/// where its confinement would otherwise refuse it (SERVERS-10).
-///
-/// A word is taken as a file only where it is an absolute path to one that exists now, and it is
-/// recorded as it resolves, so the grant is to the file that was there when the person was shown
-/// it. A directory is never granted this way: a word naming one is too broad a read to infer. Nor
-/// is a file in the state directory, so a line copied from somewhere else cannot hand a server the
-/// person's declarations, approvals or credentials.
-fn with_reads(
-    declaration: Declaration,
-    state: &Path,
-    environment: &dyn Fn(&str) -> Option<OsString>,
-) -> Result<Declaration, Problem> {
-    let Declaration::Stdio { argv, env, .. } = &declaration else {
-        return Ok(declaration);
-    };
-    let state = std::fs::canonicalize(state).unwrap_or_else(|_| state.to_path_buf());
-    let mut files: Vec<PathBuf> = Vec::new();
-    for word in env.values().chain(argv) {
-        let path = Path::new(word);
-        if !path.is_absolute() {
-            continue;
-        }
-        let Ok(file) = std::fs::canonicalize(path) else {
-            continue;
-        };
-        if file.is_file() && !file.starts_with(&state) && !files.contains(&file) {
-            files.push(file);
-        }
-    }
-    let reads = bravebot_agent::servers::unreached(&declaration, files, environment)
-        .into_iter()
-        .filter_map(|file| file.into_os_string().into_string().ok())
-        .collect();
-    declaration.reading(reads)
-}
-
-fn is_a_bare_name(program: &str) -> bool {
-    let mut parts = Path::new(program).components();
-    matches!(
-        (parts.next(), parts.next()),
-        (Some(std::path::Component::Normal(_)), None)
-    )
 }
 
 /// Which transport the flags named, before the rest of the declaration is checked.
@@ -2359,7 +2314,8 @@ mod tests {
         let declaration = Declaration::stdio(argv, Vec::new(), Some(text(&work)))
             .and_then(|declaration| declaration.storing(env))
             .unwrap();
-        let declaration = with_reads(declaration, &state, &|_| None).expect("a declaration");
+        let declaration = bravebot_agent::servers::with_reads(declaration, &state, &|_| None)
+            .expect("a declaration");
         assert_eq!(declaration.reads(), [text(&key), text(&script)]);
     }
 

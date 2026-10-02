@@ -32,6 +32,7 @@
     "drive:plan": "npm run bridge && electron-vite build && node scripts/drive-plan.mjs",
     "drive:exposure": "npm run bridge && electron-vite build && node scripts/drive-exposure.mjs",
     "drive:mcp": "npm run bridge && electron-vite build && node scripts/drive-mcp.mjs",
+    "drive:connectors": "npm run bridge && electron-vite build && node scripts/drive-connectors.mjs",
     "drive:rules": "npm run bridge && electron-vite build && node scripts/drive-rules.mjs",
     "drive:remembered-trust": "npm run bridge && electron-vite build && node scripts/drive-remembered-trust.mjs",
     "drive:run": "npm run bridge && electron-vite build && node scripts/drive-run.mjs",

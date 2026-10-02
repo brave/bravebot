@@ -811,6 +811,52 @@ pub fn unreached(
         .collect()
 }
 
+/// `declaration` with a read granted for each file one of its stored values or arguments names,
+/// where its confinement would otherwise refuse it (SERVERS-10).
+///
+/// A word is taken as a file only where it is an absolute path to one that exists now, and it is
+/// recorded as it resolves, so the grant is to the file that was there when the person was shown
+/// it. A directory is never granted this way: a word naming one is too broad a read to infer. Nor
+/// is a file in the state directory, so a line copied from somewhere else cannot hand a server the
+/// person's declarations, approvals or credentials.
+pub fn with_reads(
+    declaration: Declaration,
+    state: &Path,
+    environment: &dyn Fn(&str) -> Option<OsString>,
+) -> Result<Declaration, Problem> {
+    let Declaration::Stdio { argv, env, .. } = &declaration else {
+        return Ok(declaration);
+    };
+    let state = std::fs::canonicalize(state).unwrap_or_else(|_| state.to_path_buf());
+    let mut files: Vec<PathBuf> = Vec::new();
+    for word in env.values().chain(argv) {
+        let path = Path::new(word);
+        if !path.is_absolute() {
+            continue;
+        }
+        let Ok(file) = std::fs::canonicalize(path) else {
+            continue;
+        };
+        if file.is_file() && !file.starts_with(&state) && !files.contains(&file) {
+            files.push(file);
+        }
+    }
+    let reads = unreached(&declaration, files, environment)
+        .into_iter()
+        .filter_map(|file| file.into_os_string().into_string().ok())
+        .collect();
+    declaration.reading(reads)
+}
+
+/// Whether `program` is a bare name, found through `PATH`, rather than a path.
+pub fn is_a_bare_name(program: &str) -> bool {
+    let mut parts = Path::new(program).components();
+    matches!(
+        (parts.next(), parts.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    )
+}
+
 /// Why the machine's managed layer keeps `plan` from starting, where it does (SERVERS-12).
 fn refused(managed: &Managed, plan: &Plan) -> Option<String> {
     match plan {
