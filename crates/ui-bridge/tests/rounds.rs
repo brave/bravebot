@@ -146,7 +146,7 @@ fn front_end(home: &Path, endpoint: &str) -> Child {
         .env("BRAVE_SERVICES_KEY_ID", "a-key-id")
         .env("BRAVE_AI_CHAT_ENDPOINT", endpoint)
         .env("BRAVE_AI_CHAT_PREMIUM_ENDPOINT", endpoint)
-        .env("BRAVE_AI_CHAT_DEFAULT_MODEL", "stub-model")
+        .env("BRAVEBOT_DEFAULT_MODEL", "stub-model")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

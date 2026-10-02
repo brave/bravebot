@@ -923,7 +923,7 @@ fn resolve(
 /// variable names a default, which is what a `.envrc` that exports it for every checkout means by
 /// it, and a file that names a model is somebody choosing one. A variable ranked above the file
 /// would also rank above a saved `/model` pick, which answers as the person's own file does.
-/// `env.BRAVE_AI_CHAT_DEFAULT_MODEL` is read last, below the baked-in value, because that block is
+/// `env.BRAVEBOT_DEFAULT_MODEL` is read last, below the baked-in value, because that block is
 /// variables and is ranked like them.
 fn resolve_model(
     from_env: Option<String>,
@@ -2345,7 +2345,7 @@ mod tests {
                 "BRAVE_SERVICES_KEY_ID": "key-id-from-the-file",
                 "BRAVE_AI_CHAT_ENDPOINT": "https://endpoint.invalid",
                 "BRAVE_AI_CHAT_PREMIUM_ENDPOINT": "https://premium.invalid",
-                "BRAVE_AI_CHAT_DEFAULT_MODEL": "model-from-the-file",
+                "BRAVEBOT_DEFAULT_MODEL": "model-from-the-file",
                 "BRAVEBOT_CONTEXT_BUDGET": "4096",
                 "BRAVEBOT_OUTPUT_BUDGET": "48000",
                 "BRAVEBOT_USE_BEDROCK": "1",
@@ -3027,7 +3027,7 @@ mod tests {
     #[test]
     fn the_env_block_spelling_stays_below_the_baked_in_value() {
         let settings =
-            Settings::parse(r#"{"env": {"BRAVE_AI_CHAT_DEFAULT_MODEL": "from-the-env-block"}}"#);
+            Settings::parse(r#"{"env": {"BRAVEBOT_DEFAULT_MODEL": "from-the-env-block"}}"#);
         let chosen = resolve_model(None, &settings, |_| Some("baked".into()));
         assert_eq!(chosen.as_deref(), Some("baked"));
 

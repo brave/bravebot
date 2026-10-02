@@ -46,7 +46,7 @@ build() {
 if [ "${BRAVEBOT_BUILD_UNCONFIGURED:-0}" = 1 ]; then
   # Check builds must not inherit a developer's account or load it through direnv.
   unset SERVICES_KEY_AICHAT BRAVE_SERVICES_KEY_ID BRAVE_AI_CHAT_ENDPOINT \
-    BRAVE_AI_CHAT_PREMIUM_ENDPOINT BRAVE_AI_CHAT_DEFAULT_MODEL
+    BRAVE_AI_CHAT_PREMIUM_ENDPOINT BRAVEBOT_DEFAULT_MODEL
   export BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1
   build "$@"
   exit $?

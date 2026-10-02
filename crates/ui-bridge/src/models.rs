@@ -297,7 +297,7 @@ mod tests {
             "BRAVE_AI_CHAT_ENDPOINT" => Some("https://example.invalid".into()),
             "BRAVE_SERVICES_KEY_ID" => Some("a-key-id".into()),
             "SERVICES_KEY_AICHAT" => Some("a-signing-key".into()),
-            "BRAVE_AI_CHAT_DEFAULT_MODEL" => Some(default.into()),
+            "BRAVEBOT_DEFAULT_MODEL" => Some(default.into()),
             _ => None,
         })
         .expect("configured");

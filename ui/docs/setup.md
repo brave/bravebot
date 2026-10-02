@@ -38,7 +38,7 @@ requires backend configuration. For the Brave backend, supply these exported nam
 | `SERVICES_KEY_AICHAT` | Backend signing key |
 | `BRAVE_SERVICES_KEY_ID` | Key identifier |
 | `BRAVE_AI_CHAT_ENDPOINT` | Backend endpoint |
-| `BRAVE_AI_CHAT_DEFAULT_MODEL` | Optional default model; otherwise `automatic` |
+| `BRAVEBOT_DEFAULT_MODEL` | Optional default model, for every backend; otherwise `automatic-bravebot` |
 | `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | Optional premium endpoint |
 
 Use the exported names, not the `DEV_`/`PROD_` inputs used by the agent's example

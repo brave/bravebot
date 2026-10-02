@@ -2348,7 +2348,7 @@ fn a_run_asks_for_the_recorded_model_ignoring_a_checkouts() {
     );
 }
 
-/// The settings key outranks an exported `BRAVE_AI_CHAT_DEFAULT_MODEL` (BACKEND-11). The variable
+/// The settings key outranks an exported `BRAVEBOT_DEFAULT_MODEL` (BACKEND-11). The variable
 /// names a default, which is what a `.envrc` exporting it for every checkout means by it; ranked
 /// above the file it would outrank every `model` key on a machine that sources one.
 #[test]
@@ -2357,7 +2357,7 @@ fn a_run_asks_for_the_settings_model_over_an_exported_default() {
     let scratch =
         Scratch::new("cli-running-model-over-export").with_settings(&settings_for(&gateway));
     let mut environment = AT_A_GATEWAY.to_vec();
-    environment.push(("BRAVE_AI_CHAT_DEFAULT_MODEL", "openrouter/exported"));
+    environment.push(("BRAVEBOT_DEFAULT_MODEL", "openrouter/exported"));
 
     bravebot(&scratch.path, &environment, &["-p", "say something"]);
 
@@ -2368,6 +2368,37 @@ fn a_run_asks_for_the_settings_model_over_an_exported_default() {
     assert!(
         asked.contains(r#""model":"reasons-only""#),
         "the exported variable outranked the settings file: {asked}"
+    );
+}
+
+/// An exported `BRAVEBOT_DEFAULT_MODEL` is the model a run asks a gateway for where no file names
+/// one (BACKEND-11). Brave's credentials are set too, so a build that did not read the name would
+/// ask Brave's endpoint for its own default and the gateway would never hear from it.
+#[test]
+fn a_run_asks_for_an_exported_default_where_no_file_names_a_model() {
+    let gateway = a_gateway_listing(r#"["tools", "reasoning"]"#);
+    // `settings_for` without its `model` key, which would outrank the variable.
+    let settings = format!(
+        r#"{{"provider": {{"openrouter": {{
+            "env": ["OPENROUTER_API_KEY"],
+            "options": {{"baseURL": "http://127.0.0.1:{}/api/v1"}}
+        }}}}}}"#,
+        gateway.port
+    );
+    let scratch = Scratch::new("cli-running-exported-default").with_settings(&settings);
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("BRAVEBOT_DEFAULT_MODEL", "openrouter/reasons-only"));
+
+    let output = bravebot(&scratch.path, &environment, &["-p", "say something"]);
+
+    let (_, stderr) = said(&output);
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .unwrap_or_else(|_| panic!("the exported default did not reach the gateway: {stderr}"));
+    assert!(
+        asked.contains(r#""model":"reasons-only""#),
+        "the gateway was asked for another model: {asked}"
     );
 }
 
