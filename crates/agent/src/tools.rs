@@ -84,6 +84,42 @@ impl Scheduling {
     }
 }
 
+/// Whether this turn is offered `run`.
+///
+/// Read by the tool table and by dispatch, because both say what to do where `read_git` will not
+/// open a repository. git answers nearly everything this reader declines and `run` is how git is
+/// asked, so a turn holding one is sent there. A delegate that may read files and not run programs is
+/// offered `read_git` and no `run`, and sending that one there costs a round on a name that is not on
+/// its list and then a refusal it cannot act on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Running {
+    /// `run` is on this turn's list, so what is said may name it.
+    Offered,
+    /// It is not, so what is said names what can be done without it instead.
+    Withheld,
+}
+
+impl Running {
+    /// What a list of tools offers, read off the list rather than from the capability that gates
+    /// `run`.
+    ///
+    /// A definition's own `tools:` line takes names off a list whose capabilities reach them, so
+    /// the capability is the wider answer of the two and what a description may name is what is
+    /// beside it on the list.
+    pub fn on(offered: &[Tool]) -> Self {
+        if offer_runs(offered) {
+            Self::Offered
+        } else {
+            Self::Withheld
+        }
+    }
+
+    /// Whether what is said may name `run`.
+    pub fn offered(self) -> bool {
+        matches!(self, Running::Offered)
+    }
+}
+
 /// The tools the model may call.
 ///
 /// `scheduling` says what this turn may say about when it runs again, which decides whether
@@ -91,13 +127,16 @@ impl Scheduling {
 /// `arming` says whether the session this turn belongs to keeps standing watches, which decides
 /// whether `watch_file` is offered. `deadlines` is how long a command may run, which `run`'s
 /// description quotes: a planner told 600 seconds where a person has made room for 1200 spends its
-/// deadline on the figure it was told about and never asks for the run they paid for.
+/// deadline on the figure it was told about and never asks for the run they paid for. `running` says
+/// whether this list holds `run`, which `read_git`'s description names where a repository is one it
+/// will not open.
 pub fn available(
     scheduling: Scheduling,
     arming: crate::watch::Arming,
     deadlines: crate::exec::Deadlines,
+    running: Running,
 ) -> Vec<Tool> {
-    let mut tools = table(scheduling, arming, deadlines);
+    let mut tools = table(scheduling, arming, deadlines, running);
     for tool in &mut tools {
         ask_why(tool);
     }
@@ -108,6 +147,7 @@ fn table(
     scheduling: Scheduling,
     arming: crate::watch::Arming,
     deadlines: crate::exec::Deadlines,
+    running: Running,
 ) -> Vec<Tool> {
     // Which of the two answers a request about one file gets. Both exist wherever watches do, and
     // a description that named neither as the better one would leave the planner picking the one
@@ -155,6 +195,25 @@ fn table(
     // nothing gets the first, and a call may raise its own deadline as far as the second.
     let (deadline_default, deadline_ceiling) =
         (deadlines.default.as_secs(), deadlines.ceiling.as_secs());
+    // What read_git says to do where it will not answer: a repository or a working tree it may not
+    // read, and a request none of its queries covers. git answers both and `run` is how git is
+    // asked, so a turn holding one is sent there. A turn without one has no second way to that
+    // history at all, and naming `run` to it costs what naming `schedule_next` on a surface
+    // offering none costs: a round spent on a name that is not there, and then a question to report
+    // back on unanswered.
+    let (git_elsewhere, git_beyond) = if running.offered() {
+        (
+            "elsewhere it says so and you use run",
+            "For --follow, blame or anything else use run.",
+        )
+    } else {
+        (
+            "elsewhere it says so, and no tool on your list reads that history instead",
+            "--follow, blame and anything else this does not answer cannot be read here either. \
+             Report what you could not read rather than describing how somebody with a shell would \
+             read it.",
+        )
+    };
     let mut tools = vec![
         Tool::function(
             "read_file",
@@ -428,7 +487,8 @@ fn table(
         ),
         Tool::function(
             "read_git",
-            "Read a repository's history from its .git directory without starting git: log lists \
+            format!(
+                "Read a repository's history from its .git directory without starting git: log lists \
              commits one per line, or each with its whole message, a page at a time; show \
              prints a commit with its diff or a file or directory at \
              a revision, diff compares two commits, and status lists staged, unstaged and \
@@ -436,11 +496,11 @@ fn table(
              as git tag --sort=-v:refname does, and with a revision only those it reaches, as \
              --merged does; search finds the lines matching a regular expression in the files \
              at a revision, as git grep does. Works only where the whole of .git is \
-             trusted, and for status the whole working tree; elsewhere it says so and you use \
-             run. Nothing git's configuration names is applied: no diff drivers, textconv, \
+             trusted, and for status the whole working tree; {git_elsewhere}. Nothing git's \
+             configuration names is applied: no diff drivers, textconv, \
              filters or signature checks, and no remote URL is ever returned. Status detects no \
-             renames and lists a file an attribute would convert as not compared. For --follow, \
-             blame or anything else use run.",
+             renames and lists a file an attribute would convert as not compared. {git_beyond}"
+            ),
             json!({
                 "type": "object",
                 "properties": {
@@ -1184,14 +1244,7 @@ pub fn for_delegate(
 ) -> Vec<Tool> {
     use bravebot_core::delegate::{NEVER_DELEGATED, gating_capability};
 
-    let mut tools: Vec<Tool> = available(
-        Scheduling::ArrangingALook,
-        crate::watch::Arming::Unavailable,
-        deadlines,
-    )
-    .into_iter()
-    .filter(|tool| {
-        let name = tool.function.name.as_str();
+    let offers = |name: &str| {
         if NEVER_DELEGATED.contains(&name) {
             return false;
         }
@@ -1205,7 +1258,24 @@ pub fn for_delegate(
         // what its kind reaches and never adds, so a name here that the gate above dropped is a
         // name this delegate loaded without.
         confined_to.is_none_or(|named| named.iter().any(|tool| tool == name))
-    })
+    };
+
+    // Asked before the table is written as well as of each name in it, because a description that
+    // says to use `run` is wrong on a list that does not hold one, and the question is the same
+    // question either way round.
+    let running = if offers("run") {
+        Running::Offered
+    } else {
+        Running::Withheld
+    };
+    let mut tools: Vec<Tool> = available(
+        Scheduling::ArrangingALook,
+        crate::watch::Arming::Unavailable,
+        deadlines,
+        running,
+    )
+    .into_iter()
+    .filter(|tool| offers(tool.function.name.as_str()))
     .collect();
     if let Some(delegates) = delegating {
         offer_kinds(&mut tools, delegates);
@@ -1218,13 +1288,18 @@ pub fn for_delegate(
 /// The schema is otherwise the table's own, and this replaces one field of one tool: which names
 /// `spawn_agent` accepts, and what each of them is for. Built here rather than threaded through
 /// [`available`] because every other tool is the same whatever a person has written down.
+///
+/// `running` is the planner's own `Offered` on an ordinary turn, which holds the whole table. A turn
+/// addressed to a definition is narrowed by a list read after this is built, so its caller asks
+/// again with `Withheld` where that narrowing took `run` away.
 pub fn for_planner(
     scheduling: Scheduling,
     arming: crate::watch::Arming,
     delegates: &bravebot_core::delegate::Definitions,
     deadlines: crate::exec::Deadlines,
+    running: Running,
 ) -> Vec<Tool> {
-    let mut tools = available(scheduling, arming, deadlines);
+    let mut tools = available(scheduling, arming, deadlines, running);
     offer_kinds(&mut tools, delegates);
     tools
 }
@@ -1482,6 +1557,13 @@ pub struct Tools<'a> {
     /// tool this turn was not offered is answered the way any other unknown name is rather than
     /// quietly working.
     pub arming: crate::watch::Arming,
+    /// Whether this turn's list holds `run`.
+    ///
+    /// Read by dispatch as well as by the tool table, because the two have to agree: `read_git`'s
+    /// description says what to do where it will not open a repository, and the refusal it is
+    /// refused with says the same thing again. A turn told in the description that nothing else
+    /// reads the history and then told by the refusal to use `run` has been given both answers.
+    pub running: Running,
     /// How many watches this turn has already armed, which is what the count bound is read
     /// against.
     ///
@@ -7838,6 +7920,26 @@ fn git_day(
     }
 }
 
+/// What the planner is told about a `read_git` call that was not answered: the driver's sentence for
+/// the failure, and what to do instead where this turn is offered the tool that would do it.
+///
+/// The two are built separately because only one of them depends on the turn. The sentence is the
+/// same for everybody, and `run` is the only other way to read a repository this reader declines, so
+/// a turn offered no `run` is told what happened and nothing more. Composed here rather than in the
+/// workspace, which words a failure for a log and for a person as well as for the planner and has no
+/// turn's tool list to read.
+fn git_failure(e: &crate::workspace::WorkspaceError, named: &str, running: Running) -> String {
+    let mut said = e.describe(named);
+    if let crate::workspace::WorkspaceError::Git { declined, .. } = e
+        && running.offered()
+        && let Some(instead) = declined.instead()
+    {
+        said.push(' ');
+        said.push_str(instead);
+    }
+    said
+}
+
 fn read_git<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
@@ -7845,6 +7947,9 @@ fn read_git<S: Sink, C: Confirmer>(
     arguments: &Value,
 ) -> Produced {
     let workspace = tools.workspace;
+    // Whether anything this tool refuses may point at `run`, which is how git answers what this
+    // reader will not. Read once here because every refusal below is worded against it.
+    let running = tools.running;
     let Some(named) = argument(arguments, "query") else {
         return Produced::problem(
             "error: 'query' is required: one of log, show, diff, status, tags or search",
@@ -7859,8 +7964,13 @@ fn read_git<S: Sink, C: Confirmer>(
                 None => {
                     return Produced::problem(format!(
                         "error: read_git answers log, show, diff, status, tags and search, not \
-                         {}. Use run to ask git for anything else.",
-                        name.trim()
+                         {}.{}",
+                        name.trim(),
+                        if running.offered() {
+                            " Use run to ask git for anything else."
+                        } else {
+                            ""
+                        }
                     ));
                 }
             },
@@ -7964,7 +8074,7 @@ fn read_git<S: Sink, C: Confirmer>(
     };
     let answer = match workspace.read_git(policy, &question) {
         Ok(answer) => answer,
-        Err(e) => return Produced::problem(format!("error: {}", e.describe(&shown))),
+        Err(e) => return Produced::problem(format!("error: {}", git_failure(&e, &shown, running))),
     };
 
     // Scanned before the planner is given it, as a file read is (CRED-15): a commit that added a
@@ -8195,6 +8305,7 @@ mod tests {
             Scheduling::ArrangingALook,
             Arming::Allowed { free: 1 },
             Deadlines::BUILT_IN,
+            Running::Offered,
         );
         // The part of a description that is about the matcher rather than about the argument.
         let syntax = |tool: &str, property: &str| -> String {
@@ -8282,6 +8393,7 @@ mod tests {
             Scheduling::ArrangingALook,
             Arming::Allowed { free: 1 },
             Deadlines::BUILT_IN,
+            Running::Offered,
         )
         .iter()
         .map(|t| t.function.name.clone())
@@ -8339,6 +8451,7 @@ mod tests {
                     arming,
                     &Definitions::default(),
                     Deadlines::BUILT_IN,
+                    Running::Offered,
                 ));
             }
         }
@@ -8426,6 +8539,7 @@ mod tests {
             Scheduling::ArrangingALook,
             crate::watch::Arming::Unavailable,
             Deadlines::BUILT_IN,
+            Running::Offered,
         );
         let spawn = offered
             .iter()
@@ -8591,6 +8705,76 @@ mod tests {
         );
     }
 
+    /// Every kind that reads files is offered `read_git`, and only the two that may run a program
+    /// are offered `run`, so a reader reads a description that cannot send it there: it would spend
+    /// a round on a name that is not on its list and then have a refusal to explain to whoever asked
+    /// about the history.
+    #[test]
+    fn read_git_names_run_only_where_the_delegate_holds_one() {
+        use bravebot_core::delegate::Kind;
+
+        let described = |kind: Kind| {
+            let offered = for_delegate(&kind.capabilities(), None, None, Deadlines::BUILT_IN);
+            let runs = offered.iter().any(|tool| tool.function.name == "run");
+            let said = offered
+                .into_iter()
+                .find(|tool| tool.function.name == "read_git")
+                .expect("a kind that reads files is offered read_git")
+                .function
+                .description;
+            (runs, said)
+        };
+
+        let (runs, reader) = described(Kind::Reader);
+        assert!(!runs, "a reader was offered a way to run a program");
+        assert!(
+            !reader.contains("run"),
+            "a reader's read_git named a tool it is not offered: {reader}"
+        );
+        assert!(
+            reader.contains("no tool on your list reads that history instead"),
+            "a reader was not told what it cannot read: {reader}"
+        );
+
+        let (runs, checker) = described(Kind::Checker);
+        assert!(runs, "a checker was not offered a way to run a program");
+        assert!(
+            checker.contains("elsewhere it says so and you use run"),
+            "a checker was not sent to the tool it holds: {checker}"
+        );
+        assert!(
+            checker.contains("For --follow, blame or anything else use run."),
+            "a checker was not sent to the tool it holds: {checker}"
+        );
+    }
+
+    /// The description and the refusal are read in one context, so they have to agree. A turn told
+    /// in the description that nothing on its list reads the history, and then told by the refusal
+    /// to read it with git, has been given both answers at once.
+    #[test]
+    fn a_declined_repository_names_run_only_where_the_turn_holds_one() {
+        let failed = crate::workspace::WorkspaceError::Git {
+            path: "project".to_string(),
+            declined: crate::git::Declined::Untrusted,
+        };
+
+        let offered = git_failure(&failed, "project", Running::Offered);
+        assert!(
+            offered.contains("Use run to read it with git instead."),
+            "a turn holding run was not told to use it: {offered}"
+        );
+
+        let withheld = git_failure(&failed, "project", Running::Withheld);
+        assert!(
+            withheld.contains("read_git does not open it"),
+            "the refusal stopped saying what happened: {withheld}"
+        );
+        assert!(
+            !withheld.contains("run"),
+            "a turn holding no run was told to use it: {withheld}"
+        );
+    }
+
     /// The kernel narrows a definition's capabilities by asking
     /// [`bravebot_core::delegate::gating_capability`] what each named tool needs, and this list
     /// is built by asking the same question. Two answers to it would be a delegate holding a
@@ -8606,6 +8790,7 @@ mod tests {
             Scheduling::ArrangingALook,
             crate::watch::Arming::Unavailable,
             Deadlines::BUILT_IN,
+            Running::Offered,
         ) {
             let name = tool.function.name.as_str();
             if NEVER_DELEGATED.contains(&name) {
@@ -8643,6 +8828,7 @@ mod tests {
             Scheduling::ArrangingALook,
             crate::watch::Arming::Unavailable,
             Deadlines::BUILT_IN,
+            Running::Offered,
         )
         .iter()
         .map(|tool| tool.function.name.clone())
@@ -8695,6 +8881,7 @@ mod tests {
             crate::watch::Arming::Unavailable,
             &delegates,
             Deadlines::BUILT_IN,
+            Running::Offered,
         );
         let spawn = tools
             .iter()
@@ -8742,6 +8929,7 @@ mod tests {
             crate::watch::Arming::Unavailable,
             &delegates,
             Deadlines::BUILT_IN,
+            Running::Offered,
         );
         let spawn = tools
             .iter()
@@ -8801,6 +8989,7 @@ mod tests {
             Scheduling::ArrangingALook,
             Arming::Allowed { free: 1 },
             Deadlines::BUILT_IN,
+            Running::Offered,
         );
         shell_free("a turn", &turn);
         shell_free(
@@ -8809,6 +8998,7 @@ mod tests {
                 Scheduling::PacingALoop,
                 Arming::Allowed { free: 1 },
                 Deadlines::BUILT_IN,
+                Running::Offered,
             ),
         );
         shell_free(
@@ -8817,6 +9007,7 @@ mod tests {
                 Scheduling::TheirInterval,
                 Arming::Allowed { free: 1 },
                 Deadlines::BUILT_IN,
+                Running::Offered,
             ),
         );
 
@@ -8855,6 +9046,7 @@ mod tests {
             Scheduling::ArrangingALook,
             Arming::Allowed { free: 1 },
             Deadlines::BUILT_IN,
+            Running::Offered,
         )
         .into_iter()
         .find(|t| t.function.name == "run")
@@ -9018,6 +9210,7 @@ mod tests {
                 Scheduling::ArrangingALook,
                 Arming::Allowed { free: 1 },
                 deadlines,
+                Running::Offered,
             )
             .into_iter()
             .find(|tool| tool.function.name == "run")
@@ -9109,6 +9302,7 @@ mod tests {
             Scheduling::ArrangingALook,
             Arming::Allowed { free: 1 },
             Deadlines::BUILT_IN,
+            Running::Offered,
         )
         .into_iter()
         .find(|t| t.function.name == "job_output")
@@ -9233,12 +9427,17 @@ mod tests {
     #[test]
     fn what_a_watch_request_is_told_about_the_next_look_matches_what_this_turn_can_arrange() {
         let described = |scheduling, name: &str| {
-            available(scheduling, Arming::Allowed { free: 1 }, Deadlines::BUILT_IN)
-                .into_iter()
-                .find(|t| t.function.name == name)
-                .unwrap_or_else(|| panic!("{name} is offered"))
-                .function
-                .description
+            available(
+                scheduling,
+                Arming::Allowed { free: 1 },
+                Deadlines::BUILT_IN,
+                Running::Offered,
+            )
+            .into_iter()
+            .find(|t| t.function.name == name)
+            .unwrap_or_else(|| panic!("{name} is offered"))
+            .function
+            .description
         };
 
         for name in ["read_file", "run"] {
@@ -9297,6 +9496,7 @@ mod tests {
             Scheduling::ArrangingALook,
             Arming::Allowed { free: 1 },
             Deadlines::BUILT_IN,
+            Running::Offered,
         )
         .into_iter()
         .find(|t| t.function.name == "run")
@@ -9314,6 +9514,7 @@ mod tests {
             Scheduling::ArrangingALook,
             Arming::Allowed { free: 1 },
             Deadlines::BUILT_IN,
+            Running::Offered,
         )
         .into_iter()
         .find(|t| t.function.name == "run")
@@ -9351,6 +9552,7 @@ mod tests {
             Scheduling::ArrangingALook,
             Arming::Allowed { free: 1 },
             Deadlines::BUILT_IN,
+            Running::Offered,
         )
         .into_iter()
         .find(|t| t.function.name == "read_file")
@@ -9453,6 +9655,7 @@ mod tests {
             Scheduling::ArrangingALook,
             Arming::Allowed { free: 1 },
             Deadlines::BUILT_IN,
+            Running::Offered,
         ) {
             let name = tool.function.name;
             assert!(
@@ -9486,6 +9689,7 @@ mod tests {
             Scheduling::ArrangingALook,
             Arming::Allowed { free: 1 },
             Deadlines::BUILT_IN,
+            Running::Offered,
         )
         .into_iter()
         .find(|t| t.function.name == "ask_user")
@@ -9510,6 +9714,7 @@ mod tests {
             Scheduling::ArrangingALook,
             Arming::Allowed { free: 1 },
             Deadlines::BUILT_IN,
+            Running::Offered,
         )
         .into_iter()
         .find(|t| t.function.name == "ask_user")
@@ -9531,6 +9736,7 @@ mod tests {
             Scheduling::ArrangingALook,
             Arming::Allowed { free: 1 },
             Deadlines::BUILT_IN,
+            Running::Offered,
         )
         .into_iter()
         .find(|t| t.function.name == "run")
@@ -9555,6 +9761,7 @@ mod tests {
                 Scheduling::ArrangingALook,
                 Arming::Allowed { free: 1 },
                 Deadlines::BUILT_IN,
+                Running::Offered,
             )
             .into_iter()
             .find(|t| t.function.name == name)
@@ -9575,6 +9782,7 @@ mod tests {
             Scheduling::ArrangingALook,
             Arming::Allowed { free: 1 },
             Deadlines::BUILT_IN,
+            Running::Offered,
         )
         .into_iter()
         .find(|t| t.function.name == "edit_file")
@@ -9594,6 +9802,7 @@ mod tests {
             Scheduling::ArrangingALook,
             Arming::Allowed { free: 1 },
             Deadlines::BUILT_IN,
+            Running::Offered,
         ) {
             assert_eq!(tool.kind, "function");
             assert_eq!(tool.function.parameters["type"], "object");
@@ -9626,6 +9835,7 @@ mod tests {
             Scheduling::ArrangingALook,
             Arming::Allowed { free: 1 },
             Deadlines::BUILT_IN,
+            Running::Offered,
         )
         .into_iter()
         .find(|t| t.function.name == "todo_write")
@@ -9654,6 +9864,7 @@ mod tests {
             Scheduling::ArrangingALook,
             Arming::Allowed { free: 1 },
             Deadlines::BUILT_IN,
+            Running::Offered,
         )
         .into_iter()
         .find(|t| t.function.name == "todo_write")
@@ -9677,6 +9888,7 @@ mod tests {
             Scheduling::ArrangingALook,
             Arming::Allowed { free: 1 },
             Deadlines::BUILT_IN,
+            Running::Offered,
         )
         .into_iter()
         .find(|t| t.function.name == "todo_write")
@@ -10452,10 +10664,15 @@ mod tests {
         #[test]
         fn nothing_on_this_tool_says_what_the_next_turn_asks() {
             for scheduling in [Scheduling::ArrangingALook, Scheduling::PacingALoop] {
-                let tool = available(scheduling, Arming::Allowed { free: 1 }, Deadlines::BUILT_IN)
-                    .into_iter()
-                    .find(|t| t.function.name == "schedule_next")
-                    .expect("schedule_next is offered");
+                let tool = available(
+                    scheduling,
+                    Arming::Allowed { free: 1 },
+                    Deadlines::BUILT_IN,
+                    Running::Offered,
+                )
+                .into_iter()
+                .find(|t| t.function.name == "schedule_next")
+                .expect("schedule_next is offered");
                 let properties = tool.function.parameters["properties"]
                     .as_object()
                     .expect("properties");
@@ -10472,12 +10689,17 @@ mod tests {
         #[test]
         fn any_turn_may_arrange_the_next_look_and_is_told_which_case_it_is() {
             let described = |scheduling| {
-                available(scheduling, Arming::Allowed { free: 1 }, Deadlines::BUILT_IN)
-                    .into_iter()
-                    .find(|t| t.function.name == "schedule_next")
-                    .expect("schedule_next is offered")
-                    .function
-                    .description
+                available(
+                    scheduling,
+                    Arming::Allowed { free: 1 },
+                    Deadlines::BUILT_IN,
+                    Running::Offered,
+                )
+                .into_iter()
+                .find(|t| t.function.name == "schedule_next")
+                .expect("schedule_next is offered")
+                .function
+                .description
             };
             let pacing = described(Scheduling::PacingALoop);
             let starting = described(Scheduling::ArrangingALook);
@@ -10502,6 +10724,7 @@ mod tests {
                 Scheduling::NoLaterLook,
                 Arming::Allowed { free: 1 },
                 Deadlines::BUILT_IN,
+                Running::Offered,
             );
             assert!(
                 !offered.iter().any(|t| t.function.name == "schedule_next"),
@@ -10526,7 +10749,8 @@ mod tests {
                 !available(
                     Scheduling::TheirInterval,
                     Arming::Allowed { free: 1 },
-                    Deadlines::BUILT_IN
+                    Deadlines::BUILT_IN,
+                    Running::Offered
                 )
                 .iter()
                 .any(|t| t.function.name == "schedule_next"),
@@ -11174,6 +11398,7 @@ mod tests {
                 Scheduling::ArrangingALook,
                 Arming::Allowed { free: 8 },
                 Deadlines::BUILT_IN,
+                Running::Offered,
             )
             .into_iter()
             .find(|t| t.function.name == "watch_file")
@@ -11194,6 +11419,7 @@ mod tests {
                 Scheduling::ArrangingALook,
                 Arming::Allowed { free: 8 },
                 Deadlines::BUILT_IN,
+                Running::Offered,
             )
             .into_iter()
             .find(|t| t.function.name == "read_file")
@@ -11214,6 +11440,7 @@ mod tests {
                 Scheduling::ArrangingALook,
                 Arming::Unavailable,
                 Deadlines::BUILT_IN,
+                Running::Offered,
             )
             .into_iter()
             .find(|t| t.function.name == "read_file")
@@ -11261,7 +11488,8 @@ mod tests {
                 !available(
                     Scheduling::ArrangingALook,
                     Arming::Unavailable,
-                    Deadlines::BUILT_IN
+                    Deadlines::BUILT_IN,
+                    Running::Offered
                 )
                 .iter()
                 .any(|t| t.function.name == "watch_file"),
@@ -11745,6 +11973,7 @@ mod tests {
                 cancel: &cancel,
                 scheduling: Scheduling::ArrangingALook,
                 arming: Arming::Allowed { free: 1 },
+                running: Running::Offered,
                 armed: &mut armed,
                 home: None,
                 profile: None,
@@ -11832,6 +12061,40 @@ mod tests {
                 !released_for_display(&sink, "a proposed run directory"),
                 "the directory was released for a screen and branched on from that: {:?}",
                 sink.events()
+            );
+        }
+
+        /// GIT-5 and TOOL-6. A word off the list is refused by name whoever asked, and only the
+        /// sentence sending the planner to git turns on whether this turn holds `run`. Asserted
+        /// whole rather than by what it contains, because the refusal by name is the half the turn
+        /// acts on and a test reading only that half would pass with either sentence appended.
+        #[test]
+        fn a_query_off_the_list_names_run_only_where_the_turn_holds_one() {
+            let scratch = Scratch::new("read-git-off-list");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let refused = |running: Running| {
+                let mut sink = RecordingSink::new();
+                let mut policy = policy(&mut sink);
+                let produced = with_tools(&workspace, |tools| {
+                    tools.running = running;
+                    read_git(
+                        &mut policy,
+                        tools,
+                        &mut crate::confirm::Unattended,
+                        &json!({"query": "blame"}),
+                    )
+                });
+                told(&mut policy, &produced.text)
+            };
+
+            assert_eq!(
+                refused(Running::Offered),
+                "error: read_git answers log, show, diff, status, tags and search, not blame. Use \
+                 run to ask git for anything else."
+            );
+            assert_eq!(
+                refused(Running::Withheld),
+                "error: read_git answers log, show, diff, status, tags and search, not blame."
             );
         }
 

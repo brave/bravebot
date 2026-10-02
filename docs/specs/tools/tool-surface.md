@@ -154,3 +154,28 @@ was for, so a session reads as a list of commands.
 
 `verified-by: bravebot_agent::tools::every_tool_offered_asks_why_it_is_being_called`
 `verified-by: bravebot_agent::turn::each_call_is_announced_and_summarised_with_its_own_reason`
+
+<a id="TOOL-6"></a>
+### TOOL-6: what a tool says names only the tools the same turn is offered
+
+A description and a refusal are read in the turn they were written for, and two turns are not offered
+the same list. A delegate that may read files and not run programs is offered `read_git` and no
+`run`; a turn a person addressed to a definition is offered what that definition kept.
+[delegation.md](../delegation.md) and
+[addressing-a-definition.md](../addressing-a-definition.md) are where those two lists are settled. So
+a sentence that sends the planner to another tool is written against this turn's own list, and where
+that tool is not on it the sentence says what can be done without it instead.
+
+**Why.** A turn told to use a tool nobody offered it spends a round calling a name that is not there
+and is refused for a reason it cannot act on, and then has a question to report back on unanswered.
+It was also told in its own prompt what it cannot do, so it holds both answers at once and the one in
+the tool list is the one that is true.
+
+Not every description is written this way yet. The read's and the run's advice to arrange a later
+look, the processor's, the run's and the job's mention of writing a file, and the output's mention of
+checking a reference each name a tool some delegate is not offered.
+
+`verified-by: bravebot_agent::tools::read_git_names_run_only_where_the_delegate_holds_one`
+`verified-by: bravebot_agent::tools::a_declined_repository_names_run_only_where_the_turn_holds_one`
+`verified-by: bravebot_agent::tools::a_query_off_the_list_names_run_only_where_the_turn_holds_one`
+`verified-by: bravebot_agent::turn::an_addressed_reader_reads_a_read_git_that_names_no_run`
