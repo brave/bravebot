@@ -70,6 +70,8 @@ pub struct Facts<'a> {
     pub added_directories: &'a [std::path::PathBuf],
     /// The session's own directory outside the project, or `None` where it has none.
     pub scratch: Option<&'a Path>,
+    /// The checkouts the session made for its delegates and has not removed, oldest first.
+    pub checkouts: &'a [bravebot_agent::workspace::SessionCheckout],
     pub model: Option<&'a str>,
     /// The definition every turn is addressed to, where `--agent` named one (CLI-17).
     pub agent: Option<&'a crate::state::Addressed>,
@@ -237,6 +239,19 @@ pub fn report(facts: &Facts<'_>) -> Report {
     if let Some(scratch) = facts.scratch {
         lines.push(
             Line::new(t!(status_scratch), abbreviate(scratch)).with_note(t!(status_scratch_note)),
+        );
+    }
+
+    // The transcript says a checkout was kept but not where: its path goes to the planner alone,
+    // beside the delegate's report.
+    for checkout in facts.checkouts {
+        lines.push(
+            Line::new(t!(status_checkout), abbreviate(&checkout.path)).with_note(t!(
+                status_checkout_note,
+                id = &checkout.id,
+                commit = checkout.commit.get(..10).unwrap_or(&checkout.commit),
+                delegate = checkout.delegate.to_string()
+            )),
         );
     }
 
@@ -729,6 +744,8 @@ mod tests {
             // No scratch directory, which is what a session on a machine that could not give it
             // one looks like. The test about the line sets it itself.
             scratch: None,
+            // No checkouts, on the same footing.
+            checkouts: &[],
             model: None,
             agent: None,
             effort: None,
@@ -1847,6 +1864,86 @@ mod tests {
 
         let shown = rendered(&report(&facts(&config, &trust)));
         assert!(!shown.contains(&*t!(status_scratch)), "{shown}");
+    }
+
+    /// Each checkout is a line of its own, under the directories and the session's own, with its
+    /// number, its commit and the delegate it was made for.
+    #[test]
+    fn each_checkout_the_session_has_is_a_line_of_its_own() {
+        use bravebot_agent::workspace::SessionCheckout;
+        use bravebot_core::delegate::DelegateId;
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let checkouts = [
+            SessionCheckout {
+                id: "c1".into(),
+                path: "/state/checkouts/work/c1".into(),
+                commit: "0123456789abcdef0123456789abcdef01234567".into(),
+                delegate: DelegateId::nth(1),
+            },
+            SessionCheckout {
+                id: "c3".into(),
+                path: "/state/checkouts/work/c3".into(),
+                commit: "fedcba9876543210fedcba9876543210fedcba98".into(),
+                delegate: DelegateId::nth(2).child(1).expect("a child"),
+            },
+        ];
+        let added = [std::path::PathBuf::from("/tmp/beside")];
+        let mut with_checkouts = facts(&config, &trust);
+        with_checkouts.checkouts = &checkouts;
+        with_checkouts.added_directories = &added;
+        with_checkouts.scratch = Some(Path::new("/tmp/scratch"));
+
+        let lines = report(&with_checkouts).lines;
+        let at = |path: &str| {
+            lines
+                .iter()
+                .position(|line| line.value == path)
+                .unwrap_or_else(|| panic!("no line for {path}: {lines:?}"))
+        };
+        let (first, second) = (
+            at("/state/checkouts/work/c1"),
+            at("/state/checkouts/work/c3"),
+        );
+        assert_eq!(second, first + 1);
+        for directory in ["/tmp/project", "/tmp/beside", "/tmp/scratch"] {
+            assert!(
+                first > at(directory),
+                "a checkout is listed above {directory}"
+            );
+        }
+        assert_eq!(lines[first].label, t!(status_checkout));
+        assert_eq!(
+            lines[first].note,
+            t!(
+                status_checkout_note,
+                id = "c1",
+                commit = "0123456789",
+                delegate = "d1"
+            )
+        );
+        assert_eq!(
+            lines[second].note,
+            t!(
+                status_checkout_note,
+                id = "c3",
+                commit = "fedcba9876",
+                delegate = "d2.1"
+            )
+        );
+    }
+
+    /// A session with no checkout says nothing about checkouts.
+    #[test]
+    fn a_session_with_no_checkout_reports_none() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+
+        let lines = report(&facts(&config, &trust)).lines;
+        assert!(
+            lines.iter().all(|line| line.label != t!(status_checkout)),
+            "{lines:?}"
+        );
     }
 
     /// A total is unactionable. The panel has to say which of the three things took the time, since

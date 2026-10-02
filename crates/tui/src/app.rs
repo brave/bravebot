@@ -3290,12 +3290,14 @@ fn event_loop(
                         store.path().to_path_buf(),
                     ))
                 });
+                let checkouts = workspace.session_checkouts();
                 let report = crate::status::report(&crate::status::Facts {
                     session_name: stored.title(),
                     session_id: stored.id(),
                     directory: workspace.root(),
                     added_directories: workspace.added_directories(),
                     scratch: scratch.as_ref().map(SessionScratch::path),
+                    checkouts: &checkouts,
                     model: session.model(),
                     agent: session.standing_definition(),
                     effort: session.effort(),
@@ -3512,6 +3514,7 @@ fn event_loop(
                 // context and the directories opened under it go too, since opening one is a grant
                 // and leaving it reachable with nothing vouching for it would outlive its answer.
                 workspace.close_added_directories();
+                workspace.forget_session_checkouts();
                 // Where this map came from decides nothing further: a directory a settings file
                 // named was opened by an answer the cleared session's user gave, and it closed
                 // with that session rather than carrying into this one.

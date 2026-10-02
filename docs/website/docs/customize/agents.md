@@ -212,7 +212,8 @@ checkout keeps no [memory](#memory), so a definition with both keeps its memory 
 turn, and bravebot says so when it loads the definition.
 
 The commands that bring a checkout's work back into your tree are not built yet. A checkout a
-delegate wrote in stays where it is until you remove it.
+delegate wrote in stays where it is until you remove it, and
+[`/status`](../reference/commands.md#status) lists each one the session has kept.
 
 ## Which one wins
 

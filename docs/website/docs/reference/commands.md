@@ -48,6 +48,9 @@ Reports everything the session knows about itself:
 
 - the working directory, and anything opened with `/add-dir`, and whether a later session started
   there will trust it without asking because you [said to remember](#forget-trust);
+- each [checkout](../customize/agents.md#a-checkout-of-its-own) a delegate kept or that could not be
+  removed, with its number, the commit it holds and the delegate it was made for, since the
+  transcript says one was kept but not where;
 - the model in force, and whether it was chosen or defaulted. Where the server substituted a
   different one, the model that actually answered is shown beside it;
 - the [effort level](#effort-level), and whether this model reads one;

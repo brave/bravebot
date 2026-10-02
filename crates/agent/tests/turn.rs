@@ -22640,6 +22640,123 @@ fn a_checkout_nothing_was_done_in_is_removed_when_its_delegate_ends() {
     assert_eq!(entries, 0, "the repository still lists the checkout");
 }
 
+/// CHECKOUT-21. After a turn that fanned out over two delegates in checkouts, the session lists
+/// the one the second delegate wrote in, with its number, its commit and that delegate's number,
+/// and not the one the first did nothing in. The trust map the turn hands back holds the rule
+/// copied for the kept one and none for the removed one. A checkout a later turn keeps is listed
+/// after it.
+#[test]
+fn the_session_lists_the_checkout_a_delegate_kept_and_the_rule_copied_for_it() {
+    let scratch = Scratch::new("checkout-listed-after-a-turn");
+    let home = Scratch::new("checkout-listed-after-a-turn-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let head = std::fs::read_to_string(scratch.path.join(".git/refs/heads/main")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let writes = |reply: &str| {
+        vec![
+            tool_request("write_file", r#"{"path":"out.txt","contents":"kept"}"#),
+            reply_with(reply),
+        ]
+    };
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "FIRST-TURN-FANS-OUT",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"SHARED","each":["ONLY-LOOK","WRITE-AND-KEEP"],"isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "ONLY-LOOK",
+            vec![
+                tool_request("read_file", r#"{"path":"README"}"#),
+                reply_with("saw it"),
+            ],
+        ),
+        ("WRITE-AND-KEEP", writes("wrote it")),
+        (
+            "SECOND-TURN-KEEPS",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"WRITE-AGAIN","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        ("WRITE-AGAIN", writes("wrote it again")),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    let outcome = turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("FIRST-TURN-FANS-OUT").with_home(Some(home.path.clone())),
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    let made = checkouts_under(&home.path);
+    assert_eq!(made.len(), 1, "one checkout was not kept, or both were");
+    let kept = made[0].canonicalize().unwrap();
+    let removed = kept.with_file_name("c1");
+    assert_eq!(kept.file_name().unwrap(), "c2");
+    let listed = workspace.session_checkouts();
+    assert_eq!(listed.len(), 1, "the session lists {listed:?}");
+    assert_eq!(listed[0].id, "c2");
+    assert_eq!(listed[0].path, kept);
+    assert_eq!(listed[0].commit, head.trim());
+    assert_eq!(listed[0].delegate.to_string(), "d2");
+    let rule_for = |path: &std::path::Path| {
+        let key = bravebot_agent::workspace::key_of(path);
+        outcome
+            .trust
+            .rules()
+            .find(|(named, _)| *named == key)
+            .map(|(_, integrity)| integrity)
+    };
+    assert_eq!(
+        rule_for(&kept),
+        Some(Some(bravebot_core::label::Integrity::Trusted)),
+        "the turn handed back no rule for the kept checkout"
+    );
+    assert_eq!(
+        rule_for(&removed),
+        None,
+        "the turn handed back a rule for the removed checkout"
+    );
+
+    run_in_a_repository(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "SECOND-TURN-KEEPS",
+    );
+    let listed: Vec<(String, String)> = workspace
+        .session_checkouts()
+        .into_iter()
+        .map(|one| (one.id, one.delegate.to_string()))
+        .collect();
+    assert_eq!(
+        listed,
+        [("c2".into(), "d2".into()), ("c3".into(), "d1".into())],
+        "a later turn's checkout is not listed after the first"
+    );
+}
+
 /// CHECKOUT-13, CHECKOUT-18. Beside the report the planner is told the paths written in a kept
 /// checkout: by name where the delegate typed it, in a write, an edit or a redirection, by count
 /// where it wrote through a reference, and that the checkout's status was not read. A redirection

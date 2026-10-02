@@ -307,8 +307,23 @@ pub struct Workspace {
     /// Shared by every clone, since a delegate's workspace is a clone and its checkout is the
     /// session's.
     checkouts: Arc<Mutex<Vec<PathBuf>>>,
+    /// The checkouts the session made and has not removed, oldest first (CHECKOUT-21). Shared for
+    /// the reason `checkouts` is.
+    session_checkouts: Arc<Mutex<Vec<SessionCheckout>>>,
     /// The number the next checkout takes, shared for the reason `checkouts` is.
     checkout_numbers: Arc<AtomicU64>,
+}
+
+/// A checkout the session made and has not removed, as the driver recorded it (CHECKOUT-21).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionCheckout {
+    /// Its number, `c1` and on.
+    pub id: String,
+    pub path: PathBuf,
+    /// The commit it holds, in full.
+    pub commit: String,
+    /// The delegate it was made for.
+    pub delegate: bravebot_core::delegate::DelegateId,
 }
 
 /// A checkout a delegate works in, as the driver recorded it (CHECKOUT-5, CHECKOUT-7).
@@ -327,6 +342,7 @@ pub struct CheckoutInfo {
     /// (CHECKOUT-15).
     worked_in: AtomicBool,
     listed: Arc<Mutex<Vec<PathBuf>>>,
+    session_checkouts: Arc<Mutex<Vec<SessionCheckout>>>,
     written: Mutex<Candidates>,
 }
 
@@ -444,6 +460,10 @@ impl CheckoutInfo {
         if crate::git::checkout::remove(&self.git_dir, &self.path, &self.id).is_err() {
             return Retired::Stuck;
         }
+        self.session_checkouts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|made| made.path != self.path);
         if !authority.withdraw_beneath(&self.key)
             && let Ok(mut listed) = self.listed.lock()
         {
@@ -646,6 +666,7 @@ impl Workspace {
             rewind: Arc::default(),
             checkout: None,
             checkouts: Arc::default(),
+            session_checkouts: Arc::default(),
             checkout_numbers: Arc::new(AtomicU64::new(1)),
         })
     }
@@ -2916,6 +2937,27 @@ impl Workspace {
         self.checkout.clone()
     }
 
+    /// The checkouts the session made and has not removed, oldest first (CHECKOUT-21). One whose
+    /// directory is gone, removed by hand or only half removed, is not among them.
+    pub fn session_checkouts(&self) -> Vec<SessionCheckout> {
+        self.session_checkouts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter(|made| made.path.exists())
+            .cloned()
+            .collect()
+    }
+
+    /// For starting over inside one process: the session beginning here has made no checkout, so
+    /// the list empties for every clone. The checkouts themselves stay on disk.
+    pub fn forget_session_checkouts(&self) {
+        self.session_checkouts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
+
     /// The workspace instructions, skills and definitions are read from: this one, or the
     /// working directory's where this one is a checkout (CHECKOUT-9).
     pub fn sources(&self) -> &Workspace {
@@ -2924,7 +2966,7 @@ impl Workspace {
             .map_or(self, |checkout| &checkout.source)
     }
 
-    /// Make a checkout for one delegate and return the workspace it works in (CHECKOUT-1,
+    /// Make a checkout for the delegate `made_for` and return the workspace it works in (CHECKOUT-1,
     /// CHECKOUT-3, CHECKOUT-6, CHECKOUT-7, CHECKOUT-8).
     ///
     /// `state` is the state directory the checkout is made under. The sentence an `Err` carries is
@@ -2938,6 +2980,7 @@ impl Workspace {
         &self,
         policy: &Policy<'_, S>,
         state: &Path,
+        made_for: bravebot_core::delegate::DelegateId,
     ) -> Result<Workspace, String> {
         let refused = |why: &str| format!("No checkout was made: {why}");
         if self.checkout.is_some() {
@@ -3004,6 +3047,16 @@ impl Workspace {
         if let Ok(mut listed) = self.checkouts.lock() {
             listed.push(target.clone());
         }
+        let commit = made.commit.to_string();
+        self.session_checkouts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(SessionCheckout {
+                id: id.clone(),
+                path: target.clone(),
+                commit: commit.clone(),
+                delegate: made_for,
+            });
 
         let mut delegate = self.clone();
         delegate.root = target.clone();
@@ -3014,12 +3067,13 @@ impl Workspace {
             id,
             path: target,
             key,
-            commit: made.commit.to_string(),
+            commit,
             left_out: made.left_out,
             git_dir: self.root.join(".git"),
             source: self.clone(),
             worked_in: AtomicBool::new(false),
             listed: self.checkouts.clone(),
+            session_checkouts: self.session_checkouts.clone(),
             written: Mutex::default(),
         }));
         Ok(delegate)

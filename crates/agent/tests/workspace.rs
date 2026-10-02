@@ -6309,6 +6309,11 @@ fn repository_with_a_state_directory(
     (scratch, state, workspace)
 }
 
+/// The delegate a checkout is made for, where which one does not matter.
+fn d1() -> bravebot_core::delegate::DelegateId {
+    bravebot_core::delegate::DelegateId::nth(1)
+}
+
 /// CHECKOUT-1, CHECKOUT-7. Each checkout is a workspace of its own under the state directory,
 /// numbered in the order they are made, holding the committed tree.
 #[test]
@@ -6319,10 +6324,10 @@ fn each_checkout_is_a_numbered_workspace_under_the_state_directory() {
     let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
 
     let first = workspace
-        .checkout_for(&policy, &state.path)
+        .checkout_for(&policy, &state.path, d1())
         .expect("a checkout");
     let second = workspace
-        .checkout_for(&policy, &state.path)
+        .checkout_for(&policy, &state.path, d1())
         .expect("a second checkout");
 
     let ids: Vec<&str> = [&first, &second]
@@ -6356,7 +6361,7 @@ fn a_checkout_is_refused_where_it_would_overlap_a_tree_the_session_opened() {
     let inside = scratch.path.join("state");
     std::fs::create_dir_all(&inside).unwrap();
     let refused = workspace
-        .checkout_for(&policy, &inside)
+        .checkout_for(&policy, &inside, d1())
         .expect_err("inside the working directory");
     assert!(
         refused.contains("inside the working directory"),
@@ -6371,7 +6376,7 @@ fn a_checkout_is_refused_where_it_would_overlap_a_tree_the_session_opened() {
         .add_directory(&state.path.to_string_lossy())
         .unwrap();
     let refused = workspace
-        .checkout_for(&policy, &state.path)
+        .checkout_for(&policy, &state.path, d1())
         .expect_err("inside an opened directory");
     assert!(
         refused.contains("holds the working directory or the checkout"),
@@ -6389,11 +6394,11 @@ fn a_checkout_is_not_made_from_a_checkout() {
     let mut sink = RecordingSink::new();
     let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
     let first = workspace
-        .checkout_for(&policy, &state.path)
+        .checkout_for(&policy, &state.path, d1())
         .expect("a checkout");
 
     let refused = first
-        .checkout_for(&policy, &state.path)
+        .checkout_for(&policy, &state.path, d1())
         .expect_err("a checkout of a checkout");
     assert!(refused.contains("already works in a checkout"), "{refused}");
     assert_eq!(checkout_directories(&state.path).len(), 1);
@@ -6439,7 +6444,7 @@ fn a_checkout_is_labelled_as_the_working_directory_is() {
     .with_trust(trust);
 
     let made = workspace
-        .checkout_for(&policy, &state.path)
+        .checkout_for(&policy, &state.path, d1())
         .expect("a checkout");
     let key = made.checkout().expect("a checkout").key().to_string();
     let authority = policy.file_authority();
@@ -6458,8 +6463,12 @@ fn a_checkout_is_removed_unless_something_was_done_in_it() {
     let mut sink = RecordingSink::new();
     let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
     let authority = policy.file_authority();
-    let idle = workspace.checkout_for(&policy, &state.path).expect("idle");
-    let busy = workspace.checkout_for(&policy, &state.path).expect("busy");
+    let idle = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("idle");
+    let busy = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("busy");
     let idle_key = idle.checkout().unwrap().key().to_string();
     assert!(authority.is_trusted(&format!("{idle_key}/README")));
 
@@ -6483,6 +6492,106 @@ fn a_checkout_is_removed_unless_something_was_done_in_it() {
     );
 }
 
+/// CHECKOUT-21. Every clone of the workspace lists each checkout the session made, with its
+/// number, its path, its commit and the delegate it was made for. One that is removed leaves the
+/// list, by its delegate or by hand, and one that is kept or could not be removed stays on it.
+#[test]
+fn the_session_lists_each_checkout_it_has_until_one_is_removed() {
+    use bravebot_agent::workspace::{Retired, SessionCheckout};
+    use bravebot_core::delegate::DelegateId;
+    let (scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-listed", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let authority = policy.file_authority();
+    let elsewhere = workspace.clone();
+    assert_eq!(workspace.session_checkouts(), []);
+
+    let nested = DelegateId::nth(1).child(2).expect("a child");
+    let made: Vec<Workspace> = [DelegateId::nth(1), DelegateId::nth(2), nested]
+        .into_iter()
+        .map(|delegate| {
+            workspace
+                .checkout_for(&policy, &state.path, delegate)
+                .expect("a checkout")
+        })
+        .collect();
+    let head = std::fs::read_to_string(scratch.path.join(".git/refs/heads/main")).unwrap();
+    let under = state.path.canonicalize().unwrap().join("checkouts");
+    let listed = elsewhere.session_checkouts();
+    let expected: Vec<(&str, DelegateId)> = vec![
+        ("c1", DelegateId::nth(1)),
+        ("c2", DelegateId::nth(2)),
+        ("c3", nested),
+    ];
+    assert_eq!(
+        listed
+            .iter()
+            .map(|one| (one.id.as_str(), one.delegate))
+            .collect::<Vec<_>>(),
+        expected
+    );
+    for (one, made) in listed.iter().zip(&made) {
+        assert_eq!(one.path, made.root());
+        assert!(one.path.starts_with(&under), "{:?}", one.path);
+        assert_eq!(one.commit, head.trim());
+    }
+    assert_eq!(
+        made[0].session_checkouts(),
+        listed,
+        "a delegate's workspace keeps a list of its own"
+    );
+
+    let [kept, idle, stuck] = &made[..] else {
+        unreachable!()
+    };
+    kept.checkout().unwrap().mark_worked_in();
+    assert_eq!(kept.checkout().unwrap().retire(&authority), Retired::Kept);
+    assert_eq!(
+        idle.checkout().unwrap().retire(&authority),
+        Retired::Removed
+    );
+    // Another session here numbers its checkouts from `c1` too, so it can make one at this path.
+    std::fs::create_dir(idle.root()).unwrap();
+    #[cfg(unix)]
+    {
+        let worktrees = scratch.path.join(".git/worktrees");
+        std::fs::rename(&worktrees, scratch.path.join(".git/entries")).unwrap();
+        std::os::unix::fs::symlink("entries", &worktrees).unwrap();
+        assert_eq!(stuck.checkout().unwrap().retire(&authority), Retired::Stuck);
+    }
+    let left: Vec<SessionCheckout> = vec![listed[0].clone(), listed[2].clone()];
+    assert_eq!(workspace.session_checkouts(), left);
+    assert_eq!(stuck.session_checkouts(), left);
+
+    std::fs::remove_dir_all(kept.root()).unwrap();
+    assert_eq!(
+        workspace.session_checkouts(),
+        [listed[2].clone()],
+        "a checkout removed by hand is still listed"
+    );
+}
+
+/// CHECKOUT-21. A session begun over in the same process, as `/clear` begins one, lists none of the
+/// checkouts the one before it made, in any clone, and those checkouts stay on disk.
+#[test]
+fn a_session_begun_over_lists_none_of_the_checkouts_made_before_it() {
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-forgotten", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    let elsewhere = workspace.clone();
+    assert_eq!(elsewhere.session_checkouts().len(), 1);
+
+    workspace.forget_session_checkouts();
+    assert_eq!(elsewhere.session_checkouts(), []);
+    assert_eq!(made.session_checkouts(), []);
+    assert!(made.root().exists(), "the checkout was removed");
+}
+
 /// CHECKOUT-13. A checkout's candidates are the names a planner typed for files it wrote inside it,
 /// placed by their spelling, and a count of the writes it made through a reference. A name outside
 /// the checkout is not recorded, and a link is recorded by its own name and not its target's.
@@ -6493,8 +6602,12 @@ fn a_checkout_records_the_paths_written_in_it() {
         repository_with_a_state_directory("checkout-candidates", &[("README", "hello\n")]);
     let mut sink = RecordingSink::new();
     let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
-    let made = workspace.checkout_for(&policy, &state.path).expect("made");
-    let idle = workspace.checkout_for(&policy, &state.path).expect("idle");
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("made");
+    let idle = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("idle");
     let info = made.checkout().unwrap();
     assert_eq!(info.candidates(), Candidates::default());
 
@@ -6562,7 +6675,7 @@ fn a_distrusted_path_in_a_checkout_labels_history_that_shows_it() {
     let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
     let authority = policy.file_authority();
     let made = workspace
-        .checkout_for(&policy, &state.path)
+        .checkout_for(&policy, &state.path, d1())
         .expect("a checkout");
     let info = made.checkout().unwrap();
 
@@ -6597,7 +6710,7 @@ fn read_git_declines_in_a_checkout() {
     let mut sink = RecordingSink::new();
     let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
     let made = workspace
-        .checkout_for(&policy, &state.path)
+        .checkout_for(&policy, &state.path, d1())
         .expect("a checkout");
     let repository = Labelled::trusted(".".to_string());
 
