@@ -475,6 +475,9 @@ jobs:
       # Not `make check-ui-build`: scripts/*.test.mjs assume a POSIX host for packaging, which is
       # the installer's work (#769), and the Front end job runs them.
       - name: Build the desktop UI
+        env:
+          npm_config_loglevel: silly
+          npm_config_timing: "true"
         run: |
           ui/scripts/ci-install.sh "$HOME/.cache/bravebot-leo"
           BRAVEBOT_BUILD_UNCONFIGURED=1 npm --prefix ui run build
