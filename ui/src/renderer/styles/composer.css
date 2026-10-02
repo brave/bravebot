@@ -297,6 +297,14 @@ button.fresh-project:hover { color: var(--ink-accent); }
 button.fresh-project:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
 button.fresh-project:disabled { cursor: default; color: inherit; }
 .fresh-greeting .project-menu.title { display: inline-block; vertical-align: baseline; }
+/* The list is slotted from inside the heading, so its items would read the heading's type and the
+   greeting's centring. */
+.fresh-greeting .project-menu.title leo-menu-item {
+  font: var(--type-body);
+  color: var(--ink-primary);
+  text-align: start;
+  text-wrap: wrap;
+}
 .fresh-greeting p { margin: 0; font: var(--type-lede); color: var(--ink-secondary); text-wrap: pretty; }
 /* The notes under the greeting are centred lines in caption ink, 40px over the box. */
 .transcript.fresh .session-notices { align-items: center; margin-bottom: var(--leo-spacing-4xl); }
