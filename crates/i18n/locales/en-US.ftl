@@ -1860,6 +1860,7 @@ command-forget-trust = Stop remembering that this directory is trusted, so later
 command-loop = Send a prompt again and again, say what is repeating, or stop it
 command-goal = Keep working until a condition you set is judged met
 command-watch = List the files this session is watching, and stop one by its number
+command-checkouts = List the checkouts delegates kept, and remove one by its number
 command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
 command-agent = Run one of your definitions on a task, by its name
 command-export = Export the session transcript to a markdown file
@@ -2181,6 +2182,38 @@ watches-cleared = { $count ->
     [one] { $count } live watch has ended with the conversation it was armed in
    *[other] { $count } live watches have ended with the conversation they were armed in
     }
+
+## The checkouts a delegate kept
+
+checkouts-listed = { $id }: made for delegate { $delegate } of commit { $commit }, at { $path }
+checkouts-nothing-done = { $id }: nothing was recorded done in it
+# Followed by the names of the files written, separated by commas, which are left as they are.
+checkouts-written = { $id }: written in it: { $paths }
+checkouts-more = { $count } more
+checkouts-referenced = { $count ->
+    [one] { $id }: { $count } write through a reference, whose path was not recorded
+   *[other] { $id }: { $count } writes through a reference, whose paths were not recorded
+    }
+checkouts-unread =
+    { $id }: its status was not read, so a file changed other than by a write is not named here
+checkouts-none =
+    this session keeps no checkout. A delegate given one keeps it when something was done in it
+checkouts-no-such = this session keeps no checkout { $id }. /checkouts lists the ones it keeps
+checkouts-command-takes =
+    /checkouts lists the checkouts this session keeps, and /checkouts remove <n> removes the one
+    with that number
+checkouts-removed = checkout { $id } at { $path } is removed
+checkouts-not-removed = checkout { $id } at { $path } could not be removed, and is still kept
+checkouts-worked-from =
+    checkout { $id } at { $path } is kept, since the working directory or a directory added with /add-dir is inside it
+checkouts-kept = checkout { $id } is kept
+remove-checkout-title = remove this checkout?
+remove-checkout-which = checkout { $id }, made for delegate { $delegate }, is at
+remove-checkout-explained =
+    Something was done in it, and nothing brings that work back here. Removing it deletes the
+    directory and whatever is in it.
+remove-checkout-yes = remove it
+remove-checkout-no = keep it
 
 ## Where a line sent while something runs is going, beside the mark under it
 

@@ -40,9 +40,10 @@ it ([CHECKOUT-7](#CHECKOUT-7)), and a checkout nothing was done in is removed
 ([CHECKOUT-15](#CHECKOUT-15)), and a definition can ask for one ([CHECKOUT-2](#CHECKOUT-2)).
 The driver records what was written in a checkout, and beside the report names the paths the
 planner typed and counts the writes made through a reference ([CHECKOUT-13](#CHECKOUT-13),
-[CHECKOUT-18](#CHECKOUT-18)), and `/status` lists each checkout the session has
-([CHECKOUT-21](#CHECKOUT-21)). Bringing work back, keeping checkouts across a resume and the
-`/checkouts` command are not built.
+[CHECKOUT-18](#CHECKOUT-18)), `/status` lists each checkout the session has
+([CHECKOUT-21](#CHECKOUT-21)), and `/checkouts` lists the ones kept and removes one
+([CHECKOUT-15](#CHECKOUT-15)). Bringing work back and keeping checkouts across a resume are not
+built.
 
 **A checkout is not a sandbox.** It moves where a delegate's file tools reach and where its
 programs start. A program it runs is as unconfined as any other ([sandboxing.md](sandboxing.md)),
@@ -69,7 +70,8 @@ A spawn can ask for a checkout ([CHECKOUT-1](#CHECKOUT-1)), and so can a definit
 key ([CHECKOUT-2](#CHECKOUT-2)). The planner is told the paths the delegate typed for what it wrote in a kept
 checkout ([CHECKOUT-18](#CHECKOUT-18)), and `/status` lists each checkout the session has
 ([CHECKOUT-21](#CHECKOUT-21)). Nothing brings that work back into the working directory, and a
-checkout a delegate wrote in stays where it is until a person removes it.
+checkout a delegate wrote in stays where it is until a person removes it with `/checkouts remove`
+([CHECKOUT-15](#CHECKOUT-15)).
 
 ## Asking for one
 
@@ -599,14 +601,32 @@ directory, and removes one. Removing one that has candidates asks first.
 
 Half built. A checkout the delegate given it and the delegates that one started did nothing in is
 removed as the delegate ends, with its `worktrees/<id>/` entry and its rules. Any other is kept,
-the planner is told where, and `/status` lists it ([CHECKOUT-21](#CHECKOUT-21)). No session record
-holds it, there is no `/checkouts` to remove it, and leaving the session names none, so a kept
-checkout stays until a person removes it and runs `git worktree prune`.
+the planner is told where, and `/status` lists it ([CHECKOUT-21](#CHECKOUT-21)).
+
+`/checkouts` lists each one kept with the paths the planner typed for its writes and the number of
+writes made through a reference ([CHECKOUT-13](#CHECKOUT-13)), and says its status was not read.
+It compares nothing with the working directory. `/checkouts remove <n>` removes one the way a
+delegate's ending does, from the repository it was made from, wherever `/cd` has moved the session
+since. It asks first where the record shows anything done there, a program started there included,
+since the status that would name what a program wrote is not read. One that could not be removed as
+its delegate ended is removed without a question. One holding the working directory or a directory
+added by name is kept, and the person is told why: every read, write and run there would fail once
+it went.
+
+No session record holds a checkout, and leaving the session names none, so one nobody removes
+stays until a person deletes it and runs `git worktree prune`.
 
 `verified-by: bravebot_agent::turn::a_checkout_nothing_was_done_in_is_removed_when_its_delegate_ends`
 `verified-by: bravebot_agent::workspace::a_checkout_is_removed_unless_something_was_done_in_it`
+`verified-by: bravebot_agent::workspace::a_kept_checkout_is_removed_by_its_number`
 `verified-by: bravebot_agent::git::removing_a_checkout_takes_its_directory_and_its_entry_alone`
 `verified-by: bravebot_agent::git::removing_a_checkout_leaves_everything_where_worktrees_is_a_link`
+`verified-by: bravebot_tui::state::the_checkouts_report_names_what_was_done_in_each`
+`verified-by: bravebot_tui::app::a_checkout_worked_in_is_removed_only_when_the_person_says_so`
+`verified-by: bravebot_tui::app::a_checkout_nothing_was_done_in_is_removed_without_asking`
+`verified-by: bravebot_tui::app::a_checkout_not_kept_or_not_removable_is_said_so`
+`verified-by: bravebot_tui::confirm::the_remove_checkout_question_names_the_checkout_and_what_removing_it_deletes`
+`verified-by: bravebot_tui::confirm::a_remove_checkout_question_takes_a_yes_only_from_a_draw_showing_what_it_removes`
 
 <a id="CHECKOUT-16"></a>
 ### CHECKOUT-16: a resume brings kept checkouts back, a fork does not, and an opening session removes what no session lists
@@ -786,8 +806,8 @@ it made before it was left, until [CHECKOUT-16](#CHECKOUT-16) is built.
   cannot name was written and not which one ([CHECKOUT-13](#CHECKOUT-13)).
 - **No `lsp` in a checkout** ([CHECKOUT-20](#CHECKOUT-20)).
 - **Nothing brings a checkout's work back yet** ([CHECKOUT-14](#CHECKOUT-14)), and a kept checkout
-  stays until a person removes it ([CHECKOUT-15](#CHECKOUT-15)). `/status` says where it is
-  ([CHECKOUT-21](#CHECKOUT-21)).
+  stays until a person removes it with `/checkouts remove` ([CHECKOUT-15](#CHECKOUT-15)).
+  `/status` and `/checkouts` say where it is ([CHECKOUT-21](#CHECKOUT-21)).
 - **In a session that keeps nothing, a checkout goes with the session**, with whatever was not
   brought back.
 - **A checker that ran a program keeps its checkout**, since it started a program there

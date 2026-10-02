@@ -6493,11 +6493,12 @@ fn a_checkout_is_removed_unless_something_was_done_in_it() {
 }
 
 /// CHECKOUT-21. Every clone of the workspace lists each checkout the session made, with its
-/// number, its path, its commit and the delegate it was made for. One that is removed leaves the
-/// list, by its delegate or by hand, and one that is kept or could not be removed stays on it.
+/// number, its path, its commit, the delegate it was made for and what the record shows done in it.
+/// One that is removed leaves the list, by its delegate or by hand, and one that is kept or could
+/// not be removed stays on it.
 #[test]
 fn the_session_lists_each_checkout_it_has_until_one_is_removed() {
-    use bravebot_agent::workspace::{Retired, SessionCheckout};
+    use bravebot_agent::workspace::{Candidates, Retired, SessionCheckout};
     use bravebot_core::delegate::DelegateId;
     let (scratch, state, workspace) =
         repository_with_a_state_directory("checkout-listed", &[("README", "hello\n")]);
@@ -6535,6 +6536,8 @@ fn the_session_lists_each_checkout_it_has_until_one_is_removed() {
         assert_eq!(one.path, made.root());
         assert!(one.path.starts_with(&under), "{:?}", one.path);
         assert_eq!(one.commit, head.trim());
+        assert!(!one.worked_in);
+        assert_eq!(one.candidates, Default::default());
     }
     assert_eq!(
         made[0].session_checkouts(),
@@ -6545,7 +6548,7 @@ fn the_session_lists_each_checkout_it_has_until_one_is_removed() {
     let [kept, idle, stuck] = &made[..] else {
         unreachable!()
     };
-    kept.checkout().unwrap().mark_worked_in();
+    kept.checkout().unwrap().record_typed("src/new.rs");
     assert_eq!(kept.checkout().unwrap().retire(&authority), Retired::Kept);
     assert_eq!(
         idle.checkout().unwrap().retire(&authority),
@@ -6560,7 +6563,15 @@ fn the_session_lists_each_checkout_it_has_until_one_is_removed() {
         std::os::unix::fs::symlink("entries", &worktrees).unwrap();
         assert_eq!(stuck.checkout().unwrap().retire(&authority), Retired::Stuck);
     }
-    let left: Vec<SessionCheckout> = vec![listed[0].clone(), listed[2].clone()];
+    let worked_in = SessionCheckout {
+        worked_in: true,
+        candidates: Candidates {
+            named: ["src/new.rs".to_string()].into(),
+            referenced: 0,
+        },
+        ..listed[0].clone()
+    };
+    let left: Vec<SessionCheckout> = vec![worked_in, listed[2].clone()];
     assert_eq!(workspace.session_checkouts(), left);
     assert_eq!(stuck.session_checkouts(), left);
 
@@ -6699,6 +6710,121 @@ fn a_distrusted_path_in_a_checkout_labels_history_that_shows_it() {
     let removed = workspace.read_git(&mut policy, &show).expect("shown");
     assert_eq!(removed.label(), Label::untrusted_private());
     assert!(!made.root().exists());
+}
+
+/// CHECKOUT-15. A kept checkout is removed by its number, with its `worktrees` entry and its rules,
+/// from any clone of the workspace, wherever it has moved since. A rule that distrusts a path in it stays, and history showing
+/// that path is still labelled by it. A number the session does not keep removes nothing.
+#[test]
+fn a_kept_checkout_is_removed_by_its_number() {
+    use bravebot_agent::workspace::{Retired, Unremoved};
+    let (scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-remove", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let authority = policy.file_authority();
+    let made: Vec<Workspace> = (0..2)
+        .map(|_| {
+            let made = workspace
+                .checkout_for(&policy, &state.path, d1())
+                .expect("a checkout");
+            let info = made.checkout().unwrap();
+            info.record_typed("README");
+            assert_eq!(info.retire(&authority), Retired::Kept);
+            made
+        })
+        .collect();
+    let [distrusting, plain] = &made[..] else {
+        unreachable!()
+    };
+    let distrusted = format!("{}/README", distrusting.checkout().unwrap().key());
+    let trusted = format!("{}/README", plain.checkout().unwrap().key());
+    assert!(authority.publish(&distrusted, Integrity::Untrusted));
+    let mut trust = authority.snapshot();
+    assert!(trust.is_trusted(&trusted));
+    drop(policy);
+
+    // Clones the session has moved into c1 with `/cd`, or opened c1 in with `/add-dir`.
+    let c1 = distrusting.root().display().to_string();
+    let mut moved_in = workspace.clone();
+    moved_in.change_root(&c1).expect("moved");
+    let mut added = workspace.clone();
+    added.add_directory(&c1).expect("added");
+    for open in [&moved_in, &added] {
+        assert_eq!(
+            open.remove_session_checkout("c1", &mut trust),
+            Err(Unremoved::WorkedFrom)
+        );
+        assert!(
+            distrusting.root().exists(),
+            "a checkout worked from was removed"
+        );
+    }
+
+    // A clone the session has since moved out of the repository with `/cd`.
+    let mut elsewhere = workspace.clone();
+    elsewhere
+        .change_root(&state.path.display().to_string())
+        .expect("moved");
+    assert_eq!(
+        elsewhere.remove_session_checkout("c3", &mut trust),
+        Err(Unremoved::NoSuch)
+    );
+    elsewhere
+        .remove_session_checkout("c2", &mut trust)
+        .expect("removed");
+    assert!(!plain.root().exists(), "the directory was left");
+    assert!(
+        !scratch.path.join(".git/worktrees/c2").exists(),
+        "the entry was left"
+    );
+    assert!(!trust.is_trusted(&trusted), "the rules were left");
+    assert!(distrusting.root().exists(), "another checkout was removed");
+    assert_eq!(
+        workspace
+            .session_checkouts()
+            .iter()
+            .map(|one| one.id.as_str())
+            .collect::<Vec<_>>(),
+        ["c1"]
+    );
+    assert_eq!(
+        workspace.remove_session_checkout("c2", &mut trust),
+        Err(Unremoved::NoSuch),
+        "a removed checkout was removed again"
+    );
+
+    workspace
+        .remove_session_checkout("c1", &mut trust)
+        .expect("removed");
+    assert!(!distrusting.root().exists());
+    assert_eq!(workspace.session_checkouts(), []);
+    assert_eq!(
+        trust.integrity_of(&distrusted),
+        Some(Integrity::Untrusted),
+        "a rule that distrusts a path went with the checkout"
+    );
+
+    let mut sink = RecordingSink::new();
+    let mut later = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+    let repository = Labelled::trusted(".".to_string());
+    let show = bravebot_agent::workspace::GitQuestion {
+        query: bravebot_agent::git::Query::Show,
+        ..log_of(&repository)
+    };
+    let shown = workspace.read_git(&mut later, &show).expect("shown");
+    assert_eq!(
+        shown.label(),
+        Label::untrusted_private(),
+        "history showing a path distrusted in a removed checkout lost its label"
+    );
 }
 
 /// GIT-8. A repository is not opened through a linked worktree, so read_git in a checkout

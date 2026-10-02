@@ -7727,6 +7727,46 @@ impl Session {
         }
     }
 
+    /// Say which checkouts the session keeps and what the record shows done in each, or that it
+    /// keeps none (CHECKOUT-15).
+    ///
+    /// The names are the ones a planner typed. Twenty at most, since a delegate can write
+    /// thousands of files and the transcript is not where to read that many.
+    pub fn report_checkouts(&mut self, checkouts: &[bravebot_agent::workspace::SessionCheckout]) {
+        const NAMED: usize = 20;
+        if checkouts.is_empty() {
+            self.note(t!(checkouts_none));
+            return;
+        }
+        for checkout in checkouts {
+            let id = checkout.id.as_str();
+            self.note(t!(
+                checkouts_listed,
+                id = id,
+                path = checkout.path.display().to_string(),
+                commit = checkout.commit.get(..10).unwrap_or(&checkout.commit),
+                delegate = checkout.delegate.to_string()
+            ));
+            if !checkout.worked_in {
+                self.note(t!(checkouts_nothing_done, id = id));
+                continue;
+            }
+            let named = &checkout.candidates.named;
+            if !named.is_empty() {
+                let mut paths: Vec<String> = named.iter().take(NAMED).cloned().collect();
+                if named.len() > NAMED {
+                    paths.push(t!(checkouts_more, count = named.len() - NAMED).to_string());
+                }
+                self.note(t!(checkouts_written, id = id, paths = paths.join(", ")));
+            }
+            let referenced = checkout.candidates.referenced;
+            if referenced > 0 {
+                self.note(t!(checkouts_referenced, id = id, count = referenced));
+            }
+            self.note(t!(checkouts_unread, id = id));
+        }
+    }
+
     /// Send the next tick, if one is due and the session is free to take it.
     ///
     /// Called on the way round the interface's own loop, so a tick waits for the turn in flight
@@ -12489,6 +12529,74 @@ mod tests {
             s.transcript
                 .iter()
                 .any(|entry| entry.text == t!(watch_none))
+        );
+    }
+
+    fn reported_checkouts(checkouts: &[bravebot_agent::workspace::SessionCheckout]) -> Vec<String> {
+        let mut s = session();
+        let before = s.transcript.len();
+        s.report_checkouts(checkouts);
+        s.transcript[before..]
+            .iter()
+            .map(|entry| entry.text.clone())
+            .collect()
+    }
+
+    /// CHECKOUT-15. Each checkout is listed with what the record shows done in it, and with the
+    /// warning that its status was not read wherever something was.
+    #[test]
+    fn the_checkouts_report_names_what_was_done_in_each() {
+        use bravebot_agent::workspace::{Candidates, SessionCheckout};
+        assert_eq!(reported_checkouts(&[]), [t!(checkouts_none)]);
+
+        let idle = SessionCheckout {
+            id: "c1".into(),
+            path: "/state/checkouts/work/c1".into(),
+            commit: "0123456789abcdef0123456789abcdef01234567".into(),
+            delegate: bravebot_core::delegate::DelegateId::nth(1),
+            worked_in: false,
+            candidates: Candidates::default(),
+        };
+        let written = SessionCheckout {
+            id: "c2".into(),
+            path: "/state/checkouts/work/c2".into(),
+            worked_in: true,
+            candidates: Candidates {
+                named: (0..22).map(|n| format!("src/{n:02}.rs")).collect(),
+                referenced: 3,
+            },
+            ..idle.clone()
+        };
+        let ran = SessionCheckout {
+            id: "c3".into(),
+            path: "/state/checkouts/work/c3".into(),
+            worked_in: true,
+            ..idle.clone()
+        };
+        let mut twenty: Vec<String> = (0..20).map(|n| format!("src/{n:02}.rs")).collect();
+        twenty.push(t!(checkouts_more, count = 2).to_string());
+        let listed = |id: &str| {
+            t!(
+                checkouts_listed,
+                id = id,
+                path = format!("/state/checkouts/work/{id}"),
+                commit = "0123456789",
+                delegate = "d1"
+            )
+            .to_string()
+        };
+        assert_eq!(
+            reported_checkouts(&[idle, written, ran]),
+            [
+                listed("c1"),
+                t!(checkouts_nothing_done, id = "c1").to_string(),
+                listed("c2"),
+                t!(checkouts_written, id = "c2", paths = twenty.join(", ")).to_string(),
+                t!(checkouts_referenced, id = "c2", count = 3).to_string(),
+                t!(checkouts_unread, id = "c2").to_string(),
+                listed("c3"),
+                t!(checkouts_unread, id = "c3").to_string(),
+            ]
         );
     }
 

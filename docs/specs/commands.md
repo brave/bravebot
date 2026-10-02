@@ -154,6 +154,7 @@ the conversation with a question on the end of it, which [watching.md](watching.
 `verified-by: bravebot_tui::app::the_loop_command_sends_what_is_left_after_the_interval`
 `verified-by: bravebot_tui::app::the_cd_command_carries_its_directory`
 `verified-by: bravebot_tui::app::the_btw_command_carries_its_question`
+`verified-by: bravebot_tui::app::the_checkouts_command_lists_and_removes_by_number`
 `verified-by: bravebot_tui::app::a_command_typed_while_a_turn_runs_is_not_sent_as_a_prompt`
 
 

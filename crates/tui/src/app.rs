@@ -137,6 +137,11 @@ const GOAL_COMMAND: &str = "/goal";
 /// the half they cannot read off the transcript: which watches are live, and how to end one.
 const WATCH_COMMAND: &str = "/watch";
 
+/// The line that lists the checkouts delegates kept, and removes one by its number.
+///
+/// A checkout something was done in outlives its delegate, and nothing else removes it.
+const CHECKOUTS_COMMAND: &str = "/checkouts";
+
 /// The one line that ends the session instead of starting a turn.
 const EXIT_COMMAND: &str = "/exit";
 
@@ -199,7 +204,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 22] {
+pub fn commands() -> [Command; 23] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -296,6 +301,12 @@ pub fn commands() -> [Command; 22] {
             argument: "[stop <n>]",
             description: t!(command_watch),
             mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: CHECKOUTS_COMMAND,
+            argument: "[remove <n>]",
+            description: t!(command_checkouts),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: MANIFEST_COMMAND,
@@ -496,6 +507,11 @@ pub enum Action {
     /// Withdraw the remembered answer about the working directory. Needs the workspace, which the
     /// loop owns, and leaves this session's map as it is.
     ForgetTrust,
+    /// List the checkouts the session keeps. Needs the workspace, which the loop owns.
+    ListCheckouts,
+    /// Remove the checkout with this number. Needs the workspace, the trust map and the terminal
+    /// to ask on, which the loop owns.
+    RemoveCheckout(String),
     /// Run a command the user typed in shell mode. Needs the workspace and the conversation.
     Run(String),
     /// Put the transcript in front of the user in their editor. Needs the terminal, which the
@@ -1571,6 +1587,16 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
             crate::watch_command::Asked::Unreadable => session.note(t!(watch_command_takes)),
         }
         return Action::Redraw;
+    }
+    if let Some(argument) = argument_to(line, CHECKOUTS_COMMAND) {
+        return match crate::checkouts_command::parse(argument) {
+            crate::checkouts_command::Asked::List => Action::ListCheckouts,
+            crate::checkouts_command::Asked::Remove(id) => Action::RemoveCheckout(id),
+            crate::checkouts_command::Asked::Unreadable => {
+                session.note(t!(checkouts_command_takes));
+                Action::Redraw
+            }
+        };
     }
     Action::None
 }
@@ -3451,6 +3477,20 @@ fn event_loop(
                 ));
                 needs_draw = true;
             }
+            Action::ListCheckouts => {
+                session.report_checkouts(&workspace.session_checkouts());
+                needs_draw = true;
+            }
+            Action::RemoveCheckout(id) => {
+                remove_checkout(
+                    &mut session,
+                    workspace.session_checkouts(),
+                    &id,
+                    |listed| crate::confirm::ask_remove_checkout(terminal, listed),
+                    |id| workspace.remove_session_checkout(id, &mut answers.trust),
+                );
+                needs_draw = true;
+            }
             Action::Compact => {
                 // The snapshot holds the conversation as it was before it was shortened.
                 session.close_rewind_window();
@@ -3824,6 +3864,38 @@ fn event_loop(
             // Settled into a `Submit` or a note ahead of this match.
             Action::Address(..) => {}
         }
+    }
+}
+
+/// Remove checkout `id` of those the session keeps, asking first where the record shows something
+/// was done in it (CHECKOUT-15). `ask` puts the question to the person and `remove` removes it.
+///
+/// Asked on the record alone. A checkout's status is not read, so a program that changed a file in
+/// it is known only as a program having run there, and that is enough to ask.
+fn remove_checkout(
+    session: &mut Session,
+    kept: Vec<bravebot_agent::workspace::SessionCheckout>,
+    id: &str,
+    ask: impl FnOnce(&bravebot_agent::workspace::SessionCheckout) -> crate::confirm::Answer,
+    remove: impl FnOnce(&str) -> Result<(), bravebot_agent::workspace::Unremoved>,
+) {
+    use bravebot_agent::workspace::Unremoved;
+    let Some(listed) = kept.into_iter().find(|listed| listed.id == id) else {
+        session.note(t!(checkouts_no_such, id = id));
+        return;
+    };
+    if listed.worked_in && ask(&listed) != crate::confirm::Answer::Approve {
+        session.note(t!(checkouts_kept, id = id));
+        return;
+    }
+    let path = listed.path.display().to_string();
+    match remove(id) {
+        Ok(()) => session.note(t!(checkouts_removed, id = id, path = &path)),
+        Err(Unremoved::NoSuch) => session.note(t!(checkouts_no_such, id = id)),
+        Err(Unremoved::WorkedFrom) => {
+            session.note(t!(checkouts_worked_from, id = id, path = &path))
+        }
+        Err(Unremoved::Stuck) => session.note(t!(checkouts_not_removed, id = id, path = &path)),
     }
 }
 
@@ -14195,6 +14267,175 @@ mod tests {
             session.watches().is_empty(),
             "the command armed a watch of its own"
         );
+    }
+
+    #[test]
+    fn the_checkouts_command_lists_and_removes_by_number() {
+        let mut session = Session::new("none");
+        for (typed, asked) in [
+            ("/checkouts", Action::ListCheckouts),
+            (
+                "/checkouts remove 2",
+                Action::RemoveCheckout("c2".to_string()),
+            ),
+            (
+                "/checkouts remove c2",
+                Action::RemoveCheckout("c2".to_string()),
+            ),
+        ] {
+            for c in typed.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                asked,
+                "{typed}"
+            );
+        }
+
+        for c in "/checkouts remove all".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+        assert_eq!(
+            session.transcript.last().map(|entry| entry.text.as_str()),
+            Some(t!(checkouts_command_takes))
+        );
+    }
+
+    fn kept_checkout(worked_in: bool) -> bravebot_agent::workspace::SessionCheckout {
+        bravebot_agent::workspace::SessionCheckout {
+            id: "c2".into(),
+            path: "/state/checkouts/work/c2".into(),
+            commit: "0123456789abcdef0123456789abcdef01234567".into(),
+            delegate: bravebot_core::delegate::DelegateId::nth(1),
+            worked_in,
+            candidates: Default::default(),
+        }
+    }
+
+    fn last_note(session: &Session) -> &str {
+        session
+            .transcript
+            .last()
+            .map_or("", |entry| entry.text.as_str())
+    }
+
+    /// CHECKOUT-15. Removing one something was done in asks first, and only a yes removes it.
+    #[test]
+    fn a_checkout_worked_in_is_removed_only_when_the_person_says_so() {
+        use crate::confirm::Answer;
+        for answer in [Answer::Reject, Answer::Interrupt] {
+            let mut session = Session::new("none");
+            let mut asked = false;
+            remove_checkout(
+                &mut session,
+                vec![kept_checkout(true)],
+                "c2",
+                |listed| {
+                    asked = listed.id == "c2";
+                    answer
+                },
+                |_| panic!("removed without a yes"),
+            );
+            assert!(asked, "{answer:?}");
+            assert_eq!(last_note(&session), t!(checkouts_kept, id = "c2"));
+        }
+
+        let mut session = Session::new("none");
+        let mut removed = None;
+        remove_checkout(
+            &mut session,
+            vec![kept_checkout(true)],
+            "c2",
+            |_| Answer::Approve,
+            |id| {
+                removed = Some(id.to_string());
+                Ok(())
+            },
+        );
+        assert_eq!(removed.as_deref(), Some("c2"));
+        assert_eq!(
+            last_note(&session),
+            t!(
+                checkouts_removed,
+                id = "c2",
+                path = "/state/checkouts/work/c2"
+            )
+        );
+    }
+
+    /// CHECKOUT-15. One nothing was recorded done in is removed without a question.
+    #[test]
+    fn a_checkout_nothing_was_done_in_is_removed_without_asking() {
+        let mut session = Session::new("none");
+        let mut removed = false;
+        remove_checkout(
+            &mut session,
+            vec![kept_checkout(false)],
+            "c2",
+            |_| panic!("asked about a checkout nothing was done in"),
+            |_| {
+                removed = true;
+                Ok(())
+            },
+        );
+        assert!(removed);
+        assert_eq!(
+            last_note(&session),
+            t!(
+                checkouts_removed,
+                id = "c2",
+                path = "/state/checkouts/work/c2"
+            )
+        );
+    }
+
+    #[test]
+    fn a_checkout_not_kept_or_not_removable_is_said_so() {
+        use bravebot_agent::workspace::Unremoved;
+        let mut session = Session::new("none");
+        remove_checkout(
+            &mut session,
+            vec![kept_checkout(true)],
+            "c3",
+            |_| panic!("asked about a checkout the session does not keep"),
+            |_| panic!("removed a checkout the session does not keep"),
+        );
+        assert_eq!(last_note(&session), t!(checkouts_no_such, id = "c3"));
+
+        for (unremoved, said) in [
+            (Unremoved::NoSuch, t!(checkouts_no_such, id = "c2")),
+            (
+                Unremoved::WorkedFrom,
+                t!(
+                    checkouts_worked_from,
+                    id = "c2",
+                    path = "/state/checkouts/work/c2"
+                ),
+            ),
+            (
+                Unremoved::Stuck,
+                t!(
+                    checkouts_not_removed,
+                    id = "c2",
+                    path = "/state/checkouts/work/c2"
+                ),
+            ),
+        ] {
+            let mut session = Session::new("none");
+            remove_checkout(
+                &mut session,
+                vec![kept_checkout(false)],
+                "c2",
+                |_| crate::confirm::Answer::Approve,
+                |_| Err(unremoved),
+            );
+            assert_eq!(last_note(&session), said, "{unremoved:?}");
+        }
     }
 
     /// A sentence mentioning it is a thing to say to the planner.
