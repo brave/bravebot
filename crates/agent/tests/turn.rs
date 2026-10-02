@@ -24971,12 +24971,78 @@ fn a_line_the_user_moves_to_the_background_goes_on_as_a_job_the_turn_owns() {
     );
 }
 
+/// A line that asked to be read is moved like any other: the planner asks for the output of nearly
+/// every slow command it runs, so refusing these would leave the key with nothing to move. The call
+/// returns the move, with none of what the program printed, and the planner is told the job.
+#[test]
+fn a_line_that_asked_to_be_read_can_be_moved_to_the_background() {
+    let scratch = Scratch::new("moved-read-line");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let script = scratch.path.join("build");
+    std::fs::write(&script, "#!/bin/sh\necho BUILD_SENTINEL\nsleep 30\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./build","read":true}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = MovesWhenOffered::default();
+
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    let started = std::time::Instant::now();
+    let outcome = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("build it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    assert!(outcome.clean, "no gate should have refused");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(20),
+        "the turn waited for a line that asked to be read after it was moved: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(reporter.offered, 1, "the line was not offered to be moved");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let told = bodies
+        .iter()
+        .find(|body| body.contains("moved this command to the background"))
+        .expect("the planner was not told the user moved the line");
+    assert!(
+        told.contains("job:1"),
+        "the planner was not told which job the line is: {told}"
+    );
+    assert!(
+        !bodies.iter().any(|body| body.contains("BUILD_SENTINEL")),
+        "what the program printed reached the planner without a call to read it"
+    );
+}
+
 /// The key is offered only for a line a job can hold whole. A join is two lines, and the turn
-/// would be holding the second; a route sends a stream somewhere a job does not read; a line asked
-/// to be read hands its output back; a line fed a reference would write it into a job nobody
-/// waits for. Offering one of those, the press either did nothing or kept a job that is not the
-/// line the person approved. The two plain lines are offered, so the count is these lines being
-/// turned down rather than nothing ever being offered.
+/// would be holding the second; a route sends a stream somewhere a job does not read; a line fed a
+/// reference would write it into a job nobody waits for. Offering one of those, the press either
+/// did nothing or kept a job that is not the line the person approved. The plain lines are offered,
+/// one of them having asked to be read, so the count is these lines being turned down rather than
+/// nothing ever being offered.
 #[test]
 fn only_a_line_a_job_can_hold_is_offered_to_be_moved() {
     let scratch = Scratch::new("movable-lines");
@@ -25019,8 +25085,8 @@ fn only_a_line_a_job_can_hold_is_offered_to_be_moved() {
 
     assert_eq!(
         reporter.movable.len(),
-        2,
-        "a line no job can hold was offered to be moved, or a plain one was not"
+        3,
+        "a line no job can hold was offered to be moved, or a plain one, or one that asked to read, was not"
     );
 }
 
