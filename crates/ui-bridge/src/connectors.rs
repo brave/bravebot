@@ -163,16 +163,7 @@ pub fn connect(request: &Request) -> Result<Value, Failure> {
     let file = mcp::declarations_file(&directory);
     bravebot_agent::mcp::replace(&file, declarations.to_text())
         .map_err(|error| written(&file, error))?;
-    let mut approvals = Approvals::to_change(&directory).map_err(|why| {
-        Failure::new(
-            ErrorCode::Config,
-            format!(
-                "{} cannot be read: {}",
-                mcp::approvals_file(&directory).display(),
-                bravebot_agent::mcp::unreadable(&why)
-            ),
-        )
-    })?;
+    let mut approvals = approvals_to_change(&directory)?;
     servers::record(
         &directory,
         &declarations,
@@ -208,16 +199,31 @@ pub fn remove(request: &Request) -> Result<Value, Failure> {
     }
     let mut declarations = read(&directory)?;
     if declarations.remove(&alias) {
+        let mut approvals = approvals_to_change(&directory)?;
         let file = mcp::declarations_file(&directory);
         bravebot_agent::mcp::replace(&file, declarations.to_text())
             .map_err(|error| written(&file, error))?;
-        let mut approvals = Approvals::read(&directory);
         approvals.keep_only(&declarations);
         let file = mcp::approvals_file(&directory);
         bravebot_agent::mcp::replace(&file, approvals.to_text())
             .map_err(|error| written(&file, error))?;
     }
     list()
+}
+
+/// The approvals to change and write back, refused where the file is there and cannot be read,
+/// since writing over it would lose every approval it holds.
+fn approvals_to_change(directory: &Path) -> Result<Approvals, Failure> {
+    Approvals::to_change(directory).map_err(|why| {
+        Failure::new(
+            ErrorCode::Config,
+            format!(
+                "{} cannot be read: {}",
+                mcp::approvals_file(directory).display(),
+                bravebot_agent::mcp::unreadable(&why)
+            ),
+        )
+    })
 }
 
 /// A declaration as the window draws it. A stored value is named and never sent.

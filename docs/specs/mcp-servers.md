@@ -392,7 +392,9 @@ declaration of the same name unless the page that sent it is that connector's ow
 value is never sent back to the window, so a settings page that leaves a secret blank keeps the
 stored one rather than resending it. Disconnecting takes the request out of the home settings file
 and keeps the declaration and its approval, as `disable -s user` does; removing deletes both, as
-`remove` does. In an incognito session each of these is refused.
+`remove` does. Removing refuses, and changes nothing, when the approvals file is there and cannot be
+read, since writing it back would lose every approval it holds. In an incognito session each of
+these is refused.
 
 `verified-by: bravebot_cli::mcp::a_yes_at_the_question_records_the_digest_and_nothing_else_does`
 `verified-by: bravebot_ui_bridge::connectors::a_connector_is_declared_approved_and_requested_only_as_it_was_shown`
@@ -400,6 +402,7 @@ and keeps the declaration and its approval, as `disable -s user` does; removing 
 `verified-by: bravebot_ui_bridge::connectors::a_stored_value_is_kept_and_never_shown`
 `verified-by: bravebot_ui_bridge::connectors::a_form_the_declarations_cannot_hold_is_refused`
 `verified-by: bravebot_ui_bridge::connectors::a_connector_turned_on_again_from_its_listing_is_the_same_declaration`
+`verified-by: bravebot_ui_bridge::connectors::removing_a_connector_leaves_an_approvals_file_it_cannot_read`
 `verified-by: bravebot_cli::mcp::approve_records_only_on_a_yes_and_a_no_ends_refused`
 `verified-by: bravebot_cli::mcp::the_question_shows_every_argument_as_the_word_it_is`
 `verified-by: bravebot_cli::mcp::a_bare_double_dash_declares_the_program_after_it`

@@ -208,6 +208,39 @@ fn a_connector_is_declared_approved_and_requested_only_as_it_was_shown() {
     assert!(!scratch.file("mcp-approved").contains(&fingerprint));
 }
 
+/// SERVERS-3: removing a connector rewrites the approvals file, so an approvals file that cannot be
+/// read refuses the removal and is left as it was, with the declaration still there.
+#[test]
+fn removing_a_connector_leaves_an_approvals_file_it_cannot_read() {
+    let scratch = Scratch::new("bridge-connectors-unreadable-approvals");
+    let mut front = FrontEnd::start(&scratch.home());
+    for (alias, url) in [
+        ("calc", "http://localhost:3333/mcp"),
+        ("other", "http://localhost:4444/mcp"),
+    ] {
+        let form = remote(alias, url);
+        let shown = front.call("connectors.preview", form.clone());
+        front.call(
+            "connectors.connect",
+            with(form, "fingerprint", shown["fingerprint"].clone()),
+        );
+    }
+
+    let approvals = scratch.home().join(".bravebot/mcp-approved");
+    let mut text = scratch.file("mcp-approved");
+    text.push_str(&"#".repeat(70 * 1024));
+    std::fs::write(&approvals, &text).expect("an approvals file too large to read");
+
+    let said = front.refused("connectors.remove", json!({"alias": "calc"}));
+    assert!(said.contains("cannot be read"), "{said}");
+    assert_eq!(
+        std::fs::read_to_string(&approvals).expect("still there"),
+        text,
+        "the approvals file was written over"
+    );
+    assert!(scratch.file("mcp.json").contains("calc"));
+}
+
 /// Adding a connector cannot quietly change another of the same name. A settings page that means
 /// to change one says so.
 #[test]
