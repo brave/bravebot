@@ -1309,6 +1309,20 @@ run-yes = run it
 run-always = always this session
 run-remember = remember it
 run-no = don't
+# Said above the keys while a row of the plan has not been on the screen. It counts rows, which is
+# what the arrows move by, and the count comes first so a narrow box does not cut it off.
+run-unseen =
+    { $count ->
+        [one] ↑↓ { $count } row not shown: no key runs this yet
+       *[other] ↑↓ { $count } rows not shown: no key runs this yet
+    }
+# Said once the plan has been read while the rows saying what `a` or `r` grant besides have not. The
+# keys still waiting on them are drawn muted.
+run-grant-unseen =
+    { $count ->
+        [one] ↑↓ { $count } row not shown: a muted key waits on it
+       *[other] ↑↓ { $count } rows not shown: a muted key waits on them
+    }
 
 
 ## What a check said, at the head of every prompt whose answer would promote content

@@ -1148,6 +1148,16 @@ run-yes = l'exécuter
 run-always = toujours pour cette session
 run-remember = s'en souvenir
 run-no = ne pas l'exécuter
+run-unseen =
+    { $count ->
+        [one] ↑↓ { $count } ligne non affichée : aucune touche ne l'exécute encore
+       *[other] ↑↓ { $count } lignes non affichées : aucune touche ne l'exécute encore
+    }
+run-grant-unseen =
+    { $count ->
+        [one] ↑↓ { $count } ligne non affichée : une touche grisée l'attend
+       *[other] ↑↓ { $count } lignes non affichées : une touche grisée les attend
+    }
 
 
 ## Ce qu'une vérification a dit, en tête de chaque question dont la réponse sortirait un contenu de quarantaine
