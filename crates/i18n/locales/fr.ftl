@@ -1033,6 +1033,11 @@ resume-manifest-run =
 stop-the-turn = arrêter le tour
 scroll-more = ↑↓ { $count } de plus
 scroll-back = ↑↓ retour
+prompt-unseen =
+    { $count ->
+        [one] ↑↓ encore { $count } ligne à lire avant un oui
+       *[other] ↑↓ encore { $count } lignes à lire avant un oui
+    }
 
 
 ## Approuver une écriture
