@@ -419,6 +419,10 @@ jobs:
         shell: bash
     env:
       npm_config_script_shell: C:\Program Files\Git\bin\bash.exe
+      # setup-node saves the directory `npm config get cache` names under cmd.exe. Without this,
+      # npm under Git's bash writes its cache elsewhere, the saved cache is empty, and Leo's
+      # prepare step downloads all of Leo's dev dependencies on every run.
+      npm_config_cache: C:\npm\cache
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
