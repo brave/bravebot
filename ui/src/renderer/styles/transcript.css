@@ -146,14 +146,14 @@
 }
 
 /* ---- toasts
-   Bottom-right of the card, above where the composer sits. Confirmations go by themselves;
-   errors are not dismissed for you. */
+   Above the composer, in the box's width (see .dock-float). Where there is no composer they stand
+   bottom-right of the card. Confirmations go by themselves; errors are not dismissed for you. */
 
 .toast-stack {
   position: absolute;
   z-index: 4;
   right: var(--leo-spacing-xl);
-  bottom: var(--leo-spacing-9xl);
+  bottom: var(--leo-spacing-xl);
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -162,7 +162,6 @@
   pointer-events: none;
 }
 .toast-stack:empty { display: none; }
-.transcript.empty-state > .toast-stack { bottom: var(--leo-spacing-xl); }
 .problem-toast, .status-toast {
   width: 100%;
   pointer-events: auto;
@@ -177,6 +176,8 @@
   font: var(--type-caption);
   color: var(--ink-secondary);
 }
+/* The close button has no wash of its own on a tinted alert; only its glyph darkens. */
+:is(.problem-toast, .status-toast) > .icon-button.plain-faint:hover { background: transparent; }
 .problem-text {
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -471,7 +472,7 @@
 .bot-first-hero { display: flex; flex-direction: column; align-items: center; gap: var(--leo-spacing-xl); text-align: center; }
 .bot-first-hero h1 { margin: 0; font: var(--type-page-title); color: var(--ink-primary); text-wrap: balance; }
 .bot-first-hero p { margin: 0; font: var(--type-lede); color: var(--ink-secondary); text-wrap: pretty; }
-.bot-first .composer-dock { padding: 0; }
+.bot-first .composer-dock { --dock-inset: 0px; padding: 0; }
 .bot-first .composer-dock::before { display: none; }
 .bot-history-search { display: block; margin-bottom: var(--leo-spacing-l); }
 .bot-conversations {
