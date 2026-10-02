@@ -60,6 +60,10 @@ the policy names, and egress is a capability the token either carries or does no
 therefore a change to the filesystem rather than to the process, which is the one thing the other
 two backends do not cost, and what follows from it is below.
 
+Where a clause here is not built, or has an unbuilt half, the clause says so, and that sentence is
+what keeps a reader from taking the present tense for a claim about what runs today.
+[SANDBOX-11](#SANDBOX-11) is the one that says it.
+
 ## Clauses
 
 <a id="SANDBOX-1"></a>
@@ -361,6 +365,14 @@ what the program would have made for itself, because the account gains a path no
 have: the directory this fires on first holds a private key, a umask most accounts leave at its
 default would make it listable by everybody, and nothing tightens a directory that already exists
 afterwards.
+
+Half built. A write row says which of the three it is, and every row a run builds says neither. The
+creating is written and tested, and nothing calls it before a policy is resolved, so no run creates
+anything. A call put in today would create nothing either: the session temporary directory, the null
+device, a server's own directory and the directory a declaration named are each there by the time
+the policy is assembled, and none is a row somebody meant a program to create. The rows this fires
+on, a toolchain cache and `known_hosts`, would come from a per-program write list, and that list is
+not built.
 
 `verified-by: bravebot_sandbox::policy::a_row_naming_a_directory_that_is_not_there_is_created_as_a_directory`
 `verified-by: bravebot_sandbox::policy::a_row_naming_a_file_that_is_not_there_is_created_as_a_file`
