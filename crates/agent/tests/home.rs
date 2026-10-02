@@ -189,7 +189,7 @@ fn an_empty_credentials_file_is_reported_rather_than_read_as_absent() {
         // Which cause and what to do about it. Every refusal names the import, so the cause is
         // asserted too: reported as corruption instead would send someone looking for a bad file.
         assert!(complaint.contains("holds nothing"), "{complaint}");
-        assert!(complaint.contains("import-leo-creds"), "{complaint}");
+        assert!(complaint.contains("bravebot auth login leo"), "{complaint}");
         assert!(discovery.found().is_none(), "nothing spendable");
     });
 }
@@ -227,7 +227,7 @@ fn a_subscription_imported_for_another_environment_is_reported() {
             .expect("a staging batch cannot be spent on production, and must say so");
         // Which environment it holds and what to do, since "premium is off" leaves nothing to act on.
         assert!(complaint.contains("staging"), "{complaint}");
-        assert!(complaint.contains("import-leo-creds"), "{complaint}");
+        assert!(complaint.contains("bravebot auth login leo"), "{complaint}");
         assert!(discovery.found().is_none(), "nothing spendable");
     });
 }

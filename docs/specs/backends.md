@@ -523,8 +523,10 @@ qualified name at all, which is what keeps the other rosters' spellings out of t
 ### BACKEND-19: a gateway that was told no models is asked what it serves
 
 Where a gateway block names its models, those are what is offered and nothing is asked over the
-network. Where it names none, the gateway itself is asked, and what it answers is offered. A listing
-that cannot be fetched contributes nothing and takes nothing away from the rest of the roster.
+network. Where it names none, the gateway itself is asked, and what it answers is offered. A Google
+Vertex service has no listing to ask, and is offered the list [BACKEND-49](#BACKEND-49) compiles in
+instead. A listing that cannot be fetched contributes nothing and takes nothing away from the rest of
+the roster.
 
 What the credential in use may reach is asked for ahead of what the service offers generally, and the
 wider roster answers only where the narrower question does not. A block naming no credential has no
@@ -2072,10 +2074,18 @@ An entry stating neither a project nor an endpoint configures no service. So doe
 character outside the ones Google allows in it: a project is letters, digits, `_`, `.`, `:` and `-`
 and starts with a letter or a digit, and a location is lowercase letters, digits and `-`.
 
-The entry has no roster to ask for. The endpoint has no model listing a key can call, so
-[BACKEND-19](#BACKEND-19) asks nothing of it: a `google-vertex` entry offers the models it lists and
-no others, and a model it does not list is named qualified, as
-`google-vertex/google/gemini-2.5-flash`, which [BACKEND-18](#BACKEND-18) routes to it.
+The entry is not asked for a roster, since the endpoint has no model listing a key can call. In
+place of [BACKEND-19](#BACKEND-19)'s request, an entry that lists no models is offered a list
+compiled in: `google/gemini-3.1-flash-lite`, `google/gemini-2.5-pro`, `google/gemini-2.5-flash` and
+`google/gemini-2.5-flash-lite`. An id goes on it only once the `global` endpoint has answered it
+with a tool call and then answered the call's result, and no preview model goes on it. An entry that
+lists models is offered those and no others: its list replaces the compiled one rather than adding
+to it. The compiled list is offered whether or not a key is found, as a block's own models are, since
+offering it sends nothing, and a turn sent without a key is refused as any gateway's is. The compiled
+list is names to choose from and not a roster a bare name is routed by. A pick off it is recorded
+qualified, `bravebot doctor` names each of its ids qualified, and a model on no list is named
+qualified, as `google-vertex/google/gemini-3-flash-preview`, which [BACKEND-18](#BACKEND-18) routes
+to it.
 
 **Why.** The service requires a project, and a request without one is refused, so a guessed project
 is a request that fails somewhere far from the mistake, which is the argument [BACKEND-29](#BACKEND-29)
@@ -2087,15 +2097,25 @@ endpoint as the one way to change it, so it is a destination somebody reviewed a
 derived from anything a model or a fetched page said ([routing.md](routing.md)).
 
 Not asked for a roster because the request would spend a round trip and carry the key to be told
-404. A model named qualified needs no roster, and a block listing models pins a short list exactly
-as it does for any other gateway.
+404. The compiled list stands in for the answer because the environment route
+([BACKEND-50](#BACKEND-50)) has no block to name models in, and a block written for a picker would
+otherwise name every model and be kept current by hand. It is content, on the footing BACKEND-19
+gives a fetched roster. A preview is left out because Google withdraws one without notice, and its
+row would fail when picked until a release took it out. The list stays out of the entry's own models
+so that a bare name routes as it did, and a block's list replaces it so that what a file pins is
+exactly what is offered, as for any other gateway.
 
 `verified-by: bravebot_config::provider::a_google_vertex_entry_is_reached_at_the_host_its_project_and_location_build`
 `verified-by: bravebot_config::provider::a_google_vertex_entry_in_a_region_is_reached_at_that_regions_host`
 `verified-by: bravebot_config::provider::a_google_vertex_entry_without_a_project_configures_nothing`
 `verified-by: bravebot_config::provider::a_project_or_location_that_would_move_the_request_configures_nothing`
 `verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_google_vertex_host`
-`verified-by: bravebot_aichat::client::a_google_vertex_entry_is_not_asked_for_a_roster`
+`verified-by: bravebot_aichat::client::a_google_vertex_entry_offers_the_compiled_models_without_asking`
+`verified-by: bravebot_tui::app::the_picker_offers_the_compiled_models_for_a_google_vertex_service_naming_none`
+`verified-by: bravebot_tui::app::a_google_vertex_block_naming_models_is_offered_those_alone`
+`verified-by: bravebot_ui_bridge::models::the_window_offers_the_compiled_models_for_a_google_vertex_service_naming_none`
+`verified-by: bravebot_ui_bridge::models::the_window_offers_a_google_vertex_block_its_own_models_alone`
+`verified-by: bravebot_cli::main::doctor_names_the_compiled_models_a_google_vertex_service_is_offered`
 `verified-by: bravebot_config::lib::a_name_qualified_by_the_google_vertex_id_names_that_service_and_the_rest_is_sent`
 
 <a id="BACKEND-50"></a>
@@ -2105,7 +2125,8 @@ as it does for any other gateway.
 `global`, configure the `google-vertex` service of [BACKEND-49](#BACKEND-49), whether they are
 exported or set in the `env` block of a settings file. Both of the first two have to hold a value:
 either one missing or blank configures nothing, and a project or location
-that BACKEND-49 refuses configures nothing.
+that BACKEND-49 refuses configures nothing. The service it configures lists no models, so it is
+offered the list BACKEND-49 compiles in.
 
 The key is read from `GOOGLE_API_KEY` when a request needs it, as [BACKEND-16](#BACKEND-16) says of
 any variable a gateway names, so a key exported after the session opened is the one sent. A key set
@@ -2132,6 +2153,7 @@ project, is dropped as any such entry is, and leaves the route open. A managed l
 [BACKEND-38](#BACKEND-38) gives: a destination list a variable could add to is one that pins nothing.
 
 `verified-by: bravebot_config::lib::the_environment_names_a_google_vertex_service_when_no_block_does`
+`verified-by: bravebot_config::lib::a_google_vertex_service_from_the_environment_is_offered_the_compiled_models`
 `verified-by: bravebot_config::lib::the_environment_route_needs_both_a_key_and_a_project`
 `verified-by: bravebot_config::lib::a_key_set_only_in_the_env_block_reaches_the_google_vertex_service`
 `verified-by: bravebot_config::lib::an_exported_key_outranks_the_one_in_the_env_block`
@@ -2450,7 +2472,17 @@ strict one, refuses the request, and a conversation can change service between t
   and have a project set. A key scoped to another Google service is refused there, which is a failed
   request rather than a leak, since the host is Google's own.
 
+- **The compiled Gemini list goes stale between releases.** A model Google retires stays offered to
+  a `google-vertex` service until a release takes it off BACKEND-49's list, and a model Google adds is
+  absent until a release puts it on. Either costs a shortcut and not a capability: any model is
+  reachable named qualified, and a block naming models replaces the list.
+
+- **The compiled Gemini list is what the `global` location serves.** An entry naming a regional
+  `location` is offered the same list, and a model on it that the region does not serve fails when
+  picked. A block naming that region's models replaces the list.
+
 - **The name `google-vertex` means Vertex's behaviour at any endpoint.** An entry keyed `google-vertex`
-  sends its key in `x-goog-api-key`, is not asked for a roster and sends `extra_content` back, even
-  where its `baseURL` names a proxy. A proxy that wants a bearer token is reached by keying the
-  entry with another name, which gets the behaviour of any other gateway.
+  sends its key in `x-goog-api-key`, is offered the compiled list rather than asked for a roster,
+  and sends `extra_content` back, even where its `baseURL` names a proxy. A proxy that wants a
+  bearer token is reached by keying the entry with another name, which gets the behaviour of any
+  other gateway.

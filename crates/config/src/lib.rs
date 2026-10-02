@@ -1260,8 +1260,9 @@ impl Config {
     /// The credentials this build holds itself, each owing an account of what would end it.
     ///
     /// Both AWS arrangements wherever an account is configured, because which one a profile
-    /// resolves to is the AWS CLI's answer and asking it means running it, which a report about
-    /// configuration does not do. A resolved credential says which it is for itself.
+    /// resolves to is the AWS CLI's answer, and asking it would make this record of the
+    /// configuration differ between two runs of it. A resolved credential says which it is for
+    /// itself.
     ///
     /// A build that cannot reach the Brave backend holds no signing key to account for, which is
     /// the build-from-source case [`Config::serves_aichat`] describes: the field is blank there,
@@ -2760,6 +2761,25 @@ mod tests {
         assert_eq!(provider.id, provider::GOOGLE_VERTEX_ID);
         assert_eq!(wire, "google/gemini-2.5-flash");
         assert!(config.provider_for("google/gemini-2.5-flash").is_none());
+    }
+
+    /// BACKEND-50: the environment names no models, so the service is offered the list BACKEND-49
+    /// compiles in. Each is reached named qualified, which is how a pick off a picker is recorded,
+    /// and none by its bare name, since the list is not a roster anything is routed by.
+    #[test]
+    fn a_google_vertex_service_from_the_environment_is_offered_the_compiled_models() {
+        let config = resolved(&Settings::default(), google_env, |_| None).expect("configured");
+        let vertex = vertex_of(&config).expect("a google-vertex service");
+        assert!(vertex.models.is_empty(), "{:?}", vertex.models);
+        let compiled = vertex.compiled_roster().expect("a compiled list");
+        assert!(!compiled.is_empty());
+        for id in compiled {
+            let qualified = format!("google-vertex/{id}");
+            let (provider, wire) = config.provider_for(&qualified).expect("the service");
+            assert_eq!(provider.id, provider::GOOGLE_VERTEX_ID);
+            assert_eq!(wire, *id);
+            assert!(config.provider_for(id).is_none(), "{id} was routed bare");
+        }
     }
 
     #[test]

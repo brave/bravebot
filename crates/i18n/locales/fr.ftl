@@ -162,13 +162,13 @@ cli-piped-input-too-large =
 onboarding-no-model = aucun service de modèle n'est encore configuré
 onboarding-subscription-unusable = l'abonnement enregistré n'a pas pu être utilisé : { $problem }
 onboarding-import-one =
-    { $source } configure un service de modèle que bravebot peut utiliser : lancez `bravebot import-providers` dans un terminal pour l'importer.
+    { $source } configure un service de modèle que bravebot peut utiliser : lancez `bravebot auth login import` dans un terminal pour l'importer.
 onboarding-import-running =
-    { $source } tourne ici avec des modèles que bravebot peut utiliser : lancez `bravebot import-providers` dans un terminal pour l'importer.
+    { $source } tourne ici avec des modèles que bravebot peut utiliser : lancez `bravebot auth login import` dans un terminal pour l'importer.
 onboarding-import-both =
-    { $first } et { $second } ont chacun un service de modèle que bravebot peut utiliser : lancez `bravebot import-providers` dans un terminal pour les importer.
+    { $first } et { $second } ont chacun un service de modèle que bravebot peut utiliser : lancez `bravebot auth login import` dans un terminal pour les importer.
 onboarding-import-three =
-    { $first }, { $second } et { $third } ont chacun un service de modèle que bravebot peut utiliser : lancez `bravebot import-providers` dans un terminal pour les importer.
+    { $first }, { $second } et { $third } ont chacun un service de modèle que bravebot peut utiliser : lancez `bravebot auth login import` dans un terminal pour les importer.
 onboarding-name-a-configured-model =
     Un service est configuré, mais le modèle en vigueur est l'un de ceux de Brave : indiquez l'un des vôtres avec la clé `model` dans ~/.bravebot/settings.json, ou avec --model pour une exécution unique. `bravebot doctor` indique ce que propose chaque service configuré.
 onboarding-pick-one = Configurez l'une de ces options, puis relancez bravebot :
@@ -177,7 +177,7 @@ onboarding-bedrock =
 onboarding-openrouter =
     OpenRouter, ou toute autre passerelle compatible OpenAI : ajoutez un bloc `provider` à son nom dans ~/.bravebot/settings.json, avec la variable qui contient sa clé d'API et les modèles à proposer.
 onboarding-leo =
-    Brave Leo Premium, si vous y êtes déjà abonné : lancez `bravebot import-leo-creds` sur une machine où Brave est connecté à cet abonnement. Les modèles passent alors par la passerelle IA de Brave, dont certains problèmes restent à résoudre, donc préférez pour l'instant l'une des deux options ci-dessus.
+    Brave Leo Premium, si vous y êtes déjà abonné : lancez `bravebot auth login leo` sur une machine où Brave est connecté à cet abonnement. Les modèles passent alors par la passerelle IA de Brave, dont certains problèmes restent à résoudre, donc préférez pour l'instant l'une des deux options ci-dessus.
 onboarding-where-to-read =
     Des exemples concrets se trouvent dans https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service
 
@@ -221,7 +221,7 @@ doctor-ends-aws-session =
 doctor-ends-gateway-token =
     un jeton porteur de passerelle : émis par { $gateway }, qui est aussi la seule surface qui le révoque ; le supprimer du fichier de réglages ou effacer la variable met fin à la garde de cette machine et laisse le jeton actif là-bas
 doctor-ends-subscription-batch =
-    le lot d'identifiants d'un abonnement importé : émis par le service d'abonnement de Brave pour la commande sur laquelle cette installation s'est enregistrée comme appareil ; chaque identifiant est dépensé par une requête premium et le lot cesse de fonctionner à la fermeture de sa dernière fenêtre, et rien ne révoque un identifiant non dépensé, donc `bravebot import-leo-creds --forget` met fin à la garde de cette machine et laisse le lot dépensable par tout ce qui a copié le fichier
+    le lot d'identifiants d'un abonnement importé : émis par le service d'abonnement de Brave pour la commande sur laquelle cette installation s'est enregistrée comme appareil ; chaque identifiant est dépensé par une requête premium et le lot cesse de fonctionner à la fermeture de sa dernière fenêtre, et rien ne révoque un identifiant non dépensé, donc `bravebot auth logout leo` met fin à la garde de cette machine et laisse le lot dépensable par tout ce qui a copié le fichier
 doctor-tier = niveau
 doctor-tier-delegated =
     délégué : rien n'est détenu ici, et quelque chose que ce programme ne peut usurper décide de chaque usage et peut le refuser
@@ -274,10 +274,17 @@ doctor-gateway-token = trouvé (jamais affiché)
 doctor-gateway-token-absent = aucun trouvé (définissez une variable nommée dans `env`)
 doctor-gateway-token-not-needed = aucun requis (le bloc n'en nomme aucun)
 doctor-gateway-models-absent = aucun configuré (la passerelle est interrogée)
-doctor-gateway-models-unlisted = aucun configuré (ce service n'a pas de liste : nommez un modèle sous la forme <id>/<modèle>)
+doctor-gateway-models-compiled = { $models } (intégrés, ce service n'ayant pas de liste ; nommez tout autre modèle de la même façon)
 doctor-region = région
 doctor-profile = profil
 doctor-profile-absent = identifiants par défaut
+doctor-aws-session = session
+doctor-aws-signed-in = connecté
+doctor-aws-signed-out = non connecté (lancez `bravebot auth login bedrock`)
+doctor-aws-no-profile = profil inconnu de l'AWS CLI (elle a { $available })
+doctor-aws-no-profiles = profil inconnu, et l'AWS CLI n'en a aucun (lancez `aws configure sso`)
+doctor-aws-no-cli = inconnu (l'AWS CLI n'est pas installée)
+doctor-aws-undecodable = inconnu (l'AWS CLI a répondu par autre chose qu'un identifiant)
 doctor-tiers = modèles
 doctor-tiers-absent = aucun configuré (définir ANTHROPIC_DEFAULT_OPUS_MODEL)
 doctor-settings = réglages
