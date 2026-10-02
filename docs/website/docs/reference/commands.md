@@ -427,9 +427,10 @@ the writes it made through a reference. Nothing reads a checkout's status, so a 
 changed there is not named.
 
 **Removing one something was done in asks first**, since nothing brings its work back into your tree
-yet and removing it deletes that work. Anything but `y` keeps it. `2` and `c2` name the same
-checkout. The rules copied for it go with it, except one marking a file there untrusted, which stays
-so that history showing the file keeps its label.
+yet and removing it deletes that work. `y` removes it; `n`, Esc and ctrl-c keep it. `2` and `c2` name
+the same checkout. The rules copied for it go with it, except one marking a file there untrusted,
+which stays so that history showing the file keeps its label. A checkout that holds your working
+directory, or a directory added with `/add-dir`, is kept: `/cd` out of it first.
 
 **The list is held in memory.** After `/clear` it starts empty and the earlier checkouts stay on disk,
 and `--resume` brings none back.

@@ -609,7 +609,9 @@ It compares nothing with the working directory. `/checkouts remove <n>` removes 
 delegate's ending does, from the repository it was made from, wherever `/cd` has moved the session
 since. It asks first where the record shows anything done there, a program started there included,
 since the status that would name what a program wrote is not read. One that could not be removed as
-its delegate ended is removed without a question.
+its delegate ended is removed without a question. One holding the working directory or a directory
+added by name is kept, and the person is told why: every read, write and run there would fail once
+it went.
 
 No session record holds a checkout, and leaving the session names none, so one nobody removes
 stays until a person deletes it and runs `git worktree prune`.

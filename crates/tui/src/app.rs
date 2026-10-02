@@ -3891,6 +3891,9 @@ fn remove_checkout(
     match remove(id) {
         Ok(()) => session.note(t!(checkouts_removed, id = id, path = &path)),
         Err(Unremoved::NoSuch) => session.note(t!(checkouts_no_such, id = id)),
+        Err(Unremoved::WorkedFrom) => {
+            session.note(t!(checkouts_worked_from, id = id, path = &path))
+        }
         Err(Unremoved::Stuck) => session.note(t!(checkouts_not_removed, id = id, path = &path)),
     }
 }
@@ -14405,6 +14408,14 @@ mod tests {
 
         for (unremoved, said) in [
             (Unremoved::NoSuch, t!(checkouts_no_such, id = "c2")),
+            (
+                Unremoved::WorkedFrom,
+                t!(
+                    checkouts_worked_from,
+                    id = "c2",
+                    path = "/state/checkouts/work/c2"
+                ),
+            ),
             (
                 Unremoved::Stuck,
                 t!(

@@ -2530,7 +2530,7 @@ fn draw_move(frame: &mut ratatui::Frame, request: &MoveRequest, scroll: u16) -> 
 
 /// Ask whether to remove a checkout something was done in, blocking until answered (CHECKOUT-15).
 ///
-/// Asked with no turn running, so anything but a yes keeps the checkout and nothing is stopped.
+/// Asked with no turn running, so ctrl-c keeps the checkout like a no, and nothing is stopped.
 pub fn ask_remove_checkout<B: Backend>(
     terminal: &mut Terminal<B>,
     checkout: &bravebot_agent::workspace::SessionCheckout,

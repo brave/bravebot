@@ -2204,6 +2204,8 @@ checkouts-command-takes =
     with that number
 checkouts-removed = checkout { $id } at { $path } is removed
 checkouts-not-removed = checkout { $id } at { $path } could not be removed, and is still kept
+checkouts-worked-from =
+    checkout { $id } at { $path } is kept, since the working directory or a directory added with /add-dir is inside it
 checkouts-kept = checkout { $id } is kept
 remove-checkout-title = remove this checkout?
 remove-checkout-which = checkout { $id }, made for delegate { $delegate }, is at

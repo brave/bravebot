@@ -1902,6 +1902,8 @@ checkouts-command-takes =
 checkouts-removed = la copie de travail { $id } dans { $path } est supprimée
 checkouts-not-removed =
     la copie de travail { $id } dans { $path } n'a pas pu être supprimée, et reste gardée
+checkouts-worked-from =
+    la copie de travail { $id } dans { $path } est gardée, car le répertoire de travail ou un répertoire ajouté avec /add-dir s'y trouve
 checkouts-kept = la copie de travail { $id } est gardée
 remove-checkout-title = supprimer cette copie de travail ?
 remove-checkout-which = la copie de travail { $id }, faite pour le délégué { $delegate }, se trouve dans

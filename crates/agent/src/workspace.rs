@@ -395,6 +395,8 @@ impl Made {
 pub enum Unremoved {
     /// The session keeps no checkout by that number.
     NoSuch,
+    /// The working directory or a directory added by name is inside it.
+    WorkedFrom,
     /// It is there and could not be removed.
     Stuck,
 }
@@ -3012,6 +3014,9 @@ impl Workspace {
     ///
     /// Whether to ask first is the caller's, from what the list says: nothing here reads the
     /// checkout.
+    ///
+    /// One `/cd` or `/add-dir` reached is kept, for the reason [`Workspace::change_root`] refuses
+    /// the session's own directory: every read, write and run there would fail afterwards.
     pub fn remove_session_checkout(
         &self,
         id: &str,
@@ -3025,6 +3030,12 @@ impl Workspace {
             .find(|made| made.id == id && made.path.exists())
             .cloned()
             .ok_or(Unremoved::NoSuch)?;
+        if std::iter::once(&self.root)
+            .chain(&self.added)
+            .any(|open| open.starts_with(&made.path))
+        {
+            return Err(Unremoved::WorkedFrom);
+        }
         made.remove(
             |key| trust.withdraw_beneath(key),
             &self.checkouts,

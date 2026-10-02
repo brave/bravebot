@@ -6744,6 +6744,23 @@ fn a_kept_checkout_is_removed_by_its_number() {
     assert!(trust.is_trusted(&trusted));
     drop(policy);
 
+    // Clones the session has moved into c1 with `/cd`, or opened c1 in with `/add-dir`.
+    let c1 = distrusting.root().display().to_string();
+    let mut moved_in = workspace.clone();
+    moved_in.change_root(&c1).expect("moved");
+    let mut added = workspace.clone();
+    added.add_directory(&c1).expect("added");
+    for open in [&moved_in, &added] {
+        assert_eq!(
+            open.remove_session_checkout("c1", &mut trust),
+            Err(Unremoved::WorkedFrom)
+        );
+        assert!(
+            distrusting.root().exists(),
+            "a checkout worked from was removed"
+        );
+    }
+
     // A clone the session has since moved out of the repository with `/cd`.
     let mut elsewhere = workspace.clone();
     elsewhere
