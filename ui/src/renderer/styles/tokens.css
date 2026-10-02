@@ -127,13 +127,6 @@
 :root[data-theme='light'] { color-scheme: light; }
 :root[data-theme='dark'] { color-scheme: dark; }
 
-.app.compact {
-  --row-h: 28px;
-  --session-row-h: 36px;
-  --turn-gap: var(--leo-spacing-l);
-  --part-gap: var(--leo-spacing-s);
-}
-
 @media (prefers-reduced-motion: reduce) {
   :root {
     --motion-fast: 0s linear;

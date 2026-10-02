@@ -47,9 +47,7 @@ Three columns, each side one resizable and foldable:
 The two side columns fold from controls at either end of the transcript header, and their
 widths and fold states survive a relaunch. With the chat list folded, its toggle carries a
 count of the background chats waiting on an answer or an approval, and opens the list. There
-is no separate focus mode: folding both columns is it. Density, comfortable or compact, is a
-preference rather than a per-conversation action, so it lives in [Appearance](#appearance) and
-not in the header.
+is no separate focus mode: folding both columns is it.
 
 The sidebar sits flush on the window's ground. The transcript and the inspector are two raised
 cards, inset by 8px from the window's edges and 8px from each other, each with a hairline border
@@ -588,7 +586,7 @@ src/main/                   Electron main: one window, one child process, a narr
   state.ts                  bravebot-ui.json: one key replaced at a time, rest untouched
   files.ts                  listing, search, preview, opening and attachment grants
   project-files.ts          client for the secure-file helper
-  experience.ts             drafts, scroll position, pins, archives and density
+  experience.ts             drafts, scroll position, pins and archives
   memory.ts                 bot-memory editing and revision history
   recents.ts                the projects opened before, which only this side writes
   forks.ts                  which session came out of which
@@ -642,7 +640,7 @@ docs/                       the protocol design, this document, testing and the 
 Additional state lives outside this file:
 
 - `experience.json`: per-conversation drafts, scroll, pins, archives and bot associations;
-  also density and recent model choices.
+  also recent model choices.
 - `bots/<slug>/ground.md` and `memory-history-<folder hash>.json`: cached briefing and memory
   revisions, one history per folder.
 - `bot-homes/<slug>/`: a bot's home folder, where its conversations with no project run.
@@ -675,10 +673,9 @@ where they are and never read again.
 
 ### Appearance
 
-**Settings ▸ General** holds the theme, System, Light or Dark, and the **Density**, Comfortable or
-Compact. Each applies and is kept as soon as it is chosen: the theme in `bravebot-ui.json` and the
-density in `experience.json`. `View ▸ Appearance…` opens that page. Compact tightens row heights
-and the gaps between turns and their parts, and drops the branch line from each chat row.
+**Settings ▸ General** holds the theme, chosen from a dropdown: System, Light or Dark. The choice
+applies and is kept in `bravebot-ui.json` as soon as it is made. `View ▸ Appearance…` opens that
+page.
 
 System follows the OS (`prefers-color-scheme`). Light and Dark set `data-theme` on
 `<html>` so Leo (Nala) tokens stay put. The PDF export window is pinned with

@@ -331,37 +331,6 @@ button.fresh-project:disabled { cursor: default; color: inherit; }
 .welcome-shortcut { font: var(--type-caption); color: var(--ink-tertiary); }
 .welcome .composer-tray { margin: 0; border-bottom: 1px solid var(--border-subtle); border-radius: var(--radius-card); }
 .welcome-recents { display: flex; flex-direction: column; margin-top: var(--leo-spacing-2xl); }
-.welcome-recents h2 {
-  margin: 0 0 var(--leo-spacing-s);
-  padding: 0 var(--leo-spacing-m);
-  font: var(--type-caption-strong);
-  color: var(--ink-tertiary);
-}
-.welcome-recent {
-  display: flex;
-  align-items: center;
-  gap: var(--leo-spacing-l);
-  min-height: var(--leo-spacing-5xl);
-  padding: 0 var(--leo-spacing-m);
-  border: 0;
-  border-radius: var(--radius-control);
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-  --leo-icon-size: var(--icon-control);
-  --leo-icon-color: var(--ink-tertiary);
-}
-.welcome-recent:hover { background: var(--surface-hover); }
-.welcome-recent:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
-.recent-text { display: flex; flex-direction: column; min-width: 0; }
-.recent-text strong { font: var(--type-body-strong); color: var(--ink-primary); }
-.recent-path {
-  overflow: hidden;
-  font: var(--type-caption);
-  color: var(--ink-tertiary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 /* Text for a screen reader and a search, drawn nowhere. */
 .visually-hidden {

@@ -10,8 +10,7 @@ export function readExperience(): Experience {
 }
 export function writeExperience(key: unknown, value: unknown): Experience {
   const state = readExperience()
-  if (key === 'density') state.density = value === 'compact' ? 'compact' : 'comfortable'
-  else if (key === 'recentModels') state.recentModels = parseExperience({ recentModels: value }).recentModels
+  if (key === 'recentModels') state.recentModels = parseExperience({ recentModels: value }).recentModels
   else if (typeof key === 'string' && key.startsWith('[') && key.length <= 10000) {
     state.conversations[key] = parseConversation(value)
   } else throw new Error('Invalid preference')

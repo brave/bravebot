@@ -62,7 +62,7 @@ gallery review. A new surface needs all of it.
 
 ## Quality bar for every surface
 
-A surface is done only when all of this holds in light, dark, compact and comfortable, at
+A surface is done only when all of this holds in light and dark, at
 1440×900 and at the minimum window size.
 
 **Grid and alignment**

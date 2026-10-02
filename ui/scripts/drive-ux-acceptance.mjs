@@ -61,9 +61,6 @@ try {
   await page.locator('.session').filter({hasText:'Plan the next iteration'}).click();await composer.fill('Independent draft.')
   await page.locator('.session').filter({hasText:'Review the sample project'}).click();assert.equal(await composer.inputValue(),'Draft retained across conversations.')
   for (const name of ['Chat list','Context panel']) await page.getByRole('button',{name,exact:true}).click();await snap('03-focus');for (const name of ['Chat list','Context panel']) await page.getByRole('button',{name,exact:true}).click()
-  // View ▸ Appearance… opens the General settings page, where a choice applies at once; Escape goes back.
-  const density=async(name)=>{await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].webContents.send('bravebot:command','view.theme',null));await page.locator('[data-test="density-control"]').getByText(name,{exact:true}).click();await page.keyboard.press('Escape');await page.locator('[data-test="settings-view"]').waitFor({state:'detached'})}
-  await density('Compact');await page.locator('.app.compact').waitFor();await snap('04-compact');await density('Comfortable');assert.equal(await page.locator('.app.compact').count(),0)
   await page.getByRole('button',{name:'More',exact:true}).click();await page.getByRole('menuitem',{name:'Permissions…',exact:true}).click();await page.getByRole('button',{name:'Revoke',exact:true}).first().waitFor();await snap('05-permissions')
   await page.getByRole('button',{name:'Revoke',exact:true}).first().click();await page.getByText('No trusted path grants.',{exact:true}).waitFor()
   await page.getByRole('button',{name:'Revoke',exact:true}).click();await page.getByText('No remembered command grants.',{exact:true}).waitFor();await snap('06-revoked')

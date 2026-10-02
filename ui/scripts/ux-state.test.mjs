@@ -124,11 +124,9 @@ test('drafts, archives and pins survive process reload and unrelated preference 
     const key = JSON.stringify(['/project/a', 'session-a'])
     const state = load('src/main/experience.ts', electron)
     state.writeExperience(key, { draft: 'An unsent prompt\nwith code', scroll: 120, pinned: true, archived: true })
-    state.writeExperience('density', 'compact')
     state.writeExperience('recentModels', ['one', 'one', 'two'])
     const fresh = load('src/main/experience.ts', electron).readExperience()
     assert.deepEqual(fresh.conversations[key], { botSlug: null, draft: 'An unsent prompt\nwith code', scroll: 120, pinned: true, archived: true })
-    assert.equal(fresh.density, 'compact')
     assert.deepEqual(fresh.recentModels, ['one', 'two'])
     assert.throws(() => state.writeExperience('../../outside', {}))
   } finally { rmSync(directory, { recursive: true, force: true }) }
