@@ -83,10 +83,10 @@ function ModeMenu({ mode, blocked, disabled, onMode }: {
         <Icon name="carat-down" slot="icon-after" />
       </Button>
       <leo-menu-item onClick={() => choose('agent')} data-test="mode-agent" aria-checked={mode === 'agent' ? 'true' : 'false'}>
-        <span className="menu-icon-row mode-row">
-          <span className="mode-text">
-            <span className="mode-name">Agent</span>
-            <span className="mode-about">Works in turns, deciding each step after reading</span>
+        <span className="menu-icon-row">
+          <span className="menu-text">
+            <span className="menu-title">Agent</span>
+            <span className="menu-subtitle">Works in turns, deciding each step after reading</span>
           </span>
           <span className="menu-check" aria-hidden="true">{mode === 'agent' && <Icon name="check-normal" />}</span>
         </span>
@@ -94,10 +94,10 @@ function ModeMenu({ mode, blocked, disabled, onMode }: {
       <leo-menu-item onClick={() => { if (!blocked) choose('plan') }} data-test="mode-plan"
         aria-disabled={blocked ? 'true' : undefined} aria-checked={mode === 'plan' ? 'true' : 'false'}
         data-tooltip={blocked ? PLAN_BLOCKED[blocked] : undefined}>
-        <span className="menu-icon-row mode-row">
-          <span className="mode-text">
-            <span className="mode-name">Plan</span>
-            <span className="mode-about">{blocked ? PLAN_BLOCKED[blocked] : 'Plans the whole task, shows you the plan, then runs it'}</span>
+        <span className="menu-icon-row">
+          <span className="menu-text">
+            <span className="menu-title">Plan</span>
+            <span className="menu-subtitle">{blocked ? PLAN_BLOCKED[blocked] : 'Plans the whole task, shows you the plan, then runs it'}</span>
           </span>
           <span className="menu-check" aria-hidden="true">{mode === 'plan' && <Icon name="check-normal" />}</span>
         </span>
@@ -356,11 +356,11 @@ export function ProjectMenu({ directory, choices, onChoose, disabled = false, va
       )}
       {choices.folders.map((folder) => (
         <leo-menu-item key={folder} onClick={() => choose({ kind: 'folder', directory: folder })}>
-          <span className="menu-icon-row recent-row">
+          <span className="menu-icon-row">
             <Icon name="folder" />
-            <span className="recent-text">
-              <span className="recent-name">{projectLabel(folder)}</span>
-              <span className="recent-path">{folder}</span>
+            <span className="menu-text">
+              <span className="menu-title">{projectLabel(folder)}</span>
+              <span className="menu-subtitle menu-path">{folder}</span>
             </span>
           </span>
         </leo-menu-item>

@@ -795,9 +795,9 @@ function ExportMenu({
           `shared/commands.ts`. The tick is the state; a second line would say it twice.
           Choosing it closes the menu, the way a checkable menu item does. */}
       <leo-menu-item className="export-tools" data-role="menuitemcheckbox" aria-checked={includeTools ? 'true' : 'false'} onClick={() => onToggleTools()}>
-        <span className="menu-check-row">
-          <span className="menu-check">{includeTools && <Icon name="check-normal" />}</span>
+        <span className="menu-icon-row">
           Include Tool Calls
+          <span className="menu-check" aria-hidden="true">{includeTools && <Icon name="check-normal" />}</span>
         </span>
       </leo-menu-item>
       <hr />

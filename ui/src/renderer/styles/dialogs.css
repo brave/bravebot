@@ -215,10 +215,6 @@
 .bot-field { display: flex; flex-direction: column; gap: var(--leo-spacing-s); min-width: 0; }
 .bot-field > span { font: var(--type-meta-strong); color: var(--ink-primary); }
 .bot-field leo-input, .bot-field leo-textarea { width: 100%; min-width: 0; }
-.bot-form-model .model-picker { align-self: flex-start; width: max-content; max-width: 100%; flex: none; }
-.bot-form-model .model-trigger { width: auto; }
-/* The menu's minimum is the anchor. Keep the popup at its own width once the anchor shrinks. */
-.bot-form-model .model-menu { --model-menu-width: min(360px, calc(100vw - 48px)); width: max-content; max-width: min(360px, calc(100vw - 48px)); }
 
 .bot-note { margin: 0; font: var(--type-caption); color: var(--ink-tertiary); }
 .bot-note code { font: var(--type-caption); font-family: var(--font-mono); }

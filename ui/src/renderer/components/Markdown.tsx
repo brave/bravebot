@@ -102,7 +102,7 @@ const COMPONENTS: Components = {
       // window: the text of this link was written by the model, and nothing obliges it to
       // describe where the link goes. A browser gives you the URL in a status bar before
       // you commit to it; there is no status bar here, so this is it.
-      <a href={url} target="_blank" rel="noopener noreferrer nofollow" title={url}>
+      <a href={url} target="_blank" rel="noopener noreferrer nofollow" data-tooltip={url}>
         {children}
       </a>
     ) : (
@@ -127,7 +127,7 @@ const COMPONENTS: Components = {
         href={url}
         target="_blank"
         rel="noopener noreferrer nofollow"
-        title={url}
+        data-tooltip={url}
       >
         image · {label}
       </a>
