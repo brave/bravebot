@@ -2521,36 +2521,66 @@ struct Search<'a> {
     page: Page,
 }
 
-/// Orders names as `git tag --sort=v:refname` does: a run of digits by the number it spells,
-/// everything else byte by byte.
+/// Orders names as `git tag --sort=v:refname` does, by the same state machine as git's
+/// `versioncmp`: a run of digits is compared as a number, except that a run starting with `0` is a
+/// fraction and sorts below every number, and everything else is compared byte by byte.
 fn version_order(a: &str, b: &str) -> Ordering {
-    let digits = |s: &[u8]| s.iter().take_while(|c| c.is_ascii_digit()).count();
-    let (mut a, mut b) = (a.as_bytes(), b.as_bytes());
+    // Which of the two steps of the state machine applies to the byte before the first difference.
+    const CMP: i8 = 2;
+    const LEN: i8 = 3;
+    const S_N: usize = 0;
+    const S_I: usize = 3;
+    const S_F: usize = 6;
+    const S_Z: usize = 9;
+    // Indexed by state, then by the class of the next byte: other, digit, zero.
+    const NEXT_STATE: [usize; 12] = [
+        S_N, S_I, S_Z, //
+        S_N, S_I, S_I, //
+        S_N, S_F, S_F, //
+        S_N, S_F, S_Z,
+    ];
+    // Indexed by state, then by the class of the byte in each name at the first difference.
+    const RESULT_TYPE: [i8; 36] = [
+        CMP, CMP, CMP, CMP, LEN, CMP, CMP, CMP, CMP, //
+        CMP, -1, -1, 1, LEN, LEN, 1, LEN, CMP, //
+        CMP, CMP, CMP, CMP, CMP, CMP, CMP, CMP, CMP, //
+        CMP, 1, 1, -1, CMP, CMP, -1, CMP, CMP,
+    ];
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let at = |s: &[u8], i: usize| s.get(i).copied().unwrap_or(0);
+    let class = |c: u8| usize::from(c == b'0') + usize::from(c.is_ascii_digit());
+    let mut i = 0;
+    let mut state = S_N + class(at(a, 0));
     loop {
-        match (a.first(), b.first()) {
-            (None, None) => return Ordering::Equal,
-            (None, Some(_)) => return Ordering::Less,
-            (Some(_), None) => return Ordering::Greater,
-            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
-                let (da, db) = (digits(a), digits(b));
-                let trim = |run: &[u8]| -> usize { run.iter().take_while(|c| **c == b'0').count() };
-                let na = &a[trim(&a[..da])..da];
-                let nb = &b[trim(&b[..db])..db];
-                let order = na.len().cmp(&nb.len()).then_with(|| na.cmp(nb));
-                if order != Ordering::Equal {
-                    return order;
+        let (c1, c2) = (at(a, i), at(b, i));
+        if c1 != c2 {
+            let diff = c1.cmp(&c2);
+            return match RESULT_TYPE[state * 3 + class(c2)] {
+                CMP => diff,
+                LEN => {
+                    let mut j = i + 1;
+                    while at(a, j).is_ascii_digit() {
+                        if !at(b, j).is_ascii_digit() {
+                            return Ordering::Greater;
+                        }
+                        j += 1;
+                    }
+                    if at(b, j).is_ascii_digit() {
+                        Ordering::Less
+                    } else {
+                        diff
+                    }
                 }
-                a = &a[da..];
-                b = &b[db..];
-            }
-            (Some(x), Some(y)) => {
-                if x != y {
-                    return x.cmp(y);
-                }
-                a = &a[1..];
-                b = &b[1..];
-            }
+                negative if negative < 0 => Ordering::Less,
+                _ => Ordering::Greater,
+            };
         }
+        if c1 == 0 {
+            return Ordering::Equal;
+        }
+        state = NEXT_STATE[state];
+        i += 1;
+        state += class(at(a, i));
     }
 }
 
@@ -4295,6 +4325,52 @@ mod tests {
         assert_eq!((answer.next, answer.cut), (None, false));
         assert!(answer.shown.is_empty(), "{:?}", answer.shown);
         assert_eq!(answer.around, answer.text);
+    }
+
+    /// A digit run that starts with `0` is a fraction in git's version order, so it sorts below every
+    /// number: `v1.05` and `v1.010` come after `v1.0`, not beside `v1.5` and `v1.10`. The expected
+    /// order is what `git tag --sort=-v:refname` printed for these names.
+    #[test]
+    fn version_order_reads_a_digit_run_with_a_leading_zero_as_a_fraction() {
+        let expected = [
+            "x",
+            "v2",
+            "v1.10",
+            "v1.9",
+            "v1.5",
+            "v1.1a",
+            "v1.1.a",
+            "v1.1",
+            "v1.0.0",
+            "v1.0.00",
+            "v1.0",
+            "v1.05",
+            "v1.010",
+            "v1.00",
+            "v1.000",
+            "v1",
+            "v0.10.0-rc1",
+            "v0.10.0",
+            "v0.9.0",
+            "v0.2.0",
+            "v01",
+            "a10b",
+            "a9b",
+            "a1b",
+            "a01b",
+            "2024.10.1",
+            "2024.3.1",
+            "2024.03.1",
+            "1",
+            "0",
+            "01",
+            "00",
+            "001",
+        ];
+        let mut names = expected;
+        names.reverse();
+        names.sort_by(|a, b| version_order(b, a).then_with(|| a.cmp(b)));
+        assert_eq!(names, expected);
     }
 
     /// With a revision, only the tags whose commit it reaches are listed, as `git tag --merged`
