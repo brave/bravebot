@@ -3254,6 +3254,8 @@ impl Session {
         }
         self.abandon_the_selection();
         self.history.leave();
+        // A line that grew under the list is one the list was not put up over.
+        self.shortcuts = false;
         self.input.insert(self.caret, '\n');
         self.caret += 1;
         // A command is one line by definition, and a reference ends at whitespace, so a newline
@@ -3628,6 +3630,10 @@ impl Session {
         // stretch, so what the next operator acts on is what the caret is on and nothing invisible.
         self.let_go_of_the_selection();
         self.mode = crate::vim::Mode::Normal;
+        // Escape takes the list of keys down in every editing style. The ordinary box clears the
+        // line on it, which takes the list down through the line; here the key is the mode's, and
+        // `?` in NORMAL mode is vi's own key, so nothing else could close it from there.
+        self.shortcuts = false;
         // Where vi leaves it. The caret in NORMAL mode sits on a character rather than between two,
         // so the position one past the end of the line is not one it can hold, and Escape at the end
         // of a line somebody has just typed lands on the last character they typed.
@@ -6189,6 +6195,10 @@ impl Session {
     pub fn paste(&mut self, text: &str) {
         self.abandon_the_selection();
         self.history.leave();
+        // Every path that writes text in whole comes through here (a paste, a dropped file, an
+        // image marker), and the list stands over a line that arrived under it as it does over a
+        // recalled one.
+        self.shortcuts = false;
         let text = normalised(text);
         self.input.insert_str(self.caret, &text);
         self.caret += text.len();

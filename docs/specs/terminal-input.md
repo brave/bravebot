@@ -629,6 +629,9 @@ prevent, and a mode read off `/status` after the write is a mode read too late.
 `verified-by: bravebot_tui::app::typing_takes_the_list_down`
 `verified-by: bravebot_tui::app::escape_takes_the_list_down`
 `verified-by: bravebot_tui::state::a_line_that_arrives_under_the_list_takes_the_list_down`
+`verified-by: bravebot_tui::app::escape_takes_the_list_down_in_vis_editing_style`
+`verified-by: bravebot_tui::app::a_paste_or_a_newline_takes_the_list_down`
+`verified-by: bravebot_tui::render::the_shell_hint_line_drops_whole_parts_rather_than_cutting_one`
 `verified-by: bravebot_tui::render::a_question_mark_lists_every_shortcut`
 `verified-by: bravebot_tui::render::the_list_names_the_chord_that_opens_the_scroller`
 `verified-by: bravebot_tui::render::the_shortcuts_are_not_something_to_complete`

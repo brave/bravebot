@@ -12096,6 +12096,35 @@ mod tests {
         assert!(!session.shortcuts, "the list stayed up");
     }
 
+    /// In vi's style Escape is the key that makes the letters instructions, and `?` there is vi's
+    /// own key, so nothing but Escape can take the list down from the box the style opens in.
+    #[test]
+    fn escape_takes_the_list_down_in_vis_editing_style() {
+        let mut session = Session::new("none");
+        session.choose_editing(crate::vim::Editing::Vi);
+        type_line(&mut session, "?");
+        assert!(session.shortcuts, "the list did not come up");
+
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert!(!session.shortcuts, "the list stayed up after Escape");
+    }
+
+    /// A line that arrives under the list takes it down, whichever path put it there: a paste, a
+    /// dropped path and Shift-Enter all write the line without typing a character.
+    #[test]
+    fn a_paste_or_a_newline_takes_the_list_down() {
+        let mut pasted = Session::new("none");
+        type_line(&mut pasted, "?");
+        pasted.paste_text("hello");
+        assert!(!pasted.shortcuts, "the list stands over a pasted line");
+        assert_eq!(pasted.input(), "hello");
+
+        let mut broken = Session::new("none");
+        type_line(&mut broken, "?");
+        broken.type_newline();
+        assert!(!broken.shortcuts, "the list stands over a new line");
+    }
+
     /// The list is documentation, and a turn in flight refuses sending and nothing else. The key
     /// used to set the flag with the list refused a place to be drawn, so the press did nothing on
     /// screen and the list came up unasked when the turn ended, attached to no press at all.
