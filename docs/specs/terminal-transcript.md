@@ -88,6 +88,7 @@ user cannot tell was ever in the file.
 
 `verified-by: bravebot_tui::marking::quarantined_content_cannot_paint_its_own_margin`
 `verified-by: bravebot_tui::marking::a_neutralised_escape_is_still_visible`
+`verified-by: bravebot_tui::marking::a_tab_in_the_content_or_the_origin_is_drawn_as_a_glyph`
 `verified-by: bravebot_tui::marking::text_without_control_characters_is_drawn_as_it_is`
 `verified-by: bravebot_tui::render::quarantined_content_is_shown_and_marked_on_every_line`
 `verified-by: bravebot_tui::marking::a_wrapped_preview_line_is_marked_on_every_row_it_reaches`

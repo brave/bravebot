@@ -108,15 +108,16 @@ fn placeholder() -> &'static str {
 /// of drawing one is that content cannot.
 ///
 /// Everything the terminal would act on becomes a visible glyph, so what is on the screen stays a
-/// faithful record of the bytes without being able to act. Tabs and newlines are handled before this
-/// (lines are already split, and a tab is only ever width), so both are safe to keep.
+/// faithful record of the bytes without being able to act. A tab is replaced like the rest, since
+/// ratatui drops it without drawing anything. Callers that lay a tab out as width do so before
+/// this, and lines are already split, so no newline reaches it.
 pub(crate) fn printable(text: &str) -> String {
-    if !text.chars().any(|c| c.is_control() && c != '\t') {
+    if !text.chars().any(|c| c.is_control()) {
         return text.to_string();
     }
     text.chars()
         .map(|c| {
-            if !c.is_control() || c == '\t' {
+            if !c.is_control() {
                 c
             } else {
                 // The Unicode pictures for C0, so an escape reads as ␛ rather than vanishing: a
