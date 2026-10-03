@@ -8025,6 +8025,31 @@ mod tests {
         );
     }
 
+    /// A turn starts from a line that held a slash word, and the loop that lets the skills go is
+    /// not reached again until the turn ends. A skill typed meanwhile is neither drawn as
+    /// recognised nor given its hint, while a command still is.
+    #[test]
+    fn a_turn_running_draws_no_skill_as_recognised() {
+        let mut session = typed_with_skills("use /code-review please");
+        assert_eq!(recognised_in_the_box(&session), "/code-review");
+        session.submit().expect("the line is sent");
+        assert_eq!(session.status, Status::Working);
+
+        for c in "/code-review ".chars() {
+            session.type_char(c);
+        }
+        assert_eq!(recognised_in_the_box(&session), "");
+        assert_eq!(input_row(&session, 90), "/code-review");
+
+        let mut command = Session::new("test");
+        command.type_char('a');
+        command.submit().expect("the line is sent");
+        for c in "/loop ".chars() {
+            command.type_char(c);
+        }
+        assert_eq!(recognised_in_the_box(&command), "/loop");
+    }
+
     /// The hint is one row however narrow the terminal is, cut where it reaches the edge with an
     /// ellipsis, and a file's own escape in it is drawn as a glyph.
     #[test]

@@ -393,6 +393,7 @@ is not drawn as recognised then, while a command is.
 `verified-by: bravebot_tui::render::nothing_is_drawn_as_recognised_in_shell_mode`
 `verified-by: bravebot_tui::render::a_command_shows_what_it_takes_once_it_is_typed`
 `verified-by: bravebot_tui::render::a_skill_shows_the_hint_its_file_gave`
+`verified-by: bravebot_tui::render::a_turn_running_draws_no_skill_as_recognised`
 `verified-by: bravebot_tui::render::a_hint_is_cut_to_the_row_and_holds_no_escape`
 `verified-by: bravebot_tui::app::the_skills_are_resolved_once_a_line_and_let_go_after_it`
 

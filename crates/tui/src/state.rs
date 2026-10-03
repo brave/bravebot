@@ -5741,7 +5741,14 @@ impl Session {
     }
 
     /// The skills held while a slash word is being typed, and none otherwise.
+    ///
+    /// None while work runs, even if the line that started it was holding some: the loop that
+    /// calls [`Session::settle_skills`] is not reached again until the work ends, so what was held
+    /// when Enter was pressed would otherwise be drawn as recognised for the whole turn.
     pub fn held_skills(&self) -> &[crate::skills::Skill] {
+        if self.status == Status::Working {
+            return &[];
+        }
         self.skills.as_deref().unwrap_or_default()
     }
 
