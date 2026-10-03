@@ -281,6 +281,11 @@ pub enum Outcome {
     Failed(String),
     /// It outstayed the limit and was stopped, with what it had run for by then.
     Stopped(std::time::Duration),
+    /// A background job the person asked to stop, with what it had run for by then.
+    ///
+    /// Separate from [`Outcome::Stopped`] because the planner did not ask for it and no limit was
+    /// reached: a planner told its job outstayed a limit tries it again with a longer one.
+    StoppedByTheUser(std::time::Duration),
     /// It was still going when it was looked at, and was left going.
     ///
     /// Separate from [`Outcome::Stopped`] because nothing stopped it: a look at a background job is
@@ -320,6 +325,11 @@ impl Outcome {
                  printed by then and not the whole of what it would print.",
                 after.as_secs()
             ),
+            Self::StoppedByTheUser(after) => format!(
+                "The user stopped it after {}, so this is what it had printed by then and not the \
+                 whole of what it would print. Do not start it again unless the user asks you to.",
+                seconds(*after)
+            ),
             Self::Running {
                 ran_for,
                 waited: None,
@@ -355,6 +365,7 @@ impl Outcome {
                 "still running after {} seconds, so it was stopped; what it printed first is here",
                 after.as_secs()
             ),
+            Self::StoppedByTheUser(after) => format!("stopped by you after {}", seconds(*after)),
             Self::Running {
                 ran_for,
                 waited: None,
@@ -417,8 +428,11 @@ pub enum JobEvent {
         line: String,
         /// How long the run had been waited for when the person moved it, where they did.
         moved_after: Option<std::time::Duration>,
+        /// The token that asks the turn to stop this job and no other.
+        stop: bravebot_core::cancel::JobStop,
     },
-    /// It exited, or was stopped at the planner's asking, and somebody has been told how.
+    /// It exited, or was stopped at the planner's or the person's asking, and somebody has been
+    /// told how.
     Ended { name: String, outcome: Outcome },
     /// The turn ended with it still running, and it is stopped with the turn.
     Dropped { name: String },

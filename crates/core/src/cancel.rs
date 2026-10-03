@@ -77,6 +77,43 @@ impl Handoff {
     }
 }
 
+/// A one-way flag asking one background job to stop.
+///
+/// The same shape as [`Handoff`]: the person asks on the interface thread, and the turn holding the
+/// job reads it on its own and stops the job itself. Each job gets a fresh one, so asking about one
+/// job reaches no other.
+///
+/// Equal only to its own clones, because what two handles have to agree on is which job they reach.
+#[derive(Debug, Clone, Default)]
+pub struct JobStop {
+    flag: Arc<AtomicBool>,
+}
+
+impl JobStop {
+    /// A token nobody has asked with.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Ask the turn to stop the job at its next step.
+    pub fn request(&self) {
+        self.flag.store(true, Ordering::Release);
+    }
+
+    /// Whether the stop has been asked for.
+    pub fn is_requested(&self) -> bool {
+        self.flag.load(Ordering::Acquire)
+    }
+}
+
+impl PartialEq for JobStop {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.flag, &other.flag)
+    }
+}
+
+impl Eq for JobStop {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,5 +205,33 @@ mod tests {
             handle.join().expect("run finished"),
             "the press never reached the other thread"
         );
+    }
+
+    /// The interface holds one clone and the turn reads another, so the request has to cross, and
+    /// it reaches only the job whose token it is.
+    #[test]
+    fn a_job_stop_reaches_the_turn_and_no_other_job() {
+        let asked = JobStop::new();
+        let other = JobStop::new();
+        let turn = asked.clone();
+        let other_in_the_turn = other.clone();
+
+        let handle = thread::spawn(move || {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !turn.is_requested() {
+                if std::time::Instant::now() >= until {
+                    return (false, other_in_the_turn.is_requested());
+                }
+                std::hint::spin_loop();
+            }
+            (true, other_in_the_turn.is_requested())
+        });
+
+        asked.request();
+        let (seen, other_seen) = handle.join().expect("turn finished");
+        assert!(seen, "the request never reached the other thread");
+        assert!(!other_seen, "asking to stop one job asked to stop another");
+        assert_eq!(asked, asked.clone());
+        assert_ne!(asked, other, "two jobs' tokens compare equal");
     }
 }

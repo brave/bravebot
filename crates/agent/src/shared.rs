@@ -588,6 +588,7 @@ mod tests {
             name: "job:1".to_string(),
             line: "sleep 600".to_string(),
             moved_after: None,
+            stop: bravebot_core::cancel::JobStop::new(),
         };
         let mut screen = Lines::default();
         {

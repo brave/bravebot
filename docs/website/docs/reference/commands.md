@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Slash commands
-description: The twenty-three commands the interface acts on itself, and the rules every one of them shares.
+description: The twenty-four commands the interface acts on itself, and the rules every one of them shares.
 ---
 
 # Slash commands
@@ -26,6 +26,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/loop` | `[[interval] <prompt> \| stop]` | Send a prompt again and again, say what is repeating, or stop it |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
+| `/jobs` | `[stop <name> [<delegate>]]` | List this turn's background jobs, and stop one by its name |
 | `/checkouts` | `[remove <n>]` | List the checkouts delegates kept, and remove one by its number |
 | `/manifest` | `<task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
 | `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
@@ -416,6 +417,32 @@ time), the path ceasing to be readable, `/clear` and leaving, and age.
 
 **A watch is never written down**, so `--resume` restores none and none outlives the process.
 
+## `/jobs [stop <name> [<delegate>]]`
+
+Lists the turn's [background jobs](run-tool.md#leaving-a-pipeline-running), and stops one by its name.
+
+```
+/jobs                 # each job: its name, its command, and how it stands
+/jobs stop job:1      # stop the turn's job:1, leaving the others running
+/jobs stop 1 d2       # stop job:1 of delegate d2
+```
+
+The list is the jobs of the turn running, or of the last turn when none is, so it is empty once the
+next turn starts. Each delegate numbers its own jobs from 1, so a delegate's job takes the delegate's
+number after the name, and a name alone is the turn's own job. The list names a delegate's job the
+same way, as `job:1 d2`, and says which delegate started it.
+
+**The turn does the stopping.** The job is stopped at the turn's next step: when the round the model
+is in ends, or at once if the model is waiting on that job's output. A wait on another job's output
+ends then too, and the job is stopped at the next round. A reply the model is writing, a command run
+in the foreground and a wait on a delegate are not cut short, so the stop comes after them. Its row
+says `being stopped` until then. The model is told you stopped it and after how long, gets what it
+had printed by then, and is told not to start it again unless you ask.
+The rest of the turn goes on. The stop is recorded in the session's trail as yours.
+
+`/jobs` is carried out as you type it while a turn runs, since a job ends with its turn and a stop
+that waited would find nothing left to stop.
+
 ## `/checkouts [remove <n>]`
 
 Lists the checkouts this session keeps for its delegates, and removes one by its number.
@@ -696,7 +723,8 @@ it and the picture or file goes with it.
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/watch`,
 and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
-waiting. The exception is a line of the same command already waiting, which they wait behind, so
+waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
+key. The exception is a line of the same command already waiting, which they wait behind, so
 `/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/rename`, `/forget-trust`,
 `/theme <name>` and `/effort <level>` change only what the session keeps, and are carried out as you
 type them when nothing is waiting. Behind a waiting line they wait too, so `/rename` typed after a

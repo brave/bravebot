@@ -425,8 +425,10 @@ the hint does not appear for them.
 running, whether you moved it or the model started it in the background, the hint line says how many,
 as in `1 in the background`, in shell mode too. Each job is one row under
 [Ctrl-L](#watching-a-delegate-reading-a-command-and-asking-something-aside), and
-[`/status`](../reference/commands.md#status) lists them. When the turn ends with a job still running,
-the turn stops it, and its row says `stopped when the turn ended`.
+[`/status`](../reference/commands.md#status) and
+[`/jobs`](../reference/commands.md#jobs-stop-name-delegate) list them. `/jobs stop job:1` stops one
+while the rest of the turn goes on, and the model is told you stopped it. When the turn ends with a
+job still running, the turn stops it, and its row says `stopped when the turn ended`.
 
 The key works from the box. In the transcript view and the scroller, Ctrl-B pages back. In the box
 it is the move key and not a word back; Alt-B and Ctrl-Left move the caret a word back.

@@ -1438,16 +1438,18 @@ fn output_row(output: &Output, highlighted: bool, width: usize) -> Line<'static>
 
 /// The mark and the colour for how a command ended.
 ///
-/// A run stopped at the wall-clock limit keeps the mark and the colour of one still working,
-/// because that is what it was doing when it was stopped: a server told to serve a page prints as
-/// it goes and never exits, and drawing that as a failure would say something about the program
-/// that is not true.
+/// A run stopped at the wall-clock limit, or by the person, keeps the mark and the colour of one
+/// still working, because that is what it was doing when it was stopped: a server told to serve a
+/// page prints as it goes and never exits, and drawing that as a failure would say something about
+/// the program that is not true.
 fn mark_for(outcome: &bravebot_agent::report::Outcome) -> (&'static str, ratatui::style::Color) {
     use bravebot_agent::report::Outcome;
     match outcome {
         Outcome::Succeeded => ("✓", theme::ok()),
         Outcome::Failed(_) => ("✗", theme::fail()),
-        Outcome::Stopped(_) | Outcome::Running { .. } => ("●", theme::running()),
+        Outcome::Stopped(_) | Outcome::StoppedByTheUser(_) | Outcome::Running { .. } => {
+            ("●", theme::running())
+        }
     }
 }
 
@@ -4102,6 +4104,7 @@ mod tests {
                 name: name.to_string(),
                 line: line.to_string(),
                 moved_after: None,
+                stop: bravebot_core::cancel::JobStop::new(),
             });
         }
 
@@ -7468,6 +7471,7 @@ mod tests {
             name: name.to_string(),
             line: "sleep 600".to_string(),
             moved_after: None,
+            stop: bravebot_core::cancel::JobStop::new(),
         }
     }
 

@@ -1504,12 +1504,82 @@ with nothing going.
 `verified-by: bravebot_tui::status::a_job_line_keeps_its_spacing_and_is_cut_by_the_columns_it_takes`
 `verified-by: bravebot_tui::state::a_job_printing_status_shaped_lines_changes_no_row_mark_or_count`
 
+<a id="RUN-27"></a>
+### RUN-27: a person may stop one job, and the planner is told it was the person
+
+`/jobs` lists the jobs of the turn in flight, or of the last turn when none is, each with the name
+`/jobs stop` takes, its line, and how it stands in the words `/status` uses ([RUN-26](#RUN-26)).
+`/jobs stop <name>` asks for one to be stopped. The name is the one the driver minted, `job:1`, or
+its number alone. Each delegate numbers its own jobs from 1, so a delegate's job takes the
+delegate's number after the name, as in `/jobs stop job:1 d2`, and a name alone is the turn's own
+job. The list names a delegate's job the same way, and says which delegate started it. Any other
+form is answered with what the command takes.
+
+**A token, read at the turn's next step.** The driver makes a token for each job when it starts the
+job ([RUN-15](#RUN-15)) or the person moves a line ([RUN-25](#RUN-25)), and hands it to the front
+end with the start. The stop sets that token and does nothing else: the front end does not signal
+the program. The turn reads the token at its next step. Between rounds, where it looks for jobs that
+ended, it kills the job and then takes what the job printed, so nothing it printed before it died is
+left out. A `job_output` call waiting on any job the turn has not finished with returns at once,
+since its wait holds that step back. A call at the stopped job kills it. A call at another job
+returns what that job has printed and leaves it running, and the next round stops the one the person
+named. The model's reply, a foreground run and a wait on a delegate are not cut short, and the stop
+is carried out when they end. At the turn's end, the job is killed with the rest. A look at the job
+after it was stopped says the person stopped it, not how a killed program exits. Until the
+driver says the job ended, its row says it is being stopped and the hint line still counts it, since
+its program may still be running. A job whose program exited before the turn read its token is
+reported by how it exited, since the stop changed nothing it did. A stop of a job that has ended, or
+of a name the list does not hold, sets nothing and says so. A token belongs to one job, so a stop
+reaches no other job, the turn's or a delegate's.
+
+**What the planner is told.** That the job ended because the user stopped it, after how long; that
+what it printed is what it had printed by then and not all it would print; and that it should not
+start the job again unless the user asks. These are the driver's own words, a name it minted and a
+count read off a clock, so they are trusted text. What the job printed keeps the label
+[RUN-16](#RUN-16) gives it and reaches the planner as any job's finish does
+([RUN-13](#RUN-13)). The stop says nothing about what a program printed, so it changes no label.
+
+**The person is told the same.** The finish reaches the front end as the person's stop
+([RUN-26](#RUN-26)), and the row says the job was stopped by them and after how long. A stop that
+only the turn's end reads, because no round was left to read it, is reported as the person's stop
+and not as the turn stopping the job.
+
+**Whose choice it was is recorded.** The stop is a `job_stop` entry in the trail naming the job and
+how long it ran, as a move is a `handoff` entry ([RUN-25](#RUN-25)), since what the turn did next
+depends on it and nothing else in the session says it was the person's doing. It is recorded once,
+at whichever step read it. It asserts nothing about what the job printed, so it is not one of
+[TRACE-3](../trace.md#TRACE-3)'s assertions and moves no label.
+
+**It answers while the turn runs.** A job runs only while its turn does, so `/jobs` in every form is
+carried out mid-turn ([CMD-8](../commands.md#CMD-8)). Waiting for the turn to end would leave
+nothing to stop.
+
+**Why.** The planner could stop a job with `job_output` and `kill`, and the turn stopped every job
+when it ended, but a person who saw one job going wrong, a server on the wrong port or a build of
+the wrong target, could only stop the whole turn and lose the rest of its work.
+
+`verified-by: bravebot_core::cancel::a_job_stop_reaches_the_turn_and_no_other_job`
+`verified-by: bravebot_core::policy::stopping_a_background_job_is_recorded_in_the_audit_trail`
+`verified-by: bravebot_agent::exec::a_wait_for_more_comes_back_when_the_person_asks_to_stop_any_job_of_the_turn`
+`verified-by: bravebot_agent::tools::a_stop_no_round_read_is_reported_at_the_turns_end_as_the_persons`
+`verified-by: bravebot_agent::tools::a_job_that_exited_before_its_stop_was_read_is_reported_by_its_exit`
+`verified-by: bravebot_agent::turn::a_job_the_person_stops_is_killed_at_the_next_round_and_the_planner_told_why`
+`verified-by: bravebot_agent::turn::a_look_at_a_job_the_person_stopped_stops_it_and_says_who_did`
+`verified-by: bravebot_agent::turn::a_look_at_another_job_comes_back_when_the_person_stops_one`
+`verified-by: bravebot_tui::jobs_command::the_bare_word_lists_the_jobs`
+`verified-by: bravebot_tui::jobs_command::stop_and_a_name_stops_the_turns_own_job`
+`verified-by: bravebot_tui::jobs_command::a_delegates_number_after_the_name_stops_that_delegates_job`
+`verified-by: bravebot_tui::jobs_command::anything_else_is_answered_by_saying_what_the_command_takes`
+`verified-by: bravebot_tui::state::jobs_lists_each_job_by_the_name_a_stop_takes_and_where_it_is`
+`verified-by: bravebot_tui::state::a_stop_sets_the_jobs_token_and_the_row_waits_for_the_driver`
+`verified-by: bravebot_tui::state::a_stop_reaches_the_job_of_the_delegate_it_names_and_no_other`
+`verified-by: bravebot_tui::state::a_stop_of_a_job_that_is_not_running_says_so_and_sets_nothing`
+`verified-by: bravebot_tui::app::jobs_stop_typed_mid_turn_sets_the_token_of_the_job_it_names`
+
 ## Open questions
 
 - Whether output can ever be trusted by proof rather than by assertion is issue #3, and it may not
   be resolved by weakening RUN-4.
-- A person cannot yet stop one job from the screen. The planner can, with `job_output` and `kill`,
-  and the turn stops every job when it ends.
 - Only the terminal client draws the job events. The one-shot command line and the desktop app
   receive them and draw nothing of them yet.
 - A separate proof path reaches RUN-4's trusted label by the other road, proving from the program

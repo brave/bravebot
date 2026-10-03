@@ -5,7 +5,7 @@
 //! wrong comes back with what it produced instead of nothing.
 
 use bravebot_agent::exec::{self, ExecError};
-use bravebot_core::cancel::{Cancel, Handoff};
+use bravebot_core::cancel::{Cancel, Handoff, JobStop};
 use bravebot_core::{Pipeline, Stage};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -1670,7 +1670,12 @@ fn waiting_for_more_returns_when_the_job_prints_rather_than_at_the_bound() {
     );
 
     let began = std::time::Instant::now();
-    job.wait_for_more(&seen, std::time::Duration::from_secs(30), &Cancel::new());
+    job.wait_for_more(
+        &seen,
+        std::time::Duration::from_secs(30),
+        &Cancel::new(),
+        &[],
+    );
     let waited = began.elapsed();
 
     assert!(
@@ -1726,7 +1731,12 @@ fn waiting_for_more_returns_at_once_on_output_that_landed_since_the_last_look() 
     );
 
     let began = std::time::Instant::now();
-    job.wait_for_more(&seen, std::time::Duration::from_secs(20), &Cancel::new());
+    job.wait_for_more(
+        &seen,
+        std::time::Duration::from_secs(20),
+        &Cancel::new(),
+        &[],
+    );
     let waited = began.elapsed();
 
     assert!(
@@ -1775,7 +1785,7 @@ fn waiting_for_more_lasts_its_bound_where_a_job_that_has_printed_says_nothing_fu
 
     let bound = std::time::Duration::from_secs(2);
     let began = std::time::Instant::now();
-    job.wait_for_more(&seen, bound, &Cancel::new());
+    job.wait_for_more(&seen, bound, &Cancel::new(), &[]);
     let waited = began.elapsed();
 
     assert!(
@@ -1803,6 +1813,7 @@ fn waiting_for_more_returns_when_the_job_ends_without_printing() {
         &exec::Seen::default(),
         std::time::Duration::from_secs(60),
         &Cancel::new(),
+        &[],
     );
     let waited = began.elapsed();
 
@@ -1918,7 +1929,12 @@ fn a_character_split_across_two_pipe_reads_is_handed_over_whole() {
         "half a character was handed over as a replacement character: {held:?}"
     );
 
-    job.wait_for_more(&seen, std::time::Duration::from_secs(30), &Cancel::new());
+    job.wait_for_more(
+        &seen,
+        std::time::Duration::from_secs(30),
+        &Cancel::new(),
+        &[],
+    );
     let whole = job.since(&mut seen);
     assert!(
         whole.contains("\u{e9} done"),
@@ -1948,12 +1964,47 @@ fn a_cancelled_wait_for_more_comes_back_without_waiting_out_its_bound() {
         &exec::Seen::default(),
         std::time::Duration::from_secs(600),
         &cancel,
+        &[],
     );
     let waited = began.elapsed();
 
     assert!(
         waited < std::time::Duration::from_secs(5),
         "a cancelled wait went on waiting: {waited:?}"
+    );
+}
+
+/// A person who asks to stop a job the turn holds is answered by the look ending, not by the rest
+/// of a wait the planner asked for, whichever job the look is waiting on: the stop is carried out
+/// at the turn's next step, which the wait holds back. The stop arrives part way through, from
+/// another thread, the way it does from the interface.
+#[test]
+fn a_wait_for_more_comes_back_when_the_person_asks_to_stop_any_job_of_the_turn() {
+    let scratch = Scratch::new("wait-job-stopped");
+    let resolved = script(&scratch.path, "quiet", "#!/bin/sh\nsleep 30\n");
+
+    let pipeline = Pipeline::new(vec![Stage::new("quiet", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+
+    let stop = JobStop::new();
+    let asking = stop.clone();
+    let asker = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        asking.request();
+    });
+    let began = std::time::Instant::now();
+    job.wait_for_more(
+        &exec::Seen::default(),
+        std::time::Duration::from_secs(600),
+        &Cancel::new(),
+        &[JobStop::new(), stop],
+    );
+    let waited = began.elapsed();
+    asker.join().expect("the request was made");
+
+    assert!(
+        waited < std::time::Duration::from_secs(5),
+        "a wait went on waiting after the person asked to stop a job: {waited:?}"
     );
 }
 

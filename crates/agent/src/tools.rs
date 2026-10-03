@@ -1741,9 +1741,34 @@ struct Job {
     /// it a planner that waited for a build would be told a second time, with the output gone,
     /// since the bytes go to whoever was handed them.
     reported: bool,
+    /// The token the person sets to stop this job, read here at the turn's next step.
+    stop: bravebot_core::cancel::JobStop,
+    /// How long it had run when the person's stop was carried out, so a look after the account
+    /// says the person stopped it and not how a killed program exited.
+    stopped_by_the_person: Option<std::time::Duration>,
 }
 
 impl Job {
+    /// Whether the person asked to stop it and it is still going, so the stop is theirs to report.
+    ///
+    /// Its steps having exited first means the stop reached nothing, and how it ended is said from
+    /// its exit codes as it would have been.
+    fn stop_asked(&mut self) -> bool {
+        self.stop.is_requested() && !self.running.steps_exited()
+    }
+
+    /// Carry out the person's stop, and say how long the job had run.
+    ///
+    /// Killed before its output is taken, and given the pipes' grace a finish gets, so what the
+    /// account hands over is all it printed and nothing of it is left for a look nobody makes.
+    fn stop_for_the_person(&mut self) -> std::time::Duration {
+        let ran_for = self.running.ran_for();
+        self.running.kill();
+        self.running.ended();
+        self.stopped_by_the_person = Some(ran_for);
+        ran_for
+    }
+
     /// The label this job's output may carry now, rather than the one fixed before it started.
     ///
     /// A proof about the files a line was endorsed against says nothing about a tree something has
@@ -1800,7 +1825,8 @@ impl Jobs {
         self.running.is_empty()
     }
 
-    /// Take a background pipeline and hand back the name the planner will call it by.
+    /// Take a background pipeline and hand back the name the planner will call it by, with the
+    /// token that stops it.
     fn keep(
         &mut self,
         running: crate::exec::Background,
@@ -1808,9 +1834,10 @@ impl Jobs {
         label: bravebot_core::label::Label,
         file_authority: bravebot_core::file_authority::FileAuthority,
         file_revision: u64,
-    ) -> String {
+    ) -> (String, bravebot_core::cancel::JobStop) {
         self.started += 1;
         let name = format!("job:{}", self.started);
+        let stop = bravebot_core::cancel::JobStop::new();
         self.running.insert(
             name.clone(),
             Job {
@@ -1821,9 +1848,11 @@ impl Jobs {
                 label,
                 seen: crate::exec::Seen::default(),
                 reported: false,
+                stop: stop.clone(),
+                stopped_by_the_person: None,
             },
         );
-        name
+        (name, stop)
     }
 
     /// Every job that has ended and whose finish nobody has been told about yet (CMDLINE-14).
@@ -1840,12 +1869,22 @@ impl Jobs {
     /// output. Taken as an argument because a job outlives the round that started it and this is
     /// not the round's own call: the turn holds the figure it read from the settings and hands it
     /// over here.
+    ///
+    /// A job the person asked to stop is killed here, at the turn's next step after they asked
+    /// (RUN-27), and reported with the rest.
     pub fn ended(&mut self, cap: usize) -> Vec<Ended> {
         let mut finished = Vec::new();
         for (name, job) in self.running.iter_mut() {
-            if job.reported || !job.running.ended() {
+            if job.reported {
                 continue;
             }
+            let outcome = if job.stop_asked() {
+                crate::report::Outcome::StoppedByTheUser(job.stop_for_the_person())
+            } else if job.running.ended() {
+                how_it_ended(job.running.codes())
+            } else {
+                continue;
+            };
             job.reported = true;
             let printed = job.running.since(&mut job.seen);
             job.label = job.label_now();
@@ -1864,7 +1903,7 @@ impl Jobs {
             finished.push(Ended {
                 name: name.clone(),
                 line: job.line.clone(),
-                outcome: how_it_ended(job.running.codes()),
+                outcome,
                 printed: (!printed.is_empty()).then(|| Labelled::new(printed, job.label)),
                 whole,
             });
@@ -1881,20 +1920,33 @@ impl Jobs {
     ///
     /// Asked whether its steps exited and not whether its pipes drained: nothing here reads what it
     /// printed, and waiting out the drain would hold the end of the turn for each one.
-    pub fn stop_all<R: Reporter>(&mut self, reporter: &mut R) {
+    ///
+    /// One the person asked to stop, with no round left to read the request, is reported as their
+    /// stop and recorded in the trail as one (RUN-27), so their stop is not told back to them as
+    /// the turn's.
+    pub fn stop_all<S: Sink, R: Reporter>(&mut self, policy: &mut Policy<'_, S>, reporter: &mut R) {
         for (name, job) in self.running.iter_mut() {
             if job.reported {
                 continue;
             }
             job.reported = true;
             let name = name.clone();
-            reporter.job(match job.running.steps_exited() {
-                true => crate::report::JobEvent::Ended {
+            let event = if job.running.steps_exited() {
+                crate::report::JobEvent::Ended {
                     name,
                     outcome: how_it_ended(job.running.codes()),
-                },
-                false => crate::report::JobEvent::Dropped { name },
-            });
+                }
+            } else if job.stop.is_requested() {
+                let ran_for = job.running.ran_for();
+                policy.record_job_stop(&name, ran_for);
+                crate::report::JobEvent::Ended {
+                    name,
+                    outcome: crate::report::Outcome::StoppedByTheUser(ran_for),
+                }
+            } else {
+                crate::report::JobEvent::Dropped { name }
+            };
+            reporter.job(event);
         }
         self.running.clear();
     }
@@ -6164,7 +6216,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                 policy.record_ambient(&spends);
                 // The directory is carried over only once pre-flight checks and launch succeed.
                 *tools.run_directory = plan.directory.clone();
-                let name = tools.jobs.keep(
+                let (name, stop) = tools.jobs.keep(
                     running,
                     displayed.clone(),
                     label,
@@ -6175,6 +6227,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                     name: name.clone(),
                     line: displayed.clone(),
                     moved_after: None,
+                    stop,
                 });
                 Produced::new(
                     // Nothing has been printed yet, and the label is the one the kernel fixed
@@ -6238,7 +6291,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                 // person pressing a key says nothing about what the line printed.
                 policy.record_ambient(&spends);
                 *tools.run_directory = plan.directory.clone();
-                let name = tools.jobs.keep(
+                let (name, stop) = tools.jobs.keep(
                     moved.running,
                     displayed.clone(),
                     label,
@@ -6250,6 +6303,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                     name: name.clone(),
                     line: displayed.clone(),
                     moved_after: Some(moved.after),
+                    stop,
                 });
                 return Produced::new(
                     Labelled::new(String::new(), label),
@@ -6678,6 +6732,16 @@ fn job_output<S: Sink, R: Reporter>(
         Err(refusal) => return Produced::problem(refusal),
     };
 
+    // Every job's token and not only this one's: another job's stop is carried out at the next
+    // round, and a look here that sat out its wait would hold that round back (RUN-27).
+    let stops: Vec<bravebot_core::cancel::JobStop> = tools
+        .jobs
+        .running
+        .values()
+        .filter(|job| !job.reported)
+        .map(|job| job.stop.clone())
+        .collect();
+
     let Some(job) = tools.jobs.running.get_mut(&name) else {
         // Started, not still running: the kernel does not know which have been collected, so
         // the answer has to hold whether the report is still to come or already above.
@@ -6705,11 +6769,17 @@ fn job_output<S: Sink, R: Reporter>(
             // job printed or exited is otherwise indistinguishable from one that sat out its whole
             // bound, and the difference is the whole of what a caller learns from silence.
             let began = std::time::Instant::now();
-            job.running.wait_for_more(&job.seen, bound, tools.cancel);
+            job.running
+                .wait_for_more(&job.seen, bound, tools.cancel, &stops);
             began.elapsed()
         });
 
     let ended = job.running.ended();
+    // The person's stop, read at this step as at a round's (RUN-27), and carried out before the
+    // output is taken and the finish reported. One already reported has been given its account
+    // and killed.
+    let asked = !ended && !job.reported && job.stop.is_requested();
+    let stopped_now = asked.then(|| job.stop_for_the_person());
     // Per pipe, so output arriving on one stream cannot shift where the other sits in the composed
     // text and hand back bytes this caller was already shown.
     let fresh = job.running.since(&mut job.seen);
@@ -6720,8 +6790,11 @@ fn job_output<S: Sink, R: Reporter>(
 
     // Said from the clock and the exit codes, which are structure: nothing here reads a byte of
     // what the pipeline printed. Worked out before the kill below, so a job that had already ended
-    // is reported as what it did rather than as what the kill would have done to it.
-    let outcome = if ended {
+    // is reported as what it did rather than as what the kill would have done to it. A job the
+    // person stopped is said to be theirs at every look, since its exit codes are the kill's.
+    let outcome = if let Some(after) = job.stopped_by_the_person {
+        crate::report::Outcome::StoppedByTheUser(after)
+    } else if ended {
         how_it_ended(job.running.codes())
     } else if kill {
         crate::report::Outcome::Stopped(ran_for)
@@ -6734,7 +6807,7 @@ fn job_output<S: Sink, R: Reporter>(
     // This answer is the account of the finish, so the turn's own look between rounds does not give
     // it a second time (CMDLINE-14). A killed job is finished too: the planner asked for the end of
     // it and was told what it had done, and news of it exiting afterwards is news of nothing.
-    if (ended || kill) && !job.reported {
+    if (ended || kill || asked) && !job.reported {
         job.reported = true;
         reporter.job(crate::report::JobEvent::Ended {
             name: name.clone(),
@@ -6742,6 +6815,9 @@ fn job_output<S: Sink, R: Reporter>(
         });
     }
 
+    if let Some(after) = stopped_now {
+        policy.record_job_stop(&name, after);
+    }
     if kill {
         job.running.kill();
     }
@@ -8380,6 +8456,160 @@ mod tests {
                 .expect("the actual process printed");
             assert_eq!(printed.label().is_trusted(), !changed);
         }
+    }
+
+    /// A stop the person asked for that no round was left to read is still theirs at the turn's
+    /// end: the screen and the trail say they stopped it, and a job nobody asked about is still
+    /// the one the turn ended.
+    #[test]
+    fn a_stop_no_round_read_is_reported_at_the_turns_end_as_the_persons() {
+        use crate::report::{JobEvent, Outcome};
+        use bravebot_core::TrustStore;
+        use bravebot_core::capability::CapabilitySet;
+        use bravebot_core::event::{Event, RecordingSink};
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::policy::{ReleasePlan, Routing};
+
+        let root = std::env::current_dir().unwrap();
+        let mut jobs = Jobs::new();
+        let mut stops = Vec::new();
+        for _ in 0..2 {
+            let plan =
+                crate::cmdline::compile("sleep 30", &root, None, &mut |_, _| Ok(())).unwrap();
+            let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
+                panic!("one pipeline");
+            };
+            let running = crate::exec::start_steps(steps, &root, None).unwrap();
+            let (_, stop) = jobs.keep(
+                running,
+                plan.display(),
+                Label::trusted_public(),
+                FileAuthority::new(TrustStore::new(&root)),
+                0,
+            );
+            stops.push(stop);
+        }
+        stops[0].request();
+
+        let mut sink = RecordingSink::new();
+        let mut reporter = crate::report::RecordingReporter::default();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "start two jobs");
+        {
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::none(),
+                &mut sink,
+            )
+            .expect("policy");
+            jobs.stop_all(&mut policy, &mut reporter);
+        }
+
+        assert!(
+            matches!(
+                reporter.jobs.as_slice(),
+                [
+                    JobEvent::Ended { name, outcome: Outcome::StoppedByTheUser(_) },
+                    JobEvent::Dropped { name: dropped },
+                ] if name == "job:1" && dropped == "job:2"
+            ),
+            "{:?}",
+            reporter.jobs
+        );
+        let stopped: Vec<&String> = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed {
+                    gate: "job_stop",
+                    detail,
+                } => Some(detail),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            matches!(stopped.as_slice(), [detail] if detail.starts_with("job:1 stopped by the user")),
+            "{stopped:?}"
+        );
+    }
+
+    /// A job that exited before any step read the person's stop is reported as what it did, at a
+    /// round and at the turn's end. Nothing was stopped, and its exit code is the news.
+    #[test]
+    fn a_job_that_exited_before_its_stop_was_read_is_reported_by_its_exit() {
+        use crate::report::{JobEvent, Outcome};
+        use bravebot_core::TrustStore;
+        use bravebot_core::capability::CapabilitySet;
+        use bravebot_core::event::{Event, RecordingSink};
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::policy::{ReleasePlan, Routing};
+
+        let root = std::env::current_dir().unwrap();
+        let mut jobs = Jobs::new();
+        let exited_and_asked = |jobs: &mut Jobs| {
+            let plan = crate::cmdline::compile("true", &root, None, &mut |_, _| Ok(())).unwrap();
+            let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
+                panic!("one pipeline");
+            };
+            let running = crate::exec::start_steps(steps, &root, None).unwrap();
+            let (name, stop) = jobs.keep(
+                running,
+                plan.display(),
+                Label::trusted_public(),
+                FileAuthority::new(TrustStore::new(&root)),
+                0,
+            );
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !jobs.running.get_mut(&name).unwrap().running.ended() {
+                assert!(std::time::Instant::now() < until, "`true` did not exit");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            stop.request();
+        };
+
+        exited_and_asked(&mut jobs);
+        let at_the_round: Vec<(String, Outcome)> = jobs
+            .ended(OUTPUT_CAP)
+            .into_iter()
+            .map(|ended| (ended.name, ended.outcome))
+            .collect();
+        assert_eq!(at_the_round, [("job:1".to_string(), Outcome::Succeeded)]);
+
+        exited_and_asked(&mut jobs);
+        let mut sink = RecordingSink::new();
+        let mut reporter = crate::report::RecordingReporter::default();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "start a job");
+        {
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::none(),
+                &mut sink,
+            )
+            .expect("policy");
+            jobs.stop_all(&mut policy, &mut reporter);
+        }
+        assert!(
+            matches!(
+                reporter.jobs.as_slice(),
+                [JobEvent::Ended { name, outcome: Outcome::Succeeded }] if name == "job:2"
+            ),
+            "{:?}",
+            reporter.jobs
+        );
+        assert!(
+            !sink.events().iter().any(|event| matches!(
+                event,
+                Event::GatePassed {
+                    gate: "job_stop",
+                    ..
+                }
+            )),
+            "{:?}",
+            sink.events()
+        );
     }
 
     /// A glob the matcher cannot read selects no files, and a search over no files reports no

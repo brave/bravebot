@@ -25,6 +25,7 @@ pub mod history;
 pub mod history_search;
 pub mod indicator;
 pub mod input;
+pub mod jobs_command;
 pub mod keybindings;
 pub mod logo;
 pub mod loops;

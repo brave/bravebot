@@ -1098,6 +1098,8 @@ run-stages = { $count ->
     }
 run-in-directory = dans { $directory }
 watching-list-command = commande
+# La même colonne sur la ligne d'une tâche en arrière-plan. Le nom de la tâche ouvre la ligne à côté.
+watching-list-job = arrière-plan
 watching-list-aside = aparté
 watching-aside-head = une question posée à côté du travail
 watching-aside-question = vous avez demandé
@@ -1109,6 +1111,8 @@ watching-lines = { $count ->
    *[other] { $count } lignes
     }
 watching-output-head = ce que cette commande a affiché
+# Le nom est celui que le pilote a donné à la tâche, jamais rien de ce qu'elle a affiché.
+watching-output-job-head = ce que la tâche en arrière-plan { $name } a affiché
 watching-output-read = le modèle a lu ceci
 watching-output-kept = le modèle n'a pas lu ceci
 watching-row-read = lu
@@ -1408,6 +1412,12 @@ status-loop-unpaced = en attente que le tour dise quand
 status-goal = Objectif
 status-watch = Veille { $number }
 status-watch-armed-by = posée au tour { $turn } · il reste { $left }
+# Une ligne par tâche en arrière-plan du dernier tour. Le nom est celui du pilote.
+status-job = Tâche en arrière-plan { $name }
+status-job-of-delegate = Tâche en arrière-plan { $name } du délégué { $number }
+status-job-note = { $standing } · { $origin }
+status-job-moved = passée du premier plan à l'arrière-plan après { $after }
+status-job-started = lancée en arrière-plan
 # « fois » est invariable, donc une seule forme là où l'anglais en a deux.
 status-goal-rounds = renvoyé { $rounds } fois, il en reste { $left }
 status-permissions = Permissions
@@ -1599,6 +1609,7 @@ command-forget-trust = Ne plus retenir que ce répertoire est approuvé, pour qu
 command-loop = Renvoyer une consigne encore et encore, dire ce qui se répète, ou l'arrêter
 command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie
 command-watch = Lister les fichiers que cette session surveille, et en arrêter un par son numéro
+command-jobs = Lister les tâches en arrière-plan de ce tour, et en arrêter une par son nom
 command-checkouts = Lister les copies de travail gardées par les délégués, et en supprimer une par son numéro
 command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
 command-agent = Exécuter l'une de vos définitions sur une tâche, par son nom
@@ -2089,6 +2100,7 @@ delegate-memory-in-checkout =
 # Le pied de page de la vue d'un delegue. Le genre et le numero sont les mots du pilote, jamais
 # ceux du modele.
 watching-footer = delegue { $kind } { $number }
+watching-footer-job = arrière-plan { $name }
 watching-working = au travail
 watching-answered = a repondu
 watching-failed = n'a pas termine
@@ -2114,6 +2126,37 @@ watching-hint = { $chord } { $count } a ouvrir
 # Dit sur la ligne du bas tant qu'une commande attendue par le tour peut passer en arrière-plan,
 # et retiré dès qu'elle se termine ou y passe. Court, car il partage la ligne avec tout le reste.
 background-hint = { $chord } en arrière-plan
+# Dit sur la ligne du bas tant qu'une tâche en arrière-plan tourne, et retiré quand la dernière se
+# termine.
+jobs-hint = { $count ->
+    [one] 1 en arrière-plan
+   *[other] { $count } en arrière-plan
+    }
+# Où en est une tâche en arrière-plan, dans la vue qu'ouvre sa ligne et dans /status. La durée vient
+# de l'horloge de ce côté, comptée depuis le lancement de la ligne.
+job-running = en cours depuis { $ran_for }
+job-ended-with-turn = arrêtée à la fin du tour
+# Où en est une tâche entre /jobs stop et la prochaine étape du tour, qui est le moment où il
+# l'arrête.
+job-stopping = en cours d'arrêt
+# Le nom d'une tâche en arrière-plan lancée par un délégué : chaque délégué numérote ses tâches
+# depuis un.
+job-of-delegate = { $name } du délégué { $number }
+# Une ligne de /jobs. Le nom est celui que prend /jobs stop.
+jobs-listed = { $name } : { $command }, { $standing }
+# Une ligne de /jobs pour une tâche d'un délégué, nommée comme la prend /jobs stop : le nom de la
+# tâche, puis le numéro du délégué, comme dans job:1 d2.
+jobs-listed-of-delegate = { $name } { $number } : { $command }, { $standing }, lancée par le délégué { $number }
+jobs-none =
+    il n'y a aucune tâche en arrière-plan à lister. Un tour en lance une quand il exécute une
+    commande en arrière-plan, et /jobs liste les tâches d'un tour jusqu'au début du suivant
+jobs-no-such = il n'y a pas de tâche { $name } à arrêter. /jobs liste celles qui existent
+jobs-already-ended = { $name } est déjà terminée
+job-stop-asked = { $name } sera arrêtée à la prochaine étape du tour
+job-stop-already-asked = { $name } est déjà en cours d'arrêt
+jobs-command-takes =
+    /jobs liste les tâches en arrière-plan de ce tour, et /jobs stop <nom> en arrête une. Une
+    tâche d'un délégué prend aussi le numéro du délégué, comme dans /jobs stop job:1 d2
 
 # Vérifications indicatives affichées uniquement dans un dépôt de sources de Bravebot.
 doctor-development = environnement de développement { $path }

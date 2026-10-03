@@ -5829,6 +5829,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Record that a person stopped one background job, and how long it had run.
+    ///
+    /// A person's decision for the reason a move is: the planner is told afterwards that its job
+    /// ended, and somebody reading the session back has to see that it ended because a person asked
+    /// and not because the program gave up or the planner killed it.
+    pub fn record_job_stop(&mut self, job: &str, ran_for: std::time::Duration) {
+        self.allow(
+            "job_stop",
+            format!(
+                "{job} stopped by the user after {:.1}s",
+                ran_for.as_secs_f64()
+            ),
+        );
+    }
+
     /// The gate a command line passes immediately before anything executes. Returns the label its
     /// output will carry.
     ///
@@ -12846,6 +12861,29 @@ five
                         && detail.contains("42.5s")
             )),
             "the move left no trace: {:?}",
+            sink.events()
+        );
+    }
+
+    /// The planner is told its job ended because a person ended it, so the trail says the same,
+    /// naming the job and how long it ran, or the rest of the turn reads as a job that gave up.
+    #[test]
+    fn stopping_a_background_job_is_recorded_in_the_audit_trail() {
+        let mut sink = RecordingSink::new();
+        {
+            let mut policy = policy_trusting(&mut sink, &[]);
+            policy.record_job_stop("job:2", std::time::Duration::from_millis(61_200));
+        }
+
+        assert!(
+            sink.events().iter().any(|e| matches!(
+                e,
+                Event::GatePassed { gate: "job_stop", detail }
+                    if detail.contains("job:2")
+                        && detail.contains("by the user")
+                        && detail.contains("61.2s")
+            )),
+            "the stop left no trace: {:?}",
             sink.events()
         );
     }

@@ -30,9 +30,10 @@ use std::path::Path;
 /// says how much more is in a file the reader has just been pointed at.
 const MAX_REMEMBERED: usize = 6;
 
-/// How much of a background job's line `/status` gives, so a long one does not push every note in
-/// the report across the screen. The whole line is in the job's row, which the view opens.
-const JOB_LINE: usize = 48;
+/// How much of a background job's line `/status` and `/jobs` give, so a long one does not push
+/// every note in the report across the screen. The whole line is in the job's row, which the view
+/// opens.
+pub(crate) const JOB_LINE: usize = 48;
 
 /// One line at most `most` columns wide, ending in an ellipsis where it was cut.
 ///
@@ -940,11 +941,13 @@ mod tests {
             name: "job:1".to_string(),
             line: format!("cargo test {}", "--workspace ".repeat(10)),
             moved_after: Some(std::time::Duration::from_secs(72)),
+            stop: bravebot_core::cancel::JobStop::new(),
         });
         session.job(JobEvent::Started {
             name: "job:2".to_string(),
             line: "sleep 600".to_string(),
             moved_after: None,
+            stop: bravebot_core::cancel::JobStop::new(),
         });
         session.job(JobEvent::Ended {
             name: "job:2".to_string(),
@@ -1019,6 +1022,7 @@ mod tests {
             name: "job:1".to_string(),
             line: "sleep 600".to_string(),
             moved_after: None,
+            stop: bravebot_core::cancel::JobStop::new(),
         });
 
         let mut facts = facts(&config, &trust);
