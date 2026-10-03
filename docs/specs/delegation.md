@@ -416,8 +416,9 @@ A delegate's gates report into the same audit trail as the turn that spawned it,
 can be told apart. A nested run recording somewhere else would leave a hole in the record exactly
 over the part of the turn nobody watched.
 
-The name is the delegate's number, minted by the kernel when it approves the delegate. The number
-is its path from the turn: `d1.2` is the second delegate that `d1` started. A record says which
+The name is the delegate's number, minted by the kernel when it approves the delegate. A request
+the kernel refuses takes no number. The number is its path from the turn: `d1.2` is the second
+delegate that `d1` started. A record says which
 run took the decision it holds, and the turn's own records are left unnamed. A nested delegate's
 records reach the trail through every run above it and carry its own number, not the number of
 a run they passed through.
@@ -429,6 +430,7 @@ a run they passed through.
 `verified-by: bravebot_session::audit::the_written_record_names_the_delegate_that_took_the_decision`
 `verified-by: bravebot_core::delegate::a_delegates_number_is_its_path_from_the_turn`
 `verified-by: bravebot_core::policy::a_delegate_numbers_its_own_delegates_beneath_it`
+`verified-by: bravebot_core::policy::a_refusal_between_two_delegates_leaves_their_numbers_adjacent`
 `verified-by: bravebot_agent::shared::a_nested_delegates_records_name_it_rather_than_the_delegate_above_it`
 `verified-by: bravebot_agent::shared::a_handle_relays_only_its_own_descendants_and_only_once`
 `verified-by: bravebot_agent::turn::a_delegate_can_spawn_its_own_delegate_and_the_trail_names_it`
