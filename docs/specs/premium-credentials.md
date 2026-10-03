@@ -285,6 +285,8 @@ is most likely to notice first.
 `verified-by: bravebot_tui::app::a_model_the_configuration_named_is_reported_as_substituted_too`
 `verified-by: bravebot_tui::app::a_substitution_that_carries_on_is_said_once`
 `verified-by: bravebot_tui::app::the_configured_automatic_entry_resolving_to_a_model_says_nothing`
+`verified-by: bravebot_tui::app::a_turn_on_a_definitions_model_records_its_tier_and_model`
+`verified-by: bravebot_tui::app::a_turn_on_a_skills_model_replaces_an_earlier_turns_tier`
 
 ## Requirements and limits
 
