@@ -3665,6 +3665,30 @@ fn a_settings_file_the_import_cannot_write_is_named_in_place_of_the_command() {
     );
 }
 
+/// IMPORT-8: a settings file that parses and is under the size bravebot reads, but that the import
+/// would take past it, is one the command would refuse to write, so it is named in place of the
+/// command.
+#[test]
+fn a_settings_file_the_import_would_take_too_large_is_named_in_place_of_the_command() {
+    // Under the 64 KiB bravebot reads by less than the import adds.
+    let padded = format!(r#"{{"note": "{}"}}"#, "x".repeat(65_400));
+    assert!(padded.len() < 65_536, "the file must be readable as it is");
+    let scratch = Scratch::new("cli-running-import-too-large")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK)
+        .with_settings(&padded);
+
+    let output = bravebot(&scratch.path, NOTHING_CONFIGURED, &["-p", "say something"]);
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("is past what bravebot reads"), "{stderr}");
+    assert!(!stderr.contains("auth login import"), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(scratch.settings()).expect("read"),
+        padded
+    );
+}
+
 /// IMPORT-8: an import is a write, which an incognito session will not do.
 #[test]
 fn import_providers_is_refused_while_incognito() {

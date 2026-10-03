@@ -377,6 +377,7 @@ answers yes on their behalf.
 `verified-by: bravebot_cli::running::import_providers_is_refused_while_incognito`
 `verified-by: bravebot_cli::running::nothing_is_asked_where_stderr_is_not_a_terminal`
 `verified-by: bravebot_cli::running::a_settings_file_the_import_cannot_write_is_named_in_place_of_the_command`
+`verified-by: bravebot_cli::running::a_settings_file_the_import_would_take_too_large_is_named_in_place_of_the_command`
 
 <a id="IMPORT-9"></a>
 ### IMPORT-9: after a write, the start reads its settings again and opens the session if a service now answers
