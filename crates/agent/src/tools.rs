@@ -143,6 +143,21 @@ pub fn available(
     tools
 }
 
+/// What the planner is told of the refs its checkouts share, in the description of `isolation` and
+/// in the answer to a spawn that made one (CHECKOUT-7).
+fn checkouts_share_refs(running: Running) -> String {
+    let fetch = if running.offered() {
+        "run it once yourself before starting them rather than asking each to"
+    } else {
+        "ask one of them for it rather than each"
+    };
+    format!(
+        "Checkouts share remote-tracking refs and tags with your working directory and with each \
+         other, so a git fetch in one updates them in all of them, and two fetches at the same \
+         time can fail. Where delegates need a fetch, {fetch}."
+    )
+}
+
 fn table(
     scheduling: Scheduling,
     arming: crate::watch::Arming,
@@ -1059,15 +1074,16 @@ fn table(
                     },
                     "isolation": {
                         "type": "string",
-                        "description": "Optional. \"checkout\" gives each delegate a new \
-                                        checkout of the last commit to work in, so that \
-                                        delegates writing at the same time do not edit or \
-                                        build in one working tree. Changes not yet committed \
-                                        are not in it, and what it changes stays there until \
-                                        it is brought back. Not for a \"reader\", and not for \
-                                        a delegate that is already in one. A definition may \
-                                        ask for one itself, and its delegates are then started \
-                                        as if this were set.",
+                        "description": format!(
+                            "Optional. \"checkout\" gives each delegate a new checkout of the \
+                             last commit to work in, so that delegates writing at the same time \
+                             do not edit or build in one working tree. Changes not yet committed \
+                             are not in it, and what it changes stays there until it is brought \
+                             back. Not for a \"reader\", and not for a delegate that is already \
+                             in one. A definition may ask for one itself, and its delegates are \
+                             then started as if this were set. {}",
+                            checkouts_share_refs(running)
+                        ),
                         "enum": ["checkout"]
                     }
                 },
@@ -7155,12 +7171,14 @@ fn spawn_agent<S: Sink, R: Reporter>(
         Some(commit) if started.len() == 1 => format!(
             "{body} It works in a checkout of commit {commit}, which has no changes that are not \
              committed and is not your working directory. It keeps no memory between \
-             conversations and is not offered lsp."
+             conversations and is not offered lsp. {}",
+            checkouts_share_refs(tools.running)
         ),
         Some(commit) => format!(
             "{body} Each works in a checkout of its own of commit {commit}, which has no changes \
              that are not committed and is not your working directory. None keeps memory between \
-             conversations or is offered lsp."
+             conversations or is offered lsp. {}",
+            checkouts_share_refs(tools.running)
         ),
         None => body,
     };
@@ -9011,6 +9029,53 @@ mod tests {
         );
         assert_eq!(line("reviewer"), "- reviewer: Does it.");
         assert_eq!(line("tester"), "- tester: Does it.");
+    }
+
+    /// CHECKOUT-7: the planner reads this before it fans out, and a fetch in each checkout moves
+    /// the refs of the working directory and races the others. A planner without `run` cannot
+    /// fetch itself, so it is told to leave the fetch to one delegate.
+    #[test]
+    fn the_isolation_field_says_checkouts_share_refs_and_who_fetches_once() {
+        let described = |running: Running| -> String {
+            let tools = for_planner(
+                Scheduling::ArrangingALook,
+                crate::watch::Arming::Unavailable,
+                &bravebot_core::delegate::Definitions::default(),
+                Deadlines::BUILT_IN,
+                running,
+            );
+            let spawn = tools
+                .iter()
+                .find(|tool| tool.function.name == "spawn_agent")
+                .expect("a planner is offered a way to delegate");
+            spawn.function.parameters["properties"]["isolation"]["description"]
+                .as_str()
+                .expect("a description")
+                .to_string()
+        };
+        let shared = "Checkouts share remote-tracking refs and tags with your working directory \
+                      and with each other, so a git fetch in one updates them in all of them, and \
+                      two fetches at the same time can fail.";
+
+        let running = described(Running::Offered);
+        assert!(
+            running.contains(shared)
+                && running.contains(
+                    "Where delegates need a fetch, run it once yourself before starting them \
+                     rather than asking each to."
+                ),
+            "a planner with run is not told the checkouts share refs and to fetch first: {running}"
+        );
+        let withheld = described(Running::Withheld);
+        assert!(
+            withheld.contains(shared)
+                && withheld.contains(
+                    "Where delegates need a fetch, ask one of them for it rather than each."
+                )
+                && !withheld.contains("yourself"),
+            "a planner without run is not told the checkouts share refs, or is told to fetch \
+             itself: {withheld}"
+        );
     }
 
     /// A **shell** stays absent, and this is the distinction the whole tool turns on. A shell

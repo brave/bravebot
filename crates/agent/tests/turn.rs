@@ -23175,6 +23175,103 @@ fn a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory() {
     );
 }
 
+/// CHECKOUT-7. Remote-tracking refs and tags live in the repository's common directory, so a git
+/// fetch in a checkout updates them in the working directory and in every other checkout, and
+/// fetches in several at once race for them. The answer to a spawn that made one checkout or
+/// several says so, and so does what each delegate in one is told. A spawn that made none says
+/// nothing of it.
+#[test]
+fn the_answer_to_a_spawn_in_a_checkout_says_the_checkouts_share_the_repositorys_refs() {
+    let answered = |tag: &str, spawn: &str| -> (String, String) {
+        let scratch = Scratch::new(&format!("checkout-shared-refs-{tag}"));
+        let home = Scratch::new(&format!("checkout-shared-refs-{tag}-home"));
+        repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_by_marker(vec![
+            (
+                "SPAWN-AND-WAIT",
+                vec![
+                    tool_request("spawn_agent", spawn),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            ("LOOK-ONE", vec![reply_with("looked")]),
+            ("LOOK-TWO", vec![reply_with("looked")]),
+        ]);
+        let (asked, _) = run_in_a_repository(
+            &workspace,
+            &home.path,
+            &endpoint,
+            &received,
+            "SPAWN-AND-WAIT",
+        );
+        let (planner, delegates): (Vec<&String>, Vec<&String>) = asked
+            .iter()
+            .partition(|body| body.contains("SPAWN-AND-WAIT"));
+        (
+            planner
+                .iter()
+                .map(|body| tool_results(body))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            delegates
+                .iter()
+                .map(|body| body.as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+    };
+    let told = "This checkout shares remote-tracking refs and tags with the person's working \
+                directory and with every other checkout, so a git fetch here updates them there \
+                too, and two fetches at the same time can fail.";
+    let one = answered(
+        "one",
+        r#"{"kind":"worker","task":"LOOK-ONE","isolation":"checkout"}"#,
+    );
+    let each = answered(
+        "each",
+        r#"{"kind":"worker","task":"SHARED","each":["LOOK-ONE","LOOK-TWO"],"isolation":"checkout"}"#,
+    );
+    let none = answered("none", r#"{"kind":"worker","task":"LOOK-ONE"}"#);
+
+    for (spawned, (answer, delegates), started) in
+        [("one delegate", &one, 1), ("a fan-out", &each, 2)]
+    {
+        assert!(
+            answer.contains("in a checkout"),
+            "the spawn of {spawned} made no checkout: {answer}"
+        );
+        assert!(
+            answer.contains(
+                "Checkouts share remote-tracking refs and tags with your working directory and \
+                 with each other, so a git fetch in one updates them in all of them, and two \
+                 fetches at the same time can fail. Where delegates need a fetch, run it once \
+                 yourself before starting them rather than asking each to."
+            ),
+            "the answer to {spawned} in a checkout does not say the checkouts share refs: {answer}"
+        );
+        assert_eq!(
+            delegates.matches(told).count(),
+            started,
+            "not every delegate of {spawned} in a checkout was told it shares refs: {delegates}"
+        );
+    }
+    let (answer, delegates) = &none;
+    assert!(
+        answer.contains("has started"),
+        "the spawn without a checkout was not answered: {answer}"
+    );
+    assert!(
+        !answer.contains("remote-tracking refs"),
+        "a spawn that made no checkout was told about a checkout's refs: {answer}"
+    );
+    assert!(
+        delegates.contains("LOOK-ONE") && !delegates.contains("This checkout shares"),
+        "a delegate in the working directory was told about a checkout's refs: {delegates}"
+    );
+}
+
 /// CHECKOUT-20, LSP-9. A worker given a checkout holds the language server capability by its
 /// kind, and is still not offered `lsp`, because the session's servers are rooted at the working
 /// directory. The session's own planner is offered it, and so is the same kind of delegate

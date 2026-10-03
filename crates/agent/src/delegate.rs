@@ -233,7 +233,10 @@ pub(crate) fn checkout_notice(checkout: &crate::workspace::CheckoutInfo) -> Stri
     let unnamed = checkout.left_out().len() - named.len();
     let mut notice = format!(
         "\n\nYou are working in a checkout of commit {} of the project, at {}. Changes the person \
-         has not committed are not in it. You have no memory and no language servers here.",
+         has not committed are not in it. You have no memory and no language servers here. This \
+         checkout shares remote-tracking refs and tags with the person's working directory and \
+         with every other checkout, so a git fetch here updates them there too, and two fetches \
+         at the same time can fail.",
         checkout.commit(),
         checkout.path().display()
     );

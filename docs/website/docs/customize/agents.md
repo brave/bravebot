@@ -211,6 +211,11 @@ yourself with `/agent` is yours, so it works in your working tree and says so. A
 checkout keeps no [memory](#memory), so a definition with both keeps its memory only in a `/agent`
 turn, and bravebot says so when it loads the definition.
 
+A checkout shares its branches, tags and remote-tracking refs with your working tree and with every
+other checkout, as any git worktree does. A `git fetch` a delegate runs in one moves `origin/main`
+in your working tree too, and several fetching at once can fail. The planner and each delegate are
+told this, and the planner is told to have the fetch done once rather than by each delegate.
+
 The commands that bring a checkout's work back into your tree are not built yet. A checkout a
 delegate wrote in stays where it is until you remove it with
 [`/checkouts remove`](../reference/commands.md#checkouts-remove-n), and
