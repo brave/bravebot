@@ -712,10 +712,11 @@ spawn says so.
 **Why not a server per checkout.** It costs a second index and a second approval
 ([LSP-5](tools/lsp.md#LSP-5)), and is left for a later change.
 
-Built. A delegate in a checkout is given no language servers, and the answer to the spawn says so.
-No test asks for `lsp` in a checkout.
+Built. A delegate in a checkout is given no language servers, is not offered the `lsp` tool
+whatever its kind holds, and the answer to the spawn says so.
 
 `verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory`
+`verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_is_offered_no_lsp`
 
 <a id="CHECKOUT-21"></a>
 ### CHECKOUT-21: `/status` lists the session's checkouts
