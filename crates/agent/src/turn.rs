@@ -2356,8 +2356,10 @@ fn collect_delegates<S: Sink, R: Reporter>(
                         "Its checkout {} was removed, since nothing was done in it.",
                         checkout.id()
                     ),
-                    "its checkout was removed",
+                    "its checkout was removed".to_string(),
                 ),
+                // The size is the person's alone. It is a measure of files programs wrote, and the
+                // planner decides nothing by it.
                 Retired::Kept => (
                     format!(
                         "Its checkout {} of commit {} was kept at {}, since something was done in \
@@ -2367,7 +2369,14 @@ fn collect_delegates<S: Sink, R: Reporter>(
                         checkout.path().display(),
                         crate::delegate::checkout_candidates(&checkout.candidates())
                     ),
-                    "its checkout was kept",
+                    match checkout.size() {
+                        Some(size) => format!(
+                            "its checkout {} was kept, taking {} on disk",
+                            checkout.id(),
+                            size.spelled()
+                        ),
+                        None => format!("its checkout {} was kept", checkout.id()),
+                    },
                 ),
                 Retired::Stuck => (
                     format!(
@@ -2376,7 +2385,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
                         checkout.commit(),
                         checkout.path().display()
                     ),
-                    "its checkout could not be removed",
+                    "its checkout could not be removed".to_string(),
                 ),
             };
             body.push_str("\n\n");

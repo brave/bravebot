@@ -6667,7 +6667,7 @@ fn a_checkout_is_removed_unless_something_was_done_in_it() {
 /// CHECKOUT-21. Every clone of the workspace lists each checkout the session made, with its
 /// number, its path, its commit, the delegate it was made for and what the record shows done in it.
 /// One that is removed leaves the list, by its delegate or by hand, and one that is kept or could
-/// not be removed stays on it.
+/// not be removed stays on it, measured as its delegate ended (CHECKOUT-15).
 #[test]
 fn the_session_lists_each_checkout_it_has_until_one_is_removed() {
     use bravebot_agent::workspace::{Candidates, Retired, SessionCheckout};
@@ -6710,6 +6710,14 @@ fn the_session_lists_each_checkout_it_has_until_one_is_removed() {
         assert_eq!(one.commit, head.trim());
         assert!(!one.worked_in);
         assert_eq!(one.candidates, Default::default());
+        assert_eq!(one.size, None, "measured while its delegate runs");
+        assert_eq!(
+            std::fs::read_to_string(one.repository.join("worktrees").join(&one.id).join("HEAD"))
+                .unwrap()
+                .trim(),
+            head.trim(),
+            "the repository is not the one the checkout was made from"
+        );
     }
     assert_eq!(
         made[0].session_checkouts(),
@@ -6721,6 +6729,26 @@ fn the_session_lists_each_checkout_it_has_until_one_is_removed() {
         unreachable!()
     };
     kept.checkout().unwrap().record_typed("src/new.rs");
+    // What git keeps for a checkout in the repository goes when the checkout does.
+    const MEGABYTE: u64 = 1 << 20;
+    let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+    let incompressible: Vec<u8> = (0..MEGABYTE)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 24) as u8
+        })
+        .collect();
+    std::fs::write(
+        listed[0]
+            .repository
+            .join("worktrees")
+            .join(&listed[0].id)
+            .join("kept-by-git"),
+        incompressible,
+    )
+    .unwrap();
     assert_eq!(kept.checkout().unwrap().retire(&authority), Retired::Kept);
     assert_eq!(
         idle.checkout().unwrap().retire(&authority),
@@ -6735,22 +6763,42 @@ fn the_session_lists_each_checkout_it_has_until_one_is_removed() {
         std::os::unix::fs::symlink("entries", &worktrees).unwrap();
         assert_eq!(stuck.checkout().unwrap().retire(&authority), Retired::Stuck);
     }
+    let sizes: Vec<_> = workspace
+        .session_checkouts()
+        .iter()
+        .map(|one| one.size)
+        .collect();
+    assert!(
+        sizes[0].is_some_and(|size| size.whole && size.bytes >= MEGABYTE),
+        "a kept checkout was not measured with its entry in the repository: {sizes:?}"
+    );
+    // Its entry is reached through a link now, which is not followed.
+    #[cfg(unix)]
+    assert!(
+        sizes[1].is_some_and(|size| !size.whole),
+        "one that could not be removed was not measured, or its entry was: {sizes:?}"
+    );
     let worked_in = SessionCheckout {
         worked_in: true,
         candidates: Candidates {
             named: ["src/new.rs".to_string()].into(),
             referenced: 0,
         },
+        size: sizes[0],
         ..listed[0].clone()
     };
-    let left: Vec<SessionCheckout> = vec![worked_in, listed[2].clone()];
+    let still = SessionCheckout {
+        size: sizes[1],
+        ..listed[2].clone()
+    };
+    let left: Vec<SessionCheckout> = vec![worked_in, still.clone()];
     assert_eq!(workspace.session_checkouts(), left);
     assert_eq!(stuck.session_checkouts(), left);
 
     std::fs::remove_dir_all(kept.root()).unwrap();
     assert_eq!(
         workspace.session_checkouts(),
-        [listed[2].clone()],
+        [still],
         "a checkout removed by hand is still listed"
     );
 }

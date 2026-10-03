@@ -16,6 +16,7 @@ governs:
   - crates/core/src/policy.rs
   - crates/core/src/trust.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/checkouts_command.rs
   - crates/tui/src/status.rs
 documented-by:
   - docs/website/docs/customize/agents.md
@@ -612,7 +613,13 @@ of the delegate given it, and the paths the driver recorded a file effect on in 
 ([SESSION-8](sessions.md#SESSION-8)).
 
 `/checkouts` lists the checkouts the session keeps, shows one's candidates against the working
-directory, and removes one. Removing one that has candidates asks first.
+directory, and removes one. Removing one that has candidates asks first. The list says what each
+one took on disk as its delegate ended, and whether a remote branch is at the commit its HEAD is
+at, so a person can tell which ones are large and which are at a commit already pushed.
+
+**Why the front end reads the branches.** A program in the checkout can write its HEAD and the
+repository's refs, so what they say is untrusted. It is shown to the person and decides nothing:
+the driver reads none of it, and the planner is told none of it.
 
 Half built. A checkout the delegate given it and the delegates that one started did nothing in is
 removed as the delegate ends, with its `worktrees/<id>/` entry and its rules. Any other is kept,
@@ -620,7 +627,28 @@ the planner is told where, and `/status` lists it ([CHECKOUT-21](#CHECKOUT-21)).
 
 `/checkouts` lists each one kept with the paths the planner typed for its writes and the number of
 writes made through a reference ([CHECKOUT-13](#CHECKOUT-13)), and says its status was not read.
-It compares nothing with the working directory. `/checkouts remove <n>` removes one the way a
+It compares nothing with the working directory.
+
+It gives each one's size, measured once as its delegate ends: the blocks the file system gives
+everything beneath it and beneath its `worktrees/<id>/` entry, with no link followed and, on Unix,
+a file with several names counted once. On Windows each name counts at the file's length. A link
+in place of either directory is not measured. Measuring stops after two seconds, and the parent
+waits for it; a size it did not finish is given as at least what it counted. A checkout whose
+delegate is still running is said to be measured when it ends. The size is spelled in the units
+of the person's line ([CHECKOUT-18](#CHECKOUT-18)).
+
+It reads the HEAD in the checkout's `worktrees/<id>/` entry, never `<checkout>/.git`
+([CHECKOUT-12](#CHECKOUT-12)), and the repository's loose and packed refs, once for each
+repository listed. A file is opened without following a link in its place, each directory on the
+way to it is checked not to be a link first, and only a plain file is read, opened so that a pipe
+does not hold the listing. A name git would not take as a ref is not read, so one cannot add a
+line to the listing. It names the branch HEAD
+is on, or that it is on none, and a remote branch at the same commit, preferring the one of the
+same name. A remote branch at a later commit is not looked for, so a checkout whose commit was
+pushed and then built on elsewhere reads as at a commit no remote branch is at. A HEAD it cannot
+follow, and remote branches it cannot read in full, are said to be unread.
+
+`/checkouts remove <n>` removes one the way a
 delegate's ending does, from the repository it was made from, wherever `/cd` has moved the session
 since. It asks first where the record shows anything done there, a program started there included,
 since the status that would name what a program wrote is not read. One that could not be removed as
@@ -637,6 +665,20 @@ stays until a person deletes it and runs `git worktree prune`.
 `verified-by: bravebot_agent::git::removing_a_checkout_takes_its_directory_and_its_entry_alone`
 `verified-by: bravebot_agent::git::removing_a_checkout_leaves_everything_where_worktrees_is_a_link`
 `verified-by: bravebot_tui::state::the_checkouts_report_names_what_was_done_in_each`
+`verified-by: bravebot_tui::state::the_checkouts_report_says_what_each_takes_and_whether_it_is_pushed`
+`verified-by: bravebot_agent::git::a_checkout_is_measured_with_each_file_once_and_no_link_followed`
+`verified-by: bravebot_agent::git::a_size_measuring_did_not_finish_is_a_lower_bound`
+`verified-by: bravebot_agent::git::two_sizes_together_are_whole_only_where_both_are`
+`verified-by: bravebot_agent::workspace::the_session_lists_each_checkout_it_has_until_one_is_removed`
+`verified-by: bravebot_tui::checkouts_command::a_checkout_reads_as_pushed_where_a_remote_branch_is_at_its_commit`
+`verified-by: bravebot_tui::checkouts_command::the_remote_branch_named_is_the_one_of_the_same_name`
+`verified-by: bravebot_tui::checkouts_command::a_head_that_cannot_be_followed_reads_as_unread`
+`verified-by: bravebot_tui::checkouts_command::a_link_is_not_followed`
+`verified-by: bravebot_tui::checkouts_command::a_name_git_would_not_take_is_not_read`
+`verified-by: bravebot_tui::checkouts_command::a_packed_ref_that_is_not_utf8_leaves_the_others_read`
+`verified-by: bravebot_tui::checkouts_command::a_ref_that_cannot_be_read_reads_as_unread`
+`verified-by: bravebot_tui::checkouts_command::a_pipe_is_not_waited_on`
+`verified-by: bravebot_tui::checkouts_command::a_branch_git_pushed_reads_as_pushed`
 `verified-by: bravebot_tui::app::a_checkout_worked_in_is_removed_only_when_the_person_says_so`
 `verified-by: bravebot_tui::app::a_checkout_nothing_was_done_in_is_removed_without_asking`
 `verified-by: bravebot_tui::app::a_checkout_not_kept_or_not_removable_is_said_so`
@@ -699,7 +741,15 @@ candidate path whose name the planner typed, the first twenty and then how many 
 writes made through a reference, and says the status could not be read
 ([CHECKOUT-13](#CHECKOUT-13)).
 
+The person's line for the delegate's ending names a kept checkout by its number and gives what it
+took on disk ([CHECKOUT-15](#CHECKOUT-15)), in kilobytes under a megabyte, megabytes under a
+gigabyte and gigabytes from there, the unit chosen after rounding so that a size just short of a
+gigabyte reads as 1.0 GB. The planner is not told the size: it measures files programs
+in the checkout wrote, and nothing the planner does turns on it.
+
 `verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory`
+`verified-by: bravebot_agent::turn::the_person_is_told_what_a_kept_checkout_takes_on_disk_and_the_planner_is_not`
+`verified-by: bravebot_agent::git::a_size_is_spelled_in_kilobytes_megabytes_or_gigabytes`
 `verified-by: bravebot_agent::turn::a_checkout_nothing_was_done_in_is_removed_when_its_delegate_ends`
 `verified-by: bravebot_agent::turn::a_kept_checkout_is_named_with_the_paths_written_in_it`
 `verified-by: bravebot_agent::delegate::a_kept_checkouts_note_names_twenty_paths_and_counts_the_rest`

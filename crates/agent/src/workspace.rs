@@ -327,6 +327,12 @@ pub struct SessionCheckout {
     /// Whether the driver recorded a file effect in it or a program started in it (CHECKOUT-15).
     pub worked_in: bool,
     pub candidates: Candidates,
+    /// The `.git` directory it was made from. The checkout's HEAD is the `worktrees/<id>/` entry
+    /// the driver wrote there, never what `<checkout>/.git` names (CHECKOUT-12).
+    pub repository: PathBuf,
+    /// What it took on disk when its delegate ended (CHECKOUT-15). `None` while that delegate
+    /// runs.
+    pub size: Option<crate::git::checkout::Size>,
 }
 
 /// What the driver recorded doing in a checkout. One record for the delegate's workspace and the
@@ -335,6 +341,7 @@ pub struct SessionCheckout {
 struct Record {
     worked_in: AtomicBool,
     written: Mutex<Candidates>,
+    size: Mutex<Option<crate::git::checkout::Size>>,
 }
 
 /// A checkout the session made, with what removing it takes.
@@ -364,6 +371,8 @@ impl Made {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .clone(),
+            repository: self.git_dir.clone(),
+            size: *self.record.size.lock().unwrap_or_else(|e| e.into_inner()),
         }
     }
 
@@ -515,21 +524,53 @@ impl CheckoutInfo {
             .unwrap_or_else(|e| e.into_inner())
     }
 
+    /// What it took on disk as its delegate ended, measured by [`CheckoutInfo::retire`] where the
+    /// checkout stayed (CHECKOUT-15). `None` before then.
+    pub fn size(&self) -> Option<crate::git::checkout::Size> {
+        *self
+            .made
+            .record
+            .size
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
     /// End the checkout: remove it unless the record shows something was done in it. Its rules go
     /// with it, except those that distrust a path, which stay for as long as the session lasts
-    /// (CHECKOUT-8, CHECKOUT-12).
+    /// (CHECKOUT-8, CHECKOUT-12). One that stays is measured, for the person (CHECKOUT-15).
     pub fn retire(&self, authority: &bravebot_core::file_authority::FileAuthority) -> Retired {
-        if self.worked_in() {
-            return Retired::Kept;
-        }
-        match self.made.remove(
-            |key| authority.withdraw_beneath(key),
-            &self.listed,
-            &self.session_checkouts,
-        ) {
-            Ok(()) => Retired::Removed,
-            Err(_) => Retired::Stuck,
-        }
+        let retired = if self.worked_in() {
+            Retired::Kept
+        } else {
+            match self.made.remove(
+                |key| authority.withdraw_beneath(key),
+                &self.listed,
+                &self.session_checkouts,
+            ) {
+                Ok(()) => return Retired::Removed,
+                Err(_) => Retired::Stuck,
+            }
+        };
+        use crate::git::checkout::{MEASURING, Size, size};
+        let deadline = Instant::now() + MEASURING;
+        // What git keeps for it in the repository goes when it does, so it counts too.
+        let worktrees = self.made.git_dir.join("worktrees");
+        let admin = if std::fs::symlink_metadata(&worktrees).is_ok_and(|meta| meta.is_dir()) {
+            size(&worktrees.join(&self.made.id), deadline)
+        } else {
+            Size {
+                bytes: 0,
+                whole: false,
+            }
+        };
+        let measured = size(&self.made.path, deadline).and(admin);
+        *self
+            .made
+            .record
+            .size
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(measured);
+        retired
     }
 }
 

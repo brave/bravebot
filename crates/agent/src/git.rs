@@ -943,7 +943,7 @@ fn clean(path: &str) -> Result<String, Declined> {
 ///
 /// A name under `worktrees/` or `main-worktree/` is refused as well: the ref store reads those
 /// from another worktree's directory, which [`survey`] never lists.
-fn plausible_ref(name: &str) -> bool {
+pub fn plausible_ref(name: &str) -> bool {
     !name.is_empty()
         && !name.starts_with("worktrees/")
         && !name.starts_with("main-worktree/")
@@ -6709,6 +6709,147 @@ mod tests {
             assert_eq!(
                 git_text(&repo.root, &["worktree", "prune", "--dry-run", "--verbose"]),
                 ""
+            );
+        }
+
+        const MEGABYTE: u64 = 1 << 20;
+
+        fn measured(dir: &Path) -> crate::git::checkout::Size {
+            crate::git::checkout::size(dir, later())
+        }
+
+        /// Bytes no file system that compresses what it stores can make smaller.
+        #[cfg(unix)]
+        fn incompressible(len: u64) -> Vec<u8> {
+            let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+            (0..len)
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    (state >> 24) as u8
+                })
+                .collect()
+        }
+
+        /// CHECKOUT-15. A checkout's size counts what is beneath it however deep, counts a file
+        /// with two names once, and does not count what a link names, nor anything where a link
+        /// stands in place of the checkout.
+        #[cfg(unix)]
+        #[test]
+        fn a_checkout_is_measured_with_each_file_once_and_no_link_followed() {
+            let repo = Repo::new("measured");
+            let checkout = target(&repo);
+            let deep = checkout.join("target/debug/deps");
+            std::fs::create_dir_all(&deep).expect("deep");
+            std::fs::write(deep.join("built"), incompressible(MEGABYTE)).expect("built");
+            let once = measured(&checkout);
+            assert!(once.whole, "{once:?}");
+            assert!((MEGABYTE..2 * MEGABYTE).contains(&once.bytes), "{once:?}");
+
+            std::fs::hard_link(deep.join("built"), checkout.join("target/debug/built"))
+                .expect("linked");
+            let outside = repo.root.join("outside");
+            std::fs::create_dir_all(&outside).expect("outside");
+            std::fs::write(outside.join("big"), incompressible(4 * MEGABYTE)).expect("big");
+            std::os::unix::fs::symlink(outside.join("big"), checkout.join("big")).expect("link");
+            std::os::unix::fs::symlink(&outside, checkout.join("dir")).expect("link");
+            let linked = measured(&checkout);
+            assert!(linked.whole, "{linked:?}");
+            assert!(
+                (MEGABYTE..2 * MEGABYTE).contains(&linked.bytes),
+                "{linked:?}"
+            );
+
+            let in_place = repo.root.join("in-place");
+            std::os::unix::fs::symlink(&outside, &in_place).expect("link");
+            assert_eq!(
+                measured(&in_place),
+                crate::git::checkout::Size {
+                    bytes: 0,
+                    whole: false
+                }
+            );
+        }
+
+        /// CHECKOUT-15. Measuring that stops at its deadline, or a directory that cannot be read,
+        /// gives a lower bound and says it is one.
+        #[test]
+        fn a_size_measuring_did_not_finish_is_a_lower_bound() {
+            let repo = Repo::new("measuring-stopped");
+            let checkout = target(&repo);
+            std::fs::create_dir_all(&checkout).expect("checkout");
+            std::fs::write(checkout.join("file"), "x").expect("file");
+            assert!(measured(&checkout).whole);
+            let stopped = crate::git::checkout::size(&checkout, Instant::now());
+            assert!(!stopped.whole, "{stopped:?}");
+            let missing = measured(&repo.root.join("gone"));
+            assert_eq!(
+                missing,
+                crate::git::checkout::Size {
+                    bytes: 0,
+                    whole: false
+                }
+            );
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                let shut = checkout.join("shut");
+                std::fs::create_dir(&shut).expect("shut");
+                let mode = |mode| {
+                    std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(mode))
+                        .expect("mode");
+                };
+                mode(0o000);
+                // A superuser reads it anyway, which leaves nothing to observe.
+                let unreadable = std::fs::read_dir(&shut).is_err();
+                let partial = measured(&checkout);
+                mode(0o755);
+                if unreadable {
+                    assert!(!partial.whole, "{partial:?}");
+                } else {
+                    eprintln!(
+                        "running as a superuser, so a directory that cannot be read is not tried"
+                    );
+                }
+            }
+        }
+
+        /// CHECKOUT-18. A size is spelled in kilobytes, rounded up, under a megabyte, megabytes
+        /// under a gigabyte and gigabytes from there, the unit chosen after rounding, and as a
+        /// lower bound where it is one.
+        #[test]
+        fn a_size_is_spelled_in_kilobytes_megabytes_or_gigabytes() {
+            use crate::git::checkout::Size;
+            let spelled = |bytes, whole| Size { bytes, whole }.spelled();
+            assert_eq!(spelled(0, true), "0 KB");
+            assert_eq!(spelled(4097, true), "5 KB");
+            assert_eq!(spelled(MEGABYTE - 1024, true), "1023 KB");
+            assert_eq!(spelled(MEGABYTE - 1, false), "at least 1.0 MB");
+            assert_eq!(spelled(MEGABYTE, true), "1.0 MB");
+            assert_eq!(spelled(5 * MEGABYTE + 300 * 1024, true), "5.3 MB");
+            assert_eq!(spelled(1023 * MEGABYTE, true), "1023.0 MB");
+            assert_eq!(spelled(1023 * MEGABYTE + 900 * 1024, true), "1023.9 MB");
+            assert_eq!(spelled(1024 * MEGABYTE - 50 * 1024, true), "1.0 GB");
+            assert_eq!(spelled(1024 * MEGABYTE, true), "1.0 GB");
+            assert_eq!(
+                spelled(7 * 1024 * MEGABYTE + 512 * MEGABYTE, false),
+                "at least 7.5 GB"
+            );
+            assert_eq!(spelled(u64::MAX, true), "17179869184.0 GB");
+        }
+
+        /// CHECKOUT-15. Two sizes together are whole only where both are.
+        #[test]
+        fn two_sizes_together_are_whole_only_where_both_are() {
+            use crate::git::checkout::Size;
+            let size = |bytes, whole| Size { bytes, whole };
+            assert_eq!(size(1, true).and(size(2, true)), size(3, true));
+            assert_eq!(size(1, true).and(size(2, false)), size(3, false));
+            assert_eq!(size(1, false).and(size(2, true)), size(3, false));
+            assert_eq!(
+                size(u64::MAX, true).and(size(2, true)),
+                size(u64::MAX, true)
             );
         }
     }
