@@ -15837,6 +15837,276 @@ fn an_unscreened_unattended_run_credits_the_mode_for_a_promoted_slot() {
     );
 }
 
+/// The note on the finished row for `call` after a turn that runs `cat where.txt`, makes `call`
+/// on what it printed and finishes, with every check answered safe, and every request the model
+/// was sent. The row is what a person watching the turn reads of a release: the trail is drawn
+/// only where somebody asks for it.
+fn the_note_a_release_leaves<C: bravebot_agent::Confirmer + Send>(
+    name: &str,
+    call: (&str, &str),
+    task: Task,
+    confirmer: &mut C,
+) -> (String, Vec<String>) {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request(call.0, call.1),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::Conversation::new(),
+        confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    assert!(
+        sent.last()
+            .is_some_and(|last| last.contains("SENTINEL-XYZZY")),
+        "the bytes never reached the planner, so there was no release for the row to describe"
+    );
+    let note = reporter
+        .finished
+        .iter()
+        .find(|activity| activity.tool == call.0)
+        .unwrap_or_else(|| panic!("no finished row for {}", call.0))
+        .note
+        .clone()
+        .unwrap_or_else(|| panic!("the {} row has no note", call.0));
+    (note, sent)
+}
+
+/// With auto-vetting on, a release a check made in the person's place says so on the row. Only the
+/// trail told it from a release a person made, and nobody reads the trail while a turn runs, so a
+/// read nobody was asked about looked like any other and the one trace was the second the check
+/// took.
+#[test]
+fn with_auto_vetting_the_row_says_a_check_released_the_output_unasked() {
+    let mut confirmer = ReadsWhatItRan::new(false);
+    let shown = confirmer.shown.clone();
+    let (note, _) = the_note_a_release_leaves(
+        "read-output-auto-row",
+        ("read_output", r#"{"ref":"ref:1"}"#),
+        Task::new("find out").with_auto_vetting(true),
+        &mut confirmer,
+    );
+
+    assert!(
+        shown.lock().unwrap().is_empty(),
+        "a prompt was drawn, so a person released the output and not the check"
+    );
+    assert_eq!(
+        note, "1 line, read without asking: a check found nothing",
+        "the row does not say a check released the output unasked"
+    );
+}
+
+/// The same on the other route, which promotes one slot on the same verdict and drew the same
+/// row.
+#[test]
+fn with_auto_vetting_the_row_says_a_check_promoted_the_slot_unasked() {
+    let mut confirmer = ShownAfterAVet::new(false);
+    let shown = confirmer.shown.clone();
+    let (note, _) = the_note_a_release_leaves(
+        "vet-content-auto-row",
+        (
+            "vet_content",
+            r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+        ),
+        Task::new("find out").with_auto_vetting(true),
+        &mut confirmer,
+    );
+
+    assert!(
+        shown.lock().unwrap().is_empty(),
+        "a prompt was drawn, so a person released the slot and not the check"
+    );
+    assert_eq!(
+        note, "1 line, read without asking: a check found nothing",
+        "the row does not say a check promoted the slot unasked"
+    );
+}
+
+/// A person's yes keeps the row it had. A check ran here as well and found nothing, so a row that
+/// followed the verdict rather than who answered would credit the check with a read the person
+/// made.
+#[test]
+fn the_row_for_output_a_person_read_names_no_check() {
+    let mut confirmer = ReadsWhatItRan::new(true);
+    let shown = confirmer.shown.clone();
+    let (note, _) = the_note_a_release_leaves(
+        "read-output-person-row",
+        ("read_output", r#"{"ref":"ref:1"}"#),
+        Task::new("find out"),
+        &mut confirmer,
+    );
+
+    let asked = shown.lock().unwrap();
+    let request = asked.first().expect("the person was asked");
+    assert_eq!(
+        request.verdict,
+        bravebot_core::vetting::Verdict::Safe,
+        "no check found nothing, so this cannot tell the verdict from the answer"
+    );
+    drop(asked);
+    assert_eq!(
+        note, "1 line, read",
+        "the row for a person's release does not read as it did"
+    );
+}
+
+/// The same for a slot a person let through after a check found nothing in it, on the route that
+/// promotes one slot.
+#[test]
+fn the_row_for_a_slot_a_person_let_through_names_no_check() {
+    let mut confirmer = ShownAfterAVet::new(true);
+    let shown = confirmer.shown.clone();
+    let (note, _) = the_note_a_release_leaves(
+        "vet-content-person-row",
+        (
+            "vet_content",
+            r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+        ),
+        Task::new("find out"),
+        &mut confirmer,
+    );
+
+    let asked = shown.lock().unwrap();
+    let request = asked.first().expect("the person was asked");
+    assert_eq!(
+        request.verdict,
+        bravebot_core::vetting::Verdict::Safe,
+        "no check found nothing, so this cannot tell the verdict from the answer"
+    );
+    drop(asked);
+    assert_eq!(
+        note, "1 line, read",
+        "the row for a person's release does not read as it did"
+    );
+}
+
+/// A run bypassing permissions with no screening asked for releases on the mode's word, and no
+/// check is made. The row says nothing was asked and nothing was checked, rather than borrowing
+/// either of the other two wordings.
+#[test]
+fn an_unscreened_unattended_run_says_on_the_row_that_nothing_checked_the_output() {
+    let mut reading = ReadsWhatItRan::new(false);
+    let asked = std::sync::Arc::clone(&reading.shown);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, false);
+    let (note, sent) = the_note_a_release_leaves(
+        "read-output-bypass-row",
+        ("read_output", r#"{"ref":"ref:1"}"#),
+        Task::new("find out").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut confirmer,
+    );
+
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "a prompt reached somebody, so the mode did not release the output"
+    );
+    assert!(
+        !sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+        "a check was made, so a row saying nothing was checked would be false"
+    );
+    assert_eq!(
+        note, "1 line, read without asking or checking",
+        "the row does not say the mode released the output with nothing checked"
+    );
+}
+
+/// A picture is released on the same verdict as text, and its row has the same gap: a picture
+/// attached unasked read as one a person let through.
+#[test]
+fn with_auto_vetting_the_row_says_a_check_attached_the_picture_unasked() {
+    let scratch = Scratch::new("vet-picture-auto-row");
+    let cache = Scratch::new("vet-picture-auto-row-cache");
+    std::fs::write(scratch.path.join("shot.png"), a_png()).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(A_SAFE_VERDICT)],
+        vec![
+            tool_request("read_file", r#"{"path":"shot.png"}"#),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"a screenshot of the login page"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ShownAfterAVet::new(false);
+    let shown = confirmer.shown.clone();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("look at the screenshot")
+            .with_auto_vetting(true)
+            .with_cache(Some(cache.path.clone())),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert!(
+        shown.lock().unwrap().is_empty(),
+        "a prompt was drawn, so a person let the picture through and not the check"
+    );
+    let sent: Vec<String> = received.try_iter().collect();
+    assert!(
+        sent.last()
+            .is_some_and(|last| last.contains("data:image/png;base64,iVBORw0KGgo")),
+        "the picture was not attached, so there was no release for the row to describe"
+    );
+    let note = reporter
+        .finished
+        .iter()
+        .find(|activity| activity.tool == "vet_content")
+        .and_then(|activity| activity.note.clone());
+    assert_eq!(
+        note.as_deref(),
+        Some("a picture, attached without asking: a check found nothing"),
+        "the row does not say a check attached the picture unasked"
+    );
+}
+
 /// Every release `read_output` makes in the trail, picked out by the sentence one writes, so a test
 /// can say none was made without the helper above panicking on the count.
 fn releases_of_output(sink: &RecordingSink) -> Vec<String> {

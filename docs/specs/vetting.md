@@ -467,6 +467,17 @@ the output prompt: a run's output is quarantined by default, so it is the prompt
 they ask what a command printed. That is the reason the mode reaches it, and equally the reason the
 mode is off until somebody turns it on.
 
+With no prompt drawn, the row a `read_output` or `vet_content` call leaves is all a person sees of
+the release, so the row says who released the bytes. Where a check did, it reads `1 line, read
+without asking: a check found nothing`, or for a picture `a picture, attached without asking: a check
+found nothing`, and `a PDF, ...` for a PDF. Where a run bypassing permissions with no screening asked
+for did, it reads `1 line, read without asking or checking`. A person's answer leaves the row as it
+was, `1 line, read`. The trail tells the same three apart ([CHECK-8](#CHECK-8)), but only for
+somebody who opens it after the fact. The words on the row are the driver's, picked by which of the
+three answered, and nothing the check wrote is among them. A run that is handed what it printed in
+its own result ([RUN-22](tools/run.md#RUN-22)) makes no such call and leaves only its own row; the
+mode is the one thing that releases output there.
+
 What the mode never decides is anything but who answers. The slot is the planner's choice either
 way, the label is `(T,priv)` either way ([CHECK-7](#CHECK-7)), the endorsement is single-use either
 way, and no trust rule is written either way. [labels.md](labels.md) enumerates what an attacker who
@@ -492,6 +503,12 @@ owns the content gains from this, which is the reason it is off by default.
 `verified-by: bravebot_core::policy::output_released_by_a_safe_verdict_is_no_wider`
 `verified-by: bravebot_core::policy::the_trail_says_which_of_the_three_released_the_output`
 `verified-by: bravebot_agent::turn::with_auto_vetting_a_safe_verdict_attaches_a_picture_unasked`
+`verified-by: bravebot_agent::turn::with_auto_vetting_the_row_says_a_check_released_the_output_unasked`
+`verified-by: bravebot_agent::turn::with_auto_vetting_the_row_says_a_check_promoted_the_slot_unasked`
+`verified-by: bravebot_agent::turn::with_auto_vetting_the_row_says_a_check_attached_the_picture_unasked`
+`verified-by: bravebot_agent::turn::the_row_for_output_a_person_read_names_no_check`
+`verified-by: bravebot_agent::turn::the_row_for_a_slot_a_person_let_through_names_no_check`
+`verified-by: bravebot_agent::turn::an_unscreened_unattended_run_says_on_the_row_that_nothing_checked_the_output`
 
 <a id="CHECK-13"></a>
 ### CHECK-13: every surface a promotion prompt reaches is given the verdict, and none of them is given an answer
