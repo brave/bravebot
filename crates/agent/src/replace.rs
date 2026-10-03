@@ -108,10 +108,18 @@ const MAX_EXCERPT_LINES: usize = 40;
 /// places at once. The common prefix and suffix of the two versions bound everything that moved,
 /// whichever of those happened.
 ///
-/// Returns `None` where nothing differs, which `replace` refuses before ever reaching here.
+/// Lines are compared with their terminators, so an edit that only changes `\r\n` to `\n`, or adds
+/// or removes the final newline, still names the lines it touched. The terminator is left off what
+/// is shown.
+///
+/// Returns `None` only where the two texts are identical, which `replace` refuses before ever
+/// reaching here.
 pub fn changed_region(before: &str, after: &str) -> Option<String> {
-    let old: Vec<&str> = before.lines().collect();
-    let new: Vec<&str> = after.lines().collect();
+    if before == after {
+        return None;
+    }
+    let old: Vec<&str> = before.split_inclusive('\n').collect();
+    let new: Vec<&str> = after.split_inclusive('\n').collect();
 
     let head = old
         .iter()
@@ -129,17 +137,17 @@ pub fn changed_region(before: &str, after: &str) -> Option<String> {
         .min(old.len().saturating_sub(head))
         .min(new.len().saturating_sub(head));
 
-    if head == new.len() && old.len() == new.len() {
-        return None;
-    }
-
     let from = head.saturating_sub(CONTEXT_LINES);
     let to = (new.len() - tail + CONTEXT_LINES).min(new.len());
 
     let mut lines: Vec<String> = new[from..to]
         .iter()
         .enumerate()
-        .map(|(at, line)| format!("{:>6}  {line}", from + at + 1))
+        .map(|(at, line)| {
+            let text = line.strip_suffix('\n').unwrap_or(line);
+            let text = text.strip_suffix('\r').unwrap_or(text);
+            format!("{:>6}  {text}", from + at + 1)
+        })
         .collect();
 
     // Cut from the middle rather than the end: the last changed lines are as much a part of what
@@ -213,6 +221,37 @@ mod tests {
         assert!(
             !shown.contains("gone"),
             "the removed line is still shown: {shown}"
+        );
+    }
+
+    #[test]
+    fn a_change_of_line_terminator_still_shows_the_line() {
+        let shown = changed_region("a\r\nb\r\nc\r\n", "a\nb\r\nc\r\n").expect("the text differs");
+        assert!(
+            shown.contains("     1  a"),
+            "the edited line is missing: {shown}"
+        );
+        assert!(
+            !shown.contains('\r'),
+            "a terminator leaked into the excerpt: {shown:?}"
+        );
+    }
+
+    #[test]
+    fn removing_the_final_newline_still_shows_the_last_line() {
+        let shown = changed_region("a\nb\n", "a\nb").expect("the text differs");
+        assert!(
+            shown.contains("     2  b"),
+            "the last line is missing: {shown}"
+        );
+    }
+
+    #[test]
+    fn adding_the_final_newline_still_shows_the_last_line() {
+        let shown = changed_region("a\nb", "a\nb\n").expect("the text differs");
+        assert!(
+            shown.contains("     2  b"),
+            "the last line is missing: {shown}"
         );
     }
 
