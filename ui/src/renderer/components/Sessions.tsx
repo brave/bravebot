@@ -12,7 +12,7 @@ import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
 import { conversationKey } from '../../shared/experience'
 import { useConversationPreferences, useExperienceValue, setConversation } from '../experience'
-import { ButtonMenu, Icon, ProgressRing } from '../nala'
+import { ButtonMenu, Icon, Menu, ProgressRing } from '../nala'
 
 /** What a row says about a session that is open somewhere: only what asks something of the reader. */
 export type SessionStatus = 'working' | 'answer' | 'approval' | 'failed'
@@ -327,12 +327,14 @@ const Session = memo(function Session({
   const preferences = useConversationPreferences(key)
   const info = useContext(SessionInfo)[key]
   const [menu, setMenu] = useState(false)
-  const anchor = useRef<HTMLElement>(null)
-  const shutReason = useRef('explicit')
-  const choose = (id: 'pin' | 'archive') => {
-    setMenu(false)
-    anchor.current?.focus()
+  const trigger = useRef<HTMLElement>(null)
+  const choose = (id: 'pin' | 'archive') =>
     setConversation(key, id === 'pin' ? { pinned: !preferences?.pinned } : { archived: !preferences?.archived })
+  const shut = ({ reason }: { reason: string }) => {
+    setMenu(false)
+    // Escape and a chosen item return focus to the button that opened the menu; a click elsewhere
+    // leaves it where the pointer landed.
+    if (reason !== 'blur') trigger.current?.focus()
   }
   const status = info?.status
   return <div className={`session-row${current ? ' current' : ''}${menu ? ' menu-open' : ''}`}>
@@ -359,24 +361,21 @@ const Session = memo(function Session({
       {forked && <span className="offscreen">Forked.</span>}
       {status && <span className="offscreen">, {STATUS_WORDS[status]}</span>}
     </button>
-    <ButtonMenu className="session-more-menu" isOpen={menu} placement="bottom-end" positionStrategy="fixed"
-      onClose={(detail) => { shutReason.current = detail.reason }}
-      onChange={({ isOpen }) => {
-        setMenu(isOpen)
-        // Escape returns focus to the button that opened the menu; a click elsewhere leaves it
-        // where the pointer landed.
-        if (!isOpen && shutReason.current !== 'blur') anchor.current?.focus()
-        if (!isOpen) shutReason.current = 'explicit'
-      }}>
-      <IconButton ref={anchor} slot="anchor-content" icon="more-horizontal" size="tiny" className="session-more"
-        label={`Actions for ${session.title}`} tooltip={false} hasPopup="menu" expanded={menu} />
-      <leo-menu-item onClick={() => choose('pin')}>
-        <span className="menu-icon-row"><Icon name="pin" />{preferences?.pinned ? 'Unpin conversation' : 'Pin conversation'}</span>
-      </leo-menu-item>
-      <leo-menu-item onClick={() => choose('archive')}>
-        <span className="menu-icon-row"><Icon name="inbox" />{preferences?.archived ? 'Restore conversation' : 'Archive conversation'}</span>
-      </leo-menu-item>
-    </ButtonMenu>
+    <div className="session-more-menu">
+      <IconButton ref={trigger} icon="more-horizontal" size="tiny" className="session-more"
+        label={`Actions for ${session.title}`} tooltip={false} hasPopup="menu" expanded={menu}
+        onClick={() => setMenu((open) => !open)} />
+      {menu && (
+        <Menu isOpen target={trigger.current ?? undefined} placement="bottom-end" positionStrategy="fixed" onClose={shut}>
+          <leo-menu-item onClick={() => choose('pin')}>
+            <span className="menu-icon-row"><Icon name="pin" />{preferences?.pinned ? 'Unpin conversation' : 'Pin conversation'}</span>
+          </leo-menu-item>
+          <leo-menu-item onClick={() => choose('archive')}>
+            <span className="menu-icon-row"><Icon name="inbox" />{preferences?.archived ? 'Restore conversation' : 'Archive conversation'}</span>
+          </leo-menu-item>
+        </Menu>
+      )}
+    </div>
   </div>
 })
 

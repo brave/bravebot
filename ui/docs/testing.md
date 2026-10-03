@@ -119,6 +119,7 @@ at, that a control keeps keyboard focus through an animation.
 | Command | Covers |
 | --- | --- |
 | `npm run drive` | Launch, list sessions, filter them by title and project, group them by checkout, fold one away, start one from a heading, open one |
+| `npm run drive:session-list` | A row's actions menu: that no closed row mounts one, and that it opens, shuts and returns focus by mouse and keyboard |
 | `npm run drive:resize` | Divider drags, the clamps, keyboard resizing, persistence |
 | `npm run drive:columns` | Folding each side column, and what is remembered |
 | `npm run drive:panels` | The context panels, the row of buttons that turns them on and off, and the transcript's tool runs |
@@ -194,8 +195,8 @@ These pass `--user-data-dir` with a temporary profile, so the app's own state is
 
 `drive-about`, `drive-agent-settings`, `drive-bot-history`, `drive-conversation-workflow`,
 `drive-manual-walkthrough`, `drive-models`, `drive-models-live`, `drive-remembered-trust`,
-`drive-secure-files`, `drive-turn-details`, `drive-ux-acceptance`, `drive-vetting`,
-`drive-visual` and `drive-perf`.
+`drive-secure-files`, `drive-session-list`, `drive-turn-details`, `drive-ux-acceptance`,
+`drive-vetting`, `drive-visual` and `drive-perf`.
 
 The flag isolates only the app's own state. Most of these also replace the bridge with IPC
 fixtures, so they need no credentials and make no requests; `drive-models-live` does not, and

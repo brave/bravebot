@@ -160,7 +160,7 @@ list if they differ. From `ui/`:
 - The non-paid drivers that touch what you changed (for example `drive`, `drive:columns`,
   `drive:panels`, `drive:models`, `drive:menu`, `drive:export`, `drive:fork`, `drive:tree`,
   `drive:theme`, `drive:bots`, `drive:about`, `drive:vetting`, `drive:remembered-trust`,
-  `drive:markdown`, `drive:perf`, plus `drive-ux-acceptance.mjs`,
+  `drive:markdown`, `drive:perf`, `drive:session-list`, plus `drive-ux-acceptance.mjs`,
   `drive-conversation-workflow.mjs` and `drive-visual.mjs`). If you moved a label or a DOM
   location, update the drivers and demo scenes that assert on it.
 - Docs: update `ui/docs/interface.md` (layout, toolbar, keyboard model), `ui/docs/development.md`
