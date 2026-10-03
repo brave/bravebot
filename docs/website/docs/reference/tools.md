@@ -648,6 +648,7 @@ of capabilities, and gets back one report.
 | `kind` | `reader`, `checker` or `worker`, or the name of a [definition](../customize/agents.md) |
 | `task` | the whole of what the delegate is told |
 | `each` | optional; starts one delegate per entry, each told `task` followed by its own entry |
+| `mcp_servers` | optional; the [MCP servers](../customize/mcp-servers.md) a `worker` keeps, out of the ones its parent may call. `[]` keeps none |
 
 | Kind | Holds | For |
 |---|---|---|
@@ -675,6 +676,14 @@ its own, takes its own number, and holds its own copy of what you vouched for, s
 several runs rather than one run several times. A call naming more than eight, or naming none, is
 refused and starts nothing. A call that reaches the turn's ceiling of 32 delegates part-way starts
 the ones that fit and says how many did not start, and why.
+
+**`mcp_servers` takes servers away from a worker.** Without it a worker holds every server its
+parent may call, less any its [definition](../customize/agents.md) leaves off. With it the worker
+holds only those of them the list names, so a worker sent to fix a build can be started holding no
+mail server.
+A name is the server's part of its tools' names, as in `mcp__gmail__search`. A name the turn holds
+no grant for is refused and starts nothing, and the refusal lists the servers it holds. The list
+never adds a server.
 
 The delegate cannot see the conversation the task came from, so a task that leaves something out is a
 delegate that never learns it. It cannot come back for more, since there is no channel to ask

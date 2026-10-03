@@ -13,13 +13,13 @@ guards:
       - crates/agent/src/lsp.rs: 6
       - crates/agent/src/manifest.rs: 3
       - crates/agent/src/mcp.rs: 1
-      - crates/agent/src/tools.rs: 25
+      - crates/agent/src/tools.rs: 26
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 8
       - crates/agent/tests/workspace.rs: 35
       - crates/aichat/src/lib.rs: 5
       - crates/bedrock/src/lib.rs: 6
-      - crates/core/src/policy.rs: 106
+      - crates/core/src/policy.rs: 108
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 7
       - crates/mcp/src/http.rs: 2
@@ -41,7 +41,7 @@ guards:
       - crates/agent/tests/workspace.rs: 47
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 2
-      - crates/core/src/policy.rs: 61
+      - crates/core/src/policy.rs: 62
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 2
       - crates/mcp/tests/stdio.rs: 4
@@ -68,7 +68,7 @@ guards:
       - crates/core/src/value.rs: 4
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 58
+      - crates/core/src/policy.rs: 59
   - symbol: SlotStore::path_of
     sites:
       - crates/core/src/policy.rs: 5

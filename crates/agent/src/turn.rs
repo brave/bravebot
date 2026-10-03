@@ -5129,6 +5129,7 @@ mod tests {
                 .before_delegate(
                     &Labelled::trusted(kind.to_string()),
                     &Labelled::trusted("look it up".to_string()),
+                    None,
                 )
                 .expect("a trusted run may delegate");
             let delegated = super::held(

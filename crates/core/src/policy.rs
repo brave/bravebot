@@ -3018,6 +3018,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// that its definition selects and no other, so a delegate can call what the turn already may
     /// and never more (SERVERS-9).
     ///
+    /// `keeping` is the call's own list of the servers its delegate keeps, read as `kind` is: it
+    /// must be public, and each name is compared against the servers this run holds only once the
+    /// integrity gate has passed. A name this run holds no grant for is refused rather than
+    /// dropped, because the planner chose it out of the tools it is offered. `None` is a call that
+    /// wrote no list, which keeps every server the rest of this selects (AGENT-6).
+    ///
     /// The number is minted here, beneath this run's own, and spent only by a delegate that is
     /// approved. A refusal takes none, so the number says which of the run's delegates it was
     /// and not how many requests the run made. Two bounds are this call's to keep: a run at
@@ -3033,6 +3039,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         &mut self,
         kind: &Labelled<String>,
         task: &Labelled<String>,
+        keeping: Option<&Labelled<Vec<String>>>,
     ) -> Gated<crate::delegate::DelegateSpec> {
         let next = self.spawned + 1;
         let minted = match self.at {
@@ -3072,8 +3079,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             ));
         }
 
-        for (field, value) in [("kind", kind), ("task", task)] {
-            let label = value.label();
+        for (field, label) in [("kind", kind.label()), ("task", task.label())] {
             if !label.is_public() {
                 return Err(self.deny(
                     "delegate",
@@ -3084,6 +3090,19 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                     ),
                 ));
             }
+        }
+        if let Some(label) = keeping
+            .map(Labelled::label)
+            .filter(|label| !label.is_public())
+        {
+            return Err(self.deny(
+                "delegate",
+                Principle::Confinement,
+                format!(
+                    "mcp_servers is {label}, and private content must not decide what a \
+                     delegate holds; name the servers rather than pasting what was read"
+                ),
+            ));
         }
 
         // Read, not carried, and only now: a name has to be compared against the enumerated set
@@ -3100,6 +3119,40 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                     self.delegates.names().join(", ")
                 ),
             ));
+        };
+
+        // Compared against the servers this run holds for the reason the name above is compared
+        // against the enumerated set, and before a place in the tree is taken so a refusal takes
+        // none.
+        let kept = match keeping {
+            None => None,
+            Some(kept) => {
+                let proof = Declassification::authorise("the MCP servers a delegate keeps");
+                let kept = kept.clone().declassify(&proof);
+                let ours: Vec<String> = self
+                    .capabilities
+                    .iter()
+                    .filter_map(|capability| match capability {
+                        Capability::McpCall(alias) => Some(alias.as_str().to_string()),
+                        _ => None,
+                    })
+                    .collect();
+                if let Some(unheld) = kept.iter().find(|name| !ours.contains(name)) {
+                    let held = match ours.is_empty() {
+                        true => "it holds none".to_string(),
+                        false => format!("the ones it holds are {}", ours.join(", ")),
+                    };
+                    return Err(self.deny(
+                        "delegate",
+                        Principle::Capability,
+                        format!(
+                            "this run holds no MCP server called '{unheld}', so a delegate \
+                             cannot keep it; {held}"
+                        ),
+                    ));
+                }
+                Some(kept)
+            }
         };
 
         if !self.tree.claim() {
@@ -3180,6 +3233,54 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 ),
             );
         }
+
+        // Last, so the call's list can only take away from what everything above already chose.
+        let held = match &kept {
+            None => held,
+            Some(kept) => {
+                let (held, left_out): (Vec<Capability>, Vec<Capability>) =
+                    held.iter().partition(|capability| match capability {
+                        Capability::McpCall(alias) => {
+                            kept.iter().any(|name| name == alias.as_str())
+                        }
+                        _ => true,
+                    });
+                if !left_out.is_empty() {
+                    let left_out: Vec<String> =
+                        left_out.iter().map(Capability::to_string).collect();
+                    self.allow(
+                        "delegate",
+                        format!(
+                            "{id}: the call keeps none of {}, so it is delegated without them",
+                            left_out.join(", ")
+                        ),
+                    );
+                }
+                // Said rather than refused: the run holds each of these, and it is the kind or
+                // the definition the planner chose that leaves them off.
+                let not_given: Vec<&str> = kept
+                    .iter()
+                    .filter(|name| {
+                        !held.iter().any(|capability| {
+                            matches!(capability, Capability::McpCall(alias) if alias.as_str() == name.as_str())
+                        })
+                    })
+                    .map(String::as_str)
+                    .collect();
+                if !not_given.is_empty() {
+                    self.allow(
+                        "delegate",
+                        format!(
+                            "{id}: the call keeps {} which a {} does not hold, so it is \
+                             delegated without them",
+                            not_given.join(", "),
+                            selected.name()
+                        ),
+                    );
+                }
+                held.into_iter().collect()
+            }
+        };
 
         let proof = Declassification::authorise("a delegate's prompt, carried not read");
         let task = task.clone().declassify(&proof);
@@ -13851,7 +13952,7 @@ five
             .resuming(Integrity::Untrusted);
 
             let err = policy
-                .before_delegate(&argument("reader"), &argument("find the bug"))
+                .before_delegate(&argument("reader"), &argument("find the bug"), None)
                 .expect_err("a fallen context must not steer a second planner");
             assert_eq!(err.principle, Principle::IntegrityGate);
             assert!(!policy.finish());
@@ -13865,7 +13966,7 @@ five
             let mut policy = open_policy(&mut sink);
 
             let spec = policy
-                .before_delegate(&argument("reader"), &argument("find the bug"))
+                .before_delegate(&argument("reader"), &argument("find the bug"), None)
                 .expect("a clean context may delegate");
             assert_eq!(spec.kind(), Kind::Reader);
             assert_eq!(spec.task(), "find the bug");
@@ -13883,7 +13984,7 @@ five
                 Label::untrusted_private(),
             );
             let err = policy
-                .before_delegate(&argument("reader"), &private)
+                .before_delegate(&argument("reader"), &private, None)
                 .expect_err("private content must not become a prompt");
             assert_eq!(err.principle, Principle::Confinement);
             assert!(!policy.finish());
@@ -13896,7 +13997,7 @@ five
             let mut sink = RecordingSink::new();
             let mut policy = open_policy(&mut sink).holding(Confidentiality::Private);
             let spec = policy
-                .before_delegate(&argument("reader"), &argument("summarise it"))
+                .before_delegate(&argument("reader"), &argument("summarise it"), None)
                 .expect("a clean context may delegate");
 
             let mut inner = RecordingSink::new();
@@ -13914,7 +14015,7 @@ five
                 let mut policy = open_policy(&mut sink);
 
                 let err = policy
-                    .before_delegate(&argument(name), &argument("do it"))
+                    .before_delegate(&argument(name), &argument("do it"), None)
                     .expect_err("a name nobody enumerated must reach no capability set");
                 assert_eq!(err.principle, Principle::Capability, "for '{name}'");
                 assert!(!policy.finish());
@@ -13941,7 +14042,7 @@ five
             policy.install_delegates(definitions);
 
             let err = policy
-                .before_delegate(&argument("auditor"), &argument("do it"))
+                .before_delegate(&argument("auditor"), &argument("do it"), None)
                 .expect_err("a name nobody resolved must reach no capability set");
             assert!(
                 err.to_string().contains("rule-reviewer"),
@@ -13969,7 +14070,7 @@ five
             policy.install_delegates(definitions);
 
             let spec = policy
-                .before_delegate(&argument("rule-reviewer"), &argument("check it"))
+                .before_delegate(&argument("rule-reviewer"), &argument("check it"), None)
                 .expect("a resolved definition may be selected");
 
             assert_eq!(spec.definition(), "rule-reviewer");
@@ -14002,7 +14103,7 @@ five
             policy.install_delegates(definitions);
 
             let spec = policy
-                .before_delegate(&argument("rule-reviewer"), &argument("check it"))
+                .before_delegate(&argument("rule-reviewer"), &argument("check it"), None)
                 .expect("a resolved definition may be selected");
 
             assert_eq!(spec.tools(), Some(["read_file".to_string()].as_slice()));
@@ -14047,7 +14148,7 @@ five
             policy.install_delegates(definitions);
 
             let spec = policy
-                .before_delegate(&argument("fixer"), &argument("fix it"))
+                .before_delegate(&argument("fixer"), &argument("fix it"), None)
                 .expect("a narrow run may still delegate");
 
             assert!(spec.capabilities().contains(&Capability::FileRead));
@@ -14076,7 +14177,7 @@ five
             .unwrap();
 
             let spec = policy
-                .before_delegate(&argument("worker"), &argument("fix it"))
+                .before_delegate(&argument("worker"), &argument("fix it"), None)
                 .expect("a narrow run may still delegate");
 
             assert!(spec.capabilities().contains(&Capability::FileRead));
@@ -14108,7 +14209,7 @@ five
                 .unwrap();
 
                 let spec = policy
-                    .before_delegate(&argument(name), &argument("look it up"))
+                    .before_delegate(&argument(name), &argument("look it up"), None)
                     .expect("an enumerated kind");
                 let kind = Kind::from_name(name).expect("enumerated");
                 assert_eq!(
@@ -14157,7 +14258,7 @@ five
             policy.install_delegates(definitions);
 
             let spec = policy
-                .before_delegate(&argument("forecaster"), &argument("look it up"))
+                .before_delegate(&argument("forecaster"), &argument("look it up"), None)
                 .expect("a resolved definition may be selected");
             assert!(spec.capabilities().contains(&weather));
             assert!(
@@ -14165,7 +14266,7 @@ five
                 "a worker was handed a server its definition left off"
             );
             let spec = policy
-                .before_delegate(&argument("looker"), &argument("look it up"))
+                .before_delegate(&argument("looker"), &argument("look it up"), None)
                 .expect("a resolved definition may be selected");
             assert!(!spec.capabilities().contains(&weather));
 
@@ -14181,6 +14282,195 @@ five
             }
         }
 
+        /// A call's list of the servers its delegate keeps, labelled as the tool layer labels it.
+        fn keeping(names: &[&str]) -> Labelled<Vec<String>> {
+            Labelled::new(
+                names.iter().map(|name| name.to_string()).collect(),
+                Label::untrusted_public(),
+            )
+        }
+
+        /// A run holding the weather and the notes servers, and everything else.
+        fn holding_weather_and_notes(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
+            Policy::begin(
+                routing_with("task", "look into it"),
+                ReleasePlan::new(),
+                all_capabilities()
+                    .iter()
+                    .chain(
+                        ["weather", "notes"]
+                            .map(|name| Capability::McpCall(ServerAlias::new(name))),
+                    )
+                    .collect(),
+                sink,
+            )
+            .unwrap()
+        }
+
+        /// AGENT-6. A worker spawned with an empty list holds no server, so a sub-task that needs
+        /// none cannot call the mail server its parent happens to hold. The rest of what a worker
+        /// holds stays, and the trail names each grant it was delegated without.
+        #[test]
+        fn a_worker_spawned_keeping_no_server_holds_none() {
+            let mut sink = RecordingSink::new();
+            let mut policy = holding_weather_and_notes(&mut sink);
+
+            let spec = policy
+                .before_delegate(
+                    &argument("worker"),
+                    &argument("fix it"),
+                    Some(&keeping(&[])),
+                )
+                .expect("an empty list narrows and refuses nothing");
+
+            let servers: Vec<String> = spec
+                .capabilities()
+                .iter()
+                .filter(|capability| matches!(capability, Capability::McpCall(_)))
+                .map(|capability| capability.to_string())
+                .collect();
+            assert!(servers.is_empty(), "the worker kept {servers:?}");
+            for kept in [Capability::FileWrite, Capability::ShellExec] {
+                assert!(
+                    spec.capabilities().contains(&kept),
+                    "the list took {kept} away, and it names servers only"
+                );
+            }
+            let trail = format!("{:?}", sink.events());
+            let said = "the call keeps none of mcp_call:notes, mcp_call:weather";
+            assert!(
+                trail.contains(said),
+                "the trail does not say '{said}': {trail}"
+            );
+        }
+
+        /// AGENT-6. A list keeps the servers it names and no other, and it only takes away: a
+        /// definition naming one server keeps that one alone however many the call lists, and a
+        /// reader keeps none. A listed server the delegate does not get is said, because the
+        /// planner listed it expecting the delegate to have it.
+        #[test]
+        fn a_worker_spawned_keeping_one_server_holds_only_that_one() {
+            let weather = Capability::McpCall(ServerAlias::new("weather"));
+            let notes = Capability::McpCall(ServerAlias::new("notes"));
+            let mut sink = RecordingSink::new();
+            let mut policy = holding_weather_and_notes(&mut sink);
+            let mut definitions = crate::delegate::Definitions::default();
+            definitions.insert(
+                crate::delegate::Definition::from_file(
+                    "forecaster",
+                    "looks it up",
+                    Kind::Worker,
+                    None,
+                    "",
+                    "",
+                )
+                .with_servers(vec!["weather".into()]),
+            );
+            policy.install_delegates(definitions);
+
+            let spec = policy
+                .before_delegate(
+                    &argument("worker"),
+                    &argument("note it"),
+                    Some(&keeping(&["notes"])),
+                )
+                .expect("a server this run holds may be kept");
+            assert!(spec.capabilities().contains(&notes));
+            assert!(
+                !spec.capabilities().contains(&weather),
+                "a worker kept a server its call left out"
+            );
+
+            let spec = policy
+                .before_delegate(
+                    &argument("forecaster"),
+                    &argument("look it up"),
+                    Some(&keeping(&["weather", "notes"])),
+                )
+                .expect("a server this run holds may be kept");
+            assert!(spec.capabilities().contains(&weather));
+            assert!(
+                !spec.capabilities().contains(&notes),
+                "a call's list handed a worker a server its definition left off"
+            );
+
+            let spec = policy
+                .before_delegate(
+                    &argument("reader"),
+                    &argument("read it"),
+                    Some(&keeping(&["notes"])),
+                )
+                .expect("a server this run holds may be listed for any kind");
+            assert!(
+                !spec.capabilities().contains(&notes),
+                "a call's list handed a reader a server"
+            );
+
+            let trail = format!("{:?}", sink.events());
+            assert!(
+                !trail.contains("d1: the call keeps notes which"),
+                "the trail says a worker went without a server it holds: {trail}"
+            );
+            for said in [
+                "d2: the call keeps notes which a forecaster does not hold",
+                "d3: the call keeps notes which a reader does not hold",
+            ] {
+                assert!(
+                    trail.contains(said),
+                    "the trail does not say '{said}': {trail}"
+                );
+            }
+        }
+
+        /// AGENT-6. A name this run holds no grant for is refused rather than dropped, because the
+        /// planner picked it from the tools it is offered and a name that is not among them is a
+        /// mistake it should hear about. The refusal names the servers it could have kept and
+        /// takes no number, and a list naming nothing it lacks then delegates.
+        #[test]
+        fn a_server_this_run_holds_no_grant_for_cannot_be_kept() {
+            let mut sink = RecordingSink::new();
+            let mut policy = holding_weather_and_notes(&mut sink);
+
+            let err = policy
+                .before_delegate(
+                    &argument("worker"),
+                    &argument("fix it"),
+                    Some(&keeping(&["weather", "gmail"])),
+                )
+                .expect_err("a server this run does not hold cannot be kept");
+            assert_eq!(err.principle, Principle::Capability);
+            let said = format!("{err}");
+            assert!(
+                said.contains("no MCP server called 'gmail'")
+                    && said.contains("the ones it holds are notes, weather"),
+                "the refusal does not say which name and which servers: {said}"
+            );
+
+            let spec = policy
+                .before_delegate(
+                    &argument("worker"),
+                    &argument("fix it"),
+                    Some(&keeping(&["weather"])),
+                )
+                .expect("a list naming only held servers delegates");
+            assert_eq!(spec.id(), DelegateId::nth(1), "the refusal took a number");
+        }
+
+        /// AGENT-6. The list is read as `kind` is, so a private one is refused before any name in
+        /// it is compared with anything.
+        #[test]
+        fn a_private_server_list_cannot_direct_a_delegate() {
+            let mut sink = RecordingSink::new();
+            let mut policy = holding_weather_and_notes(&mut sink);
+
+            let private = Labelled::new(vec!["weather".to_string()], Label::untrusted_private());
+            let err = policy
+                .before_delegate(&argument("worker"), &argument("fix it"), Some(&private))
+                .expect_err("a private list must not steer a delegate");
+            assert_eq!(err.principle, Principle::Confinement);
+            assert!(format!("{err}").contains("mcp_servers"), "{err}");
+        }
+
         /// The bound belongs to the definition, so nothing about a call can lengthen it. A
         /// planner that could set it would be setting its own delegate's budget from a sentence it
         /// wrote.
@@ -14191,7 +14481,7 @@ five
                 let mut policy = open_policy(&mut sink);
 
                 let spec = policy
-                    .before_delegate(&argument(name), &argument("do it"))
+                    .before_delegate(&argument(name), &argument("do it"), None)
                     .expect("an enumerated kind");
                 let kind = Kind::from_name(name).expect("enumerated");
                 assert_eq!(spec.rounds(), kind.rounds(), "{name} was bounded elsewhere");
@@ -14230,12 +14520,12 @@ five
             policy.install_delegates(definitions);
 
             let long = policy
-                .before_delegate(&argument("migrator"), &argument("migrate it"))
+                .before_delegate(&argument("migrator"), &argument("migrate it"), None)
                 .expect("a resolved definition may be selected");
             assert_eq!(long.rounds(), 180);
 
             let held = policy
-                .before_delegate(&argument("endless"), &argument("go on"))
+                .before_delegate(&argument("endless"), &argument("go on"), None)
                 .expect("a resolved definition may be selected");
             assert_eq!(held.rounds(), Kind::Worker.most_rounds());
 
@@ -14263,7 +14553,7 @@ five
             let mut sink = RecordingSink::new();
             let mut turn = open_policy(&mut sink);
             let first = turn
-                .before_delegate(&argument("reader"), &argument("look"))
+                .before_delegate(&argument("reader"), &argument("look"), None)
                 .expect("a clean context may delegate");
             assert_eq!(first.id(), DelegateId::nth(1));
 
@@ -14271,7 +14561,7 @@ five
             let mut within = open_policy(&mut within_sink).within(&first);
             let numbered = [(); 2].map(|()| {
                 within
-                    .before_delegate(&argument("reader"), &argument("look closer"))
+                    .before_delegate(&argument("reader"), &argument("look closer"), None)
                     .expect("a delegate above the bottom may delegate")
                     .id()
                     .to_string()
@@ -14287,12 +14577,12 @@ five
             let mut sink = RecordingSink::new();
             let mut turn = open_policy(&mut sink);
             let first = turn
-                .before_delegate(&argument("reader"), &argument("look"))
+                .before_delegate(&argument("reader"), &argument("look"), None)
                 .expect("a clean context may delegate");
-            turn.before_delegate(&argument("auditor"), &argument("look"))
+            turn.before_delegate(&argument("auditor"), &argument("look"), None)
                 .expect_err("no kind is called that");
             let second = turn
-                .before_delegate(&argument("reader"), &argument("look"))
+                .before_delegate(&argument("reader"), &argument("look"), None)
                 .expect("a clean context may delegate");
             assert_eq!(
                 [first.id().to_string(), second.id().to_string()],
@@ -14303,7 +14593,7 @@ five
             let mut within = open_policy(&mut within_sink).within(&first);
             let numbered = ["reader", "auditor", "auditor", "reader"].map(|kind| {
                 within
-                    .before_delegate(&argument(kind), &argument("look closer"))
+                    .before_delegate(&argument(kind), &argument("look closer"), None)
                     .map(|spec| spec.id().to_string())
                     .unwrap_or_default()
             });
@@ -14320,13 +14610,13 @@ five
                 .collect();
             let (turn_sink, rest) = sinks.split_first_mut().expect("one for the turn");
             let mut spec = open_policy(turn_sink)
-                .before_delegate(&argument("reader"), &argument("look"))
+                .before_delegate(&argument("reader"), &argument("look"), None)
                 .expect("the turn may delegate");
             let mut rest = rest.iter_mut();
             while spec.may_delegate() {
                 spec = open_policy(rest.next().expect("one per level"))
                     .within(&spec)
-                    .before_delegate(&argument("reader"), &argument("look"))
+                    .before_delegate(&argument("reader"), &argument("look"), None)
                     .expect("a delegate above the bottom may delegate");
             }
             assert_eq!(spec.id().depth(), MAX_DEPTH);
@@ -14335,7 +14625,7 @@ five
             let bottom_sink = rest.next().expect("one for the bottom");
             let mut bottom = open_policy(bottom_sink).within(&spec);
             let err = bottom
-                .before_delegate(&argument("reader"), &argument("look"))
+                .before_delegate(&argument("reader"), &argument("look"), None)
                 .expect_err("a delegate at the bottom was allowed to delegate");
             assert_eq!(err.principle, Principle::Capability);
             assert!(
@@ -14354,12 +14644,12 @@ five
             let mut turn = open_policy(&mut sink);
             for _ in 0..=MAX_DELEGATES {
                 let spec = turn
-                    .before_delegate(&argument("reader"), &argument("look"))
+                    .before_delegate(&argument("reader"), &argument("look"), None)
                     .expect("a withdrawn request filled the tree");
                 turn.withdraw_delegate(spec);
             }
             let spec = turn
-                .before_delegate(&argument("reader"), &argument("look"))
+                .before_delegate(&argument("reader"), &argument("look"), None)
                 .expect("the tree was full of delegates that never started");
             assert_eq!(spec.id(), DelegateId::nth(1));
             drop(turn);
@@ -14380,7 +14670,7 @@ five
             let mut sink = RecordingSink::new();
             let mut turn = open_policy(&mut sink);
             let siblings = [(); 2].map(|()| {
-                turn.before_delegate(&argument("reader"), &argument("look"))
+                turn.before_delegate(&argument("reader"), &argument("look"), None)
                     .expect("the turn may delegate")
             });
 
@@ -14393,9 +14683,11 @@ five
             let mut started = siblings.len();
             let mut refused = None;
             for n in 0..MAX_DELEGATES {
-                match beneath[n as usize % 2]
-                    .before_delegate(&argument("reader"), &argument("look closer"))
-                {
+                match beneath[n as usize % 2].before_delegate(
+                    &argument("reader"),
+                    &argument("look closer"),
+                    None,
+                ) {
                     Ok(_) => started += 1,
                     Err(denial) => {
                         refused = Some(denial);
@@ -14407,7 +14699,7 @@ five
             let refused = refused.expect("the tree took more than its bound");
             assert_eq!(refused.principle, Principle::Capability);
             assert!(
-                turn.before_delegate(&argument("reader"), &argument("look"))
+                turn.before_delegate(&argument("reader"), &argument("look"), None)
                     .is_err(),
                 "the turn was not held to the places its delegates had taken"
             );
@@ -14415,7 +14707,7 @@ five
             let mut other_sink = RecordingSink::new();
             assert!(
                 open_policy(&mut other_sink)
-                    .before_delegate(&argument("reader"), &argument("look"))
+                    .before_delegate(&argument("reader"), &argument("look"), None)
                     .is_ok(),
                 "another turn's tree shared this one's count"
             );
@@ -14429,17 +14721,17 @@ five
             let mut sink = RecordingSink::new();
             let mut turn = open_policy(&mut sink);
             for _ in 0..MAX_DELEGATES {
-                turn.before_delegate(&argument("auditor"), &argument("look"))
+                turn.before_delegate(&argument("auditor"), &argument("look"), None)
                     .expect_err("no kind is called that");
             }
             let first = turn
-                .before_delegate(&argument("reader"), &argument("look"))
+                .before_delegate(&argument("reader"), &argument("look"), None)
                 .expect("refusals took places in the tree");
             assert_eq!(first.id(), DelegateId::nth(1));
             let started = 1
                 + (1..MAX_DELEGATES)
                     .filter(|_| {
-                        turn.before_delegate(&argument("reader"), &argument("look"))
+                        turn.before_delegate(&argument("reader"), &argument("look"), None)
                             .is_ok()
                     })
                     .count();
@@ -14461,11 +14753,11 @@ five
             .unwrap();
             for _ in 0..MAX_DELEGATES {
                 policy
-                    .before_delegate(&argument("worker"), &argument("fix it"))
+                    .before_delegate(&argument("worker"), &argument("fix it"), None)
                     .expect("the tree has room");
             }
             policy
-                .before_delegate(&argument("worker"), &argument("fix it"))
+                .before_delegate(&argument("worker"), &argument("fix it"), None)
                 .expect_err("the tree took more than its bound");
 
             let passed_for = |id: DelegateId| {
@@ -14508,7 +14800,7 @@ five
             turn.install_delegates(definitions);
 
             let narrow = turn
-                .before_delegate(&argument("narrow"), &argument("look"))
+                .before_delegate(&argument("narrow"), &argument("look"), None)
                 .expect("the turn may delegate");
             assert!(
                 !narrow.may_delegate(),
@@ -14517,7 +14809,7 @@ five
             let mut narrow_sink = RecordingSink::new();
             let err = open_policy(&mut narrow_sink)
                 .within(&narrow)
-                .before_delegate(&argument("reader"), &argument("look closer"))
+                .before_delegate(&argument("reader"), &argument("look closer"), None)
                 .expect_err("a definition without spawn_agent was allowed to delegate");
             assert_eq!(err.principle, Principle::Capability);
             assert!(
@@ -14526,7 +14818,7 @@ five
             );
 
             let fanning = turn
-                .before_delegate(&argument("fanning"), &argument("look"))
+                .before_delegate(&argument("fanning"), &argument("look"), None)
                 .expect("the turn may delegate");
             assert!(
                 fanning.may_delegate(),
@@ -14535,7 +14827,7 @@ five
             let mut fanning_sink = RecordingSink::new();
             open_policy(&mut fanning_sink)
                 .within(&fanning)
-                .before_delegate(&argument("reader"), &argument("look closer"))
+                .before_delegate(&argument("reader"), &argument("look closer"), None)
                 .expect("a definition naming spawn_agent was refused a delegate");
         }
 
@@ -15036,6 +15328,7 @@ five
                 .before_delegate(
                     &super::delegates::argument("worker"),
                     &super::delegates::argument("fix it"),
+                    None,
                 )
                 .expect("an addressed turn may delegate");
             for refused in [Capability::FileWrite, Capability::ShellExec] {

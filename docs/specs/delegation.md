@@ -132,7 +132,8 @@ A reader and a checker hold no MCP server's grant ([SERVERS-9](mcp-servers.md#SE
 server's tool does is the server's to say, so a call to one may write or run anything, and a worker
 is the one kind already let write and run. No kind names a server, since which servers a session
 reached is not known until it starts, so a worker holds a server's grant only where its parent
-does, and its definition may narrow which of those it keeps ([DELEGATE-24](#DELEGATE-24)).
+does. Its definition ([DELEGATE-24](#DELEGATE-24)) and the call that starts it
+([AGENT-6](tools/spawn-agent.md#AGENT-6)) may narrow which of those it keeps.
 
 Every kind additionally reaches the network, because a planner is a model call and the request out
 is egress like any other. No tool of this program's that a delegate is offered reaches it, so what

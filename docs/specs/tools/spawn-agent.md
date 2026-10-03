@@ -9,10 +9,10 @@ documented-by: docs/website/docs/reference/tools.md
 
 ## Scope
 
-The call that starts a delegated agent. `kind` is routing; `task` and `each` are content. The
-call answers as soon as the kernel has approved it, and the report follows later. What a delegate
-is, what it may do and how long it may live is [delegation.md](../delegation.md); this spec is the
-call surface.
+The call that starts a delegated agent. `kind` and `mcp_servers` are routing; `task` and `each`
+are content. The call answers as soon as the kernel has approved it, and the report follows later.
+What a delegate is, what it may do and how long it may live is [delegation.md](../delegation.md);
+this spec is the call surface.
 
 [CHECKOUT-1](../checkouts.md#CHECKOUT-1) adds a routing field, `isolation`, whose one value,
 `checkout`, asks for a checkout of the delegate's own. A definition `kind` names may ask for one
@@ -91,3 +91,44 @@ field turning one sentence into an unbounded number of runs is worth a bound.
 `verified-by: bravebot_agent::turn::one_call_can_fan_a_task_out_over_several_delegates`
 `verified-by: bravebot_agent::turn::a_fan_out_past_the_ceiling_is_refused_and_starts_nothing`
 `verified-by: bravebot_agent::turn::a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not`
+
+<a id="AGENT-6"></a>
+### AGENT-6: `mcp_servers` lists the servers a worker keeps, and can only take servers away
+
+`mcp_servers` is optional: a list of server aliases, each written as it appears in the names of
+the server's tools the planner is offered. A worker started by a call with a list holds the grant of
+each listed server it would otherwise hold, and of no other server, so an empty list starts a worker
+holding none. The list applies after the definition's own `mcpServers:` line
+([DELEGATE-24](../delegation.md#DELEGATE-24)), so a server the definition leaves off stays off
+whatever the call lists. A call without the field gives the worker what
+[DELEGATE-4](../delegation.md#DELEGATE-4) gives it. A reader and a checker hold no server either way.
+In a fan-out the list applies to every delegate the call starts. The trail names each grant the
+list left out, and each listed server the delegate went without because its kind or definition
+leaves it off.
+
+A name the run holds no grant for is refused, nothing starts, and the refusal lists the servers the
+run holds. The list must be public, and its names are compared with the run's grants only after
+the integrity gate has passed, as `kind` is ([AGENT-1](#AGENT-1)).
+
+**Why the call and not only a definition.** A definition is written before any session, so it
+cannot know which servers a session will reach or what one task needs. The planner starting a
+worker knows both. Without the field, a worker sent to fix a Rust bug holds the mail server its
+parent holds for something else, and every call it makes to that server is one more prompt for the
+person.
+
+**Why refused rather than dropped.** A definition naming a server the session did not reach was
+written before the session, so the name is dropped and said. The planner writes its list in the
+turn, choosing from tools it is shown, so a name outside them is a mistake. Dropping it would start
+a worker without a server the planner meant it to have.
+
+**Why it widens nothing.** Each name selects from grants the run already holds, after every other
+narrowing, so the most a list can do is leave the worker as it would have been
+([DELEGATE-4](../delegation.md#DELEGATE-4)).
+
+`verified-by: bravebot_core::policy::a_worker_spawned_keeping_no_server_holds_none`
+`verified-by: bravebot_core::policy::a_worker_spawned_keeping_one_server_holds_only_that_one`
+`verified-by: bravebot_core::policy::a_server_this_run_holds_no_grant_for_cannot_be_kept`
+`verified-by: bravebot_core::policy::a_private_server_list_cannot_direct_a_delegate`
+`verified-by: bravebot_core::policy::a_worker_delegate_holds_the_servers_its_parent_holds_and_no_other`
+`verified-by: bravebot_agent::tools::a_server_list_that_is_not_a_list_of_names_is_refused`
+`verified-by: bravebot_agent::mcp::a_worker_spawned_keeping_no_server_is_offered_no_servers_tool`

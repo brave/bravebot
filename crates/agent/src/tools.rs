@@ -1085,6 +1085,16 @@ fn table(
                             checkouts_share_refs(running)
                         ),
                         "enum": ["checkout"]
+                    },
+                    "mcp_servers": {
+                        "type": "array",
+                        "description": "Optional. The MCP servers a \"worker\" keeps, each named \
+                                        as the server's part of its tools' names \
+                                        (mcp__<server>__<tool>), out of the ones you may call. \
+                                        Leave it out and it keeps every one; [] keeps none. \
+                                        Give it only the servers its task needs. A \"reader\" \
+                                        and a \"checker\" keep none either way.",
+                        "items": {"type": "string"}
                     }
                 },
                 "required": ["kind", "task"]
@@ -7037,6 +7047,10 @@ fn spawn_agent<S: Sink, R: Reporter>(
         Ok(tasks) => tasks,
         Err(refusal) => return Produced::problem(refusal),
     };
+    let keeping = match servers_kept(arguments) {
+        Ok(keeping) => keeping,
+        Err(refusal) => return Produced::problem(refusal),
+    };
 
     let mut produced = Produced::new(
         Labelled::trusted(String::new()),
@@ -7061,7 +7075,7 @@ fn spawn_agent<S: Sink, R: Reporter>(
         //
         // Gated once per delegate rather than once per call. A fan-out is several runs, and a
         // gate that saw one of them would be approving the others on the strength of a sibling.
-        let spec = match policy.before_delegate(&kind, task) {
+        let spec = match policy.before_delegate(&kind, task, keeping.as_ref()) {
             Ok(spec) => spec,
             Err(denial) if started.is_empty() => {
                 return Produced::problem(format!("refused: {denial}"));
@@ -7313,6 +7327,31 @@ fn tasks_in(arguments: &Value) -> Result<Vec<Labelled<String>>, String> {
             ))
         })
         .collect()
+}
+
+/// The MCP servers a `spawn_agent` call's delegates keep, where it names them (AGENT-6).
+///
+/// Only the shape is checked here. Whether each name is a server this run holds is the kernel's
+/// to compare, after the gate that says this run has met nothing a name could be steered by.
+fn servers_kept(arguments: &Value) -> Result<Option<Labelled<Vec<String>>>, String> {
+    let refusal = || {
+        "error: 'mcp_servers' must be an array of the names of MCP servers you may call; leave it \
+         out to hand on every one"
+            .to_string()
+    };
+    let entries = match arguments.get("mcp_servers") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::Array(entries)) => entries,
+        Some(_) => return Err(refusal()),
+    };
+    let names = entries
+        .iter()
+        .map(|entry| entry.as_str().map(str::to_string).ok_or_else(refusal))
+        .collect::<Result<Vec<String>, String>>()?;
+    Ok(Some(Labelled::new(
+        names,
+        bravebot_core::label::Label::untrusted_public(),
+    )))
 }
 
 /// Read a skill the planner was listed.
@@ -8979,6 +9018,32 @@ mod tests {
             ),
             "the planner was given no reason to pick the definition: {described}"
         );
+    }
+
+    /// AGENT-6. A list of names is handed on as one, and anything else is refused with what the
+    /// field takes, so a malformed list never reaches the kernel as "keep every server".
+    #[test]
+    fn a_server_list_that_is_not_a_list_of_names_is_refused() {
+        assert!(matches!(servers_kept(&json!({"task": "t"})), Ok(None)));
+        assert!(matches!(
+            servers_kept(&json!({"mcp_servers": null})),
+            Ok(None)
+        ));
+        let kept = servers_kept(&json!({"mcp_servers": ["docs", "weather"]}))
+            .expect("a list of names")
+            .expect("named");
+        assert_eq!(
+            kept.label(),
+            bravebot_core::label::Label::untrusted_public(),
+            "labelled other than as a planner's argument"
+        );
+
+        for malformed in [json!("docs"), json!(["docs", 3]), json!({"docs": true})] {
+            let refused = servers_kept(&json!({ "mcp_servers": malformed }))
+                .err()
+                .unwrap_or_else(|| panic!("{malformed} was taken for a list of names"));
+            assert!(refused.contains("must be an array"), "{refused}");
+        }
     }
 
     /// CHECKOUT-2: the planner is told which definitions work in a checkout, since their report is
