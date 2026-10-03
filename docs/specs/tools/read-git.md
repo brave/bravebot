@@ -161,6 +161,8 @@ which object a file holds is not known until it is read.
 `verified-by: bravebot_agent::turn::a_deny_rule_over_a_file_refuses_reading_its_history`
 `verified-by: bravebot_agent::turn::a_repository_holding_a_file_a_deny_rule_covers_is_not_opened`
 `verified-by: bravebot_agent::workspace::a_repository_a_deny_rule_names_is_not_opened`
+`verified-by: bravebot_agent::workspace::a_rule_over_the_file_a_symlinked_repository_lands_on_leaves_it_out_of_a_commit`
+`verified-by: bravebot_agent::workspace::a_rule_over_a_git_file_a_symlinked_repository_lands_on_keeps_it_closed`
 `verified-by: bravebot_agent::git::a_withheld_path_is_left_out_of_every_answer_and_the_answer_says_so`
 `verified-by: bravebot_agent::git::a_withheld_path_is_neither_read_nor_listed`
 
