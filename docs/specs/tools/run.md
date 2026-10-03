@@ -745,6 +745,7 @@ call that covers a window, rather than a snapshot the planner is tempted to repo
 the window.
 
 `verified-by: bravebot_agent::exec::waiting_for_more_returns_when_the_job_prints_rather_than_at_the_bound`
+`verified-by: bravebot_agent::exec::waiting_for_more_returns_at_once_on_output_that_landed_since_the_last_look`
 `verified-by: bravebot_agent::exec::waiting_for_more_lasts_its_bound_where_a_job_that_has_printed_says_nothing_further`
 `verified-by: bravebot_agent::exec::waiting_for_more_returns_when_the_job_ends_without_printing`
 `verified-by: bravebot_agent::exec::a_cancelled_wait_for_more_comes_back_without_waiting_out_its_bound`

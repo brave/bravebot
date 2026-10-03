@@ -1029,17 +1029,32 @@ impl Drain {
     /// lossily. Decoding a half-arrived character now would hand back U+FFFD and move the offset
     /// past it, so the character that is on its way would never be handed to anybody. Bytes that
     /// are not the start of a character are not waited for: they are not going to become valid.
-    fn since(&self, seen: &mut usize) -> String {
+    fn since(&self, seen: &mut Mark) -> String {
         let read = self.read.lock().unwrap_or_else(|e| e.into_inner());
-        let rest = &read[(*seen).min(read.len())..];
+        let rest = &read[seen.handed.min(read.len())..];
         let take = match std::str::from_utf8(rest) {
             Ok(_) => rest.len(),
             Err(error) if error.error_len().is_none() => error.valid_up_to(),
             Err(_) => rest.len(),
         };
-        *seen = read.len() - rest.len() + take;
+        seen.handed = read.len() - rest.len() + take;
+        // Taken under the same lock as the bytes, so what was looked at is exactly what had arrived
+        // when they were taken, and nothing landing after this is counted as looked at.
+        seen.looked = read.len();
         String::from_utf8_lossy(&rest[..take]).into_owned()
     }
+}
+
+/// How much of one pipe a caller has been handed, and how much of it had arrived at that look.
+///
+/// The two differ while a character is half delivered: the look holds its bytes back, so they are
+/// not handed over, and they are not news either. Only bytes arriving past `looked` are.
+#[derive(Debug, Default, Clone, Copy)]
+struct Mark {
+    /// Bytes of the pipe handed to the caller.
+    handed: usize,
+    /// Bytes the pipe had delivered when the caller last looked.
+    looked: usize,
 }
 
 /// How much of each of a job's pipes a caller has already been handed.
@@ -1054,9 +1069,9 @@ impl Drain {
 /// what arrived, and nothing here reads a byte of it.
 #[derive(Debug, Default)]
 pub struct Seen {
-    stdout: usize,
+    stdout: Mark,
     /// One per standard-error pipe, grown to match when a pipeline's stages are first looked at.
-    stderr: Vec<usize>,
+    stderr: Vec<Mark>,
 }
 
 /// Kill every stage and reap it, so nothing is left behind.
@@ -1208,7 +1223,7 @@ impl Background {
     /// Each delivery that carries standard error carries the label with it, so a reader of a later
     /// delivery, which holds none of the earlier ones, can still tell the stream apart (CMDLINE-10).
     pub fn since(&self, seen: &mut Seen) -> String {
-        seen.stderr.resize(self.stderr.len(), 0);
+        seen.stderr.resize(self.stderr.len(), Mark::default());
         let stdout = self.stdout.since(&mut seen.stdout);
         let mut errored = String::new();
         for (drain, seen) in self.stderr.iter().zip(seen.stderr.iter_mut()) {
@@ -1224,19 +1239,20 @@ impl Background {
         both_streams(&stdout, &errored)
     }
 
-    /// Whether any pipe has delivered anything past `seen`.
+    /// Whether any pipe has delivered anything since the caller last looked.
     ///
     /// Byte counts per pipe, so asking costs nothing however much a job has printed. Composing the
     /// text to measure its length would copy the whole log every time somebody wanted to know
-    /// whether there was anything in it.
+    /// whether there was anything in it. Measured from the last look rather than from what that look
+    /// handed over, so the bytes of a half-delivered character, which the look held back, do not
+    /// count as news until the rest of the character arrives.
     pub fn has_more(&self, seen: &Seen) -> bool {
-        if self.stdout.bytes_read() > seen.stdout {
+        if self.stdout.bytes_read() > seen.stdout.looked {
             return true;
         }
-        self.stderr
-            .iter()
-            .enumerate()
-            .any(|(at, drain)| drain.bytes_read() > seen.stderr.get(at).copied().unwrap_or(0))
+        self.stderr.iter().enumerate().any(|(at, drain)| {
+            drain.bytes_read() > seen.stderr.get(at).map_or(0, |mark| mark.looked)
+        })
     }
 
     /// How long it has been running.
@@ -1254,27 +1270,20 @@ impl Background {
         stop(&mut self.children);
     }
 
-    /// How many bytes every pipe has delivered between them.
-    ///
-    /// Not the length of what [`Background::printed`] composes: that joins the streams and is taken
-    /// lossily. This is the raw total, and the one thing it answers is whether more has arrived
-    /// since it was last asked.
-    fn arrived(&self) -> usize {
-        self.stdout.bytes_read() + self.stderr.iter().map(Drain::bytes_read).sum::<usize>()
-    }
-
     /// Wait for something to happen, and return at the first of four things.
     ///
-    /// More arriving than had arrived when the wait started, every step having exited, `bound`
-    /// running out, and `cancel` being set. Which of the four it was is not reported, because the
-    /// caller then takes the account [`Background::ended`] and [`Background::printed`] give and that
-    /// account says it.
+    /// Output past `seen` being there, every step having exited, `bound` running out, and `cancel`
+    /// being set. `seen` is where the caller's last look left off, so output that arrived after that
+    /// look and before this call ends the wait at once. Which of the four it was is not reported,
+    /// because the caller then takes the account [`Background::ended`] and [`Background::printed`]
+    /// give and that account says it.
     ///
     /// **Nothing of the output is read.** Both conditions are counts this struct kept about a
-    /// pipeline it started: how many bytes have arrived, and which steps have exited. A program
-    /// that decides its own output therefore decides when this returns, which is exactly what a
-    /// caller waiting to be told about new output asked for, and the bytes themselves still reach
-    /// anybody only under the label the plan was given.
+    /// pipeline it started: how many bytes each pipe has delivered against how many the caller has
+    /// been handed, and which steps have exited. A program that decides its own output therefore
+    /// decides when this returns, which is exactly what a caller waiting to be told about new output
+    /// asked for, and the bytes themselves still reach anybody only under the label the plan was
+    /// given.
     ///
     /// `cancel` is checked on every pass rather than once at the end, and nothing inside a pass
     /// blocks. The bound runs to ten minutes, and a person who has changed their mind should not have
@@ -1282,11 +1291,10 @@ impl Background {
     /// about with [`Background::steps_exited`] and not with [`Background::ended`]: the latter waits
     /// out [`DRAIN_GRACE`] for the pipes, which would carry the wait past `bound` and would not look
     /// at `cancel` while it did.
-    pub fn wait_for_more(&mut self, bound: Duration, cancel: &Cancel) {
-        let arrived = self.arrived();
+    pub fn wait_for_more(&mut self, seen: &Seen, bound: Duration, cancel: &Cancel) {
         let until = Instant::now() + bound;
         loop {
-            if cancel.is_cancelled() || self.arrived() > arrived || self.steps_exited() {
+            if cancel.is_cancelled() || self.has_more(seen) || self.steps_exited() {
                 return;
             }
             if Instant::now() >= until {

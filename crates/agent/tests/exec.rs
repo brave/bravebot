@@ -1663,8 +1663,14 @@ fn waiting_for_more_returns_when_the_job_prints_rather_than_at_the_bound() {
          of the wait"
     );
 
+    let mut seen = exec::Seen::default();
+    assert!(
+        job.since(&mut seen).contains("first"),
+        "the first look was not handed the first line, so nothing below is a test of the wait"
+    );
+
     let began = std::time::Instant::now();
-    job.wait_for_more(std::time::Duration::from_secs(30), &Cancel::new());
+    job.wait_for_more(&seen, std::time::Duration::from_secs(30), &Cancel::new());
     let waited = began.elapsed();
 
     assert!(
@@ -1675,6 +1681,62 @@ fn waiting_for_more_returns_when_the_job_prints_rather_than_at_the_bound() {
     assert!(
         printed.contains("second"),
         "the wait returned without the output it was waiting for: {printed:?}"
+    );
+}
+
+/// Output that lands after the caller's last look and before the wait starts is unseen, so the wait
+/// returns on it. A wait that counted what had arrived when it was entered as already seen would
+/// sit out the whole bound on a job that has nothing further to print.
+#[test]
+fn waiting_for_more_returns_at_once_on_output_that_landed_since_the_last_look() {
+    let scratch = Scratch::new(&format!("wait-landed-since-look-{}", std::process::id()));
+    let looked = scratch.path.join("looked");
+    let resolved = script(
+        &scratch.path,
+        "late",
+        &format!(
+            "#!/bin/sh\necho first\nwhile [ ! -f '{}' ]; do sleep 0.05; done\necho second\n\
+             sleep 60\n",
+            looked.display()
+        ),
+    );
+
+    let pipeline = Pipeline::new(vec![Stage::new("late", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !job.printed().contains("first") && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let mut seen = exec::Seen::default();
+    assert!(
+        job.since(&mut seen).contains("first"),
+        "the first look was not handed the first line, so nothing below is a test of the wait"
+    );
+
+    // The second line is released after the look and waited for before the wait is entered, so it
+    // has arrived and has not been handed over.
+    std::fs::write(&looked, "").expect("release the second line");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !job.printed().contains("second") && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        job.printed().contains("second"),
+        "the second line never arrived, so nothing below is a test of the wait"
+    );
+
+    let began = std::time::Instant::now();
+    job.wait_for_more(&seen, std::time::Duration::from_secs(20), &Cancel::new());
+    let waited = began.elapsed();
+
+    assert!(
+        waited < std::time::Duration::from_secs(10),
+        "a wait sat out its bound though output the caller had not been handed was already there: \
+         {waited:?}"
+    );
+    assert!(
+        job.since(&mut seen).contains("second"),
+        "the output that landed since the last look was not handed over"
     );
 }
 
@@ -1705,9 +1767,15 @@ fn waiting_for_more_lasts_its_bound_where_a_job_that_has_printed_says_nothing_fu
         "the job had not printed within five seconds, so nothing below is a test of the wait"
     );
 
+    let mut seen = exec::Seen::default();
+    assert!(
+        job.since(&mut seen).contains("listening"),
+        "the first look was not handed the line, so nothing below is a test of the wait"
+    );
+
     let bound = std::time::Duration::from_secs(2);
     let began = std::time::Instant::now();
-    job.wait_for_more(bound, &Cancel::new());
+    job.wait_for_more(&seen, bound, &Cancel::new());
     let waited = began.elapsed();
 
     assert!(
@@ -1731,7 +1799,11 @@ fn waiting_for_more_returns_when_the_job_ends_without_printing() {
     let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
 
     let began = std::time::Instant::now();
-    job.wait_for_more(std::time::Duration::from_secs(60), &Cancel::new());
+    job.wait_for_more(
+        &exec::Seen::default(),
+        std::time::Duration::from_secs(60),
+        &Cancel::new(),
+    );
     let waited = began.elapsed();
 
     assert!(
@@ -1795,10 +1867,8 @@ fn what_arrived_on_one_pipe_is_not_reported_as_what_arrived_on_the_other() {
     );
 
     std::fs::write(&looked, "").expect("release the second line");
-    // Polled rather than waited for. A wait counts what has arrived when it is entered as already
-    // seen, so one descheduled between the write above and the wait would find the line already
-    // there and sit out the whole bound on nothing further coming. What is being waited for here
-    // is the line itself, and `has_more` is that question whenever it is asked.
+    // Polled rather than waited for, so the line is known to be there before the look below.
+    // `has_more` is that question whenever it is asked.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while !job.has_more(&seen) && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1848,7 +1918,7 @@ fn a_character_split_across_two_pipe_reads_is_handed_over_whole() {
         "half a character was handed over as a replacement character: {held:?}"
     );
 
-    job.wait_for_more(std::time::Duration::from_secs(30), &Cancel::new());
+    job.wait_for_more(&seen, std::time::Duration::from_secs(30), &Cancel::new());
     let whole = job.since(&mut seen);
     assert!(
         whole.contains("\u{e9} done"),
@@ -1874,7 +1944,11 @@ fn a_cancelled_wait_for_more_comes_back_without_waiting_out_its_bound() {
     let cancel = Cancel::new();
     cancel.cancel();
     let began = std::time::Instant::now();
-    job.wait_for_more(std::time::Duration::from_secs(600), &cancel);
+    job.wait_for_more(
+        &exec::Seen::default(),
+        std::time::Duration::from_secs(600),
+        &cancel,
+    );
     let waited = began.elapsed();
 
     assert!(
