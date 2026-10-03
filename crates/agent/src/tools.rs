@@ -3523,15 +3523,29 @@ pub(crate) fn materialise<S: Sink>(
         let mut opened = Vec::new();
         for slot in wanted {
             let was_unread = slots.is_unread(slot);
+            // A picture or PDF is opened as one, from the driver's table of extensions as
+            // `read_file` decides it, so nothing read chooses. Read as text it would be refused
+            // as binary, and a slot that holds one has to say so for a check to look at the file.
+            let mut picture = None;
             policy
                 // Worded about the slot, never about the file it stands for. A deferred read
                 // opens a path that came out of a directory nobody vouched for, and what the
                 // failure is put into is a sentence the planner reads as the driver's own, so
                 // the name goes back as the reference the planner is holding.
                 .materialise(tool, slot, slots, |path| {
-                    read_into_slot(workspace, path).map_err(|e| e.describe(&slot.to_string()))
+                    match crate::workspace::media_for(path) {
+                        Some(media) => {
+                            picture = Some(media);
+                            workspace.attachment_text(path, media)
+                        }
+                        None => read_into_slot(workspace, path),
+                    }
+                    .map_err(|e| e.describe(&slot.to_string()))
                 })
                 .map_err(|denial| format!("refused: {denial}"))?;
+            if let Some(media) = picture {
+                policy.holds_a_picture(slot, media, slots);
+            }
             if was_unread {
                 opened.push(slot.clone());
             }
