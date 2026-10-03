@@ -241,6 +241,14 @@ answer. That is the same reasoning [BACKEND-9](backends.md#BACKEND-9) applies to
 turn served entirely by one backend has no business acting on, or reporting on, the credentials of
 another it will never call.
 
+A batch that cannot be spent is never reported without the remedy: re-import with
+`bravebot auth login leo`, or forget it with `bravebot auth logout leo`. The store puts it in the
+text of every refusal, so the turn notice and the onboarding block both carry it. A batch that
+records a version other than the one this build writes is refused, since the same fields may mean
+something else.
+
+`verified-by: bravebot_skus::store::every_refusal_of_a_stored_batch_names_the_remedy`
+`verified-by: bravebot_skus::store::a_batch_of_another_version_is_refused`
 `verified-by: bravebot_agent::subscription::an_unreadable_batch_is_reported_and_an_absent_one_is_not`
 `verified-by: bravebot_agent::subscription::an_endpoint_in_no_environment_is_not_a_complaint`
 `verified-by: bravebot_cli::running::a_machine_with_no_profile_directory_has_nothing_imported`
