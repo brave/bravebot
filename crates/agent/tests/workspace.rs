@@ -1269,6 +1269,43 @@ fn a_stale_write_does_not_consume_the_endorsement() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "edited\n");
 }
 
+/// LIST-2: a nested directory that cannot be opened is left out and reported as a fact. Failing
+/// the listing would word an error about its name, which is a filename out of the tree.
+#[cfg(unix)]
+#[test]
+fn a_listing_leaves_out_a_directory_it_cannot_open_and_says_so() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new("list-unreadable");
+    let locked = scratch.path.join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::write(scratch.path.join("kept.txt"), "x").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // A superuser opens it anyway, which leaves nothing to observe.
+    if std::fs::read_dir(&locked).is_ok() {
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let listing = workspace.list(&mut policy, &Labelled::trusted(".".to_string()), None, None);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let listing = listing.expect("an unreadable nested directory failed the listing");
+    let proof = policy.authorise_content_release("test", "paths");
+    let listing = listing.declassify(&proof);
+
+    assert_eq!(listing.files, vec!["kept.txt".to_string()]);
+    assert!(listing.unreadable, "the missing directory was not reported");
+}
+
 /// Silent truncation is the bug: a model shown exactly the cap with no notice concludes it
 /// has seen the whole tree, and decides a file does not exist.
 #[test]
