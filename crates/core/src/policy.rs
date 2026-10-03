@@ -3079,10 +3079,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             ));
         }
 
-        let labels = [("kind", kind.label()), ("task", task.label())]
-            .into_iter()
-            .chain(keeping.map(|kept| ("mcp_servers", kept.label())));
-        for (field, label) in labels {
+        for (field, label) in [("kind", kind.label()), ("task", task.label())] {
             if !label.is_public() {
                 return Err(self.deny(
                     "delegate",
@@ -3093,6 +3090,19 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                     ),
                 ));
             }
+        }
+        if let Some(label) = keeping
+            .map(Labelled::label)
+            .filter(|label| !label.is_public())
+        {
+            return Err(self.deny(
+                "delegate",
+                Principle::Confinement,
+                format!(
+                    "mcp_servers is {label}, and private content must not decide what a \
+                     delegate holds; name the servers rather than pasting what was read"
+                ),
+            ));
         }
 
         // Read, not carried, and only now: a name has to be compared against the enumerated set
@@ -3114,32 +3124,36 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         // Compared against the servers this run holds for the reason the name above is compared
         // against the enumerated set, and before a place in the tree is taken so a refusal takes
         // none.
-        let kept = keeping.map(|kept| {
-            let proof = Declassification::authorise("the MCP servers a delegate keeps");
-            kept.clone().declassify(&proof)
-        });
-        let ours: Vec<String> = self
-            .capabilities
-            .iter()
-            .filter_map(|capability| match capability {
-                Capability::McpCall(alias) => Some(alias.as_str().to_string()),
-                _ => None,
-            })
-            .collect();
-        if let Some(unheld) = kept.iter().flatten().find(|name| !ours.contains(name)) {
-            let held = match ours.is_empty() {
-                true => "it holds none".to_string(),
-                false => format!("the ones it holds are {}", ours.join(", ")),
-            };
-            return Err(self.deny(
-                "delegate",
-                Principle::Capability,
-                format!(
-                    "this run holds no MCP server called '{unheld}', so a delegate cannot keep \
-                     it; {held}"
-                ),
-            ));
-        }
+        let kept = match keeping {
+            None => None,
+            Some(kept) => {
+                let proof = Declassification::authorise("the MCP servers a delegate keeps");
+                let kept = kept.clone().declassify(&proof);
+                let ours: Vec<String> = self
+                    .capabilities
+                    .iter()
+                    .filter_map(|capability| match capability {
+                        Capability::McpCall(alias) => Some(alias.as_str().to_string()),
+                        _ => None,
+                    })
+                    .collect();
+                if let Some(unheld) = kept.iter().find(|name| !ours.contains(name)) {
+                    let held = match ours.is_empty() {
+                        true => "it holds none".to_string(),
+                        false => format!("the ones it holds are {}", ours.join(", ")),
+                    };
+                    return Err(self.deny(
+                        "delegate",
+                        Principle::Capability,
+                        format!(
+                            "this run holds no MCP server called '{unheld}', so a delegate \
+                             cannot keep it; {held}"
+                        ),
+                    ));
+                }
+                Some(kept)
+            }
+        };
 
         if !self.tree.claim() {
             return Err(self.deny(
@@ -3239,6 +3253,28 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                         format!(
                             "{id}: the call keeps none of {}, so it is delegated without them",
                             left_out.join(", ")
+                        ),
+                    );
+                }
+                // Said rather than refused: the run holds each of these, and it is the kind or
+                // the definition the planner chose that leaves them off.
+                let not_given: Vec<&str> = kept
+                    .iter()
+                    .filter(|name| {
+                        !held.iter().any(|capability| {
+                            matches!(capability, Capability::McpCall(alias) if alias.as_str() == name.as_str())
+                        })
+                    })
+                    .map(String::as_str)
+                    .collect();
+                if !not_given.is_empty() {
+                    self.allow(
+                        "delegate",
+                        format!(
+                            "{id}: the call keeps {} which a {} does not hold, so it is \
+                             delegated without them",
+                            not_given.join(", "),
+                            selected.name()
                         ),
                     );
                 }
@@ -14309,7 +14345,9 @@ five
         }
 
         /// AGENT-6. A list keeps the servers it names and no other, and it only takes away: a
-        /// definition naming one server keeps that one alone however many the call lists.
+        /// definition naming one server keeps that one alone however many the call lists, and a
+        /// reader keeps none. A listed server the delegate does not get is said, because the
+        /// planner listed it expecting the delegate to have it.
         #[test]
         fn a_worker_spawned_keeping_one_server_holds_only_that_one() {
             let weather = Capability::McpCall(ServerAlias::new("weather"));
@@ -14355,6 +14393,33 @@ five
                 !spec.capabilities().contains(&notes),
                 "a call's list handed a worker a server its definition left off"
             );
+
+            let spec = policy
+                .before_delegate(
+                    &argument("reader"),
+                    &argument("read it"),
+                    Some(&keeping(&["notes"])),
+                )
+                .expect("a server this run holds may be listed for any kind");
+            assert!(
+                !spec.capabilities().contains(&notes),
+                "a call's list handed a reader a server"
+            );
+
+            let trail = format!("{:?}", sink.events());
+            assert!(
+                !trail.contains("d1: the call keeps notes which"),
+                "the trail says a worker went without a server it holds: {trail}"
+            );
+            for said in [
+                "d2: the call keeps notes which a forecaster does not hold",
+                "d3: the call keeps notes which a reader does not hold",
+            ] {
+                assert!(
+                    trail.contains(said),
+                    "the trail does not say '{said}': {trail}"
+                );
+            }
         }
 
         /// AGENT-6. A name this run holds no grant for is refused rather than dropped, because the

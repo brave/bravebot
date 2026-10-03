@@ -857,8 +857,8 @@ definition selects where the delegate is a worker, which is every one where the 
 neither its tools nor its servers, and none where it is a reader or a checker
 ([DELEGATE-4](delegation.md#DELEGATE-4), [DELEGATE-24](delegation.md#DELEGATE-24)): each is a
 grant for a server a person already said the session may use, and a server's tool may do what only
-a worker may. No delegate holds a grant its
-parent does not. A turn addressed to a definition holds the session's grants on the same terms
+a worker may. The call starting a worker may keep fewer of them
+([AGENT-6](tools/spawn-agent.md#AGENT-6)). No delegate holds a grant its parent does not. A turn addressed to a definition holds the session's grants on the same terms
 ([ADDRESS-7](addressing-a-definition.md#ADDRESS-7)). A call to a server's tool is refused where the
 run holds no grant naming that server, and a remote server's handshake runs under a policy holding
 the grant naming that server and no other.

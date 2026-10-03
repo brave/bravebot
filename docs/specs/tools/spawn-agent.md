@@ -10,10 +10,9 @@ documented-by: docs/website/docs/reference/tools.md
 ## Scope
 
 The call that starts a delegated agent. `kind` and `mcp_servers` are routing; `task` and `each`
-are content. The
-call answers as soon as the kernel has approved it, and the report follows later. What a delegate
-is, what it may do and how long it may live is [delegation.md](../delegation.md); this spec is the
-call surface.
+are content. The call answers as soon as the kernel has approved it, and the report follows later.
+What a delegate is, what it may do and how long it may live is [delegation.md](../delegation.md);
+this spec is the call surface.
 
 [CHECKOUT-1](../checkouts.md#CHECKOUT-1) adds a routing field, `isolation`, whose one value,
 `checkout`, asks for a checkout of the delegate's own. A definition `kind` names may ask for one
@@ -103,8 +102,9 @@ holding none. The list applies after the definition's own `mcpServers:` line
 ([DELEGATE-24](../delegation.md#DELEGATE-24)), so a server the definition leaves off stays off
 whatever the call lists. A call without the field gives the worker what
 [DELEGATE-4](../delegation.md#DELEGATE-4) gives it. A reader and a checker hold no server either way.
-In a fan-out the list applies to every delegate the call starts, and the trail names each grant it
-left out.
+In a fan-out the list applies to every delegate the call starts. The trail names each grant the
+list left out, and each listed server the delegate went without because its kind or definition
+leaves it off.
 
 A name the run holds no grant for is refused, nothing starts, and the refusal lists the servers the
 run holds. The list must be public, and its names are compared with the run's grants only after
