@@ -576,8 +576,11 @@ trail, how full the context is and on what footing it knows that, INPUT-22, a lo
 and when its next tick is due, [loop.md](loop.md), how many background jobs the turn has running,
 [RUN-26](tools/run.md#RUN-26), the key that opens the delegates where the
 session has spawned any, the key that moves the command the turn is waiting on to the background
-while it can be moved, [RUN-25](tools/run.md#RUN-25)) and then `? for shortcuts`. It lists no other binding of its own, and it does not report the
-confinement. The trail key is named only **once a turn has left a trail to look at**: a trail is
+while it can be moved, [RUN-25](tools/run.md#RUN-25)), then `? for shortcuts`, and then the key
+that opens the info panel while the panel is closed and the terminal is wide enough for it
+([PANEL-7](info-panel.md#PANEL-7)). It lists no other binding of its own, and it does not report the
+confinement. While the info panel is drawn, how full the context is and the cache figure are in the
+panel and not on the line ([PANEL-8](info-panel.md#PANEL-8)). The trail key is named only **once a turn has left a trail to look at**: a trail is
 recorded when the turn it belongs to ends, so before then the line would be offering a press that
 changes nothing on screen. The move key is named for the same reason **only while there is a
 command it would move**, and is gone once it has been pressed or the command has ended.
@@ -587,8 +590,8 @@ all: what is drawn is a mode somebody chose, named in [permission-modes.md](perm
 marker standing there on every session is one people stop reading, and being read is the whole of
 what this one is for.
 
-**What does not fit is dropped whole, at a separator.** The parts are given up in order (a reading
-with no figure in it, then the way to the bindings, then the trail key, then the figures, then the
+**What does not fit is dropped whole, at a separator.** The parts are given up in order (the key that
+opens the info panel, then a reading with no figure in it, then the way to the bindings, then the trail key, then the figures, then the
 move key, then the count of jobs, and a running loop after all of them), and the mode is the last to
 go. The move key is
 kept that late because it is up only while somebody is waiting on a command, which is when they read
@@ -1833,12 +1836,12 @@ rendering fault rather than as a border with no room for all of it.
 `verified-by: bravebot_tui::render::a_border_gives_up_the_ways_in_one_at_a_time`
 
 <a id="INPUT-32"></a>
-### INPUT-32: a settings file can move eight chords, and nothing else
+### INPUT-32: a settings file can move nine chords, and nothing else
 
 A `keybindings` block in `settings.json` names an action and the chord it is to answer, spelled
 `ctrl-x`, `alt-o` or `ctrl+x`. It layers per action the way `env` does: a project file moving one
-action's key says nothing about the other seven. There is no second file and no other spelling of the
-block, so one place answers what a key does. Eight actions can be moved, and nothing else can:
+action's key says nothing about the other eight. There is no second file and no other spelling of the
+block, so one place answers what a key does. Nine actions can be moved, and nothing else can:
 
 - `background` (default: `ctrl-b`): move the command the turn is waiting on to the background
   ([RUN-25](tools/run.md#RUN-25)).
@@ -1849,6 +1852,7 @@ block, so one place answers what a key does. Eight actions can be moved, and not
 - `stash` (default: `ctrl-s`): stash the current input line or bring it back.
 - `trail` (default: `ctrl-t`): toggle turn execution trail visibility.
 - `paste` (default: `ctrl-v`): paste from clipboard.
+- `panel` (default: `ctrl-x`): show or hide the info panel ([PANEL-5](info-panel.md#PANEL-5)).
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is
 typed into the line, Enter sends, Escape clears it, Tab takes what is offered, and the arrows walk
@@ -1893,14 +1897,14 @@ readline editing keys (such as `ctrl-u` or `alt-b`), the action answers rather t
 editing arm. In vi's normal mode, `/` translates to the chord configured for history search.
 
 **The screen names the chord that answers.** `?` lists the keys from the one place they are written
-down (INPUT-13), and the eight rows above are asked of the chord in force rather than spelled out
+down (INPUT-13), and the nine rows above are asked of the chord in force rather than spelled out
 there. So is every other line that names one: the row saying what brings a stashed line back
 (INPUT-17), the border while an older prompt is being walked back to (INPUT-31), the keys under the
 search (INPUT-19), the hint saying there is something to watch, the note left where a picture on the
 clipboard needs a key of its own, and the scroller's way out
 ([SCROLL-7](scroller.md#SCROLL-7)). A translated line names the chord by taking it as an argument, so
 no catalog has to be revisited when a default moves. Where a clause of this spec or another names one
-of the eight, it names the default.
+of the nine, it names the default.
 
 **Why.** A list is worth having only where it is right, and a person reads it at the moment a key
 they pressed did nothing. Keeping a second copy for the defaults is the same list twice: the copy

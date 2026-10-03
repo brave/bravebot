@@ -1843,6 +1843,26 @@ watching-hint = { $chord } { $count } to open
 # Said on the bottom line for as long as a command the turn is waiting on can be moved, and gone
 # the moment it ends or is moved. Short, because it shares the line with everything else there.
 background-hint = { $chord } to background
+# Said on the bottom line while the info panel is closed and the terminal is wide enough for it.
+panel-hint = { $chord } info
+# The info panel's last row.
+panel-hide = { $chord } hide panel
+# Left in the transcript when the info panel's key is pressed on a terminal too narrow for it.
+panel-too-narrow = The info panel needs a terminal at least { $columns } columns wide.
+# The info panel's section headings.
+panel-session = Session
+panel-goal = Goal
+panel-context = Context
+panel-plan = Plan
+# The last turn's cache figures in the info panel, one to a row and never added together.
+panel-cache-read = cache read { $tokens }
+panel-cache-written = cache written { $tokens }
+# Where the info panel has no room for the whole plan.
+panel-more = +{ $count } more
+# Where the info panel's plan starts past its first rows, counting those it left out above.
+panel-earlier = +{ $count } earlier
+# The same, with rows left out below as well.
+panel-earlier-and-more = +{ $earlier } earlier, +{ $later } more
 # Said on the bottom line while a background job runs, and gone once the last one ends.
 jobs-hint = { $count ->
     [one] 1 in the background
@@ -1893,6 +1913,7 @@ command-loop = Send a prompt again and again, say what is repeating, or stop it
 command-goal = Keep working until a condition you set is judged met
 command-watch = List the files this session is watching, and stop one by its number
 command-jobs = List this turn's background jobs, and stop one by its name
+command-panel = Show or hide the info panel beside the transcript
 command-checkouts = List the checkouts delegates kept, and remove one by its number
 command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
 command-agent = Run one of your definitions on a task, by its name

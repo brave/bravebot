@@ -528,6 +528,7 @@ are in [Reading the transcript](../using/transcript.md#the-scroller).
 | `/loop [interval] <prompt>` | Send a prompt again and again, on your interval or at a pace each turn sets |
 | `/goal [<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch [stop <n>]` | List the files this session is watching, and stop one by its number |
+| `/panel` | Show or hide the info panel beside the transcript |
 | `/manifest <task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
 | `/export [path]` | Export the session transcript to a markdown file |
 | `/undo` | Rewind one turn and put back the files it wrote |
