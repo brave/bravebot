@@ -446,6 +446,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `attribution` | what a commit message or a pull request this agent writes may carry ([below](#attribution)) |
 | `keybindings` | keys rebound to your own choice ([below](#keybindings)) |
 | `search` | how large a tree a search may walk ([below](#search)) |
+| `terminalTitle` | whether the terminal's title is set to the session's name ([below](#terminaltitle)) |
 | `vetting` | whether quarantined content is checked without asking you ([below](#vetting)) |
 
 In `env`, only string values: a number or a boolean is skipped rather than coerced, so write `"1"` and
@@ -579,6 +580,18 @@ no choice at all: the box stays the ordinary one and nothing fails to start.
 A choice made with [`/config`](../reference/commands.md#config) outranks this file, which answers for
 somebody who has never made one. The style is a preference about the person rather than a property of
 a checkout, which is why a file in a repository is the weaker claim.
+
+### `terminalTitle`
+
+```json
+{ "terminalTitle": false }
+```
+
+The terminal's title names the session, as `bravebot · dependency audit`
+([naming a session](../using/sessions.md#naming-a-session)). `false` leaves the title alone, for a
+terminal or multiplexer that manages titles itself. Only the boolean `false` turns it off: `"false"`
+in quotes, or any other value, leaves it on. An incognito session leaves the title alone whatever this
+says.
 
 ### `run.scrubEnv`
 

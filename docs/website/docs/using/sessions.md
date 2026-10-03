@@ -199,6 +199,12 @@ prompt with nothing in it still has a title.
 Renaming rewrites the record immediately, and a chosen name survives the next turn. An empty name is
 refused.
 
+The terminal's title follows the name, as `bravebot · dependency audit`, so a row of tabs running
+several sessions can be told apart. It is set once the session has a name and changes when the name
+does, and your shell's own title comes back when you leave. A terminal that cannot save a title is
+left with an empty one rather than this session's name. An incognito session leaves the title alone,
+and so does setting [`terminalTitle`](../customize/configuration.md#terminaltitle) to `false`.
+
 ## Starting over
 
 ```

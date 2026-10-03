@@ -42,6 +42,7 @@ pub mod status;
 pub mod table;
 pub mod theme;
 pub mod theme_prompt;
+mod title;
 pub mod trust_prompt;
 pub mod update;
 pub mod verbs;

@@ -2522,7 +2522,8 @@ fn ask_for_modes<W: Write>(out: &mut W, enhanced: bool) -> io::Result<()> {
 /// Put the terminal back the way it was found.
 fn hand_back_terminal<W: Write>(out: &mut W) -> io::Result<()> {
     disable_raw_mode()?;
-    give_back_modes(out, enhanced_keys())
+    give_back_modes(out, enhanced_keys())?;
+    crate::title::give_back(out)
 }
 
 /// Give back every mode [`ask_for_modes`] asked for.
@@ -3087,6 +3088,10 @@ fn event_loop(
     // line's switch is read here and nowhere else in the interface.
     session.adopt_vetting(bravebot_core::vetting::asked_for(), settings.auto_vetting());
     session.adopt_keybindings(settings.keybindings());
+    crate::title::adopt(
+        settings.terminal_title(),
+        bravebot_core::incognito::engaged(),
+    );
     let sources = RuleSources::ambient(workspace.root());
     let Some(permissions) = rules_from(
         &mut session,
@@ -3191,6 +3196,10 @@ fn event_loop(
             needs_draw = false;
             drawn_at = Instant::now();
         }
+        // Every pass rather than at each place the name changes, so a name that arrives by a path
+        // nobody listed here (a first save, `/rename`, a resume, a rewind, `/clear`) still reaches
+        // the title. An unchanged name writes nothing.
+        crate::title::show(terminal.backend_mut(), stored.title())?;
 
         if session.is_quitting() {
             return Ok(left_behind(&stored));

@@ -38,7 +38,7 @@ const JOB_LINE: usize = 48;
 ///
 /// Only line breaks and tabs are folded, since neither can be drawn in one row of the report. The
 /// spacing inside a line is the command as it was approved.
-fn cut(text: &str, most: usize) -> String {
+pub(crate) fn cut(text: &str, most: usize) -> String {
     use unicode_width::UnicodeWidthChar;
     let line = text
         .lines()
