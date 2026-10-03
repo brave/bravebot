@@ -790,6 +790,7 @@ closes.
 `verified-by: bravebot_tui::sessions::processor_cancellation_preserves_its_plan_and_measurements_on_resume`
 `verified-by: bravebot_tui::sessions::reopening_does_not_restore_an_unsent_prompt`
 `verified-by: bravebot_tui::sessions::a_request_after_resume_excludes_the_display_failure`
+`verified-by: bravebot_ui_bridge::history::a_turn_after_a_resume_extends_the_history_the_record_held`
 
 <a id="SESSION-24"></a>
 ### SESSION-24: a resumed transcript puts the prompt back where it was sent
