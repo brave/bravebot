@@ -60,6 +60,13 @@ pub struct State {
     /// it already has a record, and the point of resuming is to write back to it.
     pub handle: Option<Handle>,
     pub turns: usize,
+    /// Where each turn began and ended, and what came of it (SESSION-23).
+    ///
+    /// `None` for a session whose record has none: a record from before turn boundaries were kept
+    /// is read as the legacy shape, and a history started halfway through it would claim
+    /// boundaries for turns nobody recorded. `Some` is carried forward from the record on resume
+    /// and extended by every turn taken here, so a save writes back the history it was given.
+    pub history: Option<Vec<bravebot_session::sessions::StoredTurn>>,
     pub tokens: u64,
     /// What each turn cost, by turn number.
     ///
@@ -131,6 +138,7 @@ impl State {
             directories: Vec::new(),
             handle: None,
             turns: 0,
+            history: Some(Vec::new()),
             tokens: 0,
             spend: BTreeMap::new(),
             timing: BTreeMap::new(),
@@ -174,6 +182,7 @@ impl State {
                 crate::agent_build(),
             )),
             turns: record.turns,
+            history: record.history.clone(),
             tokens: record.tokens,
             spend: record.spend.clone(),
             timing: record.timing.clone(),
@@ -234,6 +243,9 @@ impl State {
             directories,
             handle: Some(handle),
             turns,
+            // The parent's boundaries are offsets into a conversation this one has cut, so none
+            // are carried: the fork reads as the legacy shape, as it did before.
+            history: None,
             tokens: 0,
             spend: BTreeMap::new(),
             timing: BTreeMap::new(),

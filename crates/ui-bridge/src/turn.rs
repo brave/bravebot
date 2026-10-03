@@ -190,6 +190,8 @@ pub struct BridgeReporter {
     notices: Vec<String>,
     /// The delegate the next report belongs to, or `None` for the turn's own.
     reporting_for: Option<DelegateId>,
+    /// Where the submitted prompt entered the recounted conversation (SESSION-23).
+    prompt_at: Option<usize>,
 }
 
 impl BridgeReporter {
@@ -200,7 +202,13 @@ impl BridgeReporter {
             last_tokens: None,
             notices: Vec::new(),
             reporting_for: None,
+            prompt_at: None,
         }
+    }
+
+    /// Where the turn's prompt landed in the recounted conversation, if it got that far.
+    pub fn prompt_at(&self) -> Option<usize> {
+        self.prompt_at
     }
 
     /// What the turn said as it ran, in the order it said it.
@@ -218,6 +226,10 @@ impl BridgeReporter {
 }
 
 impl Reporter for BridgeReporter {
+    fn prompt_recorded(&mut self, at: usize) {
+        self.prompt_at = Some(at);
+    }
+
     fn todos(&mut self, rows: Vec<Row>) {
         let rows: Vec<_> = rows.iter().map(wire::row).collect();
         self.say("todos", json!({ "rows": rows }));

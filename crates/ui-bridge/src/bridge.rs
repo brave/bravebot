@@ -1661,6 +1661,8 @@ fn work(work: Work) {
         // Use the task's home so the index is cached with the rest of the session's state.
         bravebot_agent::lsp::LanguageServers::new(workspace.root().to_path_buf(), task.home.clone())
     });
+    // Where this turn begins, in the recounted conversation the record's boundaries are offsets into.
+    let begins = state.conversation.recounted().len();
     let completed = agent_turn::resume(
         &config,
         &egress,
@@ -1705,6 +1707,22 @@ fn work(work: Work) {
     }
 
     state.turns = turn;
+    let ended = match &outcome {
+        Ok(_) => Some(bravebot_session::sessions::StoredOutcome::Completed),
+        // A failure's reason is composed from the interface's own catalog, which this front end
+        // does not hold, and a recorded reason is never the backend's words (SESSION-23). The turn
+        // keeps its boundaries and no ending, which is what a record says of one it could not
+        // describe.
+        Err(_) => None,
+    };
+    record_turn(
+        &mut state,
+        turn,
+        &prompt,
+        begins,
+        reporter.prompt_at(),
+        ended,
+    );
     if state.first_prompt.is_none() && recall {
         state.first_prompt = Some(prompt.clone());
     }
@@ -1906,6 +1924,37 @@ pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -
         "attempts": attempts, "status": diagnosis.and_then(|d| d.status) })
 }
 
+/// Add the turn that just ran to the session's history, if it keeps one (SESSION-23).
+///
+/// `begins` is the length of the recounted conversation before the turn, and `prompt_at` where the
+/// submitted prompt entered it. A turn that lost the conversation ends before it began, and then
+/// its range restarts at nothing, as the terminal records it.
+fn record_turn(
+    state: &mut State,
+    number: usize,
+    prompt: &str,
+    begins: usize,
+    prompt_at: Option<usize>,
+    outcome: Option<bravebot_session::sessions::StoredOutcome>,
+) {
+    let end = state.conversation.recounted().len();
+    let Some(history) = state.history.as_mut() else {
+        return;
+    };
+    let reset_context = end < begins;
+    history.push(bravebot_session::sessions::StoredTurn {
+        number,
+        prompt: Some(prompt.to_string()),
+        start: if reset_context { 0 } else { begins },
+        end,
+        reset_context,
+        prompt_offset: prompt_at
+            .filter(|at| !reset_context && *at >= begins && *at < end)
+            .map(|at| at - begins),
+        outcome,
+    });
+}
+
 /// Write the session down, in the agent's own format.
 ///
 /// The same `Handle` the terminal uses, so a session written here is one `bravebot --resume`
@@ -1930,8 +1979,7 @@ fn save(
     handle.save(
         &first,
         Standing {
-            // The UI derives its transcript from the conversation, including newly run turns.
-            history: None,
+            history: state.history.as_deref(),
             conversation: &snapshot,
             turns: state.turns,
             tokens: state.tokens,
