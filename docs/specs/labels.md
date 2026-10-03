@@ -228,7 +228,7 @@ wearing the driver's attribution, which is the thing this clause exists to stop.
 `verified-by: bravebot_core::reference::a_visible_presentation_shows_the_content`
 `verified-by: bravebot_core::reference::a_description_names_the_shape_and_not_the_content`
 `verified-by: bravebot_core::reference::a_description_says_how_to_refer_to_the_content`
-`verified-by: bravebot_agent::turn::a_fetched_page_names_the_url_that_was_asked_for_and_not_where_a_redirect_went`
+`verified-by: bravebot_agent::turn::a_fetched_page_names_the_host_that_was_asked_for_and_not_where_a_redirect_went`
 `verified-by: bravebot_agent::tools::an_edit_by_reference_that_cannot_be_read_does_not_name_the_file`
 
 <a id="LABEL-4"></a>

@@ -46,6 +46,7 @@ for a workspace nobody vouched for.
 
 `verified-by: bravebot_agent::turn::nothing_recorded_about_a_request_carries_the_credential_in_its_url`
 `verified-by: bravebot_agent::turn::the_trail_records_the_slot_and_the_path_rather_than_the_content`
+`verified-by: bravebot_agent::turn::a_fetch_records_the_host_and_none_of_the_rest_of_the_url_in_the_trail`
 
 <a id="TRACE-3"></a>
 ### TRACE-3: an assertion a person made is recorded as one

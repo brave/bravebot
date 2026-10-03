@@ -193,5 +193,5 @@ followed it is what makes this a property of the code rather than of whoever wro
 `verified-by: bravebot_core::policy::a_refused_redirect_names_the_approved_host_and_not_the_one_a_server_chose`
 `verified-by: bravebot_agent::turn::a_failed_fetch_names_the_url_that_was_asked_for_and_not_where_a_redirect_went`
 `verified-by: bravebot_agent::turn::a_fetch_refused_for_leaving_its_host_names_no_host_the_server_chose`
-`verified-by: bravebot_agent::turn::a_fetched_page_names_the_url_that_was_asked_for_and_not_where_a_redirect_went`
+`verified-by: bravebot_agent::turn::a_fetched_page_names_the_host_that_was_asked_for_and_not_where_a_redirect_went`
 `verified-by: by-construction (neither value a successful fetch hands back carries the URL a redirect chain ended at, so no result can name one)`
