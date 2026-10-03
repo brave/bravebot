@@ -1235,6 +1235,10 @@ fn run_task(
             let ending = exit::ending_of(&err);
             let stopped = fail(ending, &err);
             say_notices(&mut std::io::stderr().lock(), reporter.notices());
+            if trace {
+                eprintln!();
+                print_trace(&mut std::io::stderr().lock(), &sink);
+            }
             if as_json {
                 say_the_result(&what_ran(
                     ending,
