@@ -39,6 +39,7 @@
     "drive:ask": "npm run bridge && electron-vite build && node scripts/drive-ask.mjs",
     "package": "npm run bridge && electron-vite build && node scripts/package.mjs",
     "drive:menu": "npm run bridge && electron-vite build && node scripts/drive-menu.mjs",
+    "drive:session-list": "npm run bridge && electron-vite build && node scripts/drive-session-list.mjs",
     "drive:about": "npm run build && node scripts/drive-about.mjs",
     "drive:export": "npm run bridge && electron-vite build && node scripts/drive-export.mjs",
     "drive:fork": "npm run bridge && electron-vite build && node scripts/drive-fork.mjs",

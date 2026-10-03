@@ -119,6 +119,7 @@ at, that a control keeps keyboard focus through an animation.
 | Command | Covers |
 | --- | --- |
 | `npm run drive` | Launch, list sessions, filter them by title and project, group them by checkout, fold one away, start one from a heading, open one |
+| `npm run drive:session-list` | A list of 260 sessions: that it draws a page and a **Show more** row that moves focus to the first row it drew, that search reaches past the page, that the open session and a working one stay drawn past the page, that grouped every checkout keeps a heading counting all its sessions and a **Show more** row of its own, that the archive has its own page, and that a row's actions menu is mounted only while open and opens, shuts and returns focus by mouse and keyboard |
 | `npm run drive:resize` | Divider drags, the clamps, keyboard resizing, persistence |
 | `npm run drive:columns` | Folding each side column, and what is remembered |
 | `npm run drive:panels` | The context panels, the row of buttons that turns them on and off, and the transcript's tool runs |
@@ -141,7 +142,7 @@ at, that a control keeps keyboard focus through an animation.
 | `npm run drive:bot-turn` | A live turn as a bot: that a purpose nobody typed reaches the model, that the memory file is real and in the checkout, and that reopening the bot resumes the same session |
 | `npm run drive:bot-memory` | That a bot is asked to keep its memory current without anybody asking it to: that one which has gone quiet is handed its briefing again with a line saying so, that the count resets on the nudge rather than on every turn, and that a prompt somebody typed to read like the app's own house-keeping is drawn as a prompt in a reopened transcript, with its words and the cut that is taken on its ordinal |
 | `npm run drive:visual` | The gallery: every surface as screenshots, in light and dark, with a hit-target audit and forced-colours captures; see [below](#the-visual-gallery) |
-| `npm run drive:perf` | The performance budgets on a 500-entry transcript; see [below](#performance-budgets) |
+| `npm run drive:perf` | The performance budgets on a 1,000-session list and a 500-entry transcript; see [below](#performance-budgets) |
 | `node scripts/drive-turn.mjs` | A live inference request through the window, to prove the binary carries its credentials rather than inheriting them |
 | `node scripts/drive-models-live.mjs` | Live inference before and after changing the conversation model, checking which model the agent actually used |
 | `scripts/smoke-turn.sh` | A live turn straight through `bravebot-rpc`, no app |
@@ -194,8 +195,8 @@ These pass `--user-data-dir` with a temporary profile, so the app's own state is
 
 `drive-about`, `drive-agent-settings`, `drive-bot-history`, `drive-conversation-workflow`,
 `drive-manual-walkthrough`, `drive-models`, `drive-models-live`, `drive-remembered-trust`,
-`drive-secure-files`, `drive-turn-details`, `drive-ux-acceptance`, `drive-vetting`,
-`drive-visual` and `drive-perf`.
+`drive-secure-files`, `drive-session-list`, `drive-turn-details`, `drive-ux-acceptance`,
+`drive-vetting`, `drive-visual` and `drive-perf`.
 
 The flag isolates only the app's own state. Most of these also replace the bridge with IPC
 fixtures, so they need no credentials and make no requests; `drive-models-live` does not, and
@@ -243,11 +244,12 @@ change to styles: it is the check for the [quality bar](development.md#the-quali
 
 ### Performance budgets
 
-`scripts/drive-perf.mjs` enforces the budgets on a long conversation. It is new alongside the
-redesign; this describes the plan it implements, so read the script for the exact thresholds and
-methods. Like the gallery it uses a temporary profile and a mocked bridge, and loads a
-deterministic **500-entry** transcript, then measures in the page from `requestAnimationFrame`
-timing and Chrome DevTools Protocol `Performance` metrics:
+`scripts/drive-perf.mjs` enforces the budgets on a long session list and a long conversation. It
+is new alongside the redesign; this describes the plan it implements, so read the script for the
+exact thresholds and methods. Like the gallery it uses a temporary profile and a mocked bridge
+that lists **1,000** sessions, and loads a deterministic **500-entry** transcript, then measures
+in the page from `requestAnimationFrame` timing and Chrome DevTools Protocol `Performance`
+metrics:
 
 | Budget | Measured |
 | --- | --- |
@@ -255,6 +257,7 @@ timing and Chrome DevTools Protocol `Performance` metrics:
 | Scrolling holds **60fps** | Frame times while scrolling the transcript |
 | Streaming a long answer drops no frames | Frame times while a reply arrives |
 | Menus open in under **100ms** | The model menu, the header's More menu and the find bar |
+| The window opens with **1,000** stored sessions: first row painted in under **1s**, no long task over **50ms** | `longtask` entries and the first `.session-row` paint, watched from before the page's script runs; also checks the list draws one page of rows and a **Show more** row |
 
 It exits non-zero when a measurement is over its budget. Software rendering or a busy machine
 inflates frame times, so `PERF_TOLERANCE=2` scales the time budgets rather than editing the

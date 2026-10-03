@@ -1,9 +1,10 @@
-// Performance budgets on a long conversation: typing, scrolling, streaming and menus.
+// Performance budgets: opening the window with a long session list, then typing, scrolling,
+// streaming and menus on a long conversation.
 //
 // Real Electron renderer, isolated profile (a temp --user-data-dir, never the real one) and a
-// mocked bridge: no provider requests, no live agent. A deterministic 500-entry transcript is
-// loaded into a session, then each budget is measured in the page and the run exits 1 if any
-// one is missed.
+// mocked bridge: no provider requests, no live agent. The bridge lists 1,000 sessions and the
+// window is reloaded under watch; then a deterministic 500-entry transcript is loaded into one
+// of them, each budget is measured in the page, and the run exits 1 if any one is missed.
 //
 //   npx electron-vite build && node scripts/drive-perf.mjs
 //
@@ -15,6 +16,12 @@ import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
 
 const tolerance = Number(process.env.PERF_TOLERANCE) || 1
+const SESSIONS = 1000
+// Rows the sidebar draws before its "Show more" row: PAGE in components/Sessions.tsx.
+const PAGE = 100
+// About 110 ms on an M-series Mac with the list drawn a page at a time; 36 s when every row was
+// drawn and mounted its menu.
+const FIRST_ROW_MS = 1000
 
 // The budgets, as the plan states them. Times are milliseconds.
 const BUDGET = {
@@ -32,6 +39,10 @@ const BUDGET = {
   streamMaxFrame: 50 * tolerance,
   // Plan: "menus open in under 100 ms (click to visible)".
   menuOpen: 100 * tolerance,
+  // Opening the window with SESSIONS stored sessions: the first row painted this long after the
+  // page starts loading, and no task on the way there or after it blocks input for over 50 ms.
+  firstRow: FIRST_ROW_MS * tolerance,
+  openLongTask: 50 * tolerance,
 }
 // Frame times are vsync-quantised (3 frames = 50.0 ms) and the timestamps jitter by a fraction of a
 // millisecond, so "no frame over 50 ms" allows this much for a frame that is exactly three vsyncs.
@@ -68,8 +79,14 @@ try {
   page.setDefaultTimeout(15000)
   page.on('pageerror', (e) => { errors.push(e.message); console.error('RENDERER', e.message) })
 
-  await app.evaluate(({ ipcMain, BrowserWindow }, { directory, id, entries }) => {
-    const rows = [{ id, title: 'A long conversation', updated: Math.floor(Date.now() / 1000) - 60, directory, project: 'perf-project', branch: 'main', bytes: 20 }]
+  await app.evaluate(({ ipcMain, BrowserWindow }, { directory, id, entries, sessions }) => {
+    // The long conversation is the newest; the rest are spread over eight checkouts, older by ten
+    // minutes each, the way a sidebar looks after a few months of use.
+    const now = Math.floor(Date.now() / 1000)
+    const rows = [{ id, title: 'A long conversation', updated: now - 60, directory, project: 'perf-project', branch: 'main', bytes: 20 }]
+    for (let n = 1; n < sessions; n++) {
+      rows.push({ id: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`, title: `Conversation ${n} about module ${n % 97}`, updated: now - 60 - n * 600, directory: `${directory}-${n % 8}`, project: `perf-project-${n % 8}`, branch: n % 3 ? 'main' : `topic-${n}`, bytes: 20 })
+    }
     const emit = (event, data, session = 's-' + id) => BrowserWindow.getAllWindows()[0].webContents.send('bravebot:event', { event, data, session })
     globalThis.perf = { emit }
     const replace = (name, fn) => { ipcMain.removeHandler(name); ipcMain.handle(name, fn) }
@@ -100,10 +117,37 @@ try {
       return { ok: {} }
     })
     replace('bravebot:files:list', (_, session, path) => ({ path, rows: [], truncated: false }))
-  }, { directory, id, entries: ENTRIES })
+  }, { directory, id, entries: ENTRIES, sessions: SESSIONS })
 
+  // 0. Opening the window. Watched from before the page's own script runs: every long task, and
+  // the moment the first sidebar row is painted (a rAF callback, then a message delivered once
+  // that frame is done, as the typing clock below does).
+  await page.addInitScript(() => {
+    const open = (window.__open = { tasks: [], firstRow: 0 })
+    new PerformanceObserver((list) => { for (const task of list.getEntries()) open.tasks.push(task.duration) }).observe({ type: 'longtask', buffered: true })
+    const channel = new MessageChannel()
+    channel.port1.onmessage = () => { open.firstRow = performance.now() }
+    const rows = new MutationObserver(() => {
+      if (!document.querySelector('.session-row')) return
+      rows.disconnect()
+      requestAnimationFrame(() => channel.port2.postMessage(0))
+    })
+    rows.observe(document, { childList: true, subtree: true })
+  })
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.reload()
+  // Generous, so a list that blocks the renderer is measured rather than timed out.
+  await page.waitForFunction(() => window.__open?.firstRow > 0, null, { timeout: 120000 })
+  // Long enough for whatever the rows schedule after their first paint to have run.
+  await page.waitForTimeout(2000)
+  const opened = await page.evaluate(() => ({ ...window.__open, rows: document.querySelectorAll('.session-row').length, more: document.querySelector('[data-test="show-more-sessions"]')?.textContent }))
+  const longest = Math.max(0, ...opened.tasks)
+  console.log(`window: ${SESSIONS} sessions listed, ${opened.rows} rows in the DOM, ${opened.tasks.length} long tasks, ${fixed(opened.tasks.reduce((a, b) => a + b, 0))} ms blocked`)
+  assertCount(opened.rows, PAGE, 'sidebar rows')
+  assertCount(opened.more, `Show ${PAGE} more of ${SESSIONS - PAGE}`, 'show-more row')
+  record(`window: first row painted, ${SESSIONS} sessions`, opened.firstRow, `< ${BUDGET.firstRow} ms`, opened.firstRow < BUDGET.firstRow)
+  record(`window: longest task, ${SESSIONS} sessions`, longest, `<= ${BUDGET.openLongTask} ms`, longest <= BUDGET.openLongTask)
+
   await page.locator('.session').filter({ hasText: 'A long conversation' }).first().click()
   const entry = page.getByRole('textbox', { name: 'Message the agent' })
   await entry.waitFor()

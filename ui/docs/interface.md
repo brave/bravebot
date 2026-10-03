@@ -486,6 +486,15 @@ or moved is refused by the bridge with `not_a_directory` rather than failing qui
 folded group regardless — a heading with nothing under it is the opposite of what somebody
 who just typed a search asked for — and the fold is still there when the box is cleared.
 
+The list draws its first 100 conversations, pinned ones and then the newest, and the archive its
+newest 100, each with a **Show more** row at the foot that draws the next 100 and moves focus to
+the first of them. The open conversation, and any that is working or waiting on the reader, is
+drawn wherever it falls, after the page if that is where it is. The filter searches every session,
+and the cap applies to what it found, so a search still finds a conversation from months ago. With
+grouping on, every checkout keeps its heading, which counts all of its conversations. Each group
+first draws the ones it has among the list's first 100, so grouping mounts no more rows than the
+flat list, and has a **Show more** row of its own for the rest.
+
 Grouping and collapsed groups are remembered in the `view` key of `bravebot-ui.json`,
 separate from the `layout` key holding column widths. The *folded* ones are
 what is written down rather than the open ones, so a checkout started since last launch
