@@ -272,11 +272,7 @@ impl Claim {
         let path = store.with_file_name(CLAIM);
         let waiting_since = std::time::Instant::now();
         loop {
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
+            match create_claim(&path) {
                 Ok(_) => return Ok(Self { path }),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(e) => {
@@ -299,6 +295,33 @@ impl Claim {
             std::thread::sleep(LOOK_AGAIN_IN);
         }
     }
+}
+
+/// Create the claim file at `path`, failing if it is already there.
+///
+/// Created 0600 as it is made: the file holds no bytes, but it is written into the state directory,
+/// and STATE-1 asks for the mode as the file is created rather than leaving it to the directory
+/// above. It is new whenever this succeeds, so there is no earlier mode to narrow.
+#[cfg(unix)]
+fn create_claim(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+}
+
+/// Create the claim file at `path`, failing if it is already there.
+///
+/// Windows has no mode to ask for, and the claim holds no bytes.
+#[cfg(not(unix))]
+fn create_claim(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
 }
 
 /// Whether the claim at `path` is old enough to have been left behind by a process that died.
@@ -1501,6 +1524,31 @@ mod tests {
             left.sort();
 
             assert_eq!(left, [FILE]);
+        });
+    }
+
+    /// The claim is a file in the state directory, so STATE-1 asks for it at 0600 as it is created.
+    /// The directory above is 0700, which is a second answer and not this one: a claim created at
+    /// the process umask is readable by group and other the moment the directory is ever loosened.
+    #[cfg(unix)]
+    #[test]
+    fn a_claim_is_created_readable_only_by_its_owner() {
+        with_temp_home("claim-mode", || {
+            use std::os::unix::fs::PermissionsExt;
+
+            let store = path().expect("a path");
+            let claim = Claim::take(&store).expect("a claim");
+
+            let mode = std::fs::metadata(&claim.path)
+                .expect("the claim")
+                .permissions()
+                .mode();
+            assert_eq!(
+                mode & 0o077,
+                0,
+                "group or other can reach {}",
+                claim.path.display()
+            );
         });
     }
 
