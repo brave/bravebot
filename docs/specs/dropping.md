@@ -140,6 +140,9 @@ a mixed drop. Deleting the marker is the only way to change your mind, and sendi
 what was attached to it. Dispatching a slash command counts as sending it: the line comes off the
 box with what it named, so nothing is left staged behind a box that no longer names it.
 
+A line armed for the shell (`!`) has no markers. A file dropped onto it is written as its path and
+nothing is staged, because the shell is handed the line as it stands.
+
 `verified-by: bravebot_tui::drop::several_files_dropped_together_each_get_a_marker`
 `verified-by: bravebot_tui::drop::a_second_drop_gets_its_own_number`
 `verified-by: bravebot_tui::drop::a_mixed_drop_keeps_each_in_its_place`
@@ -147,6 +150,7 @@ box with what it named, so nothing is left staged behind a box that no longer na
 `verified-by: bravebot_tui::drop::sending_a_line_clears_what_was_attached_to_it`
 `verified-by: bravebot_tui::app::dispatching_a_command_clears_what_was_dropped_on_its_line`
 `verified-by: bravebot_tui::app::a_command_line_whose_dropped_marker_was_deleted_carries_no_file`
+`verified-by: bravebot_tui::app::a_file_dropped_onto_a_shell_line_is_run_as_its_path`
 `verified-by: bravebot_tui::drop::a_drop_leaves_room_after_itself`
 
 <a id="DROP-7"></a>

@@ -6291,12 +6291,23 @@ impl Session {
     /// an unsupported type or a path naming no file at all, has its path written out, which is
     /// what dropping a file did before any of this existed.
     ///
+    /// In shell mode every file has its path written out and nothing is staged, so the command the
+    /// shell is given names the file and no record is left behind the line (`dropping.md` DROP-6).
+    ///
     /// Returns whether the text was a drop at all. A paste that was not one is left to
     /// [`Session::paste`], untouched.
     pub fn drop_files(&mut self, text: &str) -> bool {
         let exists = |path: &str| std::path::Path::new(path).is_file();
         if !crate::dropped::is_drop(text, exists) {
             return false;
+        }
+
+        // The line in shell mode is a command and nothing else, and the shell is handed it as it
+        // stands. A marker there would reach it as text, so nothing is staged and the path is
+        // written, which is what a terminal does when a file is dropped into a shell.
+        if self.shell {
+            self.paste(&format!("{} ", crate::dropped::paths(text).join(" ")));
+            return true;
         }
 
         let taken = crate::dropped::dropped_with(text, exists);

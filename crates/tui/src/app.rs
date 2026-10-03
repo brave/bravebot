@@ -10270,6 +10270,31 @@ mod tests {
             let _ = std::fs::remove_dir_all(&directory);
         }
 
+        /// A command line reaches the shell as it stands, so a marker in it would be run as the text
+        /// `[Image #1]`. The path is written instead, and nothing is staged behind a line that is
+        /// about to leave the box.
+        #[test]
+        fn a_file_dropped_onto_a_shell_line_is_run_as_its_path() {
+            let (mut session, directory, path) = a_session_with("shell", "shot.png");
+            type_line(&mut session, "!");
+            assert!(session.shell, "shell mode was not armed");
+            type_line(&mut session, "file ");
+            assert!(session.drop_files(&path), "not recognised as a drop");
+            assert_eq!(session.input(), format!("file {path} "));
+
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Run(format!("file {path}"))
+            );
+            assert!(
+                session.attached().is_empty(),
+                "the record outlived the line: {:?}",
+                session.attached()
+            );
+
+            let _ = std::fs::remove_dir_all(&directory);
+        }
+
         /// A text file's contents would be a context message, and a planner asked a question or a
         /// task is precommitted to a context holding the task and the driver's own words. So what it
         /// is given is the name, which it can act on, rather than a marker standing for nothing.
