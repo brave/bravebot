@@ -39,6 +39,7 @@
 import { app, BrowserWindow, Menu, shell, type MenuItemConstructorOptions } from 'electron'
 import { basename } from 'node:path'
 import { recents } from './recents'
+import { offerDirectories } from './opened'
 import {
   COMMANDS,
   CONTEXT,
@@ -111,6 +112,7 @@ const SEPARATOR: MenuItemConstructorOptions = { type: 'separator' }
  */
 function openRecent(): MenuItemConstructorOptions {
   const directories = recents()
+  offerDirectories(directories)
   return {
     label: 'Open Recent',
     submenu: directories.length
