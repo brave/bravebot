@@ -270,6 +270,25 @@ mod tests {
         );
     }
 
+    /// PERM-11: an unreadable line with surrounding space is left out of the list in force and is
+    /// reported in the spelling the file used.
+    #[test]
+    fn a_padded_unreadable_rule_is_not_listed_as_in_force() {
+        let (dir, settings) = layers(
+            Some(
+                r#"{"permissions": {"deny": [" Fetchh(domain:denied.test) ",
+                    "WebFetch(domain:denied.test)"]}}"#,
+            ),
+            None,
+        );
+        let rules = SettingsRules::read(&settings, dir.path());
+        assert_eq!(rules.deny, ["WebFetch(domain:denied.test)"]);
+        let [unreadable] = rules.unreadable.as_slice() else {
+            panic!("{:?}", rules.unreadable);
+        };
+        assert_eq!(unreadable.rule, " Fetchh(domain:denied.test) ");
+    }
+
     /// PERM-14: a settings file the person selected may write an `allow` rule where it is outside
     /// the workspace. One inside the workspace is the checkout's file under another name, so
     /// its `allow` rule is proposed and not in force.
