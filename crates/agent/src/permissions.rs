@@ -824,6 +824,36 @@ mod tests {
         );
     }
 
+    /// PERM-3 end to end: a `/x` rule in a checkout's own settings file covers the directory beside
+    /// that file, and not the one beside the global file.
+    #[test]
+    fn a_checkouts_slash_rule_is_anchored_beside_the_checkouts_file() {
+        let name = "slash-rule-in-a-checkout";
+        let block = r#"{"permissions": {"deny": ["Read(/secrets/**)"]}}"#;
+        let settings = layered_settings(name, Some(block), None);
+        let root = crate::testutil::scratch_dir(&format!("bravebot-permission-layers-{name}"));
+        let beside_the_file = root
+            .join("cwd")
+            .join(".bravebot")
+            .join("secrets")
+            .join("key");
+        let (permissions, _) =
+            from_settings(&settings, Some(&root.join("profile")), &root.join("cwd"));
+        assert_eq!(
+            permissions.for_path(Subject::Read, &beside_the_file.display().to_string()),
+            Decision::Ruled(Ruling::Deny)
+        );
+        let beside_the_global = root
+            .join("profile")
+            .join(".bravebot")
+            .join("secrets")
+            .join("key");
+        assert_eq!(
+            permissions.for_path(Subject::Read, &beside_the_global.display().to_string()),
+            Decision::Unmatched
+        );
+    }
+
     /// A scratch directory holding a project with `real/secret.txt` and `real/notes.md` in it and a
     /// `linked` link to `real`, canonicalized as a session's root is.
     #[cfg(unix)]

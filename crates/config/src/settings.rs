@@ -600,13 +600,14 @@ impl Settings {
                 }
             }
             let granting = grants(&path, home_layer.as_deref(), named, cwd, started);
+            let directory = settings_directory(&path);
             for rule in permission_lists(&root).allow {
                 // A blank entry goes through whatever layer wrote it. It grants nothing whoever
                 // wrote it, since the rule language calls an empty rule empty and refuses it, and
                 // reporting it here would say a rule was withheld where PERM-11 is already about
                 // to say there was no rule.
                 match granting || rule.trim().is_empty() {
-                    true => allow.push(rule),
+                    true => allow.push(anchor_slash_rule(&rule, &directory)),
                     false => allow_ignored.push((path.clone(), rule)),
                 }
             }
@@ -627,6 +628,7 @@ impl Settings {
                 unread.push((path.clone(), key));
             }
             found.push(path);
+            root.anchor_slash_rules(&directory);
             merge(&mut merged, root.take());
         }
 
@@ -1231,6 +1233,28 @@ impl Document {
         std::mem::take(&mut self.root)
     }
 
+    /// Respell every `/x` path rule in `deny` and `ask` as the `//` path it names, which is where
+    /// the file this document was read from puts it (PERM-3).
+    ///
+    /// The merge unions the lists of every layer into one and keeps no record of which file wrote
+    /// an entry, so the one place that still knows is the layer's own read. Rules that are not a
+    /// `Read` or `Edit` path are left as written.
+    fn anchor_slash_rules(&mut self, directory: &str) {
+        let Some(serde_json::Value::Object(block)) = self.root.get_mut(PERMISSIONS_BLOCK) else {
+            return;
+        };
+        for list in ["deny", "ask"] {
+            let Some(serde_json::Value::Array(entries)) = block.get_mut(list) else {
+                continue;
+            };
+            for entry in entries {
+                if let serde_json::Value::String(text) = entry {
+                    *text = anchor_slash_rule(text, directory);
+                }
+            }
+        }
+    }
+
     /// One name out of this document, or whether it named one.
     ///
     /// What came out is kept with the rest of what was displaced rather than handed back, so that
@@ -1799,6 +1823,45 @@ fn run_deadlines(root: &serde_json::Map<String, serde_json::Value>) -> RunDeadli
         default: seconds("defaultSeconds"),
         ceiling: seconds("maxSeconds"),
     }
+}
+
+/// The directory a settings file sits in, spelled for a rule that is anchored there.
+///
+/// Absolute, since a rule is matched against a path a gate holds in full and a named file may have
+/// been spelled relative to the working directory.
+fn settings_directory(file: &Path) -> String {
+    let file = std::path::absolute(file).unwrap_or_else(|_| file.to_path_buf());
+    file.parent()
+        .map(|directory| directory.display().to_string())
+        .unwrap_or_default()
+}
+
+/// `rule` with a single-slash path specifier respelled as the `//` path it names under `directory`.
+///
+/// A `Read` or `Edit` rule written `/x` starts at the directory of the file that wrote it
+/// ([PERM-3](../../../docs/specs/permissions.md#PERM-3)), and the rule language anchors that at one
+/// directory it is handed for every rule it reads, so a rule from any other file is told where it
+/// starts before the layers merge. Any other rule, and any other specifier, comes back as it was.
+fn anchor_slash_rule(rule: &str, directory: &str) -> String {
+    let separates = |character: char| {
+        character == '/' || (std::path::MAIN_SEPARATOR == '\\' && character == '\\')
+    };
+    let Some((name, rest)) = rule.trim().split_once('(') else {
+        return rule.to_string();
+    };
+    let Some(specifier) = rest.strip_suffix(')') else {
+        return rule.to_string();
+    };
+    let specifier = specifier.trim();
+    let name = name.trim_end();
+    let mut characters = specifier.chars();
+    let single_slash =
+        characters.next().is_some_and(separates) && !characters.next().is_some_and(separates);
+    if !(name == "Read" || name == "Edit") || !single_slash {
+        return rule.to_string();
+    }
+    let below = specifier.trim_start_matches(separates);
+    format!("{name}(//{}/{below})", directory.trim_matches(separates))
 }
 
 /// The `permissions` block: three lists of rule text, and the directories to open.
@@ -2885,6 +2948,43 @@ mod tests {
                 self.named.as_deref(),
             )
         }
+    }
+
+    /// PERM-3: a `/x` rule starts at the directory of the file that wrote it, so the same text in
+    /// two files names two places, and neither is the global state directory.
+    #[test]
+    fn a_slash_rule_starts_at_the_directory_of_the_file_that_wrote_it() {
+        let layers = Layers::new("slash-rule-per-layer")
+            .global(r#"{"permissions": {"deny": ["Read(/secrets/**)"]}}"#)
+            .project(r#"{"permissions": {"deny": ["Read(/secrets/**)", "Bash(/usr/bin/ls *)"]}}"#)
+            .named(r#"{"permissions": {"ask": ["Edit(/notes.md)"], "allow": ["Read(/open/**)"]}}"#);
+        let settings = layers.read();
+        let spelled = |directory: &Path, rest: &str| {
+            format!(
+                "//{}/{rest}",
+                directory.display().to_string().trim_start_matches('/')
+            )
+        };
+        let project = layers.cwd.join(PROJECT_DIR);
+        let named = layers
+            .named
+            .as_ref()
+            .and_then(|file| file.parent())
+            .unwrap();
+        let rules = settings.permissions();
+        assert_eq!(
+            rules.deny,
+            [
+                format!("Read({})", spelled(&layers.home, "secrets/**")),
+                format!("Read({})", spelled(&project, "secrets/**")),
+                "Bash(/usr/bin/ls *)".to_string(),
+            ]
+        );
+        assert_eq!(rules.ask, [format!("Edit({})", spelled(named, "notes.md"))]);
+        assert_eq!(
+            rules.allow,
+            [format!("Read({})", spelled(named, "open/**"))]
+        );
     }
 
     /// The point of a project layer: a checkout says which gateway or profile the work in it uses,
