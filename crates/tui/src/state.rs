@@ -1433,6 +1433,11 @@ pub struct Session {
     /// is a name rather than an optional one: every turn asks for something, whether a person picked
     /// it or the settings file did.
     served: Option<(String, String)>,
+    /// The model an earlier process recorded as having answered, for a session picked up from its
+    /// record. Read by [`Session::served_model`] only until a turn here sets [`Session::served`],
+    /// so a save before the first turn writes back what the record already says rather than
+    /// no model, which reads as a record written before the model was kept.
+    recorded_model: Option<String>,
     /// Whether the two halves of [`Session::served`] are names from one roster.
     ///
     /// False where the request named an opaque handle standing for a model rather than a model, since
@@ -1846,6 +1851,7 @@ impl Session {
             timing: std::collections::BTreeMap::new(),
             occupancy: Occupancy::Unmeasured,
             served: None,
+            recorded_model: None,
             // Nothing has been served, so nothing has been compared. Set by the first turn.
             served_names_are_comparable: true,
             premium: None,
@@ -2122,6 +2128,22 @@ impl Session {
     pub fn restore_spend(&mut self, tokens: u64, by_turn: std::collections::BTreeMap<usize, u64>) {
         self.tokens = tokens;
         self.spend = by_turn;
+    }
+
+    /// Take on the model an earlier session's record says answered.
+    ///
+    /// Separate from [`Session::served`] because that records a request made in this process, with
+    /// the tier it ran on, and nothing has been asked yet.
+    pub fn restore_model(&mut self, model: Option<String>) {
+        self.recorded_model = model;
+    }
+
+    /// Take on what a record says about what answered and what it cost: the spend, the timing and
+    /// the model, which are the figures a save writes back whole.
+    pub fn restore_accounts(&mut self, record: &bravebot_session::sessions::Record) {
+        self.restore_spend(record.tokens, record.spend.clone());
+        self.restore_timing(record.timing.clone());
+        self.restore_model(record.model.clone());
     }
 
     /// Take on how an earlier session's turns spent their time.
@@ -8250,8 +8272,13 @@ impl Session {
     }
 
     /// The model the server last reported using, or `None` before any turn has run.
+    ///
+    /// In a resumed session that has not yet had a turn, the model its record names.
     pub fn served_model(&self) -> Option<&str> {
-        self.served.as_ref().map(|(_, served)| served.as_str())
+        match &self.served {
+            Some((_, served)) => Some(served.as_str()),
+            None => self.recorded_model.as_deref(),
+        }
     }
 
     /// The model the last turn asked for, where the server answered with something else.
@@ -10684,6 +10711,42 @@ mod tests {
             !session.can_move_to_background(),
             "a stopped turn left its command movable"
         );
+    }
+
+    /// A save outside a turn rewrites the whole record from the session, so a resumed session that
+    /// has not been answered yet must still hold the model the record names.
+    #[test]
+    fn a_resumed_session_keeps_the_recorded_model_until_a_turn_replaces_it() {
+        let mut session = Session::new("none");
+        assert_eq!(session.served_model(), None);
+        let record: bravebot_session::sessions::Record =
+            serde_json::from_value(serde_json::json!({
+                "id": "1-2",
+                "directory": "/tmp/x",
+                "title": "a session",
+                "started": 1,
+                "updated": 1,
+                "turns": 1,
+                "tokens": 10,
+                "model": "qwen-14b",
+                "conversation": {
+                    "messages": [],
+                    "context": "trusted",
+                    "references": 0,
+                    "archive": [],
+                    "measured": 0,
+                },
+            }))
+            .expect("a record parses");
+        session.restore_accounts(&record);
+        assert_eq!(session.served_model(), Some("qwen-14b"));
+        assert_eq!(
+            session.substituted_model(),
+            None,
+            "a recorded model was reported as a substitution before anything was asked"
+        );
+        session.served("claude-opus", "claude-opus", false, true);
+        assert_eq!(session.served_model(), Some("claude-opus"));
     }
 
     /// The endpoint substitutes rather than refusing, so a session that asked for one model and was

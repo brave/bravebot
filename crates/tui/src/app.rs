@@ -3053,8 +3053,7 @@ fn event_loop(
             // than only for the turns this process ran.
             let recalled = bravebot_session::sessions::recall(workspace.root(), &record);
             session.replay(&conversation, &record.title, &recalled);
-            session.restore_spend(record.tokens, record.spend.clone());
-            session.restore_timing(record.timing.clone());
+            session.restore_accounts(&record);
             if conversation.last_request_tokens() > 0 {
                 session.measured(
                     conversation.last_request_tokens(),
