@@ -493,13 +493,24 @@ impl Entry {
 /// the prompt was, so the context around it is drawn without asking what any of it says. There is
 /// no row of this interface's own to draw instead, and inventing one from a tag this build happens
 /// to know would put a line on the screen that the live session never had.
-fn recalled_entry(line: &bravebot_agent::conversation::Said) -> Entry {
+///
+/// A reply goes through [`crate::reasoning::spoken`] as it did live (VIEW-18): the record holds
+/// the reply whole, reasoning block included, and a resume that drew it would put back the
+/// paragraph the live session kept off the screen. A reply with nothing left is no entry, as
+/// [`Session::narrate`] drops it.
+fn recalled_entry(line: &bravebot_agent::conversation::Said) -> Option<Entry> {
     use bravebot_agent::conversation::Said;
-    match line {
+    Some(match line {
         Said::User(text) | Said::Composed { text, .. } => Entry::user(text),
-        Said::Assistant(text) => Entry::assistant(text, Vec::new()),
+        Said::Assistant(text) => {
+            let text = crate::reasoning::spoken(text);
+            if text.trim().is_empty() {
+                return None;
+            }
+            Entry::assistant(text, Vec::new())
+        }
         Said::Tool { line, why } => Entry::recalled_tool(line, why),
-    }
+    })
 }
 
 /// A line typed while a turn was running, waiting for it to end.
@@ -6087,7 +6098,7 @@ impl Session {
                 };
                 // Messages outside turns (for example shell mode) have no turn ownership.
                 for line in said.iter().take(start).skip(cursor) {
-                    self.transcript.push(recalled_entry(line));
+                    self.transcript.extend(recalled_entry(line));
                 }
                 self.turn_places.insert(turn.number, self.transcript.len());
                 if let Some(prompt) = &turn.prompt {
@@ -6099,7 +6110,7 @@ impl Session {
                         if turn.prompt_offset == Some(offset - start) {
                             continue;
                         }
-                        self.transcript.push(recalled_entry(line));
+                        self.transcript.extend(recalled_entry(line));
                     }
                     match &turn.outcome {
                         Some(StoredOutcome::Failed { reason }) => {
@@ -6126,7 +6137,7 @@ impl Session {
                 cursor = end;
             }
             for line in said.iter().skip(cursor) {
-                self.transcript.push(recalled_entry(line));
+                self.transcript.extend(recalled_entry(line));
             }
             self.turn_history = history.clone();
             self.turns = recalled
@@ -6140,7 +6151,7 @@ impl Session {
         // prompts. None of those roles establish turn ownership. Keep the messages unassigned
         // and preserve the recorded count rather than saving guessed boundaries as history.
         self.transcript
-            .extend(conversation.recounted().iter().map(recalled_entry));
+            .extend(conversation.recounted().iter().filter_map(recalled_entry));
         self.turns = recalled.turns.unwrap_or(0);
 
         // Into the view and not into the transcript, which is the whole of what an aside is: the
@@ -15619,7 +15630,8 @@ mod tests {
                     path: "readme.md".into(),
                 },
                 text: file.into(),
-            });
+            })
+            .expect("a composed message is always drawn");
             assert_eq!(attached.speaker, Speaker::User);
             assert_eq!(attached.text, file);
 
@@ -15630,9 +15642,62 @@ mod tests {
                     path: "/etc/hosts".into(),
                 },
                 text: sentence.into(),
-            });
+            })
+            .expect("a composed message is always drawn");
             assert_eq!(fired.speaker, Speaker::User);
             assert_eq!(fired.text, sentence);
+        }
+
+        /// The record holds a reply whole, so a model with no channel of its own for its working
+        /// has the block in it. A resume that drew the record as written would put back the
+        /// paragraph the live session kept off the screen (VIEW-18). A round's narration before a
+        /// tool call is the same text on the same path, and a narration that was only thought is
+        /// dropped as the live session drops it.
+        #[test]
+        fn a_resumed_reply_leaves_off_its_leading_reasoning_block() {
+            let transcript = resumed(
+                vec![
+                    Message::user("question"),
+                    Message::assistant("<think>weighing it up</think>\n\nThe answer"),
+                    Message::assistant("<think>only thinking</think>"),
+                    Message::assistant("Mentions <think> further down, keeps every word"),
+                ],
+                &BTreeMap::new(),
+            );
+            let said: Vec<&str> = transcript
+                .iter()
+                .filter(|entry| entry.speaker == Speaker::Assistant)
+                .map(|entry| entry.text.as_str())
+                .collect();
+            assert_eq!(
+                said,
+                vec![
+                    "The answer",
+                    "Mentions <think> further down, keeps every word"
+                ]
+            );
+        }
+
+        /// A record with no turn history is replayed on a path of its own, and it is the one an
+        /// older session takes.
+        #[test]
+        fn a_legacy_resumed_reply_leaves_off_its_leading_reasoning_block() {
+            let mut conversation = Conversation::new();
+            conversation.push(Message::user("question"));
+            conversation.push(Message::assistant(
+                "<think>weighing it up</think>The answer",
+            ));
+            let recalled = bravebot_session::sessions::Recalled {
+                history: None,
+                turns: None,
+                trails: BTreeMap::new(),
+                todos: BTreeMap::new(),
+                asides: Vec::new(),
+            };
+            let mut s = session();
+            s.replay(&conversation, "a title", &recalled);
+            assert!(s.transcript.iter().any(|e| e.text == "The answer"));
+            assert!(!s.transcript.iter().any(|e| e.text.contains("weighing")));
         }
 
         /// The audit is written beside the record, so what a gate decided two sessions ago is on

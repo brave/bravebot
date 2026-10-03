@@ -441,6 +441,8 @@ that has observed untrusted content those are untrusted bytes and it may not bra
 `verified-by: bravebot_tui::state::a_finished_reply_keeps_the_answer_and_not_the_thought`
 `verified-by: bravebot_tui::state::a_round_that_thought_before_speaking_records_only_what_it_said`
 `verified-by: bravebot_tui::state::a_round_that_only_thought_leaves_no_entry`
+`verified-by: bravebot_tui::state::a_resumed_reply_leaves_off_its_leading_reasoning_block`
+`verified-by: bravebot_tui::state::a_legacy_resumed_reply_leaves_off_its_leading_reasoning_block`
 
 
 <a id="VIEW-19"></a>
