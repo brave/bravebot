@@ -6667,7 +6667,7 @@ fn job_output<S: Sink, R: Reporter>(
             // job printed or exited is otherwise indistinguishable from one that sat out its whole
             // bound, and the difference is the whole of what a caller learns from silence.
             let began = std::time::Instant::now();
-            job.running.wait_for_more(bound, tools.cancel);
+            job.running.wait_for_more(&job.seen, bound, tools.cancel);
             began.elapsed()
         });
 
