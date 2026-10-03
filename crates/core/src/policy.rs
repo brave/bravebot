@@ -3018,12 +3018,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// that its definition selects and no other, so a delegate can call what the turn already may
     /// and never more (SERVERS-9).
     ///
-    /// The number is minted here, beneath this run's own, and a refusal spends one as a delegate
-    /// would. Two bounds are this call's to keep: a run at [`MAX_DEPTH`] spawns nothing, and a
-    /// tree holding [`MAX_DELEGATES`] takes no more, whichever run in it asks. A run whose
-    /// definition named its tools without `spawn_agent` spawns nothing either, wherever it sits.
-    /// Only a delegate that passed everything else takes a place in the tree, and the trail
-    /// records what it was delegated without only once it has one.
+    /// The number is minted here, beneath this run's own, and spent only by a delegate that is
+    /// approved. A refusal takes none, so the number says which of the run's delegates it was
+    /// and not how many requests the run made. Two bounds are this call's to keep: a run at
+    /// [`MAX_DEPTH`] spawns nothing, and a tree holding [`MAX_DELEGATES`] takes no more,
+    /// whichever run in it asks. A run whose definition named its tools without `spawn_agent`
+    /// spawns nothing either, wherever it sits. Only a delegate that passed everything else
+    /// takes a place in the tree, and the trail records what it was delegated without only once
+    /// it has one.
     ///
     /// [`MAX_DEPTH`]: crate::delegate::MAX_DEPTH
     /// [`MAX_DELEGATES`]: crate::delegate::MAX_DELEGATES
@@ -3032,10 +3034,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         kind: &Labelled<String>,
         task: &Labelled<String>,
     ) -> Gated<crate::delegate::DelegateSpec> {
-        self.spawned += 1;
+        let next = self.spawned + 1;
         let minted = match self.at {
-            None => Some(crate::delegate::DelegateId::nth(self.spawned)),
-            Some(at) => at.child(self.spawned),
+            None => Some(crate::delegate::DelegateId::nth(next)),
+            Some(at) => at.child(next),
         };
         let Some(id) = minted else {
             let at = self.at.map(|at| at.to_string()).unwrap_or_default();
@@ -3054,10 +3056,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             return Err(self.deny(
                 "delegate",
                 Principle::Capability,
-                format!(
-                    "{id}: this run's definition names the tools it may use and spawn_agent is \
-                     not one of them; do the work yourself or say in the report what is left"
-                ),
+                "this run's definition names the tools it may use and spawn_agent is not one of \
+                 them; do the work yourself or say in the report what is left"
+                    .to_string(),
             ));
         }
 
@@ -3065,10 +3066,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             return Err(self.deny(
                 "delegate",
                 Principle::IntegrityGate,
-                format!(
-                    "{id}: this run's context has met something untrusted, so nothing it says \
-                     may become a planner's prompt"
-                ),
+                "this run's context has met something untrusted, so nothing it says may become a \
+                 planner's prompt"
+                    .to_string(),
             ));
         }
 
@@ -3079,7 +3079,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                     "delegate",
                     Principle::Confinement,
                     format!(
-                        "{id}: {field} is {label} and private content must not become a \
+                        "{field} is {label} and private content must not become a \
                          planner's prompt; say what to do rather than pasting what was read"
                     ),
                 ));
@@ -3096,7 +3096,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 "delegate",
                 Principle::Capability,
                 format!(
-                    "{id}: there is no kind of delegate called '{name}'; the kinds are {}",
+                    "there is no kind of delegate called '{name}'; the kinds are {}",
                     self.delegates.names().join(", ")
                 ),
             ));
@@ -3107,12 +3107,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 "delegate",
                 Principle::Capability,
                 format!(
-                    "{id}: this turn has already started {} delegates, which is as many as one \
+                    "this turn has already started {} delegates, which is as many as one \
                      turn may; do the work yourself or say what is left",
                     crate::delegate::MAX_DELEGATES
                 ),
             ));
         }
+
+        // Spent only here, with the place in the tree, so a request refused above takes neither
+        // and the next delegate this run starts is numbered as the one after the last that did.
+        self.spawned = next;
 
         // The definition's tools are the second term and the parent's set is the third, so the
         // intersection still only ever narrows. Taken here rather than where the file was read,
@@ -14254,6 +14258,37 @@ five
             assert_eq!(numbered, ["d1.1", "d1.2"]);
         }
 
+        /// DELEGATE-13: `d1.2` is the second delegate `d1` started. A request refused between two
+        /// approved ones, by a kind nobody defined, takes no number from either, at the turn and
+        /// beneath a delegate.
+        #[test]
+        fn a_refusal_between_two_delegates_leaves_their_numbers_adjacent() {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            let first = turn
+                .before_delegate(&argument("reader"), &argument("look"))
+                .expect("a clean context may delegate");
+            turn.before_delegate(&argument("auditor"), &argument("look"))
+                .expect_err("no kind is called that");
+            let second = turn
+                .before_delegate(&argument("reader"), &argument("look"))
+                .expect("a clean context may delegate");
+            assert_eq!(
+                [first.id().to_string(), second.id().to_string()],
+                ["d1", "d2"]
+            );
+
+            let mut within_sink = RecordingSink::new();
+            let mut within = open_policy(&mut within_sink).within(&first);
+            let numbered = ["reader", "auditor", "auditor", "reader"].map(|kind| {
+                within
+                    .before_delegate(&argument(kind), &argument("look closer"))
+                    .map(|spec| spec.id().to_string())
+                    .unwrap_or_default()
+            });
+            assert_eq!(numbered, ["d1.1", "", "", "d1.2"]);
+        }
+
         /// The depth is what the bound on a chain of delegates is, and the kernel keeps it: a
         /// delegate at the bottom that names the tool anyway is refused, with nothing minted for
         /// the child it asked for and the trail saying which run asked.
@@ -14338,9 +14373,9 @@ five
             );
         }
 
-        /// A place in the tree is taken by a delegate that exists. A refusal still spends a
-        /// number, so the trail names the call it refused, but a planner that asked badly
-        /// several times has not used up what the turn may start.
+        /// A place in the tree and a number are taken by a delegate that exists. A planner that
+        /// asked badly several times has not used up what the turn may start, and the delegate it
+        /// then starts is `d1`, the first the turn started.
         #[test]
         fn a_refused_delegate_takes_no_place_in_the_tree() {
             let mut sink = RecordingSink::new();
@@ -14352,7 +14387,7 @@ five
             let first = turn
                 .before_delegate(&argument("reader"), &argument("look"))
                 .expect("refusals took places in the tree");
-            assert_eq!(first.id(), DelegateId::nth(MAX_DELEGATES + 1));
+            assert_eq!(first.id(), DelegateId::nth(1));
             let started = 1
                 + (1..MAX_DELEGATES)
                     .filter(|_| {

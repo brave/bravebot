@@ -7015,13 +7015,12 @@ fn spawn_agent<S: Sink, R: Reporter>(
     let mut rest_refused: Option<String> = None;
 
     for task in &tasks {
-        // Numbered by the kernel, beneath this run's own number in the order this run spawned
-        // them, and numbered before the gate decides rather than after so that the record of the
-        // gate names the delegate it approved. Everything recorded or reported about this
+        // Numbered by the kernel, beneath this run's own number in the order this run started
+        // them, when it approves the delegate. Everything recorded or reported about this
         // delegate carries the number, which is the only thing saying whose a line is: the
         // alternative is reading the line, which is prose a model wrote. A fan-out is exactly
-        // where two of them read alike, and a refusal is numbered for the same reason a
-        // permission is.
+        // where two of them read alike. A refusal takes no number, so the trail says which run
+        // was asked and the number only ever names a delegate that was approved.
         //
         // The trail's name for it is that number, not the task: a task is a paragraph, and it
         // would be in every line of the trail that mentions this run.
