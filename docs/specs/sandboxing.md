@@ -85,12 +85,17 @@ not have, and the audit trail records a sandbox that was never applied.
 ### SANDBOX-2: a policy that would confine nothing is refused
 
 A profile starts denying everything, grants accumulate onto it, and a fully permissive policy is
-rejected rather than applied. Granting everything is not a confinement decision.
+rejected rather than applied. Granting everything is not a confinement decision. A write row
+grants everything when it resolves to the root of a filesystem, whatever its spelling: `/..` is the
+same grant as `/`, and on Windows a drive root such as `C:\` is one too.
 
 `verified-by: bravebot_sandbox::policy::strict_permits_nothing`
 `verified-by: bravebot_sandbox::policy::allowances_accumulate`
 `verified-by: bravebot_sandbox::policy::a_strict_policy_is_meaningful`
 `verified-by: bravebot_sandbox::policy::granting_everything_is_not_meaningful`
+`verified-by: bravebot_sandbox::policy::granting_everything_spelled_another_way_is_not_meaningful`
+`verified-by: bravebot_sandbox::policy::a_grant_below_the_root_remains_meaningful`
+`verified-by: bravebot_sandbox::policy::granting_a_drive_root_is_not_meaningful`
 `verified-by: bravebot_sandbox::policy::network_alone_remains_meaningful`
 `verified-by: bravebot_sandbox::macos::a_fully_permissive_policy_is_refused`
 `verified-by: bravebot_sandbox::linux::a_fully_permissive_policy_is_refused`
