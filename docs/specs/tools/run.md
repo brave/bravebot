@@ -635,6 +635,16 @@ rationale names the case: a server told to serve serves, prints as it goes, and 
 for one and killing it at the limit leaves no moment at which it is up and can be used, so the turn
 that started a server could never talk to it.
 
+**A delegate's number is not a job name.** A delegate is numbered `d1`
+([DELEGATE-14](../delegation.md#DELEGATE-14)), and how it ended reaches the planner without being
+asked for, before the turn answers ([DELEGATE-17](../delegation.md#DELEGATE-17)). `job_output`
+neither reads one nor stops one. A name that is no job but is the number of a delegate this run
+started is answered as that: the planner is told it named a delegate, and that a message saying the
+delegate has finished or did not finish reaches it on its own. The answer is the same whether that
+message has come yet or not, since nothing the tool can see says which. "No such job" would read as
+a fact about the delegate. The name is compared with the numbers the kernel minted, as it is with
+the job names the driver minted.
+
 `verified-by: bravebot_agent::exec::a_background_pipeline_reports_what_it_printed_while_it_is_still_running`
 `verified-by: bravebot_agent::exec::a_background_pipeline_that_finishes_says_so_and_reports_its_code`
 `verified-by: bravebot_agent::exec::a_background_pipeline_reported_as_ended_has_all_of_its_output`
@@ -647,6 +657,8 @@ that started a server could never talk to it.
 `verified-by: bravebot_agent::turn::a_background_line_is_refused_for_any_redirection_it_carries`
 `verified-by: bravebot_agent::turn::a_refused_background_run_starts_nothing`
 `verified-by: bravebot_agent::turn::asking_about_a_job_that_does_not_exist_says_so`
+`verified-by: bravebot_agent::turn::a_job_output_call_naming_a_delegate_says_its_report_arrives_on_its_own`
+`verified-by: bravebot_core::policy::the_delegates_a_run_started_are_the_numbers_it_minted`
 
 <a id="RUN-16"></a>
 ### RUN-16: what a background job printed keeps the label its plan was given

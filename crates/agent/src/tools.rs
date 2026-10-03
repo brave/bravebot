@@ -6617,8 +6617,10 @@ fn call_server_tool<S: Sink, C: Confirmer, R: Reporter>(
 /// What a background pipeline has printed since it was last looked at.
 ///
 /// The job name is routing, and it is the driver's own: a name this module minted and looked up in
-/// its own map, so nothing the planner writes reaches anything but that lookup. The output is
-/// content and carries the label the kernel fixed before the pipeline started.
+/// its own map, so nothing the planner writes reaches anything but that lookup. A name that is no
+/// job is compared with the delegates the kernel numbered too, so a planner waiting on one is told
+/// where its report comes from. The output is content and carries the label the kernel fixed
+/// before the pipeline started.
 fn job_output<S: Sink, R: Reporter>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
@@ -6651,6 +6653,16 @@ fn job_output<S: Sink, R: Reporter>(
     };
 
     let Some(job) = tools.jobs.running.get_mut(&name) else {
+        // Started, not still running: the kernel does not know which have been collected, so
+        // the answer has to hold whether the report is still to come or already above.
+        if policy.delegates_started().any(|id| id.to_string() == name) {
+            return Produced::problem(format!(
+                "error: '{name}' is a delegate, not a background job, so job_output neither reads \
+                 it nor stops it. How it ended reaches you on its own, in a message saying {name} \
+                 has finished or did not finish, and you are not asked to answer before that \
+                 message has come."
+            ));
+        }
         return Produced::problem(format!(
             "error: there is no background job called '{name}'. Only a job name run handed back \
              in this turn can be read, and they do not outlive the turn."
@@ -12312,9 +12324,9 @@ mod tests {
             );
         }
 
-        /// The baseline for `job_output`. The name is read, which the trail says, and the lookup
-        /// against the turn's jobs then finds nothing, which is the whole of what this tool
-        /// decides from it.
+        /// The baseline for `job_output`. The name is read, which the trail says, and the lookups
+        /// against the turn's jobs and the delegates it started then find nothing, which is the
+        /// whole of what this tool decides from it.
         #[test]
         fn a_job_name_is_read_from_a_trusted_context() {
             let scratch = Scratch::new("job-trusted");
