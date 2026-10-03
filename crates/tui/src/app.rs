@@ -785,7 +785,7 @@ fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
             // typed into a mode that is going away goes with it. Neither is a character, so
             // neither is read as typing, and leaving both to do nothing left a mode whose only
             // way out was Escape.
-            KeyCode::Char('c') if ctrl => {
+            KeyCode::Char('c') if is_ctrl_c(key) => {
                 session.close_scroller();
                 Action::Redraw
             }
@@ -830,7 +830,7 @@ fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
             }
             Action::Redraw
         }
-        KeyCode::Char('c') if ctrl => {
+        KeyCode::Char('c') if is_ctrl_c(key) => {
             session.close_scroller();
             Action::Redraw
         }
@@ -976,7 +976,7 @@ fn history_search_key(session: &mut Session, key: KeyEvent) -> Action {
     // The chord that opened it closes it, and so does Ctrl-C: the nearest thing there is to stop is
     // the search, and the turn behind it goes on running, so the press that reaches it is the next
     // one.
-    if session.bindings().is_history(&key) || (ctrl && key.code == KeyCode::Char('c')) {
+    if session.bindings().is_history(&key) || is_ctrl_c(key) {
         session.close_history_search();
         return Action::Redraw;
     }
@@ -1176,7 +1176,9 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         session.abandon_half_typed();
     }
 
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    // Ctrl without Alt: this is only read by the arms for Ctrl-C and Ctrl-D, and Ctrl-Alt-C and
+    // Ctrl-Alt-D are chords a settings file can give to an action (INPUT-32).
+    let ctrl = holds_ctrl_without_alt(key.modifiers);
 
     // The hint offering the way out lives for one press, and this is it. Cleared before the arms
     // rather than after, so the Ctrl-C that puts it up survives its own press.
@@ -7124,7 +7126,7 @@ fn took_input(session: &mut Session, taken: &TermEvent) {
     session.key_arrived_alone = input::the_last_event_arrived_alone();
 
     let asks_to_leave = input::key_of(taken).is_some_and(|key| {
-        key.modifiers.contains(KeyModifiers::CONTROL)
+        holds_ctrl_without_alt(key.modifiers)
             && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d'))
     });
     if !asks_to_leave {
@@ -7142,7 +7144,16 @@ fn took_input(session: &mut Session, taken: &TermEvent) {
 /// did nothing whatever at the prompt. It leaves from the prompt now, so the press that stops a
 /// turn is followed by a press that leaves, and both requests have a key again.
 fn is_ctrl_c(key: KeyEvent) -> bool {
-    key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c'))
+    holds_ctrl_without_alt(key.modifiers) && matches!(key.code, KeyCode::Char('c'))
+}
+
+/// Whether Ctrl is held and Alt is not.
+///
+/// Ctrl-C and Ctrl-D are the chords that stop and leave (INPUT-4). Ctrl-Alt-C and Ctrl-Alt-D are
+/// different chords that a settings file may give to an action (INPUT-32), so the handlers for the
+/// first two must not answer the second two.
+fn holds_ctrl_without_alt(modifiers: KeyModifiers) -> bool {
+    modifiers.contains(KeyModifiers::CONTROL) && !modifiers.contains(KeyModifiers::ALT)
 }
 
 /// Whose line a turn is running.
@@ -11794,6 +11805,60 @@ mod tests {
             Action::Redraw
         );
         assert!(session.scrolling());
+    }
+
+    /// Ctrl-Alt-C and Ctrl-Alt-D are not Ctrl-C and Ctrl-D (INPUT-32). A settings file can give
+    /// them to an action, and the handlers that stop the turn and leave must not answer them: read
+    /// as Ctrl-C, the stash chord cleared the box and the scroller chord offered to leave.
+    #[test]
+    fn ctrl_alt_c_and_ctrl_alt_d_are_not_the_chords_that_stop_and_leave() {
+        let ctrl_alt =
+            |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL | KeyModifiers::ALT);
+        let mut session = Session::new("none");
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("stash".to_string(), "ctrl-alt-c".to_string());
+        moved.insert("scroller".to_string(), "ctrl-alt-d".to_string());
+        session.adopt_keybindings(&moved);
+        assert!(session.bindings().is_stash(&ctrl_alt('c')));
+        assert!(session.bindings().is_scroller(&ctrl_alt('d')));
+
+        type_line(&mut session, "a thought");
+        assert_eq!(handle_key(&mut session, ctrl_alt('c')), Action::Redraw);
+        assert!(
+            !session.cleared_by_interrupt,
+            "the stash chord was read as Ctrl-C"
+        );
+        assert_eq!(session.input(), "", "the stash chord did not stash");
+        handle_key(&mut session, ctrl_alt('c'));
+        assert_eq!(
+            session.input(),
+            "a thought",
+            "the stash was not brought back"
+        );
+
+        // Over an empty box the scroller chord must open the scroller, and leave nothing offered.
+        session.clear_input();
+        assert_eq!(handle_key(&mut session, ctrl_alt('d')), Action::Redraw);
+        assert!(session.scrolling(), "the scroller chord did not open it");
+        assert!(
+            !session.offered_to_leave,
+            "the scroller chord offered to leave"
+        );
+
+        // Inside the scroller, Ctrl-Alt-C is nobody's and must not close it as Ctrl-C does.
+        handle_key(&mut session, ctrl_alt('c'));
+        assert!(session.scrolling(), "Ctrl-Alt-C closed the scroller");
+        handle_key(&mut session, ctrl_alt('d'));
+        assert!(!session.scrolling(), "the chord did not close the scroller");
+
+        // Mid-turn, the press that would stop the turn is not this one.
+        assert!(!stops_the_turn(&session, ctrl_alt('c')));
+        assert!(!is_ctrl_c(ctrl_alt('c')));
+        assert!(is_ctrl_c(ctrl('c')));
+        assert!(
+            !session.bindings().claims(&ctrl('c')),
+            "Ctrl-C was taken by an action"
+        );
     }
 
     /// Inside the prompt search every character narrows the list, so a moved chord has to be read

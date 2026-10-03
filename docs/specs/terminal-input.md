@@ -1940,6 +1940,7 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::app::custom_keybindings_work_while_a_turn_runs`
 `verified-by: bravebot_tui::app::vi_mode_search_prompts_uses_configured_history_chord`
 `verified-by: bravebot_tui::app::configured_keybinding_overrides_readline_editing`
+`verified-by: bravebot_tui::app::ctrl_alt_c_and_ctrl_alt_d_are_not_the_chords_that_stop_and_leave`
 
 <a id="INPUT-33"></a>
 ### INPUT-33: a session takes the terminal for its length, and gives every part of it back
