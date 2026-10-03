@@ -1384,25 +1384,45 @@ impl Workspace {
             let resolved = self.resolve_attachment(&relative, reach)?;
             let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
 
-            let raw = std::fs::read(&resolved).map_err(|e| WorkspaceError::Io {
-                path: relative.clone(),
-                detail: e.to_string(),
-            })?;
-
-            if raw.len() > MAX_ATTACHMENT_BYTES {
-                return Err(WorkspaceError::TooLarge {
-                    path: relative,
-                    limit: MAX_ATTACHMENT_BYTES,
-                });
-            }
-
-            let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
-
-            Ok(Labelled::new(
-                format!("data:{media};base64,{encoded}"),
-                label,
-            ))
+            self.encode_attachment(&resolved, &relative, media)
+                .map(|text| Labelled::new(text, label))
         })
+    }
+
+    /// A picture or PDF as the data URI a slot holds, with no gate of its own.
+    ///
+    /// For the read a deferred slot is waiting on, where the policy layer has already asked every
+    /// question and only the bytes are missing, as [`Workspace::page`] is for text. `named` is
+    /// resolved as a confined read is.
+    pub(crate) fn attachment_text(
+        &self,
+        named: &str,
+        media: &str,
+    ) -> Result<String, WorkspaceError> {
+        let resolved = self.resolve_attachment(named, Reach::Confined)?;
+        self.encode_attachment(&resolved, named, media)
+    }
+
+    fn encode_attachment(
+        &self,
+        resolved: &Path,
+        relative: &str,
+        media: &str,
+    ) -> Result<String, WorkspaceError> {
+        let raw = std::fs::read(resolved).map_err(|e| WorkspaceError::Io {
+            path: relative.to_string(),
+            detail: e.to_string(),
+        })?;
+
+        if raw.len() > MAX_ATTACHMENT_BYTES {
+            return Err(WorkspaceError::TooLarge {
+                path: relative.to_string(),
+                limit: MAX_ATTACHMENT_BYTES,
+            });
+        }
+
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
+        Ok(format!("data:{media};base64,{encoded}"))
     }
 
     /// Read a bounded window of a file's lines, for the model.

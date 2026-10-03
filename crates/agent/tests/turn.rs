@@ -15307,6 +15307,34 @@ fn vet_a_picture(
     confirmer: &mut ShownAfterAVet,
     configure: impl FnOnce(&mut Config),
 ) -> (Vec<String>, RecordingSink, bravebot_agent::Conversation) {
+    let read = tool_request("read_file", &format!(r#"{{"path":"{}"}}"#, file.0));
+    vet_a_picture_after(
+        name,
+        file,
+        read,
+        trusting_the_workspace(),
+        check,
+        task,
+        cache,
+        confirmer,
+        configure,
+    )
+}
+
+/// [`vet_a_picture`] with the call that mints `ref:1` and the trust map chosen by the caller, so
+/// the reference can be one nothing has read yet.
+#[allow(clippy::too_many_arguments)]
+fn vet_a_picture_after(
+    name: &str,
+    file: (&str, Vec<u8>),
+    minting: String,
+    trust: bravebot_core::trust::TrustStore,
+    check: &str,
+    task: Task,
+    cache: Option<PathBuf>,
+    confirmer: &mut ShownAfterAVet,
+    configure: impl FnOnce(&mut Config),
+) -> (Vec<String>, RecordingSink, bravebot_agent::Conversation) {
     let scratch = Scratch::new(name);
     std::fs::write(scratch.path.join(file.0), file.1).unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
@@ -15314,7 +15342,7 @@ fn vet_a_picture(
     let (endpoint, received) = serve_sequence_answering_checks_with(
         vec![reply_with(check)],
         vec![
-            tool_request("read_file", &format!(r#"{{"path":"{}"}}"#, file.0)),
+            minting,
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"a screenshot of the login page"}"#,
@@ -15337,7 +15365,7 @@ fn vet_a_picture(
         confirmer,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
-        trusting_the_workspace(),
+        trust,
         bravebot_core::programs::TrustedPrograms::new(),
         None,
         &bravebot_core::cancel::Cancel::new(),
@@ -15441,6 +15469,111 @@ fn a_picture_a_person_opens_and_lets_through_is_attached_after_the_results() {
         )),
         "the copy left no record in the trail: {:#?}",
         sink.events()
+    );
+}
+
+/// VET-2: a reference to a file nothing has read yet is opened rather than refused, and a picture
+/// among them is opened as one. The listing of a directory nobody vouched for hands the planner one
+/// deferred reference per file, so this is the planner's ordinary way of asking about a screenshot
+/// it was never shown the name of. Read as text the file is refused as binary and no check is made.
+#[test]
+fn an_unread_reference_to_a_picture_is_opened_as_a_picture() {
+    let cache = Scratch::new("vet-unread-picture-cache");
+    let mut confirmer = ShownAfterAVet::new(true);
+    let shown = confirmer.shown.clone();
+    let (sent, _sink, _conversation) = vet_a_picture_after(
+        "vet-unread-picture",
+        ("shot.png", a_png()),
+        tool_request("list_files", r#"{"directory":"."}"#),
+        bravebot_core::trust::TrustStore::new("/work"),
+        A_SAFE_VERDICT,
+        Task::new("look at the screenshot"),
+        Some(cache.path.clone()),
+        &mut confirmer,
+        |_| {},
+    );
+
+    assert!(
+        !sent.iter().any(|body| body.contains("is a binary file")),
+        "an unread picture was refused as text: {sent:?}"
+    );
+    let asked = shown.lock().unwrap();
+    let request = asked.first().expect("the person was never asked");
+    let picture = request
+        .picture
+        .as_ref()
+        .expect("the prompt carried no copy, so the file was not opened as a picture");
+    assert_eq!(picture.media, "image/png");
+    assert_eq!(picture.bytes, a_png().len());
+    let check = sent
+        .iter()
+        .find(|body| body.contains(A_CHECK_ASKING))
+        .expect("no check was made");
+    assert!(
+        check.contains("data:image/png;base64,iVBORw0KGgo"),
+        "the check was not shown the picture: {check}"
+    );
+}
+
+/// VET-2: a delegate is not offered `vet_content` and is not answered when it names it anyway. The
+/// guard in dispatch is what makes the second half true, and the tool list says nothing about it.
+#[test]
+fn a_delegate_naming_vet_content_is_told_there_is_no_such_tool() {
+    let scratch = Scratch::new("delegate-vets");
+    std::fs::write(scratch.path.join("notes.txt"), "UNVOUCHED-BODY\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-VETTING",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"VET-THE-NOTES"}"#),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "VET-THE-NOTES",
+            vec![
+                tool_request("read_file", r#"{"path":"notes.txt"}"#),
+                tool_request("vet_content", r#"{"ref":"ref:1","expects":"some notes"}"#),
+                reply_with("I could not vet it"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ShownAfterAVet::new(true);
+    let shown = confirmer.shown.clone();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-THE-VETTING"),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        shown.lock().unwrap().is_empty(),
+        "a delegate's call to vet_content put a prompt to the person"
+    );
+    let asked = every_request(&received);
+    let delegates: Vec<&String> = asked
+        .iter()
+        .filter(|body| !body.contains("DELEGATE-THE-VETTING"))
+        .collect();
+    assert!(
+        delegates
+            .last()
+            .is_some_and(|body| body.contains("no such tool")),
+        "a delegate's call to vet_content was not refused as an unknown name: {delegates:?}"
     );
 }
 

@@ -557,7 +557,9 @@ fn a_picture_dropped_onto_the_task_reaches_the_planner() {
 /// The map starts with a rule against that exact path, which is what a turn writing fetched bytes
 /// there leaves behind, because a file inside the session's own directory is read as trusted
 /// otherwise and the drop would not be what decided it. Its bytes are text so a step can read them
-/// back; nothing here looks at a picture's bytes, and the drop is what this is about.
+/// back; nothing here looks at a picture's bytes, and the drop is what this is about. A step that
+/// reads a picture holds it as the data URI the driver encodes, so the answer is checked for the
+/// base64 of those bytes.
 #[test]
 fn a_dropped_picture_is_still_trusted_when_a_step_of_the_plan_reads_it() {
     let scratch = Scratch::new("dropped-task-trusted");
@@ -596,8 +598,11 @@ fn a_dropped_picture_is_still_trusted_when_a_step_of_the_plan_reads_it() {
         "the plan's own read of the dropped file was quarantined: {:?}",
         outcome.answer
     );
+    // "three stripes", as the data URI a picture is held as.
     assert!(
-        outcome.reply_for_display().contains("three stripes"),
+        outcome
+            .reply_for_display()
+            .contains("data:image/png;base64,dGhyZWUgc3RyaXBlcw=="),
         "the file's own bytes are not what came back: {}",
         outcome.reply_for_display()
     );

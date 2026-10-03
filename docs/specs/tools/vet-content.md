@@ -67,6 +67,8 @@ into a context nobody at the keyboard is watching.
 `verified-by: bravebot_agent::turn::a_model_listed_as_taking_no_pictures_is_never_asked_about_one`
 `verified-by: bravebot_agent::turn::a_picture_with_nowhere_to_copy_it_is_kept_back`
 `verified-by: bravebot_agent::tools::a_delegate_is_never_offered_a_way_to_promote_a_slot`
+`verified-by: bravebot_agent::turn::a_delegate_naming_vet_content_is_told_there_is_no_such_tool`
+`verified-by: bravebot_agent::turn::an_unread_reference_to_a_picture_is_opened_as_a_picture`
 
 <a id="VET-3"></a>
 ### VET-3: the result is the bytes, or a refusal that says to work without them
