@@ -428,6 +428,9 @@ fn given(
             }
         }
         None if alone && mcp::is_variable_name(word) => {
+            if variables.iter().any(|name| name == word) {
+                return Err(Refusal::Problem(Problem::Twice(word.to_string())));
+            }
             variables.push(word.to_string());
             Ok(())
         }
@@ -2138,6 +2141,7 @@ mod tests {
         };
         for flags in [
             &["-e", "A=1", "A=2", "--", "/opt/srv"][..],
+            &["-e", "A", "-e", "A", "--", "/opt/srv"],
             &["-e", "A", "-e", "A=2", "--", "/opt/srv"],
             &["-e", "A=2", "-e", "A", "--", "/opt/srv"],
         ] {
