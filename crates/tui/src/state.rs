@@ -6903,9 +6903,7 @@ impl Session {
         let pasted = self.pasted_named(&typed);
         let attached = self.attachments_named(&typed);
         let line = self.unfolded(&typed);
-        self.pasted.clear();
-        self.previews.clear();
-        self.attached.clear();
+        self.settle_staged();
         // Not through [`Session::clear_input`], which keeps a line typed mid-turn: a command carried
         // out while a turn runs (CMD-8) leaves the box as one carried out at rest does.
         self.history.leave();
@@ -7929,12 +7927,22 @@ impl Session {
     /// out means the same thing whether the thing behind it was dropped or pasted.
     fn take_line(&mut self, prompt: &str) -> (Vec<Attached>, Vec<AttachedImage>) {
         let attached = self.attachments_named(prompt);
-        self.attached.clear();
         let pasted = self.pasted_named(prompt);
-        self.pasted.clear();
-        self.previews.clear();
+        self.settle_staged();
         self.set_input(String::new());
         (attached, pasted)
+    }
+
+    /// Drop what was staged, except what the line put away still names.
+    ///
+    /// A stashed line holds only its words, and what its markers stand for stays staged beside it
+    /// (INPUT-17). Sending some other line must not take that with it, or the line comes back
+    /// carrying markers that name nothing.
+    fn settle_staged(&mut self) {
+        let stashed = self.stashed.as_deref().unwrap_or("");
+        self.attached.retain(|a| stashed.contains(&a.marker));
+        self.pasted.retain(|p| stashed.contains(&p.marker));
+        self.previews.retain(|(marker, _)| stashed.contains(marker));
     }
 
     /// Start a turn for a prompt, whether it was sent just now or waited for its turn.
@@ -16422,6 +16430,43 @@ mod tests {
             1,
             "the picture did not survive the round trip"
         );
+    }
+
+    /// Sending another line settles what that line named and nothing a put-away line still names:
+    /// the picture and the dropped file behind a stashed marker are there when the words come back,
+    /// and what nothing names is gone.
+    #[test]
+    fn sending_another_line_keeps_what_a_stashed_line_names() {
+        let mut s = session();
+        for c in "look at ".chars() {
+            s.type_char(c);
+        }
+        s.attach(picture(b"pixels"));
+        let line = s.input.clone();
+        s.stash();
+        for c in "hello".chars() {
+            s.type_char(c);
+        }
+        s.take_line("hello");
+
+        s.stash();
+        assert_eq!(s.input, line);
+        assert_eq!(
+            s.pasted_named(&s.input).len(),
+            1,
+            "sending another line cleared the picture the stashed line named"
+        );
+    }
+
+    /// The other half: a marker nothing names is still discarded, so keeping is not "never clear".
+    #[test]
+    fn sending_a_line_still_settles_what_nothing_names() {
+        let mut s = session();
+        s.attach(picture(b"pixels"));
+        let line = s.input.clone();
+        let (_, pasted) = s.take_line(&line);
+        assert_eq!(pasted.len(), 1);
+        assert!(s.pasted.is_empty(), "a sent picture stayed staged");
     }
 
     /// Off is what a session opens with, so a prompt appears for every slot until somebody says
