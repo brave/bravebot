@@ -653,6 +653,54 @@ fn a_turn_that_could_not_run_exits_non_zero() {
     );
 }
 
+/// `--trace` prints the trail of a run that ended in an error, after the error and on stderr
+/// (TRACE-5), where the trail is how a person finds out what was checked before the failure.
+///
+/// The turn fails on a backend nothing listens on, after the gates before the first request have
+/// already recorded themselves, so the sink is not empty when the error arrives.
+#[test]
+fn a_one_shot_run_that_failed_prints_its_trail_under_trace() {
+    let scratch = Scratch::new("cli-running-trace-on-failure");
+    let environment = [
+        ("SERVICES_KEY_AICHAT", "a-services-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+        ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+    ];
+
+    let traced = bravebot(
+        &scratch.path,
+        &environment,
+        &["--trace", "-p", "say something"],
+    );
+    let (stdout, stderr) = said(&traced);
+    assert!(
+        !traced.status.success(),
+        "the turn this is about did not fail: {stderr}"
+    );
+    let error = stderr.find("127.0.0.1:1").unwrap_or_else(|| {
+        panic!("the run failed over something other than the backend: {stderr}")
+    });
+    let trail = stderr
+        .find("audit trail")
+        .unwrap_or_else(|| panic!("a failed run printed no trail under --trace: {stderr}"));
+    assert!(error < trail, "the trail came before the error: {stderr}");
+    assert!(
+        stderr[trail..].contains("ok      precommit:"),
+        "the trail held no gate that ran before the failure: {stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "the trail went to the reply stream: {stdout}"
+    );
+
+    let untraced = bravebot(&scratch.path, &environment, &["-p", "say something"]);
+    let (_, stderr) = said(&untraced);
+    assert!(
+        !stderr.contains("audit trail"),
+        "a failed run printed the trail without --trace: {stderr}"
+    );
+}
+
 /// A hook that went wrong is said even by a run whose turn then failed (HOOK-7), which is the one
 /// case where the outcome that would have carried the sentence never arrives.
 ///
