@@ -122,6 +122,18 @@ fn text_without_control_characters_is_drawn_as_it_is() {
     assert!(drawn.contains("fn main() { let x = 1; }"), "{drawn}");
 }
 
+/// ratatui silently drops a tab, so one that reaches it leaves no trace in the preview or the
+/// heading. It is replaced with a visible glyph in both places.
+#[test]
+fn a_tab_in_the_content_or_the_origin_is_drawn_as_a_glyph() {
+    let mut session = quarantining(vec!["before\tafter".to_string()]);
+    session.transcript[0].shown.as_mut().expect("shown").origin = "dir\tname.md".to_string();
+
+    let drawn = screen(&session);
+    assert!(drawn.contains("before\u{2409}after"), "{drawn}");
+    assert!(drawn.contains("dir\u{2409}name.md"), "{drawn}");
+}
+
 /// The defect this file exists to prevent, reached by width rather than by an escape. A preview
 /// line wider than the terminal used to continue at column 0 with no margin at all, so untrusted
 /// bytes were drawn outside the block on a row the marking never reached.
