@@ -1209,6 +1209,10 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
             // Said only here. A press that leaves is not one to explain, and the hint is the
             // answer to what a person has just done rather than standing advice.
             session.cleared_by_interrupt = true;
+            // The hint says the next press leaves, so it has to: the table's line-taking rung also
+            // offers the way out. Held to the guard the rung that leaves is held to, since a run of
+            // bytes is one press however many keys it holds and must not arm what the next takes.
+            session.offered_to_leave = session.key_arrived_alone;
             Action::Redraw
         }
         // Before leaving, because a loop is a thing still happening and leaving is what a person
@@ -15378,13 +15382,38 @@ mod tests {
         session.restore("a");
         assert_eq!(session.input(), "a", "the stopped prompt came back");
 
+        // Taking the line is the offer, so the press after it is the one that leaves.
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
         assert!(!session.is_quitting());
+        assert!(session.offered_to_leave, "taking the line did not offer");
 
-        // The rung that leaves offers first, so the press that takes it is a second one.
-        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
         assert!(session.is_quitting());
+    }
+
+    /// The hint under a taken line says the next press exits, so one key between the two presses
+    /// must withdraw it like any other offer, and a press that arrived inside a run must not arm
+    /// it at all.
+    #[test]
+    fn a_taken_line_offers_the_way_out_only_to_a_lone_press() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "hello");
+        handle_key(&mut session, ctrl('c'));
+        handle_key(&mut session, key(KeyCode::Char('x')));
+        assert_ne!(
+            handle_key(&mut session, ctrl('c')),
+            Action::Quit,
+            "a key between the two presses left the offer standing"
+        );
+
+        let mut session = Session::new("none");
+        type_line(&mut session, "hello");
+        session.key_arrived_alone = false;
+        handle_key(&mut session, ctrl('c'));
+        assert!(session.input().is_empty(), "the line was not taken");
+        assert!(!session.offered_to_leave, "a run of bytes armed the offer");
+        session.key_arrived_alone = false;
+        assert_ne!(handle_key(&mut session, ctrl('c')), Action::Quit);
     }
 
     /// Escape is still the key that stops a turn, and stopping a turn is not leaving. Losing that
