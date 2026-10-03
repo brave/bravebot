@@ -24478,11 +24478,11 @@ fn a_fetched_page_never_reaches_the_planner() {
 /// The same property for the road a 200 takes. A reference's origin is the driver's own words
 /// about where content came from: it is formatted into the planner's context, the trace and the
 /// transcript verbatim, and a redirect puts the request on a URL a server wrote into a `Location`
-/// header. So the origin names the URL that was asked for, not the one the body arrived from:
+/// header. So the origin names the host that was asked for, not the URL the body arrived from:
 /// otherwise a header is a sentence the planner reads as though the driver wrote it, on the one
 /// road where the body itself is quarantined and nothing else of the server's gets through.
 #[test]
-fn a_fetched_page_names_the_url_that_was_asked_for_and_not_where_a_redirect_went() {
+fn a_fetched_page_names_the_host_that_was_asked_for_and_not_where_a_redirect_went() {
     let scratch = Scratch::new("fetch-redirect-origin");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
