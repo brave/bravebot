@@ -263,7 +263,22 @@ fn value_of(first: &str, wrapped: &[&str]) -> String {
     if !first.is_empty() {
         parts.push(first);
     }
-    parts.extend(wrapped.iter().map(|l| l.trim()).filter(|l| !l.is_empty()));
+    if joiner == "\n" {
+        // A blank line inside a literal block is one of the newlines it asked for. Those before
+        // the first line and after the last belong to the file's layout and are dropped.
+        let lines: Vec<&str> = wrapped.iter().map(|l| l.trim()).collect();
+        let from = lines
+            .iter()
+            .position(|l| !l.is_empty())
+            .unwrap_or(lines.len());
+        let to = lines
+            .iter()
+            .rposition(|l| !l.is_empty())
+            .map_or(from, |at| at + 1);
+        parts.extend(&lines[from..to]);
+    } else {
+        parts.extend(wrapped.iter().map(|l| l.trim()).filter(|l| !l.is_empty()));
+    }
 
     unquoted(&parts.join(joiner))
 }
@@ -944,6 +959,18 @@ mod tests {
         assert_eq!(folded.expect("parses").description, "one two");
         let literal = parse_frontmatter("---\nname: n\ndescription: |\n  one\n  two\n---\n");
         assert_eq!(literal.expect("parses").description, "one\ntwo");
+    }
+
+    /// A blank line inside a literal block is a newline the file asked for, so a paragraph break
+    /// survives. Blank lines around the block are layout and do not add newlines to the value,
+    /// and a folded block has no paragraph break to keep.
+    #[test]
+    fn a_blank_line_inside_a_literal_block_is_kept() {
+        let literal =
+            parse_frontmatter("---\nname: n\ndescription: |\n  one\n\n  two\n\nother: x\n---\n");
+        assert_eq!(literal.expect("parses").description, "one\n\ntwo");
+        let folded = parse_frontmatter("---\nname: n\ndescription: >\n  one\n\n  two\n---\n");
+        assert_eq!(folded.expect("parses").description, "one two");
     }
 
     /// The planner already has the name and the description. Sending them again spends context
