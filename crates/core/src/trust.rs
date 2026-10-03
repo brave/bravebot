@@ -253,8 +253,7 @@ impl TrustStore {
 
     fn decision_at_key(&self, path: &str) -> Option<Option<Integrity>> {
         // Probe only whole-segment ancestors, from the most specific to the least.
-        // Each lookup costs O(log rules). Where the volume folds case, a probe with no exact hit
-        // also scans every rule.
+        // Each lookup costs O(log rules). Where the volume folds case, a probe scans every rule.
         let mut prefix = path;
         while !prefix.is_empty() && prefix != "/" {
             if let Some(decision) = self.rule_at(prefix) {
@@ -277,20 +276,19 @@ impl TrustStore {
 
     /// The decision recorded under `key`, reached however the key was spelled.
     ///
-    /// A direct hit by the map's own keying first. Where the volume answers to either spelling of a
-    /// name ([`TrustStore::folding_case`]), a spelling that missed directly is then looked up
-    /// case-insensitively: a rule written about `src/fetched.json` decides the very same bytes read
-    /// as `SRC/fetched.json`, and a probe that could not see it would answer from the trusted rule
-    /// above the file instead, the laundering spelled-past-a-rule closes elsewhere. Folding only
+    /// Where the volume answers to either spelling of a name ([`TrustStore::folding_case`]), the
+    /// rule that sorts first among every key spelling the same name decides, an exact-spelling hit
+    /// included: a rule written about `src/fetched.json` decides the very same bytes read as
+    /// `SRC/fetched.json`, and a probe that could not see it would answer from the trusted rule
+    /// above the file instead, the laundering spelled-past-a-rule closes elsewhere. Two rules that
+    /// differ only in case can coexist, and giving the exact spelling priority would let a
+    /// distrust recorded under one spelling miss a file vouched for under the other. Folding only
     /// reaches a rule already written, and on such a volume the two spellings are one file, so no
     /// rule reaches a file it was not about. Otherwise the map stays byte-exact.
     /// The scan costs one pass over the rules a person's decisions have written.
     fn rule_at(&self, key: &str) -> Option<&Option<Integrity>> {
-        if let Some(decision) = self.rules.get(key) {
-            return Some(decision);
-        }
         if !self.folds_case {
-            return None;
+            return self.rules.get(key);
         }
         let folded = fold_case(key);
         self.rules
@@ -814,6 +812,32 @@ mod tests {
             Some(Integrity::Untrusted),
             "a distrusted file beneath a directory was not seen under another spelling of it"
         );
+    }
+
+    /// Two rules differing only in case can coexist on a folding volume, and the one that sorts
+    /// first decides both spellings, whichever spelling the probe uses and in either polarity.
+    #[test]
+    fn a_folding_volume_lets_the_sort_first_case_variant_decide_both_spellings() {
+        for (first, second) in [
+            (Integrity::Untrusted, Integrity::Trusted),
+            (Integrity::Trusted, Integrity::Untrusted),
+        ] {
+            let mut store = TrustStore::new("/work").folding_case(true);
+            // "/work/Docs/a.md" sorts before "/work/docs/a.md".
+            for (path, integrity) in [("Docs/a.md", first), ("docs/a.md", second)] {
+                match integrity {
+                    Integrity::Trusted => store.trust(path),
+                    Integrity::Untrusted => store.distrust(path),
+                }
+            }
+            for spelling in ["Docs/a.md", "docs/a.md", "DOCS/A.MD"] {
+                assert_eq!(
+                    store.integrity_of(spelling),
+                    Some(first),
+                    "{spelling} was not decided by the rule that sorts first"
+                );
+            }
+        }
     }
 
     /// On a volume that holds `Docs` and `docs` apart they are two files, so a rule about one
