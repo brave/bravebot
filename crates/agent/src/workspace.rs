@@ -2316,6 +2316,12 @@ pub struct Listing {
     pub directories: Vec<String>,
     /// Whether files were left out because a cap was reached.
     pub truncated: bool,
+    /// Whether a directory beneath the one named could not be opened and was left out.
+    ///
+    /// A fact about the shape of the walk and never the directory's name: the error that opening
+    /// it produced spells that name, which is a name out of the tree and would reach the planner
+    /// as a sentence the driver wrote (LIST-2).
+    pub unreadable: bool,
 }
 
 /// The result of a content search. Reports truncation for the same reason as [`Listing`].
@@ -2421,6 +2427,8 @@ struct Collected<'a> {
     /// short of the tree for a reason no query can get around, so that it does not report an empty
     /// answer as evidence about what the tree holds.
     withheld: bool,
+    /// Whether a nested directory could not be opened and the walk went on without it.
+    unreadable: bool,
 }
 
 impl Collected<'_> {
@@ -2512,18 +2520,15 @@ impl Workspace {
                 under: &under,
             });
             let denied = |path: &str| policy.read_is_denied(path);
-            let _ = self.walk_filtered(
-                &root,
-                wanted,
-                depth,
-                MAX_ENTRIES,
-                &denied,
-                &mut Collected {
-                    files: &mut found,
-                    stopped_at: &mut stopped_at,
-                    withheld: false,
-                },
-            )?;
+            let mut collected = Collected {
+                files: &mut found,
+                stopped_at: &mut stopped_at,
+                withheld: false,
+                unreadable: false,
+            };
+            let _ =
+                self.walk_filtered(&root, wanted, depth, MAX_ENTRIES, &denied, &mut collected)?;
+            let unreadable = collected.unreadable;
             found.sort();
             stopped_at.sort();
 
@@ -2550,6 +2555,7 @@ impl Workspace {
                     files: found,
                     directories: stopped_at,
                     truncated,
+                    unreadable,
                 },
                 label,
             ))
@@ -2676,6 +2682,7 @@ impl Workspace {
                 files: &mut paths,
                 stopped_at: &mut ignored,
                 withheld: false,
+                unreadable: false,
             };
             let unvisited = self.walk_filtered(
                 &root,
@@ -3322,15 +3329,22 @@ impl Workspace {
             }
             // Propagated rather than left to the next iteration's check, which a directory
             // with nothing after it never reaches.
-            if self.walk_filtered(
+            //
+            // A failure to open this one is not propagated: the error spells the directory's
+            // name, an entry out of the walk, and a failure a tool words is trusted text the
+            // planner reads as the driver's own (LIST-2). The walk goes on without it and
+            // records only that it did, which a caller says without a name.
+            match self.walk_filtered(
                 &path,
                 wanted,
                 remaining.map(|left| left - 1),
                 limit,
                 denied,
                 collected,
-            )? {
-                return Ok(true);
+            ) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(_) => collected.unreadable = true,
             }
         }
         Ok(false)

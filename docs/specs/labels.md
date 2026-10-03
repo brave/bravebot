@@ -34,11 +34,11 @@ guards:
       - crates/agent/src/mcp.rs: 3
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
-      - crates/agent/src/tools.rs: 33
+      - crates/agent/src/tools.rs: 34
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
-      - crates/agent/tests/workspace.rs: 44
+      - crates/agent/tests/workspace.rs: 45
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 2
       - crates/core/src/policy.rs: 61
@@ -57,7 +57,7 @@ guards:
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4
-      - crates/agent/tests/workspace.rs: 191
+      - crates/agent/tests/workspace.rs: 192
       - crates/core/src/policy.rs: 23
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
