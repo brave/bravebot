@@ -700,11 +700,17 @@ fn discover_workspace<S: Sink>(
         return;
     }
 
+    // Counted rather than named, as the directory above is (SKILL-6). The directory is vouched
+    // for, but a skill file inside it can still be distrusted, and the name of a directory a
+    // turn that acted on untrusted content created is that content's to choose.
+    let mut denied = 0;
+    let mut distrusted = 0;
+
     for name in names {
         let relative = format!("{WORKSPACE_SKILLS}/{name}/{SKILL_FILE}");
 
         if workspace.rule_denies_reading(policy, &relative) {
-            notices.push(Notice::denied_by_rule(&relative));
+            denied += 1;
             continue;
         }
         let Ok(contents) = workspace.read(policy, &Labelled::trusted(relative.clone())) else {
@@ -717,9 +723,7 @@ fn discover_workspace<S: Sink>(
         // every turn in an untrusted directory as one where something was refused and teach the
         // user to ignore the times it means something.
         if !contents.label().is_trusted() {
-            notices.push(Notice::new(format!(
-                "{relative} was not loaded: it is not trusted"
-            )));
+            distrusted += 1;
             continue;
         }
         let Ok(text) = policy.read_trusted_content("skills", &contents) else {
@@ -746,6 +750,18 @@ fn discover_workspace<S: Sink>(
             None => notices.push(Notice::new(format!(
                 "{relative} was skipped: it needs a name and a description in its frontmatter"
             ))),
+        }
+    }
+
+    for (n, why) in [
+        (distrusted, "the file is not trusted"),
+        (denied, "a deny rule in your settings covers the file"),
+    ] {
+        if n > 0 {
+            let (count, verb) = counted(n);
+            notices.push(Notice::new(format!(
+                "{count} in {WORKSPACE_SKILLS} {verb} not loaded: {why}"
+            )));
         }
     }
 }
