@@ -492,6 +492,9 @@ allow rule quietly removed a deny rule's protection.
 `verified-by: bravebot_agent::permissions::an_entry_that_is_not_a_line_is_reported_to_a_run_nobody_is_watching`
 `verified-by: bravebot_agent::permissions::a_rule_list_that_is_not_a_list_is_reported_with_its_file`
 `verified-by: bravebot_agent::permissions::a_blank_rule_is_reported_as_empty`
+`verified-by: bravebot_core::permissions::a_dropped_rule_is_named_in_the_spelling_the_file_used`
+`verified-by: bravebot_agent::permissions::a_padded_unreadable_rule_is_reported_in_the_spelling_the_file_used`
+`verified-by: bravebot_ui_bridge::rules::a_padded_unreadable_rule_is_not_listed_as_in_force`
 `verified-by: bravebot_agent::permissions::every_reason_a_rule_is_dropped_for_says_something_of_its_own`
 `verified-by: bravebot_cli::running::doctor_names_a_permission_entry_that_is_not_a_rule`
 `verified-by: bravebot_agent::permissions::a_checkouts_unreadable_allow_entry_is_named_to_a_run_nobody_is_watching`

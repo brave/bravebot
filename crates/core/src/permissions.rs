@@ -210,14 +210,20 @@ impl Rule {
     /// so `doctor` can name it. Guessing would be worse than ignoring: a misread deny rule reads
     /// as protection that is not there.
     pub fn parse(text: &str, anchors: &Anchors) -> Result<Self, Rejected> {
-        let rule = text.trim();
-        if rule.is_empty() {
-            // The spelling the file used, not the nothing that is left of it. A line of three
-            // spaces and a line of none are two entries somebody has to find in their file, and a
-            // report calling both of them `''` names neither.
+        // A rejection names the entry in the spelling the file used, not the trimmed text that was
+        // read. Two lines that differ only in surrounding space are two entries somebody has to
+        // find in their file, and a report that trimmed them names neither.
+        Self::parse_trimmed(text.trim(), anchors).map_err(|rejected| Rejected {
+            text: text.to_string(),
+            ..rejected
+        })
+    }
+
+    /// [`Rule::parse`] on text with its surrounding space already removed.
+    fn parse_trimmed(text: &str, anchors: &Anchors) -> Result<Self, Rejected> {
+        if text.is_empty() {
             return Err(Rejected::new(text, Unreadable::Empty));
         }
-        let text = rule;
 
         let (name, specifier) = match text.split_once('(') {
             None => (text, None),
@@ -1690,6 +1696,37 @@ mod tests {
         let (permissions, rejected) = Permissions::parse(&texts, &[], &[], &anchors());
         assert!(permissions.is_empty(), "an unreadable rule was kept");
         assert_eq!(rejected.len(), texts.len());
+    }
+
+    /// PERM-11: a dropped rule is named in the spelling the file used, for every reason and not
+    /// only an empty one. Two lines that differ only in surrounding space are two entries to find
+    /// in the file, and a report that trimmed them would name both the same.
+    #[test]
+    fn a_dropped_rule_is_named_in_the_spelling_the_file_used() {
+        let texts: Vec<String> = [
+            "Bash(git diff",
+            " Bash(git diff",
+            "Bash(git diff \t",
+            "  Fetchh(domain:denied.test)",
+            "\tWebFetch(https://example.com/docs) ",
+            " Bash() ",
+            // A home-anchored path rule with no home to resolve it against.
+            " Read(~/.env) ",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let no_anchors = Anchors::none();
+        for text in &texts {
+            let rejected = Rule::parse(text, &no_anchors).expect_err(text);
+            assert_eq!(&rejected.text, text);
+        }
+        let (permissions, rejected) = Permissions::parse(&texts, &[], &[], &no_anchors);
+        assert!(permissions.is_empty());
+        assert_eq!(
+            rejected.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(),
+            texts.iter().map(String::as_str).collect::<Vec<_>>()
+        );
     }
 
     /// A rule names a server, or one tool of it, and matches the two names whole: `weather` is not
