@@ -318,10 +318,11 @@ pub const NULL_DEVICE: &str = "/dev/null";
 
 /// Whether a redirection target is [`NULL_DEVICE`], spelled as such.
 ///
-/// Matched on the spelling, so a link to the device, or `/dev/../dev/null`, is an ordinary path and
-/// is confined as one.
+/// Matched on the exact spelling, so a link to the device, `/dev/../dev/null`, `/dev//null` and
+/// `/dev/./null` are ordinary paths and are confined as such. `Path` equality is not used because it
+/// ignores repeated and interior-dot separators.
 pub fn is_the_null_device(path: &Path) -> bool {
-    path == Path::new(NULL_DEVICE)
+    path.as_os_str() == NULL_DEVICE
 }
 
 /// One program in a plan, resolved.
