@@ -3044,6 +3044,18 @@ mod tests {
         assert_eq!(plan.writes.len(), 2, "{:?}", plan.writes);
     }
 
+    /// Repeated and interior-dot separators name the same file as `/dev/null`, but only the exact
+    /// spelling is a discard. Path equality would fold these into the device and skip the write
+    /// gates.
+    #[test]
+    fn a_separator_variant_of_the_null_device_is_a_write() {
+        let tree = Tree::new("discard-separators");
+        for line in ["cat > /dev//null", "cat > /dev/./null", "cat >> //dev/null"] {
+            let plan = compiled(line, &tree.root);
+            assert_eq!(plan.writes.len(), 1, "`{line}` wrote {:?}", plan.writes);
+        }
+    }
+
     /// A destination worked out from what is on disk is a destination that moves when the tree
     /// does, so the plan would stop saying where the bytes go.
     #[test]
