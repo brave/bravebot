@@ -6520,13 +6520,15 @@ fn fetch_url<S: Sink, C: Confirmer>(
                 tally(text.lines().count(), "line", "lines")
             );
 
-            // The URL as it was requested. A redirect chain ends somewhere the person approving
-            // never saw, and naming that here would present a host nobody agreed to as though they
-            // had, in the planner's context, the trace and the transcript alike. Nothing here can
-            // name it in any case: where a chain went does not leave the crate that followed it.
+            // The host as it was requested, and not the URL: this origin is written into the trail,
+            // which holds no userinfo, path, query or fragment (TRACE-2). A redirect chain ends
+            // somewhere the person approving never saw, and naming that here would present a host
+            // nobody agreed to as though they had, in the planner's context, the trace and the
+            // transcript alike. Nothing here can name it in any case: where a chain went does not
+            // leave the crate that followed it.
             let mut produced = Produced::new(
                 Labelled::new(text, body_label),
-                format!("what {url} returned"),
+                format!("what {host} returned"),
                 note,
             )
             .of_content()

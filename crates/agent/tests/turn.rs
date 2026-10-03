@@ -24519,8 +24519,8 @@ fn a_fetched_page_names_the_url_that_was_asked_for_and_not_where_a_redirect_went
         "the redirect the server chose reached the planner's context: {second}"
     );
     assert!(
-        second.contains(&format!("what {site}/start returned")),
-        "the reference did not name the URL that was asked for: {second}"
+        second.contains("what 127.0.0.1 returned"),
+        "the reference did not name the host that was asked for: {second}"
     );
 }
 
@@ -28097,6 +28097,45 @@ fn nothing_recorded_about_a_request_carries_the_credential_in_its_url() {
     )
     .unwrap_err();
     assert!(!format!("{sink:?}").contains("REVIEW_SECRET"), "{sink:?}");
+}
+
+/// A fetched body's origin is formatted into the `present` and `quarantine` gates' detail, which is
+/// the trail. The URL the planner proposed may carry userinfo, a path, a query and a fragment, and
+/// all of it is the planner's to choose, so only the destination host may be written down.
+#[test]
+fn a_fetch_records_the_host_and_none_of_the_rest_of_the_url_in_the_trail() {
+    let scratch = Scratch::new("fetch-trail-secret");
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (site, _requests) = serve_pages(vec![page("the docs")]);
+    let host = site.trim_start_matches("http://").to_string();
+    let url = format!("http://user:TRAIL_PW@{host}/TRAIL_PATH?api_key=TRAIL_QUERY#TRAIL_FRAG");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{url}"}}"#)),
+        reply_with("done"),
+    ]);
+    let mut sink = RecordingSink::new();
+    let outcome = turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("read the page"),
+        &mut bravebot_agent::confirm::ApproveFetches,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+    assert!(outcome.clean, "no gate should have refused");
+    let trail = format!("{sink:?}");
+    assert!(
+        trail.contains("what 127.0.0.1 returned"),
+        "the fetch was not recorded against its host: {trail}"
+    );
+    for secret in ["TRAIL_PW", "TRAIL_PATH", "TRAIL_QUERY", "TRAIL_FRAG"] {
+        assert!(
+            !trail.contains(secret),
+            "{secret} reached the trail: {trail}"
+        );
+    }
 }
 
 /// A delegate's failure is written into the parent's conversation, which is the planner's context:
