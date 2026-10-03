@@ -4922,14 +4922,31 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         reason,
         counted,
     ) {
-        Ok((text, counted)) => {
+        Ok((text, counted, endorsed)) => {
             let lines = tally(counted, "line", "lines");
-            Produced::new(text, format!("what {slot} held"), format!("{lines}, read"))
-                .of_content()
-                .costing(spent)
-                .waiting(waited)
+            Produced::new(
+                text,
+                format!("what {slot} held"),
+                released_note(format!("{lines}, read"), endorsed),
+            )
+            .of_content()
+            .costing(spent)
+            .waiting(waited)
         }
         Err(refused) => (*refused).costing(spent).waiting(waited),
+    }
+}
+
+/// The row note for one slot's bytes once released, saying who released them. The trail tells the
+/// three apart too, but nobody reads it while a turn runs.
+///
+/// Matched whole so a fourth way of releasing fails to compile here rather than borrowing a
+/// person's wording. Nothing the check wrote reaches these words.
+fn released_note(done: String, endorsed: Endorsed) -> String {
+    match endorsed {
+        Endorsed::ByAPerson => done,
+        Endorsed::ByASafeVerdict => format!("{done} without asking: a check found nothing"),
+        Endorsed::ByBypassing => format!("{done} without asking or checking"),
     }
 }
 
@@ -5021,13 +5038,13 @@ pub(crate) fn read_in_the_result<S: Sink, C: Confirmer>(
         0,
     )
     .ok()
-    .map(|(text, _)| text)
+    .map(|(text, _, _)| text)
 }
 
 /// Put one slot a program printed to whoever answers for reading it, and hand the planner a new
 /// value if they agree. The half of `read_output` that comes after the reference is accepted and
-/// any check has spoken, returning the text and how many lines it holds, or the result to hand
-/// back instead.
+/// any check has spoken, returning the text, how many lines it holds and who released it, or the
+/// result to hand back instead.
 #[allow(clippy::too_many_arguments)]
 fn release_output<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
@@ -5039,7 +5056,7 @@ fn release_output<S: Sink, C: Confirmer>(
     verdict: Verdict,
     reason: Option<String>,
     mut counted: usize,
-) -> Result<(Labelled<String>, usize), Box<Produced>> {
+) -> Result<(Labelled<String>, usize, Endorsed), Box<Produced>> {
     // Who the trail is credited to, which the mode decides along with the verdict. The one branch
     // on a verdict that decides more than which sentence a person reads first is inside it, and it
     // is reachable only where somebody turned auto-vetting on: `Safe` is the only word that answers
@@ -5112,7 +5129,7 @@ fn release_output<S: Sink, C: Confirmer>(
     policy.issue_grant("read_output", "ref", slot.to_string());
 
     match policy.read_output(slot, slots, endorsed) {
-        Ok(text) => Ok((text, counted)),
+        Ok(text) => Ok((text, counted, endorsed)),
         Err(denial) => Err(Box::new(Produced::problem(format!("refused: {denial}")))),
     }
 }
@@ -5368,10 +5385,14 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         None => match policy.promote_vetted(&slot, tools.slots, endorsed) {
             Ok(text) => {
                 let lines = tally(counted, "line", "lines");
-                Produced::new(text, format!("what {slot} held"), format!("{lines}, read"))
-                    .of_content()
-                    .costing(spent)
-                    .waiting(waited)
+                Produced::new(
+                    text,
+                    format!("what {slot} held"),
+                    released_note(format!("{lines}, read"), endorsed),
+                )
+                .of_content()
+                .costing(spent)
+                .waiting(waited)
             }
             Err(denial) => Produced::problem(format!("refused: {denial}")),
         },
@@ -5387,7 +5408,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
                          after these results, where you can look at it."
                     )),
                     format!("what {slot} held"),
-                    format!("{kind}, attached"),
+                    released_note(format!("{kind}, attached"), endorsed),
                 )
                 .attaching(attached)
                 .costing(spent)
