@@ -3318,7 +3318,12 @@ impl Workspace {
             // file is not a file this walk may report, so it is not one the budget is spent on
             // either.
             if denied(&relative) {
-                collected.withheld = true;
+                // Only a file the include selected is one the rule kept from this search. One it
+                // did not select is not what the empty answer is about, and saying a rule is the
+                // reason would tell the planner not to rewrite a glob that is the actual problem.
+                if wanted.is_none_or(|wanted| wanted.admits(&relative)) {
+                    collected.withheld = true;
+                }
                 continue;
             }
             match wanted {
@@ -3336,7 +3341,9 @@ impl Workspace {
             // descends into it nor names it: a rule reaching one file of a directory is written
             // against the files, and one reaching the directory is written against all of them.
             if denied(&relative) {
-                collected.withheld = true;
+                if wanted.is_none_or(|wanted| self.selects_beneath(&path, wanted)) {
+                    collected.withheld = true;
+                }
                 continue;
             }
             if remaining.is_some_and(|left| left <= 1) {
@@ -3364,6 +3371,30 @@ impl Workspace {
             }
         }
         Ok(false)
+    }
+
+    /// Whether `wanted` admits any file beneath `directory`, which a rule has fenced off.
+    ///
+    /// Asked only to decide whether the rule is the reason a search found nothing, so it reads
+    /// names and nothing else, reports none of them, and stops at the first one admitted. Walks
+    /// the same entries `walk_filtered` would: no links, no ignored directories.
+    fn selects_beneath(&self, directory: &Path, wanted: Wanted<'_>) -> bool {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return false;
+        };
+        entries.flatten().any(|entry| {
+            let Ok(kind) = entry.file_type() else {
+                return false;
+            };
+            if kind.is_symlink() {
+                false
+            } else if kind.is_dir() {
+                !is_ignored_directory(entry.file_name().to_string_lossy().as_ref())
+                    && self.selects_beneath(&entry.path(), wanted)
+            } else {
+                kind.is_file() && wanted.admits(&self.relative_display(&entry.path()))
+            }
+        })
     }
 
     /// How a path is named back to the caller.
