@@ -155,6 +155,9 @@ renamed for less than this.
 `verified-by: bravebot_skus::store::a_refilled_batch_is_written_back`
 `verified-by: bravebot_skus::store::a_spend_after_a_refill_comes_out_of_the_new_batch`
 `verified-by: bravebot_skus::store::a_batch_imported_for_another_environment_mid_session_is_not_spent`
+`verified-by: bravebot_skus::store::a_failed_spend_write_is_not_written_over_a_later_import`
+`verified-by: bravebot_skus::store::a_failed_spend_write_leaves_nothing_for_the_end_of_the_session_to_write`
+`verified-by: bravebot_skus::store::a_refilled_batch_is_not_written_over_another_environment`
 `verified-by: bravebot_skus::store::a_write_replaces_the_file_rather_than_truncating_it`
 `verified-by: bravebot_skus::store::a_write_leaves_neither_a_temporary_nor_a_claim_behind`
 `verified-by: bravebot_skus::store::a_detached_batch_has_nowhere_to_write`

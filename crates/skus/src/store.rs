@@ -836,13 +836,21 @@ impl Wallet {
     /// memory alone.
     pub fn spend(&mut self, now: &str) -> Result<Spent, StoreError> {
         let Some(destination) = self.destination.clone() else {
-            return self.take(now);
+            return self.take(now).map(|(spent, _)| spent);
         };
 
         let _claim = Claim::take(&destination)?;
         self.reconcile()?;
-        let spent = self.take(now)?;
-        write_at(&destination, &self.batch)?;
+        let unwritten = self.dirty;
+        let (spent, index) = self.take(now)?;
+        if let Err(e) = write_at(&destination, &self.batch) {
+            // The credential never left this wallet, so the spend is taken back rather than left
+            // as a pending write: a later flush would write this batch over a file another import
+            // or wallet has changed since, and a later spend would skip the read that sees it.
+            self.batch.credentials[index].spent = false;
+            self.dirty = unwritten;
+            return Err(e);
+        }
         self.dirty = false;
         Ok(spent)
     }
@@ -854,9 +862,6 @@ impl Wallet {
         // A wallet holding a batch the file has not seen is the newer of the two: `refill` puts a
         // freshly minted one here because the stored batch had nothing left, and reading over it
         // would spend the exhausted batch it replaced.
-        if self.dirty {
-            return Ok(());
-        }
         // A read that fails leaves the batch in hand. The file is gone, or holds something this
         // version cannot read, and there are no markers to learn from either way.
         let Ok(stored) = load() else {
@@ -875,12 +880,17 @@ impl Wallet {
                 ),
             });
         }
-        self.batch = stored;
+        // The environment is checked even when the wallet holds a refilled batch, since writing
+        // that over a file imported for another deployment costs the person the import just the
+        // same. What the file says is only taken up when it is the newer of the two.
+        if !self.dirty {
+            self.batch = stored;
+        }
         Ok(())
     }
 
     /// Mark the next credential usable at `now` spent, in the batch in hand.
-    fn take(&mut self, now: &str) -> Result<Spent, StoreError> {
+    fn take(&mut self, now: &str) -> Result<(Spent, usize), StoreError> {
         let index = match self.batch.next_usable(now) {
             Some(index) => index,
             // Nothing usable is normal rather than exceptional: a batch covers a few daily windows
@@ -898,11 +908,12 @@ impl Wallet {
         self.batch.credentials[index].spent = true;
         self.dirty = true;
 
-        Ok(Spent {
+        let spent = Spent {
             credential: self.batch.credentials[index].clone(),
             issuer: self.batch.issuer.clone(),
             remaining: self.batch.remaining(),
-        })
+        };
+        Ok((spent, index))
     }
 
     /// The order this batch belongs to, so a refill knows what to register against.
@@ -937,6 +948,9 @@ impl Wallet {
             return Ok(());
         };
         let _claim = Claim::take(&destination)?;
+        // Under the claim, so what is read cannot change before the write: a refill minted for one
+        // deployment is not written over a batch another import has since put there for another.
+        self.reconcile()?;
         write_at(&destination, &self.batch)?;
         self.dirty = false;
         Ok(())
@@ -1477,6 +1491,99 @@ mod tests {
                 wallet.spend("2026-08-22T12:00:00"),
                 Err(StoreError::Unusable { .. })
             ));
+            assert_eq!(
+                load().expect("a read").credentials[0].unblinded.expose(),
+                "token-staging",
+                "the batch that had just been imported was written over"
+            );
+        });
+    }
+
+    /// Make the next write at the store fail, by putting a directory where its temporary goes.
+    ///
+    /// Returns what to remove to let writes through again.
+    fn block_writes() -> PathBuf {
+        let blocker = path()
+            .expect("a path")
+            .with_file_name(format!("{FILE}.{}.tmp", std::process::id()));
+        std::fs::create_dir(&blocker).expect("a blocker");
+        blocker
+    }
+
+    /// A spend whose write failed leaves nothing pending, so neither the next spend nor the end of
+    /// the session writes that batch over a file another import has since replaced.
+    ///
+    /// The credential never left the wallet, so the spend is not kept: left as a pending write it
+    /// would skip the read that sees the import, and the flush on drop would write over it.
+    #[test]
+    fn a_failed_spend_write_is_not_written_over_a_later_import() {
+        with_temp_home("failed-spend", || {
+            save(&batch()).expect("a write");
+            let mut wallet = Wallet::open().expect("the batch just written");
+
+            let blocker = block_writes();
+            assert!(wallet.spend("2026-08-22T12:00:00").is_err());
+            std::fs::remove_dir(&blocker).expect("unblocked");
+
+            let mut elsewhere = batch();
+            elsewhere.environment = crate::Environment::Staging;
+            elsewhere.credentials[0].unblinded = crate::Secret::new("token-staging");
+            save(&elsewhere).expect("a second write");
+
+            assert!(matches!(
+                wallet.spend("2026-08-22T12:00:00"),
+                Err(StoreError::Unusable { .. })
+            ));
+            drop(wallet);
+            assert_eq!(
+                load().expect("a read").credentials[0].unblinded.expose(),
+                "token-staging",
+                "the batch that had just been imported was written over"
+            );
+        });
+    }
+
+    /// The end of a session does not write a spend whose write failed over a batch imported since,
+    /// even one for the same environment, which the environment check cannot tell apart.
+    #[test]
+    fn a_failed_spend_write_leaves_nothing_for_the_end_of_the_session_to_write() {
+        with_temp_home("failed-spend-same-environment", || {
+            save(&batch()).expect("a write");
+            let mut wallet = Wallet::open().expect("the batch just written");
+
+            let blocker = block_writes();
+            assert!(wallet.spend("2026-08-22T12:00:00").is_err());
+            std::fs::remove_dir(&blocker).expect("unblocked");
+
+            let mut imported = batch();
+            imported.order_id = "bbbbbbbb-1111-4222-8333-444444444444".to_string();
+            save(&imported).expect("a second write");
+            drop(wallet);
+
+            assert_eq!(
+                load().expect("a read").order_id,
+                imported.order_id,
+                "the batch that had just been imported was written over"
+            );
+        });
+    }
+
+    /// A refilled batch is not flushed over a file imported for another environment.
+    #[test]
+    fn a_refilled_batch_is_not_written_over_another_environment() {
+        with_temp_home("refill-swapped", || {
+            save(&batch()).expect("a write");
+            let mut wallet = Wallet::open().expect("the batch just written");
+            wallet.refill(batch());
+
+            let mut elsewhere = batch();
+            elsewhere.environment = crate::Environment::Staging;
+            elsewhere.credentials[0].unblinded = crate::Secret::new("token-staging");
+            save(&elsewhere).expect("a second write");
+
+            assert!(wallet.flush().is_err());
+            assert!(wallet.spend("2026-08-22T12:00:00").is_err());
+            drop(wallet);
             assert_eq!(
                 load().expect("a read").credentials[0].unblinded.expose(),
                 "token-staging",
