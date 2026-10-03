@@ -9954,6 +9954,94 @@ fn a_run_the_person_refused_leaves_the_change_reported_as_never_built() {
     );
 }
 
+/// A turn with no `run` to offer is not told, or told of, a build it had no way to do.
+///
+/// TURN-4 ties both lines to a run being possible. The planner's question was already gated on it;
+/// the person's line was gated only on a write having landed, so a definition that lists `write_file`
+/// and no `run` ended by telling the person that no command was run. The control turn is the same
+/// definition with `run` added, which writes and ends with the line, so the absence is the list's.
+#[test]
+fn a_turn_offered_no_run_is_not_reported_as_a_change_that_was_never_built() {
+    let scratch = Scratch::new("write-without-run");
+    let home = Scratch::new("write-without-run-home");
+    define(
+        &home,
+        "no-shell",
+        "kind: worker\ntools: read_file, list_files, write_file\n",
+        "WRITE",
+    );
+    define(
+        &home,
+        "with-shell",
+        "kind: worker\ntools: read_file, list_files, write_file, run\n",
+        "WRITE",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let script = |file: &str| {
+        let mut replies = vec![tool_request(
+            "write_file",
+            &format!(r#"{{"path":"{file}","contents":"first slice"}}"#),
+        )];
+        replies.extend(
+            (0..ROUNDS_AFTER_WRITING_BEFORE_RUNNING + 1)
+                .map(|_| tool_request("list_files", r#"{"directory":"."}"#)),
+        );
+        replies.push(reply_with("done"));
+        replies
+    };
+    let mut narration = Vec::new();
+    let mut bodies = Vec::new();
+    for (name, file) in [("with-shell", "control.txt"), ("no-shell", "confined.txt")] {
+        let (endpoint, received) = serve_sequence(script(file));
+        let config = config_for(&endpoint);
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        turn::run_cancellable(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &addressed("add a toggle", &home, name),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut reporter,
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("the turn finishes");
+        narration.push(reporter.narration);
+        bodies.push(received.try_iter().collect::<Vec<String>>());
+    }
+
+    for file in ["control.txt", "confined.txt"] {
+        assert!(
+            scratch.path.join(file).exists(),
+            "{file} was not written, so this test says nothing about a turn that changed a file"
+        );
+    }
+    let told = |narration: &[String]| {
+        narration
+            .iter()
+            .any(|said| said.contains("no command was run"))
+    };
+    assert!(
+        told(&narration[0]),
+        "the control turn, which could run, was not told its change was never built: {:?}",
+        narration[0]
+    );
+    assert!(
+        !told(&narration[1]),
+        "a turn with no run was told no command was run: {:?}",
+        narration[1]
+    );
+    assert!(
+        !bodies[1]
+            .iter()
+            .any(|body| body.contains("nothing has been run")),
+        "a planner with no run was asked to run something: {:?}",
+        bodies[1]
+    );
+}
+
 /// A turn stopped after a write still tells the person that nothing was built.
 ///
 /// This is the incident the clause was written for: eighteen files edited, no command run, and the

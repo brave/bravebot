@@ -130,6 +130,7 @@ about to act on.
 `verified-by: bravebot_agent::turn::a_write_the_person_refused_is_not_reported_as_a_change_that_was_never_built`
 `verified-by: bravebot_agent::turn::a_write_plan_mode_refused_is_not_reported_as_a_change_that_was_never_built`
 `verified-by: bravebot_agent::turn::a_run_the_person_refused_leaves_the_change_reported_as_never_built`
+`verified-by: bravebot_agent::turn::a_turn_offered_no_run_is_not_reported_as_a_change_that_was_never_built`
 `verified-by: bravebot_agent::turn::a_turn_stopped_before_any_write_is_not_told_a_change_was_never_built`
 `verified-by: bravebot_agent::turn::a_turn_stopped_after_a_write_is_told_the_change_was_never_built`
 `verified-by: bravebot_agent::turn::a_turn_that_failed_after_a_write_is_told_the_change_was_never_built`

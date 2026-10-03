@@ -4833,7 +4833,11 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // files on disk as an answer does, and being stopped with none of it compiled is the state a
         // person is least able to spot for themselves. Both flags are the round loop's own locals,
         // settled by whatever it did before it ended.
-        if changed_at.is_some() && !ran_a_program {
+        //
+        // Only where a run was possible, the state the planner's question is asked in. A definition
+        // or a delegate whose tools leave out `run` could not have built what it wrote, so the line
+        // would report something it had no way to do.
+        if may_run && changed_at.is_some() && !ran_a_program {
             reporter.narration(
                 "files changed this turn and no command was run, so none of it has been \
              built or tested"
