@@ -7522,13 +7522,13 @@ fn patterns_in(arguments: &Value) -> Vec<Labelled<String>> {
 ///
 /// The two halves of the answer take different roads out of here, which is [LSP-3]:
 ///
-/// - The **locations** are written into a line by the driver, from a path and two integers it read
-///   off the server's index. That line is the driver's own words, so it is trusted, the same footing
-///   a line count or an exit status reaches the planner on. Nothing a file wrote is in it.
+/// - The **locations** are a path and two integers read off the server's index. The two integers
+///   are structure. The path is a name out of a tree nobody need have vouched for, so the kernel
+///   labels the answer from the trust map's entry for each path it names: read as written where
+///   every one is vouched for, and a reference where any is not.
 /// - The **text**, where an operation reports any, is bytes a file chose, and no answer says which
 ///   file chose them: a hover response carries a position and no file. So it is untrusted and comes
-///   back as a reference, in a vouched-for tree as much as in `vendor/`, with the locations listed
-///   either way.
+///   back as a reference, in a vouched-for tree as much as in `vendor/`.
 ///
 /// [LSP-3]: ../../../docs/specs/tools/lsp.md
 fn lsp<S: Sink, C: Confirmer + ?Sized>(
@@ -7692,15 +7692,17 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
             produced.incomplete = answer.partial;
             produced
         }
-        // Locations only, which is every operation but hover. The label is not built here: it is
-        // LSP-3's, and `crate::lsp::label_for_locations` is where the clause and its bound are
-        // argued. Trusted so the planner reads it, private so nothing routes on it.
+        // Locations only, which is every operation but hover. The names in it are bytes out of the
+        // tree the server indexed, so the kernel labels it from the trust map's entry for each path
+        // and an answer naming a file nobody vouched for is quarantined, as a listing is.
         None => {
-            let mut produced = Produced::new(
-                Labelled::new(described, crate::lsp::label_for_locations()),
-                relative,
-                note,
-            );
+            let label = match crate::lsp::label_for_locations(policy, &answer) {
+                Ok(label) => label,
+                Err(denial) => return Produced::problem(format!("refused: {denial}")),
+            };
+            let mut produced = Produced::new(Labelled::new(described, label), relative, note)
+                .marked_untrusted(!label.is_trusted());
+            produced.content = !label.is_trusted();
             produced.incomplete = answer.partial;
             produced
         }
