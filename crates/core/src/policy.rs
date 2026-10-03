@@ -14691,21 +14691,21 @@ five
             let mut turn = open_policy(&mut sink);
             assert!(started(&turn).is_empty());
             let first = turn
-                .before_delegate(&argument("reader"), &argument("look"))
+                .before_delegate(&argument("reader"), &argument("look"), None)
                 .expect("a clean context may delegate");
-            turn.before_delegate(&argument("auditor"), &argument("look"))
+            turn.before_delegate(&argument("auditor"), &argument("look"), None)
                 .expect_err("no kind is called that");
-            turn.before_delegate(&argument("reader"), &argument("look"))
+            turn.before_delegate(&argument("reader"), &argument("look"), None)
                 .expect("a clean context may delegate");
             assert_eq!(started(&turn), ["d1", "d2"]);
 
             let mut within_sink = RecordingSink::new();
             let mut within = open_policy(&mut within_sink).within(&first);
             within
-                .before_delegate(&argument("reader"), &argument("look closer"))
+                .before_delegate(&argument("reader"), &argument("look closer"), None)
                 .expect("a delegate above the bottom may delegate");
             let withdrawn = within
-                .before_delegate(&argument("reader"), &argument("look closer"))
+                .before_delegate(&argument("reader"), &argument("look closer"), None)
                 .expect("a delegate above the bottom may delegate");
             within.withdraw_delegate(withdrawn);
             assert_eq!(started(&within), ["d1.1"]);
