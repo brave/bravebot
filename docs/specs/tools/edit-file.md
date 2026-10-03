@@ -59,7 +59,8 @@ The result carries the changed region of the file, with a few lines either side 
 numbers, in front of the count of replacements. The region is found by comparing the file before
 and after rather than by locating the new text, so a deletion, an insertion and a `replace_all`
 are all shown; a span longer than the excerpt allows is cut in the middle and says how much it
-dropped.
+dropped. An edit that changes only a line terminator, or adds or removes the final newline, is
+compared with the terminators included and shows the lines it touched.
 
 **Why.** A count of replacements is not a result anybody can check. A session edited eighteen
 files on nothing but those counts, never looked at one of them again, and compiled none of it. The
@@ -75,3 +76,6 @@ told only that. [EDIT-2](#EDIT-2) is what makes the file itself trusted by this 
 `verified-by: bravebot_agent::turn::an_edit_shows_the_lines_it_changed`
 `verified-by: bravebot_agent::replace::an_excerpt_shows_the_changed_line_with_its_neighbours`
 `verified-by: bravebot_agent::replace::a_long_span_is_cut_in_the_middle_and_says_so`
+`verified-by: bravebot_agent::replace::a_change_of_line_terminator_still_shows_the_line`
+`verified-by: bravebot_agent::replace::removing_the_final_newline_still_shows_the_last_line`
+`verified-by: bravebot_agent::replace::adding_the_final_newline_still_shows_the_last_line`
