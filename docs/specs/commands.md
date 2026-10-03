@@ -252,17 +252,21 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| reads or ends what the session keeps | `/cost`; `/watch` in every form; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
-| everything else | every other command, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
+| touches only what the session keeps | `/cost`; `/rename`; `/forget-trust`; `/theme <name>` and `/effort <level>`; `/watch` in every form; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| everything else | every other command, `/theme` and `/effort` alone, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
-A command carried out as it is typed goes ahead of every line already waiting, and a line behind it
-stays where it was. The exception is a line of the same command already waiting, which it waits
+A command that reads or ends something goes ahead of every line already waiting, and a line behind
+it stays where it was. The exception is a line of the same command already waiting, which it waits
 behind: `/loop stop` typed after a waiting `/loop 5m check the deploy` would find no loop to stop
 and the loop would start after it, so two lines of one command are carried out in the order they
-were typed. It comes off the box and is not remembered, as at rest. What it says is drawn
-under the turn as notes are, and joins the transcript after the turn's own entries once the turn has
-ended. Ctrl-Enter on one stops nothing: the command is already done, and stopping the turn would
-send the prompts waiting behind it, which nobody asked to hurry.
+were typed. A command that changes something, `/rename`, `/forget-trust`, `/theme <name>` or
+`/effort <level>`, is carried out as it is typed only when nothing is waiting, and otherwise waits
+behind what is, so it lands where it was typed: `/rename` ahead of a waiting `/clear` would name the
+session `/clear` leaves, and `/forget-trust` ahead of a waiting `/cd` would forget the directory
+`/cd` leaves. A command carried out as it is typed comes off the box and is not remembered, as at
+rest. What it says is drawn under the turn as notes are, and joins the transcript after the turn's
+own entries once the turn has ended. Ctrl-Enter on one stops nothing: the command is already done,
+and stopping the turn would send the prompts waiting behind it, which nobody asked to hurry.
 
 A command that waits is taken off the box and joins the lines waiting for the turn to end, exactly
 as a prompt does: the box clears, the history remembers it, and it is drawn under the box marked as
@@ -284,14 +288,27 @@ typed is no better. Each acts on the conversation, the workspace, the terminal o
 the turn holds all four, so it would change what the turn is running under. Starting a loop or
 setting a goal is in this kind for the same reason: `/loop 5m check the deploy` sends its first tick
 at once, and a second turn may not begin while one is in flight, while a goal set mid-turn would
-have the turn in flight judged against a condition it was never sent with.
+have the turn in flight judged against a condition it was never sent with. `/theme` and `/effort`
+alone open a picker, which takes the terminal the turn draws its own questions on.
 
 **Why the first kind does not.** A loop, a goal, a watch and the spend so far are the session's own,
 and the turn holds none of them, so reading or ending one changes nothing the turn is using. The
 moment these are wanted is mid-turn: a person who has seen enough of a loop types `/loop stop` while
 its tick runs, and an ending carried out after that tick would cost them the next one too if the
 queue held a prompt. What a tick asks for once its loop is gone is
-[loop.md](loop.md#LOOP-11)'s.
+[loop.md](loop.md#LOOP-11)'s. The rest of the kind changes what the session keeps and the turn
+does not read:
+
+- **`/rename`.** The turn is handed the record's id, and the record is written after the turn
+  under whatever name the session has by then. The rename gives up every rewind point
+  ([SESSION-19](sessions.md#SESSION-19)), the one the running turn opened among them. `/rename`
+  with no name renames nothing and gives up none.
+- **`/forget-trust`.** What it takes back is the answer kept for the next session in the directory
+  ([TRUST-24](trust-map.md#TRUST-24)). The turn runs under the map this session opened with, which
+  the command leaves alone.
+- **`/theme <name>` and `/effort <level>`.** A theme changes only how the screen is drawn. A turn is
+  sent with the level in force when it begins and does not read it again, so a level set mid-turn
+  is the next turn's.
 
 **Nothing enters the transcript while the turn runs.** What a keystroke wrote into the transcript
 would count as the turn having done something, which is what decides whether a stopped prompt comes
@@ -308,6 +325,16 @@ been folded in.
 `verified-by: bravebot_tui::app::a_command_typed_during_a_compaction_waits`
 `verified-by: bravebot_tui::app::a_stopped_prompt_comes_back_after_a_command_answered_mid_turn`
 `verified-by: bravebot_tui::app::ctrl_enter_on_a_command_answered_mid_turn_hurries_nothing`
+`verified-by: bravebot_tui::app::a_session_renamed_mid_turn_is_renamed_as_it_is_typed`
+`verified-by: bravebot_tui::app::a_session_renamed_mid_turn_gives_up_the_running_turns_rewind_point`
+`verified-by: bravebot_tui::app::a_rename_with_no_name_mid_turn_keeps_the_running_turns_rewind_point`
+`verified-by: bravebot_tui::app::a_command_that_changes_something_waits_behind_what_was_typed_first`
+`verified-by: bravebot_tui::app::every_command_carried_out_mid_turn_answers_under_the_turn`
+`verified-by: bravebot_tui::app::ctrl_enter_on_a_rename_mid_turn_hurries_nothing`
+`verified-by: bravebot_tui::app::trust_forgotten_mid_turn_is_forgotten_as_it_is_typed`
+`verified-by: bravebot_tui::app::an_effort_named_mid_turn_is_set_as_it_is_typed`
+`verified-by: bravebot_tui::app::a_theme_or_an_effort_nobody_has_is_refused_mid_turn`
+`verified-by: bravebot_tui::app::the_bare_theme_and_effort_commands_wait_for_the_turn`
 `verified-by: bravebot_tui::render::what_a_command_answered_mid_turn_is_drawn_under_the_turn`
 `verified-by: bravebot_tui::app::no_command_is_sent_as_a_prompt_while_a_turn_runs`
 `verified-by: bravebot_tui::app::a_command_with_an_argument_is_not_sent_as_a_prompt_while_a_turn_runs`

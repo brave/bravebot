@@ -115,7 +115,8 @@ every turn uses that model, so `/model` opens no picker and says so.
 ## `/theme [name]`
 
 Opens a picker on the palette in force. With a name, `/theme nord` applies it without opening the
-panel.
+panel, and typed while a turn runs with nothing waiting it is applied at once. The bare `/theme` waits
+for the turn to end.
 
 Up and Down move the cursor, and the theme under it is put in force while it is selected, so you are
 comparing themes against your own transcript rather than against a sample. Enter keeps the one on the
@@ -131,7 +132,9 @@ Themes of your own are JSON files under `~/.bravebot/themes/`, and nothing in a 
 Opens a picker of the five levels (`low`, `medium`, `high`, `xhigh` and `max`) above a row for
 asking for no level at all, so a first pick is not permanent. With a word, `/effort high` takes it
 directly, and a word that names no level changes nothing and says so rather than reaching a request
-field.
+field. Typed while a turn runs with nothing waiting, `/effort high` is taken at once and the next turn
+is the first sent at it, since the running one keeps the level it began with. The bare `/effort` waits
+for the turn to end.
 
 The choice is written to `~/.bravebot`, so it outlives the session and applies in every directory,
 except one whose own settings name an [`effort`](../customize/configuration.md#effort): that key
@@ -197,7 +200,8 @@ about again.
 Takes back the answer you said to remember at the question a session asks about its directory, with
 `r` here or **Trust and remember** in the desktop app, which keep it in one place. The next session
 started in this directory asks again, in either. This session keeps the answer it already has;
-[`/clear`](#clear) starts one that asks.
+[`/clear`](#clear) starts one that asks. Typed while a turn runs with nothing waiting, it is carried
+out at once, and the turn goes on under the answer it already has.
 
 It removes every answer kept about the path, including one given about a directory that was deleted
 and made again there. In an incognito session it changes nothing, since nothing is written there
@@ -521,7 +525,9 @@ line this program wrote is text.
 ## `/rename <name>`
 
 Rewrites the session record immediately, and the chosen name survives the next turn. An empty name is
-refused.
+refused. Typed while a turn runs with nothing waiting, it is carried out at once rather than waiting
+for the turn to end. Renaming leaves `/undo` nothing to go back to, including the turn running when
+you renamed.
 
 ## `/compact`
 
@@ -691,8 +697,11 @@ it and the picture or file goes with it.
 and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. The exception is a line of the same command already waiting, which they wait behind, so
-`/goal clear` typed after a waiting `/goal <condition>` clears that goal. What they say is drawn under
-the turn and joins the transcript once the turn has ended.
+`/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/rename`, `/forget-trust`,
+`/theme <name>` and `/effort <level>` change only what the session keeps, and are carried out as you
+type them when nothing is waiting. Behind a waiting line they wait too, so `/rename` typed after a
+waiting `/clear` names the new session. What they say is drawn under the turn and joins the
+transcript once the turn has ended. `/theme` and `/effort` alone open a picker, so they wait.
 
 Every other command typed mid-turn comes off the box and joins the lines waiting for the turn to end,
 exactly as a prompt does: the box clears, the history remembers it, and it is drawn under the box

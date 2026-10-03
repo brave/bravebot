@@ -275,8 +275,9 @@ comes off the box and is drawn under it like anything else waiting, but it is no
 in flight, so nothing about it reaches the planner. It runs when the queue is reached after the turn
 has ended, and a prompt behind it goes once it has. During a turn, `/cost`, `/watch`, `/loop` and
 `/goal` are carried out as you press Enter instead, except a `/loop` that starts a loop and a `/goal`
-that sets one, which wait. What they answer is drawn under the turn and joins the transcript after it,
-and nothing waiting moves. During a compaction, a `/btw` question, a `/manifest` run or a goal check,
+that sets one, which wait. `/rename`, `/forget-trust`, `/theme <name>` and `/effort <level>` are too
+when nothing is waiting, and `/theme` and `/effort` alone wait. What they answer is drawn under the
+turn and joins the transcript after it, and nothing waiting moves. During a compaction, a `/btw` question, a `/manifest` run or a goal check,
 every command waits.
 
 **The turn in flight is the one on the screen.** Work handed out to a [delegate](#watching-a-delegate-reading-a-command-and-asking-something-aside)
