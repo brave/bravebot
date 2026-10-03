@@ -946,6 +946,27 @@ mod tests {
         assert!(!running.due(due));
     }
 
+    /// A turn that outlasts its own interval must not be due the moment it ends: the gap is the
+    /// time between runs, counted from the end of the one before.
+    #[test]
+    fn the_gap_is_measured_from_the_end_of_a_tick_and_not_its_start() {
+        let start = Instant::now();
+        let ended = start + Duration::from_secs(600);
+
+        let mut every = Running::begin(request("5m watch"));
+        every.dispatching();
+        assert!(every.ended(None, ended));
+        assert!(!every.due(ended), "an interval was counted from the start");
+        assert!(!every.due(ended + Duration::from_secs(299)));
+        assert!(every.due(ended + Duration::from_secs(300)));
+
+        let mut paced = Running::begin(request("watch"));
+        paced.dispatching();
+        assert!(paced.ended(Some(Wakeup::asked(900, false)), ended));
+        assert!(!paced.due(ended + Duration::from_secs(899)));
+        assert!(paced.due(ended + Duration::from_secs(900)));
+    }
+
     #[test]
     fn a_loop_with_nothing_armed_is_not_due() {
         let running = Running::begin(request("watch"));

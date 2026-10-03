@@ -1521,6 +1521,55 @@ fn a_tick_is_told_that_it_is_one_and_which_kind_of_loop_it_is_in() {
     }
 }
 
+/// A self-paced tick is told the loop ends if it stops saying when to run again, and a tick the
+/// person paced is told there is no tool for the timing. Each sentence belongs to one kind only.
+#[test]
+fn a_tick_is_told_what_its_kind_of_loop_lasts_on() {
+    for (self_paced, present, absent) in [
+        (
+            true,
+            "runs for exactly as long as you keep pacing it",
+            "no tool for it",
+        ),
+        (
+            false,
+            "There is nothing here for you to schedule and no tool for it",
+            "as long as you keep pacing it",
+        ),
+    ] {
+        let scratch = Scratch::new(&format!("tick-lasts-{self_paced}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve(&reply_with("nothing has changed"));
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        let task = Task::new("watch the build").ticking(Some(turn::Tick {
+            number: 2,
+            self_paced,
+        }));
+        turn::run(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut sink,
+        )
+        .expect("turn runs");
+
+        let request = received.recv().expect("the request");
+        assert!(
+            request.contains(present),
+            "self_paced {self_paced}: {request}"
+        );
+        assert!(
+            !request.contains(absent),
+            "self_paced {self_paced} was told the other kind's sentence"
+        );
+    }
+}
+
 /// The driver is the only thing that knows a goal is set, and a turn that is not told the
 /// condition is a turn judged against something it was never shown. The first round is the one
 /// this matters most for: it decides what the work is about, and nothing sends it back to be

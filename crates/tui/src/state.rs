@@ -12644,6 +12644,79 @@ mod tests {
         assert!(s.loop_tick().is_none(), "a tick jumped the queue");
     }
 
+    /// A loop whose next tick is already due, so that what holds it back is the session.
+    fn a_loop_that_is_due() -> crate::loops::Running {
+        crate::loops::Running::armed(
+            "watch".to_string(),
+            crate::loops::Wakeup::asked(60, false),
+            std::time::Instant::now() - std::time::Duration::from_secs(600),
+        )
+    }
+
+    /// The other half of LOOP-6: a due tick is held while a turn runs and while a prompt waits,
+    /// and goes once both are done. A test that never reaches a due tick cannot tell a hold from
+    /// a tick that was never due.
+    #[test]
+    fn a_due_tick_is_held_for_a_running_turn_and_a_queued_prompt_and_then_goes() {
+        let mut s = session();
+        s.looping = Some(a_loop_that_is_due());
+
+        for c in "their own question".chars() {
+            s.type_char(c);
+        }
+        s.submit();
+        assert!(
+            s.loop_tick().is_none(),
+            "a due tick interrupted a running turn"
+        );
+
+        for c in "and another".chars() {
+            s.type_char(c);
+        }
+        s.queue();
+        s.complete("done", Vec::new(), 0);
+        assert!(!s.queued.is_empty(), "the prompt was not left waiting");
+        assert!(s.loop_tick().is_none(), "a due tick jumped the queue");
+
+        assert!(s.unqueue());
+        assert!(
+            s.loop_tick().is_some(),
+            "a due tick was never sent once the session was free"
+        );
+    }
+
+    /// LOOP-13: each tick says which one it is, and how many in a row found nothing once any have.
+    #[test]
+    fn each_tick_is_announced_with_its_number_and_its_quiet_count() {
+        fn last_note(s: &Session) -> String {
+            s.transcript
+                .iter()
+                .rev()
+                .find(|entry| entry.speaker == Speaker::System)
+                .expect("a note")
+                .text
+                .clone()
+        }
+        let mut s = session();
+        s.start_loop(crate::loops::request("watch"), Vec::new(), Vec::new());
+        assert_eq!(last_note(&s), "loop 1");
+
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(Some(crate::loops::Wakeup::asked(60, true)));
+        s.dispatch_tick();
+        assert_eq!(last_note(&s), "loop 2, after 1 tick that found nothing");
+
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(Some(crate::loops::Wakeup::asked(60, true)));
+        s.dispatch_tick();
+        assert_eq!(last_note(&s), "loop 3, after 2 ticks that found nothing");
+
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(Some(crate::loops::Wakeup::asked(60, false)));
+        s.dispatch_tick();
+        assert_eq!(last_note(&s), "loop 4");
+    }
+
     /// The person's own prompt is not a tick of the loop, so finishing it must not re-arm one.
     /// Otherwise a loop would keep time from whatever its user happened to be doing.
     #[test]
