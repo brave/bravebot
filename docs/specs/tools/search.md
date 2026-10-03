@@ -139,7 +139,9 @@ matches. One that read files and found nothing reports no matches, as before.
 
 A search left with nothing to read because a permission rule covers what it selected reports the
 rule, and says that retrying is not the answer. The rule is stated, never which paths it reached:
-the names are what it is keeping back. See [permissions.md](../permissions.md).
+the names are what it is keeping back. A rule that covers nothing the `include` selected is not the
+reason, and the search reports the glob as it would with no rule in force. See
+[permissions.md](../permissions.md).
 
 **Why.** The two are opposite facts wearing the same sentence. Files were read and the pattern was
 not in them, which is evidence about the tree. Or nothing was read at all, which is evidence about
@@ -160,6 +162,7 @@ result decides only whether there was anything to advise about.
 
 `verified-by: bravebot_agent::workspace::a_search_says_when_its_include_selected_no_files`
 `verified-by: bravebot_agent::workspace::a_search_a_rule_emptied_is_not_reported_as_an_empty_glob`
+`verified-by: bravebot_agent::workspace::a_rule_covering_nothing_the_include_selected_is_not_blamed_for_an_empty_search`
 `verified-by: bravebot_agent::turn::a_search_a_rule_emptied_names_the_rule_and_not_the_glob`
 `verified-by: bravebot_agent::workspace::an_include_may_use_a_brace_group`
 `verified-by: bravebot_agent::tools::a_glob_leaning_on_missing_syntax_is_named`

@@ -4398,6 +4398,63 @@ fn a_search_a_rule_emptied_is_not_reported_as_an_empty_glob() {
     );
 }
 
+/// SEARCH-5: the rule is the reason a search came back empty only when it covers something the
+/// include selected. A rule over `.env` or `secrets/` says nothing about a glob that selects
+/// neither, and blaming it tells the planner not to fix the glob that is the actual problem.
+#[test]
+fn a_rule_covering_nothing_the_include_selected_is_not_blamed_for_an_empty_search() {
+    let scratch = Scratch::new("grep-unrelated-rule");
+    std::fs::create_dir_all(scratch.path.join("secrets/deep")).unwrap();
+    std::fs::create_dir_all(scratch.path.join("src")).unwrap();
+    std::fs::write(scratch.path.join(".env"), "needle\n").unwrap();
+    std::fs::write(scratch.path.join("secrets/deep/key.pem"), "needle\n").unwrap();
+    std::fs::write(scratch.path.join("src/a.rs"), "needle\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let withheld = |rule: &str, include: &str| {
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_permissions(denying(&[rule]));
+        let found = workspace
+            .grep(
+                &mut policy,
+                std::slice::from_ref(&Labelled::trusted("needle".to_string())),
+                &Labelled::trusted(".".to_string()),
+                Some(&Labelled::trusted(include.to_string())),
+                true,
+                1,
+            )
+            .expect("grep succeeds");
+        let proof = policy.authorise_content_release("test", "matches");
+        let found = found.declassify(&proof);
+        assert_eq!(found.considered, 0, "{rule} with {include} read a file");
+        found.withheld
+    };
+
+    assert!(
+        !withheld("Read(./.env)", "*.py"),
+        "a denied file the include did not select was blamed"
+    );
+    assert!(
+        !withheld("Read(secrets/**)", "*.py"),
+        "a denied directory holding nothing the include selects was blamed"
+    );
+    assert!(
+        withheld("Read(./.env)", ".env"),
+        "a denied file the include selected was not reported"
+    );
+    assert!(
+        withheld("Read(secrets/**)", "**/*.pem"),
+        "a denied directory holding a file the include selects was not reported"
+    );
+}
+
 /// A denied file is not one a walk may report, so it must not be one the budget is spent on.
 /// Dropping the path after the cap had counted it reads the same in a small tree and turns a rule
 /// into the reason a search stops before the files it was asked about: here the denied files sort
