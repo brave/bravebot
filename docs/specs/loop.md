@@ -119,6 +119,7 @@ instant it drew breath, and a loop over slow work would become a continuous one.
 how often somebody wants to be told something, and telling them takes time too.
 
 `verified-by: bravebot_tui::loops::a_tick_in_flight_is_not_due_again`
+`verified-by: bravebot_tui::loops::the_gap_is_measured_from_the_end_of_a_tick_and_not_its_start`
 `verified-by: bravebot_tui::state::a_tick_that_says_when_to_wake_arms_the_next_one`
 
 <a id="LOOP-6"></a>
@@ -132,6 +133,7 @@ it: it is not asked when the next tick is due, and its ending does not reset the
 still the one using this session.
 
 `verified-by: bravebot_tui::state::a_tick_waits_for_the_turn_in_flight_and_for_what_is_queued`
+`verified-by: bravebot_tui::state::a_due_tick_is_held_for_a_running_turn_and_a_queued_prompt_and_then_goes`
 `verified-by: bravebot_tui::state::a_prompt_typed_during_a_loop_is_not_a_tick_of_it`
 
 <a id="LOOP-7"></a>
@@ -203,6 +205,7 @@ exists to avoid, and one that half-knows goes looking for the scheduling tool an
 never has and tells the user it is missing. Both were observed before this clause existed.
 
 `verified-by: bravebot_agent::turn::a_tick_is_told_that_it_is_one_and_which_kind_of_loop_it_is_in`
+`verified-by: bravebot_agent::turn::a_tick_is_told_what_its_kind_of_loop_lasts_on`
 
 ## What ends one
 
@@ -303,6 +306,7 @@ that has nothing to do, and without it a long watch is twenty identical answers 
 `verified-by: bravebot_tui::status::the_report_says_what_is_repeating_and_when_it_is_next_due`
 `verified-by: bravebot_tui::status::a_session_with_no_loop_does_not_mention_one`
 `verified-by: bravebot_tui::loops::quiet_ticks_are_counted_until_one_reports_something`
+`verified-by: bravebot_tui::state::each_tick_is_announced_with_its_number_and_its_quiet_count`
 
 <a id="LOOP-14"></a>
 ### LOOP-14: a turn may start a loop over the person's line, and over no other
