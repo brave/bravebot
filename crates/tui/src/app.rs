@@ -188,12 +188,21 @@ pub struct Command {
 /// What Enter on a command does while a turn is running, which turns on what the command touches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MidTurn {
-    /// Carried out as it is typed. It reads or ends what the session keeps for itself, and the
-    /// turn holds none of that.
+    /// Carried out as it is typed. It reads what the session keeps or ends something it has
+    /// standing, and the turn holds none of that.
     Runs,
     /// Carried out as it is typed where it reads or ends what is standing, and waiting where it
     /// would start something: a loop or a goal armed mid-turn needs a look of its own.
     RunsUnlessItStarts,
+    /// Carried out as it is typed when nothing typed before it is waiting. It changes only what the
+    /// session keeps for itself or keeps for a later session, which the turn does not hold, but a
+    /// line waiting ahead of it may replace that: `/clear` begins another session and `/cd` moves to
+    /// another directory, and a change made first would land on the one being left.
+    Changes,
+    /// As [`MidTurn::Changes`] where the line names what to set, and waiting where the bare word
+    /// would open a picker: a picker takes the terminal, and the turn's own questions are drawn
+    /// there.
+    RunsWhenNamed,
     /// Waits for the turn to end, because it acts on the conversation, the workspace, the
     /// terminal or the network, and the turn holds all four.
     Waits,
@@ -228,13 +237,13 @@ pub fn commands() -> [Command; 23] {
             name: THEME_COMMAND,
             argument: "[name]",
             description: t!(command_theme),
-            mid_turn: MidTurn::Waits,
+            mid_turn: MidTurn::RunsWhenNamed,
         },
         Command {
             name: EFFORT_COMMAND,
             argument: "[level]",
             description: t!(command_effort),
-            mid_turn: MidTurn::Waits,
+            mid_turn: MidTurn::RunsWhenNamed,
         },
         Command {
             name: CONFIG_COMMAND,
@@ -258,7 +267,7 @@ pub fn commands() -> [Command; 23] {
             name: RENAME_COMMAND,
             argument: "<name>",
             description: t!(command_rename),
-            mid_turn: MidTurn::Waits,
+            mid_turn: MidTurn::Changes,
         },
         Command {
             name: COMPACT_COMMAND,
@@ -282,7 +291,7 @@ pub fn commands() -> [Command; 23] {
             name: FORGET_TRUST_COMMAND,
             argument: "",
             description: t!(command_forget_trust),
-            mid_turn: MidTurn::Waits,
+            mid_turn: MidTurn::Changes,
         },
         Command {
             name: LOOP_COMMAND,
@@ -407,14 +416,18 @@ fn row_typed(line: &str) -> Option<Command> {
 ///
 /// Read off the table's column, and for the two words that both read and start, off the form the
 /// argument takes: `/loop stop` ends what is standing, and `/loop 5m check the deploy` would start
-/// a loop while the turn in flight is still the session's work.
+/// a loop while the turn in flight is still the session's work. For the two that set something,
+/// off whether the line names it: `/theme nord` sets a theme, and `/theme` alone opens a picker.
 fn runs_while_working(line: &str) -> bool {
     let Some(command) = row_typed(line) else {
         return false;
     };
     match command.mid_turn {
-        MidTurn::Runs => true,
+        MidTurn::Runs | MidTurn::Changes => true,
         MidTurn::Waits => false,
+        MidTurn::RunsWhenNamed => {
+            argument_to(line, command.name).is_some_and(|named| !named.is_empty())
+        }
         MidTurn::RunsUnlessItStarts => {
             let argument = argument_to(line, command.name).unwrap_or_default();
             match command.name {
@@ -428,6 +441,22 @@ fn runs_while_working(line: &str) -> bool {
             }
         }
     }
+}
+
+/// Whether a line that would be carried out mid-turn waits anyway, for what is queued ahead of it.
+///
+/// Behind a waiting line of the same command: `/loop stop` typed after a waiting
+/// `/loop 5m check the deploy` would find no loop to stop, and the loop would start after it. And a
+/// command that changes something waits behind any line at all, so it lands where it was typed:
+/// `/rename` ahead of a waiting `/clear` would name the session being left.
+fn waits_behind_the_queue(session: &Session, line: &str) -> bool {
+    let changes = row_typed(line).is_some_and(|command| {
+        matches!(command.mid_turn, MidTurn::Changes | MidTurn::RunsWhenNamed)
+    });
+    (changes && !session.queued.is_empty())
+        || session
+            .commands_waiting()
+            .any(|waiting| command_typed(waiting) == command_typed(line))
 }
 
 /// What a key press asked for.
@@ -721,16 +750,42 @@ fn stop_what_is_running(session: &mut Session, cancel: &Cancel) {
     cancel.cancel();
 }
 
+/// What a command carried out mid-turn reaches besides the session, none of which the turn holds.
+struct Beside<'a> {
+    /// The record the session is kept under. The turn is given only its id, and the record is
+    /// written after the turn with whatever name the session has by then.
+    stored: &'a mut bravebot_session::sessions::Handle,
+    /// The working directory, by name only: what `/forget-trust` withdraws is kept about it.
+    root: &'a std::path::Path,
+    /// Where that answer is kept, or `None` where the platform names nowhere.
+    home: Option<&'a std::path::Path>,
+}
+
 /// A press during a turn that is not one of the keys that only stop it.
 ///
 /// Ctrl-Enter is stopped here like any other stop, and what is waiting goes from the queue once the
 /// turn has ended, as it would have after any turn.
-fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel) {
-    let action = handle_key_while_working(session, key);
-    if action == Action::SendNow {
-        stop_what_is_running(session, cancel);
+///
+/// A command the key handler carried out as it was typed, but which needs more than the session to
+/// finish, is finished here, and what it says is held under the turn as the key handler holds its
+/// own (CMD-8).
+fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut Beside<'_>) {
+    match handle_key_while_working(session, key) {
+        Action::SendNow => stop_what_is_running(session, cancel),
+        Action::Rename(name) => {
+            session.answer_while_working(|session| rename_session(session, beside.stored, &name));
+        }
+        Action::ForgetTrust => session.answer_while_working(|session| {
+            session.note(forget_trust(beside.home, beside.root));
+        }),
+        Action::SetTheme(name) => {
+            session.answer_while_working(|session| set_theme(session, &name));
+        }
+        Action::SetEffort(level) => {
+            session.answer_while_working(|session| set_effort(session, &level));
+        }
+        action => act_while_working(session, action, crate::clipboard::paste),
     }
-    act_while_working(session, action, crate::clipboard::paste);
 }
 
 /// Whether a press is a character typed, which is the only kind of press a half-typed vi
@@ -2103,28 +2158,25 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     }
 
     // Before the arm that queues a command, because these commands need not wait: each reads or
-    // ends only what the session keeps for itself, a loop, a goal, a watch or the spend so far, and
-    // the turn holds none of it (CMD-8). Ahead of everything queued too, so `/cost` typed behind a
-    // waiting prompt answers for the moment it was typed. What it says is held off the transcript
-    // until the turn ends, since the transcript is how a stopped turn tells whether it did anything.
+    // changes only what the session keeps for itself, a loop, a goal, a watch, the spend so far, its
+    // name, a level or a theme, or what is kept for the next session here, and the turn holds none
+    // of it (CMD-8). A command that only reads goes ahead of everything queued, so `/cost` typed
+    // behind a waiting prompt answers for the moment it was typed. What it says is held off the
+    // transcript until the turn ends, since the transcript is how a stopped turn tells whether it
+    // did anything. A command that needs more than the session comes back as its action, for the
+    // turn's loop to finish.
     //
     // A turn only. The other loops that run while the session works, a compaction among them, keep
     // every command waiting. Ctrl-Enter here stops nothing: the command has already been carried
     // out, and stopping the turn would send prompts waiting behind it that nobody asked to hurry.
-    //
-    // Not past a waiting line of the same command: `/loop stop` typed after a waiting
-    // `/loop 5m check the deploy` would find no loop to stop, and the loop would start after it.
     if key.code == KeyCode::Enter
         && !session.shell
         && session.a_turn_is_running()
         && runs_while_working(session.input())
-        && !session
-            .commands_waiting()
-            .any(|waiting| command_typed(waiting) == command_typed(session.input()))
+        && !waits_behind_the_queue(session, session.input())
     {
         let commanded = session.take_command();
-        session.answer_while_working(|session| dispatch_command(session, commanded));
-        return Action::Redraw;
+        return session.answer_while_working(|session| dispatch_command(session, commanded));
     }
 
     // Before the arm that queues a prompt, because the two do the same thing to the box and differ
@@ -3417,17 +3469,7 @@ fn event_loop(
                     return Ok(left_behind(&stored));
                 }
             }
-            Action::Rename(name) => {
-                // The snapshot holds the name the session had before it was renamed.
-                session.close_rewind_window();
-                if name.is_empty() {
-                    session.note(t!(session_rename_needs_a_name));
-                } else if stored.rename(&name) {
-                    session.note(t!(session_renamed, title = stored.title()));
-                } else {
-                    session.note(t!(session_rename_needs_something));
-                }
-            }
+            Action::Rename(name) => rename_session(&mut session, &mut stored, &name),
             Action::Status => {
                 let theme = crate::theme::name();
                 // Read here rather than held, for the reason the run prompt reads it where it would
@@ -3774,7 +3816,7 @@ fn event_loop(
                         settings.attribution(),
                         settings.run_output_cap(),
                         bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines()),
-                        stored.id(),
+                        &mut stored,
                     )?;
                     // Taken apart with no `..`, so an answer a turn learns to remember does not
                     // build until it has a place in `answers`, where `/cd` and `/clear` decide it.
@@ -4651,6 +4693,24 @@ fn said_of(effort: Option<bravebot_aichat::protocol::Effort>) -> String {
     match effort {
         Some(level) => t!(session_effort_set, effort = level.as_str()),
         None => t!(session_effort_unset).to_string(),
+    }
+}
+
+/// Call the session what the person typed, and say so.
+fn rename_session(
+    session: &mut Session,
+    stored: &mut bravebot_session::sessions::Handle,
+    name: &str,
+) {
+    if name.is_empty() {
+        session.note(t!(session_rename_needs_a_name));
+    } else if stored.rename(name) {
+        // Every point holds the name the session had before it was renamed, the one a turn running
+        // now opened among them (SESSION-19). A refused name changes nothing, so it gives up none.
+        session.close_rewind_window();
+        session.note(t!(session_renamed, title = stored.title()));
+    } else {
+        session.note(t!(session_rename_needs_something));
     }
 }
 
@@ -6448,10 +6508,11 @@ fn run_turn_animated(
     // And how long a command may run, resolved where those settings were read and for the same
     // reason (RUN-23).
     deadlines: bravebot_agent::exec::Deadlines,
-    // This session's own identifier. It travels with the task because a run prompt may be answered
-    // with the key whose grant outlives the session, and the record of that says which session
-    // pressed it so that `/status` can tell a person which answers they are still carrying.
-    session_id: &str,
+    // The session's record. Its id travels with the task because a run prompt may be answered with
+    // the key whose grant outlives the session, and the record of that says which session pressed
+    // it so that `/status` can tell a person which answers they are still carrying. The record
+    // itself stays here, for a `/rename` typed while the turn runs.
+    stored: &mut bravebot_session::sessions::Handle,
 ) -> io::Result<Continued> {
     // The prompt is in the transcript by now, and drawn before anything that might take a moment:
     // a check that has to run the AWS CLI holds the frame for as long as the process takes, and
@@ -6521,7 +6582,7 @@ fn run_turn_animated(
         .with_cache(bravebot_agent::home::cache())
         // There is somebody in front of this, so a run prompt here may offer the key whose answer
         // outlives the session. A one-shot run says nothing here and reads no record.
-        .remembering(Some(session_id.to_string()))
+        .remembering(Some(stored.id().to_string()))
         .with_model(session.model().map(str::to_string))
         .addressing(addressed.as_ref().map(|addressed| addressed.name.clone()))
         .with_effort(session.effort_in_force())
@@ -6621,6 +6682,13 @@ fn run_turn_animated(
         }
     });
 
+    let home = bravebot_agent::home::directory();
+    let mut beside = Beside {
+        stored,
+        root: workspace.root(),
+        home: home.as_deref(),
+    };
+
     // Redraw until the turn finishes, answering approvals and watching for a cancel on the way.
     loop {
         redraw(terminal, session)?;
@@ -6657,7 +6725,7 @@ fn run_turn_animated(
                     TermEvent::Key(key) if stops_the_turn(session, key) => {
                         stop_what_is_running(session, &cancel);
                     }
-                    TermEvent::Key(key) => turn_key(session, key, &cancel),
+                    TermEvent::Key(key) => turn_key(session, key, &cancel, &mut beside),
                     TermEvent::Paste(text) => {
                         let action = handle_paste_while_working(session, &text);
                         act_while_working(session, action, crate::clipboard::paste);
@@ -11122,8 +11190,24 @@ mod tests {
         if stops_the_turn(session, key) {
             stop_what_is_running(session, cancel);
         } else {
-            turn_key(session, key, cancel);
+            nothing_beside(|beside| turn_key(session, key, cancel, beside));
         }
+    }
+
+    /// What a turn's loop holds beside the session, where a test reads none of it: a record that
+    /// is never written, and no home to keep an answer in.
+    fn nothing_beside<R>(press: impl FnOnce(&mut Beside<'_>) -> R) -> R {
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        press(&mut Beside {
+            stored: &mut stored,
+            root,
+            home: None,
+        })
     }
 
     /// A turn in flight in a session editing vi's way, with the box in INSERT as sending leaves it.
@@ -15887,7 +15971,8 @@ mod tests {
     }
 
     /// A command that takes an argument is a command on this path too, argument and all. `/rename`
-    /// mid-turn used to name nothing and ask the planner about renaming instead.
+    /// mid-turn used to name nothing and ask the planner about renaming instead, and `/cd` is the
+    /// word that still waits with one.
     #[test]
     fn a_command_with_an_argument_is_not_sent_as_a_prompt_while_a_turn_runs() {
         let mut session = Session::new("none");
@@ -15895,7 +15980,7 @@ mod tests {
         handle_key(&mut session, key(KeyCode::Enter));
 
         assert_eq!(session.status, Status::Working);
-        for c in "/rename the parser work".chars() {
+        for c in "/cd crates/tui".chars() {
             handle_key_while_working(&mut session, key(KeyCode::Char(c)));
         }
         handle_key_while_working(&mut session, key(KeyCode::Enter));
@@ -15911,7 +15996,7 @@ mod tests {
             .expect("the command was not waiting to be carried out");
         assert_eq!(
             dispatch_command(&mut session, queued),
-            Action::Rename("the parser work".to_string())
+            Action::ChangeDirectory("crates/tui".to_string())
         );
     }
 
@@ -15928,7 +16013,16 @@ mod tests {
         skipping.sort_unstable();
         assert_eq!(
             skipping,
-            vec![COST_COMMAND, GOAL_COMMAND, LOOP_COMMAND, WATCH_COMMAND]
+            vec![
+                COST_COMMAND,
+                EFFORT_COMMAND,
+                FORGET_TRUST_COMMAND,
+                GOAL_COMMAND,
+                LOOP_COMMAND,
+                RENAME_COMMAND,
+                THEME_COMMAND,
+                WATCH_COMMAND,
+            ]
         );
     }
 
@@ -16170,6 +16264,328 @@ mod tests {
         );
     }
 
+    /// A line typed during a turn and sent with `send`, each press taken the way the turn's own
+    /// loop takes it, with what that loop holds beside the session.
+    fn typed_during_a_turn(
+        session: &mut Session,
+        line: &str,
+        send: KeyEvent,
+        beside: &mut Beside<'_>,
+    ) -> Cancel {
+        let cancel = Cancel::new();
+        for c in line.chars() {
+            turn_key(session, key(KeyCode::Char(c)), &cancel, beside);
+        }
+        turn_key(session, send, &cancel, beside);
+        cancel
+    }
+
+    fn said_under_the_turn(session: &Session) -> Vec<&str> {
+        session
+            .said_while_working()
+            .iter()
+            .map(|said| said.text.as_str())
+            .collect()
+    }
+
+    fn waiting_prompts(session: &Session) -> Vec<&str> {
+        session
+            .queued
+            .iter()
+            .map(|queued| queued.prompt.as_str())
+            .collect()
+    }
+
+    /// `/rename` mid-turn names the session as it is typed. The turn was handed only the record's
+    /// id, and the record is written after the turn under whatever name the session has by then, so
+    /// nothing the turn does reads the name. What it says is held under the turn.
+    #[test]
+    fn a_session_renamed_mid_turn_is_renamed_as_it_is_typed() {
+        let mut session = a_turn_running_on("first");
+        let transcript = session.transcript.len();
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+
+        typed_during_a_turn(
+            &mut session,
+            "/rename deploy watch",
+            key(KeyCode::Enter),
+            &mut Beside {
+                stored: &mut stored,
+                root,
+                home: None,
+            },
+        );
+
+        assert_eq!(stored.title(), "deploy watch", "the session kept its name");
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![t!(session_renamed, title = "deploy watch")]
+        );
+        assert_eq!(
+            session.transcript.len(),
+            transcript,
+            "/rename wrote into the transcript of the turn in flight"
+        );
+        assert!(session.queued.is_empty(), "/rename waited");
+        assert_eq!(session.input(), "", "/rename was left in the box");
+    }
+
+    /// Renaming gives up every point a rewind could go back to (SESSION-19), and mid-turn that
+    /// includes the one the running turn opened: each holds the old name, and a rewind to it would
+    /// put that name back.
+    #[test]
+    fn a_session_renamed_mid_turn_gives_up_the_running_turns_rewind_point() {
+        let mut session = a_turn_running_on("first");
+        session.open_rewind_point(a_point_before(0), "first".to_string());
+
+        nothing_beside(|beside| {
+            typed_during_a_turn(
+                &mut session,
+                "/rename deploy watch",
+                key(KeyCode::Enter),
+                beside,
+            )
+        });
+
+        assert!(
+            session.rewind_points().is_empty(),
+            "a point holding the old name outlived the rename"
+        );
+    }
+
+    /// `/rename` with no name renames nothing, so it gives up nothing: the point the running turn
+    /// opened is still there for `/undo`.
+    #[test]
+    fn a_rename_with_no_name_mid_turn_keeps_the_running_turns_rewind_point() {
+        let mut session = a_turn_running_on("first");
+        session.open_rewind_point(a_point_before(0), "first".to_string());
+
+        nothing_beside(|beside| {
+            typed_during_a_turn(&mut session, RENAME_COMMAND, key(KeyCode::Enter), beside)
+        });
+
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![t!(session_rename_needs_a_name)]
+        );
+        assert_eq!(
+            session.rewind_points().len(),
+            1,
+            "a rename that renamed nothing gave up the running turn's point"
+        );
+    }
+
+    /// Ctrl-Enter on `/rename` stops nothing, as on any command carried out as it is typed: the
+    /// rename is done as it is typed, so there is nothing to stop the turn for.
+    #[test]
+    fn ctrl_enter_on_a_rename_mid_turn_hurries_nothing() {
+        let mut session = a_turn_running_on("first");
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+
+        let cancel = typed_during_a_turn(
+            &mut session,
+            "/rename deploy watch",
+            ctrl_enter(),
+            &mut Beside {
+                stored: &mut stored,
+                root,
+                home: None,
+            },
+        );
+
+        assert!(
+            !cancel.is_cancelled(),
+            "Ctrl-Enter on /rename stopped the turn"
+        );
+        assert_eq!(stored.title(), "deploy watch");
+        assert!(session.queued.is_empty(), "/rename waited");
+    }
+
+    /// `/forget-trust` mid-turn takes back the answer kept for the next session here as it is typed.
+    /// The turn reads the trust map this session opened with, which the command leaves alone, and
+    /// never the answer kept for a later one.
+    #[test]
+    fn trust_forgotten_mid_turn_is_forgotten_as_it_is_typed() {
+        use bravebot_agent::trusted::{Identity, Store};
+
+        let scratch = crate::testutil::scratch_dir("bravebot-app-forget-trust-mid-turn");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let home = scratch.join("home");
+        let root = scratch.join("work");
+        std::fs::create_dir_all(&root).expect("create");
+        let Some(identity) = Identity::of(&root) else {
+            // A filesystem with no birth time keeps nothing, which a sibling test covers.
+            return;
+        };
+        let store = Store::new(&home, &root);
+        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+        let mut session = a_turn_running_on("first");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            &root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+
+        typed_during_a_turn(
+            &mut session,
+            FORGET_TRUST_COMMAND,
+            key(KeyCode::Enter),
+            &mut Beside {
+                stored: &mut stored,
+                root: &root,
+                home: Some(&home),
+            },
+        );
+
+        assert_eq!(
+            store.kept(&identity),
+            None,
+            "the answer outlived /forget-trust"
+        );
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![t!(session_trust_forgotten, directory = root.display())]
+        );
+        assert!(session.queued.is_empty(), "/forget-trust waited");
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// `/effort high` mid-turn sets the level as it is typed. The running turn was sent with the
+    /// level in force when it began and does not read the session's again, so the next turn is the
+    /// first to go out at the new one.
+    #[test]
+    fn an_effort_named_mid_turn_is_set_as_it_is_typed() {
+        let mut session = a_turn_running_on("first");
+
+        nothing_beside(|beside| {
+            typed_during_a_turn(&mut session, "/effort high", key(KeyCode::Enter), beside)
+        });
+
+        assert_eq!(
+            session.effort(),
+            Some(bravebot_aichat::protocol::Effort::High)
+        );
+        assert_eq!(
+            said_under_the_turn(&session).first().copied(),
+            Some(said_of(Some(bravebot_aichat::protocol::Effort::High)).as_str())
+        );
+        assert!(session.queued.is_empty(), "/effort high waited");
+    }
+
+    /// A name this program does not know changes nothing mid-turn either, and the refusal is said
+    /// under the turn rather than dropped with the line.
+    #[test]
+    fn a_theme_or_an_effort_nobody_has_is_refused_mid_turn() {
+        for (line, refused) in [
+            (
+                "/theme no-such-theme",
+                t!(session_no_such_theme, theme = "no-such-theme"),
+            ),
+            (
+                "/effort hardest",
+                t!(session_no_such_effort, effort = "hardest"),
+            ),
+        ] {
+            let mut session = a_turn_running_on("first");
+
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, line, key(KeyCode::Enter), beside)
+            });
+
+            assert_eq!(said_under_the_turn(&session), vec![refused.as_str()]);
+            assert_eq!(session.effort(), None, "{line} set a level");
+            assert!(session.queued.is_empty(), "{line} waited");
+        }
+    }
+
+    /// The bare word opens a picker, and a picker takes the terminal the turn draws its own
+    /// questions on, so `/theme` and `/effort` alone wait for the turn.
+    #[test]
+    fn the_bare_theme_and_effort_commands_wait_for_the_turn() {
+        for line in [THEME_COMMAND, EFFORT_COMMAND] {
+            let mut session = a_turn_running_on("first");
+
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, line, key(KeyCode::Enter), beside)
+            });
+
+            assert!(
+                session.said_while_working().is_empty(),
+                "{line} was carried out mid-turn"
+            );
+            session.complete("answered", Vec::new(), 0);
+            assert_eq!(
+                session.take_queued_command().map(|taken| taken.line),
+                Some(line.to_string()),
+                "{line} did not wait to be carried out"
+            );
+        }
+    }
+
+    /// A command that changes something waits behind whatever was typed before it, so it lands
+    /// where it was typed: `/rename` ahead of a waiting `/clear` would name the session `/clear`
+    /// leaves, `/forget-trust` ahead of a waiting `/cd` would forget the directory `/cd` leaves, and
+    /// `/effort` ahead of a waiting prompt would change the level that prompt was typed under.
+    #[test]
+    fn a_command_that_changes_something_waits_behind_what_was_typed_first() {
+        for (first, then) in [
+            (CLEAR_COMMAND, "/rename deploy watch"),
+            ("/cd crates/tui", FORGET_TRUST_COMMAND),
+            ("second", "/effort high"),
+            (MODEL_COMMAND, "/theme no-such-theme"),
+        ] {
+            let mut session = a_turn_running_on("first");
+            type_while_working(&mut session, first);
+
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, then, key(KeyCode::Enter), beside)
+            });
+
+            assert!(
+                said_under_the_turn(&session).is_empty(),
+                "{then} was carried out ahead of a waiting {first}"
+            );
+            assert_eq!(session.effort(), None, "{then} set a level");
+            assert_eq!(waiting_prompts(&session), vec![first, then]);
+        }
+    }
+
+    /// Every command carried out mid-turn says what it did under the turn. One that came back as an
+    /// action [`turn_key`] has no arm for would be taken off the box and dropped without a word.
+    #[test]
+    fn every_command_carried_out_mid_turn_answers_under_the_turn() {
+        for command in commands() {
+            let line = match command.mid_turn {
+                MidTurn::Waits => continue,
+                MidTurn::RunsWhenNamed => format!("{} no-such-name", command.name),
+                MidTurn::Runs | MidTurn::Changes | MidTurn::RunsUnlessItStarts => {
+                    command.name.to_string()
+                }
+            };
+            let mut session = a_turn_running_on("first");
+
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, &line, key(KeyCode::Enter), beside)
+            });
+
+            assert!(
+                !said_under_the_turn(&session).is_empty(),
+                "{line} typed mid-turn said nothing"
+            );
+            assert!(session.queued.is_empty(), "{line} waited");
+        }
+    }
+
     /// The fallback in [`dispatch_command`] is unreachable, and this is what says so: a word the table
     /// names that no arm answers would be recognised, taken off the box and then quietly dropped, which
     /// is worse than a word nobody recognises. The bare word is enough for every one of them, since a
@@ -16321,12 +16737,12 @@ mod tests {
         let cancel = Cancel::new();
 
         for c in "a".chars() {
-            turn_key(&mut session, key(KeyCode::Char(c)), &cancel);
+            pressed_during_a_turn(&mut session, key(KeyCode::Char(c)), &cancel);
         }
-        turn_key(&mut session, key(KeyCode::Enter), &cancel);
+        pressed_during_a_turn(&mut session, key(KeyCode::Enter), &cancel);
         assert!(!cancel.is_cancelled(), "Enter stopped the turn");
 
-        turn_key(&mut session, ctrl_enter(), &cancel);
+        pressed_during_a_turn(&mut session, ctrl_enter(), &cancel);
         assert!(cancel.is_cancelled(), "Ctrl-Enter left the turn running");
     }
 
@@ -16340,9 +16756,9 @@ mod tests {
         handle_key(&mut session, key(KeyCode::Enter));
         let cancel = Cancel::new();
         for c in "second".chars() {
-            turn_key(&mut session, key(KeyCode::Char(c)), &cancel);
+            pressed_during_a_turn(&mut session, key(KeyCode::Char(c)), &cancel);
         }
-        turn_key(&mut session, key(KeyCode::Enter), &cancel);
+        pressed_during_a_turn(&mut session, key(KeyCode::Enter), &cancel);
         assert_eq!(session.where_it_goes(0), crate::state::Bound::IntoThisTurn);
 
         stop_what_is_running(&mut session, &cancel);
@@ -18595,10 +19011,8 @@ mod tests {
             "the turn left no point in the record, so the rename below gives up nothing"
         );
 
-        // What `Action::Rename` does: the window closes in the session, and the name goes into the
-        // record.
-        session.close_rewind_window();
-        assert!(stored.rename("the parser bug"));
+        rename_session(&mut session, &mut stored, "the parser bug");
+        assert_eq!(stored.title(), "the parser bug");
 
         // The resume, as `run` does it.
         let record = sessions::load(&root, stored.id()).expect("the record survived the rename");

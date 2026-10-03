@@ -379,8 +379,8 @@ the person can see that what they sent went somewhere.
 out: such a line comes off the box and is drawn under it like anything else waiting, but it is not
 offered to the turn in flight, so nothing about it reaches the planner. What carries it out is the
 queue being reached once the turn has ended, and a prompt behind it goes when it has, as any waiting
-prompt does. A command that reads or ends only what the session keeps for itself is carried out as
-it is typed instead. Which lines are commands, and which of them wait, is
+prompt does. A command that reads or changes only what the session keeps is carried out as it is
+typed instead. Which lines are commands, and which of them wait, is
 [commands.md](commands.md#CMD-8)'s.
 
 **The turn in flight takes it.** A turn asks between rounds, after the round's tool calls have run

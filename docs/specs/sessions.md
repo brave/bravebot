@@ -560,7 +560,9 @@ Anything that changes the session outside a turn gives up every point at once: `
 `/compact`, `/btw`, `/rename`, `/add-dir`, and `/cd`. Shell-mode commands retain the points and
 record incomplete command coverage. For changes that give up points, `/undo` then says there is
 nothing left to undo rather than reaching a different session. Every point goes rather than the most recent alone,
-since such a change lands after the most recent point and so before none of them.
+since such a change lands after the most recent point and so before none of them. `/rename` typed
+while a turn runs is carried out then ([CMD-8](commands.md#CMD-8)), and the point that turn opened
+goes with the rest: it holds the old name too.
 
 **Why.** A turn that went wrong is the case with no clean recovery: `git checkout` takes the
 user's own uncommitted work with it, and `/clear` throws away the context that was worth keeping.
@@ -597,6 +599,7 @@ whether or not it is ever read.
 `verified-by: bravebot_tui::state::a_session_keeps_no_more_points_than_it_may`
 `verified-by: bravebot_tui::state::one_turns_writes_can_cost_the_session_the_turns_behind_it`
 `verified-by: bravebot_tui::state::backups_with_no_point_to_hang_them_on_are_dropped`
+`verified-by: bravebot_tui::app::a_session_renamed_mid_turn_gives_up_the_running_turns_rewind_point`
 
 `verified-by: bravebot_tui::undo_tests::oversized_original_preserves_unrelated_grants_after_live_and_resumed_successful_undo`
 `verified-by: bravebot_tui::undo_tests::oversized_original_preserves_unrelated_grants_after_failed_undo`
