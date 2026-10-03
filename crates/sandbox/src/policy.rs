@@ -2,7 +2,7 @@
 
 use std::fmt;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// The confinement a process should run under.
 ///
@@ -204,17 +204,40 @@ impl SandboxPolicy {
 
     /// Whether this policy would confine anything at all.
     ///
-    /// A policy granting network, subprocesses, and write access to `/` is not
-    /// confinement; treating it as such would be the sort of accident that makes a
-    /// sandbox decorative.
+    /// A policy granting network, subprocesses, and write access to the root of a
+    /// filesystem is not confinement; treating it as such would be the sort of accident
+    /// that makes a sandbox decorative. A row counts as the root by where it resolves,
+    /// so `/..` and `/tmp/..` are the root as much as `/` is.
     pub fn is_meaningful(&self) -> bool {
         !self.allow_network
             || !self.allow_subprocesses
             || !self
                 .writable
                 .iter()
-                .any(|row| row.path.as_path() == Path::new("/"))
+                .any(|row| names_a_filesystem_root(&row.path))
     }
+}
+
+/// Whether a path resolves to the root of a filesystem: `/`, or on Windows a drive root
+/// such as `C:\`.
+///
+/// An existing path is resolved through the filesystem, so a link that leads to the root
+/// counts. A path that is not there is folded by its text, where `.` is dropped and `..`
+/// removes the component before it.
+fn names_a_filesystem_root(path: &Path) -> bool {
+    let resolved = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut rooted = false;
+    let mut below_root = 0usize;
+    for component in resolved.components() {
+        match component {
+            Component::Prefix(_) => {}
+            Component::RootDir => rooted = true,
+            Component::CurDir => {}
+            Component::ParentDir => below_root = below_root.saturating_sub(1),
+            Component::Normal(_) => below_root += 1,
+        }
+    }
+    rooted && below_root == 0
 }
 
 /// A path a confined process may write, and what the row says is there.
@@ -417,6 +440,58 @@ mod tests {
             .allow_subprocesses()
             .allow_write("/");
         assert!(!policy.is_meaningful());
+    }
+
+    /// A grant of everything spelled another way is still a grant of everything: `..` at
+    /// the root stays at the root, and a component folded away by `..` leaves the root.
+    #[test]
+    fn granting_everything_spelled_another_way_is_not_meaningful() {
+        for spelling in [
+            "/..",
+            "/../..",
+            "/./",
+            "//",
+            "/no-such-entry-in-root/..",
+            "/no-such-a/no-such-b/../..",
+        ] {
+            let policy = SandboxPolicy::strict()
+                .allow_network_egress()
+                .allow_subprocesses()
+                .allow_write(spelling);
+            assert!(
+                !policy.is_meaningful(),
+                "{spelling} grants the whole filesystem"
+            );
+        }
+    }
+
+    /// A path that only looks like the root stays a confinement decision.
+    #[test]
+    fn a_grant_below_the_root_remains_meaningful() {
+        for spelling in [
+            "/no-such-entry-in-root",
+            "/no-such-a/../no-such-b",
+            "/no-such-a/no-such-b/..",
+        ] {
+            let policy = SandboxPolicy::strict()
+                .allow_network_egress()
+                .allow_subprocesses()
+                .allow_write(spelling);
+            assert!(policy.is_meaningful(), "{spelling} is not the root");
+        }
+    }
+
+    /// A drive root is the whole of that drive.
+    #[cfg(windows)]
+    #[test]
+    fn granting_a_drive_root_is_not_meaningful() {
+        for spelling in ["C:\\", "C:\\..", "C:/"] {
+            let policy = SandboxPolicy::strict()
+                .allow_network_egress()
+                .allow_subprocesses()
+                .allow_write(spelling);
+            assert!(!policy.is_meaningful(), "{spelling} grants the whole drive");
+        }
     }
 
     /// Network alone is still confinement if the filesystem stays restricted.
