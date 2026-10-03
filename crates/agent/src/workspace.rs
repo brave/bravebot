@@ -2895,7 +2895,7 @@ impl Workspace {
                 until,
                 deadline,
             };
-            let withheld = |inside: &str| policy.read_is_denied(&self.trust_key(&spelled(inside)));
+            let withheld = |inside: &str| self.denies_in_repository(policy, &named, inside);
             let answer = opened.answer(&request, &withheld).map_err(declined)?;
             let mut shown: Vec<String> = answer
                 .shown
@@ -2928,6 +2928,20 @@ impl Workspace {
         })
     }
 
+    /// Whether a `deny` rule covers reading `inside` the repository the planner called `named`,
+    /// under the name it was typed with or the file that name lands on (PERM-7), so a repository
+    /// reached through a symbolic link is judged as the one it is.
+    fn denies_in_repository<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        named: &str,
+        inside: &str,
+    ) -> bool {
+        let spelled = in_repository(named, inside);
+        policy.read_is_denied(&self.trust_key(&spelled))
+            || self.rule_denies_reading(policy, &spelled)
+    }
+
     /// The trust map's name for `.git` in the repository the planner called `named`, where the map
     /// trusts all of it and no deny rule covers it, decided before anything there is listed.
     fn trusted_git_dir<S: Sink>(
@@ -2939,7 +2953,9 @@ impl Workspace {
         if !policy.trusts_beneath(&git_key) {
             return Err(crate::git::Declined::Untrusted);
         }
-        if policy.read_is_denied(&git_key) {
+        if policy.read_is_denied(&git_key)
+            || self.rule_denies_reading(policy, &in_repository(named, ".git"))
+        {
             return Err(crate::git::Declined::Fenced);
         }
         Ok(git_key)
@@ -2962,7 +2978,7 @@ impl Workspace {
             let below =
                 bravebot_core::spelling::to_slash(&below.to_string_lossy(), BACKSLASH_SEPARATES)
                     .into_owned();
-            policy.read_is_denied(&self.trust_key(&in_repository(named, &below)))
+            self.denies_in_repository(policy, named, &below)
         });
         if fenced {
             return Err(crate::git::Declined::Fenced);

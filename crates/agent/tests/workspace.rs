@@ -5726,6 +5726,84 @@ fn a_repository_a_deny_rule_names_is_not_opened() {
     );
 }
 
+/// A repository `link` reaching `real`, where `real` has committed a `.env`, and a policy denying
+/// `rule` and trusting the whole of the workspace.
+#[cfg(unix)]
+fn aliased_repository_asked(
+    name: &str,
+    rule: &str,
+    query: bravebot_agent::git::Query,
+) -> Result<(bool, String), WorkspaceError> {
+    let scratch = Scratch::new(name);
+    let real = scratch.path.join("real");
+    std::fs::create_dir(&real).unwrap();
+    repository::commit_files(
+        &real,
+        &[(".env", "TOKEN=hunter2\n"), ("README", "hi\n")],
+        "first",
+    );
+    std::os::unix::fs::symlink(&real, scratch.path.join("link")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust)
+    .with_permissions(denying(&[rule]));
+    let repository = Labelled::trusted("link".to_string());
+    let revision = Labelled::trusted("HEAD".to_string());
+    let mut question = log_of(&repository);
+    question.query = query;
+    question.revision = Some(&revision);
+    let answer = workspace.read_git(&mut policy, &question)?;
+    let proof = policy.authorise_content_release("test", "answer");
+    let answer = answer.declassify(&proof);
+    Ok((answer.withheld, answer.text))
+}
+
+/// GIT-4 with PERM-7. A rule written over the file a symlinked repository name lands on leaves
+/// that file out of what the commit shows, whichever name the planner typed.
+#[cfg(unix)]
+#[test]
+fn a_rule_over_the_file_a_symlinked_repository_lands_on_leaves_it_out_of_a_commit() {
+    let (withheld, text) = aliased_repository_asked(
+        "git-link-withheld",
+        "Read(real/.env)",
+        bravebot_agent::git::Query::Show,
+    )
+    .expect("the repository is open");
+    assert!(withheld, "the answer did not say a file was left out");
+    assert!(!text.contains("hunter2"), "{text}");
+}
+
+/// GIT-4 with PERM-7. A rule over a file beneath the `.git` a symlinked name lands on keeps the
+/// repository closed.
+#[cfg(unix)]
+#[test]
+fn a_rule_over_a_git_file_a_symlinked_repository_lands_on_keeps_it_closed() {
+    let refused = aliased_repository_asked(
+        "git-link-fenced",
+        "Read(real/.git/config)",
+        bravebot_agent::git::Query::Log,
+    );
+    assert!(
+        matches!(
+            refused,
+            Err(WorkspaceError::Git {
+                declined: bravebot_agent::git::Declined::Fenced,
+                ..
+            })
+        ),
+        "{refused:?}"
+    );
+}
+
 /// The policy a checkout is asked under: `trusted` given to the map, `denied` as deny rules.
 fn checkout_policy<'a>(
     workspace: &Workspace,
