@@ -138,6 +138,7 @@ const READ_KEYS: &[&str] = &[
     PROVIDER_BLOCK,
     "run",
     "search",
+    "terminalTitle",
     VETTING_BLOCK,
 ];
 
@@ -220,6 +221,8 @@ pub struct Settings {
     /// not recognise has to reach the interface to be reported there rather than be dropped here as
     /// though the file had said nothing.
     editor_mode: Option<String>,
+    /// What the top-level `terminalTitle` key said, if it said a boolean.
+    terminal_title: Option<bool>,
     /// What `vetting.auto` said, where the layer that said it was entitled to.
     ///
     /// Read from the **home** layer and no other, which is why [`Settings::layered`] settles this
@@ -711,6 +714,10 @@ impl Settings {
             model_outranks_a_pick: false,
             effort_outranks_a_pick: false,
             editor_mode: word(root, "editorMode"),
+            terminal_title: match root.get("terminalTitle") {
+                Some(serde_json::Value::Bool(on)) => Some(*on),
+                _ => None,
+            },
             // Read here so one file's worth can be parsed on its own, and overwritten by
             // [`Settings::layered`], which is the only caller that knows which layer this came
             // from and so the only one entitled to answer.
@@ -802,6 +809,15 @@ impl Settings {
     /// wins. This is what answers for somebody who has never made one.
     pub fn editor_mode(&self) -> Option<&str> {
         self.editor_mode.as_deref()
+    }
+
+    /// Whether the settings in force let the interface set the terminal's title, if they said.
+    ///
+    /// A boolean and nothing else, so a quoted `"false"` is absence and the title is still set:
+    /// the key only exists to turn something off, and a value read loosely could turn it off for
+    /// somebody who wrote something else.
+    pub fn terminal_title(&self) -> Option<bool> {
+        self.terminal_title
     }
 
     /// What `vetting.auto` said in the home layer, if it said anything.
@@ -960,6 +976,7 @@ impl Settings {
             && self.model.is_none()
             && self.effort.is_none()
             && self.editor_mode.is_none()
+            && self.terminal_title.is_none()
             && self.vetting.is_none()
             && self.narrowing.is_empty()
             // A key named as something other than a boolean said something too, and `doctor` names
@@ -1058,6 +1075,7 @@ impl Settings {
             .into_iter()
             .chain(self.effort.is_some().then_some("effort"))
             .chain(self.editor_mode.is_some().then_some("editorMode"))
+            .chain(self.terminal_title.is_some().then_some("terminalTitle"))
             .chain(self.vetting.is_some().then_some("vetting.auto"))
             .chain(self.narrowing.named())
             .chain((!self.keybindings.is_empty()).then_some("keybindings"))
@@ -4056,6 +4074,48 @@ mod tests {
         let reported: Vec<&str> = settings.names().collect();
         assert_eq!(reported, ["vetting.auto"]);
         assert!(!settings.is_empty());
+    }
+
+    /// The key exists to turn the title off, so only a real `false` may do it. A quoted `"false"`
+    /// read as false would make the rule depend on spelling, and one read as true would be a
+    /// coercion nobody chose; both are absence, which leaves the title on.
+    #[test]
+    fn only_a_boolean_turns_the_terminal_title_off() {
+        assert_eq!(
+            Settings::parse(r#"{"terminalTitle": false}"#).terminal_title(),
+            Some(false)
+        );
+        assert_eq!(
+            Settings::parse(r#"{"terminalTitle": true}"#).terminal_title(),
+            Some(true)
+        );
+        assert_eq!(
+            Settings::parse(r#"{"terminalTitle": "false"}"#).terminal_title(),
+            None
+        );
+        assert_eq!(Settings::parse(r#"{"model": "m"}"#).terminal_title(), None);
+
+        let settings = Layers::new("title-override")
+            .global(r#"{"terminalTitle": true}"#)
+            .project(r#"{"terminalTitle": false}"#)
+            .read();
+        assert_eq!(settings.terminal_title(), Some(false));
+    }
+
+    /// A file that sets only this is not a file that set nothing, and it is a key this build reads:
+    /// reported among the names, and never as one nothing reads, which would tell somebody who wrote
+    /// it that the title they turned off is still being set.
+    #[test]
+    fn the_terminal_title_switch_is_among_the_names_reported() {
+        let settings = Settings::parse(r#"{"terminalTitle": false}"#);
+        let reported: Vec<&str> = settings.names().collect();
+        assert_eq!(reported, ["terminalTitle"]);
+        assert!(!settings.is_empty());
+
+        let settings = Layers::new("title-read")
+            .global(r#"{"terminalTitle": false}"#)
+            .read();
+        assert_eq!(settings.unread_keys().count(), 0);
     }
 
     /// A file that sets only this is not a file that set nothing: `doctor` reports which names a layer

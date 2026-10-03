@@ -110,7 +110,7 @@ fn placeholder() -> &'static str {
 /// Everything the terminal would act on becomes a visible glyph, so what is on the screen stays a
 /// faithful record of the bytes without being able to act. Tabs and newlines are handled before this
 /// (lines are already split, and a tab is only ever width), so both are safe to keep.
-fn printable(text: &str) -> String {
+pub(crate) fn printable(text: &str) -> String {
     if !text.chars().any(|c| c.is_control() && c != '\t') {
         return text.to_string();
     }
