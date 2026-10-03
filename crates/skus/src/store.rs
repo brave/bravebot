@@ -65,15 +65,20 @@ pub enum StoreError {
     Expired { until: String, unspent: usize },
 }
 
+/// What to do about a stored batch that cannot be used.
+const REMEDY: &str =
+    "run `bravebot auth login leo` again to replace it, or `bravebot auth logout leo` to forget it";
+
 impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotFound => f.write_str("no imported Leo subscription found"),
-            Self::Unusable { detail } => {
-                write!(f, "the stored credentials could not be read: {detail}")
-            }
+            Self::Unusable { detail } => write!(
+                f,
+                "the stored credentials could not be read: {detail}; {REMEDY}"
+            ),
             Self::Malformed { detail } => {
-                write!(f, "the stored credentials are unusable: {detail}")
+                write!(f, "the stored credentials are unusable: {detail}; {REMEDY}")
             }
             Self::Exhausted => f.write_str(
                 "every credential valid today has been spent; run `bravebot auth login leo` again",
@@ -1008,9 +1013,7 @@ fn decode(raw: &str) -> Result<StoredCredentials, StoreError> {
     // was paid for is not being spent and nothing else would say so.
     if raw.trim().is_empty() {
         return Err(StoreError::Malformed {
-            detail: "the file holds nothing, which an interrupted write leaves behind; \
-                     run `bravebot auth login leo` again"
-                .to_string(),
+            detail: "the file holds nothing, which an interrupted write leaves behind".to_string(),
         });
     }
 
@@ -1023,6 +1026,16 @@ fn decode(raw: &str) -> Result<StoredCredentials, StoreError> {
         }
     })?);
     let value = document.read();
+
+    // A batch another version wrote may mean something different by the same fields, so it is
+    // refused rather than read. A file with no version predates the field being written.
+    if let Some(version) = value.get("version")
+        && version.as_u64() != Some(1)
+    {
+        return Err(StoreError::Malformed {
+            detail: format!("it was written as version {version}, and this build reads version 1"),
+        });
+    }
 
     let field = |name: &str| -> Result<String, StoreError> {
         value
@@ -2049,6 +2062,50 @@ mod tests {
             decode("not json").unwrap_err(),
             StoreError::Malformed { .. }
         ));
+    }
+
+    /// Every refusal of a stored batch tells the person what to do, not only the empty file.
+    #[test]
+    fn every_refusal_of_a_stored_batch_names_the_remedy() {
+        let complete = |version: serde_json::Value| {
+            serde_json::json!({
+                "version": version, "order_id": "o", "item_id": "i", "issuer": "x",
+                "credentials": [{"unblinded": "t"}],
+            })
+            .to_string()
+        };
+        for raw in [
+            "not json".to_string(),
+            r#"{"version": 1}"#.to_string(),
+            r#"{"version": 1, "order_id": "o", "item_id": "i", "issuer": "x", "credentials": [{}]}"#
+                .to_string(),
+            complete(serde_json::json!(2)),
+        ] {
+            let said = decode(&raw).unwrap_err().to_string();
+            assert!(said.contains("bravebot auth login leo"), "{said}");
+            assert!(said.contains("bravebot auth logout leo"), "{said}");
+        }
+        let unreadable = StoreError::Unusable {
+            detail: "denied".to_string(),
+        }
+        .to_string();
+        assert!(
+            unreadable.contains("bravebot auth login leo"),
+            "{unreadable}"
+        );
+        assert!(decode(&complete(serde_json::json!(1))).is_ok());
+    }
+
+    /// A version this build does not write is refused even when every field is present.
+    #[test]
+    fn a_batch_of_another_version_is_refused() {
+        let raw = serde_json::json!({
+            "version": 2, "order_id": "o", "item_id": "i", "issuer": "x",
+            "credentials": [{"unblinded": "t"}],
+        })
+        .to_string();
+        let said = decode(&raw).unwrap_err().to_string();
+        assert!(said.contains("version 2"), "{said}");
     }
 
     /// A credential with no token would fail at presentation time with something obscure, so it
