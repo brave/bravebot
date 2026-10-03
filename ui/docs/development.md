@@ -201,7 +201,8 @@ at the minimum window size. In short:
   a marking never depends on colour or a background image alone.
 - **Copy.** Menu items that open a dialog end in "…", buttons use verbs, tooltips carry no
   trailing period, and button texts that tests or [security](security.md) pin stay word for word.
-- **Performance.** The [budgets](testing.md#performance-budgets), on a 500-entry transcript.
+- **Performance.** The [budgets](testing.md#performance-budgets), on a 500-entry transcript and a
+  1,000-session list.
 
 The [visual gallery](testing.md#the-visual-gallery) is how this is checked by eye, and it fails
 the run on any interactive target under 28px.

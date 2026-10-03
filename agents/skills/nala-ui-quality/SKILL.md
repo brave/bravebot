@@ -129,8 +129,8 @@ A surface is done only when all of this holds in light, dark, compact and comfor
 3. **Tokens first.** If a value is missing, add a semantic token in `tokens.css` that aliases a
    Leo token, then use it. Don't inline the value.
 4. **Design the edge cases.** Empty, loading, error, very long titles, 12-level-deep paths, 400-line
-   diffs, 3,000-line code blocks, 500-entry transcripts, 0 or 80 sessions, a very long model name,
-   5 attachments, 4 queued messages, the minimum window size, forced colours.
+   diffs, 3,000-line code blocks, 500-entry transcripts, 0, 80 or 1,000 sessions, a very long
+   model name, 5 attachments, 4 queued messages, the minimum window size, forced colours.
 5. **Protect the render path.** Typing in the composer must re-render only the composer. Keep
    `EntryList` and `Row` memoised, pass callbacks from `App.tsx` through `useCallback`, and keep
    per-keystroke state (the draft) out of shared parents. Never add a subscription that makes the
@@ -143,10 +143,14 @@ A surface is done only when all of this holds in light, dark, compact and comfor
 
 ## Performance budgets
 
-Measured by `scripts/drive-perf.mjs` on a 500-entry fixture; a change must not regress them.
+Measured by `scripts/drive-perf.mjs` on a 500-entry transcript and a 1,000-session list; a change
+must not regress them.
 - Keystroke to paint in the composer under 16ms.
 - Transcript scroll holds 60fps; streaming a long answer doesn't drop frames.
 - Opening the model menu, session menu or find bar takes under 100ms.
+- With 1,000 stored sessions the window paints its first session row in under 1s and runs no
+  task over 50ms. A list that can grow with history draws a page at a time, and a popup that
+  only one row can have open is mounted when it opens, not on every row.
 - Syntax highlighting: only closed fences while streaming; no re-highlight per token. Highlighting
   must never change the text content (`drive:markdown` checks this).
 

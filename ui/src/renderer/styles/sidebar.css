@@ -164,7 +164,8 @@
 }
 .session:focus-visible,
 .bot-open-button:focus-visible,
-.session-group-fold:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+.session-group-fold:focus-visible,
+.session-show-more:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
 
 .session-status {
   flex: none;
@@ -253,6 +254,14 @@
 .session-row:has(.session:focus-visible) .session-time,
 .session-row:has(.session-more-menu:focus-within) .session-time,
 .session-row.menu-open .session-time { opacity: 0; }
+
+/* The foot of a list drawn a page at a time: quieter than a session, since it is not one. */
+.session-show-more {
+  flex: none;
+  color: var(--ink-secondary);
+  font: var(--type-meta);
+  --leo-icon-color: var(--ink-tertiary);
+}
 
 /* ------------------------------------------------------------------ groups
 
