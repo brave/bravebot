@@ -7,7 +7,7 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 164
+      - crates/agent/src/tools.rs: 165
   - symbol: Produced::refused_with_a_note
     sites:
       - crates/agent/src/tools.rs: 8
@@ -68,10 +68,9 @@ routing string: a turn whose context has met untrusted content can name no refer
 [routing.md](../routing.md) is where that is settled.
 
 `lsp` is the one tool whose result is split across both footings rather than being one or the other:
-a location is structure and is reported whatever the trust map says, while the text at that location
-is content and is quarantined when it is untrusted. [LSP-3](lsp.md#LSP-3) is where that is settled,
-and it is the only place in these specs where a path reaches the planner without having been
-vouched for.
+the line and character of a location are structure, while the name of the file and the text at the
+location are content, labelled from the files the answer names and quarantined when any is not
+vouched for. [LSP-3](lsp.md#LSP-3) is where that is settled.
 
 `spawn_agent`'s `task` and `each` are the content arguments that may not be untrusted. It decides no
 destination, so it is not routing, but it becomes a second planner's prompt rather than a payload

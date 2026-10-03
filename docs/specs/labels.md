@@ -10,7 +10,7 @@ governs:
 guards:
   - symbol: Labelled::new
     sites:
-      - crates/agent/src/lsp.rs: 4
+      - crates/agent/src/lsp.rs: 6
       - crates/agent/src/manifest.rs: 3
       - crates/agent/src/mcp.rs: 1
       - crates/agent/src/tools.rs: 25
@@ -105,7 +105,7 @@ guards:
       - crates/agent/src/aside.rs: 1
       - crates/agent/src/attached.rs: 1
       - crates/agent/src/goal.rs: 1
-      - crates/agent/src/lsp.rs: 3
+      - crates/agent/src/lsp.rs: 4
       - crates/agent/src/turn.rs: 10
       - crates/core/src/policy.rs: 8
   - symbol: Policy::render_in_place
