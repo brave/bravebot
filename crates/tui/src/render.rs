@@ -1599,6 +1599,34 @@ fn draw_scroller_help(frame: &mut Frame, area: Rect, session: &Session) {
     frame.render_widget(list, box_area);
 }
 
+/// The tail of `needle` that fits in `room` columns, with an ellipsis where the head went.
+///
+/// The tail because the end is where somebody typing is looking. Whatever the row cannot hold of a
+/// needle is cut here, before it is drawn, because a span too wide for the row is cut by the row at
+/// its right edge, and what is there is the way out.
+fn needle_that_fits(needle: &str, room: usize) -> String {
+    let width = |text: &str| text.chars().filter_map(|c| c.width()).sum::<usize>();
+    if width(needle) <= room {
+        return needle.to_string();
+    }
+    let mut kept: Vec<char> = Vec::new();
+    let mut used = 1;
+    for c in needle.chars().rev() {
+        let next = used + c.width().unwrap_or(0);
+        if next > room {
+            break;
+        }
+        used = next;
+        kept.push(c);
+    }
+    if room == 0 {
+        return String::new();
+    }
+    kept.push('…');
+    kept.reverse();
+    kept.into_iter().collect()
+}
+
 /// Put what a turn underneath is saying on the row, keeping `reserved` columns for what follows.
 ///
 /// What follows is the way out, and reserving it is how the two rules meeting on this row resolve
@@ -1658,17 +1686,17 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
     // A search being typed owns the line: what somebody is typing is the thing they are looking
     // at, and a caret says the keys are going here rather than into the box.
     if let Some(typing) = &scroller.typing {
+        // Escape is the way out of a search, and the hint naming it is what the row holds on to
+        // while the needle grows, so the needle is what is cut to leave it room.
+        let searching = Span::styled(format!("  ·  {}", t!(scroller_searching)), dim());
+        let room = (area.width as usize).saturating_sub(searching.width() + "  /".len() + 1);
         let mut spans = vec![
             Span::styled(
-                format!("  /{typing}"),
+                format!("  /{}", needle_that_fits(typing, room)),
                 Style::default().fg(theme::brand_primary()),
             ),
             Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED)),
         ];
-
-        // Escape is the way out of a search, and the hint naming it is what the row holds on to
-        // while the needle grows.
-        let searching = Span::styled(format!("  ·  {}", t!(scroller_searching)), dim());
         say_the_turn_if_it_fits(
             &mut spans,
             area.width,
@@ -1711,13 +1739,7 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
                 total = found
             )
         };
-        let looking = [
-            Span::styled(
-                format!("  /{}", scroller.needle),
-                Style::default().fg(theme::brand_primary()),
-            ),
-            Span::styled(format!("  ·  {standing}"), dim()),
-        ];
+        let standing = Span::styled(format!("  ·  {standing}"), dim());
 
         // The keys are what gives up the room, because every one of them is behind `?` as well
         // while a turn underneath is said nowhere but here. What the row keeps before anything
@@ -1725,6 +1747,18 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
         // the row costs the longer list first and then what the turn is saying.
         let walking = Span::styled(format!("  ·  {}", t!(scroller_search_keys)), dim());
         let closing = Span::styled(format!("  ·  {}", t!(scroller_footer_keys)), dim());
+
+        // The needle is whatever somebody typed, so it is cut to the columns the way out leaves,
+        // and the match count goes before any of the needle does.
+        let room = (area.width as usize).saturating_sub(closing.width() + "  /".len());
+        let shown = needle_that_fits(&scroller.needle, room);
+        let shown_width: usize = shown.chars().filter_map(|c| c.width()).sum();
+        let looking: Vec<Span> = std::iter::once(Span::styled(
+            format!("  /{shown}"),
+            Style::default().fg(theme::brand_primary()),
+        ))
+        .chain((shown_width + standing.width() <= room).then_some(standing))
+        .collect();
         let kept = looking.iter().map(Span::width).sum::<usize>() + closing.width();
         let mut spans: Vec<Span> = counted(kept).into_iter().collect();
         spans.extend(looking);
@@ -5518,6 +5552,51 @@ mod tests {
                 !drawn.contains("12 rows below"),
                 "the row said more than it had the width for: {drawn}"
             );
+        }
+
+        /// A needle wider than the whole row is the case the test above does not reach: there is
+        /// no room for the turn, the count or the keys, and the needle alone could fill the row.
+        /// The row has to cut the needle rather than let the right edge cut the way out.
+        #[test]
+        fn a_needle_wider_than_the_row_still_leaves_the_way_out() {
+            let mut session = reading_under_a_running_turn();
+            search(&mut session, &"x".repeat(200));
+
+            let (drawn, _) = screen(&session);
+
+            assert!(
+                drawn.contains("q closes"),
+                "a needle wider than the row pushed the way out off it: {drawn}"
+            );
+            assert!(
+                drawn.contains('…'),
+                "the cut needle did not say it was cut: {drawn}"
+            );
+        }
+
+        /// The same for a needle still being typed, whose way out is Escape.
+        #[test]
+        fn a_needle_wider_than_the_row_being_typed_still_leaves_the_way_out() {
+            let mut session = reading_under_a_running_turn();
+            session.begin_search();
+            for c in "x".repeat(200).chars() {
+                session.type_into_search(c);
+            }
+
+            let (drawn, _) = screen(&session);
+
+            assert!(
+                drawn.contains("esc to abandon"),
+                "a needle wider than the row pushed Escape off it: {drawn}"
+            );
+        }
+
+        /// The tail is what is kept, since the end is where the typing is happening.
+        #[test]
+        fn a_cut_needle_keeps_its_end() {
+            assert_eq!(needle_that_fits("abcdefgh", 4), "…fgh");
+            assert_eq!(needle_that_fits("abcd", 4), "abcd");
+            assert_eq!(needle_that_fits("abcd", 0), "");
         }
 
         /// The same rule while the needle is still being typed, where the way out is Escape and the
