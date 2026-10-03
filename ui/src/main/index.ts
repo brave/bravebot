@@ -41,7 +41,7 @@ import { isBotModel, withoutBot, type Bot } from '../shared/bots'
 import { isSessionId, parseForkResult } from '../shared/forks'
 import { rootForSession, forgetRoot, list, noteRoot, open as openInApp, preview, search, chooseAttachments, attachmentPaths } from './files'
 import { isSubpath } from '../shared/files'
-import { chooseDirectory } from './opened'
+import { chooseDirectory, mayOpenSessionIn, offerDirectories } from './opened'
 import {
   parseExportRequest,
   suggestedFilename,
@@ -457,9 +457,8 @@ const FILTERS: Record<ExportFormat, Electron.FileFilter> = {
  * The handle comes off the answer in every case. The directory comes off the answer too where
  * there is one — an opened session carries its record, a forked one its own directory — and off
  * the request for `session.new`, which answers with a handle and a branch and nothing else. That
- * one path is the same value this handler already trusts enough to write to the recents list a few
- * lines up, it arrived from a native picker or a list the main process itself keeps, and it is
- * checked as a project path before it becomes a root.
+ * one path has already passed `mayOpenSessionIn` in the handler, so it is a folder the picker or a
+ * list this process keeps handed over, and is checked as a project path before it becomes a root.
  */
 function noteOpenedRoot(method: string, params: unknown, ok: unknown): void {
   if (method !== 'session.open' && method !== 'session.new' && method !== 'session.fork') return
@@ -521,11 +520,24 @@ app.whenReady().then(() => {
     if (!bridge) {
       return { error: { code: 'no_bridge', message: 'the agent is not running' } }
     }
+    // A session's directory becomes the root the file helper is pinned to, so the renderer may
+    // open one only in a folder it was given (TRUST-20), whatever shape the string it sends has.
+    if (method === 'session.new' || method === 'session.open') {
+      if (!mayOpenSessionIn((params as { directory?: unknown } | null)?.directory)) {
+        return { error: { code: 'bad_request', message: 'that is not a folder this app offered' } }
+      }
+    }
     try {
       const session = (params as { session?: unknown } | null)?.session
       const ok = method === 'models.list'
         ? await listModels(rootForSession(typeof session === 'string' ? session : ''))
         : await bridge.request(method, sanitised(method, params))
+      // The directories the agent reports are folders somebody opened, and the window draws them
+      // as group headings it can open a new session under.
+      if (method === 'session.list') {
+        const listed = (ok as { sessions?: unknown } | null)?.sessions
+        if (Array.isArray(listed)) offerDirectories(listed.map((row) => (row as { directory?: unknown } | null)?.directory))
+      }
       // Opening a session is the other way a project becomes recent, and this handler is
       // already the choke point that sees it. Reading one field it is forwarding anyway is
       // a smaller thing than a channel that would let the renderer write the list itself.
@@ -816,7 +828,11 @@ app.whenReady().then(() => {
   })
 
   /** The projects opened before, newest first. Read-only on purpose. */
-  ipcMain.handle('bravebot:recents:read', () => recents())
+  ipcMain.handle('bravebot:recents:read', () => {
+    const found = recents()
+    offerDirectories(found)
+    return found
+  })
 
   /** Which session came out of which. Read-only for the same reason the recents list is. */
   ipcMain.handle('bravebot:forks:read', () => forks())

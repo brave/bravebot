@@ -23,6 +23,16 @@ import { isProjectPath } from '../shared/recents'
 const chosen = new Set<string>()
 
 /**
+ * Folders this process itself put in front of the window: the recents list it keeps, and the
+ * directories the agent reported on a session. A window may name one of these to open a
+ * session, which is the other half of "what it may name is decided by what it has been given".
+ *
+ * Kept apart from `chosen` because a bot's folder has a stricter source (the picker alone), and
+ * folding the two would widen that road.
+ */
+const offered = new Set<string>()
+
+/**
  * Ask for a project folder, and remember what came back.
  *
  * `null` for a cancelled dialog, which is not a failure: somebody changed their mind, and nothing
@@ -43,4 +53,18 @@ export async function chooseDirectory(window: BrowserWindow): Promise<string | n
 /** Whether a window is naming a folder this process handed it, rather than one it composed. */
 export function isOpenedDirectory(value: unknown): value is string {
   return isProjectPath(value) && chosen.has(value)
+}
+
+/** Record folders this process is about to hand to the window, from a list it composed. */
+export function offerDirectories(values: unknown): void {
+  if (!Array.isArray(values)) return
+  for (const value of values) if (isProjectPath(value)) offered.add(value)
+}
+
+/**
+ * Whether a window may open a session in this folder: the picker handed it over, or this process
+ * offered it from a list of its own. The shape of the string decides nothing.
+ */
+export function mayOpenSessionIn(value: unknown): value is string {
+  return isOpenedDirectory(value) || (isProjectPath(value) && offered.has(value))
 }
