@@ -65,7 +65,8 @@ pub enum Pushed {
 /// The longest ref file read. A ref is one line.
 const LONGEST_REF: u64 = 4096;
 const LONGEST_PACKED_REFS: u64 = 64 << 20;
-/// The most entries under `refs/remotes` looked at.
+/// A checkout shares the repository's refs, so a program in it can fill `refs/remotes`. The
+/// walk stops here so that cannot stall the listing.
 const MOST_REMOTE_ENTRIES: usize = 100_000;
 
 /// The refs of one `.git` directory, read once for every checkout made from it.
