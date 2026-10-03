@@ -917,6 +917,24 @@ impl Tree {
     }
 }
 
+impl Tree {
+    /// Give back a place [`Tree::claim`] took, for a delegate that was approved and then did not
+    /// start. Never below none.
+    pub(crate) fn release(&self) {
+        use std::sync::atomic::Ordering;
+        let mut held = self.0.load(Ordering::SeqCst);
+        while held > 0 {
+            match self
+                .0
+                .compare_exchange_weak(held, held - 1, Ordering::SeqCst, Ordering::SeqCst)
+            {
+                Ok(_) => return,
+                Err(now) => held = now,
+            }
+        }
+    }
+}
+
 /// The same tree, not the same count: two turns that each spawned one hold different trees.
 impl PartialEq for Tree {
     fn eq(&self, other: &Self) -> bool {

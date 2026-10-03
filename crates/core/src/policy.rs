@@ -3210,6 +3210,27 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Ok(spec)
     }
 
+    /// Take back a delegate [`Policy::before_delegate`] approved and the caller then did not
+    /// start, because something it checks afterwards refused it.
+    ///
+    /// The place under the ceiling and the number go back, so only a delegate that started is
+    /// counted ([DELEGATE-7](../../../docs/specs/delegation.md#DELEGATE-7)) and the next one is
+    /// numbered as the one after the last that did. Only the delegate this run approved last can
+    /// be taken back, which is the only one a caller holds: it asks for one at a time.
+    pub fn withdraw_delegate(&mut self, spec: crate::delegate::DelegateSpec) {
+        debug_assert_eq!(self.spawned, spec.id().position());
+        self.spawned = self.spawned.saturating_sub(1);
+        self.tree.release();
+        self.allow(
+            "delegate",
+            format!(
+                "{}: withdrawn before it started, so it holds no place in this turn's tree of \
+                 delegates and no number",
+                spec.id()
+            ),
+        );
+    }
+
     /// Select the definition a person's line addressed, and narrow this turn to it.
     ///
     /// `None` where the line addressed none. The name is the [`crate::delegate::ADDRESSED`]
@@ -14322,6 +14343,33 @@ five
                 "the refusal did not name the run that asked: {err}"
             );
             assert!(!bottom.finish());
+        }
+
+        /// DELEGATE-7: a request the caller refuses after the gate approved it takes no place
+        /// under the ceiling and no number, so refusing more requests than the ceiling allows
+        /// leaves the next one startable and numbered as the first.
+        #[test]
+        fn a_withdrawn_delegate_takes_neither_a_place_nor_a_number() {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            for _ in 0..=MAX_DELEGATES {
+                let spec = turn
+                    .before_delegate(&argument("reader"), &argument("look"))
+                    .expect("a withdrawn request filled the tree");
+                turn.withdraw_delegate(spec);
+            }
+            let spec = turn
+                .before_delegate(&argument("reader"), &argument("look"))
+                .expect("the tree was full of delegates that never started");
+            assert_eq!(spec.id(), DelegateId::nth(1));
+            drop(turn);
+            assert!(
+                sink.events().iter().any(|event| matches!(
+                    event,
+                    Event::GatePassed { detail, .. } if detail.contains("d1: withdrawn")
+                )),
+                "the trail did not say the approved delegate was withdrawn"
+            );
         }
 
         /// The ceiling is on the tree rather than on each run, so siblings running at once draw

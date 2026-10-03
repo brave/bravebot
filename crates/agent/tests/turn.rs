@@ -24330,6 +24330,60 @@ fn a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not
     );
 }
 
+/// DELEGATE-7. A spawn the checkout rules refuse after the gate has approved it starts nothing,
+/// so it takes no place under the turn's ceiling: refusing more of them than the ceiling allows
+/// leaves a valid spawn startable.
+#[test]
+fn a_spawn_refused_for_its_checkout_takes_no_place_under_the_turns_ceiling() {
+    use bravebot_core::delegate::MAX_DELEGATES;
+
+    let scratch = Scratch::new("delegate-ceiling-refused-checkout");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut asked: Vec<String> = (0..=MAX_DELEGATES)
+        .map(|_| {
+            tool_request(
+                "spawn_agent",
+                r#"{"kind":"reader","task":"NEVER-RUNS","isolation":"checkout"}"#,
+            )
+        })
+        .collect();
+    asked.push(tool_request(
+        "spawn_agent",
+        r#"{"kind":"reader","task":"RUNS-AFTER"}"#,
+    ));
+    asked.push(reply_with("waiting"));
+    asked.push(reply_with("done"));
+    let (endpoint, _received) = serve_by_marker(vec![
+        ("REFUSE-THEN-START", asked),
+        ("RUNS-AFTER", vec![reply_with("ok")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = Watched::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("REFUSE-THEN-START"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        reporter
+            .position("delegate d1 finished failed=false")
+            .is_some(),
+        "refused spawns used up the turn's ceiling, or numbers: {:?}",
+        reporter.lines()
+    );
+}
+
 /// The transcript has room for a preview and a count, and a person who owns the directory is
 /// entitled to the rest. Every report the turn makes goes through the shim that lends one reporter
 /// to the turn and its delegates, so a report that shim does not carry reaches no screen at all.

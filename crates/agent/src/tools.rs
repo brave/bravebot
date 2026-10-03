@@ -7064,8 +7064,13 @@ fn spawn_agent<S: Sink, R: Reporter>(
         // name could be steered by (CHECKOUT-1).
         let state = match wants_checkout(arguments, &spec, tools) {
             Ok(state) => state,
-            Err(refusal) if started.is_empty() => return Produced::problem(refusal),
+            // Approved by the gate and refused here, so it starts nothing and takes no place
+            // under the turn's ceiling (DELEGATE-7).
             Err(refusal) => {
+                policy.withdraw_delegate(spec);
+                if started.is_empty() {
+                    return Produced::problem(refusal);
+                }
                 rest_refused = Some(refusal);
                 break;
             }
@@ -7084,6 +7089,7 @@ fn spawn_agent<S: Sink, R: Reporter>(
                         ),
                         false => refusal,
                     };
+                    policy.withdraw_delegate(spec);
                     if started.is_empty() {
                         return Produced::problem(refusal);
                     }
