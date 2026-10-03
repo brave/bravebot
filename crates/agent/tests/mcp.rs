@@ -2044,6 +2044,59 @@ fn a_worker_whose_definition_names_one_server_is_offered_only_its_tool() {
     );
 }
 
+/// `spawn-agent.md` AGENT-6. A call's `mcp_servers` narrows the servers its worker holds. The turn
+/// holds both servers and is offered both tools; a worker spawned keeping none is offered neither,
+/// and one spawned keeping the docs server is offered that one's tool alone.
+#[test]
+fn a_worker_spawned_keeping_no_server_is_offered_no_servers_tool() {
+    for (name, kept, offered) in [
+        ("none", "[]", vec![]),
+        ("docs", r#"["docs"]"#, vec![DOCS_TOOL]),
+    ] {
+        let scratch = Scratch::new(&format!("delegate-keeps-{name}"));
+        let (session, _bodies) = two_servers(&scratch);
+        let spawn = format!(r#"{{"kind":"worker","task":"{DELEGATED}","mcp_servers":{kept}}}"#);
+        let (endpoint, chat) = serve_chat_by_marker(vec![
+            (
+                PARENT,
+                vec![
+                    tool_request("spawn_agent", &spawn),
+                    reply_with("waiting"),
+                    reply_with("the delegate reported"),
+                ],
+            ),
+            (DELEGATED, vec![reply_with("nothing to look up")]),
+        ]);
+        let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+        run_turn(
+            &endpoint,
+            &scratch.project(),
+            Task::new(PARENT).with_mcp(Some(session)),
+            &mut asked,
+        );
+        let sent = rounds(&chat);
+        let parent = sent
+            .iter()
+            .find(|body| body.contains(PARENT))
+            .expect("the turn asked");
+        assert!(
+            parent.contains(FORECAST) && parent.contains(DOCS_TOOL),
+            "{name}: the turn was not offered both tools, so this says nothing: {parent}"
+        );
+        let delegate = sent
+            .iter()
+            .find(|body| body.contains(DELEGATED) && !body.contains(PARENT))
+            .unwrap_or_else(|| panic!("{name}: the worker never asked"));
+        for tool in [FORECAST, DOCS_TOOL] {
+            assert_eq!(
+                delegate.contains(tool),
+                offered.contains(&tool),
+                "{name}: the worker and {tool}: {delegate}"
+            );
+        }
+    }
+}
+
 /// A reader and a checker hold no server, so neither is offered a server's tool, and a call to one
 /// anyway is answered as any other unknown name is: nothing is put to the person and the server
 /// hears nothing. The turn settled the list, so the tool was there to be offered.

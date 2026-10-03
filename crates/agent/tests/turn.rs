@@ -22342,6 +22342,7 @@ fn seeded_reader(task: &str) -> bravebot_agent::delegate::Seeded {
         .before_delegate(
             &bravebot_core::value::Labelled::new("reader".to_string(), Label::untrusted_public()),
             &bravebot_core::value::Labelled::new(task.to_string(), Label::untrusted_public()),
+            None,
         )
         .expect("a delegate the gate allows");
     let seeded = bravebot_agent::delegate::seed(&policy, spec, None);
