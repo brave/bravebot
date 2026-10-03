@@ -151,6 +151,8 @@ and a backend error are all **inconclusive**, which says nothing about the conte
 
 Where a reply holds more than one candidate answer, the last is read: that is the one a model
 writes after reasoning, and reading the first would let its worked example outrank its conclusion.
+A reply that leaves an object open at its end is a truncated reply, and an earlier complete object
+does not speak for it.
 
 **Why.** Fails closed on every path. The only reply that can reduce a warning is one that answered
 in the form it was asked for, so a check that half worked lands where a check that did not run
@@ -167,6 +169,7 @@ lands.
 `verified-by: bravebot_core::vetting::a_bare_word_is_not_a_verdict`
 `verified-by: bravebot_core::vetting::a_nested_key_does_not_answer_for_the_object_holding_it`
 `verified-by: bravebot_core::vetting::a_truncated_reply_is_inconclusive`
+`verified-by: bravebot_core::vetting::a_complete_object_followed_by_a_truncated_one_is_inconclusive`
 `verified-by: bravebot_core::vetting::a_reply_holding_characters_outside_ascii_is_read`
 `verified-by: bravebot_agent::turn::a_check_that_could_not_be_made_falls_back_to_the_question`
 
