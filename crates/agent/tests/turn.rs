@@ -694,18 +694,24 @@ fn serve_sequence_answering(
     replies: Vec<String>,
     lose_every_check: bool,
 ) -> (String, MockRequests) {
+    let mut attempts = std::iter::repeat_n(None, dropped).chain(replies.into_iter().map(Some));
+    serve_rounds(checks, lose_every_check, move |_| attempts.next())
+}
+
+/// As [`serve_sequence_answering`], with each round's reply chosen by `next` from the request it
+/// answers. `None` is the end of the script, and `Some(None)` an attempt to hang up on.
+fn serve_rounds(
+    checks: Vec<String>,
+    lose_every_check: bool,
+    mut next: impl FnMut(&str) -> Option<Option<String>> + Send + 'static,
+) -> (String, MockRequests) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
 
-    let attempts: Vec<Option<String>> = std::iter::repeat_n(None, dropped)
-        .chain(replies.into_iter().map(Some))
-        .collect();
-
     let stopped = Arc::new(AtomicBool::new(false));
     let stopping = Arc::clone(&stopped);
     let worker = thread::spawn(move || {
-        let mut attempts = attempts.into_iter();
         let mut checks = checks.into_iter();
         // The listener outlives the script rather than going away with the last reply in it. The
         // chat client resends a request whose reply it could not finish reading, and a port with
@@ -762,7 +768,7 @@ fn serve_sequence_answering(
                 answered = Some((body, reply.clone()));
                 Some(reply)
             } else {
-                match attempts.next() {
+                match next(&body) {
                     // An attempt this was asked to lose. Not remembered, so the resend that follows
                     // gets the reply after it, which is the whole point of losing one.
                     Some(None) => None,
@@ -801,6 +807,42 @@ fn serve_sequence_answering(
         worker: Some(worker),
     };
     (format!("http://127.0.0.1:{port}"), requests)
+}
+
+/// What a request holds once the turn has told the planner that job:1 finished.
+const JOB_1_FINISHED: &str = "The background job you started as job:1 has finished";
+
+/// The command a planner stand-in runs in the foreground while it waits to hear about a job.
+const SOMETHING_ELSE: &str = "sleep 0.2";
+
+/// A planner that starts a job with `start`, makes [`SOMETHING_ELSE`] until a request says the job
+/// finished, and then says it is done.
+///
+/// The finish reaches the turn at the first round after the job exits, and on a loaded machine no
+/// fixed number of rounds is sure to come after that. The call is made at least once and at most 150
+/// times, thirty seconds of sleeping and whatever the rounds cost, so a finish that never arrives
+/// fails the test's own assertion before the turn runs out of rounds.
+fn serve_until_job_1_finishes(start: String) -> (String, MockRequests) {
+    let mut start = Some(start);
+    let mut waited = 0;
+    let mut done = false;
+    serve_rounds(Vec::new(), false, move |body| {
+        if let Some(start) = start.take() {
+            return Some(Some(start));
+        }
+        if done {
+            return None;
+        }
+        if (waited > 0 && body.contains(JOB_1_FINISHED)) || waited == 150 {
+            done = true;
+            return Some(Some(reply_with("done")));
+        }
+        waited += 1;
+        Some(Some(tool_request(
+            "run",
+            &format!(r#"{{"command":"{SOMETHING_ELSE}"}}"#),
+        )))
+    })
 }
 
 /// What a request the script has no reply for is told.
@@ -16943,8 +16985,10 @@ fn what_a_job_printed_says_how_to_read_it_where_nobody_is_asked() {
 
     let (endpoint, received) = serve_sequence(vec![
         tool_request("run", r#"{"command":"./noisy","background":true}"#),
-        tool_request("run", r#"{"command":"sleep 0.5"}"#),
-        tool_request("job_output", r#"{"job":"job:1","kill":true}"#),
+        tool_request(
+            "job_output",
+            r#"{"job":"job:1","wait_seconds":30,"kill":true}"#,
+        ),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -17002,11 +17046,10 @@ fn what_an_ended_job_printed_says_how_to_read_it_where_nobody_is_asked() {
     }
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"./noisy","background":true}"#),
-        tool_request("run", r#"{"command":"sleep 1"}"#),
-        reply_with("done"),
-    ]);
+    let (endpoint, received) = serve_until_job_1_finishes(tool_request(
+        "run",
+        r#"{"command":"./noisy","background":true}"#,
+    ));
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut reading = ReadsWhatItRan::new(true);
@@ -25569,6 +25612,24 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
     }
 }
 
+/// Writes `wait-for` into `dir`: a program that returns once the path it is given exists, so a
+/// planner's next call can wait on what a job did rather than on how long it might take. It gives
+/// up after 600 polls of 50 ms and exits 1, and the test's own assertion then says what never
+/// happened.
+fn write_wait_for(dir: &std::path::Path) {
+    let script = dir.join("wait-for");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\ni=0\nwhile [ ! -e \"$1\" ] && [ \"$i\" -lt 600 ]; do\n  i=$((i + 1))\n  sleep 0.05\ndone\n[ -e \"$1\" ]\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
 /// The turn a background job exists for, and the one that could not happen before: a server is
 /// started, the turn talks to it while it is up, and it is still up when the second call is made.
 /// Waiting for it would have held the turn for five minutes and then killed it, so there was never
@@ -25591,12 +25652,13 @@ fn a_background_server_is_still_running_when_the_next_call_is_made() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
+    write_wait_for(&scratch.path);
 
     let (endpoint, received) = serve_sequence(vec![
         tool_request("run", r#"{"command":"./serve","background":true}"#),
-        // Long enough for the server to have written its file, which is how this observes that it
-        // was still running rather than killed at the end of the first call.
-        tool_request("run", r#"{"command":"sleep 1"}"#),
+        // Returns once the server has written its file, which is how this observes that it was
+        // still running rather than killed at the end of the first call.
+        tool_request("run", r#"{"command":"./wait-for served"}"#),
         tool_request("run", r#"{"command":"ls served"}"#),
         tool_request("job_output", r#"{"job":"job:1","kill":true}"#),
         reply_with("done"),
@@ -26068,8 +26130,10 @@ fn what_a_background_job_printed_is_quarantined_like_any_other_output() {
 
     let (endpoint, received) = serve_sequence(vec![
         tool_request("run", r#"{"command":"./noisy","background":true}"#),
-        tool_request("run", r#"{"command":"sleep 0.5"}"#),
-        tool_request("job_output", r#"{"job":"job:1","kill":true}"#),
+        tool_request(
+            "job_output",
+            r#"{"job":"job:1","wait_seconds":30,"kill":true}"#,
+        ),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -26102,6 +26166,13 @@ fn what_a_background_job_printed_is_quarantined_like_any_other_output() {
             .all(|body| !body.contains("SENTINEL-BACKGROUND")),
         "what a background job printed reached the planner unvouched for"
     );
+    // Without this, a job that had printed nothing yet would pass the assertion above.
+    assert!(
+        bodies
+            .last()
+            .is_some_and(|body| body.contains("Result of job_output could not be shown to you")),
+        "the planner was not told the job printed something it may not read"
+    );
 }
 
 /// Backgrounding changes when the planner reads a result, not what a cap does to one. A job that
@@ -26120,22 +26191,24 @@ fn the_middle_of_a_capped_job_output_stays_reachable() {
     }
     std::fs::write(scratch.path.join("big.log"), &log).unwrap();
 
-    // Printed and then left running. Everything it will print has been printed by the time the
-    // sleep below is over, so the size of the result is not a race against the clock; and it has
+    // Printed and then left running. It writes `printed` once the whole log is in the pipe, and
+    // the planner waits for that file before it looks, so all that is left to the clock is the
+    // reader taking the last pipe buffer while the waiter polls and the reply comes back. It has
     // not ended, so this exercises the job_output call rather than the account the turn gives of a
     // job that finished, which is a path of its own with a test of its own.
     let script = scratch.path.join("noisy");
-    std::fs::write(&script, "#!/bin/sh\ncat big.log\nsleep 30\n").unwrap();
+    std::fs::write(&script, "#!/bin/sh\ncat big.log\ntouch printed\nsleep 30\n").unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
+    write_wait_for(&scratch.path);
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let (endpoint, received) = serve_sequence(vec![
         tool_request("run", r#"{"command":"./noisy","background":true}"#),
-        tool_request("run", r#"{"command":"sleep 1"}"#),
+        tool_request("run", r#"{"command":"./wait-for printed"}"#),
         tool_request("job_output", r#"{"job":"job:1"}"#),
         // Every result of the turn takes a number, the planner's own replies included, and this
         // is the one the job's output reached.
@@ -26327,7 +26400,7 @@ fn a_background_jobs_finish_reaches_the_turn_without_the_planner_asking() {
     let scratch = Scratch::new("background-finish-told");
 
     // Prints and exits, so it is over while the turn is still going, which is the case nothing
-    // reported. Nothing waits on it: the ordinary round that follows is what it finishes during.
+    // reported. Nothing waits on it: the ordinary rounds that follow are what it finishes during.
     let script = scratch.path.join("build");
     std::fs::write(&script, "#!/bin/sh\necho FINISH-MARKER-GRAULT\n").unwrap();
     #[cfg(unix)]
@@ -26337,12 +26410,11 @@ fn a_background_jobs_finish_reaches_the_turn_without_the_planner_asking() {
     }
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    // No job_output call anywhere in this sequence. The account has to arrive without one.
-    let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"./build","background":true}"#),
-        tool_request("run", r#"{"command":"sleep 1"}"#),
-        reply_with("done"),
-    ]);
+    // No job_output call anywhere in this turn. The account has to arrive without one.
+    let (endpoint, received) = serve_until_job_1_finishes(tool_request(
+        "run",
+        r#"{"command":"./build","background":true}"#,
+    ));
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -26400,11 +26472,10 @@ fn a_finished_jobs_wake_up_labels_its_standard_error() {
     }
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"./both","background":true}"#),
-        tool_request("run", r#"{"command":"sleep 1"}"#),
-        reply_with("done"),
-    ]);
+    let (endpoint, received) = serve_until_job_1_finishes(tool_request(
+        "run",
+        r#"{"command":"./both","background":true}"#,
+    ));
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -26527,11 +26598,10 @@ fn a_background_job_is_announced_when_it_starts_and_its_finish_carries_its_name(
     }
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, _received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"./build","background":true}"#),
-        tool_request("run", r#"{"command":"sleep 1"}"#),
-        reply_with("done"),
-    ]);
+    let (endpoint, _received) = serve_until_job_1_finishes(tool_request(
+        "run",
+        r#"{"command":"./build","background":true}"#,
+    ));
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -26584,7 +26654,7 @@ fn a_background_job_is_announced_when_it_starts_and_its_finish_carries_its_name(
         reporter
             .printed
             .iter()
-            .any(|printed| printed.command.contains("sleep 1") && printed.job.is_none()),
+            .any(|printed| printed.command.contains(SOMETHING_ELSE) && printed.job.is_none()),
         "a foreground line was put under a job: {:?}",
         reporter.printed
     );
@@ -26693,17 +26763,23 @@ fn process_is_alive(pid: &std::path::Path) -> bool {
 fn a_turn_ending_with_a_job_running_says_so_before_it_stops_it() {
     let scratch = Scratch::new("background-dropped-with-the-turn");
     let script = scratch.path.join("serve");
-    std::fs::write(&script, "#!/bin/sh\necho $$ > pid\nsleep 30\n").unwrap();
+    // Renamed into place, so `pid` never exists half written.
+    std::fs::write(
+        &script,
+        "#!/bin/sh\necho $$ > pid.part\nmv pid.part pid\nsleep 30\n",
+    )
+    .unwrap();
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
+    write_wait_for(&scratch.path);
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    // The round between gives the job time to write its pid before the turn ends.
+    // The round between waits for the job to have written its pid, so the turn ends with it running.
     let (endpoint, _received) = serve_sequence(vec![
         tool_request("run", r#"{"command":"./serve","background":true}"#),
-        tool_request("run", r#"{"command":"sleep 1"}"#),
+        tool_request("run", r#"{"command":"./wait-for pid"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -26768,11 +26844,10 @@ fn a_silent_background_jobs_exit_code_reaches_the_turn_by_itself() {
     }
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"./failing","background":true}"#),
-        tool_request("run", r#"{"command":"sleep 1"}"#),
-        reply_with("done"),
-    ]);
+    let (endpoint, received) = serve_until_job_1_finishes(tool_request(
+        "run",
+        r#"{"command":"./failing","background":true}"#,
+    ));
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -26829,11 +26904,10 @@ fn what_an_ended_job_printed_is_quarantined_where_nobody_vouched_for_the_line() 
     }
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"./noisy","background":true}"#),
-        tool_request("run", r#"{"command":"sleep 1"}"#),
-        reply_with("done"),
-    ]);
+    let (endpoint, received) = serve_until_job_1_finishes(tool_request(
+        "run",
+        r#"{"command":"./noisy","background":true}"#,
+    ));
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -26903,11 +26977,10 @@ fn what_an_ended_job_printed_is_capped_with_the_whole_of_it_kept() {
     }
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"./noisy","background":true}"#),
-        tool_request("run", r#"{"command":"sleep 1"}"#),
-        reply_with("done"),
-    ]);
+    let (endpoint, received) = serve_until_job_1_finishes(tool_request(
+        "run",
+        r#"{"command":"./noisy","background":true}"#,
+    ));
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
