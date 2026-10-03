@@ -102,7 +102,7 @@ pub enum WorkspaceError {
     /// The policy refused the operation.
     Denied(Denial),
     /// The path resolved outside the workspace root.
-    Escapes { path: String },
+    Escapes { path: String, remedy: Remedy },
     /// The path was not usable as a relative workspace path.
     Invalid { path: String, reason: &'static str },
     /// The operation failed on disk.
@@ -151,9 +151,29 @@ impl WorkspaceError {
     pub fn describe(&self, named: &str) -> String {
         match self {
             Self::Denied(d) => d.to_string(),
-            Self::Escapes { .. } => {
-                format!("'{named}' resolves outside the workspace; refusing to touch it")
-            }
+            Self::Escapes {
+                remedy: Remedy::Nothing,
+                ..
+            } => format!("'{named}' resolves outside the workspace; refusing to touch it"),
+            // What the person can do is part of the sentence, since the planner cannot do it and has
+            // otherwise been seen to reach the same file through `run` instead.
+            Self::Escapes {
+                remedy: Remedy::Open,
+                ..
+            } => format!(
+                "'{named}' resolves outside the workspace; refusing to touch it. The person can \
+                 open the directory it is in, with /add-dir in the terminal or --add-dir when \
+                 starting bravebot, after which this path reaches it, or drop the file on the \
+                 window to have it read with their next message"
+            ),
+            Self::Escapes {
+                remedy: Remedy::Drop,
+                ..
+            } => format!(
+                "'{named}' resolves outside the workspace, and permissions.readsStayInWorkspace \
+                 keeps the file tools inside it; refusing to touch it. The person can drop the \
+                 file on the window to have it read with their next message"
+            ),
             Self::Invalid { reason, .. } => format!("'{named}' is not usable: {reason}"),
             Self::Io { detail, .. } => format!("'{named}': {detail}"),
             Self::Stale { .. } => {
@@ -185,7 +205,7 @@ impl WorkspaceError {
     fn carried_path(&self) -> &str {
         match self {
             Self::Denied(_) | Self::Pattern { .. } => "",
-            Self::Escapes { path }
+            Self::Escapes { path, .. }
             | Self::Invalid { path, .. }
             | Self::Io { path, .. }
             | Self::Stale { path }
@@ -196,6 +216,23 @@ impl WorkspaceError {
             | Self::Checkout { path, .. } => path,
         }
     }
+}
+
+/// What a person can do so that a path refused for leaving the workspace reaches its file.
+///
+/// Chosen where the refusal is made, since only there is it known whether opening a directory would
+/// make the same path work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Remedy {
+    /// None is offered: the path climbs with `..`, a link carries it out, it is inside the root,
+    /// where a directory cannot be opened, or what was refused is a command's redirection or a
+    /// rewind.
+    Nothing,
+    /// Opening the directory makes the same path reach the file, and dropping the file reads it.
+    Open,
+    /// `permissions.readsStayInWorkspace` refuses opening a directory, so a drop is the one way to
+    /// have the file read (PERM-16).
+    Drop,
 }
 
 impl fmt::Display for WorkspaceError {
@@ -852,6 +889,7 @@ impl Workspace {
     pub fn confines(&self, path: &Path) -> Result<(), WorkspaceError> {
         let escapes = || WorkspaceError::Escapes {
             path: path.display().to_string(),
+            remedy: Remedy::Nothing,
         };
         let resolved = destination(path).ok_or_else(escapes)?;
         if resolved.starts_with(&self.root) || self.is_opened(&resolved) {
@@ -1087,6 +1125,7 @@ impl Workspace {
                 Component::ParentDir => {
                     return Err(WorkspaceError::Escapes {
                         path: relative.to_string(),
+                        remedy: Remedy::Nothing,
                     });
                 }
                 Component::Prefix(_) | Component::RootDir => {
@@ -1103,6 +1142,7 @@ impl Workspace {
 
         let escapes = || WorkspaceError::Escapes {
             path: relative.to_string(),
+            remedy: Remedy::Nothing,
         };
         let resolved = destination(&self.root.join(candidate)).ok_or_else(escapes)?;
         if !resolved.starts_with(&self.root) {
@@ -1185,17 +1225,27 @@ impl Workspace {
         {
             return Err(WorkspaceError::Escapes {
                 path: named.to_string(),
+                remedy: Remedy::Nothing,
             });
         }
 
         refuse_misleading_names(candidate, named, true, cfg!(windows))?;
 
-        let escapes = || WorkspaceError::Escapes {
+        let escapes = |remedy| WorkspaceError::Escapes {
             path: named.to_string(),
+            remedy,
         };
-        let resolved = destination(candidate).ok_or_else(escapes)?;
+        let resolved = destination(candidate).ok_or_else(|| escapes(Remedy::Nothing))?;
         if !self.is_opened(&resolved) {
-            return Err(escapes());
+            // Inside the root a directory cannot be opened, and the relative path reaches the file.
+            let remedy = if resolved.starts_with(&self.root) {
+                Remedy::Nothing
+            } else if self.reads_stay_inside {
+                Remedy::Drop
+            } else {
+                Remedy::Open
+            };
+            return Err(escapes(remedy));
         }
         if let Some(below) = self
             .landed_in(&resolved)
@@ -1932,6 +1982,7 @@ impl Workspace {
     pub(crate) fn put_back(&self, path: &Path, was: &Before) -> Result<(), WorkspaceError> {
         let escapes = || WorkspaceError::Escapes {
             path: path.display().to_string(),
+            remedy: Remedy::Nothing,
         };
         let reached = match was {
             Before::Nothing => path.parent(),
