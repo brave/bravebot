@@ -338,6 +338,8 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_core::policy::a_denied_step_refuses_the_whole_line`
 `verified-by: bravebot_agent::cmdline::a_rule_refuses_a_line_before_its_program_is_looked_for`
 `verified-by: bravebot_agent::turn::a_denied_program_is_refused_by_the_rule_and_not_for_being_absent`
+`verified-by: bravebot_agent::turn::a_project_relative_deny_rule_refuses_a_redirection_to_the_file`
+`verified-by: bravebot_agent::turn::a_project_relative_deny_rule_refuses_a_redirection_that_reads_the_file`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_and_its_contents_do_not_reach_the_planner`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_written_even_where_writes_are_approved`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_by_a_processor_either`

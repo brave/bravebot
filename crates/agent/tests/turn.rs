@@ -3377,6 +3377,85 @@ fn a_denied_program_is_refused_by_the_rule_and_not_for_being_absent() {
     );
 }
 
+/// Runs `command` in a workspace whose `.env` holds a value, under `deny`, approving any prompt a
+/// run raises. Returns what `.env` holds afterwards and what the planner was told.
+fn run_against_a_denied_env(name: &str, command: &str, deny: &str) -> (String, String) {
+    let scratch = Scratch::new(name);
+    std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=hunter2").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "run",
+            &serde_json::json!({ "command": command }).to_string(),
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("touch the env file").with_permissions(rules(&[deny], &[], &[])),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    let left = std::fs::read_to_string(scratch.path.join(".env")).unwrap();
+    (left, second)
+}
+
+/// PERM-7: a rule written for a project file covers a redirection to it. The plan holds the
+/// target as an absolute path, which a project-relative rule does not match, so the redirection
+/// overwrote a file the rule names.
+#[test]
+fn a_project_relative_deny_rule_refuses_a_redirection_to_the_file() {
+    for deny in ["Edit(.env)", "Read(.env)"] {
+        let (left, told) = run_against_a_denied_env(
+            &format!("permissions-run-redirect-write-{}", deny.len()),
+            "echo overwritten > .env",
+            deny,
+        );
+        assert_eq!(
+            left, "SECRET_TOKEN=hunter2",
+            "{deny} did not stop the write"
+        );
+        assert!(
+            told.contains("a deny rule") && told.contains("Do not retry"),
+            "{deny}: the planner was not told a rule refused: {told}"
+        );
+    }
+}
+
+/// The read half: `< .env` feeds the file to a program, which a `Read` rule forbids.
+#[test]
+fn a_project_relative_deny_rule_refuses_a_redirection_that_reads_the_file() {
+    let (_, told) =
+        run_against_a_denied_env("permissions-run-redirect-read", "cat < .env", "Read(.env)");
+    assert!(
+        told.contains("a deny rule") && told.contains("Do not retry"),
+        "the planner was not told a rule refused the read: {told}"
+    );
+    assert!(
+        !told.contains("hunter2"),
+        "the denied file's contents reached the planner: {told}"
+    );
+}
+
 /// A quoted program word is one word however many spaces it holds. `"ls /x"` names a script at
 /// `ls /x` in the workspace, and an allow rule for `ls` used to stop the prompt for it, because the
 /// rule was matched against the words run together, which read as `ls` given `/x`.
