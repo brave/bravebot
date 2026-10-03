@@ -3471,21 +3471,30 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // In shell mode the usual bindings are beside the point: the line goes to a shell, so what a
     // user needs to know is which shell and how to get back out again.
     if session.shell {
-        let mut spans = vec![
-            Span::styled(
-                format!("  ! {}", bravebot_agent::shell::shell()),
-                Style::default().fg(theme::accent()),
-            ),
-            Span::styled("  ·  esc to cancel  ·  output goes to the model", dim()),
+        // Fitted like the ordinary line, so a narrow terminal drops a part whole rather than
+        // cutting one at the last column. The shell is the mode and goes last; what it says about
+        // the line goes before the things that are spending something unwatched.
+        let parts = [
+            format!("! {}", bravebot_agent::shell::shell()),
+            "esc to cancel".to_string(),
+            "output goes to the model".to_string(),
+            movable,
+            looping,
+            jobs,
         ];
-        if !movable.is_empty() {
-            spans.push(Span::styled(format!("  ·  {movable}"), dim()));
-        }
-        if !looping.is_empty() {
-            spans.push(Span::styled(format!("  ·  {looping}"), dim()));
-        }
-        if !jobs.is_empty() {
-            spans.push(Span::styled(format!("  ·  {jobs}"), dim()));
+        let kept = fitted(&parts, &[2, 1, 3, 5, 4], area.width);
+        let mut spans = Vec::new();
+        for (position, index) in kept.iter().enumerate() {
+            let part = parts[*index].clone();
+            if position == 0 && *index == 0 {
+                spans.push(Span::styled(
+                    format!("  {part}"),
+                    Style::default().fg(theme::accent()),
+                ));
+            } else {
+                let separator = if position == 0 { "  " } else { "  ·  " };
+                spans.push(Span::styled(format!("{separator}{part}"), dim()));
+            }
         }
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
         return;
@@ -8242,6 +8251,29 @@ mod tests {
         let hint = hint_row_at(&session, 80, 24);
         assert!(hint.contains("12 chars to clipboard"), "{hint}");
         assert!(hint.contains(SHORTCUTS_HINT), "the line was cut: {hint}");
+    }
+
+    /// In shell mode the line is fitted like the ordinary one: a part is given up whole, so a
+    /// narrow terminal never shows half of one cut at the final column.
+    #[test]
+    fn the_shell_hint_line_drops_whole_parts_rather_than_cutting_one() {
+        let mut session = Session::new("none");
+        session.shell = true;
+
+        let wide = hint_row_at(&session, 120, 24);
+        assert!(wide.contains("output goes to the model"), "{wide}");
+        assert!(wide.contains("esc to cancel"), "{wide}");
+
+        // Room for the shell and the escape, but not for the sentence after them.
+        let shell = format!("! {}", bravebot_agent::shell::shell());
+        let width = u16::try_from(2 + shell.chars().count() + 5 + "esc to cancel".len() + 12)
+            .expect("small");
+        let narrow = hint_row_at(&session, width, 24);
+        assert!(narrow.contains("esc to cancel"), "{narrow}");
+        assert!(
+            !narrow.contains("output"),
+            "a part was cut rather than dropped: {narrow}"
+        );
     }
 
     /// After compaction the line reports that the context was compacted.
