@@ -120,6 +120,7 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_agent::workspace::a_second_spelling_of_a_distrusted_file_is_read_as_untrusted`
 `verified-by: bravebot_core::trust::a_rule_covers_a_case_variant_spelling_of_the_same_file`
 `verified-by: bravebot_core::trust::a_folding_volume_applies_a_rule_in_both_polarities_to_the_other_spelling`
+`verified-by: bravebot_core::trust::a_folding_volume_lets_the_sort_first_case_variant_decide_both_spellings`
 `verified-by: bravebot_core::trust::a_folding_volume_reads_a_long_s_as_the_letter_it_opens_as`
 `verified-by: bravebot_core::trust::a_case_sensitive_volume_keeps_spellings_apart`
 `verified-by: bravebot_core::trust::a_map_moved_takes_the_new_volumes_answer`
