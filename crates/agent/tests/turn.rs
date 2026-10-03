@@ -23126,6 +23126,82 @@ fn a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory() {
     );
 }
 
+/// CHECKOUT-20, LSP-9. A worker given a checkout holds the language server capability by its
+/// kind, and is still not offered `lsp`, because the session's servers are rooted at the working
+/// directory. The session's own planner is offered it, and so is the same kind of delegate
+/// working in the working directory, so the tool is withheld for the checkout and not altogether.
+#[test]
+fn a_delegate_in_a_checkout_is_offered_no_lsp() {
+    let scratch = Scratch::new("checkout-delegate-no-lsp");
+    let home = Scratch::new("checkout-delegate-no-lsp-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAVE-DELEGATES-WITH-AND-WITHOUT-A-CHECKOUT",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"WORK-IN-A-CHECKOUT","isolation":"checkout"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"WORK-IN-THE-WORKING-DIRECTORY"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        ("WORK-IN-A-CHECKOUT", vec![reply_with("looked")]),
+        ("WORK-IN-THE-WORKING-DIRECTORY", vec![reply_with("looked")]),
+    ]);
+    let (asked, _) = run_in_a_repository(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "HAVE-DELEGATES-WITH-AND-WITHOUT-A-CHECKOUT",
+    );
+
+    let lsp = r#""name":"lsp""#;
+    let from = |marker: &str| -> Vec<&String> {
+        asked
+            .iter()
+            .filter(|body| body.contains(marker) && !body.contains("HAVE-DELEGATES-WITH"))
+            .collect()
+    };
+    let in_a_checkout = from("WORK-IN-A-CHECKOUT");
+    assert!(
+        !in_a_checkout.is_empty(),
+        "the checkout delegate asked nothing"
+    );
+    for body in &in_a_checkout {
+        assert!(
+            body.contains(r#""name":"write_file""#),
+            "the checkout delegate was not offered the tools its kind holds"
+        );
+        assert!(
+            !body.contains(lsp),
+            "a delegate in a checkout was offered lsp"
+        );
+    }
+    let in_the_working_directory = from("WORK-IN-THE-WORKING-DIRECTORY");
+    assert!(
+        !in_the_working_directory.is_empty(),
+        "the delegate in the working directory asked nothing"
+    );
+    for body in &in_the_working_directory {
+        assert!(body.contains(lsp), "a worker was not offered lsp");
+    }
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("HAVE-DELEGATES-WITH") && body.contains(lsp)),
+        "the planner was not offered lsp"
+    );
+}
+
 /// CHECKOUT-15. A checkout its delegate did nothing in goes with the delegate, directory and
 /// `worktrees` entry both.
 #[test]

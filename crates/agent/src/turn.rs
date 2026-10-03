@@ -2936,16 +2936,23 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // A turn the person addressed to a definition is offered the planner's list less what the
         // kernel narrowed away. Decided here, before the prompt is composed and before anything is
         // sent, so a name matching nothing ends the turn having spent nothing (ADDRESS-5).
+        //
+        // A delegate in a checkout is offered no `lsp`, whatever its kind holds: the session's
+        // servers are rooted at the working directory, and a path in the checkout is outside it
+        // (CHECKOUT-20).
         let (addressed, mut offered) = match &task.delegate {
-            Some(spec) => (
-                None,
-                tools::for_delegate(
+            Some(spec) => {
+                let mut offered = tools::for_delegate(
                     spec.capabilities(),
                     spec.tools(),
                     spec.may_delegate().then_some(&delegates),
                     task.deadlines,
-                ),
-            ),
+                );
+                if workspace.checkout().is_some() {
+                    offered.retain(|tool| tool.function.name != "lsp");
+                }
+                (None, offered)
+            }
             None => {
                 let mut offered = tools::for_planner(
                     scheduling,
