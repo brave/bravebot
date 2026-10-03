@@ -7337,6 +7337,27 @@ fn record_the_model_that_answered(
     }
 }
 
+/// Record the tier and the model of a finished turn, whichever model it ran on (PREM-9).
+///
+/// `/status` reports what the last turn did, so every turn is recorded. Only the comparison with
+/// what the session asked for is left out where the turn ran on a model a definition or a skill
+/// named: the turn has already compared that one with the model that answered (ADDRESS-11,
+/// SKILL-15), and a comparison with the session's would report a substitution that did not
+/// happen. That turn is recorded as asking for what answered, with nothing to compare.
+fn record_what_the_turn_ran_on(
+    session: &mut Session,
+    asked: Asked,
+    served: &str,
+    premium: bool,
+    ran_on_the_sessions_model: bool,
+) {
+    if ran_on_the_sessions_model {
+        record_the_model_that_answered(session, asked, served, premium);
+    } else {
+        session.served(served, served, premium, false);
+    }
+}
+
 /// What a finished turn is measured against, and what to fall back on where it reported nothing.
 ///
 /// One value rather than three arguments because none of them says anything alone: a figure without
@@ -7458,12 +7479,13 @@ fn fold_outcome(
             // full the context is now.
             session.measured(outcome.context_tokens, occupied.budget, occupied.guessed);
 
-            // Not for a turn whose last rounds ran on a model a definition or a skill named: the
-            // turn has already compared that one with the model that answered (ADDRESS-11,
-            // SKILL-15).
-            if outcome.ran_on_the_sessions_model() {
-                record_the_model_that_answered(session, asked, &outcome.model, outcome.premium);
-            }
+            record_what_the_turn_ran_on(
+                session,
+                asked,
+                &outcome.model,
+                outcome.premium,
+                outcome.ran_on_the_sessions_model(),
+            );
             // Where the turn was a tick, this is what arms the next one: an interval from the
             // driver's own clock, or the wait the turn asked for. Measured from here rather than
             // from when the tick went out, so the gap is between runs and a turn that outlasts
@@ -20170,6 +20192,52 @@ mod tests {
             said_in_the_transcript(&session).is_empty(),
             "the automatic entry doing its job was reported as a substitution"
         );
+    }
+
+    /// PREM-9: a turn that ran under an addressed definition's or a skill's model still says which
+    /// tier it ran on and which model answered. Skipping the record left `/status` on "nothing sent
+    /// yet", or on an earlier turn's tier, after a turn had spent a credential.
+    #[test]
+    fn a_turn_on_a_definitions_model_records_its_tier_and_model() {
+        let mut session = Session::new("none");
+        assert_eq!(session.premium(), None);
+
+        record_what_the_turn_ran_on(
+            &mut session,
+            Asked {
+                name: "claude-3-opus".to_string(),
+                comparable: true,
+            },
+            "claude-3-haiku",
+            true,
+            false,
+        );
+
+        assert_eq!(session.premium(), Some(true));
+        assert_eq!(session.served_model(), Some("claude-3-haiku"));
+        assert_eq!(
+            session.substituted_model(),
+            None,
+            "the session's model was compared with a turn that never ran on it"
+        );
+        assert!(said_in_the_transcript(&session).is_empty());
+    }
+
+    /// An earlier ordinary turn's tier must not survive a later turn on another model.
+    #[test]
+    fn a_turn_on_a_skills_model_replaces_an_earlier_turns_tier() {
+        let mut session = Session::new("none");
+        let asked = || Asked {
+            name: "claude-3-opus".to_string(),
+            comparable: true,
+        };
+        record_what_the_turn_ran_on(&mut session, asked(), "claude-3-opus", true, true);
+        assert_eq!(session.premium(), Some(true));
+
+        record_what_the_turn_ran_on(&mut session, asked(), "claude-3-haiku", false, false);
+
+        assert_eq!(session.premium(), Some(false));
+        assert_eq!(session.served_model(), Some("claude-3-haiku"));
     }
 
     /// What the session put in front of the person, one entry per line.
