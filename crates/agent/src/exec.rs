@@ -1205,19 +1205,23 @@ impl Background {
     /// advancing `seen` by what is taken.
     ///
     /// Per pipe rather than an offset into the composition, which is the whole point of [`Seen`].
+    /// Each delivery that carries standard error carries the label with it, so a reader of a later
+    /// delivery, which holds none of the earlier ones, can still tell the stream apart (CMDLINE-10).
     pub fn since(&self, seen: &mut Seen) -> String {
         seen.stderr.resize(self.stderr.len(), 0);
-        let mut text = self.stdout.since(&mut seen.stdout);
+        let stdout = self.stdout.since(&mut seen.stdout);
+        let mut errored = String::new();
         for (drain, seen) in self.stderr.iter().zip(seen.stderr.iter_mut()) {
-            let errored = drain.since(seen);
-            if !errored.is_empty() {
-                if !text.is_empty() && !text.ends_with('\n') {
-                    text.push('\n');
-                }
-                text.push_str(&errored);
+            let text = drain.since(seen);
+            if text.is_empty() {
+                continue;
             }
+            if !errored.is_empty() && !errored.ends_with('\n') {
+                errored.push('\n');
+            }
+            errored.push_str(&text);
         }
-        text
+        both_streams(&stdout, &errored)
     }
 
     /// Whether any pipe has delivered anything past `seen`.

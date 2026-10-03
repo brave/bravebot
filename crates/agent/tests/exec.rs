@@ -311,6 +311,40 @@ fn a_background_run_labels_standard_error_as_a_waited_for_one_does() {
     assert_eq!(job.printed(), "listing\nstandard error:\nboom\n");
 }
 
+/// The incremental read is the one production takes, for `job_output` and for the wake-up between
+/// rounds, so the label has to be on what `since` hands over, and on each delivery that carries
+/// standard error: a later one does not repeat the earlier, so a reader of it has no label to look
+/// back to.
+#[test]
+fn what_a_background_run_hands_over_incrementally_labels_each_delivery_of_standard_error() {
+    let scratch = Scratch::new("background-since-stderr");
+    let looked = scratch.path.join("looked");
+    let resolved = script(
+        &scratch.path,
+        "both",
+        &format!(
+            "#!/bin/sh\necho out1\necho err1 >&2\nwhile [ ! -e {} ]; do sleep 0.05; done\n\
+             echo err2 >&2\n",
+            looked.display()
+        ),
+    );
+
+    let pipeline = Pipeline::new(vec![Stage::new("both", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+    let mut seen = exec::Seen::default();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !(job.printed().contains("out1") && job.printed().contains("err1"))
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(job.since(&mut seen), "out1\nstandard error:\nerr1\n");
+
+    std::fs::write(&looked, "").expect("release the second line");
+    until_ended(&mut job);
+    assert_eq!(job.since(&mut seen), "standard error:\nerr2\n");
+}
+
 /// A shell reports only the last stage, which hides the case that matters: an early stage failing
 /// while a later one cheerfully processes the nothing it was handed.
 #[test]

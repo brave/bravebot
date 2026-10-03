@@ -26193,6 +26193,137 @@ fn a_background_jobs_finish_reaches_the_turn_without_the_planner_asking() {
     );
 }
 
+/// CMDLINE-10 for the account a finished job's wake-up carries between rounds: standard error is under its
+/// label, not run into standard output.
+#[test]
+fn a_finished_jobs_wake_up_labels_its_standard_error() {
+    let scratch = Scratch::new("background-wake-stderr");
+    let script = scratch.path.join("both");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\necho OUT-MARKER-PLUGH\necho ERR-MARKER-XYZZY >&2\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./both","background":true}"#),
+        tool_request("run", r#"{"command":"sleep 1"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    // Vouched for, so what it printed comes back as text rather than as a reference.
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let told = bodies
+        .iter()
+        .find(|body| body.contains("you started as job:1 has finished"))
+        .expect("the turn was never told the job ended");
+    let label = told
+        .find("standard error:")
+        .unwrap_or_else(|| panic!("standard error came back with no label: {told}"));
+    let marker = told
+        .find("ERR-MARKER-XYZZY")
+        .expect("standard error never arrived");
+    let out = told
+        .find("OUT-MARKER-PLUGH")
+        .expect("standard output never arrived");
+    assert!(
+        out < label && label < marker,
+        "standard error is not under its label, after standard output: {told}"
+    );
+}
+
+/// CMDLINE-10 for `job_output`, the other way a background run's output reaches the planner.
+#[test]
+fn job_output_labels_standard_error() {
+    let scratch = Scratch::new("background-job-output-stderr");
+    let script = scratch.path.join("both");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\necho OUT-MARKER-PLUGH\necho ERR-MARKER-XYZZY >&2\nsleep 1\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./both","background":true}"#),
+        tool_request("job_output", r#"{"job":"job:1","wait_seconds":30}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    // Vouched for, so what it printed comes back as text rather than as a reference.
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let told = bodies
+        .iter()
+        .find(|body| body.contains("ERR-MARKER-XYZZY"))
+        .expect("the planner was never handed the job's output");
+    let label = told
+        .find("standard error:")
+        .unwrap_or_else(|| panic!("standard error came back with no label: {told}"));
+    let marker = told
+        .find("ERR-MARKER-XYZZY")
+        .expect("standard error never arrived");
+    let out = told
+        .find("OUT-MARKER-PLUGH")
+        .expect("standard output never arrived");
+    assert!(
+        out < label && label < marker,
+        "standard error is not under its label, after standard output: {told}"
+    );
+}
+
 /// The screen is told a job exists when it starts, not when somebody first reads it, and the finish
 /// the turn finds by itself is put under the same name so it lands on the same row.
 #[test]
