@@ -575,6 +575,9 @@ planner away from it.
 `verified-by: bravebot_agent::turn::a_quarantined_run_says_what_would_make_it_visible`
 `verified-by: bravebot_agent::exec::standard_error_comes_back_labelled_beside_standard_output`
 `verified-by: bravebot_agent::exec::a_background_run_labels_standard_error_as_a_waited_for_one_does`
+`verified-by: bravebot_agent::exec::what_a_background_run_hands_over_incrementally_labels_each_delivery_of_standard_error`
+`verified-by: bravebot_agent::turn::a_finished_jobs_wake_up_labels_its_standard_error`
+`verified-by: bravebot_agent::turn::job_output_labels_standard_error`
 
 <a id="CMDLINE-11"></a>
 ### CMDLINE-11: output is bounded, and what was dropped is said
