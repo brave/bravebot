@@ -1244,6 +1244,7 @@ sent.
 
 `verified-by: bravebot_aichat::protocol::the_system_prompt_and_the_last_thing_the_user_said_are_marked`
 `verified-by: bravebot_aichat::protocol::a_result_the_assistant_asked_for_is_not_marked`
+`verified-by: bravebot_aichat::protocol::the_last_user_turn_is_marked_through_several_rounds_of_results`
 `verified-by: bravebot_aichat::protocol::a_request_giving_up_its_conversation_marks_the_prompt_alone`
 `verified-by: bravebot_aichat::protocol::a_turn_ending_in_a_picture_is_left_unmarked`
 `verified-by: bravebot_aichat::protocol::the_words_after_a_picture_carry_the_mark`
