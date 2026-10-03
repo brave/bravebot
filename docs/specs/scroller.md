@@ -243,7 +243,8 @@ A footer stands while the scroller is open, saying so and naming a key that clos
 every key in this file, and the list renders on a terminal too short for it rather than pushing the
 way out off the screen: what a short terminal loses is rows from the middle, never the last one.
 A count waiting for its key (SCROLL-3) is drawn on the footer only where the row still holds the
-way out beside it.
+way out beside it. A needle wider than the row is cut from its head, while it is typed and once it
+is standing, to the columns the way out leaves, and the match count goes before any of the needle.
 
 The list is read instead of the transcript rather than alongside it, so any key at all puts it
 away and that press is spent doing so. The list says as much, because a key that quietly did two
@@ -260,6 +261,8 @@ that must never be the line that did not fit.
 `verified-by: bravebot_tui::render::the_help_names_every_key_that_closes_the_scroller`
 `verified-by: bravebot_tui::render::the_help_renders_on_a_tiny_terminal`
 `verified-by: bravebot_tui::render::the_search_footer_names_the_way_out_with_a_turn_running_underneath`
+`verified-by: bravebot_tui::render::a_needle_wider_than_the_row_still_leaves_the_way_out`
+`verified-by: bravebot_tui::render::a_needle_wider_than_the_row_being_typed_still_leaves_the_way_out`
 `verified-by: bravebot_tui::render::a_long_needle_keeps_the_way_out_and_gives_up_what_the_turn_says`
 `verified-by: bravebot_tui::render::a_long_needle_being_typed_keeps_the_way_out_of_the_search`
 `verified-by: bravebot_tui::render::a_count_too_long_for_the_row_leaves_the_way_out_on_it`
