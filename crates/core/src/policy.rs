@@ -316,8 +316,8 @@ pub struct Policy<'sink, S: Sink> {
     /// Whether this run's definition named its tools and left `spawn_agent` out, which refuses
     /// every delegate it asks for wherever it sits.
     named_out_delegating: bool,
-    /// How many delegates this run has asked for, refused ones included, which is what numbers
-    /// the next.
+    /// How many delegates this run has started, which is what numbers the next. A refused or
+    /// withdrawn one is not counted.
     spawned: u32,
     /// The places left in the tree this run belongs to, shared with every run in it.
     tree: crate::delegate::Tree,
@@ -3042,11 +3042,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         keeping: Option<&Labelled<Vec<String>>>,
     ) -> Gated<crate::delegate::DelegateSpec> {
         let next = self.spawned + 1;
-        let minted = match self.at {
-            None => Some(crate::delegate::DelegateId::nth(next)),
-            Some(at) => at.child(next),
-        };
-        let Some(id) = minted else {
+        let Some(id) = self.number(next) else {
             let at = self.at.map(|at| at.to_string()).unwrap_or_default();
             return Err(self.deny(
                 "delegate",
@@ -3309,6 +3305,23 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             ),
         );
         Ok(spec)
+    }
+
+    /// The delegates this run has started, named as [`Policy::before_delegate`] numbered them.
+    ///
+    /// What a planner names can be compared against these, as against a job name: the driver
+    /// minted every one, so the comparison decides nothing an attacker steers.
+    pub fn delegates_started(&self) -> impl Iterator<Item = crate::delegate::DelegateId> + '_ {
+        (1..=self.spawned).filter_map(|n| self.number(n))
+    }
+
+    /// The `n`th delegate of this run, beneath this run's own number. `None` where this run sits
+    /// too deep to number one.
+    fn number(&self, n: u32) -> Option<crate::delegate::DelegateId> {
+        match self.at {
+            None => Some(crate::delegate::DelegateId::nth(n)),
+            Some(at) => at.child(n),
+        }
     }
 
     /// Take back a delegate [`Policy::before_delegate`] approved and the caller then did not
@@ -14660,6 +14673,42 @@ five
                 )),
                 "the trail did not say the approved delegate was withdrawn"
             );
+        }
+
+        /// The delegates a run started are the numbers it minted for them, beneath its own, so a
+        /// planner's `d1` can be told from a name nobody issued. A refused request and a withdrawn
+        /// one leave no number to find.
+        #[test]
+        fn the_delegates_a_run_started_are_the_numbers_it_minted() {
+            let started = |policy: &Policy<'_, RecordingSink>| -> Vec<String> {
+                policy
+                    .delegates_started()
+                    .map(|id| id.to_string())
+                    .collect()
+            };
+
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            assert!(started(&turn).is_empty());
+            let first = turn
+                .before_delegate(&argument("reader"), &argument("look"))
+                .expect("a clean context may delegate");
+            turn.before_delegate(&argument("auditor"), &argument("look"))
+                .expect_err("no kind is called that");
+            turn.before_delegate(&argument("reader"), &argument("look"))
+                .expect("a clean context may delegate");
+            assert_eq!(started(&turn), ["d1", "d2"]);
+
+            let mut within_sink = RecordingSink::new();
+            let mut within = open_policy(&mut within_sink).within(&first);
+            within
+                .before_delegate(&argument("reader"), &argument("look closer"))
+                .expect("a delegate above the bottom may delegate");
+            let withdrawn = within
+                .before_delegate(&argument("reader"), &argument("look closer"))
+                .expect("a delegate above the bottom may delegate");
+            within.withdraw_delegate(withdrawn);
+            assert_eq!(started(&within), ["d1.1"]);
         }
 
         /// The ceiling is on the tree rather than on each run, so siblings running at once draw

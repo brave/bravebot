@@ -27160,6 +27160,94 @@ fn asking_about_a_job_that_does_not_exist_says_so() {
     );
 }
 
+/// A planner told a delegate's report will reach it may still ask `job_output` for `d1`. The
+/// answer says what `d1` is and where its report comes from, since "no such job" reads as a fact
+/// about the delegate. It is the same answer once the report is in, so it promises nothing a
+/// delegate already collected cannot keep. Only a delegate the turn started is named one: `d2`,
+/// which nothing started, is still no job.
+#[test]
+fn a_job_output_call_naming_a_delegate_says_its_report_arrives_on_its_own() {
+    let scratch = Scratch::new("job-output-delegate");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // The delegate is not answered until the planner's fourth request, so the first call naming
+    // it finds it working and the planner's answer then waits for its report. The call after
+    // that report is the one a delegate already collected gets.
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            (
+                "WAIT-ON-THE-DELEGATE",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"READ-THE-NOTES"}"#,
+                    ),
+                    tool_request("job_output", r#"{"job":"d1"}"#),
+                    tool_request("job_output", r#"{"job":"d2"}"#),
+                    reply_with("waiting"),
+                    tool_request("job_output", r#"{"job":"d1"}"#),
+                    reply_with("done"),
+                ],
+            ),
+            ("READ-THE-NOTES", vec![reply_with("THE-MEETING-MOVED")]),
+        ],
+        Order::After {
+            held: "READ-THE-NOTES",
+            after: "WAIT-ON-THE-DELEGATE",
+            asked: 4,
+        },
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("WAIT-ON-THE-DELEGATE"),
+        &mut bravebot_agent::confirm::Unattended,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate was answered before the planner had asked about it, so this proves nothing"
+    );
+
+    let answer = "'d1' is a delegate, not a background job, so job_output neither reads it nor \
+                  stops it. How it ended reaches you on its own, in a message saying d1 has \
+                  finished or did not finish";
+    let last = every_request(&received)
+        .into_iter()
+        .rfind(|body| body.contains("WAIT-ON-THE-DELEGATE"))
+        .expect("the planner was asked");
+    let reported = last
+        .find("THE-MEETING-MOVED")
+        .expect("the delegate's report never reached the planner");
+    let answered: Vec<usize> = last.match_indices(answer).map(|(at, _)| at).collect();
+    assert!(
+        answered.first().is_some_and(|&at| at < reported),
+        "a delegate still working was not named one: {last}"
+    );
+    assert!(
+        answered.last().is_some_and(|&at| at > reported),
+        "a delegate whose report was in was not named one: {last}"
+    );
+    assert!(
+        !last.contains("no background job called 'd1'"),
+        "a delegate the turn started was reported as a job that does not exist: {last}"
+    );
+    assert!(
+        last.contains("no background job called 'd2'"),
+        "a delegate number nothing started was not reported as no job: {last}"
+    );
+}
+
 /// Every detail the trail recorded for one gate, in the order the gates passed.
 fn details_of<'e>(events: &'e [Event], gate: &str) -> Vec<&'e str> {
     events
