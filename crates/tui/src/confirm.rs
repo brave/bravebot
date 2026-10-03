@@ -292,6 +292,21 @@ fn answer_for(key: KeyEvent, drawn: &Drawn) -> Option<Response> {
     drawn.take(pressed(key, drawn.page()))
 }
 
+/// Interpret one key press at the plan prompt, or `None` for a key that answers nothing there.
+///
+/// Escape stops the run here, as Ctrl-C does, instead of declining the plan. A run has no other
+/// moment at which Escape means "leave this one effect": a step later the same key cancels the run,
+/// and a person pressing it at the plan asked for the same thing (MANIFEST-11). Every other key is
+/// read as at any other prompt.
+fn manifest_answer_for(key: KeyEvent, drawn: &Drawn) -> Option<Response> {
+    match key.code {
+        KeyCode::Esc if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            drawn.take(Some(Response::Answer(Answer::Interrupt)))
+        }
+        _ => answer_for(key, drawn),
+    }
+}
+
 /// What one key press means, before the draw it was pressed at has had its say, with a page being
 /// `page` rows.
 fn pressed(key: KeyEvent, page: i16) -> Option<Response> {
@@ -3379,7 +3394,7 @@ pub fn ask_manifest<B: Backend>(terminal: &mut Terminal<B>, request: &ManifestRe
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
-            Ok(TermEvent::Key(key)) => match answer_for(key, &drawn) {
+            Ok(TermEvent::Key(key)) => match manifest_answer_for(key, &drawn) {
                 Some(Response::Answer(answer)) => return answer,
                 // A plan longer than the box is the one most worth reading before answering, since
                 // approving it approves the steps below the fold as well.
@@ -7094,6 +7109,39 @@ mod tests {
         assert!(
             !drawn.to_lowercase().contains("enter"),
             "the plan prompt offers Enter as an answer: {drawn}"
+        );
+    }
+
+    /// MANIFEST-11. Escape at the plan prompt stops the run, as it does a step later, so the run is
+    /// not written as a record. Read as a plain decline it reaches the session as a `Reject`, which
+    /// does not set the cancel token. Saying no with `n` is still a decline that leaves the session
+    /// and its run going to the record, and Ctrl-C stops the run as before.
+    #[test]
+    fn escape_at_the_plan_prompt_stops_the_run_and_n_declines_it() {
+        let escape = manifest_answer_for(press(KeyCode::Esc), &Drawn::taking_yes());
+        assert_eq!(escape, Some(Response::Answer(Answer::Interrupt)));
+        assert!(
+            Answer::Interrupt.stops_the_turn(),
+            "the interrupt would not set the cancel token"
+        );
+
+        let no = manifest_answer_for(press(KeyCode::Char('n')), &Drawn::taking_yes());
+        assert_eq!(no, Some(Response::Answer(Answer::Reject)));
+        assert!(!Answer::Reject.stops_the_turn());
+
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(
+            manifest_answer_for(ctrl_c, &Drawn::taking_yes()),
+            Some(Response::Answer(Answer::Interrupt))
+        );
+        assert_eq!(
+            manifest_answer_for(press(KeyCode::Char('y')), &Drawn::taking_yes()),
+            Some(Response::Answer(Answer::Approve))
+        );
+        assert_eq!(
+            Answer::Interrupt.decision(),
+            Decision::Reject,
+            "stopping the run approved the plan"
         );
     }
 

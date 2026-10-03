@@ -265,6 +265,7 @@ anybody ([permission-modes.md](permission-modes.md#MODE-3)).
 `verified-by: bravebot_session::sessions::a_session_that_started_a_run_can_still_be_resumed`
 `verified-by: bravebot_session::sessions::a_cancelled_run_leaves_no_record`
 `verified-by: bravebot_tui::app::a_run_the_person_stopped_is_read_off_the_key_and_not_off_the_error`
+`verified-by: bravebot_tui::confirm::escape_at_the_plan_prompt_stops_the_run_and_n_declines_it`
 `verified-by: bravebot_tui::app::a_manifest_run_is_not_a_prompt`
 
 ## Known costs
