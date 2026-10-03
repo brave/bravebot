@@ -269,6 +269,11 @@ driver's own: two paths, a commit id, and the index of a tree the map trusts. No
 no ref under `refs/` changes. A person's own git, and a line a person approved running git, work in
 the checkout as in any worktree, and `git worktree list` shows it.
 
+Branches, tags and remote-tracking refs are in the common directory, so a checkout shares them with
+the working directory and with every other checkout. A `git fetch` in one updates a remote-tracking
+branch such as `upstream/main` in all of them, and fetches in several at once fail on each other's
+ref locks. [CHECKOUT-7](#CHECKOUT-7) says who is told.
+
 A checkout whose directory or `worktrees/<id>/` entry already exists is refused, and what is there
 is left as it was. A `worktrees` directory that is a link is refused before anything is written,
 as the entry would be written wherever the link points. Two paths the file system takes for one are
@@ -360,7 +365,14 @@ What follows from the root follows unchanged. A command line starts at the check
 ([HOOK-4](hooks.md#HOOK-4)), and a relative path means a path in the checkout.
 
 The delegate is told, in the driver's words, which commit the checkout holds, that changes the
-person has not committed are not in it, and which paths a deny rule left out.
+person has not committed are not in it, which paths a deny rule left out, and that a `git fetch` in
+it updates the refs of the working directory and of every other checkout
+([CHECKOUT-5](#CHECKOUT-5)).
+
+The planner is told that last part too, in the description of `isolation` and in the answer to a
+spawn that made one checkout or several. Where its list holds `run`, it is told to fetch once
+itself before starting the delegates that need a fetch, and where it does not, to ask one of them
+for it.
 
 **Why reach without a person opening it.** On grounds like those the session's own directory is
 reached on ([TRUST-16](trust-map.md#TRUST-16)): it was created here and is owned by this account.
@@ -370,12 +382,15 @@ carries the label the same path has in the working directory ([CHECKOUT-8](#CHEC
 reach brings no file into the session that nobody has an answer about.
 
 Built. The overlap refusals are made before anything is created. The delegate is told the commit,
-that changes not committed are not in it, and the paths left out. The answer to the spawn names the
-commit.
+that changes not committed are not in it, the paths left out, and that its refs are shared. The
+answer to the spawn names the commit and says the refs are shared, and so does the description of
+`isolation`.
 
 `verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory`
 `verified-by: bravebot_agent::workspace::each_checkout_is_a_numbered_workspace_under_the_state_directory`
 `verified-by: bravebot_agent::workspace::a_checkout_is_refused_where_it_would_overlap_a_tree_the_session_opened`
+`verified-by: bravebot_agent::turn::the_answer_to_a_spawn_in_a_checkout_says_the_checkouts_share_the_repositorys_refs`
+`verified-by: bravebot_agent::tools::the_isolation_field_says_checkouts_share_refs_and_who_fetches_once`
 
 <a id="CHECKOUT-8"></a>
 ### CHECKOUT-8: a file in a checkout is labelled as the same path in the working directory is
@@ -757,6 +772,10 @@ it made before it was left, until [CHECKOUT-16](#CHECKOUT-16) is built.
 - **A checkout inside the workspace**, under `.git` or a hidden directory
   ([CHECKOUT-6](#CHECKOUT-6)).
 - **The system temporary directory in every session** ([CHECKOUT-6](#CHECKOUT-6)).
+- **The driver runs one `git fetch` at a time across checkouts.** A fetch is one of the commands a
+  program in a checkout can run, and `git pull`, `git remote update` or a build script move the
+  same refs. A lock on the command's name would cover one way of spelling it, and the working
+  directory's refs would still move ([CHECKOUT-5](#CHECKOUT-5)).
 
 ## Open questions
 
@@ -786,6 +805,10 @@ it made before it was left, until [CHECKOUT-16](#CHECKOUT-16) is built.
   can write into this one the same way, and a checkout the record shows nothing was done in is
   removed with whatever such a program put there. A `run` profile ([sandboxing.md](sandboxing.md))
   would put the checkout's root where the working directory's is in a plan's write set.
+- **Checkouts share the repository's refs.** A `git fetch` a delegate runs in one updates the
+  remote-tracking refs of the working directory and of every other checkout, and fetches in several
+  at once fail ([CHECKOUT-5](#CHECKOUT-5)). The planner is told to have the fetch done once
+  ([CHECKOUT-7](#CHECKOUT-7)), and nothing stops a delegate fetching anyway.
 - **A repository with a filter or an end-of-line conversion gets no checkout**, and that includes
   every repository using LFS.
 - **A worker's first build is asked about.** A command vouched for in the working directory is not
