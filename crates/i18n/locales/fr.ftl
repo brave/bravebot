@@ -1818,6 +1818,7 @@ loop-tick-quiet = { $quiet ->
    *[other] boucle { $count }, après { $quiet } passages sans rien trouver
     }
 loop-stopped = la boucle est arrêtée
+loop-cleared = la boucle est arrêtée, car elle appartenait à la session effacée
 loop-aged-out = la boucle a tourné une semaine et s'est arrêtée d'elle-même
 loop-unpaced = ce tour n'a pas dit quand recommencer, la boucle est donc arrêtée
 loop-busy = /loop commence par un tour à lui, il attend donc la fin de celui-ci

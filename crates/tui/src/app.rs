@@ -20783,6 +20783,59 @@ mod tests {
         );
     }
 
+    /// Any turn cancelled while a loop runs ends the loop, and says so (LOOP-11), whether or not it
+    /// was a tick: this one is the person's own prompt typed in the middle of one.
+    #[test]
+    fn stopping_a_turn_ends_the_loop_and_says_so() {
+        let mut session = Session::new("none");
+        session.start_loop(
+            crate::loops::request("5m watch the build"),
+            Vec::new(),
+            Vec::new(),
+        );
+        session.complete("done", Vec::new(), 0);
+        let asked = Asked {
+            name: "test-model".to_string(),
+            comparable: true,
+        };
+
+        fold_outcome(
+            &mut session,
+            Err(turn::TurnError::Cancelled { attempts: None }),
+            Trail::new(),
+            Carried {
+                trust: TrustStore::new("/work"),
+                programs: TrustedPrograms::new(),
+                asked: AskedAbout::new(),
+                exposed: bravebot_core::credentials::Exposed::new(),
+            },
+            Occupied {
+                budget: 100_000,
+                guessed: false,
+                last_request_tokens: 0,
+            },
+            asked,
+            Line {
+                text: "",
+                addressed: None,
+                offered_a_later_look: false,
+            },
+            &workspace_for_test(),
+        );
+
+        assert!(
+            session.looping().is_none(),
+            "the stop left the loop running"
+        );
+        assert!(
+            session
+                .transcript
+                .iter()
+                .any(|entry| entry.text == t!(loop_stopped)),
+            "the ending was not announced"
+        );
+    }
+
     /// A goal is a condition for a session and not for one turn, so stopping a turn going the
     /// wrong way has to leave it: a person who has to retype the condition every time they
     /// interrupt cannot steer the work at all. The stopped turn is recorded as stopped, which is

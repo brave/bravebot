@@ -245,6 +245,9 @@ arriving after its loop has gone would otherwise start a new loop on the line ju
 `verified-by: bravebot_tui::app::interrupting_clears_the_line_before_it_stops_the_loop`
 `verified-by: bravebot_tui::state::clearing_the_session_ends_the_loop`
 `verified-by: bravebot_tui::state::stopping_a_loop_says_so_and_says_nothing_when_there_was_none`
+`verified-by: bravebot_tui::state::clearing_a_session_with_no_loop_says_nothing_of_one`
+`verified-by: bravebot_tui::state::a_loop_past_its_age_ends_and_says_so_instead_of_ticking`
+`verified-by: bravebot_tui::app::stopping_a_turn_ends_the_loop_and_says_so`
 `verified-by: bravebot_tui::loops::a_loop_older_than_a_week_has_aged_out`
 
 <a id="LOOP-12"></a>

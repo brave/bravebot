@@ -2387,7 +2387,14 @@ impl Session {
         // The loop goes with the conversation it was started in. A schedule surviving into a
         // session that knows nothing about it would send a prompt whose context has been thrown
         // away, which is neither what was asked for nor recognisable as a mistake.
-        self.looping = None;
+        //
+        // Said rather than done in silence (LOOP-11): a schedule that stopped sending turns with
+        // nothing written about it looks like one that is live and has found nothing. Silent where
+        // there was no loop, and after the transcript was emptied, so the line is the new
+        // conversation's first.
+        if self.looping.take().is_some() {
+            self.note(t!(loop_cleared));
+        }
         // The goal goes the same way, and for a sharper version of the same reason: a condition
         // judged against an exchange that has been thrown away is judged against nothing, and the
         // first turn of the new session would be sent back for failing a test nobody set here.
@@ -7979,7 +7986,10 @@ impl Session {
     /// and for everything the person queued behind it. A schedule is a request to be asked
     /// again, not a licence to interrupt.
     pub fn loop_tick(&mut self) -> Option<String> {
-        let now = Instant::now();
+        self.loop_tick_at(Instant::now())
+    }
+
+    fn loop_tick_at(&mut self, now: Instant) -> Option<String> {
         let running = self.looping.as_ref()?;
         if running.aged_out(now) {
             self.looping = None;
@@ -13422,6 +13432,40 @@ mod tests {
         s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
         s.clear();
         assert!(s.looping().is_none());
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(loop_cleared)),
+            "the ending was not announced"
+        );
+    }
+
+    #[test]
+    fn clearing_a_session_with_no_loop_says_nothing_of_one() {
+        let mut s = session();
+        s.clear();
+        assert!(
+            !s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(loop_cleared))
+        );
+    }
+
+    /// The loop's age is read where a tick would otherwise be sent, and ending there is said.
+    #[test]
+    fn a_loop_past_its_age_ends_and_says_so_instead_of_ticking() {
+        let mut s = session();
+        s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
+        s.complete("done", Vec::new(), 0);
+        let later = Instant::now() + crate::loops::MAX_AGE;
+        assert_eq!(s.loop_tick_at(later), None);
+        assert!(s.looping().is_none(), "an aged-out loop kept running");
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(loop_aged_out)),
+            "the ending was not announced"
+        );
     }
 
     #[test]
