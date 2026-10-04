@@ -1457,7 +1457,7 @@ from a reply, and without it the report names a limit and no way to change it.
 `verified-by: bravebot_agent::backend::a_hop_refused_for_leaving_https_is_reported_as_a_gate_rather_than_a_failed_request`
 `verified-by: bravebot_agent::backend::what_is_kept_about_a_failure_carries_nothing_the_service_or_the_setting_said`
 `verified-by: bravebot_agent::backend::a_reply_stopped_at_the_ceiling_reports_which_ceiling`
-`verified-by: bravebot_tui::state::a_reply_stopped_at_a_ceiling_says_which_ceiling`
+`verified-by: bravebot_session::sessions::a_reply_stopped_at_a_ceiling_says_which_ceiling`
 `verified-by: bravebot_agent::turn::a_service_that_kept_refusing_is_reported_with_its_status_and_the_attempts_made`
 `verified-by: bravebot_agent::turn::a_reply_that_stopped_early_is_reported_as_unfinished_with_no_status`
 `verified-by: bravebot_agent::turn::a_refusal_counts_the_cache_probe_as_a_second_request`
@@ -1806,7 +1806,7 @@ it and was writing the text when the ceiling fell.
 `verified-by: bravebot_bedrock::lib::a_reply_the_ceiling_stopped_says_how_much_of_its_call_had_arrived`
 `verified-by: bravebot_bedrock::lib::a_call_followed_by_text_is_not_the_one_the_ceiling_stopped`
 `verified-by: bravebot_agent::backend::a_reply_stopped_at_the_ceiling_reports_which_ceiling`
-`verified-by: bravebot_tui::state::a_reply_stopped_at_the_ceiling_says_what_it_was_writing`
+`verified-by: bravebot_session::sessions::a_reply_stopped_at_the_ceiling_says_what_it_was_writing`
 `verified-by: bravebot_ui_bridge::wire::a_reply_stopped_at_the_ceiling_crosses_with_the_ceiling_and_what_it_was_writing`
 
 <a id="BACKEND-43"></a>
