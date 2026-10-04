@@ -2398,7 +2398,12 @@ impl Session {
         // The goal goes the same way, and for a sharper version of the same reason: a condition
         // judged against an exchange that has been thrown away is judged against nothing, and the
         // first turn of the new session would be sent back for failing a test nobody set here.
-        self.goal = None;
+        //
+        // Said rather than done in silence (GOAL-10): a condition that stopped holding the session
+        // open with nothing written about it looks like one that was met or never set. Silent where
+        // there was no goal, and after the transcript was emptied, so the line is the new
+        // conversation's first.
+        self.clear_goal();
         // And the watches, for the sharper version of the same reason again: a fire is a sentence
         // this program writes about a file, and one arriving in a conversation that never asked
         // for it has nothing above it to explain itself by.
@@ -13586,6 +13591,23 @@ mod tests {
         s.start_goal("cargo test exits 0".to_string());
         s.clear();
         assert!(s.goal().is_none());
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(goal_cleared)),
+            "the ending was not announced"
+        );
+    }
+
+    #[test]
+    fn clearing_a_session_with_no_goal_says_nothing_of_one() {
+        let mut s = session();
+        s.clear();
+        assert!(
+            !s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(goal_cleared))
+        );
     }
 
     /// Both of these keep a session working without anybody typing. Together, the interval stops

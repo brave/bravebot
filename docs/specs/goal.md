@@ -232,6 +232,7 @@ just judged is still standing there.
 `verified-by: bravebot_tui::app::stopping_a_turn_leaves_the_goal_set`
 `verified-by: bravebot_tui::app::a_turn_that_failed_leaves_the_goal_where_it_was`
 `verified-by: bravebot_tui::state::clearing_the_session_takes_the_goal_off`
+`verified-by: bravebot_tui::state::clearing_a_session_with_no_goal_says_nothing_of_one`
 `verified-by: bravebot_tui::state::a_verdict_after_the_goal_was_cleared_is_neither_acted_on_nor_announced`
 `verified-by: bravebot_tui::app::a_goal_is_not_judged_after_the_person_asked_to_leave`
 
