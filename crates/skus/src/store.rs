@@ -1592,6 +1592,126 @@ mod tests {
         });
     }
 
+    /// A wallet whose spend write failed is not handed a credential another wallet has presented
+    /// since.
+    ///
+    /// Kept as a pending write, the failed spend makes the next spend trust this wallet's own view
+    /// over the file, and that view calls the other wallet's credentials unspent.
+    #[test]
+    fn a_failed_spend_write_does_not_offer_what_another_wallet_has_spent_since() {
+        with_temp_home("failed-spend-two-wallets", || {
+            let mut batch = batch();
+            let mut third = batch.credentials[0].clone();
+            third.unblinded = crate::Secret::new("token-three");
+            batch.credentials.push(third);
+            // Every window covers the same moment, so only the spent marks separate the three.
+            batch.credentials[1].valid_from = batch.credentials[0].valid_from.clone();
+            batch.credentials[1].valid_to = batch.credentials[0].valid_to.clone();
+            save(&batch).expect("a write");
+
+            let mut first = Wallet::open().expect("the batch just written");
+            let mut second = Wallet::open().expect("the same batch again");
+
+            let blocker = block_writes();
+            assert!(first.spend("2026-08-22T12:00:00").is_err());
+            std::fs::remove_dir(&blocker).expect("unblocked");
+
+            for _ in 0..2 {
+                second
+                    .spend("2026-08-22T12:00:00")
+                    .expect("a spend by the second wallet");
+            }
+
+            let taken = first
+                .spend("2026-08-22T12:00:00")
+                .expect("the one credential neither wallet has spent");
+            assert_eq!(
+                taken.credential.unblinded.expose(),
+                "token-three",
+                "a credential the second wallet had already presented was offered again"
+            );
+            assert_eq!(
+                load().expect("a read").remaining(),
+                0,
+                "a credential that was presented is recorded as unspent and will be offered again"
+            );
+        });
+    }
+
+    /// The end of a session after a failed spend write leaves another wallet's spends on the file.
+    ///
+    /// A spent mark written over is a credential the next wallet to read the file offers again, so
+    /// a flush of this wallet's view is the same failure as offering it twice, one run later.
+    #[test]
+    fn a_failed_spend_write_leaves_another_wallets_spends_on_the_file_when_the_session_ends() {
+        with_temp_home("failed-spend-then-close", || {
+            let mut batch = batch();
+            batch.credentials[1].valid_from = batch.credentials[0].valid_from.clone();
+            batch.credentials[1].valid_to = batch.credentials[0].valid_to.clone();
+            save(&batch).expect("a write");
+
+            let mut first = Wallet::open().expect("the batch just written");
+            let mut second = Wallet::open().expect("the same batch again");
+
+            let blocker = block_writes();
+            assert!(first.spend("2026-08-22T12:00:00").is_err());
+            std::fs::remove_dir(&blocker).expect("unblocked");
+
+            for _ in 0..2 {
+                second
+                    .spend("2026-08-22T12:00:00")
+                    .expect("a spend by the second wallet");
+            }
+            drop(second);
+            // The first wallet spends nothing more, so its drop is the last thing that can write.
+            drop(first);
+
+            assert_eq!(
+                load().expect("a read").remaining(),
+                0,
+                "a credential the second wallet presented is recorded as unspent and will be \
+                 offered again"
+            );
+        });
+    }
+
+    /// A spend from a refilled batch whose write failed takes the spend back and keeps the batch.
+    ///
+    /// The file still holds the exhausted batch the refill replaced, so the refill is the one
+    /// thing here that is still to be written: losing it leaves nothing to spend, and keeping the
+    /// spend skips a credential that was never presented.
+    #[test]
+    fn a_failed_spend_write_after_a_refill_takes_the_spend_back_and_keeps_the_new_batch() {
+        with_temp_home("failed-spend-after-refill", || {
+            let mut nothing_left = batch();
+            for credential in &mut nothing_left.credentials {
+                credential.spent = true;
+            }
+            save(&nothing_left).expect("a write");
+
+            let mut minted = batch();
+            minted.credentials[0].unblinded = crate::Secret::new("token-three");
+            minted.credentials[1] = minted.credentials[0].clone();
+            minted.credentials[1].unblinded = crate::Secret::new("token-four");
+
+            let mut wallet = Wallet::open().expect("the batch just written");
+            wallet.refill(minted);
+
+            let blocker = block_writes();
+            assert!(wallet.spend("2026-08-22T12:00:00").is_err());
+            std::fs::remove_dir(&blocker).expect("unblocked");
+
+            let taken = wallet
+                .spend("2026-08-22T12:00:00")
+                .expect("the batch the refill put here");
+            assert_eq!(
+                taken.credential.unblinded.expose(),
+                "token-three",
+                "a credential that was never presented was recorded as spent"
+            );
+        });
+    }
+
     /// A refilled batch is not flushed over a file imported for another environment.
     #[test]
     fn a_refilled_batch_is_not_written_over_another_environment() {

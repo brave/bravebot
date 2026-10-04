@@ -117,6 +117,8 @@ guarantee holding inside a process and failing between them.
 `verified-by: bravebot_skus::store::two_wallets_over_one_file_are_never_offered_the_same_credential`
 `verified-by: bravebot_skus::store::wallets_spending_at_the_same_moment_hand_out_different_credentials`
 `verified-by: bravebot_skus::store::neither_of_two_wallets_erases_the_others_spend_markers`
+`verified-by: bravebot_skus::store::a_failed_spend_write_does_not_offer_what_another_wallet_has_spent_since`
+`verified-by: bravebot_skus::store::a_failed_spend_write_leaves_another_wallets_spends_on_the_file_when_the_session_ends`
 `verified-by: bravebot_skus::store::a_claim_left_by_a_dead_process_is_broken_rather_than_waited_on`
 `verified-by: bravebot_skus::store::a_claim_taken_a_moment_ago_is_not_treated_as_abandoned`
 `verified-by: bravebot_agent::shared::two_runs_holding_one_wallet_are_never_offered_the_same_credential`
@@ -157,6 +159,7 @@ renamed for less than this.
 `verified-by: bravebot_skus::store::a_batch_imported_for_another_environment_mid_session_is_not_spent`
 `verified-by: bravebot_skus::store::a_failed_spend_write_is_not_written_over_a_later_import`
 `verified-by: bravebot_skus::store::a_failed_spend_write_leaves_nothing_for_the_end_of_the_session_to_write`
+`verified-by: bravebot_skus::store::a_failed_spend_write_after_a_refill_takes_the_spend_back_and_keeps_the_new_batch`
 `verified-by: bravebot_skus::store::a_refilled_batch_is_not_written_over_another_environment`
 `verified-by: bravebot_skus::store::a_write_replaces_the_file_rather_than_truncating_it`
 `verified-by: bravebot_skus::store::a_write_leaves_neither_a_temporary_nor_a_claim_behind`
