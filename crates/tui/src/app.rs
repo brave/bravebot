@@ -4531,7 +4531,13 @@ fn adopt_budget_for_current_model(session: &mut Session, config: &mut Config) {
     // Outside the note, because a budget that did not move can still have stopped being one the
     // endpoint advertised: nothing changed for compaction, and what the hint line may claim did.
     session.update_budget(config.context_budget, config.budget_is_guessed());
-    session.note_model_reads_effort(reads_effort(&models, session.model()));
+    // The model in force, not the pick: with no pick the configured default is what a request names,
+    // and it is the roster row for that one which says whether a level is read (BACKEND-22).
+    session.note_model_reads_effort(reads_effort_in_force(
+        &models,
+        session.model(),
+        &config.default_model,
+    ));
 }
 
 /// Take on a level the service refused while a turn was running.
@@ -4588,7 +4594,19 @@ pub fn adopt_listing_for_model(config: &mut Config, model: &str) -> bool {
     };
     config.adopt_window(advertised_window(&models, Some(model)));
     config.adopt_inputs(model, advertised_inputs(&models, Some(model)));
-    reads_effort(&models, Some(model))
+    reads_effort(&models, model)
+}
+
+/// Whether the roster says the model a request names reads an effort level: the pick where there is
+/// one, and the configured default where there is none.
+///
+/// Split out so the choice of which name is looked up is testable without a server.
+fn reads_effort_in_force(
+    models: &[bravebot_aichat::models::Model],
+    picked: Option<&str>,
+    default_model: &str,
+) -> bool {
+    reads_effort(models, picked.unwrap_or(default_model))
 }
 
 /// Whether the roster says `chosen` reads an effort level.
@@ -4597,13 +4615,10 @@ pub fn adopt_listing_for_model(config: &mut Config, model: &str) -> bool {
 /// described, which covers a name from a settings file and a listing that could not be fetched:
 /// neither is the roster saying a level would be ignored, and only the roster saying so is a reason
 /// to withhold what somebody asked for.
-fn reads_effort(models: &[bravebot_aichat::models::Model], chosen: Option<&str>) -> bool {
-    let Some(name) = chosen else {
-        return true;
-    };
+fn reads_effort(models: &[bravebot_aichat::models::Model], chosen: &str) -> bool {
     models
         .iter()
-        .find(|model| model.key == name)
+        .find(|model| model.key == chosen)
         .is_none_or(|model| model.reads_effort)
 }
 
@@ -12907,12 +12922,35 @@ mod tests {
             advertised: bravebot_aichat::models::Advertised::default(),
         }];
 
-        assert!(reads_effort(&described, Some("openrouter/not-listed")));
+        assert!(reads_effort(&described, "openrouter/not-listed"));
         assert!(
-            reads_effort(&described, None),
+            reads_effort(&described, bravebot_config::DEFAULT_MODEL),
             "automatic was withheld a level"
         );
-        assert!(!reads_effort(&described, Some("openrouter/reasons-only")));
+        assert!(!reads_effort(&described, "openrouter/reasons-only"));
+    }
+
+    /// With no pick, the configured default is what a request names, so it is the row the roster is
+    /// asked about. Looking up nothing took the level as read whatever the row said.
+    #[test]
+    fn a_default_model_the_roster_says_reads_no_level_is_withheld_one_when_nothing_is_picked() {
+        let row = |key: &str, reads_effort: bool| bravebot_aichat::models::Model {
+            key: key.to_string(),
+            display_name: key.to_string(),
+            premium: false,
+            provider: None,
+            conversation_tokens: None,
+            reads_effort,
+            advertised: bravebot_aichat::models::Advertised::default(),
+        };
+        let roster = vec![row("gateway/plain", false), row("gateway/reasons", true)];
+
+        assert!(!reads_effort_in_force(&roster, None, "gateway/plain"));
+        assert!(reads_effort_in_force(&roster, None, "gateway/reasons"));
+        assert!(
+            reads_effort_in_force(&roster, Some("gateway/reasons"), "gateway/plain"),
+            "the default was looked up where a model was picked"
+        );
     }
 
     /// A longer word that only starts with the command is a prompt, not the command.

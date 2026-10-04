@@ -751,6 +751,7 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_tui::app::a_level_a_model_cannot_use_is_kept_rather_than_forgotten`
 `verified-by: bravebot_tui::app::asking_for_a_level_a_model_cannot_use_says_so`
 `verified-by: bravebot_tui::app::a_model_the_listing_did_not_describe_still_takes_a_level`
+`verified-by: bravebot_tui::app::a_default_model_the_roster_says_reads_no_level_is_withheld_one_when_nothing_is_picked`
 `verified-by: bravebot_tui::app::a_level_the_service_refused_stops_being_reported_as_in_force`
 `verified-by: bravebot_tui::app::a_turn_that_refused_nothing_does_not_restore_a_level_the_roster_says_is_unread`
 `verified-by: bravebot_tui::status::a_level_the_model_does_not_read_is_reported_as_unread`
