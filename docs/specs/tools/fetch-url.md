@@ -99,6 +99,7 @@ asked for, so a rule matching one would be answering a different question on eve
 `verified-by: bravebot_tui::confirm::the_end_of_a_long_url_can_be_scrolled_to_with_the_host_still_shown`
 `verified-by: bravebot_tui::confirm::a_fetch_question_takes_a_yes_only_from_a_draw_showing_the_host_and_the_keys`
 `verified-by: bravebot_tui::confirm::a_fetch_scroll_moves_from_where_the_url_was_drawn`
+`verified-by: bravebot_agent::turn::a_fetch_prompt_carries_the_host_the_url_reaches_as_its_own_field`
 
 <a id="FETCH-3"></a>
 ### FETCH-3: an approval is bound to the URL it was given for, and nothing is remembered
@@ -115,6 +116,8 @@ seen. Offering it would collect a standing grant from a question about something
 
 `verified-by: bravebot_core::policy::an_approval_for_one_url_does_not_fetch_another`
 `verified-by: bravebot_core::policy::a_fetch_without_an_endorsement_is_refused`
+`verified-by: bravebot_core::policy::an_endorsement_is_single_use`
+`verified-by: bravebot_core::policy::approving_a_fetch_leaves_nothing_behind_for_the_next_one`
 
 <a id="FETCH-4"></a>
 ### FETCH-4: a redirect may not leave the host that was approved
@@ -143,6 +146,7 @@ knows because it set it, and which no reply can influence.
 `verified-by: bravebot_core::policy::a_denied_host_is_refused_at_the_egress_gate_on_its_own_account`
 `verified-by: bravebot_core::policy::a_web_fetch_rule_does_not_govern_this_programs_own_connection`
 `verified-by: bravebot_core::policy::a_finished_fetch_stops_confining_the_turns_other_egress`
+`verified-by: bravebot_core::policy::a_redirect_to_a_host_a_rule_allows_is_followed`
 
 <a id="FETCH-5"></a>
 ### FETCH-5: what is not text is carried anyway, and a cap is reported
@@ -159,6 +163,7 @@ shown the text.
 `verified-by: bravebot_agent::turn::a_fetched_body_that_is_not_text_is_carried_anyway`
 `verified-by: bravebot_net::lib::bodies_are_capped`
 `verified-by: bravebot_net::lib::small_bodies_are_not_reported_as_truncated`
+`verified-by: bravebot_agent::turn::a_fetched_body_cut_at_the_cap_is_reported_as_incomplete`
 
 <a id="FETCH-6"></a>
 ### FETCH-6: a result names the URL that was asked for
