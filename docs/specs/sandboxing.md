@@ -186,6 +186,7 @@ asked for, or names the directory holding it, on the platform where neither was 
 `verified-by: bravebot_sandbox::windows::capabilities_report_what_a_container_enforces`
 `verified-by: bravebot_sandbox::windows::a_policy_requiring_subprocess_denial_is_refused`
 `verified-by: bravebot_sandbox::windows::each_run_confines_through_a_profile_of_its_own`
+`verified-by: bravebot_sandbox::windows::a_reused_process_identifier_and_sequence_still_get_a_profile_of_their_own`
 `verified-by: bravebot_sandbox::windows::a_profile_name_fits_what_the_platform_accepts`
 
 <a id="SANDBOX-6"></a>
@@ -672,7 +673,10 @@ runs holding different scopes over one directory are two sets of entries on one 
 removes the entries it wrote and deletes the profile it created as it is dropped, and a run ending
 without reaching that leaves them.
 
-What bounds that is a container profile per run rather than per installation. The entry left behind
+What bounds that is a container profile per run rather than per installation. The profile name
+carries a value chosen when the backend is created, so a process identifier reused after a crash
+does not give a later run the name of the earlier one, and a profile that already exists is
+refused rather than adopted. The entry left behind
 names a security identifier no other run holds, so the residue is an entry for a container that no
 longer exists rather than a standing grant to something still running, and the next run's grants are
 its own. Removal is not atomic either way, which is why the cost is written here rather than treated
