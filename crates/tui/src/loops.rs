@@ -415,6 +415,7 @@ impl Running {
         self.running.then_some(Tick {
             number: self.ticks,
             self_paced: self.self_paced(),
+            unpaceable: false,
         })
     }
 

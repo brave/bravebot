@@ -535,6 +535,9 @@ you keep calling it. Call it once, at the end of the turn, after the work is don
 Not calling it ends the loop, and that is the right answer once there is nothing left to watch. \
 Say so in your answer rather than scheduling a tick to say it again.
 
+A turn that says no tool sets the pace is not offered schedule_next: work the tick and answer, and \
+the loop ends with it.
+
 Either kind stops when the user stops it. You never need to ask them to.
 ";
 
