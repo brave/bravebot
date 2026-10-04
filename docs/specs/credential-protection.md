@@ -338,6 +338,7 @@ one thing available before confinement is that nobody grants it thinking they gr
 `verified-by: bravebot_tui::confirm::a_run_prompt_names_the_ambient_authority_a_line_reaches`
 `verified-by: bravebot_tui::confirm::a_fetch_prompt_says_what_the_metadata_service_is`
 `verified-by: bravebot_agent::turn::spending_an_ambient_authority_is_recorded_in_the_trail_and_an_ordinary_line_is_not`
+`verified-by: bravebot_agent::turn::an_ambient_authority_is_recorded_for_a_line_the_credential_scan_refuses`
 
 <a id="CRED-6"></a>
 ### CRED-6: a handle the agent can redeem alone is not a handle

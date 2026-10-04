@@ -6497,16 +6497,19 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             tools.workspace.record_write(Some(&destination.shown));
         }
     }
+    // Spent, on the reading that the line ran. What it exited with does not enter into it, because
+    // a program that reached a daemon and then failed has still reached it, and neither does what
+    // the scan below makes of what it left: a refusal is said after the line, and does not undo the
+    // use. So it comes before that return rather than inside the arm below (CRED-5).
+    if ran.is_ok() {
+        policy.record_ambient(&spends);
+    }
     if !left.scanned.refused().is_empty() {
         return credential_refusal_after_a_line(&displayed, &left, &stuck);
     }
 
     match ran {
         Ok(ran) => {
-            // Spent, on the same reading of this arm that carries the directory over: the line
-            // ran. What it exited with does not enter into it, because a program that reached a
-            // daemon and then failed has still reached it.
-            policy.record_ambient(&spends);
             // Carried over only once the line has actually run, which is where the background
             // branch carries it too: a line whose stages never started moved nothing, and a turn
             // whose working directory had followed a run that did not happen would land the next

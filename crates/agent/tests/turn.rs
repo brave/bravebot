@@ -34281,6 +34281,83 @@ fn a_credential_the_line_itself_carries_stops_the_line() {
     );
 }
 
+/// A line the credential scan refuses afterwards has still run, so the authority it reached is
+/// still recorded (CRED-5).
+///
+/// The line copies a credentialed file into the tree, which the scan refuses and puts back, and
+/// then names the metadata service. Recording the use only on the arm that returns the line's
+/// output left the trail with no entry for a line that had reached the service, which is the one
+/// record a person accounting for what the agent did has to read.
+#[test]
+fn an_ambient_authority_is_recorded_for_a_line_the_credential_scan_refuses() {
+    let scratch = Scratch::new("ambient-trail-refused");
+    let home = Scratch::new("ambient-trail-refused-home");
+    std::fs::write(
+        scratch.path.join(".env"),
+        format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n"),
+    )
+    .unwrap();
+    let programs = bravebot_core::programs::TrustedPrograms::from_iter([
+        vouched_in("cat", &[".env"], &scratch.path),
+        vouched_in("echo", &["http://169.254.169.254/"], &scratch.path),
+    ]);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "run",
+            r#"{"command":"cat .env > backup.env && echo http://169.254.169.254/"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut sink = RecordingSink::new();
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("back the file up").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveRuns,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        programs,
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+    let _first = received.recv().expect("first request");
+    let answered = tool_results(&received.recv().expect("second request"));
+
+    assert!(
+        answered.contains("refused") && !scratch.path.join("backup.env").exists(),
+        "the scan did not refuse the line, so this exercises nothing: {answered}"
+    );
+    let recorded: Vec<&String> = sink
+        .events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "ambient",
+                detail,
+            } => Some(detail),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        recorded.len(),
+        1,
+        "a line that ran and was then refused left no record of the authority it reached: {:?}",
+        sink.events()
+    );
+    assert!(
+        recorded[0].contains("metadata-service (169.254.169.254)"),
+        "{}",
+        recorded[0]
+    );
+}
+
 /// A line that needs no prompt was drawn as a bare `Run`, so a person watching could not tell
 /// which command the turn had started. The command is on the line from the moment the call is
 /// announced to the moment it is summarised.
