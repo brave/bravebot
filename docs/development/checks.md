@@ -252,7 +252,7 @@ exited happily.
 
 **A test that fails on the parent commit is not yours to fix.** Establish that once, cheaply, and
 move on: name the test, say it reproduces without the change, and carry on with the work. Do not
-bisect it, do not build a baseline worktree for it, and do not re-run the suite hoping. Some tests
+bisect it, do not run the suite on the parent, and do not re-run the suite hoping. Some tests
 here spawn real processes against a wall clock, so they fail on a loaded machine and pass on the
 next run; that is a flake, not a signal, and chasing one costs more than the failure does.
 
@@ -277,6 +277,35 @@ the mock server races that `make check-linux` caps threads for want a machine wi
 it. So the workflow reporting nothing means less than the local command reporting nothing on the
 machine that actually failed: every report states the rate it saw, and that bound is what to read
 before concluding a test is deterministic.
+
+To run one failing test on the parent, check the parent out in a detached worktree, run the test
+there, and remove the worktree. The parent is `HEAD` for edits not yet committed, and the merge base
+with `upstream/main`, or `origin/main` without one, for a branch.
+
+```sh
+base=$(mktemp -d)
+git worktree add --lock --detach "$base" <parent>
+(cd "$base" && CARGO_TARGET_DIR="$base/target" cargo test --locked -p <crate> --lib <test>)
+git worktree unlock "$base" && git worktree remove "$base"
+```
+
+`--lib` builds the crate's unit tests alone. For a test in `tests/<file>.rs`, `--test <file>` takes
+its place. The lock keeps a `git worktree prune` or another session's cleanup from removing the
+worktree while the test runs.
+
+The worktree builds into a `target` of its own, so its first build is a cold one. Do not point
+`CARGO_TARGET_DIR` at this checkout's `target` to save that build. The line sets it to the
+worktree's own, so a value already in the environment cannot do so either. Cargo names a workspace
+crate's build by the crate's path inside the workspace, so two trees sharing one `target` write the
+same files, and the next build here takes the parent's binaries as current and runs them in place
+of the change.
+
+Never use `git stash` in a linked worktree, or in any checkout of a repository another session is
+working in. `refs/stash` is one ref in the repository's common directory, so every worktree of the
+repository shares one stack. A `git stash pop` in one applies whatever was stashed last in any of
+them, which can be another worker's changes, and an entry left behind is listed in all of them.
+`git rebase --autostash` and `git pull --autostash` use the same stack, and leave their entry on it
+when putting the changes back conflicts.
 
 If a check cannot pass for a reason outside the change, say so in the commit message rather than
 leaving it to be discovered.
