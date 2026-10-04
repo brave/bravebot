@@ -4260,13 +4260,14 @@ fn write_file<S: Sink, C: Confirmer>(
     // Whether there is a file here at all is a separate question, answered from the path and
     // `stat`, because the labelled peek cannot say: it reports a file it could not decode as
     // text the same way it reports one that is not there.
-    let (existing, replaces, existing_trusted, approved_revision) =
+    let (existing, pre_image, replaces, approved_revision) =
         policy.capture_files(|policy, capture| {
             let key = workspace.trust_key(&proposed_path);
+            let peeks = workspace.peek_labelled_for_write(policy, &proposed_path);
             (
-                workspace.peek_labelled_for_review(&proposed_path),
+                peeks.0,
+                peeks.1,
                 workspace.names_a_file(&proposed_path),
-                !policy.read_is_quarantined(&key),
                 capture.revision_of(&key),
             )
         });
@@ -4302,14 +4303,13 @@ fn write_file<S: Sink, C: Confirmer>(
     // still seen it. Asked before the approval prompt for a smaller reason: a person should not be
     // shown a diff to approve that is going to be refused whatever they answer.
     //
-    // The pre-image goes to the scan still labelled, and the scan reads it: the policy layer is
-    // the only part of this program that may. Whether it goes at all is decided from the trust
-    // map and not from the label, which is pessimistic here by construction: prior bytes a
-    // sibling effect left untrusted must not excuse a credential in this body.
+    // The pre-image goes to the scan labelled as the trust map holds the path, and the scan reads
+    // it through the trusted-content gate: prior bytes a sibling effect left untrusted are
+    // refused there, so they cannot excuse a credential in this body.
     let scanned = policy.scan_a_write(
         "write_file",
         &shown_path,
-        (replaces && existing_trusted).then_some(&existing),
+        replaces.then_some(&pre_image),
         &body,
     );
     // And written down, which is the other half of where a finding goes: a line drawn while
@@ -5766,16 +5766,14 @@ fn what_the_line_left<'a, S: Sink>(
                 label.confidentiality,
             ),
         );
-        // The pre-image places a value the file already held, and is withheld where the map had
-        // not vouched for the path: prior bytes something else left untrusted must not excuse a
-        // credential this line wrote beside them.
-        let before = match (&destination.prior, held) {
-            (bravebot_core::label::Integrity::Trusted, crate::workspace::Before::Bytes(bytes)) => {
-                Some(Labelled::new(
-                    String::from_utf8_lossy(bytes).into_owned(),
-                    crate::workspace::read_label(),
-                ))
-            }
+        // The pre-image places a value the file already held, and carries the integrity the map
+        // gave the path: scan_a_write reads it only where that is trusted, so prior bytes
+        // something else left untrusted cannot excuse a credential this line wrote beside them.
+        let before = match held {
+            crate::workspace::Before::Bytes(bytes) => Some(Labelled::new(
+                String::from_utf8_lossy(bytes).into_owned(),
+                Label::new(destination.prior, label.confidentiality),
+            )),
             _ => None,
         };
         let scanned = policy.scan_a_write("run", &destination.shown, before.as_ref(), &after);

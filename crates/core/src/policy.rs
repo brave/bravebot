@@ -2313,13 +2313,26 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
-    /// Whether a read of `path` would be quarantined rather than shown.
+    /// The label a read of `path` would carry: what the trust map says about the path, and
+    /// private as workspace content is.
     ///
     /// A question about the trust map, keyed by a path the planner named, which is routing and
-    /// therefore already trusted. Nothing about any file's contents reaches this decision, so a
-    /// caller branching on it is not branching on untrusted data: it is asking the same question
-    /// [`Policy::present`] will ask afterwards, early enough to avoid reading a file nobody will
-    /// be shown.
+    /// therefore already trusted. Nothing about any file's contents reaches this answer. It is
+    /// what labels bytes taken from the file outside a read, so a gate that asks for trusted
+    /// content refuses them from the map's word and not from the caller's.
+    pub fn label_in_force(&self, path: &str) -> Label {
+        let integrity = match self.integrity_in_force(path) {
+            Some(Integrity::Trusted) => Integrity::Trusted,
+            _ => Integrity::Untrusted,
+        };
+        Label::new(integrity, Confidentiality::Private)
+    }
+
+    /// Whether a read of `path` would be quarantined rather than shown.
+    ///
+    /// A question about the trust map, which no file's contents reach, so a caller branching on it
+    /// is not branching on untrusted data: it is asking the same question [`Policy::present`] will
+    /// ask afterwards, early enough to avoid reading a file nobody will be shown.
     pub fn read_is_quarantined(&self, path: &str) -> bool {
         !matches!(self.integrity_in_force(path), Some(Integrity::Trusted))
     }
@@ -4975,14 +4988,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// is written unscanned, and closing it needs a scan that can run without anything here
     /// branching on what it found.
     ///
-    /// **The pre-image is read to place the value, not to decide the effect.** It is the file's
-    /// own current contents, and it arrives labelled: the driver carries those bytes and this is
-    /// where they are read, because the policy layer is the only part of this program that may
-    /// read content at all. All it can do here is excuse a value that is *already* at this exact
-    /// path, so the worst it produces is a change that leaves the tree holding what it held
-    /// before. Whether a pre-image is handed over is the caller's decision, taken from the trust
-    /// map rather than from this label, which a peek for review sets pessimistically whatever
-    /// the map says.
+    /// **The pre-image is read only where it is trusted.** It is the file's own current
+    /// contents, and what this does with it is a decision: which findings are carried and which
+    /// the turn authored decides whether the write is refused. So it goes through
+    /// [`Policy::read_trusted_content`] like any other bytes a decision is taken from, and a
+    /// pre-image whose label is not trusted is not read at all, which leaves every finding the
+    /// turn's own. The label is the trust map's answer about the path
+    /// ([`Policy::label_in_force`]), so the gate is this function's and not the caller's
+    /// convention. All a trusted pre-image can do is excuse a value that is *already* at this
+    /// exact path, so the worst it produces is a change that leaves the tree holding what it
+    /// held before.
     ///
     /// **What the file would hold is read here too, and it is not a finding.** Whether the body
     /// is one value and nothing else is the difference between a credential copied into a
@@ -5016,19 +5031,26 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let salt = crate::credentials::run_salt();
         let already: std::collections::BTreeSet<String> = match existing {
             None => Default::default(),
-            Some(pre_image) => {
+            // A pre-image the map did not vouch for is not read: the decision it would feed is
+            // taken from trusted content or not at all, so the answer is that nothing was already
+            // there to excuse, which is the pessimistic one.
+            Some(pre_image) if !pre_image.label().is_trusted() => {
                 self.allow(
                     "credential-scan",
-                    format!("{tool}: {path} read as it stands, to place a value already in it"),
+                    format!(
+                        "{tool}: {path} holds bytes that are {}, not read to place a value",
+                        pre_image.label()
+                    ),
                 );
-                let proof =
-                    Declassification::authorise("a write's pre-image, to place a value in it");
-                let text = pre_image.clone().declassify(&proof);
-                crate::credentials::scan(path, &text, salt)
+                Default::default()
+            }
+            Some(pre_image) => match self.read_trusted_content(tool, pre_image) {
+                Ok(text) => crate::credentials::scan(path, &text, salt)
                     .into_iter()
                     .map(|finding| finding.fingerprint)
-                    .collect()
-            }
+                    .collect(),
+                Err(_) => Default::default(),
+            },
         };
 
         let (carried, authored) = crate::credentials::scan(path, &body, salt)
@@ -15743,5 +15765,50 @@ five
             let text = answer.declassify(&proof);
             assert!(!text.contains("nobody asked"), "{text}");
         }
+    }
+
+    /// The pre-image is read through the trusted-content gate, so the label it arrives under is
+    /// what decides whether it may excuse a value, and not the caller's decision to hand it over.
+    /// The same bytes and the same body, twice: only the label differs.
+    #[test]
+    fn a_write_pre_image_excuses_a_value_only_under_a_trusted_label() {
+        const KEY: &str = "AKIAIOSFODNN7EXAMPLE";
+        let before = format!("AWS_ACCESS_KEY_ID={KEY}\n");
+        let after = Labelled::trusted(format!("PORT=8080\nAWS_ACCESS_KEY_ID={KEY}\n"));
+
+        let scan = |label: Label| {
+            let mut sink = RecordingSink::new();
+            let scanned = open_policy(&mut sink).scan_a_write(
+                "write_file",
+                ".env",
+                Some(&Labelled::new(before.clone(), label)),
+                &after,
+            );
+            (scanned, sink)
+        };
+
+        let (vouched, sink) = scan(Label::trusted_private());
+        assert!(vouched.authored.is_empty(), "{:?}", vouched.authored);
+        assert_eq!(vouched.carried.len(), 1);
+        assert!(
+            sink.events().iter().any(|e| matches!(
+                e,
+                Event::GatePassed { gate: "trusted-read", detail } if detail.contains("write_file")
+            )),
+            "the pre-image was read outside the trusted-content gate: {:?}",
+            sink.events()
+        );
+
+        let (unvouched, sink) = scan(Label::untrusted_private());
+        assert!(unvouched.carried.is_empty(), "{:?}", unvouched.carried);
+        assert_eq!(unvouched.authored.len(), 1);
+        assert!(
+            !sink
+                .events()
+                .iter()
+                .any(|e| matches!(e, Event::GateBlocked { .. })),
+            "an unvouched pre-image is left unread, not denied: {:?}",
+            sink.events()
+        );
     }
 }

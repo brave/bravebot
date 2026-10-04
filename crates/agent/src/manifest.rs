@@ -1609,13 +1609,14 @@ fn write<S: Sink, C: Confirmer>(
     // The pre-image and the version it was read at, taken together, exactly as a turn's write
     // takes them: prior bytes a sibling effect left untrusted cannot answer for a credential in
     // this body, and the approval minted below is spent only on the version shown here.
-    let (existing, replaces, existing_trusted, approved_revision) =
+    let (existing, pre_image, replaces, approved_revision) =
         policy.capture_files(|policy, capture| {
             let key = workspace.trust_key(&path);
+            let peeks = workspace.peek_labelled_for_write(policy, &path);
             (
-                workspace.peek_labelled_for_review(&path),
+                peeks.0,
+                peeks.1,
                 workspace.names_a_file(&path),
-                !policy.read_is_quarantined(&key),
                 capture.revision_of(&key),
             )
         });
@@ -1632,12 +1633,7 @@ fn write<S: Sink, C: Confirmer>(
     // What this would leave in the tree, before anything is written and before anybody is asked.
     // A manifest run has no planner in the control path, so the refusal here is read by a person
     // and is the whole of what they are told about the step.
-    let scanned = policy.scan_a_write(
-        "write_file",
-        &path,
-        (replaces && existing_trusted).then_some(&existing),
-        &body,
-    );
+    let scanned = policy.scan_a_write("write_file", &path, replaces.then_some(&pre_image), &body);
     // Written down before the step is refused or put to anybody, exactly as a turn's write does
     // it: what a planned run found in its own body is as much a thing to read afterwards as what
     // a turn found (CRED-19).

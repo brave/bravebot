@@ -1071,8 +1071,8 @@ fn a_manifest_write_reads_the_file_it_replaces_through_a_gate_that_records_it() 
     assert!(
         sink.events().iter().any(|event| matches!(
             event,
-            Event::GatePassed { gate: "credential-scan", detail }
-                if detail.contains("notes.md") && detail.contains("read as it stands")
+            Event::GatePassed { gate: "trusted-read", detail }
+                if detail.contains("write_file") && detail.contains("(T,priv)")
         )),
         "the scan read the file the step replaces without the read being recorded: {:?}",
         sink.events()
