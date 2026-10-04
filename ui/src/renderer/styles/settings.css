@@ -114,6 +114,9 @@
 .settings-card dl > dt:first-of-type + dd { border-top: 0; }
 .settings-card dl.settings-limits-table { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
 
+/* A collapsible inside a card takes the same radius as the tables and boxes in it. */
+.settings-card leo-collapse { --leo-collapse-radius: var(--radius-control); }
+
 /* A path or a state shown as it is, in its own outlined box. */
 .settings-box {
   display: flex;
@@ -197,7 +200,7 @@
   min-width: 0;
   padding: var(--leo-spacing-l);
   border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-card);
+  border-radius: var(--radius-control);
   background: var(--surface-raised);
   color: var(--ink-primary);
   font: var(--type-body);

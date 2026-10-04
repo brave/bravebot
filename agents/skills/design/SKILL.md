@@ -57,6 +57,9 @@ The structure is set in `styles/shell.css` and `columns.ts`. New surfaces fit in
   in the sidebar. The header shows a back arrow only on a page inside a page (a connector's setup,
   the review before connecting), and it goes back one level; Esc does the same. A top-level page
   has no arrow, and "Back to BraveBot" in the page list leaves settings.
+- **Inner elements in settings.** An element inside the content area of a settings page (a table,
+  a bordered box, a collapsible, a connector card or row) uses `--radius-control`. Only the page's
+  own card uses `--radius-card`.
 - **Dividers.** A divider is a seam. It is invisible until hovered, focused or dragged, then shows
   a 2px accent line.
 - **Dialogs.** Dialogs use `Modal` in one of four widths: `sm` 400, `md` 500, `lg` 760, `xl` 1080.
