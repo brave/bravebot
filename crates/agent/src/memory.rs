@@ -35,6 +35,12 @@ use std::path::{Path, PathBuf};
 /// The directory a memory is kept in, under the working directory.
 const MEMORY: &str = ".bravebot/memory";
 
+/// The directory the desktop kept a bot's memory in before bots had definitions, under the bot's
+/// folder ([MEMORY-11]).
+///
+/// [MEMORY-11]: ../../../docs/specs/definition-memory.md
+const LEGACY: &str = ".bravebot-ui/bots";
+
 /// The directory the record lives in, inside the state directory, beside the kept answers.
 const UNTRUSTED: &str = "untrusted";
 
@@ -79,10 +85,22 @@ pub fn relative(name: &str) -> String {
 /// `.bravebot` and `memory` directories and the file name are compared with case folded, as the
 /// map folds them. There `.Bravebot/memory/NOTES.md` opens the memory `notes`.
 fn memory_at(key: &str, folds: bool) -> Option<(&str, String)> {
+    kept_at(key, folds, ".bravebot", "memory")
+}
+
+/// The desktop's old memory the map key `key` is, where it is one: the directory it is kept under
+/// and the bot's slug. A key spelled `<directory>/.bravebot-ui/bots/<slug>.md`, compared as
+/// [`memory_at`] compares.
+fn legacy_at(key: &str, folds: bool) -> Option<(&str, String)> {
+    kept_at(key, folds, ".bravebot-ui", "bots")
+}
+
+/// A key spelled `<directory>/<first>/<second>/<slug>.md`, as [`memory_at`] reads one.
+fn kept_at<'a>(key: &'a str, folds: bool, first: &str, second: &str) -> Option<(&'a str, String)> {
     let (rest, file) = key.rsplit_once('/')?;
     let (rest, memory) = rest.rsplit_once('/')?;
     let (directory, bravebot) = rest.rsplit_once('/')?;
-    if spelled(bravebot, folds) != ".bravebot" || spelled(memory, folds) != "memory" {
+    if spelled(bravebot, folds) != first || spelled(memory, folds) != second {
         return None;
     }
     let file = spelled(file, folds);
@@ -107,9 +125,39 @@ fn spelled(written: &str, folds: bool) -> Cow<'_, str> {
 /// session asks the map about the memory. Recorded as written, a write naming the directory or
 /// the memory another way would name a path no later session asks about.
 fn recorded_as(home: &Path, directory: &str, name: &str) -> (Record, String) {
+    recorded_under(home, directory, &relative(name))
+}
+
+/// The same for the file `relative` under `directory`, whichever memory it is.
+fn recorded_under(home: &Path, directory: &str, relative: &str) -> (Record, String) {
     let directory = crate::workspace::on_disk(directory).unwrap_or_else(|| directory.to_string());
-    let memory = format!("{}/{}", directory.trim_end_matches('/'), relative(name));
+    let memory = format!("{}/{relative}", directory.trim_end_matches('/'));
     (Record::new(home, &directory), memory)
+}
+
+/// Where the desktop kept a bot's memory before bots had definitions, relative to the bot's
+/// folder.
+fn legacy_relative(slug: &str) -> String {
+    format!("{LEGACY}/{slug}.md")
+}
+
+/// Record the desktop's old memory of the bot `slug` in `directory` as untrusted ([MEMORY-11]).
+///
+/// Only the path is recorded. The file is not opened, so it need not exist, and nothing of what
+/// it holds reaches the driver. The path is recorded as a session in `directory` keys it, so every
+/// later session there distrusts it until a person's yes, or naming it, takes it out again.
+///
+/// An error is a record that was not written, in which case the bot is not migrated.
+///
+/// [MEMORY-11]: ../../../docs/specs/definition-memory.md
+pub(crate) fn record_legacy(home: &Path, directory: &Path, slug: &str) -> std::io::Result<()> {
+    if !is_a_slug(slug) {
+        return Err(std::io::Error::other("the bot's name is not a slug"));
+    }
+    let workspace = Workspace::new(directory).map_err(std::io::Error::other)?;
+    let key = crate::workspace::key_of(workspace.root());
+    let (record, path) = recorded_under(home, &key, &legacy_relative(slug));
+    record.keep(&path)
 }
 
 /// Whether a memory kept under `root` would be inside the person's own directory, `home`.
@@ -176,11 +224,17 @@ pub(crate) fn record_before_write(
 /// Best effort: a line left behind distrusts the path on the next turn, which is the direction
 /// that trusts nothing.
 pub(crate) fn trusted_again(home: Option<&Path>, key: &str, folds: bool) {
-    let (Some(home), Some((directory, name))) = (home, memory_at(key, folds)) else {
+    let Some(home) = home else {
         return;
     };
-    let (record, memory) = recorded_as(home, directory, &name);
-    let named = key.ends_with(&format!("/{}", relative(&name)));
+    let Some((directory, kept)) = memory_at(key, folds)
+        .map(|(directory, name)| (directory, relative(&name)))
+        .or_else(|| legacy_at(key, folds).map(|(d, slug)| (d, legacy_relative(&slug))))
+    else {
+        return;
+    };
+    let (record, memory) = recorded_under(home, directory, &kept);
+    let named = key.ends_with(&format!("/{kept}"));
     if named || crate::workspace::one_file(key, &memory) {
         let _ = record.forget(&memory);
     }
@@ -523,6 +577,40 @@ mod tests {
             &"a".repeat(65),
         ] {
             assert!(!is_a_slug(not), "{not:?} is not a slug");
+        }
+    }
+
+    /// MEMORY-11: a person's yes, or naming the old notes, takes them out of the record as it does
+    /// a memory, and only the path that is the bot's old memory is taken out.
+    #[test]
+    fn a_persons_yes_to_the_old_notes_takes_them_out_of_the_record() {
+        let scratch = Scratch::new("memory-record-legacy");
+        let home = Some(scratch.path.as_path());
+        let record = Record::new(&scratch.path, "/work");
+        record.keep("/work/.bravebot-ui/bots/rev.md").unwrap();
+        record.keep("/work/.bravebot-ui/bots/other.md").unwrap();
+        record.keep("/work/.bravebot/memory/rev.md").unwrap();
+
+        trusted_again(home, "/work/.bravebot-ui/bots/rev.md", false);
+
+        assert_eq!(
+            record.paths(),
+            vec![
+                "/work/.bravebot-ui/bots/other.md".to_string(),
+                "/work/.bravebot/memory/rev.md".to_string()
+            ]
+        );
+        assert_eq!(
+            legacy_at("/work/.bravebot-ui/bots/rev.md", false),
+            Some(("/work", "rev".to_string()))
+        );
+        for not in [
+            "/work/.bravebot-ui/bots/Rev.md",
+            "/work/.bravebot-ui/memory/rev.md",
+            "/work/.bravebot/bots/rev.md",
+            "/work/.bravebot-ui/bots/sub/rev.md",
+        ] {
+            assert_eq!(legacy_at(not, false), None, "{not}");
         }
     }
 

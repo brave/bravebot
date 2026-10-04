@@ -232,6 +232,34 @@ export async function saveFormBot(
   return kept
 }
 
+/**
+ * Give a bot made before definitions one, the first time it is opened (MEMORY-11).
+ *
+ * The agent writes the definition and records the bot's old memory, `.bravebot-ui/bots/<slug>.md`
+ * in its folder, as untrusted in every later session. Nothing here reads that file: this process
+ * sends the slug, the purpose, the model and the folder it holds for the bot, and keeps only the
+ * name the agent answers with. A refusal, an absent agent or an answer that is not a slug throws
+ * and the bot stays as it was, so it is tried again on the next open. A bot that has a definition
+ * is returned as it is and the agent is not asked.
+ */
+export async function migrateBot(
+  held: Bot,
+  migrate: ((method: 'bot.migrate', params: Record<string, unknown>) => Promise<unknown>) | null,
+): Promise<Bot> {
+  if (held.definition !== null) return held
+  if (!migrate) throw new Error('The agent is not running, so this bot cannot be opened.')
+  const made = (await migrate('bot.migrate', {
+    slug: held.slug,
+    purpose: held.purpose,
+    directory: held.directory,
+    ...(held.model === null ? {} : { model: held.model }),
+  })) as { name?: unknown } | null
+  if (!isSlug(made?.name)) throw new Error('The agent did not name the bot’s definition.')
+  const next = { ...held, definition: made.name }
+  saveBot(next)
+  return next
+}
+
 /** Write a bot down, replacing whatever shared its slug, and stamp when that happened. */
 export function saveBot(next: Bot): void {
   putBots(withBot(bots(), { ...next, updated: Date.now() }))
@@ -298,9 +326,32 @@ function ownDirectory(slug: string): string {
   return join(app.getPath('userData'), 'bots', slug)
 }
 
-/** Where a bot's memory sits inside its checkout, as the agent would name it. */
+/** Where a bot's memory sat inside its checkout before it had a definition, as the agent names it. */
 export function memoryPath(slug: string): string {
   return `${HOME}/bots/${slug}.md`
+}
+
+/**
+ * Where the memory of a bot's definition is, relative to its checkout (MEMORY-2).
+ *
+ * Made from the definition's name, which the agent chose and this process judged to be a slug. It
+ * is the one memory path a briefing or a composed turn names. The old one is never named, since
+ * the agent records it as untrusted and a run told to read it would ask a person about notes they
+ * were already going to be asked about (MEMORY-11).
+ */
+export function definitionMemoryPath(definition: string): string {
+  return `.bravebot/memory/${definition}.md`
+}
+
+/**
+ * The memory path a briefing or a composed turn may name for this bot.
+ *
+ * The definition's once it has one. A bot with none yet is named at the old path, which only a bot
+ * that has never been opened since definitions existed can reach, and `migrateBot` runs before any
+ * turn is sent.
+ */
+function namedMemory(bot: Bot): string {
+  return bot.definition === null ? memoryPath(bot.slug) : definitionMemoryPath(bot.definition)
 }
 
 /** The same, absolutely, for this process to read and seed. */
@@ -389,7 +440,7 @@ export function consolidationPrompt(bot: Bot, why: string): string {
   return [
     why,
     '',
-    `Look back over this conversation and bring \`${memoryPath(bot.slug)}\` up to date: add what`,
+    `Look back over this conversation and bring \`${namedMemory(bot)}\` up to date: add what`,
     'has turned out to be durable — a decision and why, a constraint, how something here is',
     'arranged — and prune whatever has stopped being true. If nothing in it needs changing, say so',
     'in one line and change nothing; an honest "no" is a better answer than an invented entry.',
@@ -447,7 +498,7 @@ function groundText(bot: Bot, nudge: boolean, fresh: boolean): string {
     '',
     '## Memory',
     '',
-    `Your memory is the file \`${memoryPath(bot.slug)}\` in this checkout. It is the only thing`,
+    `Your memory is the file \`${namedMemory(bot)}\` in this checkout. It is the only thing`,
     'about you that survives a compaction, so when you learn something durable — a decision and',
     'why, a constraint, how something here is arranged — edit that file to say so as you go, in',
     'the same turn you learnt it, rather than waiting to be asked. Keep it short enough to stay',
@@ -468,7 +519,7 @@ function groundText(bot: Bot, nudge: boolean, fresh: boolean): string {
           'Read that file now, before anything else. It is not quoted here: what is in it is your',
           'own writing rather than anything this window wrote, so you read it on the same terms as',
           'any other file in this checkout. If it comes back withheld, say so and carry on without',
-          'it rather than guessing at what it used to say.',
+          'it rather than guessing at what it used to say. If nothing is there yet, nothing is kept.',
         ]),
     '',
     // Said plainly because it is true, where the sentence this replaced — that every edit would be
@@ -545,7 +596,10 @@ export function ground(bot: Bot, nudge = false): Grounding | null {
     // written through; the helper opens each component relative to a pinned directory and follows
     // nothing. It answers only whether it wrote, because what the memory *says* has no business
     // in a file this process composes.
-    const fresh = seedProjectMemory(bot.directory, memoryPath(bot.slug), emptyMemory(bot), GITIGNORE)
+    const fresh =
+      bot.definition === null
+        ? seedProjectMemory(bot.directory, memoryPath(bot.slug), emptyMemory(bot), GITIGNORE)
+        : false
 
     const ground = join(ownDirectory(bot.slug), 'ground.md')
     mkdirSync(ownDirectory(bot.slug), { recursive: true })

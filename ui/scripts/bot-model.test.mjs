@@ -90,3 +90,35 @@ test('making a bot saves nothing unless the agent names the definition it wrote'
     assert.equal(storage.bot(fresh.slug).purpose, 'Build sites')
   } finally { rmSync(profile, { recursive: true, force: true }) }
 })
+
+test('a bot made before definitions is migrated once, and the briefing never names its old memory after', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'bravebot-migrate-'))
+  const source = buildSync({ entryPoints: ['src/main/bots.ts'], bundle: true, write: false, platform: 'node', format: 'cjs', external: ['electron'] }).outputFiles[0].text
+  const module = { exports: {} }
+  const mockedRequire = (id) => id === 'electron' ? { app: { getPath: () => profile } } : require(id)
+  new Function('require', 'module', 'exports', source)(mockedRequire, module, module.exports)
+  const storage = module.exports
+  const old = { ...parseBots({ bots: [{ ...definition, model: 'provider/model-a' }] }).bots[0], definition: null }
+  try {
+    storage.saveBot(old)
+    await assert.rejects(storage.migrateBot(old, null), /not running/)
+    for (const answer of [null, {}, { name: '../x' }, { name: 42 }]) {
+      await assert.rejects(storage.migrateBot(old, async () => answer), /did not name/)
+    }
+    await assert.rejects(storage.migrateBot(old, async () => { throw new Error('refused') }), /refused/)
+    assert.equal(storage.bot(old.slug).definition, null, 'a failed migration leaves the bot as it was')
+
+    const calls = []
+    const migrated = await storage.migrateBot(old, async (method, params) => { calls.push([method, params]); return { name: 'web-dev-2' } })
+    assert.equal(migrated.definition, 'web-dev-2')
+    assert.equal(storage.bot(old.slug).definition, 'web-dev-2')
+    assert.deepEqual(calls, [['bot.migrate', { slug: 'web-dev', purpose: 'Build websites', directory: '/tmp/web-dev', model: 'provider/model-a' }]])
+
+    const again = await storage.migrateBot(migrated, async () => { throw new Error('a bot with a definition is not migrated again') })
+    assert.equal(again.definition, 'web-dev-2')
+
+    const prompt = storage.consolidationPrompt(migrated, 'why')
+    assert.ok(prompt.includes('.bravebot/memory/web-dev-2.md'), prompt)
+    assert.ok(!prompt.includes('.bravebot-ui'), prompt)
+  } finally { rmSync(profile, { recursive: true, force: true }) }
+})
