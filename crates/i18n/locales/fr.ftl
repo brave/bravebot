@@ -288,6 +288,7 @@ doctor-gateway-token-not-needed = aucun requis (le bloc n'en nomme aucun)
 doctor-gateway-keys = clés de passerelle
 doctor-gateway-keys-unreadable =
     { $path } ne peut pas être lu, donc aucune clé qu'il contient n'est envoyée (bravebot auth login gateway le laisse tel quel)
+doctor-ended = le rapport ci-dessus contient un problème qui fait échouer cette exécution
 doctor-gateway-models-absent = aucun configuré (la passerelle est interrogée)
 doctor-gateway-models-compiled = { $models } (intégrés, ce service n'ayant pas de liste ; nommez tout autre modèle de la même façon)
 doctor-region = région
