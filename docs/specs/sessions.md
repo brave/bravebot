@@ -917,6 +917,7 @@ place it genuinely is.
 `verified-by: bravebot_ui_bridge::interop::resuming_a_session_writes_back_to_it_rather_than_forking`
 `verified-by: bravebot_ui_bridge::interop::every_project_is_listed_in_one_order_rather_than_project_by_project`
 `verified-by: bravebot_ui_bridge::dispatch::listing_sessions_never_fails_however_little_is_on_disk`
+`verified-by: bravebot_ui_bridge::no_state_directory::a_desktop_session_with_no_state_directory_runs_its_turn_and_writes_nothing`
 
 <a id="SESSION-29"></a>
 ### SESSION-29: a record says which surface wrote it, and resuming in the other says so

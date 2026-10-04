@@ -415,12 +415,6 @@ impl Bridge {
                 format!("{} is not a directory", directory.display()),
             ));
         }
-        if bravebot_session::store::directory().is_none() {
-            return Err(Failure::new(
-                ErrorCode::NoHome,
-                "no home directory to store sessions in",
-            ));
-        }
 
         let branch = bravebot_session::sessions::branch_of(&directory);
         let auto_vetting = self.auto_vetting(&directory);
