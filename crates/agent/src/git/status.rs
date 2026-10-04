@@ -294,7 +294,7 @@ pub(super) fn boolean(value: Option<&[u8]>) -> Option<bool> {
 }
 
 impl Settings {
-    fn read(git_dir: &Path) -> Result<Settings, Declined> {
+    fn read(git_dir: &Path, linked: bool) -> Result<Settings, Declined> {
         let mut settings = Settings {
             filemode: cfg!(unix),
             ignorecase: false,
@@ -304,7 +304,14 @@ impl Settings {
             quote_path: true,
             untracked: Untracked::Normal,
         };
-        for name in ["config", "config.worktree"] {
+        // `config.worktree` beside the common directory is the main worktree's, which git in a linked
+        // worktree does not read (CHECKOUT-4).
+        let names: &[&str] = if linked {
+            &["config"]
+        } else {
+            &["config", "config.worktree"]
+        };
+        for name in names {
             let Some(bytes) = read_if_present(&git_dir.join(name))? else {
                 continue;
             };
@@ -972,15 +979,15 @@ pub(super) fn answer(
     filter: Option<&str>,
 ) -> Result<(), Declined> {
     let git_dir = repo.git_dir.as_path();
-    let root = git_dir.parent().ok_or(Declined::NoRepository)?;
-    let settings = Settings::read(git_dir)?;
+    let root = repo.work_tree.as_deref().ok_or(Declined::NoRepository)?;
+    let settings = Settings::read(git_dir, repo.linked)?;
     let case = if settings.ignorecase {
         Case::Fold
     } else {
         Case::Sensitive
     };
 
-    let index_file = git_dir.join("index");
+    let index_file = repo.admin.join("index");
     let (entries, index_time) = match std::fs::symlink_metadata(&index_file) {
         Ok(meta) if meta.file_type().is_symlink() => return Err(Declined::Linked),
         Ok(meta) => {

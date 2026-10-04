@@ -522,12 +522,16 @@ the working directory's rule alone, a file a write left untrusted in the checkou
 planner as trusted through that history. The meet is taken over the paths
 [GIT-3](tools/read-git.md#GIT-3) already labels an answer by, so it adds no decision of its own.
 
-Half built. An answer about history is labelled by the rule over each path in the checkouts as well
-as in the working directory, and a rule that distrusts a path outlives its checkout. `read_git` in a
-checkout declines: it is not routed through the driver's record of the entry.
+Built. `read_git` in a checkout opens the common directory and the entry the driver recorded under
+`worktrees/<id>/`, whose `HEAD` and index it reads beside the common directory's own, and never the
+checkout's `.git`. Every file it opens is held against the rules, the entry's among them. An answer
+about history is labelled by the rule over each path in the checkouts as well as in the working
+directory, and a rule that distrusts a path outlives its checkout.
 
+`verified-by: bravebot_agent::workspace::read_git_in_a_checkout_is_answered_without_reading_its_dot_git`
+`verified-by: bravebot_agent::workspace::a_checkout_reads_the_entrys_head_and_index_not_the_common_directorys`
+`verified-by: bravebot_agent::workspace::a_rule_over_a_file_the_entry_holds_declines_a_read_in_a_checkout`
 `verified-by: bravebot_agent::workspace::a_distrusted_path_in_a_checkout_labels_history_that_shows_it`
-`verified-by: bravebot_agent::workspace::read_git_declines_in_a_checkout`
 
 ## Bringing work back
 
@@ -554,8 +558,8 @@ name and not by its target's. A write through a reference is counted. A name out
 in scratch or an added directory, is not recorded. A path a deny rule covered when it was written is
 never recorded, since that write was refused. One a rule added later covers stays recorded, and
 that rule would refuse bringing it back ([CHECKOUT-14](#CHECKOUT-14)). No status is read in a
-checkout, because `read_git` declines there ([CHECKOUT-12](#CHECKOUT-12)), so the candidates always
-say it could not be read.
+checkout, because the driver does not yet ask for one, so the candidates always say it could not be
+read.
 
 `verified-by: bravebot_agent::workspace::a_checkout_records_the_paths_written_in_it`
 `verified-by: bravebot_agent::turn::a_kept_checkout_is_named_with_the_paths_written_in_it`
