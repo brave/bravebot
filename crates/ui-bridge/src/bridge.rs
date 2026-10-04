@@ -283,6 +283,7 @@ impl Bridge {
 
         let mut opened = self.recount(&handle, &directory, &record, auto_vetting);
         opened["settingsRules"] = rules;
+        opened["scratch"] = self.scratch_report(&handle);
         if let Some(settled) = settled {
             opened["trust"] = settled;
         }
@@ -332,6 +333,15 @@ impl Bridge {
                 "keeping": open.keeping.as_ref().map(|(store, _)| store.path().display().to_string()),
             }),
         ));
+    }
+
+    /// What the session opened as `handle` reports about its own directory outside the project
+    /// (TRUST-14): the path, or that it has none and why.
+    fn scratch_report(&self, handle: &str) -> Value {
+        self.open
+            .get(handle)
+            .and_then(|open| open.state.lock().ok().map(|state| state.scratch.report()))
+            .unwrap_or(Value::Null)
     }
 
     fn auto_vetting(&self, project: &std::path::Path) -> bool {
@@ -446,6 +456,7 @@ impl Bridge {
             "directory": directory.display().to_string(),
             "branch": branch,
             "autoVetting": auto_vetting,
+            "scratch": self.scratch_report(&handle),
         });
         merge(&mut made, reported);
         Ok(made)
@@ -604,6 +615,7 @@ impl Bridge {
             "trust": { "known": known, "rules": if known { Value::from(rules) } else { Value::Null } },
             "autoVetting": auto_vetting,
             "settingsRules": settings_rules,
+            "scratch": self.scratch_report(&child),
             "parent": {
                 "id": parent_id,
                 "directory": project.display().to_string(),
@@ -743,7 +755,7 @@ impl Bridge {
         let project = open.project.clone();
         let state = Arc::clone(&open.state);
         let watches = Arc::clone(&open.watches);
-        let (turn_number, directories) = state
+        let (turn_number, directories, scratch) = state
             .lock()
             .map(|mut s| {
                 for point in &mut s.rewind {
@@ -751,9 +763,16 @@ impl Bridge {
                         .coverage
                         .record([bravebot_agent::rewind::CoverageGap::Desktop]);
                 }
-                (s.turns + 1, s.directories.clone())
+                (
+                    s.turns + 1,
+                    s.directories.clone(),
+                    s.scratch.path().map(Path::to_path_buf),
+                )
             })
-            .unwrap_or((1, Vec::new()));
+            .unwrap_or((1, Vec::new(), None));
+        // The session's own directory outside the project, made as the session opened. Set by the
+        // code that holds it, so a turn cannot widen its own reach (TRUST-14).
+        workspace.open_scratch(scratch);
 
         // A workspace is built per turn and opens the project only, so the directories a
         // resumed session had open have to be opened again here. The rules about them came back
@@ -897,7 +916,7 @@ impl Bridge {
 
         let project = open.project.clone();
         let state = Arc::clone(&open.state);
-        let (run, turns, directories) = state
+        let (run, turns, directories, scratch) = state
             .lock()
             .map(|mut s| {
                 // A run writes files as a turn does, so the same coverage gap applies.
@@ -907,9 +926,15 @@ impl Bridge {
                         .record([bravebot_agent::rewind::CoverageGap::Desktop]);
                 }
                 s.runs += 1;
-                (s.runs, s.turns, s.directories.clone())
+                (
+                    s.runs,
+                    s.turns,
+                    s.directories.clone(),
+                    s.scratch.path().map(Path::to_path_buf),
+                )
             })
-            .unwrap_or((1, 0, Vec::new()));
+            .unwrap_or((1, 0, Vec::new(), None));
+        workspace.open_scratch(scratch);
         for directory in &directories {
             let _ = workspace.add_directory(&directory.display().to_string());
         }
