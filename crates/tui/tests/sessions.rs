@@ -3066,7 +3066,8 @@ mod preserved_history {
         session.narrate("looking at the files");
         session.narrate("PRIVATE_DISPLAY_ONLY_CONTENT");
         conversation.push(Message::assistant("looking at the files"));
-        let reason = bravebot_tui::state::failure_reason(Diagnosis::of(Category::Transport), None);
+        let reason =
+            bravebot_session::sessions::failure_reason(Diagnosis::of(Category::Transport), None);
         session.fail(&reason, Ending::Failed(Diagnosis::of(Category::Transport)));
         session.record_turn(0, &conversation);
         let expected = serde_json::to_value(conversation.snapshot()).unwrap();
@@ -3612,7 +3613,7 @@ mod preserved_history {
             }
             Err(error) => match error.ending() {
                 Ending::Failed(diagnosis) => session.fail(
-                    bravebot_tui::state::failure_reason(diagnosis, None),
+                    bravebot_session::sessions::failure_reason(diagnosis, None),
                     error.ending(),
                 ),
                 Ending::Stopped { attempts } => {

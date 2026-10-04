@@ -1708,12 +1708,10 @@ fn work(work: Work) {
 
     state.turns = turn;
     let ended = match &outcome {
-        Ok(_) => Some(bravebot_session::sessions::StoredOutcome::Completed),
-        // A failure's reason is composed from the interface's own catalog, which this front end
-        // does not hold, and a recorded reason is never the backend's words (SESSION-23). The turn
-        // keeps its boundaries and no ending, which is what a record says of one it could not
-        // describe.
-        Err(_) => None,
+        Ok(_) => bravebot_session::sessions::StoredOutcome::Completed,
+        Err(error) => {
+            bravebot_session::sessions::StoredOutcome::ended(turn, error.ending(), error.cut_off())
+        }
     };
     record_turn(
         &mut state,
@@ -1935,7 +1933,7 @@ fn record_turn(
     prompt: &str,
     begins: usize,
     prompt_at: Option<usize>,
-    outcome: Option<bravebot_session::sessions::StoredOutcome>,
+    outcome: bravebot_session::sessions::StoredOutcome,
 ) {
     let end = state.conversation.recounted().len();
     let Some(history) = state.history.as_mut() else {
@@ -1951,7 +1949,7 @@ fn record_turn(
         prompt_offset: prompt_at
             .filter(|at| !reset_context && *at >= begins && *at < end)
             .map(|at| at - begins),
-        outcome,
+        outcome: Some(outcome),
     });
 }
 

@@ -382,6 +382,86 @@ pub enum StoredOutcome {
     Cancelled { reason: String },
 }
 
+impl StoredOutcome {
+    /// How turn `turn` ended, in the words the interface uses for it.
+    pub fn ended(
+        turn: usize,
+        ending: bravebot_agent::Ending,
+        cut_off: Option<&bravebot_aichat::CutOff>,
+    ) -> Self {
+        match ending {
+            bravebot_agent::Ending::Done => Self::Completed,
+            bravebot_agent::Ending::Failed(diagnosis) => Self::Failed {
+                reason: failure_reason(diagnosis, cut_off),
+            },
+            bravebot_agent::Ending::Stopped { .. } => Self::Cancelled {
+                reason: t!(turn_cancelled, turn = turn),
+            },
+        }
+    }
+}
+
+/// Compose a localized failure reason from safe fields, without raw backend error text.
+///
+/// `cut_off` is what a reply the output ceiling stopped was doing, whose one name is a tool the
+/// request offered, spelt as it offered it.
+pub fn failure_reason(
+    diagnosis: bravebot_agent::Diagnosis,
+    cut_off: Option<&bravebot_aichat::CutOff>,
+) -> String {
+    use bravebot_agent::Category;
+    use bravebot_aichat::OpenCall;
+    let what: std::borrow::Cow<'_, str> = match diagnosis.category {
+        Category::Unauthorized => t!(failure_unauthorized).into(),
+        Category::RateLimited => t!(failure_rate_limited).into(),
+        Category::Unavailable => t!(failure_unavailable).into(),
+        Category::Refused => t!(failure_refused).into(),
+        Category::Transport => t!(failure_transport).into(),
+        Category::Incomplete => t!(failure_incomplete).into(),
+        Category::Undecodable => t!(failure_undecodable).into(),
+        // The one category that says a number. It is this program's own configured ceiling, not
+        // anything the service reported, and without it the sentence names no remedy.
+        // What the reply was writing is said as well, since a reply that spent the ceiling on one
+        // file's worth of argument is asked for in parts, and one that spent it thinking is not.
+        Category::TooLong => match (diagnosis.ceiling, cut_off) {
+            (None, _) => t!(failure_too_long).into(),
+            (Some(tokens), None) => t!(failure_too_long_at, tokens = tokens).into(),
+            (Some(tokens), Some(cut_off)) => match (&cut_off.call, cut_off.thought) {
+                (
+                    Some(OpenCall {
+                        tool: Some(tool), ..
+                    }),
+                    _,
+                ) => t!(
+                    failure_too_long_in_call,
+                    tokens = tokens,
+                    tool = tool.as_str()
+                )
+                .into(),
+                (Some(OpenCall { tool: None, .. }), _) => {
+                    t!(failure_too_long_in_a_call, tokens = tokens).into()
+                }
+                (None, true) => t!(failure_too_long_thinking, tokens = tokens).into(),
+                (None, false) => t!(failure_too_long_at, tokens = tokens).into(),
+            },
+        },
+        Category::Unconfigured => t!(failure_unconfigured).into(),
+        Category::Blocked => t!(failure_blocked).into(),
+        Category::Workspace => t!(failure_workspace).into(),
+        Category::Internal => t!(failure_internal).into(),
+    };
+    let mut said = what.to_string();
+    if let Some(status) = diagnosis.status {
+        said = t!(failure_with_status, what = said, status = status);
+    }
+    // Said only where there was more than one, since "after 1 attempts" is a worse sentence than
+    // the silence it replaces, and one attempt is what an unremarkable failure took.
+    if let Some(attempts) = diagnosis.attempts.filter(|count| *count > 1) {
+        said = t!(failure_with_attempts, what = said, attempts = attempts);
+    }
+    t!(session_error, problem = said)
+}
+
 /// One point a rewind can go back to, as it is written down.
 ///
 /// Its own type rather than the interface's, for the reason [`StoredAside`] is: a record on disk
@@ -2069,6 +2149,108 @@ pub fn fork(project: &Path, source_id: &str) -> Option<Record> {
 mod tests {
     use super::*;
     use crate::test_profile::in_isolated_profile;
+
+    /// "the model reached its output limit" leaves somebody guessing a budget nothing shows them.
+    /// The figure is what names the setting to raise, and it is this program's own configured
+    /// number rather than anything the service said, so repeating it gives nothing away.
+    #[test]
+    fn a_reply_stopped_at_a_ceiling_says_which_ceiling() {
+        use bravebot_agent::{Category, Diagnosis};
+
+        let vague = failure_reason(Diagnosis::of(Category::TooLong), None);
+        assert!(
+            !vague.contains("8192") && !vague.contains("8,192"),
+            "a ceiling nobody measured was named anyway: {vague}"
+        );
+
+        // Two different ceilings, because a sentence that hard-coded one would pass with either.
+        for ceiling in [8_192_u64, 64_000] {
+            let said = failure_reason(Diagnosis::of(Category::TooLong).at_ceiling(ceiling), None);
+            assert!(
+                said.contains(&ceiling.to_string()),
+                "the ceiling that stopped the reply is not in {said}"
+            );
+            assert!(
+                said.contains(bravebot_config::env_var::OUTPUT_BUDGET),
+                "the setting that raises it is not in {said}"
+            );
+        }
+    }
+
+    /// A reply stopped part way through a call and one stopped while it was thinking want
+    /// different remedies, and the failure line is the only thing left on screen that can tell
+    /// them apart. The tool is named where the request offered it, and only then.
+    #[test]
+    fn a_reply_stopped_at_the_ceiling_says_what_it_was_writing() {
+        use bravebot_agent::{Category, Diagnosis};
+        use bravebot_aichat::{CutOff, OpenCall};
+
+        let diagnosis = Diagnosis::of(Category::TooLong).at_ceiling(64_000);
+        let stopped = |call: Option<Option<&str>>, thought: bool| {
+            failure_reason(
+                diagnosis,
+                Some(&CutOff {
+                    ceiling: 64_000,
+                    call: call.map(|tool| OpenCall {
+                        tool: tool.map(str::to_owned),
+                        arguments: 0,
+                    }),
+                    thought,
+                }),
+            )
+        };
+
+        let in_a_call = stopped(Some(Some("write_file")), false);
+        assert!(in_a_call.contains("write_file"), "{in_a_call}");
+        assert!(in_a_call.contains("64000"), "{in_a_call}");
+        assert!(in_a_call.contains("not made"), "{in_a_call}");
+
+        let unnamed = stopped(Some(None), false);
+        assert!(unnamed.contains("a tool call"), "{unnamed}");
+
+        let thinking = stopped(None, true);
+        assert!(thinking.contains("thinking"), "{thinking}");
+
+        assert_eq!(
+            stopped(None, false),
+            failure_reason(diagnosis, None),
+            "a reply that wrote nothing at all is reported as it always was"
+        );
+    }
+
+    /// A turn's ending is recorded in the words the interface uses for it: a stop names its own
+    /// turn, and a failure is the composed reason, including what a reply cut off at the ceiling
+    /// was writing.
+    #[test]
+    fn an_ending_is_recorded_in_the_interfaces_words() {
+        use bravebot_agent::{Category, Diagnosis, Ending};
+        use bravebot_aichat::{CutOff, OpenCall};
+
+        assert!(matches!(
+            StoredOutcome::ended(1, Ending::Done, None),
+            StoredOutcome::Completed
+        ));
+        match StoredOutcome::ended(3, Ending::Stopped { attempts: None }, None) {
+            StoredOutcome::Cancelled { reason } => assert_eq!(reason, t!(turn_cancelled, turn = 3)),
+            other => panic!("a stop was recorded as {other:?}"),
+        }
+        let diagnosis = Diagnosis::of(Category::TooLong).at_ceiling(64_000);
+        let cut_off = CutOff {
+            ceiling: 64_000,
+            call: Some(OpenCall {
+                tool: Some("write_file".to_owned()),
+                arguments: 0,
+            }),
+            thought: false,
+        };
+        match StoredOutcome::ended(2, Ending::Failed(diagnosis), Some(&cut_off)) {
+            StoredOutcome::Failed { reason } => {
+                assert_eq!(reason, failure_reason(diagnosis, Some(&cut_off)));
+                assert!(reason.contains("write_file"), "{reason}");
+            }
+            other => panic!("a failure was recorded as {other:?}"),
+        }
+    }
 
     /// The name is printed on the way out and pasted into a command, so it has to be the shape a
     /// person recognises as an id and nothing else. It used to be the time and the process id.

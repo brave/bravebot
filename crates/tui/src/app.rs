@@ -7584,7 +7584,7 @@ fn fold_outcome(
             match ending {
                 bravebot_agent::Ending::Failed(diagnosis) => {
                     session.fail(
-                        crate::state::failure_reason(diagnosis, error.cut_off()),
+                        bravebot_session::sessions::failure_reason(diagnosis, error.cut_off()),
                         ending,
                     );
                 }
