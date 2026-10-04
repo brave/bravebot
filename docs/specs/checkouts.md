@@ -456,14 +456,18 @@ writing there could change for the delegates it starts.
 reach. The checkout's copy is HEAD's, and what the delegate wrote to it would stay in the checkout
 until a person brought it back.
 
-Built, except the copy of an absolute specifier. A relative specifier is held against the checkout's
-root, since the delegate keeps the relative gate names. Nothing in a checkout is read as a source,
-and a delegate in one is given no definition memory. The answer to the spawn says so. An absolute
-specifier under the working directory is not copied, so a rule written that way does not reach the
-checkout.
+Built. A relative specifier is held against the checkout's root, since the delegate keeps the
+relative gate names. An absolute specifier under the working directory is copied to the checkout
+in the delegate's own copy of the rules, as another spelling of the same rule, so it is withdrawn
+with the delegate. A rule whose written-out stretch stops short of the working directory, or holds
+a wildcard before it, is not copied. Nothing in a checkout is read as a source, and a delegate in
+one is given no definition memory. The answer to the spawn says so.
 
 `verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_reads_the_working_directorys_instructions`
 `verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory`
+`verified-by: bravebot_agent::turn::a_deny_rule_with_an_absolute_specifier_holds_in_a_delegates_checkout`
+`verified-by: bravebot_core::permissions::a_rule_under_the_working_directory_is_copied_to_the_checkout`
+`verified-by: bravebot_core::permissions::a_rule_outside_the_working_directory_is_not_copied_to_the_checkout`
 
 <a id="CHECKOUT-10"></a>
 ### CHECKOUT-10: a command vouched for in the working directory is asked about again in a checkout

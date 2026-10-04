@@ -23388,6 +23388,89 @@ fn a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory() {
     );
 }
 
+/// CHECKOUT-9. A deny rule written with the full path of a file under the working directory
+/// refuses the same file in the delegate's checkout, so what the rule keeps from the planner is
+/// kept from the delegate too.
+#[test]
+fn a_deny_rule_with_an_absolute_specifier_holds_in_a_delegates_checkout() {
+    let scratch = Scratch::new("checkout-absolute-rule");
+    let home = Scratch::new("checkout-absolute-rule-home");
+    repository::commit_files(
+        &scratch.path,
+        &[("secrets/key.pem", "KEY-BYTES-OF-THE-PERSON\n")],
+        "first",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let rule = format!("Read(/{}/secrets/key.pem)", workspace.root().display());
+    // The delegate names the file by its full path, the spelling an absolute rule is about: a
+    // name inside the delegate's own root is otherwise held relative.
+    let checkout = home
+        .path
+        .canonicalize()
+        .expect("state directory")
+        .join("checkouts")
+        .join(bravebot_agent::home::key_for(workspace.root()))
+        .join("c1");
+    let read_the_key = format!(
+        r#"{{"path":{:?}}}"#,
+        checkout.join("secrets/key.pem").display().to_string()
+    );
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAVE-A-DELEGATE-READ-APART",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"READ-THE-KEY-APART","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("the delegate answered"),
+            ],
+        ),
+        (
+            "READ-THE-KEY-APART",
+            vec![
+                tool_request("read_file", &read_the_key),
+                reply_with("read it"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    let task = Task::new("HAVE-A-DELEGATE-READ-APART")
+        .with_home(Some(home.path.clone()))
+        .with_permissions(rules(&[&rule], &[], &[]));
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+    let asked = every_request(&received);
+
+    assert!(
+        asked
+            .iter()
+            .all(|body| !body.contains("KEY-BYTES-OF-THE-PERSON")),
+        "the denied file's contents reached the delegate through its checkout"
+    );
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("READ-THE-KEY-APART") && body.contains("deny rule")),
+        "the delegate was not told a deny rule refused the read"
+    );
+}
+
 /// CHECKOUT-7. Remote-tracking refs and tags live in the repository's common directory, so a git
 /// fetch in a checkout updates them in the working directory and in every other checkout, and
 /// fetches in several at once race for them. The answer to a spawn that made one checkout or
