@@ -350,10 +350,28 @@ fn upper(name: &[u16]) -> Vec<u16> {
     upper
 }
 
+/// The access list a file created for a write row ([SANDBOX-11]) is given: one entry,
+/// allowing full control to the owner rights of the file and to nobody else.
+///
+/// Protected, so nothing is inherited from the directory holding it. The trustee is the
+/// owner rights identifier (`OW`): with an entry for it in the list, the platform grants
+/// the owner only what that entry says, and the list names no other account or group,
+/// `SYSTEM` and the administrators included. Spelled here so every platform's test run can
+/// check its shape; the Windows build passes it to the call that creates the file.
+///
+/// [SANDBOX-11]: ../../../../docs/specs/sandboxing.md#SANDBOX-11
+const OWNER_ONLY_FILE_SDDL: &str = "D:P(A;;FA;;;OW)";
+
+/// The access list a directory created for a write row is given: the file's, and inherited
+/// by the files and directories later made under it.
+const OWNER_ONLY_DIRECTORY_SDDL: &str = "D:P(A;OICI;FA;;;OW)";
+
 #[cfg(windows)]
 pub use appcontainer::AppContainerSandbox;
 #[cfg(windows)]
-pub(crate) use appcontainer::CreatedProcess;
+pub(crate) use appcontainer::{
+    CreatedProcess, create_directory_owner_only, create_file_owner_only,
+};
 
 #[cfg(windows)]
 mod appcontainer;
@@ -361,6 +379,29 @@ mod appcontainer;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A row created for a write ([SANDBOX-11](../../../docs/specs/sandboxing.md#SANDBOX-11))
+    /// is reachable by its owner and nobody else. The access lists the Windows build hands
+    /// to the creating call are checked here on every platform: protected so nothing is
+    /// inherited from the directory holding the path, and holding one allowing entry whose
+    /// trustee is the owner rights identifier, so a list that named `WD` (everyone), `BU`,
+    /// `AU`, `SY` or `BA` as well would fail.
+    #[test]
+    fn the_access_list_of_a_created_row_names_only_its_owner() {
+        for (name, sddl, inheritance) in [
+            ("file", OWNER_ONLY_FILE_SDDL, ""),
+            ("directory", OWNER_ONLY_DIRECTORY_SDDL, "OICI"),
+        ] {
+            let list = sddl
+                .strip_prefix("D:P")
+                .unwrap_or_else(|| panic!("the {name} list is not a protected DACL: {sddl}"));
+            assert_eq!(
+                list,
+                format!("(A;{inheritance};FA;;;OW)"),
+                "the {name} list is not one entry allowing the owner"
+            );
+        }
+    }
 
     /// A policy that grants everything this backend can withhold, so a test about one
     /// refusal is not quietly a test about another.

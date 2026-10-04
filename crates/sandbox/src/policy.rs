@@ -301,14 +301,21 @@ fn make_a_file(path: &Path) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         make_a_directory(parent)?;
     }
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
+    #[cfg(windows)]
     {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(OWNER_ONLY_FILE);
+        crate::windows::create_file_owner_only(path)
     }
-    options.open(path).map(|_| ())
+    #[cfg(not(windows))]
+    {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(OWNER_ONLY_FILE);
+        }
+        options.open(path).map(|_| ())
+    }
 }
 
 /// An empty directory at `path`, and every directory above it that is absent.
@@ -319,15 +326,26 @@ fn make_a_file(path: &Path) -> std::io::Result<()> {
 /// decides this, since the keys a fresh account is about to put in it are not for the rest
 /// of the machine to list. Nothing is lost by it, because the confined process runs as the
 /// same user.
+///
+/// On Windows the owner-only access list is passed to the call that creates each
+/// directory, since the standard library's builder would leave each with the list its
+/// parent hands down.
 fn make_a_directory(path: &Path) -> std::io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
+    #[cfg(windows)]
     {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(OWNER_ONLY_DIRECTORY);
+        crate::windows::create_directory_owner_only(path)
     }
-    builder.create(path)
+    #[cfg(not(windows))]
+    {
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(OWNER_ONLY_DIRECTORY);
+        }
+        builder.create(path)
+    }
 }
 
 /// Read and written by the owner, and reached by nobody else.
@@ -792,6 +810,50 @@ mod tests {
             "the directory created to hold it"
         );
         assert_eq!(mode(&cache), 0o700, "the created directory");
+    }
+
+    /// The same guarantee on Windows, where there is no mode. The access list of each path
+    /// is read back with `icacls`: it has to carry the owner rights entry and name none of
+    /// the groups a default list inherited from a profile directory names.
+    #[cfg(windows)]
+    #[test]
+    fn what_is_created_is_reachable_by_its_owner_and_nobody_else_on_windows() {
+        let dir = a_directory_of_this_tests_own("sandbox-policy-owner-only-windows");
+        let known_hosts = dir.join("ssh").join("known_hosts");
+        let cache = dir.join("registry");
+
+        SandboxPolicy::strict()
+            .allow_write_file(&known_hosts)
+            .allow_write_directory(&cache)
+            .create_missing_write_rows(&capabilities(false));
+
+        for (what, path) in [
+            ("the created file", known_hosts.clone()),
+            ("the directory created to hold it", dir.join("ssh")),
+            ("the created directory", cache.clone()),
+        ] {
+            let output = std::process::Command::new("icacls")
+                .arg(&path)
+                .output()
+                .expect("icacls runs");
+            let listing = String::from_utf8_lossy(&output.stdout).to_string();
+            assert!(
+                listing.contains("OWNER RIGHTS"),
+                "{what} has no entry for its owner: {listing}"
+            );
+            for other in [
+                "Everyone",
+                "BUILTIN\\Users",
+                "BUILTIN\\Administrators",
+                "NT AUTHORITY\\Authenticated Users",
+                "NT AUTHORITY\\SYSTEM",
+            ] {
+                assert!(
+                    !listing.contains(other),
+                    "{what} is reachable by {other}: {listing}"
+                );
+            }
+        }
     }
 
     /// A row names a path this process has no business rewriting: `known_hosts` on an

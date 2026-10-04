@@ -8,8 +8,8 @@
 //! refused, and how an argument is written onto a command line.
 
 use super::{
-    Grant, capability_names, command_line, environment_block, grants_for, paths_that_are_not_there,
-    profile_name, refusal_for,
+    Grant, OWNER_ONLY_DIRECTORY_SDDL, OWNER_ONLY_FILE_SDDL, capability_names, command_line,
+    environment_block, grants_for, paths_that_are_not_there, profile_name, refusal_for,
 };
 use crate::policy::{Capabilities, SandboxPolicy};
 use crate::process::{ConfinedChild, Environment, Stream, Streams};
@@ -24,23 +24,25 @@ use std::ptr::{null, null_mut};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_SUCCESS, HANDLE, HLOCAL, LocalFree,
-    WAIT_OBJECT_0,
+    CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_SUCCESS, GENERIC_WRITE, HANDLE,
+    HLOCAL, INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0,
 };
 use windows_sys::Win32::Security::Authorization::{
-    ACCESS_MODE, EXPLICIT_ACCESS_W, GRANT_ACCESS, GetNamedSecurityInfoW, NO_MULTIPLE_TRUSTEE,
-    REVOKE_ACCESS, SE_FILE_OBJECT, SetEntriesInAclW, SetNamedSecurityInfoW, TRUSTEE_IS_GROUP,
-    TRUSTEE_IS_SID, TRUSTEE_W,
+    ACCESS_MODE, ConvertStringSecurityDescriptorToSecurityDescriptorW, EXPLICIT_ACCESS_W,
+    GRANT_ACCESS, GetNamedSecurityInfoW, NO_MULTIPLE_TRUSTEE, REVOKE_ACCESS, SDDL_REVISION_1,
+    SE_FILE_OBJECT, SetEntriesInAclW, SetNamedSecurityInfoW, TRUSTEE_IS_GROUP, TRUSTEE_IS_SID,
+    TRUSTEE_W,
 };
 use windows_sys::Win32::Security::Isolation::{
     CreateAppContainerProfile, DeleteAppContainerProfile,
 };
 use windows_sys::Win32::Security::{
-    ACL, DACL_SECURITY_INFORMATION, DeriveCapabilitySidsFromName, FreeSid, GetLengthSid, PSID,
-    SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES,
+    ACL, DACL_SECURITY_INFORMATION, DeriveCapabilitySidsFromName, FreeSid, GetLengthSid,
+    PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    DELETE, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+    CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_EXECUTE,
+    FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ,
 };
 use windows_sys::Win32::System::Threading::{
     CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
@@ -805,6 +807,114 @@ fn wide(text: &OsStr) -> Result<Vec<u16>> {
     }
     encoded.push(0);
     Ok(encoded)
+}
+
+/// The attributes that give an object being created an access list of its own, and the
+/// descriptor they point at.
+struct OwnerOnly {
+    /// Freed when this is dropped, after the attributes that point at it.
+    _descriptor: LocalBuffer,
+    attributes: SECURITY_ATTRIBUTES,
+}
+
+impl OwnerOnly {
+    /// The attributes for the access list `sddl` writes.
+    #[allow(unsafe_code)]
+    fn described_by(sddl: &str) -> Result<Self> {
+        let text = wide(OsStr::new(sddl))?;
+        let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        let converted = unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                text.as_ptr(),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                null_mut(),
+            )
+        };
+        if converted == 0 {
+            return Err(Error::last_os_error());
+        }
+        let descriptor = LocalBuffer(descriptor);
+        let attributes = SECURITY_ATTRIBUTES {
+            nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: descriptor.0,
+            bInheritHandle: 0,
+        };
+        Ok(Self {
+            _descriptor: descriptor,
+            attributes,
+        })
+    }
+}
+
+/// Create an empty directory at `path`, and every directory above it that is absent, each
+/// with an access list naming only its owner ([`OWNER_ONLY_DIRECTORY_SDDL`]).
+///
+/// A directory already there is left as it is. The standard library's recursive builder
+/// takes no access list on this platform, so a directory made through it carries whatever
+/// its parent hands down.
+pub(crate) fn create_directory_owner_only(path: &Path) -> Result<()> {
+    let owner_only = OwnerOnly::described_by(OWNER_ONLY_DIRECTORY_SDDL)?;
+    create_directories(path, &owner_only)
+}
+
+fn create_directories(path: &Path, owner_only: &OwnerOnly) -> Result<()> {
+    match create_directory(path, owner_only) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            match path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                Some(parent) => {
+                    create_directories(parent, owner_only)?;
+                    create_directory(path, owner_only)
+                }
+                None => Err(e),
+            }
+        }
+        Err(_) if path.is_dir() => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+#[allow(unsafe_code)]
+fn create_directory(path: &Path, owner_only: &OwnerOnly) -> Result<()> {
+    let path = wide(path.as_os_str())?;
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let created = unsafe { CreateDirectoryW(path.as_ptr(), &owner_only.attributes) };
+    if created == 0 {
+        return Err(Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Create an empty file at `path` with an access list naming only its owner
+/// ([`OWNER_ONLY_FILE_SDDL`]), failing if anything is there. The directory holding it is
+/// the caller's to have made.
+#[allow(unsafe_code)]
+pub(crate) fn create_file_owner_only(path: &Path) -> Result<()> {
+    let owner_only = OwnerOnly::described_by(OWNER_ONLY_FILE_SDDL)?;
+    let path = wide(path.as_os_str())?;
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let handle = unsafe {
+        CreateFileW(
+            path.as_ptr(),
+            GENERIC_WRITE,
+            FILE_SHARE_READ,
+            &owner_only.attributes,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL,
+            null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(Error::last_os_error());
+    }
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    unsafe { CloseHandle(handle) };
+    Ok(())
 }
 
 /// What a call reporting an `HRESULT` failed with.
