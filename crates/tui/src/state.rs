@@ -970,15 +970,18 @@ pub struct Laid {
     pub matches: Vec<u16>,
 }
 
-/// What the info panel names the session by: its name, its directory and its branch.
+/// What the info panel names the session by: its name, its directory, its branch and its links.
 ///
 /// The name is the session record's title, which is the person's first prompt or what they typed
-/// at `/rename`. The directory and the branch are the ones the resume list shows.
+/// at `/rename`. The directory and the branch are the ones the resume list shows, and the links are
+/// the ones the person gave with `/issue` and `/pr`.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Identity {
     pub name: String,
     pub directory: String,
     pub branch: Option<String>,
+    pub issue: Option<String>,
+    pub pull_request: Option<String>,
 }
 
 /// The scroller, while it is open.
@@ -8752,7 +8755,22 @@ impl Session {
             name: name.to_string(),
             directory,
             branch: branch.map(str::to_string),
+            ..self.identity.clone()
         };
+        self.reidentify(identity)
+    }
+
+    /// Record the links the info panel shows, answering as [`Session::identify`] does.
+    pub fn link(&mut self, issue: Option<&str>, pull_request: Option<&str>) -> bool {
+        let identity = Identity {
+            issue: issue.map(str::to_string),
+            pull_request: pull_request.map(str::to_string),
+            ..self.identity.clone()
+        };
+        self.reidentify(identity)
+    }
+
+    fn reidentify(&mut self, identity: Identity) -> bool {
         let changed = self.identity != identity;
         self.identity = identity;
         changed && self.panel

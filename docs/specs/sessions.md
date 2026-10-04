@@ -79,7 +79,10 @@ design exists to close.
 The conversation, the plan each turn worked to, what the session has spent, the branch it ran on,
 the questions asked beside the work, and the standing permissions a resume restores. A session can
 be named, renaming rewrites the record immediately, a chosen name survives the next turn, and an
-empty name is refused.
+empty name is refused. The issue and the pull request the person said the session is for
+([PANEL-12](info-panel.md#PANEL-12)) are in it too, written as soon as either changes. A resume
+restores both, `bravebot --fork` copies both, `/clear` begins a session with neither, and a record
+written before they were kept reads as having neither.
 
 What the record says about each individual turn is SESSION-23.
 
@@ -91,6 +94,8 @@ delegate given it, and the paths the driver recorded a file effect on in it.
 `verified-by: bravebot_tui::sessions::a_chosen_name_survives_the_next_turn`
 `verified-by: bravebot_tui::sessions::a_session_can_be_named_before_it_has_a_record`
 `verified-by: bravebot_tui::sessions::an_empty_name_is_refused`
+`verified-by: bravebot_session::sessions::a_link_is_written_at_once_and_a_resume_and_a_fork_keep_it`
+`verified-by: bravebot_session::sessions::a_record_from_before_the_links_reads_as_having_none`
 
 <a id="SESSION-4"></a>
 ### SESSION-4: a title comes from the prompt, and is cut rather than mangled

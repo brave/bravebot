@@ -199,6 +199,14 @@ pub struct Record {
     /// The branch checked out at the time, where there was one.
     #[serde(default)]
     pub branch: Option<String>,
+    /// The issue the person said the session is for, with `/issue`.
+    ///
+    /// `None` for a record written before this was kept, or a session nobody gave one.
+    #[serde(default)]
+    pub issue: Option<String>,
+    /// The pull request the person said the session is for, with `/pr`.
+    #[serde(default)]
+    pub pull_request: Option<String>,
     /// What to call it in a list: the first thing the user asked.
     pub title: String,
     /// When it began and when it was last written, in seconds since the epoch.
@@ -1320,6 +1328,34 @@ pub struct Resumable {
     pub directory: PathBuf,
 }
 
+/// Which of the two links a session keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Link {
+    Issue,
+    PullRequest,
+}
+
+/// A link the person wrote, once it has been read as one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Url(String);
+
+impl Url {
+    /// `text` as a link, or `None` where it is not one `http` or `https` URL with a host. The link
+    /// is drawn in the info panel on every frame, so anything but printable ASCII refuses it: a
+    /// newline or an escape could act on the terminal there, and a direction override or a
+    /// zero-width character could make the row read as another link.
+    pub fn read(text: &str) -> Option<Self> {
+        let text = text.trim();
+        if !text.chars().all(|c| c.is_ascii_graphic()) {
+            return None;
+        }
+        let (scheme, rest) = text.split_once("://")?;
+        let known = scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https");
+        let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+        (known && !host.is_empty()).then(|| Self(text.to_string()))
+    }
+}
+
 /// A live session, holding where to write and what has been written.
 #[derive(Debug, Clone)]
 pub struct Handle {
@@ -1328,6 +1364,8 @@ pub struct Handle {
     started: u64,
     branch: Option<String>,
     title: String,
+    issue: Option<String>,
+    pull_request: Option<String>,
     /// Whether a record for this id is on disk yet.
     ///
     /// An id exists from the first moment, but a session that was opened and abandoned leaves
@@ -1363,6 +1401,8 @@ impl Handle {
             started: now(),
             branch: branch_of(project),
             title: String::new(),
+            issue: None,
+            pull_request: None,
             wrote: false,
             server_children_may_run: false,
             build: build.to_string(),
@@ -1382,6 +1422,8 @@ impl Handle {
             started: record.started,
             branch: branch_of(project),
             title: record.title.clone(),
+            issue: record.issue.clone(),
+            pull_request: record.pull_request.clone(),
             // The record it came from is the one being written back to.
             wrote: true,
             server_children_may_run: record.server_children_may_run(),
@@ -1469,21 +1511,49 @@ impl Handle {
             return false;
         }
         self.title = title_from(name);
-        self.rewrite_title();
+        // The rewind points are given up with the old name (SESSION-19), so a record being
+        // retitled holds points the session itself no longer has, each describing a session that
+        // still had the old name. Carried over, a resume would hand them back to `/undo`, which
+        // would rewind to a turn the session it resumed had already given up and rename the
+        // session back on the way.
+        let title = self.title.clone();
+        self.rewrite(|record| {
+            record.title = title;
+            record.rewind.clear();
+        });
         true
     }
 
-    /// Put the current title into the record on disk, if the session has one yet.
+    /// The link of this kind the person gave the session, if they gave one.
+    pub fn link(&self, kind: Link) -> Option<&str> {
+        match kind {
+            Link::Issue => self.issue.as_deref(),
+            Link::PullRequest => self.pull_request.as_deref(),
+        }
+    }
+
+    /// Say which issue or pull request the session is for, or with `None` that it is for none.
+    ///
+    /// Takes effect at once, as [`Handle::rename`] does and for its reason. The rewind points stay:
+    /// none of them holds a link, so a rewind leaves the links as they are.
+    pub fn set_link(&mut self, kind: Link, url: Option<Url>) {
+        let url = url.map(|url| url.0);
+        match kind {
+            Link::Issue => self.issue = url,
+            Link::PullRequest => self.pull_request = url,
+        }
+        let (issue, pull_request) = (self.issue.clone(), self.pull_request.clone());
+        self.rewrite(|record| {
+            record.issue = issue;
+            record.pull_request = pull_request;
+        });
+    }
+
+    /// Amend the record on disk, if the session has one yet.
     ///
     /// Read, amended and written rather than rebuilt, because everything else in the record belongs
     /// to the turns that produced it and this knows none of it.
-    ///
-    /// The rewind points are the exception: renaming a session gives up every one of them
-    /// (SESSION-19), so a record being retitled holds points the session itself no longer has, each
-    /// describing a session that still had the old name. Carried over, a resume would hand them
-    /// back to `/undo`, which would rewind to a turn the session it resumed had already given up
-    /// and rename the session back on the way.
-    fn rewrite_title(&self) {
+    fn rewrite(&self, amend: impl FnOnce(&mut Record)) {
         let Some(directory) = self.directory() else {
             return;
         };
@@ -1491,10 +1561,9 @@ impl Handle {
         let Some(mut record) = read(&path) else {
             return;
         };
-        record.title = self.title.clone();
+        amend(&mut record);
         record.updated = now();
         record.server_children_may_run = record.server_children_may_run();
-        record.rewind.clear();
 
         let Ok(body) = serde_json::to_vec_pretty(&record) else {
             return;
@@ -1540,6 +1609,8 @@ impl Handle {
             id: self.id.clone(),
             directory: self.project.display().to_string(),
             branch: self.branch.clone(),
+            issue: self.issue.clone(),
+            pull_request: self.pull_request.clone(),
             title: self.title.clone(),
             started: self.started,
             updated: now(),
@@ -3053,6 +3124,101 @@ mod tests {
         );
     }
 
+    /// A link is set between turns as often as during one, and a session left alone after it
+    /// should resume with it, so it is written at once rather than at the next turn.
+    #[test]
+    fn a_link_is_written_at_once_and_a_resume_and_a_fork_keep_it() {
+        const ISSUE: &str = "https://github.com/brave/bravebot/issues/1267";
+        const PULL: &str = "https://github.com/brave/bravebot/pull/1270";
+
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-links");
+
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut handle);
+        handle.set_link(Link::Issue, Url::read(ISSUE));
+        handle.set_link(Link::PullRequest, Url::read(PULL));
+
+        let record = load(&root, handle.id()).expect("the record was not written");
+        assert_eq!(record.issue.as_deref(), Some(ISSUE));
+        assert_eq!(record.pull_request.as_deref(), Some(PULL));
+
+        let resumed = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        assert_eq!(resumed.link(Link::Issue), Some(ISSUE));
+        assert_eq!(resumed.link(Link::PullRequest), Some(PULL));
+
+        let forked = fork(&root, handle.id()).expect("the session forks");
+        assert_eq!(forked.issue.as_deref(), Some(ISSUE));
+        assert_eq!(forked.pull_request.as_deref(), Some(PULL));
+
+        save_a_turn_session(&mut handle);
+        let saved = load(&root, handle.id()).expect("the record is still there");
+        assert_eq!(
+            saved.issue.as_deref(),
+            Some(ISSUE),
+            "the next turn's save dropped the issue"
+        );
+        assert_eq!(saved.pull_request.as_deref(), Some(PULL));
+
+        handle.set_link(Link::Issue, None);
+        let cleared = load(&root, handle.id()).expect("the record is still there");
+        assert_eq!(cleared.issue, None, "clearing the issue left it on disk");
+        assert_eq!(cleared.pull_request.as_deref(), Some(PULL));
+    }
+
+    /// Every record written before the links were kept has neither field, and it must still
+    /// resume, with no link rather than with an error.
+    #[test]
+    fn a_record_from_before_the_links_reads_as_having_none() {
+        let mut written = serde_json::to_value(a_record()).expect("serialises");
+        let fields = written.as_object_mut().expect("an object");
+        fields.remove("issue").expect("the issue is written");
+        fields
+            .remove("pull_request")
+            .expect("the pull request is written");
+
+        let record: Record = serde_json::from_value(written).expect("an older record reads");
+        assert_eq!(record.issue, None);
+        assert_eq!(record.pull_request, None);
+    }
+
+    /// The panel draws a link on every frame, so a value that could end its row, start an escape
+    /// sequence or reverse what follows is refused rather than drawn, and so is anything a browser
+    /// would not open.
+    #[test]
+    fn only_one_web_address_on_one_line_is_a_link() {
+        for link in [
+            "https://github.com/brave/bravebot/issues/1267",
+            "http://localhost:8080/pr/1",
+            "HTTPS://example.com/a",
+            "  https://example.com/padded  ",
+        ] {
+            assert!(Url::read(link).is_some(), "{link:?} was refused");
+        }
+        for refused in [
+            "",
+            "https://",
+            "github.com/brave/bravebot/issues/1267",
+            "ftp://example.com/issue",
+            "javascript://alert(1)",
+            "file:///etc/passwd",
+            "https://example.com/a\nhttps://example.com/b",
+            "https://example.com/\u{1b}[2J",
+            "https://example.com/\u{7}",
+            "https://example.com/two words",
+            "https://example.com/\u{202e}1/seussi",
+            "https://example.com/\u{200b}",
+            "\u{feff}https://example.com/",
+            "https:///issues/1",
+            "http://?q",
+            "https://#a",
+        ] {
+            assert_eq!(Url::read(refused), None, "{refused:?} was taken as a link");
+        }
+    }
+
     /// Resuming on different code is a caveat on the transcript above it, exactly as resuming on
     /// a different branch is.
     #[test]
@@ -3373,6 +3539,8 @@ mod tests {
             id: "1-2".to_string(),
             directory: "/tmp/x".to_string(),
             branch: None,
+            issue: None,
+            pull_request: None,
             title: "a session".to_string(),
             started: 1,
             updated: 1,

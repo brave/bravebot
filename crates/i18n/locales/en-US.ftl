@@ -1854,6 +1854,10 @@ panel-session = Session
 panel-goal = Goal
 panel-context = Context
 panel-plan = Plan
+panel-links = Links
+# The rows of the info panel's Links section, each followed by the link.
+panel-pull-request = Pull request
+panel-issue = Issue
 # The last turn's cache figures in the info panel, one to a row and never added together.
 panel-cache-read = cache read { $tokens }
 panel-cache-written = cache written { $tokens }
@@ -1905,6 +1909,8 @@ command-config = Choose how the input box edits text
 command-add-dir = Open another directory, and trust it for this session
 command-cd = Work in another directory from now on, and trust it for this session
 command-rename = Call this conversation something else
+command-issue = Say which issue this session is for, show it, or clear it
+command-pr = Say which pull request this session is for, show it, or clear it
 command-compact = Summarise the conversation so far, keeping the recent part
 command-btw = Ask something beside the work, without putting it in the conversation
 command-clear = Start a new session here, keeping this one resumable
@@ -1936,6 +1942,22 @@ session-resumed = resumed session: { $title }
 session-renamed = renamed to { $title }
 session-rename-needs-a-name = /rename needs a name, as in /rename the parser bug
 session-rename-needs-something = /rename needs a name with something in it
+# What /issue and /pr say back. A refused value is not repeated, since it may hold a control
+# character.
+session-issue-is = this session is for { $url }. /issue clear removes it
+session-pull-request-is = this session's pull request is { $url }. /pr clear removes it
+session-issue-none = no issue is set. /issue <url> sets one
+session-pull-request-none = no pull request is set. /pr <url> sets one
+session-issue-set = this session is for { $url }
+session-pull-request-set = this session's pull request is { $url }
+session-issue-cleared = the issue is cleared
+session-pull-request-cleared = the pull request is cleared
+session-issue-refused =
+    /issue takes one http or https link on one line, in ASCII with no spaces, as in
+    /issue https://github.com/brave/bravebot/issues/1. Nothing was set
+session-pull-request-refused =
+    /pr takes one http or https link on one line, in ASCII with no spaces, as in
+    /pr https://github.com/brave/bravebot/pull/1. Nothing was set
 session-cleared = cleared: a new session, with the previous one still resumable
 session-rewound = rewound the session to before turn { $turn }
 session-rewound-partly =

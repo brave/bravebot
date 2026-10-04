@@ -121,6 +121,10 @@ const CLEAR_COMMAND: &str = "/clear";
 /// The line that renames this session, taking the new name as its argument.
 const RENAME_COMMAND: &str = "/rename";
 
+/// The lines that say which issue and which pull request the session is for, taking the link.
+const ISSUE_COMMAND: &str = "/issue";
+const PR_COMMAND: &str = "/pr";
+
 /// The line that asks a question beside the work, taking the question as its argument.
 const BTW_COMMAND: &str = "/btw";
 
@@ -222,7 +226,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 25] {
+pub fn commands() -> [Command; 27] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -331,6 +335,18 @@ pub fn commands() -> [Command; 25] {
             argument: "",
             description: t!(command_panel),
             mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: PR_COMMAND,
+            argument: "[<url> | clear]",
+            description: t!(command_pr),
+            mid_turn: MidTurn::Changes,
+        },
+        Command {
+            name: ISSUE_COMMAND,
+            argument: "[<url> | clear]",
+            description: t!(command_issue),
+            mid_turn: MidTurn::Changes,
         },
         Command {
             name: CHECKOUTS_COMMAND,
@@ -552,6 +568,9 @@ pub enum Action {
     Clear,
     /// Call this session something else. Needs the session record, which the loop owns.
     Rename(String),
+    /// Show, set or clear one of the session's links. Needs the session record, which the loop
+    /// owns, and carries the argument unparsed, since what it says back goes in the transcript.
+    Link(bravebot_session::sessions::Link, String),
     /// Report what this session is. Needs the workspace and the trust map, which the loop owns.
     Status,
     /// Withdraw the remembered answer about the working directory. Needs the workspace, which the
@@ -795,6 +814,11 @@ fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut 
         Action::SendNow => stop_what_is_running(session, cancel),
         Action::Rename(name) => {
             session.answer_while_working(|session| rename_session(session, beside.stored, &name));
+        }
+        Action::Link(kind, argument) => {
+            session.answer_while_working(|session| {
+                link_session(session, beside.stored, kind, &argument);
+            });
         }
         Action::ForgetTrust => session.answer_while_working(|session| {
             session.note(forget_trust(beside.home, beside.root));
@@ -1602,6 +1626,18 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     }
     if let Some(name) = argument_to(line, RENAME_COMMAND) {
         return Action::Rename(name.to_string());
+    }
+    if let Some(argument) = argument_to(line, ISSUE_COMMAND) {
+        return Action::Link(
+            bravebot_session::sessions::Link::Issue,
+            argument.to_string(),
+        );
+    }
+    if let Some(argument) = argument_to(line, PR_COMMAND) {
+        return Action::Link(
+            bravebot_session::sessions::Link::PullRequest,
+            argument.to_string(),
+        );
     }
     // The command that starts the other kind of run. The task is taken verbatim and is never sent
     // as a prompt: the planner that reads it is a fresh one with nothing but the task and the
@@ -3295,6 +3331,10 @@ fn event_loop(
             crate::status::abbreviate(workspace.root()),
             stored.branch(),
         );
+        needs_draw |= session.link(
+            stored.link(bravebot_session::sessions::Link::Issue),
+            stored.link(bravebot_session::sessions::Link::PullRequest),
+        );
 
         // Waiting for the burst to end, but not indefinitely: a drag that never pauses would
         // otherwise show nothing until it stopped.
@@ -3524,6 +3564,9 @@ fn event_loop(
                 }
             }
             Action::Rename(name) => rename_session(&mut session, &mut stored, &name),
+            Action::Link(kind, argument) => {
+                link_session(&mut session, &mut stored, kind, &argument)
+            }
             Action::Status => {
                 let theme = crate::theme::name();
                 // Read here rather than held, for the reason the run prompt reads it where it would
@@ -4765,6 +4808,54 @@ fn rename_session(
     } else {
         session.note(t!(session_rename_needs_something));
     }
+}
+
+/// Show, set or clear the link of this kind, as the argument to `/issue` or `/pr` asks, and say so.
+///
+/// A value that is not a link sets nothing and is not repeated back, since it may hold the escape
+/// that made it one.
+fn link_session(
+    session: &mut Session,
+    stored: &mut bravebot_session::sessions::Handle,
+    kind: bravebot_session::sessions::Link,
+    argument: &str,
+) {
+    use bravebot_session::sessions::{Link, Url};
+    let argument = argument.trim();
+    let held = stored.link(kind).map(str::to_string);
+    let said = match (argument, held) {
+        ("", Some(url)) => match kind {
+            Link::Issue => t!(session_issue_is, url = url),
+            Link::PullRequest => t!(session_pull_request_is, url = url),
+        },
+        ("" | "clear", None) => match kind {
+            Link::Issue => t!(session_issue_none).to_string(),
+            Link::PullRequest => t!(session_pull_request_none).to_string(),
+        },
+        ("clear", Some(_)) => {
+            stored.set_link(kind, None);
+            match kind {
+                Link::Issue => t!(session_issue_cleared).to_string(),
+                Link::PullRequest => t!(session_pull_request_cleared).to_string(),
+            }
+        }
+        (typed, _) => match Url::read(typed) {
+            Some(url) => {
+                stored.set_link(kind, Some(url));
+                let url = stored.link(kind).unwrap_or_default();
+                match kind {
+                    Link::Issue => t!(session_issue_set, url = url),
+                    Link::PullRequest => t!(session_pull_request_set, url = url),
+                }
+            }
+            None => match kind {
+                Link::Issue => t!(session_issue_refused).to_string(),
+                Link::PullRequest => t!(session_pull_request_refused).to_string(),
+            },
+        },
+    };
+    session.link(stored.link(Link::Issue), stored.link(Link::PullRequest));
+    session.note(said);
 }
 
 /// Apply a theme by name without opening the picker.
@@ -16202,9 +16293,11 @@ mod tests {
                 EFFORT_COMMAND,
                 FORGET_TRUST_COMMAND,
                 GOAL_COMMAND,
+                ISSUE_COMMAND,
                 JOBS_COMMAND,
                 LOOP_COMMAND,
                 PANEL_COMMAND,
+                PR_COMMAND,
                 RENAME_COMMAND,
                 THEME_COMMAND,
                 WATCH_COMMAND,
@@ -16581,6 +16674,176 @@ mod tests {
         );
         assert!(session.queued.is_empty(), "/rename waited");
         assert_eq!(session.input(), "", "/rename was left in the box");
+    }
+
+    /// `/issue` and `/pr` as the event loop carries them out, at rest.
+    fn linked(
+        session: &mut Session,
+        stored: &mut bravebot_session::sessions::Handle,
+        line: &str,
+    ) -> String {
+        match dispatch_command(session, commanded(line)) {
+            Action::Link(kind, argument) => link_session(session, stored, kind, &argument),
+            other => panic!("{line} became {other:?}"),
+        }
+        last_note(session).to_string()
+    }
+
+    /// The bare word says what is set, a link sets it, and `clear` removes it, for each command and
+    /// only its own link.
+    #[test]
+    fn the_issue_and_pr_commands_show_set_and_clear_their_own_link() {
+        use bravebot_session::sessions::Link;
+        const ISSUE: &str = "https://github.com/brave/bravebot/issues/1267";
+        const PULL: &str = "https://github.com/brave/bravebot/pull/1270";
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = Session::new("none");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            std::path::Path::new("/work"),
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+
+        assert_eq!(
+            linked(&mut session, &mut stored, ISSUE_COMMAND),
+            t!(session_issue_none)
+        );
+        assert_eq!(
+            linked(&mut session, &mut stored, &format!("/issue {ISSUE}")),
+            t!(session_issue_set, url = ISSUE)
+        );
+        assert_eq!(
+            linked(&mut session, &mut stored, &format!("/pr {PULL}")),
+            t!(session_pull_request_set, url = PULL)
+        );
+        assert_eq!(stored.link(Link::Issue), Some(ISSUE));
+        assert_eq!(stored.link(Link::PullRequest), Some(PULL));
+        assert_eq!(
+            linked(&mut session, &mut stored, PR_COMMAND),
+            t!(session_pull_request_is, url = PULL)
+        );
+
+        assert_eq!(
+            linked(&mut session, &mut stored, "/issue clear"),
+            t!(session_issue_cleared)
+        );
+        assert_eq!(stored.link(Link::Issue), None);
+        assert_eq!(
+            stored.link(Link::PullRequest),
+            Some(PULL),
+            "clearing the issue cleared the pull request"
+        );
+        assert_eq!(
+            linked(&mut session, &mut stored, "/issue clear"),
+            t!(session_issue_none)
+        );
+    }
+
+    /// A value that is not one web address on one line sets nothing, leaves a link already set as
+    /// it was, and is not repeated back, since what made it no link may be an escape.
+    #[test]
+    fn a_link_with_a_newline_an_escape_or_another_scheme_sets_nothing() {
+        use bravebot_session::sessions::{Link, Url};
+        const PULL: &str = "https://github.com/brave/bravebot/pull/1270";
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = Session::new("none");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            std::path::Path::new("/work"),
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        stored.set_link(Link::PullRequest, Url::read(PULL));
+
+        for value in [
+            "https://example.com/a\nhttps://example.com/b",
+            "https://example.com/\u{1b}]0;owned\u{7}",
+            "ftp://example.com/pull/1",
+            "javascript:alert(1)",
+            "https://example.com/\u{202e}1/llup",
+            "https:///pull/1",
+        ] {
+            for (command, kind, refused, kept) in [
+                (ISSUE_COMMAND, Link::Issue, t!(session_issue_refused), None),
+                (
+                    PR_COMMAND,
+                    Link::PullRequest,
+                    t!(session_pull_request_refused),
+                    Some(PULL),
+                ),
+            ] {
+                assert_eq!(
+                    linked(&mut session, &mut stored, &format!("{command} {value}")),
+                    refused,
+                    "{command} {value:?} was not refused"
+                );
+                assert_eq!(stored.link(kind), kept, "{command} {value:?} set a link");
+            }
+        }
+    }
+
+    /// `/pr` mid-turn is carried out as it is typed, as `/rename` is: the turn holds only the
+    /// record's id, and the record is written after the turn with whatever links the session has.
+    /// The panel has the link at once rather than when the turn ends.
+    #[test]
+    fn a_link_set_mid_turn_is_set_as_it_is_typed() {
+        const PULL: &str = "https://github.com/brave/bravebot/pull/1270";
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = a_turn_running_on("first");
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+
+        typed_during_a_turn(
+            &mut session,
+            &format!("/pr {PULL}"),
+            key(KeyCode::Enter),
+            &mut Beside {
+                stored: &mut stored,
+                root,
+                home: None,
+            },
+        );
+
+        assert_eq!(
+            stored.link(bravebot_session::sessions::Link::PullRequest),
+            Some(PULL)
+        );
+        assert_eq!(
+            session.identity().pull_request.as_deref(),
+            Some(PULL),
+            "the panel waits for the turn to end"
+        );
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![t!(session_pull_request_set, url = PULL)]
+        );
+        assert!(session.queued.is_empty(), "/pr waited");
+    }
+
+    /// `/pr` comes after `/panel` in the list, so `/p` and Tab still give `/panel`, as they did
+    /// before `/pr` was added.
+    #[test]
+    fn slash_p_and_tab_still_give_the_panel() {
+        let mut session = Session::new("none");
+        for key_code in [KeyCode::Char('/'), KeyCode::Char('p'), KeyCode::Tab] {
+            handle_key(&mut session, key(key_code));
+        }
+        assert_eq!(session.input(), PANEL_COMMAND);
+        assert!(
+            completions("/p")
+                .iter()
+                .any(|command| command.name == PR_COMMAND),
+            "/pr is not among the commands /p matches"
+        );
     }
 
     /// Renaming gives up every point a rewind could go back to (SESSION-19), and mid-turn that

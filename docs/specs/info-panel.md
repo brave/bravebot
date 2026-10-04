@@ -11,11 +11,13 @@ documented-by: docs/website/docs/using/sessions.md
 ## Scope
 
 What lets somebody running many sessions at once tell which terminal holds which: the terminal's
-title, and the info panel beside the transcript, which holds the session's name, its goal, its
-context and cache, and its plan. The panel's issue and pull request links, its language servers and
-its MCP servers are proposed in [brave/bravebot#1220](https://github.com/brave/bravebot/issues/1220)
-and not built, and their clauses take the ids after the last one here. How a session gets its name
-is [sessions.md](sessions.md), and the keys a settings file can move are
+title, and the info panel beside the transcript, which holds the session's name, its goal, the
+issue and pull request it is for, its context and cache, and its plan. The panel's language servers
+and its MCP servers are proposed in [brave/bravebot#1220](https://github.com/brave/bravebot/issues/1220)
+and not built, and their clauses take the ids after the last one here. Giving a session its links
+with `--issue` and `--pr`, from a URL in a prompt, and from what `gh pr create` prints are proposed
+in [brave/bravebot#1267](https://github.com/brave/bravebot/issues/1267) and not built. How a session
+gets its name is [sessions.md](sessions.md), and the keys a settings file can move are
 [INPUT-32](terminal-input.md#INPUT-32).
 
 ## Clauses
@@ -149,8 +151,9 @@ narrow for it.
    from the left with an ellipsis where it is longer, since the end is what tells two apart. A new
    name reaches an open panel on the next frame, not at the next key.
 2. **Goal.** The condition, while a goal stands ([GOAL-1](goal.md#GOAL-1)).
-3. **Context.** PANEL-8. It always has a reading, so it is always there.
-4. **Plan.** PANEL-10.
+3. **Links.** PANEL-12.
+4. **Context.** PANEL-8. It always has a reading, so it is always there.
+5. **Plan.** PANEL-10.
 
 A section with nothing to show has no heading. Control characters in any row are drawn as visible
 characters, as they are wherever the interface draws text, since a directory or a branch is called
@@ -182,14 +185,38 @@ last row counts the rows left out above the ones shown apart from those below th
 ### PANEL-11: the panel draws only on what the person and the driver said
 
 Every row the panel draws comes from text the person typed (the session's name, which comes from a
-prompt or a `/rename` ([SESSION-4](sessions.md#SESSION-4)), and a goal's condition), the planner's
-own `todo_write` rows, the driver's own counters (the context reading and the cache figures), the
-chord in force, or the directory and branch the session runs in. No row comes from a reply, a tool
-result, a file's contents, a language server's reply, an issue or pull request body, or anything a
-job printed.
+prompt or a `/rename` ([SESSION-4](sessions.md#SESSION-4)), a goal's condition, and the links given
+with `/issue` and `/pr`), the planner's own `todo_write` rows, the driver's own counters (the context
+reading and the cache figures), the chord in force, or the directory and branch the session runs in.
+No row comes from a reply, a tool result, a file's contents, a language server's reply, an issue or
+pull request body, or anything a job printed.
 
 **Why.** The panel is the interface speaking in its own voice, like the scroller's footer
 ([SCROLL-5](scroller.md#SCROLL-5)). Text from any of those drawn in it would read as the interface's
 own sentence, and it would be in front of the person on every frame.
 
 `verified-by: bravebot_tui::panel::nothing_a_turn_returned_reaches_the_panel`
+
+<a id="PANEL-12"></a>
+### PANEL-12: the person says which issue and pull request the session is for
+
+`/issue <url>` and `/pr <url>` give the session its issue and its pull request. A value is one
+`http` or `https` URL with a host, in printable ASCII. One with anything else in it (whitespace, a
+newline, an escape, a direction override or a zero-width character), with no host, or with any
+other scheme, is refused with a note that does not repeat it, and sets nothing. The bare word says what is set, and `clear` removes that link and
+not the other. Each change is written to the session record at once, as a rename is
+([SESSION-3](sessions.md#SESSION-3)), and gives up no rewind point, since no point holds a link.
+Typed while a turn runs, they are carried out as `/rename` is ([CMD-8](commands.md#CMD-8)).
+
+The Links section has a `Pull request` row and then an `Issue` row, each only while that link is
+set: the word, then the link, cut from the left with an ellipsis where it is longer than the row,
+since the number at its end is what tells two apart. A new link reaches an open panel on the next
+frame.
+
+`verified-by: bravebot_tui::app::the_issue_and_pr_commands_show_set_and_clear_their_own_link`
+`verified-by: bravebot_tui::app::a_link_with_a_newline_an_escape_or_another_scheme_sets_nothing`
+`verified-by: bravebot_tui::app::a_link_set_mid_turn_is_set_as_it_is_typed`
+`verified-by: bravebot_session::sessions::only_one_web_address_on_one_line_is_a_link`
+`verified-by: bravebot_tui::panel::the_links_section_has_a_row_for_each_link_that_is_set`
+`verified-by: bravebot_tui::panel::a_long_link_keeps_its_end`
+`verified-by: bravebot_tui::panel::a_new_name_redraws_an_open_panel_and_nothing_else_does`

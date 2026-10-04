@@ -2,7 +2,8 @@
 //! plan ([PANEL-5](../../../docs/specs/info-panel.md#PANEL-5) onward).
 //!
 //! Everything here is drawn from what the person typed, the driver's own counters, the planner's
-//! task list and the directory the session runs in. Nothing a tool returned reaches it.
+//! task list and the directory the session runs in, and the links the person gave it. Nothing a
+//! tool returned reaches it.
 
 use crate::state::Session;
 use crate::theme;
@@ -81,6 +82,16 @@ fn ending(text: &str, width: usize) -> String {
     std::iter::once('…').chain(kept.into_iter().rev()).collect()
 }
 
+/// One row of the Links section: what the link is, dim, and the link cut from the left to the rest
+/// of the row, since the number at its end is what tells two apart.
+fn link_row(label: &str, url: &str, width: usize) -> Line<'static> {
+    let room = width.saturating_sub(crate::wrap::display_width(label) + 1);
+    Line::from(vec![
+        Span::styled(format!(" {label} "), dim()),
+        Span::raw(ending(&crate::render::printable(url), room)),
+    ])
+}
+
 fn section(body: &mut Vec<Line<'static>>, title: String, rows: Vec<Line<'static>>) {
     if !body.is_empty() {
         body.push(Line::raw(""));
@@ -137,8 +148,8 @@ fn text_width(width: u16) -> usize {
     usize::from(width).saturating_sub(2).max(1)
 }
 
-/// The Session, Goal and Context sections, each left out where it has nothing to say but for the
-/// context, which always has a reading.
+/// The Session, Goal, Links and Context sections, each left out where it has nothing to say but for
+/// the context, which always has a reading.
 fn head(session: &Session, text: usize) -> Vec<Line<'static>> {
     let mut body: Vec<Line<'static>> = Vec::new();
 
@@ -166,6 +177,17 @@ fn head(session: &Session, text: usize) -> Vec<Line<'static>> {
             .map(|condition| row(condition, Style::default()))
             .collect();
         section(&mut body, t!(panel_goal).to_string(), rows);
+    }
+
+    let links: Vec<Line<'static>> = [
+        (t!(panel_pull_request), &identity.pull_request),
+        (t!(panel_issue), &identity.issue),
+    ]
+    .into_iter()
+    .filter_map(|(label, url)| Some(link_row(label, url.as_deref()?, text)))
+    .collect();
+    if !links.is_empty() {
+        section(&mut body, t!(panel_links).to_string(), links);
     }
 
     let mut context = vec![row(
@@ -420,6 +442,18 @@ mod tests {
         assert!(
             open.identify("first", "~/b".to_string(), Some("main")),
             "a new branch did not redraw the open panel"
+        );
+        assert!(
+            open.link(None, Some("https://x.test/p/2")),
+            "a new link did not redraw the open panel"
+        );
+        assert!(
+            !open.link(None, Some("https://x.test/p/2")),
+            "an unchanged link redrew the panel"
+        );
+        assert!(
+            !open.identify("first", "~/b".to_string(), Some("main")),
+            "naming the session again redrew it, or dropped its link"
         );
     }
 
@@ -695,6 +729,7 @@ mod tests {
         let headings = [
             t!(panel_session).to_string(),
             t!(panel_goal).to_string(),
+            t!(panel_links).to_string(),
             t!(panel_context).to_string(),
             t!(panel_plan).to_string(),
         ];
@@ -702,7 +737,7 @@ mod tests {
         let shown: Vec<&String> = headings.iter().filter(|h| bare.contains(h)).collect();
         assert_eq!(
             shown,
-            vec![&headings[2]],
+            vec![&headings[3]],
             "headings over nothing: {bare:#?}"
         );
 
@@ -713,6 +748,7 @@ mod tests {
             Some("fix-info-panel"),
         );
         full.start_goal("the tests pass".to_string());
+        full.link(Some("https://x.test/i/1"), None);
         let drawn = texts(&lines(&full, WIDTH, 30));
         let at: Vec<usize> = headings
             .iter()
@@ -732,12 +768,70 @@ mod tests {
             "~/bravebot",
             "fix-info-panel",
             "the tests pass",
+            "Issue https://x.test/i/1",
         ] {
             assert!(
                 drawn.iter().any(|row| row == expected),
                 "{expected:?} missing: {drawn:#?}"
             );
         }
+    }
+
+    /// Each link has its row only once the person gave it, the pull request's first, and a session
+    /// given neither has no heading for them.
+    #[test]
+    fn the_links_section_has_a_row_for_each_link_that_is_set() {
+        let mut session = Session::new("none");
+        let heading = t!(panel_links).to_string();
+        assert!(
+            !texts(&lines(&session, WIDTH, 30)).contains(&heading),
+            "a Links heading over no links"
+        );
+
+        session.link(Some("https://x.test/i/1"), None);
+        let drawn = texts(&lines(&session, WIDTH, 30));
+        let at = drawn
+            .iter()
+            .position(|row| *row == heading)
+            .unwrap_or_else(|| panic!("no Links heading: {drawn:#?}"));
+        assert_eq!(drawn[at + 1], "Issue https://x.test/i/1");
+        assert_eq!(drawn[at + 2], "", "a row for a link that is not set");
+
+        session.link(Some("https://x.test/i/1"), Some("https://x.test/p/2"));
+        let drawn = texts(&lines(&session, WIDTH, 30));
+        assert_eq!(
+            drawn[at + 1..at + 3],
+            [
+                "Pull request https://x.test/p/2",
+                "Issue https://x.test/i/1"
+            ],
+            "{drawn:#?}"
+        );
+    }
+
+    /// Two pull requests in one repository differ only in the number at the end, so a link cut like
+    /// the name would draw them the same.
+    #[test]
+    fn a_long_link_keeps_its_end() {
+        let mut session = Session::new("none");
+        session.link(
+            None,
+            Some("https://github.com/an-organisation/a-long-repository-name/pull/12345"),
+        );
+        let drawn = texts(&lines(&session, WIDTH, 30));
+        let row = drawn
+            .iter()
+            .find(|row| row.starts_with("Pull request"))
+            .unwrap_or_else(|| panic!("no pull request row: {drawn:#?}"));
+        assert!(
+            row.ends_with("/pull/12345") && row.contains('…'),
+            "{row:?} is not cut from the left"
+        );
+        assert_eq!(
+            row.chars().count(),
+            usize::from(WIDTH) - 2,
+            "{row:?} is not cut to the panel's width"
+        );
     }
 
     /// The name is the one section that grows with what the person typed, so it is the one held
