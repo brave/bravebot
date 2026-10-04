@@ -946,6 +946,38 @@ pub struct Question<'a> {
     pub changed: bool,
 }
 
+/// The line saying which path a local server's program resolved to, drawn only where that differs
+/// from the program as the declaration gave it (SERVERS-4).
+fn runs(alias: &str, declaration: &Declaration, program: &Path) -> Option<String> {
+    let Declaration::Stdio { argv, .. } = declaration else {
+        return None;
+    };
+    (argv.first().map(Path::new) != Some(program)).then(|| {
+        format!(
+            "{}{}",
+            indent(alias),
+            t!(
+                servers_program,
+                path = shown(&program.display().to_string())
+            )
+        )
+    })
+}
+
+/// The `runs` line for `declaration`, resolved the way a session resolves it, for the question
+/// `bravebot mcp add`, `approve` and `enable` ask (SERVERS-3). None for a remote server, for a
+/// program given as the path it runs, and for one that does not resolve here.
+pub fn resolved_program_line(
+    alias: &str,
+    declaration: &Declaration,
+    environment: &dyn Fn(&str) -> Option<OsString>,
+) -> Option<String> {
+    match planned(declaration, environment) {
+        Ok(Plan::Stdio { program, .. }) => runs(alias, declaration, &program),
+        _ => None,
+    }
+}
+
 impl Question<'_> {
     /// Every line drawn above the answers.
     pub fn lines(&self) -> Vec<String> {
@@ -956,16 +988,8 @@ impl Question<'_> {
             "{indent}{}",
             t!(servers_requested_by, file = self.file)
         )];
-        if let (Some(program), Declaration::Stdio { argv, .. }) = (self.program, self.declaration)
-            && argv.first().map(Path::new) != Some(program.as_path())
-        {
-            under.push(format!(
-                "{indent}{}",
-                t!(
-                    servers_program,
-                    path = shown(&program.display().to_string())
-                )
-            ));
+        if let Some(program) = self.program {
+            under.extend(runs(self.alias, self.declaration, program));
         }
         lines.splice(1..1, under);
         if self.changed {
