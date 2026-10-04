@@ -367,6 +367,60 @@ fn a_server_approved_in_one_turn_answers_the_next() {
     );
 }
 
+/// A screen reads which servers are running through the roster the set reports to. It names none
+/// before a question starts one, names the program the person approved once one is up, and names
+/// none again when the set is dropped, as `/cd` and `/clear` do.
+#[test]
+fn the_roster_names_the_program_a_turn_started_until_the_set_is_dropped() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
+    let scratch = Scratch::new("agent-lsp-roster");
+    let (workspace, _recorded) = a_workspace_with_a_server(&scratch);
+
+    let (endpoint, _received) = serve_sequence(vec![
+        a_question_about_a_symbol(),
+        reply_with("it is declared in src/a.rs"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut asking = AskedAboutServers {
+        asked: 0,
+        reject: false,
+    };
+
+    let roster = bravebot_agent::lsp::Roster::default();
+    let mut servers =
+        LanguageServers::new(workspace.root().to_path_buf(), None).reporting_to(roster.clone());
+    assert!(
+        roster.programs().is_empty(),
+        "a server is named before any question has started one"
+    );
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("where is Held declared"),
+        &mut Conversation::new(),
+        &mut asking,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(&workspace),
+        TrustedPrograms::new(),
+        Some(&mut servers),
+        &Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    assert_eq!(roster.programs(), ["rust-analyzer"]);
+
+    drop(servers);
+    assert!(
+        roster.programs().is_empty(),
+        "a server is still named after the set that started it was dropped"
+    );
+}
+
 /// The other half of the same rule: a caller that keeps no set has a session of one turn, so the
 /// turn owns what it starts and nothing it started answers the turn after it.
 ///

@@ -113,6 +113,29 @@ pub fn lines(session: &Session, width: u16, height: u16) -> Vec<Line<'static>> {
     let text = text_width(width);
     let mut body = head(session, text);
 
+    let languages = session.language_servers().programs();
+    if !languages.is_empty() {
+        let rows = languages
+            .iter()
+            .map(|program| row((*program).to_string(), Style::default()))
+            .collect();
+        section(&mut body, t!(panel_language_servers).to_string(), rows);
+    }
+    if !session.servers.started.is_empty() {
+        let rows = session
+            .servers
+            .started
+            .iter()
+            .map(|alias| {
+                row(
+                    ending(&crate::render::printable(alias), text),
+                    Style::default(),
+                )
+            })
+            .collect();
+        section(&mut body, t!(panel_mcp_servers).to_string(), rows);
+    }
+
     let plan = session.plan();
     // The blank row and the heading come out of the room before the rows do.
     let room = (height - 1).saturating_sub(body.len() + 2);
@@ -278,6 +301,7 @@ fn plan_rows(plan: &[bravebot_core::todo::Row], width: usize, room: usize) -> Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bravebot_agent::lsp::{Language, Roster};
     use bravebot_core::todo::{Item, List, Status};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -731,6 +755,8 @@ mod tests {
             t!(panel_goal).to_string(),
             t!(panel_links).to_string(),
             t!(panel_context).to_string(),
+            t!(panel_language_servers).to_string(),
+            t!(panel_mcp_servers).to_string(),
             t!(panel_plan).to_string(),
         ];
         let bare = texts(&lines(&Session::new("none"), WIDTH, 30));
@@ -749,6 +775,8 @@ mod tests {
         );
         full.start_goal("the tests pass".to_string());
         full.link(Some("https://x.test/i/1"), None);
+        full.report_language_servers(Roster::of([Language::Rust]));
+        full.servers.started = vec!["notes".to_string()];
         let drawn = texts(&lines(&full, WIDTH, 30));
         let at: Vec<usize> = headings
             .iter()
@@ -769,6 +797,8 @@ mod tests {
             "fix-info-panel",
             "the tests pass",
             "Issue https://x.test/i/1",
+            "rust-analyzer",
+            "notes",
         ] {
             assert!(
                 drawn.iter().any(|row| row == expected),
@@ -904,6 +934,93 @@ mod tests {
                 "{row:?} is not cut from the left to the panel's {text} columns"
             );
         }
+    }
+
+    /// A session that has asked nothing of a language has no server, and a heading over nothing
+    /// would say one is expected. The programs are the table's names, one row each, in name order.
+    #[test]
+    fn each_started_language_server_has_a_row_and_none_leaves_no_heading() {
+        let heading = t!(panel_language_servers).to_string();
+        let mut session = working_on(plan(&[("Write the panel", Status::Active)]));
+        assert!(
+            !texts(&lines(&session, WIDTH, 30)).contains(&heading),
+            "a language servers heading over nothing"
+        );
+
+        session.report_language_servers(Roster::of([Language::Python, Language::Rust]));
+        let drawn = texts(&lines(&session, WIDTH, 30));
+        let at = drawn
+            .iter()
+            .position(|row| *row == heading)
+            .unwrap_or_else(|| panic!("no language servers heading: {drawn:#?}"));
+        assert_eq!(
+            drawn[at + 1..at + 3],
+            ["pyright-langserver", "rust-analyzer"],
+            "{drawn:#?}"
+        );
+        let context = drawn
+            .iter()
+            .position(|row| *row == *t!(panel_context))
+            .expect("a context heading");
+        let planned = drawn
+            .iter()
+            .position(|row| *row == *t!(panel_plan))
+            .expect("a plan heading");
+        assert!(context < at && at < planned, "out of order: {drawn:#?}");
+    }
+
+    /// The servers are the plan's neighbours in a column the plan fills last, so a panel too short
+    /// for both gives the plan the rows the servers left rather than the other way about.
+    #[test]
+    fn the_plan_gets_the_rows_the_server_sections_leave() {
+        let tasks: Vec<(String, Status)> = (0..20)
+            .map(|n| (format!("task {n}"), Status::Pending))
+            .collect();
+        let rows: Vec<(&str, Status)> = tasks.iter().map(|(t, s)| (t.as_str(), *s)).collect();
+        let mut session = working_on(plan(&rows));
+        let without = texts(&lines(&session, WIDTH, 20));
+        session.report_language_servers(Roster::of([Language::Rust]));
+        session.servers.started = vec!["notes".to_string()];
+        let with = texts(&lines(&session, WIDTH, 20));
+        let shown = |drawn: &[String]| drawn.iter().filter(|row| row.contains("task ")).count();
+        assert_eq!(with.len(), 20, "the panel is not the height it was given");
+        assert_eq!(
+            shown(&without) - shown(&with),
+            6,
+            "two headings, two rows and two blank rows came out of the plan's room: {with:#?}"
+        );
+        assert_eq!(
+            with.last().map(String::as_str),
+            Some(
+                t!(panel_hide, chord = session.bindings().panel_name())
+                    .to_string()
+                    .as_str()
+            ),
+            "the last row is not the key that hides the panel"
+        );
+    }
+
+    /// An MCP server's alias is whatever the settings file called it, so it is drawn as every other
+    /// typed string is, with its control characters pictured and a long one cut from the left.
+    #[test]
+    fn an_mcp_alias_is_drawn_pictured_and_cut_from_the_left() {
+        let mut session = Session::new("none");
+        session.servers.started =
+            vec!["a\u{1b}[2Jb".to_string(), format!("{}tail", "x".repeat(60))];
+        let drawn = texts(&lines(&session, WIDTH, 30));
+        let heading = drawn
+            .iter()
+            .position(|row| *row == *t!(panel_mcp_servers))
+            .unwrap_or_else(|| panic!("no MCP servers heading: {drawn:#?}"));
+        assert_eq!(drawn[heading + 1], "a\u{241b}[2Jb", "{drawn:#?}");
+        assert!(
+            drawn[heading + 2].starts_with('…') && drawn[heading + 2].ends_with("tail"),
+            "{drawn:#?}"
+        );
+        assert!(
+            drawn.iter().all(|row| !row.contains('\u{1b}')),
+            "an escape reached the panel: {drawn:#?}"
+        );
     }
 
     /// The plan is most use between turns, when it says where the work was left, and `/clear`

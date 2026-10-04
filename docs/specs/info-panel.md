@@ -12,11 +12,10 @@ documented-by: docs/website/docs/using/sessions.md
 
 What lets somebody running many sessions at once tell which terminal holds which: the terminal's
 title, and the info panel beside the transcript, which holds the session's name, its goal, the
-issue and pull request it is for, its context and cache, and its plan. The panel's language servers
-and its MCP servers are proposed in [brave/bravebot#1220](https://github.com/brave/bravebot/issues/1220)
-and not built, and their clauses take the ids after the last one here. Giving a session its links
-with `--issue` and `--pr`, from a URL in a prompt, and from what `gh pr create` prints are proposed
-in [brave/bravebot#1267](https://github.com/brave/bravebot/issues/1267) and not built. How a session
+issue and pull request it is for, its context and cache, the language servers and MCP servers it
+has started, and its plan. Giving a session its links with `--issue` and `--pr`, from a URL in a
+prompt, and from what `gh pr create` prints are proposed in
+[brave/bravebot#1267](https://github.com/brave/bravebot/issues/1267) and not built. How a session
 gets its name is [sessions.md](sessions.md), and the keys a settings file can move are
 [INPUT-32](terminal-input.md#INPUT-32).
 
@@ -153,7 +152,9 @@ narrow for it.
 2. **Goal.** The condition, while a goal stands ([GOAL-1](goal.md#GOAL-1)).
 3. **Links.** PANEL-12.
 4. **Context.** PANEL-8. It always has a reading, so it is always there.
-5. **Plan.** PANEL-10.
+5. **Language servers.** PANEL-13.
+6. **MCP servers.** PANEL-14.
+7. **Plan.** PANEL-10.
 
 A section with nothing to show has no heading. Control characters in any row are drawn as visible
 characters, as they are wherever the interface draws text, since a directory or a branch is called
@@ -173,7 +174,7 @@ with the mark [TODO-2](tools/todo-write.md#TODO-2) gives it, and a finished row 
 stays after the turn that wrote it ends, is replaced by the next report that has rows, and is
 emptied by `/clear`. A report with no rows leaves it as it was, since the session record does not
 tell a turn that emptied its list from one that kept none. It is the last section and has the rows
-the others leave. A plan longer than that shows the rows that fit less one. Where the task in
+the others leave, the language servers and MCP servers included. A plan longer than that shows the rows that fit less one. Where the task in
 progress would fall below the cut, the rows shown move down the list until it is among them. The
 last row counts the rows left out above the ones shown apart from those below them (`+12 earlier`,
 `+15 earlier, +7 more`, `+3 more`).
@@ -187,7 +188,8 @@ last row counts the rows left out above the ones shown apart from those below th
 Every row the panel draws comes from text the person typed (the session's name, which comes from a
 prompt or a `/rename` ([SESSION-4](sessions.md#SESSION-4)), a goal's condition, and the links given
 with `/issue` and `/pr`), the planner's own `todo_write` rows, the driver's own counters (the context
-reading and the cache figures), the chord in force, or the directory and branch the session runs in.
+reading and the cache figures), the chord in force, the directory and branch the session runs in, the
+programs of the language servers it started (PANEL-13), or the aliases of its MCP servers (PANEL-14).
 No row comes from a reply, a tool result, a file's contents, a language server's reply, an issue or
 pull request body, or anything a job printed.
 
@@ -220,3 +222,30 @@ frame.
 `verified-by: bravebot_tui::panel::the_links_section_has_a_row_for_each_link_that_is_set`
 `verified-by: bravebot_tui::panel::a_long_link_keeps_its_end`
 `verified-by: bravebot_tui::panel::a_new_name_redraws_an_open_panel_and_nothing_else_does`
+
+<a id="PANEL-13"></a>
+### PANEL-13: the language servers the session started
+
+The Language servers section has one row for each language server the session has started
+([LSP-8](tools/lsp.md#LSP-8)), in name order, and is left out until one has. A row is the program
+the person approved ([LSP-5](tools/lsp.md#LSP-5)), from the fixed table of programs and never from
+the server's own reply, so a server cannot put its own words into the interface. The rows stay
+while a question waits on an approval or a server's answer, since the panel reads a list kept
+beside the set rather than the set, and the section empties when the set is dropped, as `/cd` and
+`/clear` drop it.
+
+`verified-by: bravebot_tui::panel::each_started_language_server_has_a_row_and_none_leaves_no_heading`
+`verified-by: bravebot_tui::panel::the_plan_gets_the_rows_the_server_sections_leave`
+`verified-by: bravebot_agent::lsp::the_roster_names_the_program_a_turn_started_until_the_set_is_dropped`
+
+<a id="PANEL-14"></a>
+### PANEL-14: the MCP servers the session started
+
+The MCP servers section has one row for each server that started and completed its handshake
+([SERVERS-14](mcp-servers.md#SERVERS-14)), by the alias the person's settings gave it, in the order
+they were started, and is left out where none did. Control characters in an alias are drawn as
+visible characters, and an alias longer than a row is cut from the left, since the end of an alias
+is what tells two apart.
+
+`verified-by: bravebot_tui::panel::an_mcp_alias_is_drawn_pictured_and_cut_from_the_left`
+`verified-by: bravebot_tui::panel::the_sections_come_in_order_and_an_empty_one_leaves_no_heading`
