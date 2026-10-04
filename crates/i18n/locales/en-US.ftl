@@ -1856,6 +1856,8 @@ panel-too-narrow = The info panel needs a terminal at least { $columns } columns
 panel-session = Session
 panel-goal = Goal
 panel-context = Context
+panel-language-servers = Language servers
+panel-mcp-servers = MCP servers
 panel-plan = Plan
 panel-links = Links
 # The rows of the info panel's Links section, each followed by the link.

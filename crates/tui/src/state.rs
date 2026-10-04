@@ -1333,6 +1333,9 @@ pub struct Session {
     /// The MCP servers this session started, which is what makes the confinement above one it is
     /// using rather than one it has on offer.
     pub servers: Servers,
+    /// The language servers this session has started, which the turns' servers report to and the
+    /// info panel reads.
+    language_servers: bravebot_agent::lsp::Roster,
     /// How much this session asks before it acts, which one key cycles.
     ///
     /// Not persisted, like `shell` and unlike the trust map: a mode is a standing answer somebody
@@ -1800,6 +1803,7 @@ impl Session {
             laid: Laid::default(),
             confinement: confinement.into(),
             servers: Servers::default(),
+            language_servers: bravebot_agent::lsp::Roster::default(),
             // Asking, which is what a session has always done. `allowing_bypass` moves it, and is
             // the only thing that can: the flag is the record that somebody accepted the cost.
             permission_mode: bravebot_agent::PermissionMode::default(),
@@ -8789,6 +8793,18 @@ impl Session {
         let changed = self.identity != identity;
         self.identity = identity;
         changed && self.panel
+    }
+
+    /// Where the language servers this session starts report themselves, for the turns to hand to
+    /// their servers.
+    pub fn language_servers(&self) -> &bravebot_agent::lsp::Roster {
+        &self.language_servers
+    }
+
+    /// Name the language servers the panel shows, where a test has no process to start.
+    #[cfg(test)]
+    pub(crate) fn report_language_servers(&mut self, roster: bravebot_agent::lsp::Roster) {
+        self.language_servers = roster;
     }
 
     /// What the info panel names the session by.

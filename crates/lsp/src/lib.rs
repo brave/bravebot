@@ -25,7 +25,7 @@ pub mod server;
 mod testutil;
 
 pub use protocol::{Location, Operation, SymbolKind};
-pub use server::{Language, Question, Server, Servers, Starting};
+pub use server::{Language, Question, Roster, Server, Servers, Starting};
 
 use bravebot_core::policy::Denial;
 use std::fmt;

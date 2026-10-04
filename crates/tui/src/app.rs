@@ -6735,6 +6735,8 @@ fn run_turn_animated(
     // the same one: the person may press the key while this turn runs, and the two halves reading it
     // at different moments is how they would come to disagree.
     let permission_mode = session.permission_mode();
+    // The worker starts the language servers, and the info panel on this thread names them.
+    let language_servers = session.language_servers().clone();
     let mut task = Task::new(prompt)
         .with_rounds(None)
         .with_home(bravebot_agent::home::directory())
@@ -6818,6 +6820,7 @@ fn run_turn_animated(
             // The task's home rather than a second look at the state directory, so an index is
             // cached where the rest of this session's state goes.
             LanguageServers::new(worker_workspace.root().to_path_buf(), task.home.clone())
+                .reporting_to(language_servers)
         });
         let completed = turn::resume(
             &worker_config,

@@ -216,6 +216,7 @@ The title says which session a terminal holds. The info panel says the rest: pre
   each cut from the left where it is long so the number at the end stays in view,
 - how full the context is, the cache hit rate, and what the last turn read from the cache and wrote
   into it, as two figures,
+- the language servers the session has started, by program name, and the MCP servers, by alias,
 - the plan, which stays after the turn ends. Where it runs past the bottom it keeps the task in
   progress in view and counts the rows left out above and below it, as `+12 earlier` or
   `+3 more`.
@@ -226,7 +227,7 @@ running loop and the job count stay there. It needs a terminal at least 100 colu
 to open it on a narrower one leaves a note, and narrowing the terminal while the panel is open hides
 it until the terminal is wide again. A press to close it works at any width. Whether it was left open is kept in
 `~/.bravebot/panel` for the next session. The panel draws only what you typed, the plan, the
-session's own counters and where the session runs, and never a reply or anything a tool returned.
+session's own counters, the servers you approved and where the session runs, and never a reply or anything a tool returned.
 
 ```
 /issue https://github.com/brave/bravebot/issues/1267

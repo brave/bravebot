@@ -2185,6 +2185,8 @@ panel-too-narrow = Le panneau d'informations demande un terminal d'au moins { $c
 panel-session = Session
 panel-goal = Objectif
 panel-context = Contexte
+panel-language-servers = Serveurs de langage
+panel-mcp-servers = Serveurs MCP
 panel-plan = Plan
 panel-links = Liens
 # Les lignes de la section Liens du panneau d'informations, chacune suivie du lien.

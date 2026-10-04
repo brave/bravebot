@@ -28,6 +28,7 @@ use bravebot_core::label::Label;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
 use bravebot_lsp::{Answer, Location, LspResult, Operation, Servers};
+pub use bravebot_lsp::{Language, Roster};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -103,6 +104,16 @@ impl LanguageServers {
             ))),
             root,
         }
+    }
+
+    /// Report which servers are running to `roster`, so a screen can name them while a question
+    /// holds the set.
+    pub fn reporting_to(self, roster: Roster) -> Self {
+        self.servers
+            .lock()
+            .unwrap_or_else(|held| held.into_inner())
+            .reporting_to(roster);
+        self
     }
 
     /// The same servers, for a delegate to ask.
