@@ -3,6 +3,7 @@ import { Modal } from './Modal'
 import type { KeptTrust, SettingsRules } from '../../shared/protocol'
 import { Alert, Button, Icon } from '../nala'
 import { IconButton } from './IconButton'
+import { ago } from './Sessions'
 
 interface Grants {
   paths: { path: string; integrity: string }[]
@@ -49,12 +50,23 @@ export function Permissions({ session, onClose, onRemembered }: { session: strin
     <section className="grant-section">
       <h3>Remembered for this directory</h3>
       <p className="grant-note">Kept outside this conversation: sessions started in exactly this directory are trusted without asking. Forgetting it makes the next one ask; this conversation keeps its own grants.</p>
-      {grants?.remembered && <ul className="grant-list"><li className="grant-row"><Icon name="pin" /><code>{grants.remembered.path}</code>
-        <Button size="small" kind="plain-faint" isDisabled={busy} onClick={() => void request('permissions.revoke', { kind: 'remembered' })}>Forget</Button></li></ul>}
+      {grants?.remembered && <RememberedHere kept={grants.remembered} busy={busy} onForget={() => void request('permissions.revoke', { kind: 'remembered' })} />}
       {grants && !grants.remembered && <p className="grant-empty"><Icon name="pin" />No answer is remembered for this directory.</p>}
     </section>
     <RulesInForce rules={grants?.settingsRules ?? null} />
   </Modal>
+}
+
+/**
+ * The yes kept about this directory: when the person said to remember it, the file it is kept in,
+ * and the button that takes it back (TRUST-24).
+ */
+export function RememberedHere({ kept, busy, onForget }: { kept: KeptTrust; busy: boolean; onForget: () => void }): React.JSX.Element {
+  return <ul className="grant-list"><li className="grant-row">
+    <Icon name="pin" /><code>{kept.path}</code>
+    <span className="grant-state" data-test="remembered-when">{`Remembered ${ago(kept.at)}`}</span>
+    <Button size="small" kind="plain-faint" isDisabled={busy} onClick={onForget}>Forget</Button>
+  </li></ul>
 }
 
 export function PathPermissions({ paths, busy, onRevoke }: { paths: Grants['paths']; busy: boolean; onRevoke: (path: string) => void }): React.JSX.Element {
