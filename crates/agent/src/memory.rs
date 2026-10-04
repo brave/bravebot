@@ -39,7 +39,7 @@ const MEMORY: &str = ".bravebot/memory";
 const UNTRUSTED: &str = "untrusted";
 
 /// The longest name a memory may be kept under.
-const LONGEST: usize = 64;
+pub(crate) const LONGEST: usize = 64;
 
 /// Held across every change to a record. A run and its delegates record and trust again at once,
 /// and a rewrite taking one path out would otherwise drop a line appended while it ran.

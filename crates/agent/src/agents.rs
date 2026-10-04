@@ -839,6 +839,136 @@ fn definition_files(root: &Path) -> Vec<String> {
     names
 }
 
+/// What a definition made for a desktop bot came to.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Made {
+    /// The name it was given, which is the slug asked for unless that was taken.
+    pub name: String,
+    /// The file it was written to.
+    pub file: std::path::PathBuf,
+}
+
+/// Why a definition for a bot was not made, in which case no file was written.
+#[derive(Debug)]
+pub enum MakeRefused {
+    /// The slug is not one a memory can be named after ([MEMORY-3](../../../docs/specs/definition-memory.md)).
+    Name,
+    /// The model is not one line, or is one the file could not give back as it was typed.
+    Model,
+    /// The purpose has no line that is not blank, so there is no description to write.
+    Purpose,
+    /// The directory could not be made or the file could not be written.
+    Io(std::io::Error),
+}
+
+/// How many numbered names are tried after the slug itself before giving up.
+const NUMBERED_NAMES: usize = 1000;
+
+/// Write a definition for a desktop bot into the person's own directory ([MEMORY-8]).
+///
+/// `home` is the state directory, `~/.bravebot`. The definition is `agents/<name>.md` under it, of
+/// kind `worker`, with `memory: project`, the first line of `purpose` that is not blank as its
+/// description, the whole of `purpose` as its body and `model` where one was chosen. No `tools:`
+/// line is written, so the bot keeps the session's reach less what an addressed run is never
+/// offered.
+///
+/// Nothing in the arguments becomes a key. The description and the model are written single
+/// quoted with a quote doubled, the one YAML spelling the reader here gives back character for
+/// character, and the body follows the line closing the front matter.
+///
+/// A file is never written over. A name some file in the directory declares, or one of the
+/// kinds' own names, is taken and the next free `<slug>-<n>` is used; a file name already in use
+/// is taken the same way, since the file is created only where none exists.
+///
+/// [MEMORY-8]: ../../../docs/specs/definition-memory.md
+pub fn make_definition(
+    home: &Path,
+    slug: &str,
+    purpose: &str,
+    model: Option<&str>,
+) -> Result<Made, MakeRefused> {
+    if !crate::memory::is_a_slug(slug) {
+        return Err(MakeRefused::Name);
+    }
+    if let Some(model) = model {
+        let trimmed = model.trim();
+        if model.contains(['\n', '\r'])
+            || trimmed.is_empty()
+            || trimmed != model
+            || trimmed.eq_ignore_ascii_case("inherit")
+        {
+            return Err(MakeRefused::Model);
+        }
+    }
+    let Some(description) = purpose.lines().find(|line| !line.trim().is_empty()) else {
+        return Err(MakeRefused::Purpose);
+    };
+
+    let root = home.join(AGENTS);
+    crate::home::create_directory(&root).map_err(MakeRefused::Io)?;
+    let declared = names_declared_in(&root);
+
+    for attempt in 1..=NUMBERED_NAMES {
+        let name = numbered(slug, attempt);
+        if !Definitions::may_be_named(&name) || declared.contains(&name) {
+            continue;
+        }
+        let file = root.join(format!("{name}.md"));
+        let text = definition_text(&name, description, model, purpose);
+        match crate::home::create_new_file(&file, text.as_bytes()) {
+            Ok(()) => return Ok(Made { name, file }),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(MakeRefused::Io(e)),
+        }
+    }
+    Err(MakeRefused::Io(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "no free name for the definition",
+    )))
+}
+
+/// The slug for the first try, and `<slug>-<n>` for the rest, cut so the whole stays a slug.
+fn numbered(slug: &str, attempt: usize) -> String {
+    if attempt == 1 {
+        return slug.to_string();
+    }
+    let suffix = format!("-{attempt}");
+    let room = crate::memory::LONGEST - suffix.len();
+    let base: String = slug.chars().take(room).collect();
+    format!("{}{suffix}", base.trim_end_matches('-'))
+}
+
+/// Every name a definition file in `root` declares, read or not loadable alike.
+fn names_declared_in(root: &Path) -> std::collections::HashSet<String> {
+    definition_files(root)
+        .into_iter()
+        .filter_map(|file| std::fs::read_to_string(root.join(file)).ok())
+        .filter_map(|text| crate::skills::declarations(&text)?.remove("name"))
+        .collect()
+}
+
+/// The file a bot's definition is, front matter first and the purpose after it closes.
+fn definition_text(name: &str, description: &str, model: Option<&str>, purpose: &str) -> String {
+    let mut text = format!(
+        "---\nname: {name}\ndescription: {}\nkind: worker\nmemory: project\n",
+        single_quoted(description)
+    );
+    if let Some(model) = model {
+        text.push_str(&format!("model: {}\n", single_quoted(model)));
+    }
+    text.push_str("---\n\n");
+    text.push_str(purpose);
+    if !purpose.ends_with('\n') {
+        text.push('\n');
+    }
+    text
+}
+
+/// A value as a YAML single-quoted scalar, which the reader here gives back as it was written.
+fn single_quoted(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1705,5 +1835,204 @@ mod tests {
             "a memory reaching ~/.bravebot through a link was not seen as inside it: the \
              directory, the state directory, .bravebot and .bravebot/memory each through one"
         );
+    }
+
+    /// A state directory of this test's own, removed with it.
+    struct Home(std::path::PathBuf);
+
+    impl Home {
+        fn new(name: &str) -> Self {
+            let path = crate::testutil::scratch_dir(name);
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("a scratch state directory");
+            Self(path)
+        }
+
+        fn file(&self, name: &str) -> std::path::PathBuf {
+            self.0.join(AGENTS).join(format!("{name}.md"))
+        }
+
+        /// The definition a file holds, read as a turn reads it.
+        fn read(&self, name: &str) -> Definition {
+            let text = std::fs::read_to_string(self.file(name)).expect("the file was written");
+            definition_of(&text)
+        }
+    }
+
+    impl Drop for Home {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// MEMORY-8: making a bot writes `agents/<slug>.md` in the person's own directory, a worker
+    /// keeping a project memory, described by the first line of its purpose that is not blank,
+    /// with the whole purpose as its body and the model given where one was chosen.
+    #[test]
+    fn making_a_bot_writes_a_worker_keeping_a_project_memory() {
+        let home = Home::new("make-definition-shape");
+        let purpose = "\nReviews the parser.\nSecond line.\n";
+
+        let made =
+            make_definition(&home.0, "parser-bot", purpose, Some("claude-sonnet")).expect("made");
+
+        assert_eq!(made.name, "parser-bot");
+        assert_eq!(made.file, home.file("parser-bot"));
+        let text = std::fs::read_to_string(&made.file).unwrap();
+        assert!(text.contains("\nkind: worker\n"), "{text}");
+        assert!(text.contains("\nmemory: project\n"), "{text}");
+        assert!(!text.contains("tools:"), "no tools line is written: {text}");
+        let definition = home.read("parser-bot");
+        assert_eq!(definition.name(), "parser-bot");
+        assert_eq!(definition.description(), "Reviews the parser.");
+        assert_eq!(definition.kind(), Kind::Worker);
+        assert_eq!(definition.model(), Some("claude-sonnet"));
+        assert!(definition.keeps_memory());
+        assert_eq!(definition.tools(), None);
+        assert_eq!(definition.prompt(), purpose.trim_start_matches('\n'));
+    }
+
+    /// MEMORY-8: no model chosen writes no `model:` line.
+    #[test]
+    fn a_bot_with_no_model_chosen_names_none() {
+        let home = Home::new("make-definition-no-model");
+        make_definition(&home.0, "plain", "Does things.", None).expect("made");
+
+        let text = std::fs::read_to_string(home.file("plain")).unwrap();
+        assert!(!text.contains("model:"), "{text}");
+        assert_eq!(home.read("plain").model(), None);
+    }
+
+    /// MEMORY-8: nothing typed becomes a key. A description or a model carrying a colon, a quote,
+    /// a comment marker or a wrapped key is read back exactly as typed, and the keys are the ones
+    /// written here. A purpose opening with front matter of its own stays in the body.
+    #[test]
+    fn nothing_typed_into_the_form_becomes_a_key() {
+        let home = Home::new("make-definition-escaped");
+        for (slug, description, model) in [
+            ("colon", "Use when: a diff is open", "a: b"),
+            ("quote", "It's the 'reviewer' \"bot\"", "it's"),
+            ("hash", "# not a comment # either", "m # n"),
+            ("key", "kind: reader", "tools: write_file"),
+            ("dash", "- a list item", "- m"),
+            ("fold", ">", "|"),
+            ("marker", "---", "--- x"),
+            ("spaces", "  padded  ", "m"),
+        ] {
+            let purpose =
+                format!("{description}\n---\nkind: reader\ntools: write_file\n---\nbody\n");
+            make_definition(&home.0, slug, &purpose, Some(model)).expect("made");
+
+            let definition = home.read(slug);
+            assert_eq!(definition.description(), description, "{slug}");
+            assert_eq!(definition.model(), Some(model), "{slug}");
+            assert_eq!(definition.kind(), Kind::Worker, "{slug}");
+            assert_eq!(definition.tools(), None, "{slug}");
+            assert_eq!(definition.prompt(), purpose, "{slug}");
+        }
+    }
+
+    /// MEMORY-8: a model that is not one line, or a purpose with no line that is not blank, is
+    /// refused and nothing is written.
+    #[test]
+    fn a_model_of_several_lines_or_a_blank_purpose_makes_no_bot() {
+        let home = Home::new("make-definition-refused");
+        assert!(matches!(
+            make_definition(&home.0, "a", "Purpose.", Some("one\ntools: write_file")),
+            Err(MakeRefused::Model)
+        ));
+        assert!(matches!(
+            make_definition(&home.0, "a", "Purpose.", Some("one\rtwo")),
+            Err(MakeRefused::Model)
+        ));
+        for purpose in ["", "   ", "\n\n", " \t\n \n"] {
+            assert!(
+                matches!(
+                    make_definition(&home.0, "a", purpose, None),
+                    Err(MakeRefused::Purpose)
+                ),
+                "{purpose:?}"
+            );
+        }
+        for slug in ["", "Upper", "../x", "a--b", "-a"] {
+            assert!(
+                matches!(
+                    make_definition(&home.0, slug, "Purpose.", None),
+                    Err(MakeRefused::Name)
+                ),
+                "{slug:?}"
+            );
+        }
+        assert!(
+            !home.0.join(AGENTS).exists(),
+            "a refusal made the directory or a file"
+        );
+    }
+
+    /// MEMORY-8: a name some file declares, whatever that file is called, or one of the kinds' own
+    /// names, is taken; the next free name carries a number, and no file is written over.
+    #[test]
+    fn a_taken_name_gets_the_next_free_one_and_no_file_is_written_over() {
+        let home = Home::new("make-definition-taken");
+        let directory = home.0.join(AGENTS);
+        std::fs::create_dir_all(&directory).unwrap();
+        let theirs = "---\nname: helper\ndescription: theirs\nkind: reader\n---\nTheirs.\n";
+        std::fs::write(directory.join("helper.md"), theirs).unwrap();
+        // Declares `helper-2` from a file of another name, and an unloadable file still declares.
+        std::fs::write(
+            directory.join("other.md"),
+            "---\nname: helper-2\ndescription: x\nkind: nonsense\n---\n",
+        )
+        .unwrap();
+        // A file named for the slug declaring something else leaves the name free but the file taken.
+        std::fs::write(directory.join("fresh.md"), "---\nname: elsewhere\n---\n").unwrap();
+
+        let first = make_definition(&home.0, "helper", "Mine.", None).expect("made");
+        let second = make_definition(&home.0, "fresh", "Mine too.", None).expect("made");
+
+        assert_eq!(first.name, "helper-3", "helper and helper-2 are declared");
+        assert_eq!(second.name, "fresh-2", "fresh.md is a file already");
+        assert_eq!(
+            std::fs::read_to_string(directory.join("helper.md")).unwrap(),
+            theirs
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.join("fresh.md")).unwrap(),
+            "---\nname: elsewhere\n---\n"
+        );
+        assert_eq!(home.read("helper-3").description(), "Mine.");
+        assert_eq!(home.read("fresh-2").description(), "Mine too.");
+
+        for kind in ["reader", "checker", "worker"] {
+            let made = make_definition(&home.0, kind, "A kind's name.", None).expect("made");
+            assert_eq!(made.name, format!("{kind}-2"));
+        }
+    }
+
+    /// MEMORY-8: the file is the person's own, so it is reachable by them alone.
+    #[cfg(unix)]
+    #[test]
+    fn a_bots_definition_is_readable_only_by_its_owner() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = Home::new("make-definition-mode");
+        let made = make_definition(&home.0, "private", "Mine.", None).expect("made");
+
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&made.file), 0o600);
+        assert_eq!(mode(&home.0.join(AGENTS)), 0o700);
+    }
+
+    /// MEMORY-8: a slug near the longest a name may be still gets a numbered name that is a slug.
+    #[test]
+    fn a_numbered_name_is_still_a_slug() {
+        let home = Home::new("make-definition-long");
+        let slug = "a".repeat(64);
+        let first = make_definition(&home.0, &slug, "One.", None).expect("made");
+        let second = make_definition(&home.0, &slug, "Two.", None).expect("made");
+
+        assert_eq!(first.name, slug);
+        assert!(crate::memory::is_a_slug(&second.name), "{}", second.name);
+        assert_ne!(second.name, first.name);
+        assert!(second.name.ends_with("-2"));
     }
 }

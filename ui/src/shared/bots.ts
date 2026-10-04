@@ -60,6 +60,12 @@ export interface Bot {
   /** The checkout it works in, chosen when it was made and pinned from then on. */
   directory: string
   /**
+   * The name of the definition in `~/.bravebot/agents` that making this bot wrote, or `null` for a
+   * bot made before that was done. The agent chose it (the slug, or the next free name after it),
+   * so it is taken off the agent's answer and never off the form. Main-written.
+   */
+  definition: string | null
+  /**
    * The durable id used by Continue, or `null` until it has spoken.
    *
    * Null is a real state rather than a missing value: the agent writes no record until a first
@@ -205,6 +211,7 @@ export function parseBots(value: unknown): StoredBots {
       avatar,
       model,
       directory,
+      definition,
       session,
       conversations,
       archived,
@@ -234,6 +241,7 @@ export function parseBots(value: unknown): StoredBots {
       avatar: isText(avatar) ? avatar : slug,
       model: isBotModel(model) && model !== null ? model : null,
       directory,
+      definition: isSlug(definition) ? definition : null,
       session: isSessionId(session) ? session : null,
       conversations: [...new Set([...(Array.isArray(conversations) ? conversations.filter(isSessionId) : []), ...(isSessionId(session) ? [session] : [])])],
       // Clamped rather than refused. It is a watermark, and a nonsense one costs one needless

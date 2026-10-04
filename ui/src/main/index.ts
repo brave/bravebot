@@ -34,6 +34,7 @@ import {
   releaseBotSession,
   retireBot,
   saveBot,
+  saveFormBot,
   consolidationPrompt,
   AFTER_COMPACTION,
 } from './bots'
@@ -685,13 +686,15 @@ app.whenReady().then(() => {
     return next
   })
 
-  ipcMain.handle('bravebot:bots:write', (_event, value: unknown) => {
+  ipcMain.handle('bravebot:bots:write', async (_event, value: unknown) => {
     // Composed in `bots.ts` and not here, because the folder a new bot is pinned to is the one
     // field on this channel that decides where files land, and the check that it is a folder
     // somebody opened belongs beside the code that writes there.
-    const next = botFromForm(value)
-    if (!next) return null
-    saveBot(next)
+    const form = botFromForm(value)
+    if (!form) return null
+    // Making a bot writes its definition to `~/.bravebot/agents` (MEMORY-8). This process writes
+    // nothing there itself; the agent does, and `saveFormBot` keeps the name it answers with.
+    const next = await saveFormBot(form, bridge ? (method, params) => bridge!.request(method, params) : null)
     if (noteProject(next.directory)) rebuildMenu()
     return next
   })

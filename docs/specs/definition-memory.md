@@ -34,8 +34,9 @@ What a definition is, where one is read from and what it is trusted for is
 paths are trusted is [trust-map.md](trust-map.md). Where a clause here changes one of those, that
 file says so at the place it changes.
 
-The memory and the checkout are built, [MEMORY-2](#MEMORY-2) to [MEMORY-7](#MEMORY-7). The desktop
-half is not: [MEMORY-1](#MEMORY-1), [MEMORY-8](#MEMORY-8) to [MEMORY-11](#MEMORY-11), and the
+The memory and the checkout are built, [MEMORY-2](#MEMORY-2) to [MEMORY-7](#MEMORY-7), and so is
+writing a bot's definition, [MEMORY-8](#MEMORY-8). The rest of the desktop half is not:
+[MEMORY-1](#MEMORY-1), [MEMORY-9](#MEMORY-9) to [MEMORY-11](#MEMORY-11), and the
 sentences in [MEMORY-4](#MEMORY-4) about the desktop's panel are a design, written to be agreed
 before that work starts.
 
@@ -50,7 +51,8 @@ whose `isolation:` asks for a checkout works in a checkout of it
 ([CHECKOUT-2](checkouts.md#CHECKOUT-2)).
 
 The desktop front end's bots are a format of their own. A bot is a row in the desktop's store: a
-name, a purpose, a model, a folder chosen when it was made, and a history of conversations. Its
+name, a purpose, a model, a folder chosen when it was made, the name of the definition written for
+it ([MEMORY-8](#MEMORY-8)), and a history of conversations. Its
 purpose reaches a turn as a briefing file the desktop composes under its own data directory and
 hands over as a dropped file, on the first turn of a session, after a compaction, and after a run
 of turns in which its memory did not change. Its memory is a file in its folder,
@@ -386,7 +388,7 @@ says so when it loads, so its author learns that only an addressed turn keeps on
 
 Making a bot writes a definition to `~/.bravebot/agents/<name>.md`. The crate that reads the
 person's definitions writes it, since a surface writes nothing into that directory itself
-([STATE-3](state-directory.md#STATE-3)), and nothing writes one there today. The name is the bot's
+([STATE-3](state-directory.md#STATE-3)). The name is the bot's
 slug. The description is the first line of its purpose that is not blank, and the body is the whole
 purpose. The kind is `worker`, `memory:` is `project`, and the model is given where one was chosen.
 The desktop's row names the definition and the folder.
@@ -411,9 +413,22 @@ reached ([ADDRESS-7](addressing-a-definition.md#ADDRESS-7)), less a later look a
 addressed run is never offered ([ADDRESS-8](addressing-a-definition.md#ADDRESS-8)). A person
 narrows it further by editing the file.
 
-Nothing builds this yet.
+The crate that reads the person's definitions writes it (`bravebot_agent::agents::make_definition`),
+and the desktop asks for it through the bridge method `bot.define` when a bot is made. The row
+keeps the name the agent answers with. Nothing yet addresses the definition in a bot's turns
+([MEMORY-10](#MEMORY-10)), moves the briefing's purpose into it, or rewrites it on an edit
+([MEMORY-9](#MEMORY-9)).
 
-`verified-by: none`
+`verified-by: bravebot_agent::agents::making_a_bot_writes_a_worker_keeping_a_project_memory`
+`verified-by: bravebot_agent::agents::a_bot_with_no_model_chosen_names_none`
+`verified-by: bravebot_agent::agents::nothing_typed_into_the_form_becomes_a_key`
+`verified-by: bravebot_agent::agents::a_model_of_several_lines_or_a_blank_purpose_makes_no_bot`
+`verified-by: bravebot_agent::agents::a_taken_name_gets_the_next_free_one_and_no_file_is_written_over`
+`verified-by: bravebot_agent::agents::a_bots_definition_is_readable_only_by_its_owner`
+`verified-by: bravebot_agent::agents::a_numbered_name_is_still_a_slug`
+`verified-by: bravebot_ui_bridge::definitions::a_bot_is_answered_with_the_name_its_definition_was_given`
+`verified-by: bravebot_ui_bridge::definitions::a_refused_bot_writes_nothing`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-model.test.mjs pins its half: a new bot is saved only with the name the agent answers with, and nothing is saved when the agent is absent, refuses, or answers with something that is not a slug; an edit does not define again; a stored definition name that is not a slug is dropped; make check-ui runs it)`
 
 <a id="MEMORY-9"></a>
 ### MEMORY-9: editing a bot rewrites only the fields the form shows
@@ -430,7 +445,7 @@ The rewrite is built: `bravebot_agent::agents::rewrite_definition` takes a defin
 purpose and the model, and returns the text with the description, the `model:` line and the body
 replaced and every other line as it was. It writes the description and the model in single quotes
 and reads the result back, refusing a text that would not read back as what was given. Nothing in
-the desktop calls it yet, because [MEMORY-8](#MEMORY-8) does not write the file it would rewrite.
+the desktop calls it yet.
 
 `verified-by: bravebot_agent::agents::editing_a_definition_rewrites_the_description_the_model_and_the_body_alone`
 `verified-by: bravebot_agent::agents::editing_a_definition_adds_a_model_it_lacked_and_drops_one_no_longer_chosen`
