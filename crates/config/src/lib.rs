@@ -801,6 +801,78 @@ impl<'a> Held<'a> {
     }
 }
 
+/// What a person does about a credential a scan found.
+///
+/// CRED-20: a disposition moves a tier only by passing the gate it attempts. Only [`Enrol`]
+/// attempts a gate, gate 1, and it passes only where a performer exists for the operation. The
+/// other three attempt none, so none of them can change a tier. [`Disposition::apply`] is the one
+/// place a disposition yields a tier, and the tier it yields for a disposition that attempts no
+/// gate is [`Held::tier`], which is derived from the gate walk and is not an input here.
+///
+/// [`Enrol`]: Disposition::Enrol
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Disposition {
+    /// Delete the value from where it was found. Ends this run's custody and revokes nothing.
+    Remove,
+    /// Refuse the path to the tools that name a file. Keeps the value out of the context and is
+    /// not custody.
+    Deny,
+    /// Hand the credential to the authority, which performs the operation so the agent holds
+    /// nothing. The only disposition that attempts a gate.
+    Enrol,
+    /// Leave the credential where it is. Owes what the tier it stands at owes.
+    Accept,
+}
+
+/// Whether something outside the account exists that can carry out the operation a credential is
+/// used for, deciding each use and able to refuse it.
+///
+/// Gate 1 asks exactly this. It is a fact about the arrangement, supplied by whatever knows the
+/// performers that exist, and is never derived from a disposition or from a finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Performer {
+    /// A performer exists for the operation.
+    Exists,
+    /// None exists, so enrolling leaves a bearer secret in a different place.
+    Absent,
+}
+
+/// Why a disposition did not move a tier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotMoved {
+    /// Enrolling attempted gate 1 and no performer exists for the operation, so the credential
+    /// stays at the tier it stood at.
+    NoPerformer,
+}
+
+impl Disposition {
+    /// Every disposition, so a check over them cannot omit one.
+    pub const ALL: [Self; 4] = [Self::Remove, Self::Deny, Self::Enrol, Self::Accept];
+
+    /// The gate this disposition attempts, or `None` where it attempts none.
+    pub const fn attempts(self) -> Option<Gate> {
+        match self {
+            Self::Enrol => Some(Gate::One),
+            Self::Remove | Self::Deny | Self::Accept => None,
+        }
+    }
+
+    /// The tier `held` stands at once this disposition has been applied.
+    ///
+    /// A disposition that attempts no gate answers with the tier the credential already stands at.
+    /// Enrolling answers [`Tier::Delegated`] where a performer exists and refuses where none does,
+    /// and a refusal leaves the tier as it was.
+    pub fn apply(self, held: Held<'_>, performer: Performer) -> Result<Tier, NotMoved> {
+        match self.attempts() {
+            None => Ok(held.tier()),
+            Some(_) => match performer {
+                Performer::Exists => Ok(Tier::Delegated),
+                Performer::Absent => Err(NotMoved::NoPerformer),
+            },
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum ConfigError {
     Missing(&'static str),
@@ -1887,6 +1959,58 @@ mod tests {
             .tier(),
             "a gateway's tier is read off its address"
         );
+    }
+
+    /// CRED-20: removing, denying or accepting attempts no gate, so each leaves every credential
+    /// at the tier its walk stopped at, whether or not a performer exists. A disposition that
+    /// moved a tier without a gate would make the tier something a person's answer sets, which is
+    /// the tier CRED-4 says can be argued.
+    #[test]
+    fn removing_denying_or_accepting_changes_no_tier() {
+        for disposition in [Disposition::Remove, Disposition::Deny, Disposition::Accept] {
+            assert_eq!(disposition.attempts(), None);
+            for held in Held::all("gateway.invalid") {
+                for performer in [Performer::Exists, Performer::Absent] {
+                    assert_eq!(
+                        disposition.apply(held, performer),
+                        Ok(held.tier()),
+                        "{disposition:?} moved {held:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// CRED-20: enrolling attempts gate 1 and reaches Delegated only where a performer exists. With
+    /// none, the credential is refused and stays where it stood, since it would otherwise be a
+    /// Held credential recorded as holding nothing. Both directions, so an implementation that
+    /// always refused or always passed fails.
+    #[test]
+    fn enrolling_reaches_delegated_only_where_a_performer_exists() {
+        assert_eq!(Disposition::Enrol.attempts(), Some(Gate::One));
+        for held in Held::all("gateway.invalid") {
+            assert_eq!(
+                Disposition::Enrol.apply(held, Performer::Exists),
+                Ok(Tier::Delegated),
+                "{held:?} has a performer and was not enrolled"
+            );
+            assert_eq!(
+                Disposition::Enrol.apply(held, Performer::Absent),
+                Err(NotMoved::NoPerformer),
+                "{held:?} was enrolled with nothing to perform its operation"
+            );
+        }
+    }
+
+    /// CRED-20: Enrol is the only disposition that attempts a gate, so it is the only one whose
+    /// answer can differ from the credential's own tier.
+    #[test]
+    fn only_enrolling_attempts_a_gate() {
+        let attempting: Vec<Disposition> = Disposition::ALL
+            .into_iter()
+            .filter(|disposition| disposition.attempts().is_some())
+            .collect();
+        assert_eq!(attempting, [Disposition::Enrol]);
     }
 
     /// CRED-2: an imported subscription's credential batch is a credential this machine holds and
