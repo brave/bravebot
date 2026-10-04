@@ -308,8 +308,8 @@ export function saveBot(next: Bot): void {
 /**
  * Make a bot's home folder if it is not there yet.
  *
- * Called whenever the bots are handed to a window, so a home deleted by hand is back before a
- * conversation is started in it. `false` when it cannot be made.
+ * Called when a bot is made and when a conversation is started in its home, so a home deleted by
+ * hand is back before anything runs in it. `false` when it cannot be made.
  */
 export function ensureHome(held: Bot): boolean {
   try {

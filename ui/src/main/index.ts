@@ -556,6 +556,14 @@ app.whenReady().then(() => {
         return { error: { code: 'bad_request', message: 'that is not a folder this app offered' } }
       }
     }
+    // A bot's home is made when a conversation is started in it, not when the bots are listed.
+    if (method === 'session.new') {
+      const directory = (params as { directory?: unknown } | null)?.directory
+      const owner = bots().find((each) => each.home === directory)
+      if (owner && !ensureHome(owner)) {
+        return { error: { code: 'bad_request', message: `could not make the folder for ${owner.name}` } }
+      }
+    }
     try {
       const session = (params as { session?: unknown } | null)?.session
       const ok = method === 'models.list'
@@ -710,10 +718,7 @@ app.whenReady().then(() => {
   // still `worksIn`'s, in `sendBotTurn`.
   ipcMain.handle('bravebot:bots:read', () => {
     const all = bots()
-    for (const each of all) {
-      ensureHome(each)
-      offerDirectories(botFolders(each))
-    }
+    for (const each of all) offerDirectories(botFolders(each))
     return all
   })
 
