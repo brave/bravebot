@@ -387,6 +387,8 @@ not built.
 `verified-by: bravebot_sandbox::policy::a_backend_that_grants_an_absent_path_has_nothing_created_for_it`
 `verified-by: bravebot_sandbox::policy::a_backend_that_confines_nothing_has_nothing_created_for_it`
 `verified-by: bravebot_sandbox::policy::what_is_created_is_reachable_by_its_owner_and_nobody_else`
+`verified-by: bravebot_sandbox::policy::what_is_created_is_reachable_by_its_owner_and_nobody_else_on_windows`
+`verified-by: bravebot_sandbox::windows::the_access_list_of_a_created_row_names_only_its_owner`
 `verified-by: bravebot_sandbox::policy::a_row_that_is_already_there_keeps_what_is_in_it`
 `verified-by: bravebot_sandbox::policy::a_row_created_first_is_in_the_policy_the_backend_is_handed`
 `verified-by: bravebot_sandbox::policy::a_row_that_could_not_be_created_is_left_out_and_named`
