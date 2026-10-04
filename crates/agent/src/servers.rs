@@ -3056,7 +3056,7 @@ done
         home: &Home,
         notes: &mut Vec<String>,
     ) -> Option<Vec<crate::mcp::Reached>> {
-        if Prelude::current().is_none() || bravebot_sandbox::for_current_platform().is_err() {
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() {
             eprintln!("SKIPPED (no confinement here)");
             return None;
         }
@@ -3439,7 +3439,7 @@ done
         let root = scratch("cli-servers-started-reads")
             .canonicalize()
             .expect("the scratch directory resolves");
-        if Prelude::current().is_none() || bravebot_sandbox::for_current_platform().is_err() {
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() {
             eprintln!("SKIPPED (no confinement here)");
             return;
         }

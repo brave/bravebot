@@ -256,6 +256,12 @@ bisect it, do not build a baseline worktree for it, and do not re-run the suite 
 here spawn real processes against a wall clock, so they fail on a loaded machine and pass on the
 next run; that is a flake, not a signal, and chasing one costs more than the failure does.
 
+A test that fails only when the suite runs under bravebot's `run` tool fails because of the
+sandbox, not because of the change. Seatbelt cannot be applied from inside a seatbelt, so a test that
+starts a confined process cannot, and should skip through `bravebot_sandbox::confinement_works_here()`
+instead of failing. To tell the two apart, run the test from a terminal: if it passes there, the
+sandbox is the cause. A test that fails under `run` and has no such skip is a bug in the test.
+
 **Which tests those are is measured rather than assumed.** The weekly
 [Test determinism](../../.github/workflows/test-determinism.yml) workflow runs the suite a hundred
 times against one build, at four threads and at sixteen, and names every test whose outcome changed,
