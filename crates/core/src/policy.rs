@@ -351,6 +351,9 @@ pub struct Policy<'sink, S: Sink> {
     /// rule about a host: a machine runs many services on one address, and the declaration named
     /// one of them.
     calling_server: Option<String>,
+    /// The socket `calling_server` connects to, with a port the scheme implies written out, which
+    /// is what a hop is compared against: `http` and `https` on one address are two services.
+    calling_socket: Option<String>,
     /// Where the hop the egress gate last refused off a declared server was bound, until
     /// [`Policy::take_server_hop`] hands it to whoever asks the person. A server's own bytes.
     server_hop: Option<String>,
@@ -468,6 +471,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             exposed: crate::credentials::Exposed::new(),
             fetching: None,
             calling_server: None,
+            calling_socket: None,
             server_hop: None,
             context: Integrity::Trusted,
             holds: Confidentiality::Public,
@@ -584,7 +588,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // What a `Location` header names is a server's own bytes, so a refusal repeating it
             // would be writing them into whatever formats that refusal. The declared destination
             // is what a person wrote down, so a refusal names that.
-            if crate::url::authority_of(url).unwrap_or_default() != declared {
+            if crate::url::socket_of(url) != self.calling_socket {
                 // Kept for the prompt and nothing else: see `take_server_hop`.
                 self.server_hop = Some(url.to_string());
                 return Err(self.deny(
@@ -731,6 +735,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// rewrites the declaration, and the request is made again to the url it now names.
     pub fn before_server_request(&mut self, url: &str) {
         self.calling_server = Some(crate::url::authority_of(url).unwrap_or_default());
+        self.calling_socket = crate::url::socket_of(url);
         self.server_hop = None;
     }
 
@@ -740,6 +745,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// turn's egress confined to a server's host.
     pub fn server_request_finished(&mut self) {
         self.calling_server = None;
+        self.calling_socket = None;
     }
 
     /// Where the last request to a declared server was redirected off it, if it was.
@@ -10179,6 +10185,25 @@ five
             "the refusal repeated what a server chose: {}",
             denial.message
         );
+    }
+
+    /// A port the url does not write is still a port. A server declared at `http://127.0.0.1/mcp`
+    /// is on 80, and a hop to `https://127.0.0.1/` is on 443, so comparing the authority as
+    /// written would follow it. An explicit default port is the same socket as the implied one.
+    #[test]
+    fn a_servers_request_cannot_be_redirected_from_an_implied_port_to_another() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+
+        policy.before_server_request("http://127.0.0.1/mcp");
+        assert!(
+            policy.before_network("http://127.0.0.1:80/mcp/v2").is_ok(),
+            "the port the server was declared on, written out, was refused"
+        );
+        policy
+            .before_network("https://127.0.0.1/mcp")
+            .expect_err("a hop from implied port 80 to implied port 443 was followed");
+        assert!(policy.take_server_hop().is_some());
     }
 
     /// The destination a refused hop named is kept for the prompt, as the server's bytes, and

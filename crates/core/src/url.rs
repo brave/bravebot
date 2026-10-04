@@ -23,6 +23,34 @@ pub fn authority_of(url: &str) -> Option<String> {
     Some(host_and_port_of(url).to_ascii_lowercase())
 }
 
+/// The host and port a request to `url` connects to, lowercased, or `None` where it names no host.
+///
+/// [`authority_of`] as written leaves an implied port off, so `http://h/` and `https://h/` read
+/// the same although one connects to 80 and the other to 443. A check that a request has not left
+/// the socket it was addressed to compares this instead: the port is the explicit one, else the
+/// scheme's default. A scheme with no default and no port keeps the authority as written.
+pub fn socket_of(url: &str) -> Option<String> {
+    let authority = authority_of(url)?;
+    let has_port = match authority.strip_prefix('[') {
+        Some(rest) => rest
+            .split_once(']')
+            .is_some_and(|(_, after)| after.starts_with(':')),
+        None => authority.contains(':'),
+    };
+    if has_port {
+        return Some(authority);
+    }
+    let scheme = url
+        .split_once("://")
+        .map(|(scheme, _)| scheme.trim_start().to_ascii_lowercase());
+    let port = match scheme.as_deref() {
+        Some("http" | "ws") => 80,
+        Some("https" | "wss") => 443,
+        _ => return Some(authority),
+    };
+    Some(format!("{authority}:{port}"))
+}
+
 /// The host in `url`, lowercased, or `None` where it names none.
 ///
 /// The port is left out. A rule naming a host means the host whichever port it answers on, and a
@@ -89,6 +117,28 @@ mod tests {
             authority_of("https://mcp.example/api"),
             Some("mcp.example".into())
         );
+    }
+
+    /// An implied port is a port: `http` and `https` on one address are two sockets, and an
+    /// explicit default is the same socket as the implied one.
+    #[test]
+    fn a_socket_fills_in_the_port_a_scheme_implies() {
+        assert_eq!(
+            socket_of("http://127.0.0.1/mcp"),
+            Some("127.0.0.1:80".into())
+        );
+        assert_eq!(
+            socket_of("https://127.0.0.1/x"),
+            Some("127.0.0.1:443".into())
+        );
+        assert_eq!(
+            socket_of("HTTP://Example.com:80/x"),
+            Some("example.com:80".into())
+        );
+        assert_eq!(socket_of("https://[::1]/x"), Some("[::1]:443".into()));
+        assert_eq!(socket_of("http://[::1]:8080/x"), Some("[::1]:8080".into()));
+        assert_eq!(socket_of("http://h:8080/x"), Some("h:8080".into()));
+        assert_eq!(socket_of("http:///x"), None);
     }
 
     /// Userinfo belongs to whoever wrote the URL, so an authority drops it for the same reason
