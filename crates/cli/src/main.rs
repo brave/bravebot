@@ -1195,6 +1195,7 @@ fn run_task(
                 attempt: attempt.as_deref(),
                 trail: trace.then_some((&sink, outcome.model.as_str())),
                 clean: outcome.clean,
+                ending,
                 not_served: not_served.as_deref(),
             };
             report(
@@ -1783,6 +1784,9 @@ struct Finished<'a> {
     trail: Option<(&'a RecordingSink, &'a str)>,
     /// Whether no gate refused anything during the turn.
     clean: bool,
+    /// How the turn ended, which is what the substitution complaint's identifier is read from: it
+    /// is a failure only where the command line named the model.
+    ending: Ending,
     /// What to say where one model was asked for and another one answered.
     not_served: Option<&'a str>,
 }
@@ -1796,7 +1800,14 @@ struct Finished<'a> {
 fn report(reply: &mut impl Write, beside: &mut impl Write, run: &Finished<'_>) {
     say_notices(beside, run.notices);
     if let Some(complaint) = run.not_served {
-        let _ = writeln!(beside, "{complaint}");
+        // Said with the identifier of the status it is the reason for (CLI-6), and plainly where
+        // the run did not fail over it.
+        let said = if run.ending == Ending::Failed {
+            Ending::Failed.told(complaint)
+        } else {
+            complaint.to_string()
+        };
+        let _ = writeln!(beside, "{said}");
     }
     let _ = writeln!(reply, "{}", run.reply);
     if let Some(attempt) = run.attempt {
@@ -1810,7 +1821,11 @@ fn report(reply: &mut impl Write, beside: &mut impl Write, run: &Finished<'_>) {
     }
     if !run.clean {
         let _ = writeln!(beside);
-        let _ = writeln!(beside, "{}", t!(cli_something_was_refused));
+        let _ = writeln!(
+            beside,
+            "{}",
+            Ending::Refused.told(t!(cli_something_was_refused))
+        );
     }
 }
 
@@ -2834,6 +2849,12 @@ fn doctor() -> ExitCode {
         }
     }
 
+    // The report is on stdout and says what is wrong, so the identifier of the status it exits with
+    // would otherwise appear nowhere a log of the failure holds it. Said once, here, rather than
+    // beside each line that raised the ending.
+    if !ending.ok() {
+        return fail(ending, t!(doctor_ended));
+    }
     ending.code()
 }
 
@@ -4557,6 +4578,7 @@ mod tests {
             attempt: None,
             trail: Some((&sink, "qwen-3-235b")),
             clean: false,
+            ending: Ending::Refused,
             not_served: None,
         });
 
@@ -4565,6 +4587,8 @@ mod tests {
         assert!(beside.contains("note: a skill was loaded"), "got: {beside}");
         assert!(beside.contains("model: qwen-3-235b"), "got: {beside}");
         assert!(beside.contains("a policy gate refused"), "got: {beside}");
+        // Status 4 says BB1004 where it is read off a log (CLI-6).
+        assert!(beside.contains("BB1004: "), "got: {beside}");
     }
 
     /// A caller reading the result object rather than stderr is a caller with nowhere to draw, and a
@@ -4596,6 +4620,7 @@ mod tests {
             attempt: None,
             trail: None,
             clean: true,
+            ending: Ending::Done,
             not_served: None,
         });
 
@@ -5767,12 +5792,13 @@ mod tests {
             attempt: None,
             trail: None,
             clean: true,
+            ending: Ending::Failed,
             not_served: Some("a-premium-model was not served"),
         });
 
         assert_eq!(reply, "ok\n");
         assert!(
-            beside.contains("a-premium-model was not served"),
+            beside.contains("BB1001: a-premium-model was not served"),
             "{beside}"
         );
     }
@@ -5817,12 +5843,15 @@ mod tests {
             attempt: None,
             trail: None,
             clean: true,
+            ending: Ending::Done,
             not_served: Some("a-premium-model was not served"),
         };
 
         let (reply, beside) = written(&substituted);
         assert_eq!(reply, "ok\n");
         assert!(beside.contains("was not served"), "{beside}");
+        // Not a failure here, so nothing claims the identifier of one.
+        assert!(!beside.contains("BB1"), "{beside}");
         assert!(ending_of_a_turn(true, false, true).ok());
     }
 
@@ -5930,6 +5959,7 @@ mod tests {
             attempt: Some("manifest proposed, which was not usable\n  not JSON\n"),
             trail: None,
             clean: true,
+            ending: Ending::Done,
             not_served: None,
         });
         assert_eq!(reply, "ok\n");

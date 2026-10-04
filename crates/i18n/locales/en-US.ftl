@@ -335,6 +335,9 @@ doctor-gateway-token-not-needed = none needed (the block names none)
 doctor-gateway-keys = gateway keys
 doctor-gateway-keys-unreadable =
     { $path } cannot be read, so no key in it is sent (bravebot auth login gateway leaves it as it is)
+# The one line `doctor` leaves on stderr when what it printed on stdout ends the run in a failure,
+# so the identifier is somewhere a log of the failure holds it (CLI-6).
+doctor-ended = the report above holds a problem that ends this run in failure
 doctor-gateway-models-absent = none configured (the gateway is asked what it serves)
 doctor-gateway-models-compiled = { $models } (built in, since this service has no listing; name any other the same way)
 doctor-region = region

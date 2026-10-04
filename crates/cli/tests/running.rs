@@ -917,6 +917,12 @@ fn doctor_ends_on_the_configuration_status_where_nothing_will_serve_a_turn() {
         stdout.contains("bravebot auth login leo"),
         "the report stopped saying how to configure a service: {stdout}"
     );
+    // The how-to is on stdout, so the identifier of the status has to be said on stderr
+    // by something else: a log of the failure is stderr, and has nowhere else to hold it.
+    assert!(
+        stderr.contains("BB1003: "),
+        "the status was not given its identifier on stderr: {stderr}"
+    );
 }
 
 /// The point of the flag: one object on stdout, in the reply's place, holding what a caller would

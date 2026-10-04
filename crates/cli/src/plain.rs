@@ -377,6 +377,7 @@ fn lines<R: BufRead + Send, W: Write + Send, T: Turns<Prompting<R, W>>>(
                 attempt: None,
                 trail: None,
                 clean: said.clean,
+                ending: crate::ending_of_a_turn(said.clean, false, said.not_served.is_some()),
                 not_served: said.not_served.as_deref(),
             },
         );
