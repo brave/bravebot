@@ -837,6 +837,7 @@ fn status_report(
         confinement: &session.confinement,
         servers: &session.servers,
         permission_mode: session.permission_mode(),
+        bypass_available: session.bypass_available(),
         auto_vetting: session.auto_vetting(),
         turns: session.turns,
         tokens: session.tokens,

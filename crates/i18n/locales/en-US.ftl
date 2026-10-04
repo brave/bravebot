@@ -77,7 +77,9 @@ cli-plain-trusting-kept =
 #
 # The markers are Claude Code's, and deliberately: somebody who has used one of these knows what
 # ⏵⏵ means at a glance, and inventing our own would make a familiar thing need reading. Asking has
-# no line of its own, being what a session has always done.
+# a line only in a session that was started with the flag that skips permissions: there it is the
+# answer to "did it stop skipping them?", and in any other session it is what has always happened.
+mode-ask = ◇ asking before it acts
 mode-accept-edits = ⏵ accept edits on
 mode-plan = ⏸ plan mode on
 mode-bypass = ⏵⏵ bypass permissions on

@@ -5841,6 +5841,30 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow("ambient", named.join(", "));
     }
 
+    /// Record the permission mode a turn begins with, by its name.
+    ///
+    /// The mode decides whether the next prompt is drawn, and it is the one thing that changes
+    /// between two turns of a session without a word in the transcript, so somebody reading the
+    /// trail back has no other way to tell a session that started asking from one that never
+    /// skipped permissions. The name is the mode's own static text, never anything a turn read.
+    pub fn record_permission_mode(&mut self, mode: &'static str) {
+        self.allow("permission_mode", format!("the turn began in {mode} mode"));
+    }
+
+    /// Record who answered a prompt the policy had decided to put.
+    ///
+    /// The `approval` entry before it says the line was being asked about; in a mode that answers
+    /// yes without drawing anything, nobody was, and "asking" alone reads as a person having said
+    /// so. `mode` is the name of the mode that answered in the person's place, and `None` is a
+    /// prompt no mode answered, which goes to the confirmer: a person, or nothing that can ask.
+    pub fn record_answer(&mut self, mode: Option<&'static str>) {
+        let detail = match mode {
+            Some(mode) => format!("answered by {mode} mode, nobody was asked"),
+            None => "no mode answered, left to the confirmer".to_string(),
+        };
+        self.allow("approval", detail);
+    }
+
     /// Record that a person moved a waited-for command to the background, and which job it became.
     ///
     /// A decision only a person can make: the planner cannot press the key and is told afterwards.

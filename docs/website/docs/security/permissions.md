@@ -279,6 +279,10 @@ to the first again, so no mode is one you cannot press your way out of, and it w
 runs: the turn in flight keeps the mode it began with, so a diff already on your screen does not have
 the question withdrawn from under you.
 
+**A session started with `--dangerously-skip-permissions` says so when it stops bypassing.** The line
+under the input box and `/status` name asking there, where a session started without the flag draws
+nothing for it. Nothing is printed in the transcript when you press the key.
+
 **Accepting edits stops at writes on purpose.** A write lands in a tree you can read afterwards and
 `git diff` shows you all of it; a program runs with everything your own shell has, leaves no diff,
 and what it prints is what the next round reads. A mode named for edits that also stopped asking

@@ -2839,6 +2839,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         policy = policy.within(spec);
     }
 
+    policy.record_permission_mode(task.permission_mode.name());
+
     // Before every turn rather than as a session opens, since a session's map is made at a start,
     // a clear and a resume and moved by `/cd` (MEMORY-5).
     // A checkout reads what it is told from the working directory it was made from, by the names

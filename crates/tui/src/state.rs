@@ -1925,6 +1925,11 @@ impl Session {
         self.permission_mode
     }
 
+    /// Whether the session was started with the flag that skips permissions.
+    pub fn bypass_available(&self) -> bool {
+        self.bypass_available
+    }
+
     /// Move to the next mode, and say nothing: the line under the box is the answer.
     ///
     /// A note in the transcript would be a running commentary on a key somebody is pressing to see

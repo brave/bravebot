@@ -3368,6 +3368,160 @@ fn a_deny_rule_holds_where_every_permission_check_is_bypassed() {
     );
 }
 
+/// A session that starts asking has to be distinguishable from one that never skipped permissions,
+/// and the trail is the only record that outlives the screen. Each turn names the mode it began with,
+/// and the four modes are named differently, so a trail cannot say "ask" for a session that ran in
+/// bypass.
+#[test]
+fn a_turn_records_the_mode_it_began_with() {
+    use bravebot_agent::PermissionMode;
+    for mode in [
+        PermissionMode::Ask,
+        PermissionMode::AcceptEdits,
+        PermissionMode::Plan,
+        PermissionMode::Bypass,
+    ] {
+        let scratch = Scratch::new("records-the-mode");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, _received) = serve(&reply_with("the answer"));
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        turn::run(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("what is 2 + 2?").with_permission_mode(mode),
+            &mut bravebot_agent::Unattended,
+            &mut sink,
+        )
+        .expect("turn runs");
+
+        let recorded: Vec<String> = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed {
+                    gate: "permission_mode",
+                    detail,
+                } => Some(detail.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            recorded,
+            [format!("the turn began in {} mode", mode.name())],
+            "{mode:?}: the trail did not name the mode the turn began in exactly once"
+        );
+    }
+}
+
+/// An `approval` entry that says "asking" reads as a person having been asked. Where a mode answers
+/// in the person's place nobody was, and a trail that cannot tell the two apart hides the one fact
+/// somebody reading it back came for. A run, a whole-file write and an edit each reach the prompt by
+/// their own road, so each is checked.
+#[test]
+fn an_approval_names_what_answered_it() {
+    use bravebot_agent::PermissionMode;
+    let answers = |mode: PermissionMode, tool: &str, arguments: &str| -> Vec<String> {
+        let scratch = Scratch::new("names-what-answered");
+        std::fs::write(scratch.path.join("notes.md"), "original").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, _received) =
+            serve_sequence(vec![tool_request_2(tool, arguments), reply_with("done")]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+        let mut confirmer = bravebot_agent::Confining::new(&mut asked, mode, false);
+
+        turn::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            // The workspace is vouched for, which an edit needs to read the file at all, and the rule
+            // is what puts the write to somebody in a tree that would otherwise not ask.
+            &Task::new("do it")
+                .with_permissions(rules(&[], &["Edit(notes.md)"], &[]))
+                .with_permission_mode(mode),
+            &mut confirmer,
+            &mut sink,
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+
+        sink.events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed {
+                    gate: "approval",
+                    detail,
+                } if detail.starts_with("answered by")
+                    || detail.starts_with("no mode answered") =>
+                {
+                    Some(detail.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    };
+
+    let run = ("run", r#"{"command":"touch marker.txt"}"#);
+    let write = ("write_file", r#"{"path":"notes.md","contents":"replaced"}"#);
+    let edit = (
+        "edit_file",
+        r#"{"path":"notes.md","old_text":"original","new_text":"edited"}"#,
+    );
+    for (tool, arguments) in [run, write, edit] {
+        assert_eq!(
+            answers(PermissionMode::Bypass, tool, arguments),
+            ["answered by bypass mode, nobody was asked"],
+            "{tool} under bypass"
+        );
+        assert_eq!(
+            answers(PermissionMode::Ask, tool, arguments),
+            ["no mode answered, left to the confirmer"],
+            "{tool} under ask"
+        );
+    }
+    // A mode answers only what it answers: accepting edits takes the write prompt and leaves the run.
+    assert_eq!(
+        answers(PermissionMode::AcceptEdits, write.0, write.1),
+        ["answered by accept-edits mode, nobody was asked"]
+    );
+    assert_eq!(
+        answers(PermissionMode::AcceptEdits, run.0, run.1),
+        ["no mode answered, left to the confirmer"]
+    );
+
+    // Accepting edits does not answer a write that would create a credential: the prompt is still
+    // drawn, so the trail must not say a mode answered it. Bypass does answer it.
+    let credential = (
+        "write_file",
+        &format!(r#"{{"path":".env","contents":"SECRET_KEY_BASE={GENERATED_SECRET}\n"}}"#),
+    );
+    assert_eq!(
+        answers(PermissionMode::AcceptEdits, credential.0, credential.1),
+        ["no mode answered, left to the confirmer"],
+        "a credential-creating write under accept-edits"
+    );
+    assert_eq!(
+        answers(PermissionMode::Bypass, credential.0, credential.1),
+        ["answered by bypass mode, nobody was asked"],
+        "a credential-creating write under bypass"
+    );
+
+    // Plan refuses a write before any prompt is raised, so nothing answered and nothing is recorded.
+    for (tool, arguments) in [write, edit] {
+        assert_eq!(
+            answers(PermissionMode::Plan, tool, arguments),
+            Vec::<String>::new(),
+            "{tool} under plan"
+        );
+    }
+}
+
 /// Plan mode refuses a write however the person would have answered, so the file is not touched even
 /// where the confirmer approves everything. This is what makes the mode a statement about the turn
 /// rather than a person who keeps saying no.

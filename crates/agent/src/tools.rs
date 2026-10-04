@@ -2835,6 +2835,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
             tools.workspace,
             tools.slots,
             tools.recording(),
+            tools.permission_mode,
             confirmer,
             &arguments,
         ),
@@ -4469,6 +4470,12 @@ fn write_file<S: Sink, C: Confirmer>(
         };
 
         let answer = confirmer.confirm_write(&request);
+        policy.record_answer(
+            tools
+                .permission_mode
+                .answers_a_write_unasked(!request.credentials.is_empty())
+                .then(|| tools.permission_mode.name()),
+        );
         if !answer.approved() {
             return credential_aware_rejection(&shown_path, &scanned);
         }
@@ -4544,6 +4551,7 @@ fn edit_file<S: Sink, C: Confirmer>(
     workspace: &Workspace,
     slots: &SlotStore,
     recording: crate::findings::Recording<'_>,
+    mode: crate::PermissionMode,
     confirmer: &mut C,
     arguments: &Value,
 ) -> Produced {
@@ -4698,6 +4706,10 @@ fn edit_file<S: Sink, C: Confirmer>(
         };
 
         let answer = confirmer.confirm_write(&request);
+        policy.record_answer(
+            mode.answers_a_write_unasked(!request.credentials.is_empty())
+                .then(|| mode.name()),
+        );
         if answer.approved() {
             standing.keep(policy, answer);
         } else {
@@ -6308,6 +6320,12 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             stdin: fed.as_ref().map(|(slot, _, _)| slot.to_string()),
         };
         let answer = confirmer.confirm_run(&request);
+        policy.record_answer(
+            tools
+                .permission_mode
+                .answers_a_run_unasked()
+                .then(|| tools.permission_mode.name()),
+        );
         if !answer.approved() {
             return Produced::problem(
                 "refused: the user did not approve running this. Do not retry the same \
@@ -12277,6 +12295,7 @@ mod tests {
                 // scan records is `crate::findings`'s own tests and the turn-level one beside
                 // them; the question here is about the arguments.
                 crate::findings::Recording::default(),
+                crate::PermissionMode::Ask,
                 &mut crate::confirm::ApproveWrites,
                 &json!({"path": "a.txt", "old_text": "old", "new_text": "new"}),
             );
@@ -12431,6 +12450,7 @@ mod tests {
                 &workspace,
                 &slots,
                 crate::findings::Recording::default(),
+                crate::PermissionMode::Ask,
                 &mut crate::confirm::ApproveWrites,
                 &json!({"path_ref": "ref:1", "old_text": "old", "new_text": "new"}),
             );

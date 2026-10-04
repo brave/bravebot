@@ -167,3 +167,26 @@ A manifest run makes two of them, and both appear in the trail: one for the goal
 and one for fitting that to the tool set. A refusal is as much a record as a permission.
 
 `verified-by: bravebot_agent::manifest::the_audit_trail_records_each_planning_call`
+
+<a id="TRACE-7"></a>
+### TRACE-7: the trail names the mode a turn began in and what answered each prompt
+
+Each turn records the permission mode it began with ([permission-modes.md](permission-modes.md)) by
+its name, before any tool is called. When the policy decides a command or a write is to be put to
+the person, a second entry under `approval` says what answered: the mode that answered in their
+place and so drew nothing, or no mode, which leaves it to whatever confirms (a person, or nothing that
+can ask). The entries before it that end in "asking" say what the policy decided, and they read as
+a person having been asked.
+
+Other prompts a mode answers, such as a fetch or a server start, are not named here.
+
+Answers that were never a prompt already say so in their own entry: a rule in the settings file, a
+command the user vouched for, and the audited table.
+
+**Why.** A session started with the flag that skips permissions and one that never skipped them look
+the same once the key has moved off bypass, and the screen keeps nothing. The trail outlives it, and
+it is the only place somebody accounting for what ran can read which of the two they are looking at.
+The names are the modes' own text, so the entry holds no content (TRACE-2).
+
+`verified-by: bravebot_agent::turn::a_turn_records_the_mode_it_began_with`
+`verified-by: bravebot_agent::turn::an_approval_names_what_answered_it`
