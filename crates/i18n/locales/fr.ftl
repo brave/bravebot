@@ -1490,6 +1490,7 @@ indicator-checking = { $lines ->
     }
 indicator-checking-picture = Vérification d'une image
 indicator-checking-pdf = Vérification d'un PDF
+indicator-stopping = Arrêt en cours
 tokens-thousands = { $thousands } k
 tokens-millions = { $millions } M
 turn-done = tour { $turn } terminé
