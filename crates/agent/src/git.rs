@@ -6471,7 +6471,74 @@ mod tests {
                 bytes: 1 << 20,
             };
             let refused = made_with(&repo, &|_| false, bound).expect_err("bounded");
-            assert_eq!(refused, Refused::TooManyFiles);
+            assert_eq!(refused, Refused::TooManyDirectories);
+            nothing_written(&repo, &refused);
+        }
+
+        /// The bounds are applied to the whole tree before an attributes file is read, so a tree
+        /// over a bound is refused for that bound, not for what an attributes file listed ahead
+        /// of the entries that pass it sets.
+        #[test]
+        fn a_tree_past_a_bound_is_refused_for_it_before_an_attributes_file_is_read() {
+            let repo = Repo::new("checkout-bound-before-attributes");
+            let rules = repo.blob("* filter=x\n");
+            let a = repo.blob("hello\n");
+            let empty = repo.tree(&[]);
+            committed(
+                &repo,
+                &[
+                    ("100644", ".gitattributes", rules),
+                    ("100644", "a", a),
+                    ("40000", "d1", empty),
+                    ("40000", "d2", empty),
+                ],
+            );
+            let cases = [
+                (
+                    Bound {
+                        files: 1,
+                        bytes: 1 << 20,
+                    },
+                    Refused::TooManyFiles,
+                ),
+                (
+                    Bound {
+                        files: 10,
+                        bytes: 12,
+                    },
+                    Refused::TooManyBytes,
+                ),
+            ];
+            for (bound, expected) in cases {
+                let refused = made_with(&repo, &|_| false, bound).expect_err("bounded");
+                assert_eq!(refused, expected, "{bound:?}");
+                nothing_written(&repo, &refused);
+            }
+            let within = Bound {
+                files: 10,
+                bytes: 1 << 20,
+            };
+            let refused = made_with(&repo, &|_| false, within).expect_err("read");
+            assert_eq!(refused, Refused::Converts(Conversion::Filter));
+
+            let repo = Repo::new("checkout-bound-dirs-before-attributes");
+            let rules = repo.blob("* filter=x\n");
+            let empty = repo.tree(&[]);
+            committed(
+                &repo,
+                &[
+                    ("100644", ".gitattributes", rules),
+                    ("40000", "d1", empty),
+                    ("40000", "d2", empty),
+                    ("40000", "d3", empty),
+                ],
+            );
+            let bound = Bound {
+                files: 2,
+                bytes: 1 << 20,
+            };
+            let refused = made_with(&repo, &|_| false, bound).expect_err("bounded");
+            assert_eq!(refused, Refused::TooManyDirectories);
             nothing_written(&repo, &refused);
         }
 
