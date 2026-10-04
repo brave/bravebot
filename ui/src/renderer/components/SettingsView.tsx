@@ -39,6 +39,16 @@ export function SettingsView({ page, onPage, onBack, session, chosen, onAppearan
     }
   }, [])
   const back = useCallback(() => leave(onBack), [leave, onBack])
+  // The page shown, which follows `page` only through `leave`: a menu can change `page` directly,
+  // and that is asked about the same as a click here.
+  const [shown, setShown] = useState(page)
+  useEffect(() => {
+    if (page === shown) return
+    if (!dirty.current || window.confirm('Discard unsaved hook changes?')) {
+      dirty.current = false
+      setShown(page)
+    } else onPage(shown)
+  }, [page, shown, onPage])
   /** Set by a page that has somewhere inside it to go back to, and cleared when it is at its top. */
   const [inner, setInner] = useState<(() => void) | null>(null)
   const onInner = useCallback((step: (() => void) | null) => setInner(() => step), [])
@@ -54,7 +64,7 @@ export function SettingsView({ page, onPage, onBack, session, chosen, onAppearan
     return () => document.removeEventListener('keydown', keys)
   }, [back, inner])
 
-  const current = PAGES.find((each) => each.id === page) ?? PAGES[0]!
+  const current = PAGES.find((each) => each.id === shown) ?? PAGES[0]!
 
   return (
     <div className="settings-view" data-test="settings-view">
@@ -63,9 +73,9 @@ export function SettingsView({ page, onPage, onBack, session, chosen, onAppearan
         <Navigation className="settings-navigation" aria-label="Settings">
           <div className="settings-nav-list">
             {PAGES.map((each) => (
-              <NavigationItem key={each.id} outsideList icon={each.icon} isCurrent={each.id === page}
-                aria-current={each.id === page ? 'page' : undefined} data-test={`settings-page-${each.id}`}
-                onClick={() => { if (each.id !== page) leave(() => onPage(each.id)) }}>
+              <NavigationItem key={each.id} outsideList icon={each.icon} isCurrent={each.id === shown}
+                aria-current={each.id === shown ? 'page' : undefined} data-test={`settings-page-${each.id}`}
+                onClick={() => { if (each.id !== shown) leave(() => onPage(each.id)) }}>
                 {each.label}
               </NavigationItem>
             ))}
@@ -91,9 +101,9 @@ export function SettingsView({ page, onPage, onBack, session, chosen, onAppearan
           <div className="settings-page">
             <h1 id="settings-title">{current.label}</h1>
             <p className="settings-subtitle">{current.subtitle}</p>
-            {page === 'agent'
+            {shown === 'agent'
               ? <AgentSettings session={session} onChanged={onChanged} onDirty={onDirty} />
-              : page === 'connectors'
+              : shown === 'connectors'
                 ? <Connectors onBack={onInner} />
                 : <GeneralSettings chosen={chosen} onAppearance={onAppearance} />}
           </div>
