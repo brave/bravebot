@@ -26,7 +26,10 @@ go through one. The trail is the record of those decisions.
 
 A refusal is as much a record as a permission. A read and a write leave different trails, a
 promotion is recorded as one, and the fields fixed before a turn observed anything are recorded
-first.
+first. A promotion records the label it decided and nothing about where the path lands. Where a
+tool tells the planner that a path resolves outside the workspace, the trail records that refusal
+as well, with the remedy offered and the path named as the planner was told it: `ref:N` for a
+reference, the path otherwise.
 
 **Why.** A trail that logged only what happened would not answer "why did it not do the thing I
 asked", which is most of what anyone asks it.
@@ -35,6 +38,14 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_core::policy::promotion_appears_in_the_audit_trail`
 `verified-by: bravebot_core::policy::the_audit_trail_records_the_precommit_first`
 `verified-by: bravebot_core::policy::a_turn_cannot_begin_without_routing`
+`verified-by: bravebot_agent::turn::a_read_refused_for_leaving_the_workspace_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::turn::a_read_through_a_reference_refused_for_leaving_the_workspace_is_recorded_as_the_reference`
+`verified-by: bravebot_agent::turn::a_picture_refused_for_leaving_the_workspace_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::turn::every_file_tool_records_a_path_refused_for_leaving_the_workspace`
+`verified-by: bravebot_agent::turn::an_edit_whose_file_leaves_the_workspace_while_asked_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::tools::a_deferred_read_refused_for_leaving_the_workspace_is_recorded_as_the_reference`
+`verified-by: bravebot_agent::tools::a_directory_outside_the_workspace_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::tools::a_redirection_outside_the_workspace_is_recorded_as_a_refusal`
 
 <a id="TRACE-2"></a>
 ### TRACE-2: the trail holds no content
@@ -93,7 +104,7 @@ Reading a file in a trusted directory, where the content reaches the model:
 
 ```
 ok      precommit: routing fields ["task"] fixed before any observation
-ok      promote: read_file.path proposed by the model, confined and non-destructive
+ok      promote: read_file.path proposed by the model, public and non-destructive
 ok      file_read.path [routing] (T,pub)
 observe file_read produced (T,priv)
 ok      trust: notes.md read as trusted, from a trusted path
@@ -126,6 +137,14 @@ ok      resolve: write_file: ref:3 resolved to its quarantined content, (U,priv)
 release ref:3 (U,priv) -> (U,pub)
 ok      declassify: ref:3 released into src/config.py, which is inside the workspace
 ok      approval: src/config.py: a path nobody has vouched for either way, asking
+```
+
+A read of a file outside the workspace, refused when the path resolves:
+
+```
+ok      promote: read_file.path proposed by the model, public and non-destructive
+BLOCK   confine: read_file.path: '/etc/hosts' resolves outside the workspace; remedy offered:
+        open its directory, or drop the file
 ```
 
 <a id="TRACE-5"></a>

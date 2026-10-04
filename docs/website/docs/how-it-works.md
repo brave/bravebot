@@ -196,7 +196,7 @@ written to a file for a workspace nobody vouched for. See [The audit trail](secu
 
 ```
 ok      precommit: routing fields ["task"] fixed before any observation
-ok      promote: read_file.path proposed by the model, confined and non-destructive
+ok      promote: read_file.path proposed by the model, public and non-destructive
 ok      file_read.path [routing] (T,pub)
 observe file_read produced (T,priv)
 ok      trust: notes.md read as trusted, from a trusted path

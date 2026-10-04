@@ -31,7 +31,7 @@ Reading a file in a trusted directory, where the content reaches the model:
 
 ```
 ok      precommit: routing fields ["task"] fixed before any observation
-ok      promote: read_file.path proposed by the model, confined and non-destructive
+ok      promote: read_file.path proposed by the model, public and non-destructive
 ok      file_read.path [routing] (T,pub)
 observe file_read produced (T,priv)
 ok      trust: notes.md read as trusted, from a trusted path
@@ -47,6 +47,15 @@ ok      trust: notes.md read as untrusted
 slot    ref:0 at (U,priv)
 ok      present: tool_result: notes.md is (U,priv), quarantined as ref:0; the planner
         sees a reference only
+```
+
+A read of a file outside the workspace, refused when the path resolves, with what you can do about
+it:
+
+```
+ok      promote: read_file.path proposed by the model, public and non-destructive
+BLOCK   confine: read_file.path: '/etc/hosts' resolves outside the workspace; remedy offered:
+        open its directory, or drop the file
 ```
 
 Three pieces of notation appear throughout:
