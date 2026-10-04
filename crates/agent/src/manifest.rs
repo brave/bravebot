@@ -519,6 +519,29 @@ pub fn run<S: Sink, C: Confirmer, R: Reporter>(
     mut trust: TrustStore,
     cancel: &Cancel,
 ) -> Result<Outcome, TurnError> {
+    run_recording(
+        config, egress, workspace, task, confirmer, reporter, sink, &mut trust, cancel,
+    )
+}
+
+/// [`run`], with the session's trust map lent instead of handed over.
+///
+/// Rules a person's gesture recorded are left in `trust` whether the run finishes, fails or is
+/// stopped: `dropping.md` DROP-2 has a dropped file trusted for the rest of the session, and
+/// [`crate::attached::read`] writes that rule back on failure for the same reason. A run that
+/// finishes also leaves the map its steps ended with, which is the one in [`Outcome::trust`].
+#[allow(clippy::too_many_arguments)]
+pub fn run_recording<S: Sink, C: Confirmer, R: Reporter>(
+    config: &Config,
+    egress: &Egress,
+    workspace: &Workspace,
+    task: &Task,
+    confirmer: &mut C,
+    reporter: &mut R,
+    sink: &mut S,
+    trust: &mut TrustStore,
+    cancel: &Cancel,
+) -> Result<Outcome, TurnError> {
     // A pipe is quarantined context in a turn. Here it would be dropped: the plan is frozen
     // before anything is observed, and there is no slot for bytes the planner never named.
     // Failing loudly is the alternative to `cat notes.md | bravebot --mode manifest -p`
@@ -558,7 +581,7 @@ pub fn run<S: Sink, C: Confirmer, R: Reporter>(
     // (`dropping.md` DROP-2) and that rule is the person's rather than this read's: a copy left
     // behind here would make the file trusted for the length of the read and untrusted for every
     // step of the plan that touches it afterwards.
-    let dropped = match crate::attached::read(workspace, &task.attachments, &mut trust, sink) {
+    let dropped = match crate::attached::read(workspace, &task.attachments, trust, sink) {
         Ok(dropped) => dropped,
         Err(error) => return Err(stopped(attempt, error)),
     };
@@ -619,7 +642,7 @@ pub fn run<S: Sink, C: Confirmer, R: Reporter>(
         confirmer,
         reporter,
         sink,
-        trust,
+        trust.clone(),
         subscription.as_mut(),
         cancel,
         task.model.as_deref(),

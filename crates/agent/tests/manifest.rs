@@ -613,6 +613,51 @@ fn a_dropped_picture_is_still_trusted_when_a_step_of_the_plan_reads_it() {
     );
 }
 
+/// The rule a drop recorded is the person's and holds for the rest of the session (DROP-2), so a
+/// run that stops after reading the drop keeps it. Here the plan is declined, which is a failure
+/// that carries no trust map; the map lent to the run is the only place the rule can be. Asserted
+/// against a file the map distrusts, so the rule can only have come from the drop.
+#[test]
+fn a_dropped_picture_stays_trusted_when_the_run_is_declined() {
+    let scratch = Scratch::new("dropped-task-declined");
+    std::fs::write(scratch.path.join("shot.png"), "three stripes").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "shot.png", "out_slot": "doc"}},
+            {"capability": "ANSWER", "args": {"from_slot": "doc"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let task = Task::new("what is in [Image #1]?").with_attachment("shot.png", "image/png");
+
+    let mut trust = TrustStore::new(&scratch.path);
+    trust.distrust("shot.png");
+    let mut nobody = bravebot_agent::confirm::Unattended;
+
+    manifest::run_recording(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &task,
+        &mut nobody,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        &mut trust,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("a plan nobody approved must not run");
+
+    assert!(
+        trust.is_trusted("shot.png"),
+        "the rule the drop recorded went with the failed run: {:?}",
+        trust.rules().collect::<Vec<_>>()
+    );
+}
+
 /// A picture is an input, and the record says what arrived however it arrived. A plan is the one
 /// place a picture is read by something that cannot be asked about it afterwards, so the trail is
 /// the only account of what the plan was made from.
