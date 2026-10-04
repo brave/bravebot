@@ -284,9 +284,9 @@ Deletion removes the bot definition, cached briefing and app-owned memory revisi
 histories. Saved conversations stay under `~/.bravebot`, the project memory files stay in
 their checkouts, and the home folder stays where it is. Deletion is refused while a bot conversation is running.
 
-Archiving changes nothing in the sessions tab. An archived bot still owns its session — that is
-what makes restoring it a restoration — so the conversation does not surface there while the bot
-is away, which would make it a record openable twice by another route.
+Archiving changes nothing in Chats. A bot's conversations are listed there whether the bot is
+archived or not, and one opened from there is still that bot's conversation, so restoring the bot
+continues the same record.
 
 An archived row has no face, and that is deliberate twice over. A page gets a limited number of
 WebGL contexts, as the avatar section below explains at some length, and an archive is exactly the
