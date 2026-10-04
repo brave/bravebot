@@ -6158,6 +6158,7 @@ fn manifest_animated(
     session.note(t!(manifest_began));
 
     let worker = thread::spawn(move || {
+        let mut worker_trust = worker_trust;
         let mut sink = Trail::new();
         let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main.clone());
         // A queue of its own, and empty. A line typed while a run walks is not something the run
@@ -6174,7 +6175,7 @@ fn manifest_animated(
         let mut confirmer =
             bravebot_agent::Confining::new(&mut asking, permission_mode, worker_task.auto_vetting);
         let egress = Egress::new();
-        let outcome = bravebot_agent::manifest::run(
+        let outcome = bravebot_agent::manifest::run_recording(
             &worker_config,
             &egress,
             &worker_workspace,
@@ -6182,10 +6183,10 @@ fn manifest_animated(
             &mut confirmer,
             &mut reporter,
             &mut sink,
-            worker_trust,
+            &mut worker_trust,
             &worker_cancel,
         );
-        (outcome, sink)
+        (outcome, sink, worker_trust)
     });
 
     loop {
@@ -6347,12 +6348,13 @@ fn manifest_animated(
         }
     }
 
-    let (outcome, sink) = worker.join().unwrap_or_else(|_| {
+    let (outcome, sink, run_trust) = worker.join().unwrap_or_else(|_| {
         (
             Err(bravebot_agent::TurnError::Precommit(
                 t!(manifest_ended_unexpectedly).to_string(),
             )),
             Trail::new(),
+            trust.clone(),
         )
     });
 
@@ -6370,10 +6372,12 @@ fn manifest_animated(
     // What the run decided about the tree is the session's, the way a turn's is. A file dropped on
     // the line was vouched for by the gesture that put it there, and `dropping.md` DROP-2 has that
     // rule hold for the rest of the session rather than for the run; the rules the run's own writes
-    // recorded belong to the same tree the next turn reads. Nothing here on a run that failed: an
-    // error carries what it produced and no map.
-    if let Ok(finished) = &outcome {
-        *trust = finished.trust.clone();
+    // recorded belong to the same tree the next turn reads. A run that failed or was stopped
+    // carries no map in its error, so the map the run was lent comes back instead: it holds the
+    // rules the drops recorded, which the gesture granted whether or not the run finished.
+    match &outcome {
+        Ok(finished) => *trust = finished.trust.clone(),
+        Err(_) => *trust = run_trust,
     }
 
     // Only from a run that finished. A run that stopped comes back as an error carrying what it
