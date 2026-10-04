@@ -2537,6 +2537,9 @@ skill-asks-an-effort = { $skill } asks the rest of this turn at { $effort } effo
 # The skill loads and the turn goes on as it was, rather than stopping: a skill is not the thing the
 # person asked for, so a model they cannot reach is a line of its file that does nothing.
 skill-model-needs-sign-in = { $skill } asks for { $model }, which needs a sign-in first, so its rounds keep this session's model
+# The layer refuses the model, so the skill loads and the turn goes on as it was, for the reason the
+# sign-in line above does.
+skill-model-refused = { $skill } asks for { $model }, which this machine does not request, so its rounds keep this session's model: { $reason }
 # The turn runs on a model an addressed or delegate definition named, which a skill does not
 # replace. The definition is its name as the person or the planner wrote it.
 skill-model-kept-for-definition = { $skill } asks for { $model }, but this turn stays on the model { $definition } named

@@ -1983,6 +1983,18 @@ fn adopt(
                     .to_string(),
                 );
             }
+        } else if let Some((file, why)) = config.model_refused(written) {
+            // Before the sign-in question, which would send somebody to fix the wrong thing
+            // (BACKEND-48).
+            said.push(
+                t!(
+                    skill_model_refused,
+                    skill = skill,
+                    model = written,
+                    reason = crate::backend::refusal_reason(file, why)
+                )
+                .to_string(),
+            );
         } else if crate::backend::Backend::needs_sign_in(config, &resolved) {
             said.push(t!(skill_model_needs_sign_in, skill = skill, model = written).to_string());
         } else if turn_model.as_deref().unwrap_or(&config.default_model) != resolved {
@@ -3055,6 +3067,22 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         let definition_model = named
             .filter(|_| !task.model_outranks_a_definition)
             .map(|(_, written)| (written.to_string(), config.model_named(written)));
+        // The machine-level layer first, for the reason the sign-in check below is second
+        // (BACKEND-48).
+        if let (Some(addressed), Some((written, _))) = (&addressed, &definition_model)
+            && let Some((file, why)) = config.model_refused(written)
+        {
+            reporter.notice(t!(
+                delegate_model_refused,
+                definition = addressed.name(),
+                model = written,
+                reason = crate::backend::refusal_reason(file, why)
+            ));
+            return Err(TurnError::Precommit(
+                "the addressed definition's model is refused by this machine's managed layer"
+                    .to_string(),
+            ));
+        }
         if let (Some(addressed), Some((written, resolved))) = (&addressed, &definition_model)
             && crate::backend::Backend::needs_sign_in(config, resolved)
         {
