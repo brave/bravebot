@@ -175,6 +175,25 @@ impl WorkspaceError {
                  window to have it read with their next message"
             ),
             Self::Escapes {
+                remedy: Remedy::OpenEndsCheckouts,
+                ..
+            } => format!(
+                "'{named}' resolves outside the workspace; refusing to touch it. The person can \
+                 open the directory it is in, with /add-dir in the terminal or --add-dir when \
+                 starting bravebot, after which this path reaches it. That directory holds the \
+                 working directory, and while one is open no delegate is given a checkout"
+            ),
+            Self::Escapes {
+                remedy: Remedy::DropOrOpenEndsCheckouts,
+                ..
+            } => format!(
+                "'{named}' resolves outside the workspace; refusing to touch it. The person can \
+                 drop the file on the window to have it read with their next message. Opening the \
+                 directory it is in, with /add-dir in the terminal or --add-dir when starting \
+                 bravebot, would also reach it, but that directory holds the working directory, \
+                 and while one is open no delegate is given a checkout"
+            ),
+            Self::Escapes {
                 remedy: Remedy::Kept,
                 ..
             } => format!(
@@ -229,6 +248,13 @@ impl WorkspaceError {
             },
             Self::Escapes {
                 path,
+                remedy: Remedy::OpenEndsCheckouts,
+            } => Self::Escapes {
+                path,
+                remedy: Remedy::DropOrOpenEndsCheckouts,
+            },
+            Self::Escapes {
+                path,
                 remedy: Remedy::Kept,
             } => Self::Escapes {
                 path,
@@ -269,6 +295,12 @@ pub enum Remedy {
     /// [`Remedy::Open`] for a call that reads the file, where dropping it is a second way to have
     /// it read. A drop only ever reads (DROP-3), so no other call is told of it.
     OpenOrDrop,
+    /// [`Remedy::Open`] where the directory holds the working directory, so opening it leaves no
+    /// delegate a checkout (CHECKOUT-7).
+    OpenEndsCheckouts,
+    /// [`Remedy::OpenOrDrop`] where the directory holds the working directory. The drop is named
+    /// first, since it reaches the file and costs nothing.
+    DropOrOpenEndsCheckouts,
     /// `permissions.readsStayInWorkspace` refuses opening a directory, and the call is not a read,
     /// which a drop would not serve (PERM-16).
     Kept,
@@ -283,6 +315,13 @@ impl Remedy {
             Self::Nothing => "none",
             Self::Open => "open its directory",
             Self::OpenOrDrop => "open its directory, or drop the file",
+            Self::OpenEndsCheckouts => {
+                "open its directory, which holds the working directory and so ends checkouts"
+            }
+            Self::DropOrOpenEndsCheckouts => {
+                "drop the file, or open its directory, which holds the working directory and so \
+                 ends checkouts"
+            }
             Self::Kept => {
                 "none, since permissions.readsStayInWorkspace refuses opening its directory"
             }
@@ -755,6 +794,38 @@ pub struct Moved {
 /// characters would close a directory that merely shares a prefix with the new root's name.
 fn overlaps(one: &Path, other: &Path) -> bool {
     one.starts_with(other) || other.starts_with(one)
+}
+
+/// Why a checkout cannot be made under a directory (CHECKOUT-7).
+///
+/// An added directory is named because a person typed it, or accepted it from a settings file
+/// after being shown it, so saying it tells the planner nothing read from the repository.
+enum CheckoutOverlap<'a> {
+    InsideWorkingDirectory,
+    AddedHoldsWorkingDirectory(&'a Path),
+    AddedHoldsCheckouts(&'a Path),
+}
+
+impl CheckoutOverlap<'_> {
+    fn describe(&self) -> String {
+        let way_out = "The person can close it with /clear in the terminal, which starts a new \
+                       conversation, or start bravebot again without opening it.";
+        match self {
+            Self::InsideWorkingDirectory => "it would sit inside the working directory".to_string(),
+            Self::AddedHoldsWorkingDirectory(dir) => format!(
+                "'{}', a directory opened beside the working directory, holds the working \
+                 directory, so a delegate in a checkout would still reach the working directory \
+                 through it. {way_out}",
+                dir.display()
+            ),
+            Self::AddedHoldsCheckouts(dir) => format!(
+                "'{}', a directory opened beside the working directory, holds the directory \
+                 checkouts are made in, so every run that reaches it would reach the checkout. \
+                 {way_out}",
+                dir.display()
+            ),
+        }
+    }
 }
 
 /// Refuse a directory whose resolved name the trust map cannot key a rule under.
@@ -1374,6 +1445,11 @@ impl Workspace {
                 Remedy::Nothing
             } else if self.reads_stay_inside {
                 Remedy::Kept
+            } else if resolved
+                .parent()
+                .is_some_and(|directory| self.root.starts_with(directory))
+            {
+                Remedy::OpenEndsCheckouts
             } else {
                 Remedy::Open
             };
@@ -3357,6 +3433,22 @@ impl Workspace {
             .map_or(self, |checkout| &checkout.source)
     }
 
+    /// Which tree the session opened keeps checkouts from being made under `directory`, if any
+    /// does (CHECKOUT-7). A directory holding the working directory is named before one holding
+    /// `directory`, since it is the one a person has to close in either case.
+    fn checkout_overlap(&self, directory: &Path) -> Option<CheckoutOverlap<'_>> {
+        if directory.starts_with(&self.root) {
+            return Some(CheckoutOverlap::InsideWorkingDirectory);
+        }
+        if let Some(dir) = self.added.iter().find(|dir| self.root.starts_with(dir)) {
+            return Some(CheckoutOverlap::AddedHoldsWorkingDirectory(dir));
+        }
+        self.added
+            .iter()
+            .find(|dir| directory.starts_with(dir))
+            .map(|dir| CheckoutOverlap::AddedHoldsCheckouts(dir))
+    }
+
     /// Make a checkout for the delegate `made_for` and return the workspace it works in (CHECKOUT-1,
     /// CHECKOUT-3, CHECKOUT-6, CHECKOUT-7, CHECKOUT-8).
     ///
@@ -3379,33 +3471,20 @@ impl Workspace {
                 "this delegate already works in a checkout, which the delegates it starts share",
             ));
         }
-        let overlaps = |directory: &Path| {
-            directory.starts_with(&self.root)
-                || self
-                    .added
-                    .iter()
-                    .any(|dir| self.root.starts_with(dir) || directory.starts_with(dir))
-        };
-        let overlap = || {
-            refused(
-                "it would sit inside the working directory, or a directory opened beside it \
-                 holds the working directory or the checkout",
-            )
-        };
         let unmade = || refused("the directory for checkouts could not be made");
         let directory = state
             .canonicalize()
             .map_err(|_| unmade())?
             .join("checkouts")
             .join(crate::home::key_for(&self.root));
-        if overlaps(&directory) {
-            return Err(overlap());
+        if let Some(overlap) = self.checkout_overlap(&directory) {
+            return Err(refused(&overlap.describe()));
         }
         let made_directory = crate::home::create_directory(&directory)
             .and_then(|()| directory.canonicalize())
             .map_err(|_| unmade())?;
-        if overlaps(&made_directory) {
-            return Err(overlap());
+        if let Some(overlap) = self.checkout_overlap(&made_directory) {
+            return Err(refused(&overlap.describe()));
         }
         if refuse_unkeyable(&made_directory, "checkouts", BACKSLASH_SEPARATES).is_err() {
             return Err(refused("no trust rule can be keyed under its directory"));
