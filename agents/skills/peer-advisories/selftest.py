@@ -371,6 +371,30 @@ class Work(unittest.TestCase):
         self.assertEqual(out.splitlines()[-1], f"1 not attempted, at the cap of 100: {drafts[100]['id']}")
         self.assertNotIn(drafts[100]["id"], json.loads((self.work / "filed.json").read_text()))
 
+    def test_post_stopped_by_a_gh_failure_files_only_the_rest_when_run_again(self):
+        """Both SKILL.md files tell a run whose post stopped on a gh failure to run it again, which must not file twice."""
+        drafts = [{"id": ghsa, "title": f"defect {ghsa}", "labels": ["bug"]} for ghsa in (A, B, C)]
+        (self.work / "drafts.json").write_text(json.dumps(drafts))
+        _, poster = self.poster()
+        files = poster.post
+
+        def files_b_and_reports_a_failure(repo, draft, assignee=None):
+            url = files(repo, draft, assignee)
+            if draft["id"] == B:
+                raise RuntimeError("HTTP 502")
+            return url
+
+        poster.post = files_b_and_reports_a_failure
+        code, _ = quiet(pa.post, self.post_args(), poster=poster)
+        self.assertEqual(code, 1)
+        self.assertEqual(list(json.loads((self.work / "filed.json").read_text())), [A])
+
+        calls, poster = self.poster(cited=[B])
+        code, _ = quiet(pa.post, self.post_args(), poster=poster)
+        self.assertEqual(code, 0)
+        self.assertEqual([c[1] for c in calls if c[0] == "create"], [C])
+        self.assertEqual(json.loads((self.work / "filed.json").read_text())[B]["issue"], 5)
+
 
 class Tree(unittest.TestCase):
     def setUp(self):

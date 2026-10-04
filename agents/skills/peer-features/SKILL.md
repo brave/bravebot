@@ -144,7 +144,10 @@ and wait for it, so that no time limit on a tool call stops it partway.
 Pass `--dry-run` on a `dry-run` run, and `--assignee` only where the user named somebody. Print the
 output. A missing label stops the step before anything is posted and prints the `gh label create` for
 it; creating a label is the user's call, so stop and tell them. `beyond-parity` is the one a first run
-is likely to lack, and labelling-issues.md gives its description and colour.
+is likely to lack, and labelling-issues.md gives its description and colour. A `gh` failure while
+posting stops the step at that draft. Run the step once more: it skips every draft `filed.json`
+records and searches the tracker for the rest before posting. Where it fails again, print the error
+and stop.
 
 ### Step 7: record (zero model tokens)
 
