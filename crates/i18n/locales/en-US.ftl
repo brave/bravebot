@@ -2456,6 +2456,7 @@ verb-read-git = History
 verb-lsp = Look up
 verb-write-file = Write
 verb-edit-file = Update
+verb-apply-checkout = Apply
 verb-todo-write = Plan
 # Named for what it is rather than for what it does: every one of these is a model with no
 # tools, no memory and one round, and a person watching a line go by should not have to

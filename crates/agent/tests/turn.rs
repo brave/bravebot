@@ -24281,10 +24281,28 @@ fn run_in_a_repository_recording(
     received: &MockRequests,
     prompt: &str,
 ) -> (Vec<String>, RecordingConfirmer, RecordingSink) {
+    run_in_a_repository_answering(
+        workspace,
+        home,
+        endpoint,
+        received,
+        prompt,
+        RecordingConfirmer::approving(),
+    )
+}
+
+/// [`run_in_a_repository_recording`] with the person's answers chosen by the test.
+fn run_in_a_repository_answering(
+    workspace: &Workspace,
+    home: &std::path::Path,
+    endpoint: &str,
+    received: &MockRequests,
+    prompt: &str,
+    mut confirmer: RecordingConfirmer,
+) -> (Vec<String>, RecordingConfirmer, RecordingSink) {
     let config = config_for(endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
-    let mut confirmer = RecordingConfirmer::approving();
     let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
     trust.trust(".");
     turn::run_with_trust(
@@ -24691,6 +24709,160 @@ fn a_command_vouched_for_in_the_working_directory_is_asked_about_again_in_a_chec
     assert!(
         directories[1].starts_with(home.path.canonicalize().unwrap().join("checkouts")),
         "{directories:#?}"
+    );
+}
+
+/// A worker given a checkout writes `out.txt` there; the planner then makes `apply` calls, one
+/// reply each. Returns what the planner was asked, the person's questions, and the working
+/// directory.
+fn apply_after_a_worker_wrote(
+    tag: &str,
+    applies: Vec<&'static str>,
+    confirmer: RecordingConfirmer,
+) -> (Vec<String>, RecordingConfirmer, Scratch, RecordingSink) {
+    let scratch = Scratch::new(tag);
+    let home = Scratch::new(&format!("{tag}-home"));
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut planner = vec![
+        tool_request(
+            "spawn_agent",
+            r#"{"kind":"worker","task":"WRITE-OUT-TO-APPLY","isolation":"checkout"}"#,
+        ),
+        reply_with("waiting"),
+    ];
+    planner.extend(
+        applies
+            .into_iter()
+            .map(|call| tool_request("apply_checkout", call)),
+    );
+    planner.push(reply_with("applied"));
+    let (endpoint, received) = serve_by_marker(vec![
+        ("HAVE-A-DELEGATE-WRITE-TO-APPLY", planner),
+        (
+            "WRITE-OUT-TO-APPLY",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"out.txt","contents":"from the delegate"}"#,
+                ),
+                reply_with("wrote it"),
+            ],
+        ),
+    ]);
+    let (asked, confirmer, sink) = run_in_a_repository_answering(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "HAVE-A-DELEGATE-WRITE-TO-APPLY",
+        confirmer,
+    );
+    (asked, confirmer, scratch, sink)
+}
+
+/// CHECKOUT-14. A file a delegate wrote in its kept checkout comes back into the working
+/// directory as a write the person is asked about, though the working directory is trusted and the
+/// write of trusted bytes there would ask nobody. The checkout's own file is left where it is.
+#[test]
+fn a_kept_checkouts_file_comes_back_through_a_question_the_table_would_not_ask() {
+    let (asked, confirmer, scratch, sink) = apply_after_a_worker_wrote(
+        "checkout-apply",
+        vec![r#"{"checkout":"c1"}"#],
+        RecordingConfirmer::approving(),
+    );
+
+    assert_eq!(
+        confirmer.seen.len(),
+        1,
+        "the delegate's write asked nobody and the apply asked once: {:#?}",
+        confirmer.seen.iter().map(|r| &r.path).collect::<Vec<_>>()
+    );
+    assert_eq!(confirmer.seen[0].path, "out.txt");
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("out.txt")).expect("brought back"),
+        "from the delegate"
+    );
+    let events = checkout_events(&sink);
+    assert!(
+        events
+            .iter()
+            .any(|(_, detail)| detail.starts_with("applied from ") && detail.contains("/c1")),
+        "the trail does not record the apply: {events:?}"
+    );
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("1 of 1 file from checkout c1 brought back")),
+        "the planner was not told what came back"
+    );
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("brings the files it names back into the working directory")),
+        "the planner was not told how to bring a kept checkout's files back"
+    );
+}
+
+/// CHECKOUT-14. A person who declines the question leaves the working directory as it was, and the
+/// planner is told so rather than that it came back.
+#[test]
+fn declining_the_question_brings_nothing_back() {
+    let (asked, confirmer, scratch, sink) = apply_after_a_worker_wrote(
+        "checkout-apply-declined",
+        vec![r#"{"checkout":"c1"}"#],
+        RecordingConfirmer::rejecting(),
+    );
+
+    assert_eq!(confirmer.seen.len(), 1, "the person was not asked");
+    assert!(
+        !scratch.path.join("out.txt").exists(),
+        "a declined write landed in the working directory"
+    );
+    assert!(
+        !checkout_events(&sink)
+            .iter()
+            .any(|(_, detail)| detail.starts_with("applied from ")),
+        "the trail records an apply the person declined"
+    );
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("0 of 1 file from checkout c1 brought back")),
+        "the planner was told a declined write came back"
+    );
+}
+
+/// CHECKOUT-14. Only a path the driver recorded a write to can come back, and a checkout the
+/// session does not keep brings back nothing. Nothing is asked about either.
+#[test]
+fn only_a_recorded_path_of_a_kept_checkout_is_brought_back() {
+    let (asked, confirmer, scratch, _sink) = apply_after_a_worker_wrote(
+        "checkout-apply-unrecorded",
+        vec![
+            r#"{"checkout":"c1","paths":["README"]}"#,
+            r#"{"checkout":"c7"}"#,
+        ],
+        RecordingConfirmer::approving(),
+    );
+
+    assert!(
+        confirmer.seen.is_empty(),
+        "a refused apply asked: {:#?}",
+        confirmer.seen.len()
+    );
+    assert!(!scratch.path.join("out.txt").exists());
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("the driver recorded no write to README in checkout c1")),
+        "a path nobody wrote was not refused as one"
+    );
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("the session keeps no checkout c7")),
+        "a checkout the session does not keep was not refused"
     );
 }
 

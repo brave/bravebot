@@ -43,8 +43,9 @@ The driver records what was written in a checkout, and beside the report names t
 planner typed and counts the writes made through a reference ([CHECKOUT-13](#CHECKOUT-13),
 [CHECKOUT-18](#CHECKOUT-18)), `/status` lists each checkout the session has
 ([CHECKOUT-21](#CHECKOUT-21)), and `/checkouts` lists the ones kept and removes one
-([CHECKOUT-15](#CHECKOUT-15)). Bringing work back and keeping checkouts across a resume are not
-built.
+([CHECKOUT-15](#CHECKOUT-15)). `apply_checkout` brings the files a delegate wrote back, one at a
+time ([CHECKOUT-14](#CHECKOUT-14)). `/checkouts apply` and keeping checkouts across a resume are
+not built.
 
 **A checkout is not a sandbox.** It moves where a delegate's file tools reach and where its
 programs start. A program it runs is as unconfined as any other ([sandboxing.md](sandboxing.md)),
@@ -70,8 +71,9 @@ wrote ([SESSION-19](sessions.md#SESSION-19)).
 A spawn can ask for a checkout ([CHECKOUT-1](#CHECKOUT-1)), and so can a definition's `isolation:`
 key ([CHECKOUT-2](#CHECKOUT-2)). The planner is told the paths the delegate typed for what it wrote in a kept
 checkout ([CHECKOUT-18](#CHECKOUT-18)), and `/status` lists each checkout the session has
-([CHECKOUT-21](#CHECKOUT-21)). Nothing brings that work back into the working directory, and a
-checkout a delegate wrote in stays where it is until a person removes it with `/checkouts remove`
+([CHECKOUT-21](#CHECKOUT-21)). The planner brings the files it names back into the working
+directory with `apply_checkout` ([CHECKOUT-14](#CHECKOUT-14)), and a checkout a delegate wrote in
+stays where it is until a person removes it with `/checkouts remove`
 ([CHECKOUT-15](#CHECKOUT-15)).
 
 ## Asking for one
@@ -609,9 +611,27 @@ A path the status lists as removed is named in the result, and is not removed.
 map. That is the cost the map already carries for a file another process drops into a trusted
 directory, and this program would be paying it on purpose.
 
-Nothing builds this yet.
+Half built. `apply_checkout` takes `checkout`, the number the report gave a kept checkout, and
+`paths`, which are checked against the candidates the driver recorded by name before anything is
+written. A path that is not one, or a number the session keeps nothing for, refuses the whole call.
+Without `paths` it takes every named candidate. Each is read from the checkout only as a plain file
+with no link followed anywhere between the checkout's root and the file, labelled as the map labels
+the checkout's path ([CHECKOUT-8](#CHECKOUT-8)), which is the working directory's rule unless a
+write in the checkout has distrusted it since, and written to the same path in the working
+directory through the gate a `write_file` takes: the credential scan, the permission rules and the
+single question per path. The question is asked wherever the trust map's table would ask nothing,
+and the person is shown the difference from their file as it is now. The trail records an apply
+that brought a file back ([CHECKOUT-19](#CHECKOUT-19)), and a delegate is not offered the tool.
 
-`verified-by: none`
+Not built: telling the person that the driver's own record holds a write to the path in the working
+directory since the checkout was made, a path a status lists as removed (no status is read in a
+checkout, [CHECKOUT-13](#CHECKOUT-13)), a file written through a reference, and `/checkouts apply`.
+A file over 16 MiB, or that is not text, is named and left.
+
+`verified-by: bravebot_agent::turn::a_kept_checkouts_file_comes_back_through_a_question_the_table_would_not_ask`
+`verified-by: bravebot_agent::turn::declining_the_question_brings_nothing_back`
+`verified-by: bravebot_agent::turn::only_a_recorded_path_of_a_kept_checkout_is_brought_back`
+`verified-by: bravebot_agent::workspace::a_checkouts_candidate_is_read_with_its_paths_label_and_nothing_else_is_read`
 
 ## How long one lasts
 
@@ -766,7 +786,7 @@ Built. Beside the report the driver says where a kept checkout is and the commit
 same for one that could not be removed, or that it was removed. For a kept one it names each
 candidate path whose name the planner typed, the first twenty and then how many more, counts the
 writes made through a reference, and says the status could not be read
-([CHECKOUT-13](#CHECKOUT-13)).
+([CHECKOUT-13](#CHECKOUT-13)). It then says `apply_checkout` brings the files back ([CHECKOUT-14](#CHECKOUT-14)).
 
 The person's line for the delegate's ending names a kept checkout by its number and gives what it
 took on disk ([CHECKOUT-15](#CHECKOUT-15)), in kilobytes under a megabyte, megabytes under a
@@ -791,13 +811,16 @@ trail's fields are gate names, capabilities, labels, paths, hosts and slot ids
 
 Built for the making and the removal, whether the delegate's ending or `/checkouts remove` removed
 it. A checkout a delegate's own run made for a delegate of its own carries that run's number, and
-one the turn made carries none. Applying from a checkout is not built ([CHECKOUT-14](#CHECKOUT-14)),
-so nothing records it.
+one the turn made carries none. Applying from a checkout is recorded as `applied from <path>`,
+once for each `apply_checkout` call that brought a file back, and not for one that brought none
+([CHECKOUT-14](#CHECKOUT-14)).
 
 `verified-by: bravebot_agent::turn::the_trail_records_a_checkout_made_and_removed_with_its_path`
 `verified-by: bravebot_agent::turn::the_trail_records_no_removal_for_a_checkout_that_was_kept_and_holds_neither_commit_nor_number`
 `verified-by: bravebot_agent::turn::a_checkout_a_delegate_made_is_recorded_under_that_delegates_number`
 `verified-by: bravebot_tui::app::removing_a_checkout_is_recorded_with_its_path_and_a_kept_one_is_not`
+`verified-by: bravebot_agent::turn::a_kept_checkouts_file_comes_back_through_a_question_the_table_would_not_ask`
+`verified-by: bravebot_agent::turn::declining_the_question_brings_nothing_back`
 
 <a id="CHECKOUT-20"></a>
 ### CHECKOUT-20: a delegate in a checkout is offered no `lsp`

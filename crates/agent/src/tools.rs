@@ -422,6 +422,35 @@ fn table(
             }),
         ),
         Tool::function(
+            "apply_checkout",
+            "Bring the files a delegate wrote in a checkout back into the user's working \
+             directory. Name the checkout with the number its report gave, such as c1. Without \
+             paths it takes every file the report said the driver recorded a write to by name; \
+             with paths, only those. Each file is a write of the checkout's file to the same \
+             path in the working directory, and the user is asked about each one and sees the \
+             difference from their file as it is now, so explain what is coming back. A file \
+             written through a reference, or by a program other than through a redirection, is \
+             not brought back by this.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "checkout": {
+                        "type": "string",
+                        "description": "The checkout's number, e.g. \"c1\", as a delegate's \
+                                        report gave it."
+                    },
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional. Paths relative to the checkout, taken from \
+                                        the ones the report named. Leave it out to bring back \
+                                        every file the driver recorded a write to."
+                    }
+                },
+                "required": ["checkout"]
+            }),
+        ),
+        Tool::function(
             "todo_write",
             "Record the task list for what you are doing, and keep it current. Send the whole \
              list every time: it replaces the previous one, so include finished tasks with \
@@ -2388,7 +2417,10 @@ impl Produced {
 /// which they are. Asked of a name the planner sent, so the namespace some models put in front
 /// comes off first, exactly as it does before the call is dispatched.
 pub(crate) fn writes_a_file(name: &str) -> bool {
-    matches!(strip_namespace(name), "write_file" | "edit_file")
+    matches!(
+        strip_namespace(name),
+        "write_file" | "edit_file" | "apply_checkout"
+    )
 }
 
 /// Whether a call by this name runs a program.
@@ -2435,6 +2467,7 @@ fn strip_namespace(name: &str) -> &str {
 fn target_key(tool: &str) -> Option<&'static str> {
     match tool {
         "read_file" | "write_file" | "edit_file" => Some("path"),
+        "apply_checkout" => Some("checkout"),
         "list_files" => Some("directory"),
         "search" => Some("pattern"),
         "read_git" => Some("query"),
@@ -2858,6 +2891,11 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
             confirmer,
             &arguments,
         ),
+        // A delegate's work coming back into the person's tree is asked for by the turn that
+        // started it, so a delegate calling this is answered as an unknown name is.
+        "apply_checkout" if !tools.delegated => {
+            apply_checkout(policy, tools, confirmer, &arguments)
+        }
         // The list on the screen belongs to the turn the person is watching, so a delegate that
         // names this is answered the way any other unknown name is rather than replacing what
         // they were reading with the steps of a sub-task they did not ask about.
@@ -4375,6 +4413,70 @@ fn write_file<S: Sink, C: Confirmer>(
             }
         }
     };
+    put_in_the_workspace(
+        policy,
+        tools,
+        confirmer,
+        Landing {
+            path,
+            destination,
+            shown_path,
+            proposed_path,
+        },
+        Body {
+            body,
+            changes_anything,
+            remark,
+            body_from,
+        },
+        false,
+    )
+}
+
+/// Where a write lands, as [`path_argument`] settled it.
+struct Landing {
+    path: Labelled<String>,
+    destination: Destination,
+    shown_path: String,
+    proposed_path: String,
+}
+
+/// What a write carries, and what is known about it without reading it.
+struct Body {
+    body: Labelled<String>,
+    /// `false` only where the kernel filled the slot from the very file it is written to.
+    changes_anything: bool,
+    remark: Option<Remark>,
+    /// What the planner called the body, for the account it is given afterwards.
+    body_from: String,
+}
+
+/// Put `given` in the file `landing` names: the scan, the question, the grant and the write, which
+/// are the same whatever the body came from.
+///
+/// `always_ask` puts the write to a person even where the trust map's table would ask nothing
+/// (CHECKOUT-14).
+fn put_in_the_workspace<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    confirmer: &mut C,
+    landing: Landing,
+    given: Body,
+    always_ask: bool,
+) -> Produced {
+    let workspace = tools.workspace;
+    let Landing {
+        path,
+        destination,
+        shown_path,
+        proposed_path,
+    } = landing;
+    let Body {
+        body,
+        changes_anything,
+        remark,
+        body_from,
+    } = given;
     let body_label = body.label();
 
     // What the file holds now, carried rather than read: the bytes of a file nobody vouched for
@@ -4463,6 +4565,7 @@ fn write_file<S: Sink, C: Confirmer>(
     let reviewed = review_a_write(policy, "write_file", intent, &replaced, &body, replaced_age);
 
     if write_needs_approval(policy, workspace, &proposed_path, body_label, destination)
+        || always_ask
         || !to_approve.is_empty()
     {
         // Released for display only, and inside the branch because there is no screen on the
@@ -4561,6 +4664,175 @@ fn write_file<S: Sink, C: Confirmer>(
                 &shown_path
             )
         )),
+    }
+}
+
+/// Bring the files a delegate wrote in a kept checkout back into the working directory, one
+/// path at a time (CHECKOUT-14).
+///
+/// Each file is a write of the checkout file's bytes through the gate every other write takes. It
+/// is put to the person whatever the trust map's table would have said, so the one question the
+/// driver cannot answer, which is whether their file changed since the checkout was made, is
+/// theirs to answer from the difference they are shown. The bytes keep the label the checkout's
+/// path has, and nothing here reads them: they are carried from the file to the write.
+fn apply_checkout<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    confirmer: &mut C,
+    arguments: &Value,
+) -> Produced {
+    let workspace = tools.workspace;
+    let Some(named) = named_argument(arguments, "checkout") else {
+        return Produced::problem(
+            "error: 'checkout' is required: the number a delegate's report gave its checkout, \
+             such as c1",
+        );
+    };
+    let id = match policy.read_planner_argument("apply_checkout", "checkout", &named) {
+        Ok(id) => id,
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+    let Some(kept) = workspace
+        .session_checkouts()
+        .into_iter()
+        .find(|kept| kept.id == id)
+    else {
+        return Produced::problem(format!(
+            "error: the session keeps no checkout {id}. Use the number a delegate's report gave \
+             for one it kept."
+        ));
+    };
+
+    let paths: Vec<String> = match arguments.get("paths") {
+        None | Some(Value::Null) => kept.candidates.named.iter().cloned().collect(),
+        Some(Value::Array(items)) => {
+            let mut given = Vec::new();
+            for item in items {
+                match item.as_str() {
+                    Some(path) => given.push(path.to_string()),
+                    None => return Produced::problem("error: 'paths' holds only strings"),
+                }
+            }
+            if let Some(unlisted) = given
+                .iter()
+                .find(|path| !kept.candidates.named.contains(*path))
+            {
+                return Produced::problem(format!(
+                    "refused: the driver recorded no write to {unlisted} in checkout {id}, and \
+                     only a path it recorded can be brought back. Nothing was written."
+                ));
+            }
+            // Once each, so a path named twice is not put to the person twice.
+            let mut seen = std::collections::BTreeSet::new();
+            given.retain(|path| seen.insert(path.clone()));
+            given
+        }
+        Some(_) => return Produced::problem("error: 'paths' is a list of paths"),
+    };
+    if paths.is_empty() {
+        return Produced::problem(format!(
+            "error: the driver recorded no write by name in checkout {id}, so there is nothing \
+             to bring back with this. A file written through a reference, or by a program other \
+             than through a redirection, is not found."
+        ));
+    }
+
+    let mut said = Vec::new();
+    let mut notes = Vec::new();
+    let mut changes = Vec::new();
+    let mut changed = false;
+    let mut untrusted = false;
+    let mut applied = 0;
+    for relative in &paths {
+        let ask = json!({ "path": relative });
+        let found = match path_argument(
+            policy,
+            workspace,
+            "apply_checkout",
+            Purpose::Effect,
+            tools.slots,
+            &ask,
+        ) {
+            Ok(found) => found,
+            Err(refusal) => {
+                said.push(format!("{relative}: {refusal}"));
+                continue;
+            }
+        };
+        let body = match workspace.read_checkout_file(policy, &id, relative) {
+            Ok(body) => body,
+            Err(why) => {
+                said.push(format!(
+                    "{relative}: not brought back, since {}",
+                    why.describe()
+                ));
+                continue;
+            }
+        };
+        let body = policy.declassify_checkout_into_workspace(
+            &format!("{id}/{relative}"),
+            &found.shown,
+            body,
+        );
+        let produced = put_in_the_workspace(
+            policy,
+            tools,
+            confirmer,
+            Landing {
+                path: found.path,
+                destination: found.destination,
+                shown_path: found.shown,
+                proposed_path: found.released,
+            },
+            Body {
+                body,
+                changes_anything: true,
+                remark: None,
+                body_from: format!("checkout {id}"),
+            },
+            true,
+        );
+        // The driver's own sentence about one file, which is trusted whichever way the write
+        // went: no byte of the file is in it.
+        said.push(
+            produced
+                .text
+                .clone()
+                .into_trusted()
+                .unwrap_or_else(|_| format!("{relative}: see the note beside this call")),
+        );
+        notes.push(produced.note.clone());
+        if produced.changed_a_file {
+            applied += 1;
+            changed = true;
+            changes.extend(produced.changes);
+            untrusted |= produced.untrusted;
+        }
+    }
+
+    if applied > 0 {
+        crate::workspace::record_checkout(
+            policy.sink(),
+            crate::workspace::Happened::Applied,
+            &kept.path,
+        );
+    }
+    let summary = format!(
+        "{applied} of {} from checkout {id} brought back.",
+        tally(paths.len(), "file", "files")
+    );
+    let text = format!("{summary}\n{}", said.join("\n"));
+    let produced = confirmed(text, format!("{summary} {}", notes.join("; ")));
+    let produced = Produced {
+        failed: applied == 0,
+        ..produced
+    };
+    match changed {
+        true => produced
+            .with_changes(changes)
+            .marked_untrusted(untrusted)
+            .having_changed_a_file(),
+        false => produced,
     }
 }
 
@@ -9056,6 +9328,7 @@ mod tests {
                 "list_files",
                 "write_file",
                 "edit_file",
+                "apply_checkout",
                 "todo_write",
                 "search",
                 "read_git",

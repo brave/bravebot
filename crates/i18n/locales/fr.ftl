@@ -2070,6 +2070,7 @@ verb-read-git = Historique
 verb-lsp = Consulter
 verb-write-file = Écrire
 verb-edit-file = Modifier
+verb-apply-checkout = Appliquer
 verb-todo-write = Planifier
 verb-spawn-processor = Processeur isolé
 verb-load-skill = Compétence

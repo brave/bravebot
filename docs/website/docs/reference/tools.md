@@ -19,6 +19,7 @@ that is merely carried.
 | [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
 | [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, every time** |
 | [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text` | **yes, every time** |
+| [`apply_checkout`](#apply_checkout) | `checkout`, `paths` | none | **yes, for every file** |
 | [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds`, `stdin_ref`, `read` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
 | [`read_output`](#read_output) | `ref`, `offset` | none | **yes, unless the planner may already read it** |
 | [`vet_content`](#vet_content) | `ref` | none | **yes, that is what it is for** |
@@ -432,6 +433,23 @@ guesses**.
 An edit requires a **trusted** file, because locating a passage to replace is a decision and a
 decision may be taken only from trusted content. To change a file the agent may not read, the route
 is `spawn_processor` plus `write_file`.
+
+## `apply_checkout`
+
+Brings the files a delegate wrote in a kept [checkout](../customize/agents.md#a-checkout-of-its-own)
+back into your working directory. **You are asked about every file, and shown the difference from
+your own file as it is now,** even where the file's path is one you trust.
+
+| Parameter | |
+|---|---|
+| `checkout` | the number the delegate's report gave the checkout, such as `c1` |
+| `paths` | optional: only these files, each one the report named. Without it, every file named |
+
+Only a file the driver recorded a write to, by the name the delegate typed, can come back. A file
+written through a reference or by a program other than through a redirection is not found, a link in
+a file's place is not followed, and a file over 16 MiB or that is not text is left. The file keeps
+the trust label it had in the checkout, so a file written from content nobody vouched for is still
+untrusted in your tree. A delegate is never offered this tool.
 
 ## `run`
 

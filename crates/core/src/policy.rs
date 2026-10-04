@@ -4827,6 +4827,33 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Labelled::new(value.declassify(&proof), to)
     }
 
+    /// [`Policy::declassify_into_workspace`], for the bytes of a file in a checkout going back into
+    /// the working directory it was made from (CHECKOUT-14).
+    ///
+    /// The bytes were read out of the workspace's own repository and go back into it, so the
+    /// confidentiality that stops content crossing a bridge is not in play. Integrity is untouched:
+    /// the label is the one the checkout's path has, and [`Policy::reconcile_after_write`] records
+    /// the destination as untrusted where the bytes are.
+    pub fn declassify_checkout_into_workspace(
+        &mut self,
+        checkout_path: &str,
+        path: &str,
+        value: Labelled<String>,
+    ) -> Labelled<String> {
+        let from = value.label();
+        let to = Label::new(from.integrity, Confidentiality::Public);
+        self.allow(
+            "declassify",
+            format!(
+                "{checkout_path}, which is {from}, released into {path}, which is inside the \
+                 workspace, as {to}"
+            ),
+        );
+        let proof =
+            Declassification::authorise("a checkout's file written back into its workspace");
+        Labelled::new(value.declassify(&proof), to)
+    }
+
     /// Whether writing data of `contents` integrity to `path` must be shown to a person.
     ///
     /// A prompt asks for one thing only: **may this path stop being trusted?** That is the
@@ -15205,10 +15232,11 @@ five
         use crate::delegate::{ADDRESSED, Definition, Definitions, Kind};
 
         /// Every tool name a turn might be offered that the tests below turn on.
-        const OFFERED: [&str; 11] = [
+        const OFFERED: [&str; 12] = [
             "read_file",
             "list_files",
             "write_file",
+            "apply_checkout",
             "run",
             "lsp",
             "ask_user",
@@ -15245,6 +15273,7 @@ five
                     [
                         "read_file",
                         "ask_user",
+                        "apply_checkout",
                         "todo_write",
                         "schedule_next",
                         "fetch_url",

@@ -902,6 +902,7 @@ pub(crate) fn verb_for(tool: &str) -> &'static str {
         "lsp" => t!(verb_lsp),
         "write_file" => t!(verb_write_file),
         "edit_file" => t!(verb_edit_file),
+        "apply_checkout" => t!(verb_apply_checkout),
         "todo_write" => t!(verb_todo_write),
         // Named for what it is rather than for what it does: every one of these is a model
         // with no tools, no memory and one round, and a person watching a line go by should not

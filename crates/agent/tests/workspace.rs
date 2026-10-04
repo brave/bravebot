@@ -7256,6 +7256,96 @@ fn a_checkout_records_the_paths_written_in_it() {
     assert_eq!(idle.candidates(), Candidates::default());
 }
 
+/// CHECKOUT-14. A file a checkout's record names is read with the label its path has in the map,
+/// and only that: a number or a path the record does not hold, a link in the file's place or on
+/// the way to it, a file a rule covers, and one gone from the checkout are each refused by name.
+#[test]
+fn a_checkouts_candidate_is_read_with_its_paths_label_and_nothing_else_is_read() {
+    use bravebot_agent::workspace::CheckoutRead;
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-read", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let authority = policy.file_authority();
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("made");
+    let info = made.checkout().unwrap();
+    std::fs::create_dir_all(made.root().join("src")).unwrap();
+    std::fs::write(made.root().join("src/new.rs"), "fn new() {}\n").unwrap();
+    info.record_typed("src/new.rs");
+
+    let read = |id: &str, path: &str| workspace.read_checkout_file(&policy, id, path);
+    assert_eq!(
+        read("c1", "src/new.rs").expect("a candidate").label(),
+        Label::trusted_private(),
+        "a file the map trusts came back with another label"
+    );
+    assert_eq!(
+        read("c9", "src/new.rs").unwrap_err(),
+        CheckoutRead::NoSuchCheckout
+    );
+    assert_eq!(
+        read("c1", "README").unwrap_err(),
+        CheckoutRead::NotACandidate,
+        "a file the driver recorded no write to was read"
+    );
+    assert_eq!(
+        read("c1", "../README").unwrap_err(),
+        CheckoutRead::NotACandidate
+    );
+
+    assert!(authority.publish(&format!("{}/src/new.rs", info.key()), Integrity::Untrusted));
+    assert_eq!(
+        read("c1", "src/new.rs").expect("still a candidate").label(),
+        Label::untrusted_private(),
+        "a file distrusted in the checkout came back trusted"
+    );
+
+    std::fs::remove_file(made.root().join("src/new.rs")).unwrap();
+    assert_eq!(
+        read("c1", "src/new.rs").unwrap_err(),
+        CheckoutRead::NotAFile
+    );
+
+    let mut other_sink = RecordingSink::new();
+    let denying_it = checkout_policy(
+        &workspace,
+        &mut other_sink,
+        &["."],
+        &[&format!("Read(/{}/docs/denied.md)", made.root().display())],
+    );
+    std::fs::create_dir_all(made.root().join("docs")).unwrap();
+    std::fs::write(made.root().join("docs/denied.md"), "secret\n").unwrap();
+    info.record_typed("docs/denied.md");
+    assert_eq!(
+        workspace
+            .read_checkout_file(&denying_it, "c1", "docs/denied.md")
+            .unwrap_err(),
+        CheckoutRead::Denied
+    );
+
+    #[cfg(unix)]
+    {
+        let outside = made.root().join("../outside.txt");
+        std::fs::write(&outside, "not the checkout's\n").unwrap();
+        std::os::unix::fs::symlink("../../outside.txt", made.root().join("docs/link")).unwrap();
+        info.record_typed("docs/link");
+        assert_eq!(
+            read("c1", "docs/link").unwrap_err(),
+            CheckoutRead::Linked,
+            "a link in the file's place was followed"
+        );
+        std::os::unix::fs::symlink("..", made.root().join("up")).unwrap();
+        info.record_typed("up/README");
+        assert_eq!(
+            read("c1", "up/README").unwrap_err(),
+            CheckoutRead::Linked,
+            "a link on the way to the file was followed"
+        );
+    }
+}
+
 /// CHECKOUT-12. A rule that distrusts a path in a checkout outlives the checkout, and a history
 /// answer that shows the path is labelled by it, kept or removed.
 #[test]
