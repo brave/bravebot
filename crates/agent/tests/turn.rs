@@ -24167,7 +24167,11 @@ fn a_write_in_a_checkout_asks_what_the_same_write_in_the_working_directory_asks(
     let asked: Vec<&str> = confirmer.seen.iter().map(|r| r.path.as_str()).collect();
     assert_eq!(asked, ["docs/page.md", "docs/page.md"]);
     // What the gates let through is the same too, for the path a person distrusted as well.
-    assert_eq!(checkouts_under(&home.path), std::slice::from_ref(&checkout));
+    let made: Vec<PathBuf> = checkouts_under(&home.path)
+        .iter()
+        .map(|made| made.canonicalize().expect("the checkout exists"))
+        .collect();
+    assert_eq!(made, std::slice::from_ref(&checkout));
     for name in names {
         let here = std::fs::read_to_string(scratch.path.join(name)).unwrap();
         assert_eq!(
@@ -24229,9 +24233,12 @@ fn a_command_vouched_for_in_the_working_directory_is_asked_about_again_in_a_chec
         .map(|request| request.plan.directory.as_path())
         .collect();
     assert_eq!(directories.len(), 2, "{directories:#?}");
-    assert_eq!(directories[0], scratch.path);
+    assert_eq!(
+        directories[0].canonicalize().unwrap(),
+        scratch.path.canonicalize().unwrap()
+    );
     assert!(
-        directories[1].starts_with(home.path.join("checkouts")),
+        directories[1].starts_with(home.path.canonicalize().unwrap().join("checkouts")),
         "{directories:#?}"
     );
 }
