@@ -95,6 +95,14 @@ A planning call is a gate like any other and gets its own line, refusals include
 advance makes two of them, one for reading the goal in plain words and one for fitting that goal to the
 tool set, and both appear.
 
+## The mode and what answered are recorded
+
+Each turn begins with a `permission_mode` line naming the mode it ran in: `ask`, `accept-edits`, `plan`
+or `bypass`. A command or write that was put to you gets an `approval` line after it that says either
+`no mode answered, left to the confirmer` or `answered by <mode> mode, nobody was asked`, so an entry
+ending in "asking" is never the only thing the trail says about who answered. A fetch or a server
+start that a mode answers carries no such line.
+
 ## The trail holds no content
 
 Every field is a gate name, a capability, a label, a path, a destination host or a slot id. A network

@@ -3652,7 +3652,7 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     //
     // An empty part is skipped rather than drawn, so a session with no trail, nothing measured and
     // nothing to open does not open its line on a separator with nothing in front of it.
-    let mode = crate::status::named_mode(session.permission_mode());
+    let mode = crate::status::named_mode(session.permission_mode(), session.bypass_available());
     // Beside the permission mode, on the same footing and for the same reason: which vi mode the box
     // is in decides whether the next letter is a letter or an instruction, so of everything here the
     // two of them are what somebody has to catch without going looking. Nothing at all for the box
@@ -7260,18 +7260,39 @@ mod tests {
                 session.cycle_permission_mode();
             }
             let hint = hint_row_at(&session, 120, 24);
-            let named = crate::status::named_mode(mode).expect("every mode but asking is named");
+            let named =
+                crate::status::named_mode(mode, true).expect("every mode but asking is named");
             assert!(hint.contains(named), "{mode:?} was not drawn: {hint}");
         }
     }
 
-    /// Asking is what a session has always done, so it takes none of this line: a marker standing
-    /// there permanently is one people stop seeing, and being noticed is the marker's whole job.
+    /// Asking is what a session without the flag has always done, so it takes none of this line: a
+    /// marker standing there permanently is one people stop seeing, and being noticed is the
+    /// marker's whole job.
     #[test]
     fn the_hint_line_says_nothing_about_the_ordinary_mode() {
         let hint = hint_row_at(&Session::new("kernel-enforced"), 120, 24);
         // The markers, which are what a reader recognises before any words.
         assert!(!hint.contains('⏵') && !hint.contains('⏸'), "{hint}");
+        let asking = crate::status::named_mode(bravebot_agent::PermissionMode::Ask, true)
+            .expect("asking after the flag has a name");
+        assert!(!hint.contains(asking), "{hint}");
+    }
+
+    /// A session started with `--dangerously-skip-permissions` begins in bypass. Once the key moves
+    /// it off, a blank line reads the same as a session that never skipped permissions, so the line
+    /// says the session is asking.
+    #[test]
+    fn the_hint_line_names_asking_after_a_session_leaves_bypass() {
+        use bravebot_agent::PermissionMode;
+        let mut session = Session::new("kernel-enforced").allowing_bypass();
+        while session.permission_mode() != PermissionMode::Ask {
+            session.cycle_permission_mode();
+        }
+        let asking = crate::status::named_mode(PermissionMode::Ask, true)
+            .expect("asking after the flag has a name");
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(hint.contains(asking), "asking was not drawn: {hint}");
     }
 
     /// Which vi mode the box is in decides whether the next letter is a letter, so it is drawn where

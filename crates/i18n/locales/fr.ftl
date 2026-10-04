@@ -83,6 +83,7 @@ cli-plain-trusting-kept =
     soit reposée, lancez /forget-trust dans bravebot sans --plain, ou supprimez de { $path } les
     lignes qui le nomment)
 
+mode-ask = ◇ demande avant d'agir
 mode-accept-edits = ⏵ modifications acceptées
 mode-plan = ⏸ mode plan
 mode-bypass = ⏵⏵ permissions contournées

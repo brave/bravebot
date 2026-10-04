@@ -57,7 +57,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [info-panel.md](info-panel.md) | `PANEL` | 14 | telling many sessions apart: the terminal's title and the info panel |
 | [state-directory.md](state-directory.md) | `STATE` | 3 | `~/.bravebot`, and who on the machine may read what is written into it |
 | [incognito.md](incognito.md) | `INCOG` | 8 | a session that runs normally and adds nothing to `~/.bravebot` |
-| [trace.md](trace.md) | `TRACE` | 6 | what is recorded about every decision the system makes, and what that record may contain |
+| [trace.md](trace.md) | `TRACE` | 7 | what is recorded about every decision the system makes, and what that record may contain |
 | [localization.md](localization.md) | `LOCALE` | 7 | every word said to a person, and which of them change with the reader's language |
 | [layering.md](layering.md) | `LAYER` | 6 | which crate is allowed to do what |
 | [releases.md](releases.md) | `RELEASE` | 15 | what names a version, what starts a release, and what an installer trusts about what it fetched |
