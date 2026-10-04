@@ -151,6 +151,9 @@ const ALLOWED_IDS = [
   'view.theme',
   // Open the find bar and put the caret in the composer. Both move focus inside the window.
   'view.find', 'view.focus-composer',
+  // Chooses what the next turn asks. It answers no question already put: the running turn keeps
+  // the mode it began with (MODE-8).
+  'mode.cycle',
 ]
 const ours = every.filter((i) => i.id && !i.role).map((i) => i.id)
 check(
@@ -178,6 +181,7 @@ const accel = (id) => every.find((i) => i.id === id)?.accelerator
 check(accel('session.new') === 'CmdOrCtrl+N', `New Chat is Cmd+N (${accel('session.new')})`)
 check(accel('turn.send') === 'CmdOrCtrl+Enter', 'Send is Cmd+Enter')
 check(accel('turn.cancel') === 'CmdOrCtrl+.', 'Cancel Turn is Cmd+.')
+check(accel('mode.cycle') === 'CmdOrCtrl+Shift+M', 'Cycle Permission Mode is Cmd+Shift+M, leaving Shift+Tab to focus')
 check(
   accel('session.close') === 'CmdOrCtrl+Shift+W',
   'Close Chat is Cmd+Shift+W, leaving Cmd+W to the window',

@@ -193,8 +193,25 @@ export interface OpenedSession {
    * says it once at the top of the transcript and goes on showing it (CHECK-11).
    */
   autoVetting: boolean
+  /** Always `ask`: a mode is not read from the record (MODE-10). */
+  permissionMode: PermissionMode
   /** Absent from an older bridge, which read no rules. */
   settingsRules?: SettingsRules | null
+}
+
+/**
+ * How much a session's next turn asks before it acts, as `session.mode` names it.
+ *
+ * Three of the agent's four. Bypassing every check is reachable only through the command-line
+ * flag, and the bridge refuses it from a window (MODE-11).
+ */
+export type PermissionMode = 'ask' | 'acceptEdits' | 'plan'
+
+/** The order the mode shortcut walks, ending back at the first. */
+export const PERMISSION_MODES: readonly PermissionMode[] = ['ask', 'acceptEdits', 'plan']
+
+export function nextPermissionMode(mode: PermissionMode): PermissionMode {
+  return PERMISSION_MODES[(PERMISSION_MODES.indexOf(mode) + 1) % PERMISSION_MODES.length]!
 }
 
 export interface ModelOption {
@@ -238,6 +255,8 @@ export interface ForkedSession {
   keeping?: string | null
   /** The parent's, as it opened: the child carries on its conversation. */
   autoVetting: boolean
+  /** Always `ask`, whatever the parent was in: a fork opens as any session does (MODE-11). */
+  permissionMode: PermissionMode
   /** Absent from an older bridge, which read no rules. */
   settingsRules?: SettingsRules | null
   parent: {

@@ -112,6 +112,27 @@
 .composer-toolbar .model-picker { flex: 0 1 auto; min-width: 0; max-width: 220px; margin: 0; }
 .composer .model-trigger { width: auto; max-width: 100%; --leo-button-color: var(--ink-tertiary); }
 .composer .model-current { max-width: 180px; }
+/* Asking is drawn like the model beside it. The other two modes are tinted for as long as they
+   hold, and their names say the same thing where colour is not drawn. */
+.composer-toolbar .permission-menu { flex: none; }
+.composer .permission-trigger {
+  --leo-button-color: var(--ink-tertiary);
+  --leo-icon-color: currentColor;
+  border-radius: var(--radius-control);
+  white-space: nowrap;
+}
+.composer .permission-trigger.permission-acceptEdits {
+  --leo-button-color: var(--ink-primary);
+  --leo-icon-color: var(--status-warning);
+  background: var(--status-warning-bg);
+}
+.composer .permission-trigger.permission-plan {
+  --leo-button-color: var(--ink-primary);
+  --leo-icon-color: var(--status-info);
+  background: var(--status-info-bg);
+}
+.permission-option { width: min(320px, calc(100vw - 24px)); }
+.permission-option-text { display: flex; flex-direction: column; min-width: 0; white-space: normal; }
 /* The icon is 20px in a 28px target. */
 .composer .attach-files {
   --leo-button-color: var(--ink-secondary);
@@ -383,6 +404,8 @@ button.fresh-project:disabled { cursor: default; color: inherit; }
   .composer-tray,
   .attention-pill,
   .composer-box:focus-within { outline: 2px solid Highlight; }
+  .composer .permission-trigger.permission-acceptEdits,
+  .composer .permission-trigger.permission-plan { outline: 1px solid CanvasText; }
 }
 
 /* Beside Send, so it reads as the other way to send what is written. */

@@ -31,6 +31,8 @@ export interface CommandActions {
   closeSession: () => void
   send: () => void
   cancel: () => void
+  /** Move the open session to the next permission mode. */
+  cycleMode: () => void
   toggle: (side: Side) => void
   resetColumns: () => void
   /** Open the find bar over the transcript. */
@@ -117,6 +119,8 @@ export function useCommandRouter(actions: CommandActions): void {
           return act.send()
         case 'turn.cancel':
           return act.cancel()
+        case 'mode.cycle':
+          return act.cycleMode()
         case 'view.fold-left':
           return act.toggle('left')
         case 'view.fold-right':

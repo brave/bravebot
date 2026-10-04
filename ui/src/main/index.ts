@@ -465,6 +465,7 @@ const ALLOWED = new Set([
   'session.fork',
   'session.delete',
   'session.close',
+  'session.mode',
   'turn.send',
   'turn.cancel',
   'confirm.reply',

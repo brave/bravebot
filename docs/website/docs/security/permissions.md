@@ -396,6 +396,14 @@ wrote down would take protection away at the moment you were relying on a mode t
 Neither asks for consent: the first asks for information, and the second is you speaking. An answer
 invented on your behalf is reported to the planner as your own words.
 
+### In the desktop application
+
+The control beside the model in the composer offers asking, accepting edits and plan mode, and
+`⇧⌘M` (`Ctrl+Shift+M` on Windows and Linux) walks them in that order. Bypassing is not offered: the
+desktop has no command line for the flag to be given on. The mode belongs to the open session and
+every session opens asking, a resumed one and a fork included. A turn keeps the mode it began with,
+so a change made while one runs applies from the next.
+
 ### A mode belongs to the sitting it was chosen in
 
 A resumed session opens by asking, whatever the session that wrote the record was doing when it

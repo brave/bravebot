@@ -13,6 +13,7 @@ import type {
   ForkedSession,
   KeptTrust,
   OpenedSession,
+  PermissionMode,
   RunRecord,
   SettingsRules,
   Waiting,
@@ -20,6 +21,7 @@ import type {
   Shown,
   TodoRow,
 } from '../shared/protocol'
+import { nextPermissionMode } from '../shared/protocol'
 import { Sidebar } from './components/Sidebar'
 import { SessionInfo, firstChat, type SessionInfoValue, type SessionStatus } from './components/Sessions'
 import { FIND_EVENT, FOCUS_COMPOSER_EVENT, Transcript } from './components/Transcript'
@@ -120,6 +122,8 @@ interface Live {
   archived: number
   /** Whether the session opened with auto-vetting on, as the agent settled it then. */
   autoVetting: boolean
+  /** What the session's next turn asks before it acts, as the bridge last reported it. */
+  permissionMode: PermissionMode
   /** The permission rules this session opened under. Null where the bridge reported none. */
   rules?: SettingsRules | null
   /**
@@ -512,6 +516,7 @@ export function App(): React.JSX.Element {
         bot: bot ? { slug: bot.slug, grounded: false } : null,
         archived: opened.archived,
         autoVetting: opened.autoVetting,
+        permissionMode: opened.permissionMode,
         rules: opened.settingsRules ?? null,
       })
       const notes = [opened.branchNote, opened.buildNote, opened.frontNote].filter(Boolean) as string[]
@@ -537,6 +542,7 @@ export function App(): React.JSX.Element {
         branch: string | null
         model: string | null
         autoVetting: boolean
+        permissionMode: PermissionMode
         settingsRules?: SettingsRules | null
         remembered?: KeptTrust | null
         keeping?: string | null
@@ -573,6 +579,7 @@ export function App(): React.JSX.Element {
         bot: bot ? { slug: bot.slug, grounded: false } : null,
         archived: 0,
         autoVetting: made.autoVetting,
+        permissionMode: made.permissionMode,
         rules: made.settingsRules ?? null,
       })
       setProblem(null)
@@ -885,6 +892,17 @@ export function App(): React.JSX.Element {
     } catch (error) { setProblem(String(error)) }
   }, [readBots])
 
+  // Allowed while a turn runs: the bridge keeps the running turn in the mode it began with, and
+  // the next one runs in this (MODE-8). What the bridge answered is what is drawn.
+  const chooseMode = useCallback(async (mode: PermissionMode) => {
+    const handle = handleRef.current
+    if (!handle) return
+    try {
+      const { permissionMode } = await call<{ permissionMode: PermissionMode }>('session.mode', { session: handle, mode })
+      updateSession(handle, (old) => (old ? { ...old, permissionMode } : old))
+    } catch (error) { setProblem(String(error)) }
+  }, [updateSession])
+
   /**
    * Take a bot away for good.
    *
@@ -1191,6 +1209,7 @@ export function App(): React.JSX.Element {
         // in this build it asks for nothing at all.
         archived: 0,
         autoVetting: forked.autoVetting,
+        permissionMode: forked.permissionMode,
         rules: forked.settingsRules ?? null,
         forkedFrom: {
             directory: forked.parent.directory,
@@ -1326,6 +1345,7 @@ export function App(): React.JSX.Element {
     closeSession: () => void closeSession(),
     send: submit,
     cancel: () => void cancel(),
+    cycleMode: () => { if (liveRef.current) void chooseMode(nextPermissionMode(liveRef.current.permissionMode)) },
     toggle,
     resetColumns,
     find: () => document.dispatchEvent(new Event(FIND_EVENT)),
@@ -1497,6 +1517,7 @@ export function App(): React.JSX.Element {
         draft={draft}
         onDraft={setDraft}
         onModel={(model) => void chooseModel(model)}
+        onMode={(mode) => void chooseMode(mode)}
         onSubmit={submit}
         onPlan={submitPlan}
         reading={reading}

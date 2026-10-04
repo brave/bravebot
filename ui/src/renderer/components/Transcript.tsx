@@ -6,7 +6,7 @@ import { useEvent } from '../hooks'
 import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
 import { CopyButton } from './CopyButton'
-import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
+import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type PermissionMode, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import { drawCommand } from '../../shared/connectors'
 import type { Side } from '../columns'
@@ -53,6 +53,7 @@ interface Live {
   forkedFrom: { directory: string; id: string; title: string; prompt: number } | null
   focus: number | null
   autoVetting?: boolean
+  permissionMode: PermissionMode
   trustRemembered?: KeptTrust | null
   rules?: SettingsRules | null
 }
@@ -107,6 +108,7 @@ interface Props {
   draft: string
   onDraft: (draft: string) => void
   onModel: (model: string) => void
+  onMode: (mode: PermissionMode) => void
   onSubmit: () => void
   /** Start a manifest run from the draft. Absent where the window cannot start one. */
   onPlan?: () => void
@@ -274,6 +276,7 @@ export function Transcript({
   draft,
   onDraft,
   onModel,
+  onMode,
   onSubmit,
   onPlan,
   reading,
@@ -420,6 +423,7 @@ export function Transcript({
   const plan = useEvent(() => { latest(); onPlan?.() })
   const draftChanged = useEvent(onDraft)
   const chooseModelFor = useEvent(onModel)
+  const chooseMode = useEvent(onMode)
   const attach = useEvent(onAttach)
   const removeAttachment = useEvent(onRemoveAttachment)
   const preview = useEvent((path: string) => setPreviewPath(path))
@@ -738,6 +742,8 @@ export function Transcript({
           onCancel={cancel}
           onPlan={onPlan ? plan : undefined}
           onModel={chooseModelFor}
+          permissionMode={live.permissionMode}
+          onMode={chooseMode}
           attachments={attachments}
           onAttach={attach}
           onRemoveAttachment={removeAttachment}
