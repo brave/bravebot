@@ -462,13 +462,14 @@ refused whether or not there is anything at the other end of it.
 
 An absolute path refused for landing outside the root and every opened directory is refused with
 what the person can do about it: open the directory it is in with `/add-dir` or `--add-dir`, after
-which the same path reaches the file, or drop the one file on the window
-([DROP-3](dropping.md#DROP-3)). Naming the file with `@` is not offered, since a name cannot leave
-the workspace either ([NAME-5](naming-files.md#NAME-5)). The planner can do none of these itself,
-so a refusal that names nothing it can pass on leaves it looking for another route to the file, such
-as `run`. Every other refusal for leaving the workspace offers nothing, since opening a directory would not
-make that path work: one that climbs with `..`, one a link carries out, and an absolute path that
-lands inside the root, where no directory can be opened.
+which the same path reaches the file. A call that reads the file is also told it can be dropped on
+the window ([DROP-3](dropping.md#DROP-3)), which a call that writes, edits, lists or searches is not,
+since a drop only ever reads. Naming the file with `@` is not offered, since a name cannot leave the
+workspace either ([NAME-5](naming-files.md#NAME-5)). The planner can do none of these itself, so a
+refusal that names nothing it can pass on leaves it looking for another route to the file, such as
+`run`. Every other refusal for leaving the workspace offers nothing, since opening a directory would
+not make that path work: one that climbs with `..`, one a link carries out, and an absolute path
+that lands inside the root, where no directory can be opened.
 
 Putting a file back is a write, and where it lands is decided when it is put back rather than when
 it was written. That holds for a rewind and for a file a command line wrote being put back as it was.
@@ -486,6 +487,7 @@ tree makes of it then, and a pull in between can turn a directory on it into a l
 `verified-by: bravebot_agent::workspace::an_absolute_path_outside_every_added_directory_is_still_refused`
 `verified-by: bravebot_agent::workspace::a_refusal_outside_the_workspace_says_what_the_person_can_do`
 `verified-by: bravebot_agent::workspace::a_refusal_that_opening_a_directory_would_not_cure_offers_nothing`
+`verified-by: bravebot_agent::workspace::a_refused_write_outside_the_workspace_does_not_offer_a_drop`
 `verified-by: bravebot_agent::turn::a_read_outside_the_workspace_tells_the_planner_what_the_person_can_do`
 `verified-by: bravebot_agent::workspace::a_parent_component_cannot_climb_out_of_an_added_directory`
 `verified-by: bravebot_agent::workspace::a_symlink_out_of_an_added_directory_is_refused`

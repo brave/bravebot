@@ -747,8 +747,8 @@ here is decided from a byte of content.
 
 A refusal says which key made it. Nothing a session did explains one, so a refusal that named neither
 the key nor a file would send somebody looking for a fault in the program. An absolute path refused
-for leaving the workspace names the key too, and offers the drop and not `/add-dir`, which the same
-key refuses.
+for leaving the workspace names the key too, and offers a call that reads the drop and not `/add-dir`,
+which the same key refuses. A call that writes, edits, lists or searches is offered neither.
 
 **What it does not refuse.** The directory the session was given for itself stays reachable: nobody
 was asked for it, no rule opened it, and a session whose own directory went unreachable would fail

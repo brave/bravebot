@@ -2070,6 +2070,14 @@ fn a_failure_is_worded_about_the_name_the_caller_may_say() {
         },
         WorkspaceError::Escapes {
             path: carried.to_string(),
+            remedy: Remedy::OpenOrDrop,
+        },
+        WorkspaceError::Escapes {
+            path: carried.to_string(),
+            remedy: Remedy::Kept,
+        },
+        WorkspaceError::Escapes {
+            path: carried.to_string(),
             remedy: Remedy::Drop,
         },
         WorkspaceError::Invalid {
@@ -3138,6 +3146,47 @@ fn a_refusal_where_reads_stay_in_the_workspace_names_the_key_and_not_add_dir() {
         !told.contains("add-dir"),
         "a door the key refuses was named: {told}"
     );
+}
+
+/// A drop only ever reads (DROP-3), so a refusal of a write that names it would send the person to
+/// something that cannot work. Opening the directory still can, unless the key forbids it.
+#[test]
+fn a_refused_write_outside_the_workspace_does_not_offer_a_drop() {
+    for kept_inside in [false, true] {
+        let scratch = Scratch::new("write-refusal-remedy");
+        let other = outside("write-refusal-remedy");
+        let workspace = Workspace::new(&scratch.path)
+            .expect("workspace")
+            .with_reads_kept_inside(kept_inside);
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy");
+
+        let typed = other.path.join("new.txt").display().to_string();
+        let error = workspace
+            .write(
+                &mut policy,
+                &Labelled::trusted(typed.clone()),
+                &Labelled::trusted("text".to_string()),
+            )
+            .expect_err("a path outside the workspace must be refused");
+        assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
+        let told = error.describe(&typed);
+        assert!(
+            !told.contains("drop"),
+            "kept_inside={kept_inside}: a drop was offered for a write: {told}"
+        );
+        assert_eq!(
+            told.contains("--add-dir"),
+            !kept_inside,
+            "kept_inside={kept_inside}: {told}"
+        );
+    }
 }
 
 /// PERM-16 stops at the session's own directory, which is not something a rule, a mode or an answer
