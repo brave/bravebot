@@ -74,6 +74,17 @@ jobs:
       - name: Test
         run: cargo test --all --locked
 
+      # A runner starts with no ~/.bravebot, so anything in its session store now is a record a
+      # test saved into the person's home instead of the profile `in_isolated_profile` makes.
+      - name: Check the tests left the session store empty
+        run: |
+          store="$HOME/.bravebot/sessions"
+          if [ -n "$(ls -A "$store" 2>/dev/null)" ]; then
+            echo "The tests wrote into $store:"
+            find "$store" -mindepth 1
+            exit 1
+          fi
+
   # The macOS confinement backend is compiled on no other platform, so without this job the
   # whole Seatbelt half of crates/sandbox, and every test that pins it, is neither built, run,
   # nor linted anywhere in CI. Clippy runs here for the same reason as the tests: the `check`
@@ -103,6 +114,15 @@ jobs:
 
       - name: Test
         run: cargo test --all --locked
+
+      - name: Check the tests left the session store empty
+        run: |
+          store="$HOME/.bravebot/sessions"
+          if [ -n "$(ls -A "$store" 2>/dev/null)" ]; then
+            echo "The tests wrote into $store:"
+            find "$store" -mindepth 1
+            exit 1
+          fi
 
   # Windows is a platform this project publishes binaries for, and nothing else here compiles its
   # arms of the tree for a check. cross-build produces the shipped binary and stops there: no

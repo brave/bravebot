@@ -226,6 +226,9 @@ test is invisible from every platform that has `unix`.
 `make check-linux` runs fmt, clippy and the tests on Linux under the stable toolchain its container
 is pinned to, which is a digest rather than whatever `rust:slim` resolves to today, so moving it on
 is an edit somebody makes when `make check-toolchain` says the host has fallen behind.
+The container's home starts empty, so it also fails when the tests leave anything in
+`~/.bravebot/sessions`, as CI's test jobs do: a test that saves a session belongs in
+`in_isolated_profile` (`crates/session/test-support/profile.rs`), not in the person's store.
 Worth doing before pushing platform-specific code, since a macOS host never compiles the Linux
 backend. Its one gap is the Landlock tests: the kernel in play is Docker's, and Docker Desktop's
 implements no Landlock at all, so that target sets the switch that skips them instead of failing and

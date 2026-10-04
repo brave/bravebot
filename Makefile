@@ -461,6 +461,8 @@ check-locales:
 #
 # Keep test parallelism bounded in Docker, as it is for the host checks.
 # Python runs the redirected-process fixture in the turn tests.
+# The container's home starts with no ~/.bravebot, so the last step fails on any record a test
+# saved there, which is the check CI's test jobs make after the suite.
 .PHONY: check-linux
 check-linux:
 	python3 contrib/check-source.py | docker run --rm -i -e BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 -e USER=root \
@@ -472,7 +474,12 @@ check-linux:
 		rustup component add clippy rustfmt >/dev/null 2>&1 && \
 		cargo fmt --all -- --check && \
 		cargo clippy --all-targets --all-features -- -D warnings && \
-		cargo test --all -- --test-threads=4'
+		cargo test --all -- --test-threads=4 && \
+		if [ -n "$$(ls -A "$$HOME/.bravebot/sessions" 2>/dev/null)" ]; then \
+			echo "The tests wrote into $$HOME/.bravebot/sessions:"; \
+			find "$$HOME/.bravebot/sessions" -mindepth 1; \
+			exit 1; \
+		fi'
 
 .PHONY: darwin-arm64
 darwin-arm64:
