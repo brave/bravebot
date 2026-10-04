@@ -16958,6 +16958,9 @@ mod tests {
                 stored: &mut stored,
                 root,
                 home: None,
+                workspace: &a_workspace(),
+                scratch: None,
+                config: &a_config_needing_no_sign_in(),
             },
         );
 
