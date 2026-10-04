@@ -161,6 +161,9 @@ pub struct Facts<'a> {
     pub cached: Option<bravebot_aichat::protocol::Cached>,
     pub trust: &'a TrustStore,
     pub programs: &'a TrustedPrograms,
+    /// Whether the turn in flight holds the two above, which it answers into as it runs. Then
+    /// neither is read and the report says the rules are the turn's until it ends.
+    pub turn_holds_rules: bool,
     /// The loop repeating a prompt, where the person started one.
     ///
     /// Absent from the report entirely when there is none, rather than reported as "no loop": a
@@ -179,7 +182,7 @@ pub struct Facts<'a> {
     pub watches: &'a [watch::Watch],
     /// The background jobs of the turn in flight, or of the last one, in the order they started.
     ///
-    /// A `/status` typed during a turn waits for the turn to end, so today every job here has ended.
+    /// A `/status` typed during a turn is answered at once, so a job here may still be running.
     ///
     /// Empty says nothing, for the reason no watch says nothing.
     pub jobs: Vec<(&'a crate::state::Output, &'a crate::state::JobView)>,
@@ -242,14 +245,14 @@ pub fn report(facts: &Facts<'_>) -> Report {
     ));
     lines.push(Line::new(t!(status_session_id), facts.session_id));
 
-    let trusted = facts.trust.is_trusted(".");
-    lines.push(
-        Line::new(t!(status_directory), abbreviate(facts.directory)).with_note(if trusted {
-            t!(status_directory_trusted)
-        } else {
-            t!(status_directory_untrusted)
-        }),
-    );
+    let directory = Line::new(t!(status_directory), abbreviate(facts.directory));
+    lines.push(if facts.turn_holds_rules {
+        directory
+    } else if facts.trust.is_trusted(".") {
+        directory.with_note(t!(status_directory_trusted))
+    } else {
+        directory.with_note(t!(status_directory_untrusted))
+    });
 
     // Under the directory it is about, since it is the answer the next session here starts from
     // and nothing else on the screen will ever say so: the question it stops is the only place a
@@ -557,65 +560,75 @@ pub fn report(facts: &Facts<'_>) -> Report {
 
     // Last because it is the part that grows. What a write recorded is the thing nothing else
     // reports: a file an earlier turn marked untrusted is invisible until it refuses to be read.
-    let rules: Vec<(&str, Option<Integrity>)> = facts.trust.rules().collect();
-    if rules.is_empty() {
-        lines.push(Line::new(t!(status_trust), t!(status_nothing_vouched_for)));
-    } else {
-        lines.push(Line::new(
-            t!(status_trust),
-            t!(count_rules, count = rules.len()),
-        ));
-        for (path, integrity) in rules.iter() {
-            let shown = if path.is_empty() { "." } else { path };
-            lines.push(match integrity {
-                Some(Integrity::Trusted) => Line::new("", shown).with_note(t!(status_trusted)),
-                Some(Integrity::Untrusted) => Line::new("", shown).with_note(t!(status_untrusted)),
-                None => Line::new("", shown).with_note(t!(status_undecided)),
-            });
-        }
-    }
-
-    // A standing permission the user gave earlier and cannot otherwise see. Every other prompt in
-    // this session announces itself by appearing; this is the one that stops appearing, so without
-    // a line here there is nothing to tell them a command now runs unasked and that what it prints
-    // is being read as trusted.
-    let vouched: Vec<&bravebot_core::programs::Command> = facts.programs.iter().collect();
     let remembered = facts.remembered.filter(|record| !record.lines.is_empty());
-    if vouched.is_empty() {
-        // Two different true things, and the wider one is only true where the record is empty as
-        // well. A session that has vouched for nothing but carries a remembered line does not put
-        // every run to the person, and this is the screen responsible for saying what they are
-        // carrying: a flat "every run is put to you" above a list of lines that run unasked is the
-        // one claim this report must not make.
-        lines.push(Line::new(
-            t!(status_programs),
-            match remembered.is_some() {
-                true => t!(status_nothing_vouched_this_session),
-                false => t!(status_every_run_is_asked),
-            },
-        ));
+    // The turn in flight owns the trust map and the vouched programs and answers into them as it
+    // goes, so a copy taken when it began would be a claim about an earlier moment, and the line
+    // above about every run being asked is the one this report must not get wrong.
+    if facts.turn_holds_rules {
+        lines.push(Line::new(t!(status_trust), t!(status_held_by_the_turn)));
     } else {
-        lines.push(
-            Line::new(
-                t!(status_trusted_commands),
-                t!(count_commands, count = vouched.len()),
-            )
-            .with_note(t!(status_trusted_commands_note)),
-        );
-        // Every one of them, however many there are: a vouched command that the report will not
-        // show is a permission with nothing anywhere to say it is held, since the prompt it
-        // answers is the thing that has stopped appearing.
-        //
-        // With the tree it was given in, because that is part of what the entry covers (RUN-8) and
-        // the entry is what this report exists to read back: two entries for one command in two
-        // directories would otherwise draw as one line twice, and a reader could not tell which
-        // grant they hold. Relative to the workspace where it is inside it, the way every other
-        // path on this screen is written.
-        for command in vouched.iter() {
-            lines.push(Line::new("", command.display()).with_note(t!(
-                status_command_in,
-                directory = within(facts.directory, &command.directory)
-            )));
+        let rules: Vec<(&str, Option<Integrity>)> = facts.trust.rules().collect();
+        if rules.is_empty() {
+            lines.push(Line::new(t!(status_trust), t!(status_nothing_vouched_for)));
+        } else {
+            lines.push(Line::new(
+                t!(status_trust),
+                t!(count_rules, count = rules.len()),
+            ));
+            for (path, integrity) in rules.iter() {
+                let shown = if path.is_empty() { "." } else { path };
+                lines.push(match integrity {
+                    Some(Integrity::Trusted) => Line::new("", shown).with_note(t!(status_trusted)),
+                    Some(Integrity::Untrusted) => {
+                        Line::new("", shown).with_note(t!(status_untrusted))
+                    }
+                    None => Line::new("", shown).with_note(t!(status_undecided)),
+                });
+            }
+        }
+
+        // A standing permission the user gave earlier and cannot otherwise see. Every other prompt in
+        // this session announces itself by appearing; this is the one that stops appearing, so without
+        // a line here there is nothing to tell them a command now runs unasked and that what it prints
+        // is being read as trusted.
+        let vouched: Vec<&bravebot_core::programs::Command> = facts.programs.iter().collect();
+
+        if vouched.is_empty() {
+            // Two different true things, and the wider one is only true where the record is empty as
+            // well. A session that has vouched for nothing but carries a remembered line does not put
+            // every run to the person, and this is the screen responsible for saying what they are
+            // carrying: a flat "every run is put to you" above a list of lines that run unasked is the
+            // one claim this report must not make.
+            lines.push(Line::new(
+                t!(status_programs),
+                match remembered.is_some() {
+                    true => t!(status_nothing_vouched_this_session),
+                    false => t!(status_every_run_is_asked),
+                },
+            ));
+        } else {
+            lines.push(
+                Line::new(
+                    t!(status_trusted_commands),
+                    t!(count_commands, count = vouched.len()),
+                )
+                .with_note(t!(status_trusted_commands_note)),
+            );
+            // Every one of them, however many there are: a vouched command that the report will not
+            // show is a permission with nothing anywhere to say it is held, since the prompt it
+            // answers is the thing that has stopped appearing.
+            //
+            // With the tree it was given in, because that is part of what the entry covers (RUN-8) and
+            // the entry is what this report exists to read back: two entries for one command in two
+            // directories would otherwise draw as one line twice, and a reader could not tell which
+            // grant they hold. Relative to the workspace where it is inside it, the way every other
+            // path on this screen is written.
+            for command in vouched.iter() {
+                lines.push(Line::new("", command.display()).with_note(t!(
+                    status_command_in,
+                    directory = within(facts.directory, &command.directory)
+                )));
+            }
         }
     }
 
@@ -836,6 +849,7 @@ mod tests {
             cached: None,
             trust,
             programs: &NOTHING_VOUCHED,
+            turn_holds_rules: false,
             // Nothing repeating, which is every session that has not been asked to. Tests about
             // the loop line set this themselves.
             looping: None,
@@ -1565,6 +1579,29 @@ mod tests {
         let shown = rendered(&report(&facts(&config, &trust)));
         assert!(named_mode(bravebot_agent::PermissionMode::Ask).is_none());
         assert!(!shown.contains("shift-tab"), "{shown}");
+    }
+
+    /// While a turn holds the trust map and the vouched programs the report states neither: a copy
+    /// from before the turn began would say every run is asked about after the turn had been given
+    /// a standing yes, and would call a directory untrusted that the turn had since vouched for.
+    #[test]
+    fn a_report_whose_rules_are_the_turns_states_neither_the_trust_nor_the_programs() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut facts = facts(&config, &trust);
+        facts.turn_holds_rules = true;
+
+        let shown = rendered(&report(&facts));
+
+        assert!(shown.contains(t!(status_held_by_the_turn)), "{shown}");
+        for stated in [
+            t!(status_every_run_is_asked),
+            t!(status_nothing_vouched_for),
+            t!(status_directory_trusted),
+            t!(status_directory_untrusted),
+        ] {
+            assert!(!shown.contains(stated), "stated {stated:?}: {shown}");
+        }
     }
 
     fn rendered(report: &Report) -> String {

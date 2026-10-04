@@ -232,7 +232,7 @@ pub fn commands() -> [Command; 27] {
             name: STATUS_COMMAND,
             argument: "",
             description: t!(command_status),
-            mid_turn: MidTurn::Waits,
+            mid_turn: MidTurn::Runs,
         },
         Command {
             name: COST_COMMAND,
@@ -790,6 +790,77 @@ fn stop_what_is_running(session: &mut Session, cancel: &Cancel) {
     cancel.cancel();
 }
 
+/// What `/status` says: the session's standing, read now.
+///
+/// `rules` is the trust map and the vouched programs where the caller holds them, and `None` while
+/// a turn does, since it answers into both as it runs (CMD-8).
+fn status_report(
+    session: &Session,
+    stored: &bravebot_session::sessions::Handle,
+    workspace: &Workspace,
+    scratch: Option<&std::path::Path>,
+    config: &Config,
+    rules: Option<(&TrustStore, &TrustedPrograms)>,
+) -> crate::status::Report {
+    let empty_trust = TrustStore::new(workspace.root());
+    let empty_programs = TrustedPrograms::default();
+    let theme = crate::theme::name();
+    // Read here rather than held, for the reason the run prompt reads it where it would
+    // draw: the file belongs to every session begun in this directory, so a person
+    // asking what they are carrying should be told what the file says now.
+    let record = remembered_record(workspace);
+    // Read now for the same reason: another session here may have kept or withdrawn it.
+    let kept = remembering(workspace.root()).and_then(|(store, identity)| {
+        let kept = store.kept(&identity)?;
+        Some((
+            bravebot_session::sessions::how_long_ago(kept.at),
+            store.path().to_path_buf(),
+        ))
+    });
+    let checkouts = workspace.session_checkouts();
+    crate::status::report(&crate::status::Facts {
+        session_name: stored.title(),
+        session_id: stored.id(),
+        directory: workspace.root(),
+        added_directories: workspace.added_directories(),
+        scratch,
+        checkouts: &checkouts,
+        model: session.model(),
+        agent: session.standing_definition(),
+        effort: session.effort(),
+        model_reads_effort: session.model_reads_effort(),
+        served_model: session.served_model(),
+        substituted_model: session.substituted_model(),
+        premium: session.premium(),
+        theme: &theme,
+        config,
+        confinement: &session.confinement,
+        servers: &session.servers,
+        permission_mode: session.permission_mode(),
+        auto_vetting: session.auto_vetting(),
+        turns: session.turns,
+        tokens: session.tokens,
+        timing: session.timing_total(),
+        cached: session.cached(),
+        trust: rules.map_or(&empty_trust, |(trust, _)| trust),
+        programs: rules.map_or(&empty_programs, |(_, programs)| programs),
+        turn_holds_rules: rules.is_none(),
+        looping: session.looping(),
+        watches: session.watches(),
+        jobs: session.jobs().collect(),
+        goal: session.goal(),
+        remembered: record
+            .as_ref()
+            .map(|(store, lines)| crate::status::Remembered {
+                lines,
+                path: store.path(),
+            }),
+        kept_trust: kept
+            .as_ref()
+            .map(|(when, path)| crate::status::KeptTrust { when, path }),
+    })
+}
+
 /// What a command carried out mid-turn reaches besides the session, none of which the turn holds.
 struct Beside<'a> {
     /// The record the session is kept under. The turn is given only its id, and the record is
@@ -799,6 +870,12 @@ struct Beside<'a> {
     root: &'a std::path::Path,
     /// Where that answer is kept, or `None` where the platform names nowhere.
     home: Option<&'a std::path::Path>,
+    /// The workspace the turn works in, which `/status` reads and the turn only borrows.
+    workspace: &'a Workspace,
+    /// The session's scratch directory, which `/status` names.
+    scratch: Option<&'a std::path::Path>,
+    /// The configuration the turn was started with.
+    config: &'a Config,
 }
 
 /// A press during a turn that is not one of the keys that only stop it.
@@ -822,6 +899,17 @@ fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut 
         }
         Action::ForgetTrust => session.answer_while_working(|session| {
             session.note(forget_trust(beside.home, beside.root));
+        }),
+        Action::Status => session.answer_while_working(|session| {
+            let report = status_report(
+                session,
+                beside.stored,
+                beside.workspace,
+                beside.scratch,
+                beside.config,
+                None,
+            );
+            session.report(report);
         }),
         Action::SetTheme(name) => {
             session.answer_while_working(|session| set_theme(session, &name));
@@ -3568,60 +3656,14 @@ fn event_loop(
                 link_session(&mut session, &mut stored, kind, &argument)
             }
             Action::Status => {
-                let theme = crate::theme::name();
-                // Read here rather than held, for the reason the run prompt reads it where it would
-                // draw: the file belongs to every session begun in this directory, so a person
-                // asking what they are carrying should be told what the file says now.
-                let record = remembered_record(&workspace);
-                // Read now for the same reason: another session here may have kept or withdrawn it.
-                let kept = remembering(workspace.root()).and_then(|(store, identity)| {
-                    let kept = store.kept(&identity)?;
-                    Some((
-                        bravebot_session::sessions::how_long_ago(kept.at),
-                        store.path().to_path_buf(),
-                    ))
-                });
-                let checkouts = workspace.session_checkouts();
-                let report = crate::status::report(&crate::status::Facts {
-                    session_name: stored.title(),
-                    session_id: stored.id(),
-                    directory: workspace.root(),
-                    added_directories: workspace.added_directories(),
-                    scratch: scratch.as_ref().map(SessionScratch::path),
-                    checkouts: &checkouts,
-                    model: session.model(),
-                    agent: session.standing_definition(),
-                    effort: session.effort(),
-                    model_reads_effort: session.model_reads_effort(),
-                    served_model: session.served_model(),
-                    substituted_model: session.substituted_model(),
-                    premium: session.premium(),
-                    theme: &theme,
+                let report = status_report(
+                    &session,
+                    &stored,
+                    &workspace,
+                    scratch.as_ref().map(SessionScratch::path),
                     config,
-                    confinement: &session.confinement,
-                    servers: &session.servers,
-                    permission_mode: session.permission_mode(),
-                    auto_vetting: session.auto_vetting(),
-                    turns: session.turns,
-                    tokens: session.tokens,
-                    timing: session.timing_total(),
-                    cached: session.cached(),
-                    trust: &answers.trust,
-                    programs: &answers.programs,
-                    looping: session.looping(),
-                    watches: session.watches(),
-                    jobs: session.jobs().collect(),
-                    goal: session.goal(),
-                    remembered: record
-                        .as_ref()
-                        .map(|(store, lines)| crate::status::Remembered {
-                            lines,
-                            path: store.path(),
-                        }),
-                    kept_trust: kept
-                        .as_ref()
-                        .map(|(when, path)| crate::status::KeptTrust { when, path }),
-                });
+                    Some((&answers.trust, &answers.programs)),
+                );
                 session.report(report);
                 needs_draw = true;
             }
@@ -3913,6 +3955,7 @@ fn event_loop(
                         &mut session,
                         config,
                         &workspace,
+                        scratch.as_ref().map(SessionScratch::path),
                         &prompt,
                         wrote,
                         conversation,
@@ -6647,6 +6690,7 @@ fn run_turn_animated(
     session: &mut Session,
     config: &Config,
     workspace: &Workspace,
+    scratch: Option<&std::path::Path>,
     prompt: &str,
     wrote: Wrote,
     conversation: Conversation,
@@ -6850,6 +6894,9 @@ fn run_turn_animated(
         stored,
         root: workspace.root(),
         home: home.as_deref(),
+        workspace,
+        scratch,
+        config,
     };
 
     // Redraw until the turn finishes, answering approvals and watching for a cancel on the way.
@@ -11384,6 +11431,13 @@ mod tests {
         }
     }
 
+    /// A workspace for the turn's loop to lend `/status`, in tests of the other commands that read none of it.
+    fn a_workspace() -> Workspace {
+        let directory = crate::testutil::scratch_dir("bravebot-app-beside");
+        std::fs::create_dir_all(&directory).expect("scratch");
+        Workspace::new(&directory).expect("workspace")
+    }
+
     /// What a turn's loop holds beside the session, where a test reads none of it: a record that
     /// is never written, and no home to keep an answer in. A `/rename` through it still makes the
     /// store's directory for `/work`, so a test that renames runs in `in_isolated_profile`.
@@ -11398,6 +11452,9 @@ mod tests {
             stored: &mut stored,
             root,
             home: None,
+            workspace: &a_workspace(),
+            scratch: None,
+            config: &a_config_needing_no_sign_in(),
         })
     }
 
@@ -16389,6 +16446,7 @@ mod tests {
                 PANEL_COMMAND,
                 PR_COMMAND,
                 RENAME_COMMAND,
+                STATUS_COMMAND,
                 THEME_COMMAND,
                 WATCH_COMMAND,
             ]
@@ -16749,6 +16807,9 @@ mod tests {
                 stored: &mut stored,
                 root,
                 home: None,
+                workspace: &a_workspace(),
+                scratch: None,
+                config: &a_config_needing_no_sign_in(),
             },
         );
 
@@ -16900,6 +16961,9 @@ mod tests {
                 stored: &mut stored,
                 root,
                 home: None,
+                workspace: &a_workspace(),
+                scratch: None,
+                config: &a_config_needing_no_sign_in(),
             },
         );
 
@@ -17007,6 +17071,9 @@ mod tests {
                 stored: &mut stored,
                 root,
                 home: None,
+                workspace: &a_workspace(),
+                scratch: None,
+                config: &a_config_needing_no_sign_in(),
             },
         );
 
@@ -17016,6 +17083,55 @@ mod tests {
         );
         assert_eq!(stored.title(), "deploy watch");
         assert!(session.queued.is_empty(), "/rename waited");
+    }
+
+    /// `/status` mid-turn is answered as it is typed, from what the session holds now. The trust map
+    /// and the vouched programs are the turn's, which answers into them as it runs, so the report
+    /// says so and does not state either from before the turn began: "every run is asked" is the
+    /// claim that would be false by the time it was read.
+    #[test]
+    fn status_asked_mid_turn_answers_now_and_leaves_the_turns_rules_unstated() {
+        let mut session = a_turn_running_on("first");
+        let transcript = session.transcript.len();
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+
+        typed_during_a_turn(
+            &mut session,
+            STATUS_COMMAND,
+            key(KeyCode::Enter),
+            &mut Beside {
+                stored: &mut stored,
+                root,
+                home: None,
+                workspace: &a_workspace(),
+                scratch: None,
+                config: &a_config_needing_no_sign_in(),
+            },
+        );
+
+        let said = said_under_the_turn(&session).join("\n");
+        assert!(said.contains(t!(status_session_id)), "no report: {said}");
+        assert!(
+            said.contains(t!(status_held_by_the_turn)),
+            "the rules were not said to be the turn's: {said}"
+        );
+        for stated in [
+            t!(status_every_run_is_asked),
+            t!(status_nothing_vouched_for),
+        ] {
+            assert!(
+                !said.contains(stated),
+                "the report stated {stated:?}: {said}"
+            );
+        }
+        assert_eq!(session.transcript.len(), transcript, "wrote into the turn");
+        assert!(session.queued.is_empty(), "/status waited");
+        assert_eq!(session.input(), "", "/status was left in the box");
     }
 
     /// `/forget-trust` mid-turn takes back the answer kept for the next session here as it is typed.
@@ -17051,6 +17167,9 @@ mod tests {
                 stored: &mut stored,
                 root: &root,
                 home: Some(&home),
+                workspace: &a_workspace(),
+                scratch: None,
+                config: &a_config_needing_no_sign_in(),
             },
         );
 

@@ -1486,7 +1486,7 @@ line: its name, and the delegate's number where a delegate started
 it; its line, with line breaks folded and cut to a width so a long one does not push every note in
 the report across the screen; how it stands; and whether it was started in the background or moved
 there, and after how long. A session with no job says nothing about jobs. A `/status` typed during
-a turn waits for the turn to end, so it gives how each job ended.
+a turn is answered at once, and gives how each job stands so far.
 
 **Why.** Once the block that started a job, or the move that made one, had scrolled away, nothing
 on the screen said a job was running. A person could not tell a turn with a build going from a turn
