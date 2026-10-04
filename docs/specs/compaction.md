@@ -193,6 +193,8 @@ than necessary, which is a mistake this project made before measuring the endpoi
 `verified-by: bravebot_config::lib::nothing_advertised_leaves_the_default_alone`
 `verified-by: bravebot_config::lib::a_budget_set_by_hand_is_not_replaced_by_an_advertised_one`
 `verified-by: bravebot_config::lib::adopting_the_budget_already_in_use_reports_no_change`
+`verified-by: bravebot_config::lib::a_window_nobody_advertised_puts_the_default_back_in_place_of_an_adopted_budget`
+`verified-by: bravebot_config::lib::a_window_nobody_advertised_leaves_a_budget_set_by_hand_alone`
 `verified-by: bravebot_tui::app::the_window_of_a_model_chosen_earlier_is_found_in_the_listing`
 `verified-by: bravebot_tui::app::nothing_chosen_has_no_advertised_window`
 `verified-by: bravebot_tui::app::a_model_the_listing_no_longer_offers_has_no_window`

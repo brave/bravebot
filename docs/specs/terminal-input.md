@@ -1083,7 +1083,7 @@ answer is to set the budget rather than to compact.
 `verified-by: bravebot_config::lib::a_default_budget_is_marked_as_guessed`
 `verified-by: bravebot_config::lib::an_advertised_budget_is_not_marked_as_guessed`
 `verified-by: bravebot_config::lib::a_budget_set_by_hand_is_not_marked_as_guessed`
-`verified-by: bravebot_config::lib::a_window_nobody_advertised_leaves_an_adopted_budget_standing_and_marks_it_guessed`
+`verified-by: bravebot_config::lib::a_window_nobody_advertised_puts_the_default_back_in_place_of_an_adopted_budget`
 
 <a id="INPUT-23"></a>
 ### INPUT-23: the box edits the ordinary way or vi's, and only a person chooses which
