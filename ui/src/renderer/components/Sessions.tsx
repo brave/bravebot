@@ -12,7 +12,7 @@ import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
 import { conversationKey } from '../../shared/experience'
 import { useConversationPreferences, useExperienceValue, setConversation } from '../experience'
-import { ButtonMenu, Icon, Menu, ProgressRing } from '../nala'
+import { Icon, Menu, ProgressRing } from '../nala'
 
 /** What a row says about a session that is open somewhere: only what asks something of the reader. */
 export type SessionStatus = 'working' | 'answer' | 'approval' | 'failed'
