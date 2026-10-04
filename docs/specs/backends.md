@@ -2076,6 +2076,9 @@ which is one fewer model requested rather than a list that decides nothing.
 `verified-by: bravebot_tui::app::a_definition_naming_a_model_this_machine_may_not_request_is_refused`
 `verified-by: bravebot_tui::persist::a_pick_the_managed_layer_refuses_is_set_aside_and_names_the_file`
 `verified-by: bravebot_ui_bridge::models::the_window_neither_offers_nor_requests_a_model_this_machine_refuses`
+`verified-by: bravebot_agent::turn::a_delegate_whose_model_the_managed_layer_denies_sends_nothing_and_names_the_file`
+`verified-by: bravebot_agent::turn::an_addressed_definition_whose_model_the_managed_layer_denies_sends_nothing_and_names_the_file`
+`verified-by: bravebot_agent::turn::a_skill_whose_model_the_managed_layer_denies_keeps_the_sessions_model_and_names_the_file`
 
 <a id="BACKEND-49"></a>
 ### BACKEND-49: a `google-vertex` entry is reached at a host built from its project and location

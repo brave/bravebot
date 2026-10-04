@@ -36555,6 +36555,191 @@ fn a_skill_whose_model_needs_a_sign_in_keeps_the_sessions_model_and_says_so() {
     );
 }
 
+/// A config on the test endpoint whose managed layer denies `an-expensive-model`, and the file that
+/// does so, which a refusal has to name.
+fn a_config_denying_an_expensive_model(
+    endpoint: &str,
+    scratch: &Scratch,
+) -> (Config, std::path::PathBuf) {
+    let managed = scratch.path.join("managed.json");
+    std::fs::write(&managed, r#"{"models": {"deny": ["an-expensive-model"]}}"#)
+        .expect("write the managed file");
+    let mut config = Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.to_string()),
+        _ => None,
+    })
+    .expect("config");
+    config.models = bravebot_config::Managed::at(&managed).models().clone();
+    (config, managed)
+}
+
+/// BACKEND-48. A delegate the planner starts with `spawn_agent` is not requested on a model the
+/// managed layer denies: the definition is refused with the model and the file, and its task is
+/// never sent. The addressed route checks this where the definition is read; this is the other
+/// route, which no person's choice stands in front of.
+#[test]
+fn a_delegate_whose_model_the_managed_layer_denies_sends_nothing_and_names_the_file() {
+    let scratch = Scratch::new("delegate-model-denied");
+    let home = Scratch::new("delegate-model-denied-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("costly-reader.md"),
+        "---\nname: costly-reader\ndescription: Reads on a dear model.\nkind: reader\nmodel: an-expensive-model\n---\n\nREAD-ON-A-DEAR-MODEL\n",
+    )
+    .expect("write the definition");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-TO-COSTLY-READER",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"costly-reader","task":"CHECK-ON-A-DEAR-MODEL"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("delegate finished"),
+            ],
+        ),
+        ("CHECK-ON-A-DEAR-MODEL", vec![reply_with("clear")]),
+    ]);
+    let (config, managed) = a_config_denying_an_expensive_model(&endpoint, &scratch);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("DELEGATE-TO-COSTLY-READER").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    assert!(
+        !requests.iter().any(|body| {
+            body.contains("CHECK-ON-A-DEAR-MODEL") && !body.contains("DELEGATE-TO-COSTLY-READER")
+        }),
+        "the delegate was requested on the denied model or another: {requests:?}"
+    );
+    assert!(
+        !requests
+            .iter()
+            .any(|body| body.contains(r#""model":"an-expensive-model""#)),
+        "a request carried the denied model: {requests:?}"
+    );
+    assert!(
+        matches!(reporter.delegates_finished.as_slice(), [(_, _, true)]),
+        "the delegate was not reported as not finishing: {:?}",
+        reporter.delegates_finished
+    );
+    assert!(
+        reporter.notices.iter().any(|notice| {
+            notice.contains("costly-reader")
+                && notice.contains("an-expensive-model")
+                && notice.contains(&managed.display().to_string())
+        }),
+        "the refusal named neither the definition, the model nor the file: {:?}",
+        reporter.notices
+    );
+}
+
+/// BACKEND-48. A definition a turn is addressed to is refused on the same ground inside the
+/// driver, where an interface that never ran `definition_named` (the one-shot run, the desktop
+/// bridge) starts it.
+#[test]
+fn an_addressed_definition_whose_model_the_managed_layer_denies_sends_nothing_and_names_the_file() {
+    let scratch = Scratch::new("address-model-denied");
+    let home = Scratch::new("address-model-denied-home");
+    define(
+        &home,
+        "costly-reviewer",
+        "kind: reader\nmodel: an-expensive-model\n",
+        "REVIEW",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) =
+        serve_by_marker(vec![("ADDRESSED-TASK", vec![reply_with("reviewed")])]);
+    let (config, managed) = a_config_denying_an_expensive_model(&endpoint, &scratch);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let ran = turn::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-TASK", &home, "costly-reviewer"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    assert!(
+        matches!(ran, Err(bravebot_agent::turn::TurnError::Precommit(_))),
+        "the definition ran"
+    );
+    assert_eq!(received.try_iter().count(), 0, "a request was sent");
+    assert!(
+        reporter.notices.iter().any(|notice| {
+            notice.contains("costly-reviewer")
+                && notice.contains("an-expensive-model")
+                && notice.contains(&managed.display().to_string())
+        }),
+        "the refusal named neither the definition, the model nor the file: {:?}",
+        reporter.notices
+    );
+}
+
+/// BACKEND-48. A skill naming a model the managed layer denies does not move the turn onto it: the
+/// rounds after the skill loads keep the session's model, and the person is told which file refused.
+#[test]
+fn a_skill_whose_model_the_managed_layer_denies_keeps_the_sessions_model_and_names_the_file() {
+    let scratch = Scratch::new("skill-model-denied");
+    write_project_skill_declaring(
+        &scratch.path,
+        "on-a-dear-model",
+        "model: an-expensive-model\n",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("load_skill", r#"{"name":"on-a-dear-model"}"#),
+        reply_with("understood"),
+    ]);
+    let (config, managed) = a_config_denying_an_expensive_model(&endpoint, &scratch);
+
+    let outcome = turn::run_with_trust(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("do the work").with_model(Some("custom-parent-model".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains(r#""model":"custom-parent-model""#)
+            && !second.contains("an-expensive-model\""),
+        "the round after the skill loaded left the session's model: {second}"
+    );
+    let said = outcome.notices.join(" | ");
+    assert!(
+        said.contains("on-a-dear-model")
+            && said.contains("an-expensive-model")
+            && said.contains(&managed.display().to_string()),
+        "nobody was told which file refused the skill's model: {said}"
+    );
+}
+
 /// A skill loaded in a turn addressed to a definition that names a model keeps that model, and the
 /// person is told. The definition's model is a cost boundary (ADDRESS-11), so a skill the planner
 /// loads cannot move the turn onto a dearer one. The skill's effort still applies.

@@ -533,6 +533,26 @@ pub fn run(
         .spec
         .model()
         .map(|written| (written, config.model_named(written)));
+    // The machine-level layer first, as the addressed route asks it: a model this machine does not
+    // request is refused whatever its credentials are, and nothing is started for it (BACKEND-48).
+    if let Some((written, _)) = &definition_model
+        && let Some((file, why)) = config.model_refused(written)
+    {
+        let said = t!(
+            delegate_model_refused,
+            definition = seeded.spec.definition(),
+            model = *written,
+            reason = crate::backend::refusal_reason(file, why)
+        );
+        reporter.notice(said.clone());
+        return Ended {
+            delegated: Err(TurnError::Precommit(
+                "the delegate's model is refused by this machine's managed layer".to_string(),
+            )),
+            vouched: seeded.vouched.clone(),
+            notices: vec![said],
+        };
+    }
     // Refused rather than run on the turn's model, which would spend past a boundary the definition
     // drew, and a worker thread has nowhere to show a sign-in (DELEGATE-22).
     if let Some((written, resolved)) = &definition_model
