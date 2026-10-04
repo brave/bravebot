@@ -16,12 +16,13 @@
 //! the more restrictive variant, never the more permissive one, mirroring what
 //! `Snapshot` and `Record::trust_map` already do upstream. There is no error case for a
 //! decision, because refusing to parse an answer and refusing the write it answers are
-//! the same outcome and only one of them is honest about it. [`composed`] is the one
-//! function here that refuses, and it reads a claim a request makes rather than an answer
-//! to a question: there is no quieter reading of a client asking for a tag it may not
-//! have, and a turn that went out untagged instead would be drawn as a prompt nobody
-//! typed.
+//! the same outcome and only one of them is honest about it. [`composed`] and
+//! [`permission_mode`] are the functions here that refuse, and each reads a claim a request
+//! makes rather than an answer to a question: there is no quieter reading of a client asking
+//! for a tag it may not have, and a turn that went out untagged instead would be drawn as a
+//! prompt nobody typed.
 
+use bravebot_agent::PermissionMode;
 use bravebot_agent::confirm::{
     CallDecision, Decision, ExposureRequest, FetchRequest, Intent, ManifestRequest, McpCallRequest,
     MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest, ToolListRequest,
@@ -87,7 +88,34 @@ pub fn status(status: Status) -> &'static str {
     }
 }
 
+/// The name a front end knows a permission mode by. The inverse of [`permission_mode`] for the
+/// three a window may choose.
+pub fn permission_mode_name(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Ask => "ask",
+        PermissionMode::AcceptEdits => "acceptEdits",
+        PermissionMode::Plan => "plan",
+        PermissionMode::Bypass => "bypass",
+    }
+}
+
 // ---------------------------------------------------------------- inbound
+
+/// The permission mode a `session.mode` asks for.
+///
+/// Refused rather than read as asking where the word is anything else, `bypass` included. Bypass
+/// is reachable only where the command line asked for it (MODE-5), and a window has no command
+/// line. Quietly asking instead would leave a client drawing a mode the session is not in.
+pub fn permission_mode(value: &Value) -> Result<PermissionMode, Failure> {
+    match value.as_str() {
+        Some("ask") => Ok(PermissionMode::Ask),
+        Some("acceptEdits") => Ok(PermissionMode::AcceptEdits),
+        Some("plan") => Ok(PermissionMode::Plan),
+        _ => Err(Failure::bad_request(format!(
+            "`mode` may be `ask`, `acceptEdits` or `plan`, not {value}"
+        ))),
+    }
+}
 
 /// Read a decision the front-end sent.
 ///

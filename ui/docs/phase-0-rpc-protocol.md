@@ -760,7 +760,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | event | `data` | source |
 |---|---|---|
 | `agent.ready` | `{ build, version, home, configured, defaultModel }` | startup, no `session` |
-| `turn.started` | `{ turn }` | `turn.send` accepted |
+| `turn.started` | `{ turn, mode }` | `turn.send` accepted |
 | `phase` | `{ phase }` | `Reporter::phase` |
 | `composing` | `{ call }`, a verb word or `null` | `Reporter::composing`, **a delegate's dropped** |
 | `narration` | `{ text }` | `Reporter::narration`, **empty ones dropped** |
@@ -1296,7 +1296,13 @@ Still open:
 - The rules are read when a session opens and kept for its turns. A fork takes its parent's.
   A settings file edited while a session is open governs the next one.
 - A manifest run is passed the session's rules, and the agent's runner does not read them.
-
+- `session.mode` takes `session` and `mode`, one of `ask`, `acceptEdits` or `plan`, and answers
+  `{ permissionMode }`. Any other word, `bypass` included, is `bad_request`: bypassing is reached
+  only through the command-line flag (MODE-5). It is accepted while a turn runs and changes the
+  next turn, not the running one (MODE-8).
+- `session.new`, `session.open` and `session.fork` carry `permissionMode`, which is always `ask`.
+  A mode is not written to the record and a fork does not take its parent's (MODE-10).
+- `turn.started` carries `mode`, the mode the turn reads once and keeps to its end.
 
 ## Shared session view, version 1
 
