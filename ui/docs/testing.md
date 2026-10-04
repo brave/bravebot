@@ -141,6 +141,7 @@ at, that a control keeps keyboard focus through an animation.
 | `npm run drive:menu` | The application menu: what it offers, what it greys, and what it refuses to offer |
 | `npm run drive:export` | Exporting a conversation to text, Markdown and PDF — with and without the tool calls, and what the file leaves out either way |
 | `npm run drive:fork` | Cutting a session in two: that the fork holds the right half and the session it came from is untouched |
+| `npm run drive:rewind` | Undo and rewind from each entry point against the real bridge: the file back on disk, the turn gone from the transcript, its prompt in the composer, the coverage warning for a command, and every entry point greyed while a turn runs |
 | `npm run drive:tree` | The file tree: listing, expanding, the dotfile toggle, the name filter, and that a session with no root and a symlink out of the project both list nothing |
 | `npm run drive:theme` | Appearance: System / Light / Dark painting and persistence, legacy palette fallback, and the export renderer's light-only guarantee |
 | `npm run drive:bots` | Bots: that the column has two lists and remembers which, that a bot survives a relaunch with what was typed into it, and that two bots have different faces while one bot keeps its own across a rename — asserted on the *form* the seed built, since the face is turning while it is looked at. Also the archive: that a bot put away survives field-for-field and comes back as itself, and that deleting one asks before it does anything |
@@ -201,13 +202,13 @@ These pass `--user-data-dir` with a temporary profile, so the app's own state is
 
 `drive-about`, `drive-agent-settings`, `drive-bot-history`, `drive-conversation-workflow`,
 `drive-manual-walkthrough`, `drive-models`, `drive-models-live`, `drive-remembered-trust`,
-`drive-secure-files`, `drive-session-list`, `drive-turn-details`, `drive-ux-acceptance`,
+`drive-rewind`, `drive-secure-files`, `drive-session-list`, `drive-turn-details`, `drive-ux-acceptance`,
 `drive-vetting`, `drive-visual` and `drive-perf`.
 
 The flag isolates only the app's own state. Most of these also replace the bridge with IPC
 fixtures, so they need no credentials and make no requests; `drive-models-live` does not, and
 sends a live turn through the isolated profile using your real credentials.
-`drive-manual-walkthrough` also sets a disposable `HOME`. `drive-agent-rpc` never opens a window:
+`drive-manual-walkthrough` and `drive-rewind` also set a disposable `HOME`. `drive-agent-rpc` never opens a window:
 it spawns the bridge on its own with a temporary `HOME`. When you write a new driver, launch with
 a temporary `--user-data-dir` and mock or isolate whatever the bridge would reach.
 

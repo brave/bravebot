@@ -14,6 +14,8 @@ import type {
   KeptTrust,
   OpenedSession,
   PermissionMode,
+  RewindPoint,
+  RewoundSession,
   RunRecord,
   SettingsRules,
   Waiting,
@@ -49,6 +51,8 @@ import { useExperience, conversationPreferences, setConversation, dropConversati
 import { showToast } from './toasts'
 import { applyAppearance } from './theme'
 import { SYSTEM, parseAppearance, type Appearance } from '../shared/theme'
+import { planRewind, pointForPrompt } from './rewind'
+import { RewindConfirm } from './components/Rewind'
 
 /** What the app is doing, which decides most of what the interface offers. */
 interface Live {
@@ -137,6 +141,8 @@ interface Live {
    * ordinal of the one above them.
    */
   awaitingOrdinal?: string | null
+  /** The points the session can be put back to, newest first, as the agent last listed them. */
+  rewind?: RewindPoint[]
   outcome?: 'complete' | 'failed'
   draftId?: string
   queuePaused?: boolean
@@ -518,6 +524,7 @@ export function App(): React.JSX.Element {
         autoVetting: opened.autoVetting,
         permissionMode: opened.permissionMode,
         rules: opened.settingsRules ?? null,
+        rewind: opened.rewind ?? [],
       })
       const notes = [opened.branchNote, opened.buildNote, opened.frontNote].filter(Boolean) as string[]
       setProblem(notes.length ? notes.join(' · ') : null)
@@ -1211,6 +1218,8 @@ export function App(): React.JSX.Element {
         autoVetting: forked.autoVetting,
         permissionMode: forked.permissionMode,
         rules: forked.settingsRules ?? null,
+        // The parent's backups stay the parent's: nothing in the child has written anything yet.
+        rewind: [],
         forkedFrom: {
             directory: forked.parent.directory,
             id: forked.parent.id,
@@ -1231,6 +1240,66 @@ export function App(): React.JSX.Element {
     },
     [live, refresh, readForks],
   )
+
+  /**
+   * Which rewind is waiting on its confirmation, for which session.
+   *
+   * The handle is kept so a dialog asked about one session is never answered against another.
+   */
+  const [rewinding, setRewinding] = useState<{ handle: string; steps: number; busy: boolean } | null>(null)
+  const askRewind = useCallback((steps: number) => {
+    const current = liveRef.current
+    if (!current || current.running || !current.rewind?.some((point) => point.steps === steps)) return
+    setRewinding({ handle: current.handle, steps, busy: false })
+  }, [])
+  const rewindEntry = useCallback((id: string) => {
+    const entry = liveRef.current?.entries.find((candidate) => candidate.id === id)
+    const point = entry?.kind === 'user' ? pointForPrompt(liveRef.current?.rewind ?? [], entry.prompt) : null
+    if (point) askRewind(point.steps)
+  }, [askRewind])
+
+  /**
+   * Put the session back and draw it again from what the agent says it now holds.
+   *
+   * Redrawn rather than patched, as opening a saved session is: what is on screen afterwards is
+   * what the next turn will be working from.
+   */
+  const confirmRewind = useCallback(async () => {
+    if (!rewinding || rewinding.busy) return
+    const { handle, steps } = rewinding
+    setRewinding({ ...rewinding, busy: true })
+    try {
+      const rewound = await call<RewoundSession>('session.rewind', { session: handle, steps })
+      updateSession(handle, (old) => old ? {
+        ...old,
+        entries: t.fromSaid(rewound.said),
+        turns: Object.fromEntries(Object.entries(old.turns).filter(([turn]) => Number(turn) < rewound.turn)),
+        todos: Object.values(rewound.todos).flat(),
+        contextTokens: rewound.contextTokens,
+        archived: rewound.archived,
+        rewind: rewound.rewind,
+        awaitingOrdinal: null,
+        focus: null,
+        // Held, so the prompt going back in the composer is not overtaken by one queued before it.
+        queuePaused: old.queued?.length ? true : old.queuePaused,
+        // The turn that carried the briefing may be one of those undone.
+        bot: old.bot ? { ...old.bot, grounded: false } : null,
+      } : old)
+      const draftNow = liveRef.current?.handle === handle ? draft : ''
+      setDraft(rewound.text + (draftNow.trim() ? `\n\n${draftNow}` : ''))
+      showToast(`Back to before turn ${rewound.turn}`)
+      setProblem(rewound.refused.length
+        ? `These files still hold what the undone turns wrote, so check them before going on: ${rewound.refused.join(', ')}`
+        : null)
+      void refresh()
+    } catch (error) {
+      setProblem(String(error).includes('turn_in_flight')
+        ? 'A turn started, so nothing was undone. Try again once it finishes.'
+        : String(error))
+    } finally {
+      setRewinding(null)
+    }
+  }, [rewinding, draft, setDraft, updateSession, refresh])
 
   /** Show the session this one was cut out of, at the point of the cut. */
   const openParent = useCallback(() => {
@@ -1357,6 +1426,8 @@ export function App(): React.JSX.Element {
     copyProjectPath,
     copyEntry,
     forkEntry: (id) => void forkFrom(id),
+    rewindEntry,
+    undoTurn: () => { const newest = live?.rewind?.[0]; if (newest) askRewind(newest.steps) },
     exportSession: (format) => void exportSession(format),
     toggleExportTools: () => setIncludeTools((on) => !on),
     theme: () => openSettingsPage('general'),
@@ -1371,6 +1442,7 @@ export function App(): React.JSX.Element {
       canSend: live !== null && !live.running && !live.askingTrust && backendReady !== false && draft.trim().length > 0,
       canExport,
       includeTools,
+      canRewind: live !== null && !live.running && (live.rewind?.length ?? 0) > 0,
       folded: collapsed,
     }),
     [live, draft, collapsed, canExport, includeTools, backendReady],
@@ -1530,6 +1602,7 @@ export function App(): React.JSX.Element {
         // one another session kept since did not.
         onTrustRemembered={(handle, kept) => updateSession(handle, (old) => (old ? { ...old, trustRemembered: old.trustRemembered && kept } : old))}
         onFork={(id) => void forkFrom(id)}
+        onRewind={askRewind}
         onOpenParent={openParent}
         onFocused={clearFocus}
         onDecide={answer}
@@ -1573,6 +1646,11 @@ export function App(): React.JSX.Element {
         <Notice title={notice.title} body={notice.body} onClose={() => setNotice(null)} />
       )}
       {unconfigured && <Unconfigured detail={unconfigured} onClose={() => setUnconfigured(null)} />}
+      {rewinding && live?.handle === rewinding.handle && (() => {
+        const plan = planRewind(live.rewind ?? [], rewinding.steps)
+        return plan && <RewindConfirm plan={plan} bot={live.bot !== null} running={live.running} busy={rewinding.busy}
+          onCancel={() => setRewinding(null)} onConfirm={() => void confirmRewind()} />
+      })()}
       {live?.askingTrust && (
         <TrustPrompt directory={live.askingTrust} keeping={live.keepingTrust} onAnswer={answerTrust} />
       )}
@@ -1698,6 +1776,7 @@ export function apply(
           entries: [...t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt), t.replied(message.data.reply, message.data.turn)],
           awaitingOrdinal: null,
           archived: message.data.archived,
+          rewind: message.data.rewind ?? [],
           bot: old.bot && compacted ? { ...old.bot, grounded: false } : old.bot,
         }
       }
@@ -1715,6 +1794,7 @@ export function apply(
           entries: [...t.interruptPending(t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt)), { ...t.errored(`${kind}: ${detail}`), category: kind === 'cancelled' ? 'cancelled' : message.data.category, attempts: message.data.attempts, status: message.data.status, cutOff: message.data.cutOff, turn: message.data.turn }],
           awaitingOrdinal: null,
           queuePaused: true,
+          rewind: message.data.rewind ?? [],
         }
       }
       default:

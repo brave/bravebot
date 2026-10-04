@@ -161,7 +161,27 @@ export interface KeptTrust {
   path: string
 }
 
+/** Why file backups may not account for everything a turn did (§7.1 `session.rewind`). */
+export type RewindGap = 'command' | 'hook' | 'scratch' | 'language-server' | 'desktop' | 'backup-unavailable' | 'unknown'
+
+/** One point `session.rewind` can put the session back to, as `turn.done` lists them (§8.2). */
+export interface RewindPoint {
+  /** The `steps` that reaches this point. */
+  steps: number
+  /** The turn it undoes. */
+  turn: number
+  /** That turn's prompt in the `Said.prompt` coordinate, or `null` where the conversation no longer holds it. */
+  prompt: number | null
+  text: string
+  /** What the turn wrote over. */
+  paths: string[]
+  /** A string rather than `RewindGap`: a newer agent may name a gap this build has no words for. */
+  gaps: string[]
+}
+
 export interface OpenedSession {
+  /** Absent from an older bridge, which kept no rewind points. Newest first. */
+  rewind?: RewindPoint[]
   contextTokens?: number
   session: string
   model: string | null
@@ -212,6 +232,29 @@ export const PERMISSION_MODES: readonly PermissionMode[] = ['ask', 'acceptEdits'
 
 export function nextPermissionMode(mode: PermissionMode): PermissionMode {
   return PERMISSION_MODES[(PERMISSION_MODES.indexOf(mode) + 1) % PERMISSION_MODES.length]!
+}
+
+/**
+ * The session put back `steps` turns, on disk and in the conversation (§7.1 `session.rewind`).
+ *
+ * `said` and the fields after it are `session.open`'s, read off the session as it now stands.
+ */
+export interface RewoundSession {
+  session: string
+  /** The turn the session now stands before. */
+  turn: number
+  /** The prompt that began that turn. */
+  text: string
+  /** Each path that did not go back. */
+  refused: string[]
+  gaps: string[]
+  said: Said[]
+  context: string
+  contextTokens?: number
+  archived: number
+  todos: Record<string, TodoRow[]>
+  trust: { rules: { path: string; integrity: string }[] | null }
+  rewind: RewindPoint[]
 }
 
 export interface ModelOption {
@@ -335,6 +378,8 @@ export interface TurnDone {
   id: string | null
   /** As on `OpenedSession`. */
   archived: number
+  /** As on `OpenedSession`. */
+  rewind?: RewindPoint[]
 }
 
 /**
@@ -350,6 +395,8 @@ export interface CutOff {
 export interface TurnError {
   /** As on `TurnDone`. */
   prompt?: number | null
+  /** As on `TurnDone`. */
+  rewind?: RewindPoint[]
   category?: string | null
   attempts?: number | null
   status?: number | null

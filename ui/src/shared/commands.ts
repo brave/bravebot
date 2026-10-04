@@ -37,6 +37,7 @@ export type CommandId =
   | 'turn.send'
   | 'turn.cancel'
   | 'mode.cycle'
+  | 'turn.rewind'
   | 'view.fold-left'
   | 'view.fold-right'
   | 'view.reset-columns'
@@ -53,7 +54,7 @@ export type CommandId =
  * with the rest of the declaration: the main process greys a menu item by it, and anything
  * drawing an in-window menu can grey a row by the same tag rather than by its own opinion.
  */
-export type Requires = 'always' | 'session' | 'running' | 'sendable' | 'exportable' | 'forkable'
+export type Requires = 'always' | 'session' | 'running' | 'sendable' | 'exportable' | 'forkable' | 'rewindable'
 
 export interface Command {
   id: CommandId
@@ -113,6 +114,13 @@ export interface WindowState {
    * own guess at it would be a second copy that could disagree.
    */
   includeTools: boolean
+  /**
+   * There is a session, nothing is running, and it holds a point to rewind to.
+   *
+   * Sent for the reason `canExport` is: the points arrive with each turn's end, and only the
+   * renderer holds them.
+   */
+  canRewind: boolean
   folded: { left: boolean; right: boolean }
 }
 
@@ -122,6 +130,7 @@ export const NOTHING_OPEN: WindowState = {
   canSend: false,
   canExport: false,
   includeTools: false,
+  canRewind: false,
   folded: { left: false, right: false },
 }
 
@@ -163,6 +172,8 @@ export const COMMANDS: readonly Command[] = [
     accelerator: 'CmdOrCtrl+Shift+M',
     requires: 'session',
   },
+  // No accelerator: Cmd+Z belongs to the text being edited, and this one asks first anyway.
+  { id: 'turn.rewind', label: 'Undo Last Turn…', requires: 'rewindable' },
   {
     id: 'view.fold-left',
     label: 'Hide Chat List',
@@ -214,6 +225,8 @@ export function isEnabled(requires: Requires, state: WindowState): boolean {
       // it. The agent refuses one anyway; this is so the menu does not offer what it will
       // refuse.
       return state.hasSession && !state.running
+    case 'rewindable':
+      return state.canRewind
   }
 }
 
@@ -241,7 +254,7 @@ export function isChecked(id: CommandId, state: WindowState): boolean {
  */
 export function parseWindowState(value: unknown): WindowState | null {
   if (typeof value !== 'object' || value === null) return null
-  const { hasSession, running, canSend, canExport, includeTools, folded } = value as Record<
+  const { hasSession, running, canSend, canExport, includeTools, canRewind, folded } = value as Record<
     string,
     unknown
   >
@@ -250,10 +263,11 @@ export function parseWindowState(value: unknown): WindowState | null {
   if (typeof canSend !== 'boolean') return null
   if (typeof canExport !== 'boolean') return null
   if (typeof includeTools !== 'boolean') return null
+  if (typeof canRewind !== 'boolean') return null
   if (typeof folded !== 'object' || folded === null) return null
   const { left, right } = folded as Record<string, unknown>
   if (typeof left !== 'boolean' || typeof right !== 'boolean') return null
-  return { hasSession, running, canSend, canExport, includeTools, folded: { left, right } }
+  return { hasSession, running, canSend, canExport, includeTools, canRewind, folded: { left, right } }
 }
 
 /**
@@ -287,7 +301,7 @@ export function isCommandId(value: unknown): value is CommandId {
  * A closed union rather than a free string, because this is what the renderer is allowed to
  * say when it asks for a popup, and the main process builds the menu from it.
  */
-export type ContextTarget = 'session' | 'entry' | 'entry-user' | 'directory'
+export type ContextTarget = 'session' | 'entry' | 'entry-user' | 'entry-user-rewindable' | 'directory'
 
 export type ContextCommandId =
   /** Start a session in a project the main process named, from File > Open Recent. */
@@ -297,6 +311,7 @@ export type ContextCommandId =
   | 'context.session.copy-path'
   | 'context.entry.copy'
   | 'context.entry.fork'
+  | 'context.entry.rewind'
 
 /**
  * What appears on a right-click, decided here and built in the main process.
@@ -319,6 +334,10 @@ export type ContextCommandId =
  * prompt in a composer to be edited — and every question the new session raises is still asked
  * in its transcript, beside the evidence. The renderer says a prompt was clicked; it still
  * cannot say what the menu reads.
+ *
+ * A prompt whose turn the session can still be put back to before is a kind of its own, so the
+ * menu holds a rewind only where one exists. Rewinding decides nothing either: it asks first, in
+ * a dialog naming every file it puts back.
  */
 export const CONTEXT: Record<
   ContextTarget,
@@ -336,6 +355,11 @@ export const CONTEXT: Record<
   'entry-user': [
     { id: 'context.entry.copy', label: 'Copy' },
     { id: 'context.entry.fork', label: 'Fork From Here…', requires: 'forkable' },
+  ],
+  'entry-user-rewindable': [
+    { id: 'context.entry.copy', label: 'Copy' },
+    { id: 'context.entry.fork', label: 'Fork From Here…', requires: 'forkable' },
+    { id: 'context.entry.rewind', label: 'Rewind to Before This…', requires: 'rewindable' },
   ],
 }
 

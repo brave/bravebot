@@ -27,17 +27,22 @@ const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumF
  * Quiet until the row is hovered or is the last reply, except when a policy refused something in
  * the turn, which stays in view because it is the one thing here a reader has to know.
  */
-export function TurnFooter({ details, onDisclosure, onAudit, copy }: {
+export function TurnFooter({ details, onDisclosure, onAudit, copy, undo }: {
   details?: Details
   onDisclosure: (turn: number, field: TurnDisclosure, open: boolean) => void
   onAudit: OpenAudit
   /** The reply's own text, for the Copy button. Absent under an error, which has its own details. */
   copy?: string
+  /** Offered on the latest turn's footer while the session can be put back to before it. */
+  undo?: { running: boolean; onUndo: () => void }
 }): React.JSX.Element {
   const blocked = details?.clean === false
   const label = blocked ? 'Policy blocked an action' : details ? 'Audit' : 'Audit unavailable'
   return <div className={`turn-footer${blocked ? ' has-refusal' : ''}${details?.statsOpen ? ' stats-open' : ''}`}>
     {copy !== undefined && <CopyButton text={() => copy} label="Copy message" data-test="copy-message" />}
+    {undo && <IconButton icon="arrow-undo" label="Undo turn" size="tiny" disabled={undo.running}
+      tooltip={undo.running ? 'Wait for the turn to finish' : 'Undo turn · Put back its files and conversation'}
+      data-test="turn-undo" onClick={undo.onUndo} />}
     {details?.status === 'complete' ? <Collapse className="turn-statistics" isOpen={details.statsOpen}
       title={`${details.model ?? 'Model unavailable'} · ${details.tokens === undefined ? 'Usage unavailable' : `${compact.format(details.tokens)} tokens`}`}
       onToggle={({ open }) => { if (open !== details.statsOpen) onDisclosure(details.turn, 'statsOpen', open) }}
