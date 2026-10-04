@@ -1,4 +1,3 @@
-import { Connectors } from './components/Connectors'
 import { SettingsView, type SettingsPage } from './components/SettingsView'
 import { BotDetails } from './components/BotDetails'
 import type { BotFormValue } from './components/Bots'
@@ -222,7 +221,6 @@ async function callBot(request: {
 }
 
 export function App(): React.JSX.Element {
-  const [connectors, setConnectors] = useState(false)
   /** Settings take the place of the chat view while open; which page was last open is kept. */
   const [settings, setSettings] = useState(false)
   const [settingsPage, setSettingsPage] = useState<SettingsPage>('general')
@@ -1341,7 +1339,6 @@ export function App(): React.JSX.Element {
   const stableSwitchTab = useEvent(switchTab)
   const stableOpenBot = useEvent(openBot)
   const openSettings = useEvent(() => openSettingsPage())
-  const openConnectors = useEvent(() => setConnectors(true))
   const stableCloseAudit = useEvent(closeAudit)
   const stableSwitchProject = useEvent((choice: ProjectChoice) => { void switchProject(choice) })
   const auditTurn = selectedAudit && selectedAudit.turn !== null ? live?.turns[selectedAudit.turn] : undefined
@@ -1422,7 +1419,6 @@ export function App(): React.JSX.Element {
         onRemoveBot={removeBot}
         build={build}
         onSettings={openSettings}
-        onConnectors={openConnectors}
       /></SessionInfo.Provider>
       <Gutter
         side="left"
@@ -1530,7 +1526,6 @@ export function App(): React.JSX.Element {
         <Notice title={notice.title} body={notice.body} onClose={() => setNotice(null)} />
       )}
       {unconfigured && <Unconfigured detail={unconfigured} onClose={() => setUnconfigured(null)} />}
-      {connectors && <Connectors onClose={() => setConnectors(false)} />}
       {live?.askingTrust && (
         <TrustPrompt directory={live.askingTrust} keeping={live.keepingTrust} onAnswer={answerTrust} />
       )}

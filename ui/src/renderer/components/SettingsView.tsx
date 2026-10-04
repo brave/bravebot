@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Appearance } from '../../shared/theme'
 import { Navigation, NavigationItem, type IconName } from '../nala'
 import { AgentSettings } from './AgentSettings'
+import { Connectors } from './Connectors'
 import { GeneralSettings } from './GeneralSettings'
 import { IconButton } from './IconButton'
 
-export type SettingsPage = 'general' | 'agent'
+export type SettingsPage = 'general' | 'connectors' | 'agent'
 
 const PAGES: readonly { id: SettingsPage; label: string; icon: IconName; subtitle: string }[] = [
   { id: 'general', label: 'General', icon: 'settings', subtitle: 'How this window looks' },
+  { id: 'connectors', label: 'Connectors', icon: 'plug', subtitle: 'MCP servers that give the model tools for your accounts and services' },
   { id: 'agent', label: 'Agent settings', icon: 'product-brave-leo', subtitle: 'Configuration and automation for this app' },
 ]
 
@@ -37,16 +39,20 @@ export function SettingsView({ page, onPage, onBack, session, chosen, onAppearan
     }
   }, [])
   const back = useCallback(() => leave(onBack), [leave, onBack])
+  /** Set by a page that has somewhere inside it to go back to, and cleared when it is at its top. */
+  const [inner, setInner] = useState<(() => void) | null>(null)
+  const onInner = useCallback((step: (() => void) | null) => setInner(() => step), [])
   useEffect(() => {
     const keys = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return
       if (document.querySelector('[role="dialog"]')) return
       event.preventDefault()
-      back()
+      if (inner) inner()
+      else back()
     }
     document.addEventListener('keydown', keys)
     return () => document.removeEventListener('keydown', keys)
-  }, [back])
+  }, [back, inner])
 
   const current = PAGES.find((each) => each.id === page) ?? PAGES[0]!
 
@@ -75,7 +81,7 @@ export function SettingsView({ page, onPage, onBack, session, chosen, onAppearan
         <header className="settings-head">
           <div className="drag" />
           <div className="settings-crumbs">
-            <IconButton icon="arrow-left" label="Back to BraveBot" tooltip="Back to BraveBot" shortcut="⎋" size="tiny" onClick={back} />
+            {inner && <IconButton icon="arrow-left" label="Back" tooltip="Back" shortcut="⎋" size="tiny" onClick={inner} data-test="settings-inner-back" />}
             <span className="settings-crumb">Settings</span>
             <span className="settings-crumb-sep" aria-hidden="true">/</span>
             <span className="settings-crumb current">{current.label}</span>
@@ -87,7 +93,9 @@ export function SettingsView({ page, onPage, onBack, session, chosen, onAppearan
             <p className="settings-subtitle">{current.subtitle}</p>
             {page === 'agent'
               ? <AgentSettings session={session} onChanged={onChanged} onDirty={onDirty} />
-              : <GeneralSettings chosen={chosen} onAppearance={onAppearance} />}
+              : page === 'connectors'
+                ? <Connectors onBack={onInner} />
+                : <GeneralSettings chosen={chosen} onAppearance={onAppearance} />}
           </div>
         </div>
       </main>

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Modal } from './Modal'
+import { useEffect, useRef, useState } from 'react'
+import { SettingsGroup } from './SettingsGroup'
 import { Alert, Button, ControlItem, Icon, Input, Label, ProgressRing, SegmentedControl, type IconName } from '../nala'
 import {
   CATALOG,
@@ -31,7 +31,7 @@ async function call<T>(method: string, params: Record<string, unknown> = {}): Pr
   return answer.ok as T
 }
 
-/** Where the dialog is. A review is a page of its own, reached from a form and returning to it. */
+/** Where the page is. A review is a page of its own, reached from a form and returning to it. */
 type Page =
   | { page: 'list' }
   | { page: 'catalog'; alias: string }
@@ -88,7 +88,8 @@ function Warnings({ connector }: { connector: Connector }): React.JSX.Element {
   )
 }
 
-export function Connectors({ onClose }: { onClose: () => void }): React.JSX.Element {
+/** The connectors page of the settings: what is offered, what is connected, and the review before anything is. */
+export function Connectors({ onBack }: { onBack: (step: (() => void) | null) => void }): React.JSX.Element {
   const [list, setList] = useState<ConnectorList | null>(null)
   const [page, setPage] = useState<Page>({ page: 'list' })
   const [problem, setProblem] = useState('')
@@ -135,72 +136,73 @@ export function Connectors({ onClose }: { onClose: () => void }): React.JSX.Elem
     setStatus(`${alias} was removed.`)
   })
 
+  const busyNow = useRef(busy)
+  busyNow.current = busy
   const unavailable = list && (list.unavailable || !list.writable)
   const back = page.page === 'list' ? null : page.page === 'review' ? page.back : { page: 'list' } as Page
-
-  const actions = (
-    <>
-      {back && <Button size="small" kind="plain-faint" className="modal-leading" isDisabled={busy} onClick={() => go(back)} data-test="connectors-back">
-        <Icon name="arrow-left" slot="icon-before" />Back
-      </Button>}
-      {page.page === 'review' ? (
-        // Keyed apart, so Leo's element is made anew rather than relabelled with Done's attributes.
-        <Button key="connect" size="small" kind="filled" isDisabled={busy || !!page.preview.refused || (page.preview.exists && !page.preview.same && !page.replace)}
-          onClick={() => void connect(page.form, page.preview, page.replace)} data-test="connector-connect">
-          Connect
-        </Button>
-      ) : (
-        <Button key="done" size="small" kind="filled" isDisabled={busy} onClick={onClose} data-test="connectors-done">Done</Button>
-      )}
-    </>
-  )
+  // The settings view draws the arrow that goes back one page in its header.
+  useEffect(() => {
+    onBack(back ? () => { if (!busyNow.current) go(back) } : null)
+    return () => onBack(null)
+  }, [page])
 
   return (
-    <Modal title="Connectors" size="lg" subtitle="MCP servers that give the model tools for your accounts and services." onClose={busy ? undefined : onClose} className="connectors" actions={actions}>
-      {problem && <Alert type="error" role="alert" data-test="connectors-error">{problem}</Alert>}
-      {status && <Alert type="success" size="small" role="status" data-test="connectors-status">{status}</Alert>}
-      {busy && <p role="status" className="settings-busy"><ProgressRing mode="indeterminate" /> Working…</p>}
-      {unavailable && <Alert type="warning" role="alert">{list?.unavailable ?? 'Nothing is being written in this session, so connectors cannot be changed.'}</Alert>}
+    <div className="settings-body connectors">
+      {(problem || status || busy || unavailable) && (
+        <div className="connectors-alerts">
+          {problem && <Alert type="error" role="alert" data-test="connectors-error">{problem}</Alert>}
+          {status && <Alert type="success" size="small" role="status" data-test="connectors-status">{status}</Alert>}
+          {busy && <p role="status" className="settings-busy"><ProgressRing mode="indeterminate" /> Working…</p>}
+          {unavailable && <Alert type="warning" role="alert">{list?.unavailable ?? 'Nothing is being written in this session, so connectors cannot be changed.'}</Alert>}
+        </div>
+      )}
 
       {page.page === 'list' && list && (
         <div className="connectors-list" data-test="connectors-list">
-          <div className="connector-grid">
-            {CATALOG.map((entry) => (
-              <button key={entry.alias} type="button" className="connector-card" data-test={`connector-${entry.alias}`} onClick={() => go({ page: 'catalog', alias: entry.alias })}>
-                <Icon name={entry.icon as IconName} className="connector-icon" />
-                <span className="connector-card-text">
-                  <span className="connector-name">{entry.name}</span>
-                  <span className="connector-summary">{entry.summary}</span>
-                </span>
-                <StandingLabel connector={declared(entry.alias)} />
-              </button>
-            ))}
-          </div>
-
-          <div className="connectors-custom-head">
-            <h3>Your connectors</h3>
-            <Button size="small" kind="outline" isDisabled={!!unavailable} onClick={() => go({ page: 'add' })} data-test="connector-add">
-              <Icon name="plus-add" slot="icon-before" />Add custom connector
-            </Button>
-          </div>
-          {custom.length === 0 ? (
-            <p className="connectors-empty">No custom connectors yet. Add one by its URL, or by the command that starts it on this computer.</p>
-          ) : (
-            <ul className="connector-rows">
-              {custom.map((connector) => (
-                <li key={connector.alias}>
-                  <button type="button" className="connector-row" data-test={`connector-${connector.alias}`} onClick={() => go({ page: 'custom', alias: connector.alias })}>
-                    <Icon name="plug" className="connector-icon" />
+          <SettingsGroup title="Services">
+            <div className="settings-block">
+              <div className="connector-grid">
+                {CATALOG.map((entry) => (
+                  <button key={entry.alias} type="button" className="connector-card" data-test={`connector-${entry.alias}`} onClick={() => go({ page: 'catalog', alias: entry.alias })}>
+                    <Icon name={entry.icon as IconName} className="connector-icon" />
                     <span className="connector-card-text">
-                      <span className="connector-name">{connector.alias}</span>
-                      <code className="connector-summary">{connector.url ?? connector.command?.join(' ') ?? connector.problem}</code>
+                      <span className="connector-name">{entry.name}</span>
+                      <span className="connector-summary">{entry.summary}</span>
                     </span>
-                    <StandingLabel connector={connector} />
+                    <StandingLabel connector={declared(entry.alias)} />
                   </button>
-                </li>
-              ))}
-            </ul>
-          )}
+                ))}
+              </div>
+            </div>
+          </SettingsGroup>
+
+          <SettingsGroup title="Your connectors">
+            <div className="settings-block">
+              {custom.length === 0 ? (
+                <p className="connectors-empty">No custom connectors yet. Add one by its URL, or by the command that starts it on this computer.</p>
+              ) : (
+                <ul className="connector-rows">
+                  {custom.map((connector) => (
+                    <li key={connector.alias}>
+                      <button type="button" className="connector-row" data-test={`connector-${connector.alias}`} onClick={() => go({ page: 'custom', alias: connector.alias })}>
+                        <Icon name="plug" className="connector-icon" />
+                        <span className="connector-card-text">
+                          <span className="connector-name">{connector.alias}</span>
+                          <code className="connector-summary">{connector.url ?? connector.command?.join(' ') ?? connector.problem}</code>
+                        </span>
+                        <StandingLabel connector={connector} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="settings-actions">
+                <Button size="small" kind="outline" isDisabled={!!unavailable} onClick={() => go({ page: 'add' })} data-test="connector-add">
+                  <Icon name="plus-add" slot="icon-before" />Add custom connector
+                </Button>
+              </div>
+            </div>
+          </SettingsGroup>
           <p className="connectors-foot">
             A connected server starts with each new conversation. The first time, you are asked to offer its tools to the model, and every call is put to you.
             Setup is kept in <code>~/.bravebot/mcp.json</code>, the same file <code>bravebot mcp</code> writes.
@@ -272,9 +274,15 @@ export function Connectors({ onClose }: { onClose: () => void }): React.JSX.Elem
               : 'It runs confined: it reads and writes its own directory, receives only the variables above, and starts with none of this app’s environment. '}
             Each conversation still asks before offering its tools to the model, and before every call.
           </p>
+          <div className="connector-page-actions">
+            <Button size="small" kind="filled" isDisabled={busy || !!page.preview.refused || (page.preview.exists && !page.preview.same && !page.replace)}
+              onClick={() => void connect(page.form, page.preview, page.replace)} data-test="connector-connect">
+              Connect
+            </Button>
+          </div>
         </section>
       )}
-    </Modal>
+    </div>
   )
 }
 

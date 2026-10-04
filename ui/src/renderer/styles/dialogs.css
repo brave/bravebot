@@ -143,67 +143,6 @@
 .watch-add { display: flex; align-items: flex-end; gap: var(--leo-spacing-m); margin-top: var(--leo-spacing-xl); }
 .watch-add leo-input { flex: 1; min-width: 0; }
 
-/* ------------------------------------------------------------- connectors */
-
-.connectors-list, .connector-page { display: flex; flex-direction: column; gap: var(--leo-spacing-l); }
-.connector-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--leo-spacing-m); }
-.connector-card, .connector-row {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--leo-spacing-m);
-  width: 100%;
-  min-width: 0;
-  padding: var(--leo-spacing-l);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-card);
-  background: var(--surface-raised);
-  color: var(--ink-primary);
-  font: var(--type-body);
-  text-align: left;
-  transition: background-color var(--motion-fast);
-}
-.connector-card:hover, .connector-row:hover { background: var(--surface-hover); }
-.connector-icon { flex: none; --leo-icon-size: var(--icon-control); --leo-icon-color: var(--ink-secondary); }
-.connector-card-text { display: flex; flex: 1; flex-direction: column; gap: var(--leo-spacing-xs); min-width: 0; }
-.connector-name { font: var(--type-body-strong); }
-.connector-summary { font: var(--type-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
-code.connector-summary { font: var(--type-code); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.connector-standing { flex: none; }
-.connector-rows { display: flex; flex-direction: column; gap: var(--leo-spacing-s); margin: 0; padding: 0; list-style: none; }
-.connectors-custom-head { display: flex; align-items: center; justify-content: space-between; gap: var(--leo-spacing-m); }
-.connectors-custom-head h3 { margin: 0; }
-.connectors-empty, .connectors-foot, .connector-before { margin: 0; font: var(--type-meta); color: var(--ink-secondary); }
-.connector-page-head { display: flex; align-items: center; gap: var(--leo-spacing-m); }
-.connector-page-head h3 { flex: 1; margin: 0; }
-.connector-page h4 { margin: var(--leo-spacing-s) 0 0; }
-.connector-page p { margin: 0; }
-.connector-page-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--leo-spacing-m); }
-.connector-declaration { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--leo-spacing-s) var(--leo-spacing-xl); margin: 0; font: var(--type-meta); }
-.connector-declaration dt { color: var(--ink-secondary); }
-.connector-declaration dd { margin: 0; min-width: 0; }
-.connector-declaration code { font: var(--type-code); overflow-wrap: anywhere; }
-.connector-form { display: flex; flex-direction: column; gap: var(--leo-spacing-l); }
-.connector-field { display: flex; flex-direction: column; gap: var(--leo-spacing-xs); }
-.connector-field small, .connector-variables small { font: var(--type-caption); color: var(--ink-tertiary); }
-.connector-variables {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--leo-spacing-m);
-  margin: 0;
-  padding: var(--leo-spacing-l) var(--leo-spacing-xl);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-card);
-}
-.connector-variables legend { padding: 0 var(--leo-spacing-s); font: var(--type-meta-strong); color: var(--ink-secondary); }
-.connector-variable { display: flex; align-items: flex-end; gap: var(--leo-spacing-m); width: 100%; }
-.connector-variable leo-input { flex: 1; }
-.connector-warnings { margin: 0 0 var(--leo-spacing-s); padding-left: var(--leo-spacing-xl); }
-
-@media (max-width: 640px) {
-  .connector-grid { grid-template-columns: 1fr; }
-}
-
 /* ------------------------------------------------------------- previews */
 
 .preview-code { margin: 0; }
