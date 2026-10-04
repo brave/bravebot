@@ -229,6 +229,13 @@ fn table(
              read it.",
         )
     };
+    // The tools ask_user sends the planner to for a fact about this machine. `run` is named only
+    // where this turn holds one; a turn without it is sent to the others alone.
+    let looking_tools = if running.offered() {
+        "list_files, search, read_file or run"
+    } else {
+        "list_files, search or read_file"
+    };
     let mut tools = vec![
         Tool::function(
             "read_file",
@@ -712,16 +719,18 @@ fn table(
         ),
         Tool::function(
             "ask_user",
-            "Ask the user up to four questions and wait for their answers. Only for what you \
+            format!(
+                "Ask the user up to four questions and wait for their answers. Only for what you \
              cannot find out yourself: which of two approaches to take, whether something is in \
              scope, which of two plausible files they meant. Never for a fact about this machine. \
              A path, a filename, whether a program is installed, what something is called: go and \
-             look with list_files, search, read_file or run instead, and note that a quarantined \
+             look with {looking_tools} instead, and note that a quarantined \
              result does not stop you asking afterwards, so looking first costs you nothing. Ask \
              everything the plan turns on in one call rather than a question per turn; they are \
              put to the user one at a time. Offer concrete options where you can; the user may \
              also answer in their own words or skip a question, and a skipped question is an \
-             answer to work with rather than a reason to ask again.",
+             answer to work with rather than a reason to ask again."
+            ),
             json!({
                 "type": "object",
                 "properties": {
@@ -10394,6 +10403,37 @@ mod tests {
                 .contains("does not stop you asking afterwards"),
             "ask_user still implies reading forfeits the question: {}",
             tool.function.description
+        );
+    }
+
+    /// TOOL-6. The advice to look before asking names `run` only on a list that holds one. A turn
+    /// addressed to a definition that keeps `ask_user` and drops `run` reads this description, and
+    /// would otherwise be sent to a name it is refused.
+    #[test]
+    fn ask_user_names_run_only_where_the_turn_holds_one() {
+        let described = |running: Running| -> String {
+            available(
+                Scheduling::ArrangingALook,
+                Arming::Allowed { free: 1 },
+                Deadlines::BUILT_IN,
+                running,
+            )
+            .into_iter()
+            .find(|t| t.function.name == "ask_user")
+            .expect("ask_user is offered")
+            .function
+            .description
+        };
+        let offered = described(Running::Offered);
+        assert!(
+            offered.contains("look with list_files, search, read_file or run instead"),
+            "a turn with run is not sent to it: {offered}"
+        );
+        let withheld = described(Running::Withheld);
+        assert!(
+            withheld.contains("look with list_files, search or read_file instead")
+                && !withheld.contains("run"),
+            "a turn without run is sent to it: {withheld}"
         );
     }
 
