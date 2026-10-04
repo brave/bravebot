@@ -549,9 +549,11 @@ pub enum Unremoved {
 pub enum Happened {
     Made,
     Removed,
+    /// A file a delegate wrote there came back into the working directory (CHECKOUT-14).
+    Applied,
 }
 
-/// Record in the trail that a checkout was made or removed (CHECKOUT-19).
+/// Record in the trail that a checkout was made, applied from or removed (CHECKOUT-19).
 ///
 /// The event holds the checkout's path. The sink attributes it as it does any decision, to the run
 /// whose gates it is recording, so a checkout a delegate's run made for a delegate of its own keeps
@@ -562,6 +564,7 @@ pub fn record_checkout<S: Sink + ?Sized>(sink: &mut S, happened: Happened, path:
     let did = match happened {
         Happened::Made => "made",
         Happened::Removed => "removed",
+        Happened::Applied => "applied from",
     };
     sink.emit(bravebot_core::event::Event::GatePassed {
         gate: "checkout",
@@ -597,6 +600,40 @@ pub struct Candidates {
     /// How many writes went through a reference. Only the planner's own count: where they landed
     /// is a name out of a directory nobody vouched for (WRITE-4), and nothing here compares it.
     pub referenced: usize,
+}
+
+/// The largest file [`Workspace::read_checkout_file`] reads, so one write cannot hold the whole of
+/// memory.
+const CHECKOUT_FILE_CEILING: u64 = 16 * 1024 * 1024;
+
+/// Why a file in a checkout could not be read to be brought back (CHECKOUT-14).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckoutRead {
+    NoSuchCheckout,
+    /// The driver recorded no write to the path in that checkout.
+    NotACandidate,
+    /// A link stands in the path's place, or on the way to it.
+    Linked,
+    NotAFile,
+    NotText,
+    TooLarge,
+    /// A deny rule covers the path.
+    Denied,
+}
+
+impl CheckoutRead {
+    /// The driver's own sentence, which names no byte of any file.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Self::NoSuchCheckout => "the session keeps no such checkout",
+            Self::NotACandidate => "the driver recorded no write to it in that checkout",
+            Self::Linked => "a link stands in its place, and a link is not followed",
+            Self::NotAFile => "it is not a file there any more",
+            Self::NotText => "it is not text",
+            Self::TooLarge => "it is too large to bring back",
+            Self::Denied => "a deny rule covers it",
+        }
+    }
 }
 
 /// What became of a checkout when its delegate ended (CHECKOUT-15).
@@ -3433,6 +3470,68 @@ impl Workspace {
             &self.session_checkouts,
         )
         .map_err(|_| Unremoved::Stuck)
+    }
+
+    /// The text of a file the driver recorded a write to in the session's checkout `id`, labelled
+    /// as the same path is in the working directory (CHECKOUT-8, CHECKOUT-14).
+    ///
+    /// `relative` has to be one of the checkout's candidates, so what is read is a name a planner
+    /// holding nothing untrusted typed. It is read only as a plain file, with no link followed
+    /// anywhere between the checkout's root and the file: a program that ran in the checkout could
+    /// have left a link in its place that reaches a file outside it. Nothing in the answer is
+    /// compared with anything. The label comes from the map's rule for the checkout's path, which
+    /// is the rule the working directory's path has unless a write in the checkout has made it
+    /// untrusted since.
+    pub fn read_checkout_file<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        id: &str,
+        relative: &str,
+    ) -> Result<Labelled<String>, CheckoutRead> {
+        let made = self
+            .session_checkouts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|made| made.id == id && made.path.exists())
+            .cloned()
+            .ok_or(CheckoutRead::NoSuchCheckout)?;
+        let candidate = made
+            .record
+            .written
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .named
+            .contains(relative);
+        if !candidate {
+            return Err(CheckoutRead::NotACandidate);
+        }
+        let mut file = made.path.clone();
+        for component in Path::new(relative).components() {
+            let Component::Normal(part) = component else {
+                return Err(CheckoutRead::NotACandidate);
+            };
+            file.push(part);
+            let kind = std::fs::symlink_metadata(&file)
+                .map_err(|_| CheckoutRead::NotAFile)?
+                .file_type();
+            if kind.is_symlink() {
+                return Err(CheckoutRead::Linked);
+            }
+        }
+        let metadata = std::fs::metadata(&file).map_err(|_| CheckoutRead::NotAFile)?;
+        if !metadata.is_file() {
+            return Err(CheckoutRead::NotAFile);
+        }
+        if metadata.len() > CHECKOUT_FILE_CEILING {
+            return Err(CheckoutRead::TooLarge);
+        }
+        let key = self.trust_key(&file.to_string_lossy());
+        if policy.read_is_denied(&key) {
+            return Err(CheckoutRead::Denied);
+        }
+        let text = std::fs::read_to_string(&file).map_err(|_| CheckoutRead::NotText)?;
+        Ok(Labelled::new(text, policy.label_in_force(&key)))
     }
 
     /// For starting over inside one process: the session beginning here has made no checkout, so

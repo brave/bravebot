@@ -2385,11 +2385,13 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 Retired::Kept => (
                     format!(
                         "Its checkout {} of commit {} was kept at {}, since something was done in \
-                         it. {}",
+                         it. {} apply_checkout with checkout \"{}\" brings the files it names \
+                         back into the working directory, asking the person about each.",
                         checkout.id(),
                         checkout.commit(),
                         checkout.path().display(),
-                        crate::delegate::checkout_candidates(&checkout.candidates())
+                        crate::delegate::checkout_candidates(&checkout.candidates()),
+                        checkout.id()
                     ),
                     match checkout.size() {
                         Some(size) => format!(

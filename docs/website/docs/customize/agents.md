@@ -216,8 +216,13 @@ other checkout, as any git worktree does. A `git fetch` a delegate runs in one m
 in your working tree too, and several fetching at once can fail. The planner and each delegate are
 told this, and the planner is told to have the fetch done once rather than by each delegate.
 
-The commands that bring a checkout's work back into your tree are not built yet. A checkout a
-delegate wrote in stays where it is until you remove it with
+A checkout a delegate wrote in is kept, and the agent's reply names it by number with the paths the
+delegate typed for what it wrote. The agent brings those files back with
+[`apply_checkout`](../reference/tools.md#apply_checkout), and you are asked about each one, shown
+the difference from your own file as it is now, whatever your trust settings say about that path.
+Bringing a file back is an ordinary write, so [`/undo`](../reference/commands.md#undo) puts your file
+back. A file a program wrote other than through a redirection is not found, and a command that
+brings work back by hand is not built yet. A checkout stays where it is until you remove it with
 [`/checkouts remove`](../reference/commands.md#checkouts-remove-n), and
 [`/status`](../reference/commands.md#status) and `/checkouts` list each one the session has kept.
 
