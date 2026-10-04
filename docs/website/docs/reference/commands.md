@@ -66,10 +66,12 @@ Reports everything the session knows about itself:
   running tools, and waiting for you to answer a prompt;
 - each [background job](run-tool.md#leaving-a-pipeline-running) of the last turn: its name, and the
   delegate's number where a delegate started it, its line cut short, how it ended, and whether it was
-  started in the background or you moved it there. Typed while a turn runs, `/status` waits for the
-  turn to end, so the hint line is where a running job shows;
+  started in the background or you moved it there. Typed while a turn runs, `/status` answers at
+  once and lists the jobs the turn has started so far;
 - **every trust rule in force**, listed in full, each marked trusted or untrusted;
-- **every command you vouched for**, which now run unasked and whose output is read as trusted;
+- **every command you vouched for**, which now run unasked and whose output is read as trusted.
+  Typed while a turn runs, these two lines say the running turn holds them and show them once it
+  ends, since the turn can add to both as it goes;
 - what a [`/loop`](#loop-interval-prompt) is repeating and when the next tick is due, where one is
   running, or what a [`/goal`](#goal-condition) is working towards and how many rounds it has
   spent.

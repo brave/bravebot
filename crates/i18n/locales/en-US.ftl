@@ -1642,6 +1642,7 @@ status-cache-written = written to it for the next turn
 hint-cache-hit-rate = cache { $rate }%
 status-trust = Trust
 status-nothing-vouched-for = nothing vouched for
+status-held-by-the-turn = held by the running turn, shown once it ends
 status-trusted = trusted
 status-untrusted = untrusted
 status-programs = Programs

@@ -252,7 +252,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches only what the session keeps | `/cost`; `/rename`, `/issue` and `/pr`; `/forget-trust`; `/theme <name>` and `/effort <level>`; `/watch` and `/jobs` in every form; `/panel`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| touches only what the session keeps | `/cost`; `/status`; `/rename`, `/issue` and `/pr`; `/forget-trust`; `/theme <name>` and `/effort <level>`; `/watch` and `/jobs` in every form; `/panel`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
 | everything else | every other command, `/theme` and `/effort` alone, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something goes ahead of every line already waiting, and a line behind
@@ -312,6 +312,12 @@ does not read:
   sent with the level in force when it begins and does not read it again, so a level set mid-turn
   is the next turn's.
 
+- **`/status`.** It reads what the session keeps, the workspace and the configuration the turn was
+  started with, none of which it changes. The trust map and the vouched programs are the turn's: it
+  answers into both as it runs, so a copy taken when it began would state "every run is asked" about
+  an earlier moment. The report says they are held by the running turn and states neither, and shows
+  them once the turn has ended.
+
 **Why `/jobs stop` is in the first kind.** A job is the turn's, and stopping one changes what the
 turn is running. The command does it only by setting a token the driver made for that job, which the
 turn reads at its own next step ([RUN-27](tools/run.md#RUN-27)), as the turn reads the stop key. A
@@ -330,6 +336,8 @@ been folded in.
 `verified-by: bravebot_tui::app::a_command_that_reads_or_ends_what_the_session_keeps_answers_mid_turn`
 `verified-by: bravebot_tui::app::a_command_that_would_start_a_loop_or_a_goal_waits_for_the_turn`
 `verified-by: bravebot_tui::app::a_command_typed_behind_a_waiting_one_of_its_own_waits_with_it`
+`verified-by: bravebot_tui::app::status_asked_mid_turn_answers_now_and_leaves_the_turns_rules_unstated`
+`verified-by: bravebot_tui::status::a_report_whose_rules_are_the_turns_states_neither_the_trust_nor_the_programs`
 `verified-by: bravebot_tui::app::a_command_typed_during_a_compaction_waits`
 `verified-by: bravebot_tui::app::a_stopped_prompt_comes_back_after_a_command_answered_mid_turn`
 `verified-by: bravebot_tui::app::ctrl_enter_on_a_command_answered_mid_turn_hurries_nothing`

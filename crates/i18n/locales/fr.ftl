@@ -1439,6 +1439,7 @@ status-cache-written = écrit dans le cache pour le tour suivant
 hint-cache-hit-rate = cache { $rate } %
 status-trust = Confiance
 status-nothing-vouched-for = rien d'approuvé
+status-held-by-the-turn = détenu par le tour en cours, affiché à sa fin
 status-trusted = fiable
 status-untrusted = non fiable
 status-programs = Programmes
