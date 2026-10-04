@@ -240,7 +240,7 @@ pub fn declarations(text: &str) -> Option<std::collections::BTreeMap<String, Str
 }
 
 /// How many columns a line is indented by, which is what says whether it continues the one above.
-fn indent_of(line: &str) -> usize {
+pub(crate) fn indent_of(line: &str) -> usize {
     line.len() - line.trim_start().len()
 }
 

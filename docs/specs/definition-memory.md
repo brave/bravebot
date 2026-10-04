@@ -426,9 +426,17 @@ new bot to.
 **Why not the whole file.** The file is the person's as much as the desktop's. A form that wrote the
 whole file back would undo whatever it does not show, such as a narrowing somebody made by hand.
 
-Nothing builds this yet.
+The rewrite is built: `bravebot_agent::agents::rewrite_definition` takes a definition's text, the
+purpose and the model, and returns the text with the description, the `model:` line and the body
+replaced and every other line as it was. It writes the description and the model in single quotes
+and reads the result back, refusing a text that would not read back as what was given. Nothing in
+the desktop calls it yet, because [MEMORY-8](#MEMORY-8) does not write the file it would rewrite.
 
-`verified-by: none`
+`verified-by: bravebot_agent::agents::editing_a_definition_rewrites_the_description_the_model_and_the_body_alone`
+`verified-by: bravebot_agent::agents::editing_a_definition_adds_a_model_it_lacked_and_drops_one_no_longer_chosen`
+`verified-by: bravebot_agent::agents::a_purpose_or_model_typed_as_yaml_is_written_as_text_and_reads_back`
+`verified-by: bravebot_agent::agents::an_edit_that_cannot_be_written_as_asked_is_refused`
+`verified-by: bravebot_agent::agents::a_wrapped_description_is_replaced_whole`
 
 <a id="MEMORY-10"></a>
 ### MEMORY-10: every turn in a bot's conversation addresses the bot's definition
