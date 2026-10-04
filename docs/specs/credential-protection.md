@@ -1079,7 +1079,16 @@ the only one that makes a stolen value useless rather than merely short-lived.
 and so is a bound one; this is the difference between two credentials standing at the same tier, and
 it is recorded like everything else the walk decides.
 
-`verified-by: none`
+`verified-by: bravebot_config::lib::a_derived_credential_records_whether_it_is_bound_to_its_presenter`
+`verified-by: bravebot_config::lib::a_credentials_binding_does_not_move_its_tier`
+`verified-by: bravebot_cli::main::a_derived_credential_is_reported_as_a_bearer_secret_in_words_that_keep_the_answers_apart`
+
+**What exists.** The record carries `Held::binding`, which says `Bearer` with the answer the gate
+walk uses (`Refused` for an AWS session, whose issuer offers no bound form, and `NotAttempted` for an
+imported subscription batch, which nobody has asked) for the two derived credentials, and nothing for
+the credentials issued once and held as issued. `doctor` reports it on a `binding` line. No
+credential is yet held in a sender-constrained form, and nothing here requests one: `Binding::SenderConstrained`
+is the value a credential takes when a form is asked for and granted.
 
 ## Known costs
 

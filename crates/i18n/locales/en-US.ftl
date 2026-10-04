@@ -285,6 +285,16 @@ doctor-noticed-aws-session =
 doctor-outlives = outlives
 doctor-outlives-aws-access-key =
     a session credential STS already issued under that access key, which runs to its own expiry: deleting the key does not reach it
+# Whether a derived credential is bound to the party that presents it. Shown only for the
+# credentials minted from something else. A bearer secret is usable by whatever holds a copy, and the
+# two bearer sentences keep apart an issuer that offers no bound form from one nobody has asked.
+doctor-binding = binding
+doctor-binding-sender-constrained =
+    sender-constrained: the issuer checks who presents it, so a copy taken from this machine is of no use elsewhere
+doctor-binding-bearer-refused =
+    a bearer secret: whatever holds a copy can use it until it expires, and its issuer offers no form that is bound to the presenter
+doctor-binding-bearer-not-attempted =
+    a bearer secret: whatever holds a copy can use it, and nobody has asked its issuer for a form that is bound to the presenter
 # How each credential reached the tier it stands at: one line per gate its walk failed, naming
 # the gate, whether the counterparty refused or nobody attempted it, and the condition that was
 # not met. A tier on its own says where a credential stands and nothing about whether it could

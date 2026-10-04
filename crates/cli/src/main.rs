@@ -2642,6 +2642,9 @@ fn doctor() -> ExitCode {
                 if let Some(noticed) = how_soon_a_leak_is_noticed(held) {
                     fact(t!(doctor_noticed), noticed);
                 }
+                if let Some(binding) = how_it_is_bound(held) {
+                    fact(t!(doctor_binding), binding);
+                }
                 if let Some(survives) = what_outlives_revoking(held) {
                     fact(t!(doctor_outlives), survives);
                 }
@@ -3159,6 +3162,23 @@ fn how_soon_a_leak_is_noticed(held: bravebot_config::Held<'_>) -> Option<String>
         | bravebot_config::Held::GatewayToken { .. }
         | bravebot_config::Held::SubscriptionBatch => None,
     }
+}
+
+/// What `doctor` says about whether a derived credential is bound to its presenter, which CRED-26
+/// asks the record to say.
+///
+/// `None` for a credential that is not derived from another, as the record's
+/// [`bravebot_config::Held::binding`] answers. The sentence follows the record's answer: a bound
+/// credential, a bearer secret the issuer offers no bound form of, and a bearer secret nobody has
+/// asked a bound form of are three sentences, so a reader can tell which of them is a decision
+/// made here.
+fn how_it_is_bound(held: bravebot_config::Held<'_>) -> Option<&'static str> {
+    use bravebot_config::{Attempt, Binding};
+    Some(match held.binding()? {
+        Binding::SenderConstrained => t!(doctor_binding_sender_constrained),
+        Binding::Bearer(Attempt::Refused) => t!(doctor_binding_bearer_refused),
+        Binding::Bearer(Attempt::NotAttempted) => t!(doctor_binding_bearer_not_attempted),
+    })
 }
 
 /// What `doctor` says about one drop of a credential's gate walk: the gate, whether the
@@ -4246,6 +4266,34 @@ mod tests {
             what_tier_it_stands_at(bravebot_config::Held::SubscriptionBatch.tier()),
             what_tier_it_stands_at(bravebot_config::Held::SigningKey.tier()),
             "a bounded credential and a permanent one are reported alike"
+        );
+    }
+
+    /// CRED-26: the binding reaches the person reading the record, for exactly the credentials the
+    /// record gives one, and each answer reads as itself. A session STS offers no bound form of and
+    /// a batch nobody asked a bound form of are different facts, and only the second is a decision
+    /// made here, so a report that printed one sentence for both would hide which one to revisit.
+    /// Both say bearer, since that is the word the clause asks the record to use.
+    #[test]
+    fn a_derived_credential_is_reported_as_a_bearer_secret_in_words_that_keep_the_answers_apart() {
+        for held in bravebot_config::Held::all(GATEWAY_HOST) {
+            assert_eq!(
+                how_it_is_bound(held).is_some(),
+                held.binding().is_some(),
+                "{held:?} is reported and recorded differently"
+            );
+        }
+
+        let session =
+            how_it_is_bound(bravebot_config::Held::AwsSession).expect("a derived credential");
+        let batch = how_it_is_bound(bravebot_config::Held::SubscriptionBatch)
+            .expect("a derived credential");
+        assert!(session.contains("bearer"), "{session}");
+        assert!(batch.contains("bearer"), "{batch}");
+        assert_ne!(session, batch);
+        assert_ne!(
+            how_it_is_bound(bravebot_config::Held::SigningKey),
+            Some(session)
         );
     }
 
