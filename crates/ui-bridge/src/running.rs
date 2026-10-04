@@ -111,6 +111,52 @@ pub struct State {
     pub servers: Option<bravebot_agent::lsp::LanguageServers>,
     /// The MCP servers this session started, once its first turn has started them (SERVERS-9).
     pub mcp: Mcp,
+    /// The directory of its own outside the project, made as the session opened (TRUST-14).
+    ///
+    /// Held here so it lasts as long as the session's state does: the directory is removed when
+    /// this is dropped, which happens once the session is closed and no turn still holds the state.
+    pub scratch: Scratch,
+}
+
+/// The session's own directory outside the project, or why it has none.
+pub enum Scratch {
+    /// Made, and removed when this is dropped.
+    Held(bravebot_agent::SessionScratch),
+    /// Could not be made. The session runs without one and says so, with the reason the system
+    /// gave.
+    Unavailable(String),
+}
+
+impl Scratch {
+    /// Make one, as the terminal does as a session opens.
+    pub fn open() -> Self {
+        match bravebot_agent::SessionScratch::create() {
+            Ok(held) => Self::Held(held),
+            Err(problem) => Self::Unavailable(problem.to_string()),
+        }
+    }
+
+    /// Where it is, where the session has one.
+    pub fn path(&self) -> Option<&Path> {
+        match self {
+            Self::Held(held) => Some(held.path()),
+            Self::Unavailable(_) => None,
+        }
+    }
+
+    /// What the session tells the window about it: the path, or that there is none and why.
+    pub fn report(&self) -> serde_json::Value {
+        match self {
+            Self::Held(held) => serde_json::json!({
+                "directory": held.path().display().to_string(),
+                "unavailable": null,
+            }),
+            Self::Unavailable(problem) => serde_json::json!({
+                "directory": null,
+                "unavailable": problem,
+            }),
+        }
+    }
 }
 
 /// Where a session stands with the MCP servers its project requests.
@@ -151,6 +197,7 @@ impl State {
             runs: 0,
             servers: None,
             mcp: Mcp::Unstarted,
+            scratch: Scratch::open(),
         }
     }
 
@@ -195,6 +242,7 @@ impl State {
             runs: 0,
             servers: None,
             mcp: Mcp::Unstarted,
+            scratch: Scratch::open(),
         }
     }
 
@@ -258,6 +306,7 @@ impl State {
             runs: 0,
             servers: None,
             mcp: Mcp::Unstarted,
+            scratch: Scratch::open(),
         }
     }
 }

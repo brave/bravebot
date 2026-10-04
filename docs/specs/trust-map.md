@@ -654,6 +654,7 @@ is not opened beside the working directory, and its name says it was made for a 
 `verified-by: bravebot_agent::scratch::nobody_else_may_read_what_a_session_writes_there`
 `verified-by: bravebot_tui::status::the_sessions_scratch_directory_is_reported_for_what_it_is`
 `verified-by: bravebot_tui::status::a_session_with_no_scratch_directory_reports_none`
+`verified-by: bravebot_ui_bridge::dispatch::a_desktop_session_is_given_a_directory_of_its_own`
 
 <a id="TRUST-15"></a>
 ### TRUST-15: nothing in the session's directory outlives the session
