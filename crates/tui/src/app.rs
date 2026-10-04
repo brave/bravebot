@@ -928,6 +928,18 @@ fn types_a_character(key: KeyEvent) -> bool {
     matches!(key.code, KeyCode::Char(_)) && key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
 }
 
+/// Whether a character pressed with these modifiers is a key the scroller names (SCROLL-3).
+///
+/// A character with no modifier beyond Shift is the letter. With Ctrl alone it is one of the
+/// chords the table lists. Anything else, such as Alt-J or Ctrl-K, is a chord the scroller does
+/// not name.
+fn names_the_chord(modifiers: KeyModifiers, c: char) -> bool {
+    let modifiers = modifiers.difference(KeyModifiers::SHIFT);
+    modifiers.is_empty()
+        || (modifiers == KeyModifiers::CONTROL
+            && matches!(c, 'y' | 'e' | 'p' | 'n' | 'u' | 'd' | 'f' | 'b'))
+}
+
 /// Interpret a key press while the scroller is open.
 ///
 /// Every key the scroller answers is answered here, and a key it does not name does nothing at
@@ -1003,14 +1015,11 @@ fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
     let by = |step: u16| step.saturating_mul(u16::try_from(times).unwrap_or(u16::MAX));
 
     match key.code {
-        // Four keys close it. Ctrl-C is one of them and does nothing else here: the scroller is
-        // the nearest thing there is to stop, so a turn in flight goes on running and the press
-        // that reaches it is the next one.
-        KeyCode::Char('q') if !ctrl => {
-            session.close_scroller();
-            Action::Redraw
-        }
         // The same ladder every other stop key here walks: the nearest thing there is to stop.
+        // Four keys close the scroller: `q`, Escape, Ctrl-O and Ctrl-C. Ctrl-C does nothing else
+        // here: the scroller is the nearest thing there is to stop, so a turn in flight goes on
+        // running and the press that reaches it is the next one.
+        //
         // A count waiting for its key is nearer than a standing search, and that is nearer than
         // the mode holding it, so each press takes off one and the last closes the scroller.
         KeyCode::Esc => {
@@ -1024,6 +1033,16 @@ fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
             Action::Redraw
         }
         _ if session.bindings().is_scroller(&key) => {
+            session.close_scroller();
+            Action::Redraw
+        }
+
+        // A character pressed with Ctrl, Alt or Super held is the chord and not the letter. The
+        // file names only the Ctrl chords listed in `names_the_chord`, so any other such press
+        // does nothing instead of acting as the plain letter would (SCROLL-2).
+        KeyCode::Char(c) if !names_the_chord(key.modifiers, c) => Action::None,
+
+        KeyCode::Char('q') => {
             session.close_scroller();
             Action::Redraw
         }
@@ -9698,6 +9717,49 @@ mod tests {
 
             assert_eq!(handle_key(&mut session, key(KeyCode::Enter)), Action::None);
             assert_eq!(session.input(), "a prompt", "the line was taken");
+        }
+
+        /// The file names Ctrl only on `y e p n u d f b`. Every other letter, digit and symbol
+        /// with Ctrl, Alt or Super held is a chord it does not name, and the plain-letter arms
+        /// must not answer it. The view starts mid-transcript so that a move in either direction
+        /// shows.
+        #[test]
+        fn a_chord_the_scroller_does_not_name_does_nothing() {
+            let mut unnamed = Vec::new();
+            for c in "kjyeudfbqgGvn/?{}<> ".chars() {
+                for held in [KeyModifiers::ALT, KeyModifiers::SUPER] {
+                    unnamed.push(KeyEvent::new(KeyCode::Char(c), held));
+                }
+                if !"yepnudfb".contains(c) {
+                    unnamed.push(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL));
+                }
+                unnamed.push(KeyEvent::new(
+                    KeyCode::Char(c),
+                    KeyModifiers::CONTROL | KeyModifiers::ALT,
+                ));
+            }
+            // The Ctrl spellings of keys that are named only as letters.
+            assert!(unnamed.contains(&ctrl('k')) && unnamed.contains(&ctrl('/')));
+
+            let mut session = opened();
+            session.scroll_up(40);
+            let before = session.scroll;
+
+            for pressed in unnamed {
+                assert_eq!(
+                    handle_key(&mut session, pressed),
+                    Action::None,
+                    "{pressed:?} did something"
+                );
+                assert!(session.scrolling(), "{pressed:?} closed the scroller");
+                assert!(!session.typing_a_search(), "{pressed:?} began a search");
+                assert_eq!(session.scroll, before, "{pressed:?} moved the view");
+            }
+            assert!(session.input().is_empty());
+
+            // The named Ctrl chords still move it.
+            handle_key(&mut session, ctrl('e'));
+            assert_eq!(session.scroll, before - 1);
         }
 
         /// `p` is among them: Ctrl-P is a line back, and the letter alone is nothing in either
