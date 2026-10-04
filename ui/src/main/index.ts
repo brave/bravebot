@@ -35,6 +35,7 @@ import {
   retireBot,
   saveBot,
   saveFormBot,
+  migrateBot,
   consolidationPrompt,
   AFTER_COMPACTION,
 } from './bots'
@@ -171,6 +172,14 @@ async function sendBotTurn(
 ): Promise<{ ok?: unknown; error?: BotFailure }> {
   if (!bridge) return { error: { code: 'no_bridge', message: 'the agent is not running' } }
 
+  // A bot made before definitions is given one first, and its old memory is recorded as untrusted
+  // (MEMORY-11). Nothing is sent until that has happened, so a briefing never names the old path
+  // of a bot whose notes are not yet recorded.
+  try {
+    held = await migrateBot(held, (method, params) => bridge!.request(method, params))
+  } catch (error) {
+    return { error: { code: 'no_definition', message: `${held.name} could not be given a definition: ${String(error)}` } }
+  }
   botHandles.set(session, held.slug)
 
   // `recall` is left off entirely in the ordinary case rather than sent as `true`. The agent

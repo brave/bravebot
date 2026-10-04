@@ -184,6 +184,7 @@ impl Bridge {
             "connectors.remove" => crate::connectors::remove(request),
             "hooks.inspect" => crate::hooks::inspect(),
             "bot.define" => crate::definitions::make(request),
+            "bot.migrate" => crate::definitions::migrate(request),
             "doctor" => Ok(
                 json!({"found": true, "structured": true, "text": serde_json::to_string_pretty(&crate::settings::report(None, self.settings.as_deref())).unwrap_or_default()}),
             ),

@@ -18,4 +18,3 @@ docs/specs/credential-protection.md:CRED-22: the baseline is not writable by a t
 docs/specs/credential-protection.md:CRED-24: a credential never travels as a command-line argument
 docs/specs/definition-memory.md:MEMORY-1: the definition file holds what a bot is for, and the desktop's store holds what happened to it
 docs/specs/definition-memory.md:MEMORY-10: every turn in a bot's conversation addresses the bot's definition
-docs/specs/definition-memory.md:MEMORY-11: a bot made before this keeps its notes where they are, untrusted until a person reads them
