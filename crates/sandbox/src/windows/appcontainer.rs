@@ -24,8 +24,8 @@ use std::ptr::{null, null_mut};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_ALREADY_EXISTS, ERROR_SUCCESS,
-    HANDLE, HLOCAL, LocalFree, WAIT_OBJECT_0,
+    CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_SUCCESS, HANDLE, HLOCAL, LocalFree,
+    WAIT_OBJECT_0,
 };
 use windows_sys::Win32::Security::Authorization::{
     ACCESS_MODE, EXPLICIT_ACCESS_W, GRANT_ACCESS, GetNamedSecurityInfoW, NO_MULTIPLE_TRUSTEE,
@@ -33,7 +33,7 @@ use windows_sys::Win32::Security::Authorization::{
     TRUSTEE_IS_SID, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::Isolation::{
-    CreateAppContainerProfile, DeleteAppContainerProfile, DeriveAppContainerSidFromAppContainerName,
+    CreateAppContainerProfile, DeleteAppContainerProfile,
 };
 use windows_sys::Win32::Security::{
     ACL, DACL_SECURITY_INFORMATION, DeriveCapabilitySidsFromName, FreeSid, GetLengthSid, PSID,
@@ -78,9 +78,21 @@ const PROFILE_DESCRIPTION: &str = "Confinement for a program bravebot runs on yo
 /// How many profiles this process has created, so each backend gets one of its own.
 static PROFILES: AtomicU64 = AtomicU64::new(0);
 
-/// `HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)`, which is what creating a profile that is
-/// already there reports.
-const PROFILE_ALREADY_EXISTS: i32 = (0x8007_0000u32 | ERROR_ALREADY_EXISTS) as i32;
+/// A number that differs between runs of this program, including runs that are handed the
+/// same process identifier.
+///
+/// The standard library seeds its hash maps from the operating system's random source, so
+/// the seed of a fresh hasher is not predictable from the process identifier. The clock is
+/// mixed in so two backends in one process differ even if the seeds were ever equal.
+fn run_nonce() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    hasher.write_u128(now);
+    hasher.finish()
+}
 
 /// AppContainer-based confinement.
 ///
@@ -100,7 +112,11 @@ pub struct AppContainerSandbox {
 impl AppContainerSandbox {
     /// Create this run's container profile, or refuse.
     pub fn new() -> std::result::Result<Self, SandboxError> {
-        let name = profile_name(std::process::id(), PROFILES.fetch_add(1, Ordering::Relaxed));
+        let name = profile_name(
+            std::process::id(),
+            PROFILES.fetch_add(1, Ordering::Relaxed),
+            run_nonce(),
+        );
         let name = wide(OsStr::new(&name)).map_err(|e| SandboxError::Unavailable {
             platform: "windows",
             detail: format!("the container profile could not be named: {e}"),
@@ -333,13 +349,11 @@ impl Drop for LocalBuffer {
     }
 }
 
-/// Create the profile named `name`, or find the one already there, and return its
-/// identifier.
+/// Create the profile named `name` and return its identifier.
 ///
-/// A profile that already exists is not an error: a process identifier is reused once the
-/// process holding it is gone, so a run can be handed a name a previous one left behind
-/// after failing to delete it. Deriving the identifier from the name gives the same answer
-/// creating it would have.
+/// A profile that already exists is an error. The name carries a nonce chosen for this
+/// backend, so an existing profile is not one this run created: it belongs to another run,
+/// and adopting it would apply the access entries that run left on directories to this one.
 #[allow(unsafe_code)]
 fn create_profile(name: &[u16]) -> Result<Sid> {
     let description = wide(OsStr::new(PROFILE_DESCRIPTION))?;
@@ -358,18 +372,7 @@ fn create_profile(name: &[u16]) -> Result<Sid> {
     };
 
     if created < 0 {
-        if created != PROFILE_ALREADY_EXISTS {
-            return Err(reported("CreateAppContainerProfile", created));
-        }
-        let name = name.as_ptr();
-        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-        let derived = unsafe { DeriveAppContainerSidFromAppContainerName(name, &mut psid) };
-        if derived < 0 {
-            return Err(reported(
-                "DeriveAppContainerSidFromAppContainerName",
-                derived,
-            ));
-        }
+        return Err(reported("CreateAppContainerProfile", created));
     }
 
     // Sound because the call above reported success, which means it wrote an identifier

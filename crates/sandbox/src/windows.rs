@@ -201,11 +201,17 @@ fn capabilities() -> Capabilities {
 /// left behind names a container that no longer exists, so the residue is unreachable
 /// rather than a standing grant to whatever holds the shared name next.
 ///
+/// A process identifier is reused once its process is gone, and the sequence restarts at zero
+/// in every process, so those two alone give a run the name of an earlier run that ended
+/// without deleting its profile. `nonce` is chosen when the backend is created and differs
+/// between runs, which keeps the name, and so the security identifier derived from it, from
+/// being one an earlier run wrote entries for.
+///
 /// The platform accepts up to 64 characters, and rejects the whole profile rather than
-/// truncating, so the two numbers are the only variable part and both are bounded by their
+/// truncating, so the three numbers are the only variable part and each is bounded by its
 /// own width.
-fn profile_name(process: u32, sequence: u64) -> String {
-    format!("bravebot-{process}-{sequence}")
+fn profile_name(process: u32, sequence: u64, nonce: u64) -> String {
+    format!("bravebot-{process}-{sequence}-{nonce:x}")
 }
 
 /// The longest profile name the platform accepts.
@@ -523,8 +529,17 @@ mod tests {
     /// them left behind is a live grant to whatever the other is running.
     #[test]
     fn each_run_confines_through_a_profile_of_its_own() {
-        assert_ne!(profile_name(4, 1), profile_name(4, 2));
-        assert_ne!(profile_name(4, 1), profile_name(5, 1));
+        assert_ne!(profile_name(4, 1, 9), profile_name(4, 2, 9));
+        assert_ne!(profile_name(4, 1, 9), profile_name(5, 1, 9));
+    }
+
+    /// A crashed run leaves its profile and the entries naming it behind, and a later run
+    /// can be handed the same process identifier and the same first sequence number. The
+    /// name has to differ anyway, or the later run confines through the earlier run's
+    /// security identifier and the leftover entries apply to it.
+    #[test]
+    fn a_reused_process_identifier_and_sequence_still_get_a_profile_of_their_own() {
+        assert_ne!(profile_name(4, 0, 1), profile_name(4, 0, 2));
     }
 
     /// The platform rejects a name longer than this rather than truncating it, so a run
@@ -532,7 +547,7 @@ mod tests {
     /// all.
     #[test]
     fn a_profile_name_fits_what_the_platform_accepts() {
-        let longest = profile_name(u32::MAX, u64::MAX);
+        let longest = profile_name(u32::MAX, u64::MAX, u64::MAX);
         assert!(
             longest.len() <= LONGEST_PROFILE_NAME,
             "{longest} is {} characters",
