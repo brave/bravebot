@@ -131,7 +131,7 @@ const mine = page
   .filter({ has: page.locator('.bot-name', { hasText: /^Archivist$/ }) })
 check((await mine.count()) === 1, 'the bot is in the list')
 await mine.locator('.bot-open-button').click()
-await page.locator('[data-test="bot-conversations"]').waitFor()
+await page.locator('[data-test="bot-page"]').waitFor()
 await page.locator('[data-test="project-trigger"]').click()
 await page.locator('[data-test="project-pick"]').click()
 await page.waitForTimeout(400)

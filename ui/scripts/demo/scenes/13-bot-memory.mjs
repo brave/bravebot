@@ -47,7 +47,7 @@ export default {
 
     await s.say('Open it', 'Its page lists its conversations and starts a new one from the composer.', 2.4)
     await s.click(row.locator('.bot-open-button'))
-    await page.locator('[data-test="bot-conversations"]').waitFor()
+    await page.locator('[data-test="bot-page"]').waitFor()
 
     // The project is picked per conversation, in the composer's footer. The stage answers the
     // native picker with one of the world's fixture checkouts.

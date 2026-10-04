@@ -250,7 +250,7 @@ async function ensureResidents(world) {
         // The bot's page starts a conversation from its composer, in the project picked in its
         // footer. The picker is native, so it is answered with the bot's own fixture checkout.
         await row.locator('.bot-open-button').click()
-        await page.locator('[data-test="bot-conversations"]').waitFor()
+        await page.locator('[data-test="bot-page"]').waitFor()
         await app.evaluate(({ dialog }, where) => {
           dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [where] })
         }, join(world, 'projects', bot.project))

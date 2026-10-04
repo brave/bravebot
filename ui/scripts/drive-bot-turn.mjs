@@ -104,7 +104,7 @@ const mine = page
   .filter({ has: page.locator('.bot-name', { hasText: /^Custodian$/ }) })
 check((await mine.count()) === 1, 'the bot is in the list')
 await mine.locator('.bot-open-button').click()
-await page.locator('[data-test="bot-conversations"]').waitFor()
+await page.locator('[data-test="bot-page"]').waitFor()
 
 // The bot's page starts a conversation from its composer, in the project picked in its footer.
 await page.locator('[data-test="project-trigger"]').click()

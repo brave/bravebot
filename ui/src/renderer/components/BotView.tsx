@@ -105,7 +105,7 @@ export function BotView({ notices, bot, history, filtering, backendReady, onOpen
   // A bot nobody has talked to yet: its face, that it is ready, and the box to start with.
   if (history.length === 0) {
     return (
-      <div className="entries bot-view-body bot-first">
+      <div className="entries bot-view-body bot-first" data-test="bot-page">
         <div className="bot-first-column">
           <div className="bot-first-hero">
             <BotAvatar seed={bot.avatar} size={160} doing="open" />
@@ -120,7 +120,7 @@ export function BotView({ notices, bot, history, filtering, backendReady, onOpen
 
   return (
     <>
-      <div className="entries bot-view-body">
+      <div className="entries bot-view-body" data-test="bot-page">
         <div className="bot-view-column">
           {filtering && (
             <Input autofocus type="search" size="small" className="bot-history-search" aria-label="Search conversations"

@@ -173,7 +173,7 @@ try {
   assert.equal(await botRow.locator('[data-avatar]').getAttribute('data-avatar'), chosenFace)
   // The bot's own page has a composer that starts its next conversation, with the bot's model.
   await botRow.locator('.bot-open-button').click()
-  await page.locator('[data-test="bot-conversations"]').waitFor()
+  await page.locator('[data-test="bot-page"]').waitFor()
   const botTrigger = page.locator('.composer .model-trigger')
   assert.match(await botTrigger.getAttribute('aria-label'), /sonnet/)
   await botTrigger.click()
@@ -183,7 +183,7 @@ try {
   await page.reload()
   await page.locator('[data-test="sidebar-tabs"]').getByText('Bots', { exact: true }).click()
   await botRow.locator('.bot-open-button').click()
-  await page.locator('[data-test="bot-conversations"]').waitFor()
+  await page.locator('[data-test="bot-page"]').waitFor()
   await page.waitForFunction(() => /haiku/.test(document.querySelector('.composer .model-trigger')?.getAttribute('aria-label') ?? ''))
   await page.locator('.composer textarea').fill('Use the saved bot model')
   await page.locator('.composer .send').click()
