@@ -2275,6 +2275,13 @@ fn collect_delegates<S: Sink, R: Reporter>(
             .checkout
             .as_ref()
             .map(|checkout| (checkout.retire(&policy.file_authority()), checkout.clone()));
+        if let Some((crate::workspace::Retired::Removed, checkout)) = &retired {
+            crate::workspace::record_checkout(
+                policy.sink(),
+                crate::workspace::Happened::Removed,
+                checkout.path(),
+            );
+        }
 
         let (mut note, mut body, failed, reported) = match delegated {
             Ok(delegated) => {

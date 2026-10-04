@@ -3604,13 +3604,17 @@ fn event_loop(
                 needs_draw = true;
             }
             Action::RemoveCheckout(id) => {
+                let kept = workspace.session_checkouts();
+                let named = kept.iter().find(|listed| listed.id == id).cloned();
                 remove_checkout(
                     &mut session,
-                    workspace.session_checkouts(),
+                    kept,
                     &id,
                     |listed| crate::confirm::ask_remove_checkout(terminal, listed),
                     |id| workspace.remove_session_checkout(id, &mut answers.trust),
                 );
+                let removal = removal_trail(named.as_ref(), &workspace.session_checkouts());
+                stored.append_audit(session.turns, removal.events());
                 needs_draw = true;
             }
             Action::Compact => {
@@ -3978,6 +3982,23 @@ fn event_loop(
             Action::Address(..) => {}
         }
     }
+}
+
+/// The trail of `/checkouts remove`: one event where `named`, the checkout asked for as the list
+/// had it, is no longer in `now`, and nothing where it was kept or never listed (CHECKOUT-19).
+fn removal_trail(
+    named: Option<&bravebot_agent::workspace::SessionCheckout>,
+    now: &[bravebot_agent::workspace::SessionCheckout],
+) -> Trail {
+    let mut trail = Trail::new();
+    if let Some(gone) = named.filter(|gone| !now.iter().any(|listed| listed.id == gone.id)) {
+        bravebot_agent::workspace::record_checkout(
+            &mut trail,
+            bravebot_agent::workspace::Happened::Removed,
+            &gone.path,
+        );
+    }
+    trail
 }
 
 /// Remove checkout `id` of those the session keeps, asking first where the record shows something
@@ -14694,6 +14715,34 @@ mod tests {
             candidates: Default::default(),
             size: None,
         }
+    }
+
+    /// CHECKOUT-19. A checkout `/checkouts remove` took out of the list is one event with its path,
+    /// and one still listed, or never listed, is none: a trail that said "removed" for a checkout
+    /// the person declined to remove would be wrong about a directory still on disk.
+    #[test]
+    fn removing_a_checkout_is_recorded_with_its_path_and_a_kept_one_is_not() {
+        let gone = kept_checkout(false);
+        let trail = removal_trail(Some(&gone), &[]);
+        let events: Vec<_> = trail
+            .events()
+            .iter()
+            .map(|stamped| &stamped.event)
+            .collect();
+        assert_eq!(
+            events,
+            [&bravebot_core::event::Event::GatePassed {
+                gate: "checkout",
+                detail: "removed /state/checkouts/work/c2".into(),
+            }]
+        );
+        assert!(
+            removal_trail(Some(&gone), std::slice::from_ref(&gone))
+                .events()
+                .is_empty(),
+            "a checkout still listed was recorded as removed"
+        );
+        assert!(removal_trail(None, &[]).events().is_empty());
     }
 
     fn last_note(session: &Session) -> &str {
