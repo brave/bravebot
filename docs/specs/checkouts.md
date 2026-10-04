@@ -741,9 +741,14 @@ directory and is rewound as any write is. A delegate still ends with the turn th
 ([DELEGATE-17](delegation.md#DELEGATE-17)), so nothing runs in a kept checkout once its turn is
 over.
 
-Nothing builds this yet.
+Built for the rewind. A delegate's checkout has backups of its own, which a rewind never reads, so it
+puts back nothing there. A write in a checkout, and a program run in one, mark the session's
+coverage with a `checkout` gap, which `/undo` names as delegate checkouts beside the other causes.
+A file brought back from a checkout is a write in the working directory
+([CHECKOUT-14](#CHECKOUT-14)), which is not built yet.
 
-`verified-by: none`
+`verified-by: bravebot_agent::workspace::a_write_in_a_checkout_is_a_gap_in_the_sessions_rewind_coverage`
+`verified-by: bravebot_agent::workspace::a_command_gap_in_a_checkout_is_also_a_checkout_gap_in_the_sessions_coverage`
 
 ## What else changes
 

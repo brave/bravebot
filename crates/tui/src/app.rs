@@ -3124,6 +3124,7 @@ fn rewind(
                 CoverageGap::Scratch => t!(session_rewind_cause_scratch),
                 CoverageGap::LanguageServer => t!(session_rewind_cause_server),
                 CoverageGap::Desktop => t!(session_rewind_cause_desktop),
+                CoverageGap::Checkout => t!(session_rewind_cause_checkout),
                 CoverageGap::BackupUnavailable => t!(session_rewind_cause_backup),
                 CoverageGap::Unknown => t!(session_rewind_cause_unknown),
             })

@@ -7483,3 +7483,71 @@ fn a_rule_over_a_file_the_entry_holds_declines_a_read_in_a_checkout() {
         }
     }
 }
+
+/// CHECKOUT-17. A write in a checkout records a checkout gap in the coverage the session's
+/// rewind points hold, since a rewind puts back nothing there. Making a checkout, and a write in
+/// the working directory, record none, so the gap names only what a rewind leaves alone.
+#[test]
+fn a_write_in_a_checkout_is_a_gap_in_the_sessions_rewind_coverage() {
+    use bravebot_agent::rewind::CoverageGap;
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-rewind-gap", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let coverage = workspace.rewind_coverage();
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    assert!(
+        coverage.is_complete(),
+        "making a checkout left a gap: {:?}",
+        coverage.gaps()
+    );
+
+    workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted("in-the-working-directory.txt".to_string()),
+            &Labelled::trusted("x".to_string()),
+        )
+        .expect("a write in the working directory");
+    assert!(
+        coverage.is_complete(),
+        "a write in the working directory left a gap: {:?}",
+        coverage.gaps()
+    );
+
+    made.write(
+        &mut policy,
+        &Labelled::trusted("out.txt".to_string()),
+        &Labelled::trusted("from the delegate".to_string()),
+    )
+    .expect("a write in the checkout");
+    assert_eq!(coverage.gaps(), [CoverageGap::Checkout].into());
+    assert!(
+        made.take_backups().len() == 1 && workspace.take_backups().len() == 1,
+        "each workspace kept only its own backups"
+    );
+    assert!(
+        workspace.rewind_coverage().is_complete(),
+        "a point taken afterwards inherited the gap"
+    );
+}
+
+/// CHECKOUT-17. A program a delegate runs in a checkout is a gap in the session's coverage as
+/// well as the command gap.
+#[test]
+fn a_command_gap_in_a_checkout_is_also_a_checkout_gap_in_the_sessions_coverage() {
+    use bravebot_agent::rewind::CoverageGap;
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-rewind-command-gap", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let coverage = workspace.rewind_coverage();
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+
+    made.mark_rewind_gap(CoverageGap::Command);
+    assert_eq!(coverage.gaps(), [CoverageGap::Checkout].into());
+}

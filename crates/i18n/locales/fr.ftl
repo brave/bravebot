@@ -1686,6 +1686,7 @@ session-rewind-cause-hook = hooks
 session-rewind-cause-scratch = écritures temporaires
 session-rewind-cause-server = serveurs de langage
 session-rewind-cause-desktop = tours du bureau
+session-rewind-cause-checkout = copies de travail des délégués
 session-rewind-cause-backup = sauvegardes indisponibles
 session-rewind-cause-unknown = couverture inconnue
 session-exported = transcription exportée vers { $path }

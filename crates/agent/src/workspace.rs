@@ -2150,6 +2150,7 @@ impl Workspace {
     /// [`MAX_REWIND_BYTES`] on a file nobody wants rewound, and what that budget runs out on is
     /// the next file in the project the turn writes.
     fn record_backup(&self, resolved: &Path, captured_trust: bravebot_core::label::Integrity) {
+        self.mark_checkout_gap();
         if self.reaches_scratch(resolved) {
             self.mark_rewind_gap(CoverageGap::Scratch);
             return;
@@ -2179,11 +2180,29 @@ impl Workspace {
     }
 
     /// Record an effect that file backups do not fully cover.
+    ///
+    /// In a checkout, the session's tracker is marked as well: the checkout's own tracker is
+    /// discarded with the delegate, and a rewind of the parent's turn puts back nothing there
+    /// (CHECKOUT-17).
     pub fn mark_rewind_gap(&self, gap: CoverageGap) {
         self.rewind
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .mark(gap);
+        self.mark_checkout_gap();
+    }
+
+    /// Record on the session's tracker that something happened in a checkout, where this
+    /// workspace is one.
+    fn mark_checkout_gap(&self) {
+        if let Some(checkout) = &self.checkout {
+            checkout
+                .source
+                .rewind
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .mark(CoverageGap::Checkout);
+        }
     }
 
     pub fn rewind_coverage(&self) -> RewindCoverage {

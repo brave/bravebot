@@ -1981,6 +1981,7 @@ session-rewind-cause-hook = hooks
 session-rewind-cause-scratch = scratch writes
 session-rewind-cause-server = language servers
 session-rewind-cause-desktop = desktop turns
+session-rewind-cause-checkout = delegate checkouts
 session-rewind-cause-backup = unavailable backups
 session-rewind-cause-unknown = unknown coverage
 session-nothing-to-undo = nothing left to undo in this session
