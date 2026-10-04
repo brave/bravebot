@@ -47,7 +47,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [browser.md](browser.md) | `BROWSER` | 15 | reaching a Brave extension from a session: the relay between them, who starts each half, and how each trusts the other |
 | [hooks.md](hooks.md) | `HOOK` | 8 | a command a person asked to have run when something happens |
 | [network-egress.md](network-egress.md) | `NET` | 10 | every request that leaves this process, and what comes back |
-| [backends.md](backends.md) | `BACKEND` | 52 | which service answers a request, and what a person may choose between |
+| [backends.md](backends.md) | `BACKEND` | 53 | which service answers a request, and what a person may choose between |
 | [import.md](import.md) | `IMPORT` | 10 | a first start with nothing configured: what Claude Code and opencode set up, or a running Ollama serves, and what of it may be copied here |
 | [compaction.md](compaction.md) | `COMPACT` | 12 | shortening a long conversation into a summary of itself, in the request only |
 | [loop.md](loop.md) | `LOOP` | 15 | sending one prompt again and again until somebody stops it |

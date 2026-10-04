@@ -319,6 +319,11 @@ doctor-dropped-gateway-token-not-minted-for-one-step =
     gate { $gate }, { $answer }: it is not minted for one step, since the token is whatever the settings file carries, the variable holds or `bravebot auth login gateway` stored, and it is held for the whole run
 doctor-dropped-subscription-batch-nothing-decides-each-use =
     gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this process presents a credential from the batch itself and nothing is asked to authorise the request
+# Which of the two handlers at that endpoint will answer. Never the key itself: a diagnostic that
+# printed one is a diagnostic people paste into issues, and unlike the signing key this one is sent.
+doctor-relay = requests
+doctor-relay-key = API key (relayed parameters, premium unavailable)
+doctor-relay-signed = signed
 # Both are reported when both are reachable, so this names one of the two rather than the backend.
 doctor-backend = offers
 doctor-backend-bedrock = AWS Bedrock
