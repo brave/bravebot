@@ -15,6 +15,9 @@ pub enum CoverageGap {
     Scratch,
     LanguageServer,
     Desktop,
+    /// A delegate wrote or ran a program in a checkout, which a rewind leaves as it is
+    /// (CHECKOUT-17).
+    Checkout,
     BackupUnavailable,
     Unknown,
 }

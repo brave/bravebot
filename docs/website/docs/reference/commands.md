@@ -667,8 +667,8 @@ conversation, so `/undo` and `/rewind` after a `--resume` reach the same turns t
 change lands after the most recent point and so before none of them. After that `/undo` says there is nothing left to undo
 rather than rewinding to a point describing a different session.
 
-**Running a command keeps undo available.** Commands, hooks, scratch writes, language servers and
-desktop turns can make changes outside file-tool backups. Undo names the recorded causes in a
+**Running a command keeps undo available.** Commands, hooks, scratch writes, language servers, desktop turns and delegate checkouts can make
+changes outside file-tool backups. Undo names the recorded causes in a
 warning that some changes may remain. It still restores available backups, which can also overwrite
 later command changes to those same paths. Failed restorations are reported separately by path.
 

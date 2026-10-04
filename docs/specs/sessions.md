@@ -503,7 +503,7 @@ leaving one with nothing in it. A rewind with incomplete coverage, failed restor
 it: the name was not the turn's to give, so it is not the rewind's to take. The directory the
 session was given of its own is not in the project: what a turn wrote there is neither put back nor
 counted against the budget below, for the reasons [trust-map.md](trust-map.md) gives.
-[CHECKOUT-17](checkouts.md#CHECKOUT-17), which nothing yet builds, leaves a delegate's checkout out
+[CHECKOUT-17](checkouts.md#CHECKOUT-17) leaves a delegate's checkout out
 of a rewind on the same terms.
 
 Program approvals return to the selected snapshot. File decisions use the lower effective trust
