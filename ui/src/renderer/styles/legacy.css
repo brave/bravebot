@@ -54,7 +54,6 @@
   border-radius: var(--leo-radius-m);
   cursor: pointer;
   color: var(--leo-color-text-primary);
-  font: var(--type-body);
 }
 .model-menu leo-option:hover,
 .model-menu leo-option.active { background: var(--leo-color-container-highlight); }
