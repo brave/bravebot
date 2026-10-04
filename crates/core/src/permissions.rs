@@ -739,11 +739,14 @@ fn path_pattern(specifier: &str, anchors: &Anchors) -> Option<Pattern> {
     if is_absolute_key(&keyed) {
         return rooted(&keyed);
     }
-    let rest = specifier.strip_prefix("./").unwrap_or(specifier);
-    Some(Pattern::Relative(PathPattern::relative(&fold(
-        rest,
-        anchors.folds_case,
-    ))))
+    // Decided on the specifier as written: `./x` says where it starts, and only a specifier with
+    // no slash in it is a name that matches at any depth.
+    let dotted = specifier.strip_prefix("./");
+    let rest = dotted.unwrap_or(specifier);
+    Some(Pattern::Relative(PathPattern::relative(
+        &fold(rest, anchors.folds_case),
+        dotted.is_some(),
+    )))
 }
 
 /// `path` spelled as the rules match one: `/`-separated, its drive letter in upper case, and folded
@@ -800,14 +803,20 @@ impl PathPattern {
     /// matches at any depth, in every list, so `Read(.env)` and `Read(**/.env)` are one rule. A
     /// pattern whose first segment is a plain name and which has more after it is the case Claude
     /// Code treats asymmetrically, and `floats_when_restricting` carries that.
-    fn relative(pattern: &str) -> Self {
+    ///
+    /// `dotted` is whether the specifier was written `./x`, which starts at the workspace even with
+    /// one segment: it is not a name, so it neither floats to any depth nor restricts at one.
+    fn relative(pattern: &str, dotted: bool) -> Self {
         let segments = split(pattern);
-        let is_a_bare_name = segments.len() == 1;
+        let is_a_bare_name = segments.len() == 1 && !dotted;
+        let anchored_segment = segments.len() == 1 && dotted;
         let starts_at_a_named_segment = segments
             .first()
             .is_some_and(|first| first != "**" && !first.contains('*'));
         Self {
-            floats_when_restricting: !is_a_bare_name && starts_at_a_named_segment,
+            floats_when_restricting: !is_a_bare_name
+                && !anchored_segment
+                && starts_at_a_named_segment,
             segments: if is_a_bare_name {
                 // A name matches at any depth, which is a leading `**` and nothing else.
                 let mut floated = vec!["**".to_string()];
@@ -1464,6 +1473,37 @@ mod tests {
         assert_eq!(
             allowing.for_path(Subject::Edit, "vendor/pkg/src/lib.js"),
             Decision::Unmatched
+        );
+    }
+
+    /// PERM-3: `./x` starts at the workspace, and only a specifier with no slash in it is a name
+    /// that matches at any depth, so a one-segment `./x` is the top-level `x` in every list.
+    #[test]
+    fn a_dotted_single_segment_starts_at_the_workspace_in_every_list() {
+        for list in 0..3 {
+            let rule = "Edit(./notes.md)";
+            let permissions = match list {
+                0 => rules(&[rule], &[], &[]),
+                1 => rules(&[], &[rule], &[]),
+                _ => rules(&[], &[], &[rule]),
+            };
+            assert!(
+                matches!(
+                    permissions.for_path(Subject::Edit, "notes.md"),
+                    Decision::Ruled(_)
+                ),
+                "list {list}: ./notes.md missed the workspace's own notes.md"
+            );
+            assert_eq!(
+                permissions.for_path(Subject::Edit, "vendor/pkg/notes.md"),
+                Decision::Unmatched,
+                "list {list}: ./notes.md floated to a nested copy"
+            );
+        }
+        // The undotted spelling is a name and still matches at any depth.
+        assert_eq!(
+            rules(&[], &[], &["Edit(notes.md)"]).for_path(Subject::Edit, "vendor/pkg/notes.md"),
+            Decision::Ruled(Ruling::Allow)
         );
     }
 
