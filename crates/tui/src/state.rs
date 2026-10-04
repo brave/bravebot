@@ -18174,6 +18174,8 @@ mod tests {
         for keys in [
             "ma", "\"a", "zz", "]]", "g'a", "g`a", "g?w", "g??", "g?iw", "g?fa", "g?gg", "g?'a",
             "gu'a", "d'a", "dzz", "dm", "c\"", "yq", "d@", "dr", "dZ", "dR",
+            // A count in front of the stretch, as `d2iw` has.
+            "g?2iw", "g?2w", "gq12iw", "gw3fa", "g@2gg", "g?2'a", "2g?3iw",
         ] {
             assert_eq!(
                 edited("one two", 0, &format!("{keys}x")),
