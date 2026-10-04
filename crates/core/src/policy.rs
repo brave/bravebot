@@ -10057,6 +10057,74 @@ five
         assert!(policy.before_fetch("https://example.com").is_err());
     }
 
+    /// The endorsement is spent by the fetch it was given for. A second fetch of the very same URL
+    /// is a second request nobody was asked about, so it is refused until somebody answers again.
+    #[test]
+    fn an_endorsement_is_single_use() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let url = "https://example.com/approved";
+
+        policy.endorse_fetch(url);
+        policy
+            .before_fetch(url)
+            .expect("the first fetch was allowed");
+        assert!(
+            policy.before_fetch(url).is_err(),
+            "one approval paid for two fetches of the same URL"
+        );
+    }
+
+    /// An approval records nothing: the next fetch of the same host asks again, because standing
+    /// permission is a rule a person wrote down and not a side effect of answering one prompt.
+    #[test]
+    fn approving_a_fetch_leaves_nothing_behind_for_the_next_one() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let url = "https://example.com/approved";
+
+        assert!(policy.fetch_needs_approval(url));
+        policy.endorse_fetch(url);
+        policy.before_fetch(url).expect("the fetch was allowed");
+        policy.fetch_finished();
+
+        assert!(
+            policy.fetch_needs_approval(url),
+            "the same URL was not asked about again"
+        );
+        assert!(
+            policy.fetch_needs_approval("https://example.com/other"),
+            "an approval for one page became standing consent for its host"
+        );
+    }
+
+    /// A redirect off the approved host is refused "unless a rule allows that host too". The other
+    /// tests pin the refusal; this is the exception, which a gate that refused every redirect off
+    /// the host would fail.
+    #[test]
+    fn a_redirect_to_a_host_a_rule_allows_is_followed() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_permissions(permissions(
+            &[],
+            &[],
+            &["WebFetch(domain:cdn.example.net)"],
+        ));
+
+        let start = "https://example.com/start";
+        policy.endorse_fetch(start);
+        policy.before_fetch(start).expect("the fetch was allowed");
+
+        policy
+            .before_network("https://cdn.example.net/file")
+            .expect("a host a rule allows was refused as a redirect target");
+        assert!(
+            policy
+                .before_network("https://elsewhere.test/file")
+                .is_err(),
+            "the allow rule for one host opened every redirect"
+        );
+    }
+
     /// A deny rule has to hold at the point the request goes out, not only where a person is
     /// asked. An approval names the URL the planner proposed, and the host at the end of a
     /// redirect chain is one nobody was ever shown.

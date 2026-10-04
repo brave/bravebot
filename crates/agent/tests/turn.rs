@@ -27456,6 +27456,81 @@ fn a_refused_fetch_sends_no_request() {
     );
 }
 
+/// The person is shown the host the URL reaches as a field of its own, taken by the parser. A URL
+/// with userinfo reads as one site and reaches another; the host is what they are answering about.
+#[test]
+fn a_fetch_prompt_carries_the_host_the_url_reaches_as_its_own_field() {
+    let scratch = Scratch::new("fetch-host-field");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (site, _requests) = serve_pages(vec![page("body")]);
+    let authority = site.trim_start_matches("http://");
+    let url = format!("http://docs.example.com@{authority}/api");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{url}"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ApprovesFetchesAndWrites::default();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("fetch it"),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(confirmer.asked, vec![url.clone()]);
+    assert_eq!(
+        confirmer.hosts,
+        vec!["127.0.0.1".to_string()],
+        "the prompt was given the userinfo, or the whole URL, as the host"
+    );
+}
+
+/// A body past the cap is cut by the egress layer, and the planner is told so: the reference
+/// describes shape and provenance, and a cap is neither, so without the sentence a truncated page
+/// reads exactly like a whole one.
+#[test]
+fn a_fetched_body_cut_at_the_cap_is_reported_as_incomplete() {
+    let scratch = Scratch::new("fetch-capped");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let big = "x".repeat(bravebot_net::MAX_RESPONSE_BYTES + 1024);
+    let (site, _requests) = serve_pages(vec![page(&big)]);
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/big"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("fetch it"),
+        &mut ApprovesFetchesAndWrites::default(),
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("stopped at a cap"),
+        "the planner was not told the page was cut: {second}"
+    );
+}
+
 /// A rule written in advance answers the prompt, exactly as one does for a run. The confirmer
 /// refuses everything, so a fetch that happens at all proves the rule was what allowed it.
 #[test]
@@ -27605,6 +27680,8 @@ fn a_denied_host_is_not_fetched_whatever_a_person_would_have_answered() {
 #[derive(Default)]
 struct ApprovesFetchesAndWrites {
     asked: Vec<String>,
+    /// The host each question carried as its own field, beside the URL in `asked`.
+    hosts: Vec<String>,
 }
 
 impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
@@ -27650,6 +27727,7 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
         request: &bravebot_agent::confirm::FetchRequest,
     ) -> bravebot_agent::Decision {
         self.asked.push(request.url.clone());
+        self.hosts.push(request.host.clone());
         bravebot_agent::Decision::Approve
     }
 
