@@ -451,6 +451,7 @@ mod tests {
 
     fn a_write() -> WriteRequest {
         WriteRequest {
+            written_since_checkout: false,
             path: "src/main.rs".to_string(),
             contents: "fn main() {}\n".to_string(),
             existing: None,
@@ -468,6 +469,7 @@ mod tests {
     /// is already described, as the write tools describe one, so nothing here is the value.
     fn a_credential_write() -> WriteRequest {
         WriteRequest {
+            written_since_checkout: false,
             path: "config/master.key".to_string(),
             contents: "a generated value\n".to_string(),
             credentials: vec!["line 1: a value rare enough to be a secret".to_string()],

@@ -1735,6 +1735,14 @@ function Card({
               the change.</span>
             </p>
           )}
+          {request.writtenSinceCheckout && (
+            <p className="warn">
+              <Icon name="warning-triangle-filled" />
+              <span>This session wrote to this file in the working directory after the checkout was
+              made, so it may hold changes the checkout’s copy does not. Read the difference before
+              approving.</span>
+            </p>
+          )}
           {request.credentials && request.credentials.length > 0 && <Alert type="warning" className="card-alert credential-finding">
             <Icon name="shield-alert" slot="icon" />
             <span slot="title">This looks like it would put a secret in the tree</span>

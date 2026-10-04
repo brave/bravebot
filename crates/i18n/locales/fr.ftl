@@ -1077,6 +1077,10 @@ write-credentials =
     ceci semble déposer un secret dans l'arbre, d'après le nom à côté de la valeur et l'allure de
     la valeur. Rien ne l'a reconnu comme la clé d'un fournisseur précis : c'est donc une
     supposition, et c'est à vous d'en décider
+write-since-checkout =
+    cette session a écrit dans ce fichier du répertoire de travail après la création de
+    l'extraction : il peut contenir des changements que la copie de l'extraction n'a pas. Lisez la
+    différence avant d'approuver
 write-unchanged = { $count ->
     [one] … { $count } ligne inchangée
    *[other] … { $count } lignes inchangées

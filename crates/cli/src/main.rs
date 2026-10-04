@@ -5124,6 +5124,7 @@ mod tests {
         let mut one_shot = OneShot::new(&b"y\ny\n"[..], &mut shown, true);
 
         let write = WriteRequest {
+            written_since_checkout: false,
             path: "notes.md".to_string(),
             contents: "text".to_string(),
             existing: None,

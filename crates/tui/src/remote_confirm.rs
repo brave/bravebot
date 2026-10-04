@@ -466,6 +466,7 @@ mod tests {
 
     fn request() -> WriteRequest {
         WriteRequest {
+            written_since_checkout: false,
             path: "notes.md".into(),
             contents: "body\n".into(),
             existing: None,

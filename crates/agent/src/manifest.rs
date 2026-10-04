@@ -1708,6 +1708,7 @@ fn write<S: Sink, C: Confirmer>(
             existing.declassify(&proof)
         });
         let request = WriteRequest {
+            written_since_checkout: false,
             intent,
             existing,
             path: path.clone(),

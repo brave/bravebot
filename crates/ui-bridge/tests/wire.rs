@@ -171,6 +171,7 @@ fn released_content_crosses_the_transport_with_the_label_it_was_released_under()
         wire::write_request(
             1,
             &WriteRequest {
+                written_since_checkout: false,
                 path: "notes.md".into(),
                 contents: "new".into(),
                 existing: None,
@@ -361,11 +362,39 @@ fn a_todo_row_sends_its_status_not_its_glyph() {
     );
 }
 
+/// CHECKOUT-14. A front-end is told the working directory's file was written since the checkout the
+/// body comes from was made, so the desktop's question says what the terminal's does.
+#[test]
+fn a_write_request_carries_whether_the_path_was_written_since_the_checkout() {
+    let request = |since: bool| WriteRequest {
+        written_since_checkout: since,
+        path: "out.txt".into(),
+        contents: "theirs\n".into(),
+        existing: Some("mine\n".into()),
+        diff: Diff::compute("mine\n", "theirs\n"),
+        intent: Intent::Overwrite,
+        untrusted: false,
+        remark: None,
+        credentials: Vec::new(),
+        may_always: false,
+        record: None,
+    };
+    assert_eq!(
+        wire::write_request(1, &request(true))["writtenSinceCheckout"],
+        json!(true)
+    );
+    assert_eq!(
+        wire::write_request(1, &request(false))["writtenSinceCheckout"],
+        json!(false)
+    );
+}
+
 /// The body never goes on the wire. A reviewer reads a diff; shipping `contents` invites
 /// a front-end to show the whole file instead, which is the thing the design avoids.
 #[test]
 fn a_write_request_sends_the_diff_and_never_the_body() {
     let request = WriteRequest {
+        written_since_checkout: false,
         path: "src/parser.rs".into(),
         contents: "line one\nSECRET BODY\nline three\n".into(),
         existing: Some("line one\nline two\nline three\n".into()),
@@ -405,6 +434,7 @@ fn a_created_file_says_nothing_would_be_lost() {
     let value = wire::write_request(
         1,
         &WriteRequest {
+            written_since_checkout: false,
             path: "new.md".into(),
             contents: "hello\n".into(),
             existing: None,
@@ -441,6 +471,7 @@ fn what_the_scan_inferred_reaches_the_front_end_that_draws_the_question() {
     let value = wire::write_request(
         4,
         &WriteRequest {
+            written_since_checkout: false,
             path: ".env".into(),
             contents: "SECRET_KEY_BASE=c8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7\n".into(),
             existing: None,
@@ -465,6 +496,7 @@ fn what_the_scan_inferred_reaches_the_front_end_that_draws_the_question() {
     let quiet = wire::write_request(
         5,
         &WriteRequest {
+            written_since_checkout: false,
             path: "notes.md".into(),
             contents: "hello\n".into(),
             existing: None,
@@ -897,6 +929,7 @@ fn approval_evidence_is_kept_beside_the_decision() {
     let write = wire::write_request(
         10,
         &WriteRequest {
+            written_since_checkout: false,
             path: "file".into(),
             contents: "new".into(),
             existing: None,

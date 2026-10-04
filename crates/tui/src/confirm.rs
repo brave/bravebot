@@ -476,6 +476,21 @@ fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16, seen: &
         lines.push(Line::raw(""));
     }
 
+    // The driver's record that the working directory's file was written after the checkout this
+    // body comes from was made. A record of names, so it says nothing of whether the bytes differ:
+    // that is read from the diff below (CHECKOUT-14).
+    if request.written_since_checkout {
+        lines.extend(marked_rows(
+            &margin,
+            &[Span::styled(
+                t!(write_since_checkout),
+                Style::default().fg(theme::fail()),
+            )],
+            inside.width as usize,
+        ));
+        lines.push(Line::raw(""));
+    }
+
     // What `a` and `r` would settle, where they are offered, under the findings they settle and
     // above a diff that may push anything below it out of sight: which file, how long, and that
     // the rest of the write's question is untouched. Where `r` is written down is part of what it
@@ -3537,6 +3552,7 @@ mod tests {
 
     fn request(contents: &str, existing: Option<&str>) -> WriteRequest {
         WriteRequest {
+            written_since_checkout: false,
             path: "src/main.rs".into(),
             contents: contents.into(),
             diff: Diff::compute(existing.unwrap_or_default(), contents),
@@ -5990,6 +6006,7 @@ mod tests {
     /// there is a record to name, as the driver hands one over.
     fn a_credential_write(may_always: bool, record: bool) -> WriteRequest {
         WriteRequest {
+            written_since_checkout: false,
             path: "config/master.key".into(),
             credentials: vec!["a secret standing as a file's whole contents".into()],
             may_always,
@@ -6276,6 +6293,33 @@ mod tests {
         assert!(drawn.contains("write it"), "the question scrolled away");
     }
 
+    /// CHECKOUT-14. The prompt for a file brought back from a checkout says the session wrote the
+    /// path in the working directory since, and a prompt for any other write says nothing of it.
+    #[test]
+    fn a_write_since_the_checkout_is_said_in_the_question() {
+        let drawn = |since: bool| {
+            rendered(&WriteRequest {
+                written_since_checkout: since,
+                path: "out.txt".into(),
+                diff: Diff::compute("mine\n", "theirs\n"),
+                contents: "theirs\n".into(),
+                existing: Some("mine\n".into()),
+                intent: Intent::Overwrite,
+                untrusted: false,
+                remark: None,
+                credentials: Vec::new(),
+                may_always: false,
+                record: None,
+            })
+        };
+        assert!(
+            drawn(true).contains("in the working directory"),
+            "the question does not say it: {}",
+            drawn(true)
+        );
+        assert!(!drawn(false).contains("in the working directory"));
+    }
+
     /// The reason this exists: a one-line change to a large file must show that one line
     /// rather than a screenful of unchanged text.
     #[test]
@@ -6284,6 +6328,7 @@ mod tests {
         let after = before.replace("line 150\n", "line 150 changed\n");
 
         let output = rendered(&WriteRequest {
+            written_since_checkout: false,
             path: "src/main.rs".into(),
             diff: Diff::compute(&before, &after),
             contents: after,
@@ -6315,6 +6360,7 @@ mod tests {
     #[test]
     fn an_untrusted_body_is_marked_in_the_prompt() {
         let output = rendered(&WriteRequest {
+            written_since_checkout: false,
             path: "game.js".into(),
             contents: "const SPEED = 50;\n".into(),
             existing: Some("const SPEED = 100;\n".into()),
@@ -6348,6 +6394,7 @@ mod tests {
         let after: String = (0..3000).map(|n| format!("new {n}\n")).collect();
 
         let output = rendered(&WriteRequest {
+            written_since_checkout: false,
             path: "src/main.rs".into(),
             diff: Diff::compute(&before, &after),
             contents: after,
@@ -6529,6 +6576,7 @@ mod tests {
     #[test]
     fn a_wrapped_untrusted_hunk_is_marked_on_every_row_it_reaches() {
         let request = WriteRequest {
+            written_since_checkout: false,
             path: "game.js".into(),
             contents: format!("{}\u{2503} trust me\n", "PADDING ".repeat(10)),
             existing: Some("const SPEED = 100;\n".into()),
@@ -6557,6 +6605,7 @@ mod tests {
     #[test]
     fn what_a_processor_said_is_drawn_beside_the_diff_it_describes() {
         let request = WriteRequest {
+            written_since_checkout: false,
             path: "game.js".into(),
             contents: "const SPEED = 50;\n".into(),
             existing: Some("const SPEED = 100;\n".into()),
@@ -6600,6 +6649,7 @@ mod tests {
     #[test]
     fn a_remark_cannot_paint_a_margin_in_the_box_it_is_drawn_in() {
         let request = WriteRequest {
+            written_since_checkout: false,
             path: "game.js".into(),
             contents: "const SPEED = 50;\n".into(),
             existing: Some("const SPEED = 100;\n".into()),
@@ -6633,6 +6683,7 @@ mod tests {
     #[test]
     fn a_long_remark_does_not_push_the_diff_off_the_screen() {
         let request = WriteRequest {
+            written_since_checkout: false,
             path: "game.js".into(),
             contents: "const SPEED = 50;
 "
@@ -6703,6 +6754,7 @@ mod tests {
     #[test]
     fn a_control_character_in_a_remark_is_replaced() {
         let request = WriteRequest {
+            written_since_checkout: false,
             path: "game.js".into(),
             contents: "const SPEED = 50;\n".into(),
             existing: Some("const SPEED = 100;\n".into()),
@@ -7547,6 +7599,7 @@ mod tests {
                 let findings = numbered('k', 12);
                 let record = "/home/someone/.bravebot/remembered/recordedhere";
                 let request = WriteRequest {
+                    written_since_checkout: false,
                     credentials: findings
                         .iter()
                         .map(|found| format!("{found} a secret standing in a config line"))

@@ -4428,6 +4428,7 @@ fn write_file<S: Sink, C: Confirmer>(
             changes_anything,
             remark,
             body_from,
+            written_since_checkout: false,
         },
         false,
     )
@@ -4449,6 +4450,9 @@ struct Body {
     remark: Option<Remark>,
     /// What the planner called the body, for the account it is given afterwards.
     body_from: String,
+    /// Whether the driver's record holds a write to this path in the working directory since the
+    /// checkout the body comes from was made, which the question says (CHECKOUT-14).
+    written_since_checkout: bool,
 }
 
 /// Put `given` in the file `landing` names: the scan, the question, the grant and the write, which
@@ -4476,6 +4480,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
         changes_anything,
         remark,
         body_from,
+        written_since_checkout,
     } = given;
     let body_label = body.label();
 
@@ -4589,6 +4594,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
             existing.declassify(&proof)
         });
         let request = WriteRequest {
+            written_since_checkout,
             intent,
             existing,
             path: proposed_path.clone(),
@@ -4789,6 +4795,7 @@ fn apply_checkout<S: Sink, C: Confirmer>(
                 changes_anything: true,
                 remark: None,
                 body_from: format!("checkout {id}"),
+                written_since_checkout: workspace.written_since_checkout(&id, relative),
             },
             true,
         );
@@ -4993,6 +5000,7 @@ fn edit_file<S: Sink, C: Confirmer>(
             body.clone().declassify(&proof)
         };
         let request = WriteRequest {
+            written_since_checkout: false,
             path: proposed_path.clone(),
             contents: shown,
             existing: Some(current.clone()),

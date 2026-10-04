@@ -1243,6 +1243,9 @@ write-credentials =
     this looks like it would put a secret in the tree, going by the name beside the value and how
     the value reads. Nothing recognised it as a particular provider's key, so it is a guess and
     yours to settle
+write-since-checkout =
+    this session wrote to this file in the working directory after the checkout was made, so it
+    may hold changes the checkout's copy does not. Read the difference before approving
 write-unchanged = { $count ->
     [one] … { $count } unchanged line
    *[other] … { $count } unchanged lines

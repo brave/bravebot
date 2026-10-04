@@ -623,10 +623,19 @@ single question per path. The question is asked wherever the trust map's table w
 and the person is shown the difference from their file as it is now. The trail records an apply
 that brought a file back ([CHECKOUT-19](#CHECKOUT-19)), and a delegate is not offered the tool.
 
-Not built: telling the person that the driver's own record holds a write to the path in the working
-directory since the checkout was made, a path a status lists as removed (no status is read in a
-checkout, [CHECKOUT-13](#CHECKOUT-13)), a file written through a reference, and `/checkouts apply`.
-A file over 16 MiB, or that is not text, is named and left.
+The driver records the names the session wrote in the working directory, by the spelling the
+planner typed, in the order the writes were made, and a checkout remembers how many there had been
+when it was made. The question says so where a later write names the path. That covers a
+`write_file`, an `edit_file`, a redirection and an apply, from the planner or from a delegate that
+shares the working directory. A write through a reference is not named, and a program's own write
+is not seen, so the note is absent for those and says nothing about the bytes.
+
+Not built: a path a status lists as removed (no status is read in a checkout,
+[CHECKOUT-13](#CHECKOUT-13)), a file written through a reference, and `/checkouts apply`. A file
+over 16 MiB, or that is not text, is named and left.
+
+`verified-by: bravebot_agent::turn::the_question_says_the_working_directory_was_written_since_the_checkout`
+`verified-by: bravebot_tui::confirm::a_write_since_the_checkout_is_said_in_the_question`
 
 `verified-by: bravebot_agent::turn::a_kept_checkouts_file_comes_back_through_a_question_the_table_would_not_ask`
 `verified-by: bravebot_agent::turn::declining_the_question_brings_nothing_back`
