@@ -1458,6 +1458,312 @@ fn a_read_outside_the_workspace_tells_the_planner_what_the_person_can_do() {
     );
 }
 
+/// The confinement refusals a turn's trail holds, by their reasons.
+fn confinement_refusals(sink: &RecordingSink) -> Vec<String> {
+    sink.blocked()
+        .filter_map(|event| match event {
+            Event::GateBlocked {
+                gate: "confine",
+                reason,
+                principle: bravebot_core::event::Principle::Confinement,
+                ..
+            } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A read refused for leaving the workspace is in the trail as a refusal, worded with the path the
+/// planner typed, and the promotion before it claims nothing about where the path lands.
+///
+/// Confinement is decided when the path resolves, after the promotion. With no record of its own, a
+/// refused read left a trail ending at a passed promotion that said the path was confined, and a
+/// turn reported as clean, so the trail could not say why the read did not happen. The test above
+/// checks only the sentence the planner reads, which survives the record being dropped.
+#[test]
+fn a_read_refused_for_leaving_the_workspace_is_recorded_as_a_refusal() {
+    let elsewhere = Scratch::new("escape-recorded-elsewhere");
+    std::fs::write(elsewhere.path.join("todo.txt"), "buy milk").unwrap();
+
+    let scratch = Scratch::new("escape-recorded");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let outside = elsewhere
+        .path
+        .join("todo.txt")
+        .to_string_lossy()
+        .to_string();
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("read_file", &format!(r#"{{"path":"{outside}"}}"#)),
+        reply_with("could not read it"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let outcome = turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read my todo list"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let refused = confinement_refusals(&sink);
+    assert_eq!(
+        refused.len(),
+        1,
+        "the refused read was not recorded exactly once: {:?}",
+        sink.events()
+    );
+    assert!(
+        refused[0].contains(&format!("read_file.path: '{outside}'")),
+        "the refusal does not name the call and the path typed: {}",
+        refused[0]
+    );
+    assert!(
+        refused[0].contains("open its directory, or drop the file"),
+        "the refusal does not record the remedy offered: {}",
+        refused[0]
+    );
+    assert!(
+        !outcome.clean,
+        "a turn whose read was refused was reported as clean"
+    );
+
+    let promoted = sink
+        .events()
+        .iter()
+        .find_map(|event| match event {
+            Event::GatePassed {
+                gate: "promote",
+                detail,
+            } if detail.starts_with("read_file.path") => Some(detail.clone()),
+            _ => None,
+        })
+        .expect("the path was not promoted");
+    assert!(
+        !promoted.contains("confined"),
+        "the promotion says the path was confined before it was resolved: {promoted}"
+    );
+}
+
+/// A picture outside the workspace is refused and recorded as a text file is.
+///
+/// A picture is read by a branch of its own, chosen by the extension, with its own failure arm, so
+/// the record a text read leaves says nothing about whether this one leaves it.
+#[test]
+fn a_picture_refused_for_leaving_the_workspace_is_recorded_as_a_refusal() {
+    let elsewhere = Scratch::new("refused-picture-elsewhere");
+    std::fs::write(elsewhere.path.join("shot.png"), a_png()).unwrap();
+
+    let scratch = Scratch::new("refused-picture");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let outside = elsewhere
+        .path
+        .join("shot.png")
+        .to_string_lossy()
+        .to_string();
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("read_file", &format!(r#"{{"path":"{outside}"}}"#)),
+        reply_with("could not see it"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let outcome = turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("look at my screenshot"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let refused = confinement_refusals(&sink);
+    assert_eq!(
+        refused.len(),
+        1,
+        "the refused picture was not recorded exactly once: {refused:?}"
+    );
+    assert!(
+        refused[0].contains(&format!("read_file.path: '{outside}'")),
+        "the refusal does not name the call and the path typed: {}",
+        refused[0]
+    );
+    assert!(
+        !outcome.clean,
+        "a turn whose read was refused was reported as clean"
+    );
+}
+
+/// A read through a reference refused for leaving the workspace is recorded under the reference
+/// and never under the file it names.
+///
+/// The name behind a reference came out of a directory nobody vouched for, and the planner is never
+/// told it (LIST-2). The refusal is a sentence the driver words, so it says `ref:1`, as the
+/// planner's own refusal does. Here the file is replaced by a link out of the workspace after the
+/// listing, which is how a reference comes to escape.
+#[cfg(unix)]
+#[test]
+fn a_read_through_a_reference_refused_for_leaving_the_workspace_is_recorded_as_the_reference() {
+    let elsewhere = Scratch::new("escape-reference-elsewhere");
+    std::fs::write(elsewhere.path.join("secret.txt"), "buy milk").unwrap();
+
+    let scratch = Scratch::new("escape-reference");
+    std::fs::create_dir(scratch.path.join("notes")).unwrap();
+    let file = scratch.path.join("notes").join("game.js");
+    std::fs::write(&file, "const SPEED = 100;\n").unwrap();
+    std::fs::write(scratch.path.join("notes").join("todo.txt"), "buy milk").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // One file is vouched for and the other is not, so the listing hands back references, and a
+    // read through the vouched one opens the file rather than saying the reference already holds
+    // it.
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust("notes/game.js");
+
+    let target = elsewhere.path.join("secret.txt");
+    let mut script = vec![
+        tool_request("list_files", r#"{"directory":"notes"}"#),
+        tool_request("read_file", r#"{"path_ref":"ref:1"}"#),
+        reply_with("could not read it"),
+    ]
+    .into_iter();
+    let mut round = 0;
+    let (endpoint, _received) = serve_rounds(Vec::new(), false, move |_| {
+        round += 1;
+        if round == 2 {
+            std::fs::remove_file(&file).unwrap();
+            std::os::unix::fs::symlink(&target, &file).unwrap();
+        }
+        script.next().map(Some)
+    });
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("look at the game"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    let refused = confinement_refusals(&sink);
+    assert_eq!(
+        refused.len(),
+        1,
+        "the refused read was not recorded exactly once: {:?}",
+        sink.events()
+    );
+    assert!(
+        refused[0].contains("read_file.path_ref: 'ref:1'"),
+        "the refusal does not name the call and the reference: {}",
+        refused[0]
+    );
+    for name in ["game.js", "secret.txt"] {
+        assert!(
+            !refused[0].contains(name),
+            "the refusal names {name}, which the reference exists to withhold: {}",
+            refused[0]
+        );
+    }
+}
+
+/// The same record from every other tool that resolves a path the planner typed. Each words its
+/// own refusal, so a tool that stopped recording one would leave the trail short of a refusal the
+/// planner was told of, with every other tool still passing.
+#[test]
+fn every_file_tool_records_a_path_refused_for_leaving_the_workspace() {
+    let elsewhere = Scratch::new("escape-every-tool-elsewhere");
+    std::fs::write(elsewhere.path.join("todo.txt"), "buy milk").unwrap();
+    let scratch = Scratch::new("escape-every-tool");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let outside = elsewhere.path.to_string_lossy().to_string();
+    let calls = [
+        (
+            "list_files",
+            format!(r#"{{"directory":"{outside}"}}"#),
+            format!("list_files.directory: '{outside}'"),
+        ),
+        (
+            "search",
+            format!(r#"{{"pattern":"milk","directory":"{outside}"}}"#),
+            format!("search.directory: '{outside}'"),
+        ),
+        (
+            "write_file",
+            format!(r#"{{"path":"{outside}/new.txt","contents":"x"}}"#),
+            format!("write_file.path: '{outside}/new.txt'"),
+        ),
+        (
+            "edit_file",
+            format!(r#"{{"path":"{outside}/todo.txt","old_text":"milk","new_text":"eggs"}}"#),
+            format!("edit_file.path: '{outside}/todo.txt'"),
+        ),
+        (
+            "read_git",
+            format!(r#"{{"query":"log","repository":"{outside}"}}"#),
+            format!("read_git.repository: '{outside}'"),
+        ),
+    ];
+    let mut script: Vec<_> = calls
+        .iter()
+        .map(|(tool, arguments, _)| tool_request(tool, arguments))
+        .collect();
+    script.push(reply_with("none of those could be reached"));
+    let (endpoint, _received) = serve_sequence(script);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("tidy up my notes"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let refused = confinement_refusals(&sink);
+    let unrecorded: Vec<&str> = calls
+        .iter()
+        .filter(|(_, _, recorded)| !refused.iter().any(|reason| reason.starts_with(recorded)))
+        .map(|(tool, _, _)| *tool)
+        .collect();
+    assert!(
+        unrecorded.is_empty(),
+        "these tools were refused with no record: {unrecorded:?}; recorded: {refused:?}"
+    );
+    assert_eq!(
+        refused.len(),
+        calls.len(),
+        "a refusal was recorded more or less than once: {refused:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(elsewhere.path.join("todo.txt")).unwrap(),
+        "buy milk",
+        "a file outside the workspace was edited"
+    );
+    assert!(
+        !elsewhere.path.join("new.txt").exists(),
+        "a file was written outside the workspace"
+    );
+}
+
 /// Cancellation is what stops a model that never stops calling tools. There is no round
 /// limit any more, so this is the whole of the answer: the token is checked before every
 /// request and before every tool call, and setting it ends the turn at the next one.
@@ -5142,6 +5448,104 @@ fn a_refused_edit_does_not_happen() {
     );
 }
 
+/// Approves every write, and first makes the change it was given to the file it is asked about,
+/// as something else on the machine can while a person reads the prompt.
+struct ChangesTheFileWhenAsked {
+    change: Box<dyn FnMut() + Send>,
+}
+
+impl bravebot_agent::Confirmer for ChangesTheFileWhenAsked {
+    fn confirm_server(
+        &mut self,
+        _request: &bravebot_agent::confirm::ServerRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+    fn confirm_write(
+        &mut self,
+        _request: &bravebot_agent::WriteRequest,
+    ) -> bravebot_agent::WriteDecision {
+        (self.change)();
+        bravebot_agent::WriteDecision::approve()
+    }
+    fn confirm_run(
+        &mut self,
+        _request: &bravebot_agent::RunRequest,
+    ) -> bravebot_agent::RunDecision {
+        bravebot_agent::RunDecision::reject()
+    }
+    fn confirm_read_output(
+        &mut self,
+        _request: &bravebot_agent::confirm::OutputRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_vetted_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::VetRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+    fn confirm_fetch(
+        &mut self,
+        _request: &bravebot_agent::confirm::FetchRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+    /// Refuses. A test double is not a person agreeing to a plan.
+    fn confirm_manifest(
+        &mut self,
+        _request: &bravebot_agent::confirm::ManifestRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_vouch(
+        &mut self,
+        _request: &bravebot_agent::confirm::VouchRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_exposing_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::ExposureRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_tool_list(
+        &mut self,
+        _request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_mcp_call(
+        &mut self,
+        _request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+    fn ask_user(
+        &mut self,
+        _asking: &bravebot_core::ask::Asking,
+    ) -> Vec<bravebot_core::ask::Answer> {
+        Vec::new()
+    }
+    fn interjection(&mut self) -> Option<String> {
+        None
+    }
+}
+
 /// A file that moved under the edit must not be written. The diff a person approved describes
 /// bytes that are no longer there, so applying it anyway would change something nobody reviewed
 /// and would report a passage it did not touch.
@@ -5162,103 +5566,9 @@ fn a_stale_edit_is_refused() {
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
 
-    struct StaleConfirmer {
-        path: std::path::PathBuf,
-    }
-    impl bravebot_agent::Confirmer for StaleConfirmer {
-        fn confirm_server(
-            &mut self,
-            _request: &bravebot_agent::confirm::ServerRequest,
-        ) -> bravebot_agent::Decision {
-            bravebot_agent::Decision::Reject
-        }
-        fn confirm_write(
-            &mut self,
-            _request: &bravebot_agent::WriteRequest,
-        ) -> bravebot_agent::WriteDecision {
-            std::fs::write(&self.path, "stale\n").unwrap();
-            bravebot_agent::WriteDecision::approve()
-        }
-        fn confirm_run(
-            &mut self,
-            _request: &bravebot_agent::RunRequest,
-        ) -> bravebot_agent::RunDecision {
-            bravebot_agent::RunDecision::reject()
-        }
-        fn confirm_read_output(
-            &mut self,
-            _request: &bravebot_agent::confirm::OutputRequest,
-        ) -> bravebot_agent::Decision {
-            bravebot_agent::Decision::Reject
-        }
-
-        fn confirm_vetted_read(
-            &mut self,
-            _request: &bravebot_agent::confirm::VetRequest,
-        ) -> bravebot_agent::confirm::Decision {
-            bravebot_agent::confirm::Decision::Reject
-        }
-        fn confirm_fetch(
-            &mut self,
-            _request: &bravebot_agent::confirm::FetchRequest,
-        ) -> bravebot_agent::Decision {
-            bravebot_agent::Decision::Reject
-        }
-        /// Refuses. A test double is not a person agreeing to a plan.
-        fn confirm_manifest(
-            &mut self,
-            _request: &bravebot_agent::confirm::ManifestRequest,
-        ) -> bravebot_agent::Decision {
-            bravebot_agent::Decision::Reject
-        }
-
-        fn confirm_vouch(
-            &mut self,
-            _request: &bravebot_agent::confirm::VouchRequest,
-        ) -> bravebot_agent::Decision {
-            bravebot_agent::Decision::Reject
-        }
-
-        fn confirm_exposing_read(
-            &mut self,
-            _request: &bravebot_agent::confirm::ExposureRequest,
-        ) -> bravebot_agent::Decision {
-            bravebot_agent::Decision::Reject
-        }
-
-        fn confirm_tool_list(
-            &mut self,
-            _request: &bravebot_agent::confirm::ToolListRequest,
-        ) -> bravebot_agent::confirm::Decision {
-            bravebot_agent::confirm::Decision::Reject
-        }
-
-        fn confirm_mcp_call(
-            &mut self,
-            _request: &bravebot_agent::confirm::McpCallRequest,
-        ) -> bravebot_agent::confirm::CallDecision {
-            bravebot_agent::confirm::CallDecision::reject()
-        }
-
-        fn confirm_move(
-            &mut self,
-            _request: &bravebot_agent::confirm::MoveRequest,
-        ) -> bravebot_agent::confirm::Decision {
-            bravebot_agent::confirm::Decision::Reject
-        }
-        fn ask_user(
-            &mut self,
-            _asking: &bravebot_core::ask::Asking,
-        ) -> Vec<bravebot_core::ask::Answer> {
-            Vec::new()
-        }
-        fn interjection(&mut self) -> Option<String> {
-            None
-        }
-    }
-
-    let mut confirmer = StaleConfirmer {
-        path: scratch.path.join("a.txt"),
+    let path = scratch.path.join("a.txt");
+    let mut confirmer = ChangesTheFileWhenAsked {
+        change: Box::new(move || std::fs::write(&path, "stale\n").unwrap()),
     };
 
     let task = Task::new("edit a.txt").with_permissions(rules(&[], &["Edit(a.txt)"], &[]));
@@ -5280,6 +5590,75 @@ fn a_stale_edit_is_refused() {
     assert_eq!(
         std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
         "stale\n"
+    );
+}
+
+/// An edit whose file is replaced by a link out of the workspace while the person is asked about it
+/// is refused at the write, and the trail records that refusal too.
+///
+/// The read the edit started from passed, so the only check left to refuse it is the one the write
+/// makes when it resolves the path again. A record kept only by the read would leave this refusal
+/// out of the trail.
+#[cfg(unix)]
+#[test]
+fn an_edit_whose_file_leaves_the_workspace_while_asked_is_recorded_as_a_refusal() {
+    let elsewhere = Scratch::new("edit-escape-asked-elsewhere");
+    std::fs::write(elsewhere.path.join("a.txt"), "original\n").unwrap();
+    let scratch = Scratch::new("edit-escape-asked");
+    std::fs::write(scratch.path.join("a.txt"), "original\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "edit_file",
+            r#"{"path":"a.txt","old_text":"original","new_text":"replaced"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let inside = scratch.path.join("a.txt");
+    let outside = elsewhere.path.join("a.txt");
+    let mut confirmer = ChangesTheFileWhenAsked {
+        change: Box::new(move || {
+            std::fs::remove_file(&inside).unwrap();
+            std::os::unix::fs::symlink(&outside, &inside).unwrap();
+        }),
+    };
+
+    let task = Task::new("edit a.txt").with_permissions(rules(&[], &["Edit(a.txt)"], &[]));
+    let outcome = turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let refused = confinement_refusals(&sink);
+    assert_eq!(
+        refused.len(),
+        1,
+        "the refused write was not recorded exactly once: {refused:?}"
+    );
+    assert!(
+        refused[0].starts_with("edit_file.path: 'a.txt' resolves outside the workspace"),
+        "the refusal does not name the call and the path typed: {}",
+        refused[0]
+    );
+    assert_eq!(
+        std::fs::read_to_string(elsewhere.path.join("a.txt")).unwrap(),
+        "original\n",
+        "the edit was written through the link"
+    );
+    assert!(
+        !outcome.clean,
+        "a turn whose edit was refused was reported as clean"
     );
 }
 

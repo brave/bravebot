@@ -3481,7 +3481,16 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
                 .of_content()
                 .of_a_picture(media)
             }
-            Err(e) => Produced::problem(format!("error: {}", e.describe(&shown_path))),
+            Err(e) => Produced::problem(format!(
+                "error: {}",
+                workspace_failure(
+                    policy,
+                    "read_file",
+                    path_field(destination),
+                    &e,
+                    &shown_path
+                )
+            )),
         });
     }
 
@@ -3504,7 +3513,16 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
                 Produced::deferring(Labelled::trusted(keyed), shown_path, bytes).of_content()
             }
             // A path that names nothing is said so now, exactly as an eager read would have.
-            Err(e) => Produced::problem(format!("error: {}", e.describe(&shown_path))),
+            Err(e) => Produced::problem(format!(
+                "error: {}",
+                workspace_failure(
+                    policy,
+                    "read_file",
+                    path_field(destination),
+                    &e,
+                    &shown_path
+                )
+            )),
         });
     }
 
@@ -3513,7 +3531,13 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         Err(e) => {
             return priced(Produced::problem(format!(
                 "error: {}",
-                e.describe(&shown_path)
+                workspace_failure(
+                    policy,
+                    "read_file",
+                    path_field(destination),
+                    &e,
+                    &shown_path
+                )
             )));
         }
     };
@@ -3648,7 +3672,8 @@ pub(crate) fn materialise<S: Sink>(
             // `read_file` decides it, so nothing read chooses. Read as text it would be refused
             // as binary, and a slot that holds one has to say so for a check to look at the file.
             let mut picture = None;
-            policy
+            let mut escaped = None;
+            let read = policy
                 // Worded about the slot, never about the file it stands for. A deferred read
                 // opens a path that came out of a directory nobody vouched for, and what the
                 // failure is put into is a sentence the planner reads as the driver's own, so
@@ -3661,9 +3686,18 @@ pub(crate) fn materialise<S: Sink>(
                         }
                         None => read_into_slot(workspace, path),
                     }
-                    .map_err(|e| e.describe(&slot.to_string()))
-                })
-                .map_err(|denial| format!("refused: {denial}"))?;
+                    .map_err(|e| {
+                        if let crate::workspace::WorkspaceError::Escapes { remedy, .. } = &e {
+                            escaped = Some(*remedy);
+                        }
+                        e.describe(&slot.to_string())
+                    })
+                });
+            // Recorded here rather than where it is worded, which is inside the policy's read.
+            if let Some(remedy) = escaped {
+                policy.refuse_outside_workspace(tool, &slot.to_string(), remedy.offered());
+            }
+            read.map_err(|denial| format!("refused: {denial}"))?;
             if let Some(media) = picture {
                 policy.holds_a_picture(slot, media, slots);
             }
@@ -3801,6 +3835,37 @@ fn refuse_denied_path<S: Sink>(
     match workspace.landing(path) {
         Some(landed) => ask(policy, &landed).map_err(|_| denied_by_rule(path)),
         None => Ok(()),
+    }
+}
+
+/// Word a workspace failure about `named` for the planner, recording it first when it is a path
+/// refused for leaving the workspace.
+///
+/// A tool reports such a failure through here, so the planner cannot be told of a refusal the
+/// trail leaves out (TRACE-1). The record is worded from `named` for the reason
+/// [`WorkspaceError::describe`] gives. The other failures are not gate decisions and are only
+/// worded. A deferred read is worded inside the policy's own read, so [`materialise`] records its
+/// refusal itself.
+///
+/// [`WorkspaceError::describe`]: crate::workspace::WorkspaceError::describe
+fn workspace_failure<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tool: &str,
+    field: &str,
+    e: &crate::workspace::WorkspaceError,
+    named: &str,
+) -> String {
+    if let crate::workspace::WorkspaceError::Escapes { remedy, .. } = e {
+        policy.refuse_outside_workspace(&format!("{tool}.{field}"), named, remedy.offered());
+    }
+    e.describe(named)
+}
+
+/// The argument a path arrived in.
+fn path_field(destination: Destination) -> &'static str {
+    match destination {
+        Destination::Named => "path",
+        Destination::Reference => "path_ref",
     }
 }
 
@@ -4094,7 +4159,10 @@ fn list_files<S: Sink>(
                 .capped(incomplete)
         }
         // Worded about the name typed. The error carries where it landed, which a link can choose.
-        Err(e) => Produced::problem(format!("error: {}", e.describe(&proposed_dir))),
+        Err(e) => Produced::problem(format!(
+            "error: {}",
+            workspace_failure(policy, "list_files", "directory", &e, &proposed_dir)
+        )),
     }
 }
 
@@ -4423,7 +4491,16 @@ fn write_file<S: Sink, C: Confirmer>(
                 .marked_untrusted(!body_label.is_trusted())
                 .having_changed_a_file()
         }
-        Err(e) => Produced::problem(format!("error: {}", e.describe(&shown_path))),
+        Err(e) => Produced::problem(format!(
+            "error: {}",
+            workspace_failure(
+                policy,
+                "write_file",
+                path_field(destination),
+                &e,
+                &shown_path
+            )
+        )),
     }
 }
 
@@ -4507,7 +4584,18 @@ fn edit_file<S: Sink, C: Confirmer>(
     // road in `path_argument` already swaps the same name in, through `denied_by_rule`.
     let source = match workspace.read(policy, &path) {
         Ok(contents) => contents,
-        Err(e) => return Produced::problem(format!("error: {}", e.describe(&shown_path))),
+        Err(e) => {
+            return Produced::problem(format!(
+                "error: {}",
+                workspace_failure(
+                    policy,
+                    "edit_file",
+                    path_field(destination),
+                    &e,
+                    &shown_path
+                )
+            ));
+        }
     };
 
     // Locating the passage means comparing text, which is a decision. It is only permissible
@@ -4647,7 +4735,16 @@ fn edit_file<S: Sink, C: Confirmer>(
         }
         // As the read above: the name the planner is told is the one it asked with. `Stale` is the
         // arm that reaches here in practice, and it carries the path the write was routed on.
-        Err(e) => Produced::problem(format!("error: {}", e.describe(&shown_path))),
+        Err(e) => Produced::problem(format!(
+            "error: {}",
+            workspace_failure(
+                policy,
+                "edit_file",
+                path_field(destination),
+                &e,
+                &shown_path
+            )
+        )),
     }
 }
 
@@ -6019,7 +6116,12 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             }
             let resolved = match tools.workspace.resolve(&dir) {
                 Ok(path) => path,
-                Err(escape) => return Produced::problem(format!("refused: {escape}")),
+                Err(escape) => {
+                    return Produced::problem(format!(
+                        "refused: {}",
+                        workspace_failure(policy, "run", "directory", &escape, &dir)
+                    ));
+                }
             };
             if !resolved.is_dir() {
                 return Produced::problem(format!("error: '{dir}' is not a directory"));
@@ -6048,7 +6150,11 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     // through is applied here to the path.
     for path in &plan.writes {
         if let Err(escape) = tools.workspace.confines(path) {
-            return Produced::problem(format!("refused: {escape}"));
+            let target = path.display().to_string();
+            return Produced::problem(format!(
+                "refused: {}",
+                workspace_failure(policy, "run", "command", &escape, &target)
+            ));
         }
     }
 
@@ -8146,7 +8252,10 @@ fn search<S: Sink>(
                 .paging(paging)
         }
         // Worded about the name typed. The error carries where it landed, which a link can choose.
-        Err(e) => Produced::problem(format!("error: {}", e.describe(&proposed_where))),
+        Err(e) => Produced::problem(format!(
+            "error: {}",
+            workspace_failure(policy, "search", "directory", &e, &proposed_where)
+        )),
     }
 }
 
@@ -8194,8 +8303,9 @@ fn git_day(
 /// a turn offered no `run` is told what happened and nothing more. Composed here rather than in the
 /// workspace, which words a failure for a log and for a person as well as for the planner and has no
 /// turn's tool list to read.
-fn git_failure(e: &crate::workspace::WorkspaceError, named: &str, running: Running) -> String {
-    let mut said = e.describe(named);
+///
+/// `said` is that sentence, from [`workspace_failure`].
+fn git_failure(mut said: String, e: &crate::workspace::WorkspaceError, running: Running) -> String {
     if let crate::workspace::WorkspaceError::Git { declined, .. } = e
         && running.offered()
         && let Some(instead) = declined.instead()
@@ -8340,7 +8450,10 @@ fn read_git<S: Sink, C: Confirmer>(
     };
     let answer = match workspace.read_git(policy, &question) {
         Ok(answer) => answer,
-        Err(e) => return Produced::problem(format!("error: {}", git_failure(&e, &shown, running))),
+        Err(e) => {
+            let said = workspace_failure(policy, "read_git", "repository", &e, &shown);
+            return Produced::problem(format!("error: {}", git_failure(said, &e, running)));
+        }
     };
 
     // Scanned before the planner is given it, as a file read is (CRED-15): a commit that added a
@@ -9178,13 +9291,13 @@ mod tests {
             declined: crate::git::Declined::Untrusted,
         };
 
-        let offered = git_failure(&failed, "project", Running::Offered);
+        let offered = git_failure(failed.describe("project"), &failed, Running::Offered);
         assert!(
             offered.contains("Use run to read it with git instead."),
             "a turn holding run was not told to use it: {offered}"
         );
 
-        let withheld = git_failure(&failed, "project", Running::Withheld);
+        let withheld = git_failure(failed.describe("project"), &failed, Running::Withheld);
         assert!(
             withheld.contains("read_git does not open it"),
             "the refusal stopped saying what happened: {withheld}"
@@ -12510,6 +12623,181 @@ mod tests {
                 "the failure is not the walk's, worded about the directory typed: {told}"
             );
         }
+
+        /// TRACE-1 on the same road. A file the listing reserved and that now links out of the
+        /// workspace is refused when it resolves, and the trail records that refusal named as the
+        /// reference, which is the name the planner is told. Without the record the planner was
+        /// told of a refusal the trail did not hold, and the turn read as clean.
+        #[cfg(unix)]
+        #[test]
+        fn a_deferred_read_refused_for_leaving_the_workspace_is_recorded_as_the_reference() {
+            let elsewhere = Scratch::new("deferred-elsewhere");
+            std::fs::write(elsewhere.path.join("secret.txt"), "kept\n").unwrap();
+            let scratch = Scratch::new("deferred-escape");
+            std::os::unix::fs::symlink(
+                elsewhere.path.join("secret.txt"),
+                scratch.path.join("notes.txt"),
+            )
+            .unwrap();
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let mut sink = RecordingSink::new();
+            let mut policy = policy_vouching(&mut sink);
+            let mut slots = SlotStore::new();
+            policy
+                .defer(
+                    "list_files",
+                    SlotId::new("ref:1"),
+                    "notes.txt",
+                    &Labelled::trusted("notes.txt".to_string()),
+                    1,
+                    &mut slots,
+                )
+                .expect("the file is reserved");
+
+            let Err(refusal) = materialise(
+                &mut policy,
+                &workspace,
+                &mut slots,
+                "spawn_processor",
+                &[SlotId::new("ref:1")],
+            ) else {
+                panic!("a link out of the workspace was read through");
+            };
+            assert!(
+                refusal.contains("outside the workspace"),
+                "the refusal is not the one under test: {refusal}"
+            );
+            let clean = policy.finish();
+
+            let refused: Vec<&str> = sink
+                .blocked()
+                .filter_map(|event| match event {
+                    Event::GateBlocked {
+                        gate: "confine",
+                        reason,
+                        ..
+                    } => Some(reason.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                refused.len(),
+                1,
+                "the refused read was not recorded exactly once: {:?}",
+                sink.events()
+            );
+            assert!(
+                refused[0].starts_with("spawn_processor: 'ref:1' resolves outside the workspace"),
+                "the refusal does not name the call and the reference: {}",
+                refused[0]
+            );
+            assert!(
+                !refused[0].contains("notes.txt") && !refused[0].contains("secret"),
+                "the refusal named the file the reference stands for: {}",
+                refused[0]
+            );
+            assert!(!clean, "a turn whose read was refused would end as clean");
+        }
+    }
+
+    /// TRACE-1 at `run`, which resolves two kinds of path without a promotion in front of them:
+    /// the directory it runs in and the file a redirection opens. Either one outside the workspace
+    /// refuses the call before anything is approved or run, and the trail records the refusal
+    /// under the name the planner is told.
+    mod confinement {
+        use super::arguments::{Scratch, told, with_tools};
+        use super::*;
+        use bravebot_core::capability::{Capability, CapabilitySet};
+        use bravebot_core::event::{Event, RecordingSink};
+        use bravebot_core::policy::{ReleasePlan, Routing};
+
+        /// What the planner was told, the trail's confinement refusals, and whether the turn
+        /// would end as clean, for one call to `run`.
+        fn run_once(name: &str, arguments: &Value) -> (String, Vec<String>, bool) {
+            let scratch = Scratch::new(name);
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "run a command");
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::ShellExec]),
+                &mut sink,
+            )
+            .expect("policy");
+
+            let produced = with_tools(&workspace, |tools| {
+                run(
+                    &mut policy,
+                    tools,
+                    &mut crate::confirm::Unattended,
+                    &mut crate::report::IgnoreReports,
+                    arguments,
+                )
+            });
+            assert!(!produced.ran_a_program, "a refused call ran a program");
+            let said = told(&mut policy, &produced.text);
+            let clean = policy.finish();
+
+            let refused = sink
+                .blocked()
+                .filter_map(|event| match event {
+                    Event::GateBlocked {
+                        gate: "confine",
+                        reason,
+                        ..
+                    } => Some(reason.clone()),
+                    _ => None,
+                })
+                .collect();
+            (said, refused, clean)
+        }
+
+        #[test]
+        fn a_directory_outside_the_workspace_is_recorded_as_a_refusal() {
+            let (told, refused, clean) = run_once(
+                "run-directory-escape",
+                &json!({"command": "echo hi", "directory": ".."}),
+            );
+
+            assert!(
+                told.starts_with("refused:") && told.contains("outside the workspace"),
+                "the call was not refused for leaving the workspace: {told}"
+            );
+            assert_eq!(
+                refused,
+                ["run.directory: '..' resolves outside the workspace; remedy offered: none"],
+                "the refused directory was not recorded as the planner named it"
+            );
+            assert!(!clean, "a turn whose run was refused would end as clean");
+        }
+
+        #[test]
+        fn a_redirection_outside_the_workspace_is_recorded_as_a_refusal() {
+            let (told, refused, clean) = run_once(
+                "run-redirect-escape",
+                &json!({"command": "echo hi > ../escaped.txt"}),
+            );
+
+            assert!(
+                told.starts_with("refused:") && told.contains("outside the workspace"),
+                "the call was not refused for leaving the workspace: {told}"
+            );
+            assert_eq!(
+                refused.len(),
+                1,
+                "the refused redirection was not recorded exactly once: {refused:?}"
+            );
+            assert!(
+                refused[0].starts_with("run.command: '")
+                    && refused[0].contains("escaped.txt' resolves outside the workspace"),
+                "the refusal does not name the call and the file it would open: {}",
+                refused[0]
+            );
+            assert!(!clean, "a turn whose run was refused would end as clean");
+        }
     }
 
     /// LABEL-5 over a tool's arguments, at the three tools that take a decision from one and had
@@ -12640,7 +12928,10 @@ mod tests {
             })
         }
 
-        fn told(policy: &mut Policy<'_, RecordingSink>, text: &Labelled<String>) -> String {
+        pub(super) fn told(
+            policy: &mut Policy<'_, RecordingSink>,
+            text: &Labelled<String>,
+        ) -> String {
             let proof = policy.authorise_display_release("test inspects the tool result");
             text.clone().declassify(&proof)
         }

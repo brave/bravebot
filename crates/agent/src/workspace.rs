@@ -276,6 +276,23 @@ pub enum Remedy {
     Drop,
 }
 
+impl Remedy {
+    /// The remedy as the trail records it, beside the refusal the planner was told of.
+    pub fn offered(self) -> &'static str {
+        match self {
+            Self::Nothing => "none",
+            Self::Open => "open its directory",
+            Self::OpenOrDrop => "open its directory, or drop the file",
+            Self::Kept => {
+                "none, since permissions.readsStayInWorkspace refuses opening its directory"
+            }
+            Self::Drop => {
+                "drop the file, since permissions.readsStayInWorkspace refuses opening its directory"
+            }
+        }
+    }
+}
+
 impl fmt::Display for WorkspaceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.describe(self.carried_path()))

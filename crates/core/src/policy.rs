@@ -2564,7 +2564,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let path = self.path_of_reference(tool, field, slot, slots)?;
         self.allow(
             "promote",
-            format!("{tool}.{field}: {slot} names {path}, read confined and non-destructive"),
+            format!("{tool}.{field}: {slot} names {path}, for a non-destructive read"),
         );
         Ok(Labelled::trusted(path))
     }
@@ -6113,13 +6113,33 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             ));
         }
 
-        let proof = Declassification::authorise("a path the planner proposed, confined");
+        let proof = Declassification::authorise(
+            "a public path the planner proposed, for a non-destructive read",
+        );
         let value = proposed.clone().declassify(&proof);
+        // The label is all this decides. Whether the path stays inside the workspace is settled
+        // when it resolves, after this line is written, and a refusal there is recorded by
+        // `refuse_outside_workspace`.
         self.allow(
             "promote",
-            format!("{tool}.{field} proposed by the model, confined and non-destructive"),
+            format!("{tool}.{field} proposed by the model, public and non-destructive"),
         );
         Ok(Labelled::trusted(value))
+    }
+
+    /// Record that a path resolved outside the workspace and the call was refused.
+    ///
+    /// Confinement is decided where the path resolves, which is after the promotion above, so
+    /// without this a refused call leaves a trail that ends at a passed promotion (TRACE-1), and
+    /// the turn reads as clean. `call` is the tool and, where one argument held the path, that
+    /// argument, as `read_file.path`. `named` is the name the planner was told, `ref:N` for a
+    /// reference, and `offered` is what the person was told they can do about it.
+    pub fn refuse_outside_workspace(&mut self, call: &str, named: &str, offered: &str) {
+        let _ = self.deny(
+            "confine",
+            Principle::Confinement,
+            format!("{call}: '{named}' resolves outside the workspace; remedy offered: {offered}"),
+        );
     }
 
     /// Accept a reference the planner named, as the source of content for an effect.
