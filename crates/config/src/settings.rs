@@ -494,10 +494,19 @@ impl Settings {
         started: Option<&Path>,
     ) -> Self {
         let home_layer = home.map(|home| user_settings_file(&home));
-        let paths = [
+        // A found layer the command line also named is left out here and read at the end, since
+        // reading it at its own position would let a later found layer beat it (BACKEND-24).
+        let found_layers = [
             home_layer.clone(),
             cwd.map(project_settings_file),
             cwd.map(local_settings_file),
+        ]
+        .map(|layer| layer.filter(|layer| Some(layer.as_path()) != named));
+        let [home_path, project_path, local_path] = found_layers;
+        let paths = [
+            home_path,
+            project_path,
+            local_path,
             named.map(Path::to_path_buf),
         ];
 
@@ -3120,6 +3129,32 @@ mod tests {
         assert_eq!(settings.scrubbed().collect::<Vec<_>>(), ["A_TOKEN"]);
         assert_eq!(settings.get("AWS_PROFILE"), Some("shared"));
         assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
+    }
+
+    /// A named file that is also a found layer is read after all three, not at its own position,
+    /// so the layers found after that position cannot beat it (BACKEND-24).
+    #[test]
+    fn a_named_file_that_is_a_found_layer_still_beats_the_layers_after_it() {
+        let settings = Layers::new("named-project-wins")
+            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
+            .project(r#"{"env": {"AWS_PROFILE": "shared"}}"#)
+            .local(r#"{"env": {"AWS_PROFILE": "just-this-machine"}}"#)
+            .naming_the_project_layer()
+            .read();
+        assert_eq!(settings.get("AWS_PROFILE"), Some("shared"));
+        assert_eq!(settings.layers().count(), 3);
+    }
+
+    /// The same for the home file, which was the weakest position of all.
+    #[test]
+    fn a_named_home_file_beats_the_project_and_local_layers() {
+        let settings = Layers::new("named-home-wins")
+            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
+            .project(r#"{"env": {"AWS_PROFILE": "shared"}}"#)
+            .local(r#"{"env": {"AWS_PROFILE": "just-this-machine"}}"#)
+            .naming_the_home_layer()
+            .read();
+        assert_eq!(settings.get("AWS_PROFILE"), Some("personal"));
     }
 
     /// Naming a variable here only ever takes it away from a subprocess, so the layers add up. An
