@@ -4,7 +4,7 @@
 
 A change under `ui/`. For one a person sees or interacts with (components, layout, styles, icons,
 copy, dialogs, menus, cards) the quality bar itself is
-[the nala-ui-quality skill](../../agents/skills/nala-ui-quality/SKILL.md). What follows is what a
+[the design skill](../../agents/skills/design/SKILL.md). What follows is what a
 reviewer decides from the diff, and none of it restates a rule `check-nala` already enforces.
 
 ---

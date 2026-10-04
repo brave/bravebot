@@ -145,7 +145,7 @@ Work one behavior at a time, including behavior discovered during implementation
 
 ## Verification and repository checks
 
-Apply `testing-preflight` before behavior or assertion changes. Apply `nala-ui-quality` for governed visible `ui/` work, and carry its relevant approval/label quality requirements into the React Native surfaces. Use the repository's required final-diff checks. No tests were run for this documentation revision.
+Apply `testing-preflight` before behavior or assertion changes. Apply `design` for governed visible `ui/` work, and carry its relevant approval/label quality requirements into the React Native surfaces. Use the repository's required final-diff checks. No tests were run for this documentation revision.
 
 Use a transport fault proxy plus a model stub with controlled gates for observable connection faults. Use narrow in-process barriers for atomic target and snapshot races that external proxies cannot force. Assert file bytes, invocation counts, and captured model requests, not screenshots alone. Screenshots and physical-device logs supplement automated evidence.
 
