@@ -221,11 +221,11 @@ function ColumnToggle({
   const icon: IconName =
     side === 'left'
       ? collapsed
-        ? 'sidepanel-retract'
-        : 'browser-split-view-left'
+        ? 'browser-sidebar-off'
+        : 'browser-sidebar'
       : collapsed
-        ? 'sidepanel-open'
-        : 'browser-split-view-right'
+        ? 'browser-sidebar-right-off'
+        : 'browser-sidebar-right'
   const waiting = collapsed && attention > 0
   const need = `${attention} ${attention === 1 ? 'chat needs' : 'chats need'} you`
 

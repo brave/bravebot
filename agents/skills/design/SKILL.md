@@ -52,7 +52,11 @@ The structure is set in `styles/shell.css` and `columns.ts`. New surfaces fit in
 - **Reading column.** Conversation content is centred at `--reading-width` (720px). The composer
   is lined up under it and is as wide as the column.
 - **Settings.** Settings take the whole window: a page list on the app ground where the sidebar
-  is, and the page on a raised card. The chat view stays mounted underneath and is inert.
+  is, and the page on a raised card. The chat view stays mounted underneath and is inert. The
+  pages are General, Connectors and Agent settings; Connectors is a page here and has no entry
+  in the sidebar. The header shows a back arrow only on a page inside a page (a connector's setup,
+  the review before connecting), and it goes back one level; Esc does the same. A top-level page
+  has no arrow, and "Back to BraveBot" in the page list leaves settings.
 - **Dividers.** A divider is a seam. It is invisible until hovered, focused or dragged, then shows
   a 2px accent line.
 - **Dialogs.** Dialogs use `Modal` in one of four widths: `sm` 440, `md` 560, `lg` 760, `xl` 1080.
