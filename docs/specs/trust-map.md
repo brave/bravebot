@@ -29,6 +29,8 @@ governs:
   - ui/src/main/index.ts
   - ui/scripts/bot-directory.test.mjs
   - ui/scripts/session-directory.test.mjs
+  - ui/src/renderer/components/Permissions.tsx
+  - ui/scripts/remembered-trust-list.test.mjs
 guards:
   - symbol: TrustStore::trust
   - symbol: TrustStore::distrust
@@ -1147,6 +1149,7 @@ the file would still say they had vouched for it.
 `verified-by: bravebot_agent::trusted::forgetting_removes_this_directorys_answers_and_keeps_the_rest`
 `verified-by: bravebot_agent::trusted::forgetting_the_last_answer_removes_the_file`
 `verified-by: bravebot_agent::trusted::a_line_cut_inside_a_character_is_skipped_like_any_half_written_line`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so the permissions list is pinned instead by ui/scripts/remembered-trust-list.test.mjs, which renders the real list row through react-dom and asserts that it gives when the answer was kept, from the time the bridge sends, the file it is kept in and a Forget button; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`
 
 ## What a killed session leaves
 
