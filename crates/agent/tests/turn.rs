@@ -23367,6 +23367,101 @@ fn the_answer_to_a_spawn_in_a_checkout_says_the_checkouts_share_the_repositorys_
     );
 }
 
+/// The note the person is shown as each delegate ends.
+#[derive(Default)]
+struct Noted(Vec<String>);
+
+impl bravebot_agent::report::Reporter for Noted {
+    fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+    fn delegate_finished(
+        &mut self,
+        _delegate: bravebot_agent::report::DelegateId,
+        note: String,
+        _failed: bool,
+        _reported: Option<bravebot_agent::report::Reported>,
+    ) {
+        self.0.push(note);
+    }
+}
+
+/// CHECKOUT-15, CHECKOUT-18. The person is told which checkout a delegate kept and what it took
+/// on disk as the delegate ended. The planner is told the checkout was kept and not its size.
+#[test]
+fn the_person_is_told_what_a_kept_checkout_takes_on_disk_and_the_planner_is_not() {
+    let scratch = Scratch::new("checkout-delegate-size");
+    let home = Scratch::new("checkout-delegate-size-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAVE-A-DELEGATE-WRITE-AND-BE-MEASURED",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"WRITE-OUT-TO-BE-MEASURED","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("the delegate wrote it"),
+            ],
+        ),
+        (
+            "WRITE-OUT-TO-BE-MEASURED",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"out.txt","contents":"from the delegate"}"#,
+                ),
+                reply_with("wrote it"),
+            ],
+        ),
+    ]);
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    let mut noted = Noted::default();
+    turn::run_cancellable(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("HAVE-A-DELEGATE-WRITE-AND-BE-MEASURED").with_home(Some(home.path.clone())),
+        &mut RecordingConfirmer::approving(),
+        &mut noted,
+        &mut RecordingSink::new(),
+        trust,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let [note] = &noted.0[..] else {
+        panic!("one delegate ended, and the person was told {:?}", noted.0);
+    };
+    let (_, kept) = note
+        .split_once("; its checkout c1 was kept, taking ")
+        .unwrap_or_else(|| panic!("the person was not told the checkout's size: {note}"));
+    let amount = kept
+        .strip_suffix(" KB on disk")
+        .unwrap_or_else(|| panic!("a small checkout's size is not in kilobytes: {note}"));
+    assert!(
+        amount.parse::<u64>().is_ok_and(|kilobytes| kilobytes > 0),
+        "{note}"
+    );
+    let planner: Vec<String> = every_request(&received)
+        .into_iter()
+        .filter(|body| body.contains("HAVE-A-DELEGATE-WRITE-AND-BE-MEASURED"))
+        .collect();
+    assert!(
+        planner.iter().any(|body| body.contains("was kept at")),
+        "the planner was not told the checkout was kept"
+    );
+    let size = format!("{amount} KB");
+    for body in &planner {
+        assert!(
+            !body.contains("was kept, taking") && !body.contains(&size),
+            "the planner was told the checkout's size"
+        );
+    }
+}
+
 /// CHECKOUT-20, LSP-9. A worker given a checkout holds the language server capability by its
 /// kind, and is still not offered `lsp`, because the session's servers are rooted at the working
 /// directory. The session's own planner is offered it, and so is the same kind of delegate

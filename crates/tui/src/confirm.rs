@@ -5191,6 +5191,7 @@ mod tests {
         bravebot_agent::workspace::SessionCheckout {
             id: "c2".into(),
             path: "/state/checkouts/work/c2".into(),
+            repository: "/work/.git".into(),
             commit: "0123456789abcdef0123456789abcdef01234567".into(),
             delegate: bravebot_core::delegate::DelegateId::nth(1),
             worked_in: true,
@@ -5198,6 +5199,7 @@ mod tests {
                 named: (0..40).map(|n| format!("src/{n:02}.rs")).collect(),
                 referenced: 2,
             },
+            size: None,
         }
     }
 

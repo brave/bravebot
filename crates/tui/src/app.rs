@@ -3565,7 +3565,15 @@ fn event_loop(
                 needs_draw = true;
             }
             Action::ListCheckouts => {
-                session.report_checkouts(&workspace.session_checkouts());
+                let mut branches = std::collections::BTreeMap::new();
+                session.report_checkouts(&workspace.session_checkouts(), |checkout| {
+                    branches
+                        .entry(checkout.repository.clone())
+                        .or_insert_with(|| {
+                            crate::checkouts_command::Branches::read(&checkout.repository)
+                        })
+                        .pushed(&checkout.id)
+                });
                 needs_draw = true;
             }
             Action::RemoveCheckout(id) => {
@@ -14608,10 +14616,12 @@ mod tests {
         bravebot_agent::workspace::SessionCheckout {
             id: "c2".into(),
             path: "/state/checkouts/work/c2".into(),
+            repository: "/work/.git".into(),
             commit: "0123456789abcdef0123456789abcdef01234567".into(),
             delegate: bravebot_core::delegate::DelegateId::nth(1),
             worked_in,
             candidates: Default::default(),
+            size: None,
         }
     }
 

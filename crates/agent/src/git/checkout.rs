@@ -8,6 +8,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use gix_hash::{Kind as HashKind, ObjectId};
 use gix_object::bstr::ByteSlice;
@@ -494,6 +495,143 @@ pub fn remove(git_dir: &Path, target: &Path, id: &str) -> Result<(), Refused> {
     };
     gone(target)?;
     gone(&worktrees.join(id))
+}
+
+/// How long measuring one checkout may take. It holds up the delegate's parent as the delegate
+/// ends. A five-gigabyte build directory of 30,000 files is walked in a fraction of a second with
+/// the file system's cache warm.
+pub const MEASURING: Duration = Duration::from_secs(2);
+
+/// What a checkout takes on disk, for a person deciding whether to remove it
+/// ([CHECKOUT-15](../../../../docs/specs/checkouts.md#CHECKOUT-15)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Size {
+    /// The bytes the file system gives everything beneath it. On Unix a file with several names
+    /// is counted once. On Windows each name is counted, at the file's length.
+    pub bytes: u64,
+    /// Whether every directory was read. Where one was not, or the walk stopped at its deadline,
+    /// `bytes` is a lower bound.
+    pub whole: bool,
+}
+
+/// A size rounded the way a person reads it, in the one unit it is shown in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Amount {
+    /// Whole kilobytes, rounded up.
+    Kilobytes(u64),
+    /// Tenths of a megabyte.
+    Megabytes(u64),
+    /// Tenths of a gigabyte.
+    Gigabytes(u64),
+}
+
+impl Size {
+    /// Kilobytes under a megabyte, megabytes under a gigabyte and gigabytes from there, the unit
+    /// chosen after rounding so that a size just short of a megabyte reads as `1.0 MB`.
+    pub fn amount(&self) -> Amount {
+        let kilobytes = self.bytes.div_ceil(1 << 10);
+        if kilobytes < 1 << 10 {
+            return Amount::Kilobytes(kilobytes);
+        }
+        let tenths = |unit: u64| {
+            let tenths = (u128::from(self.bytes) * 10 + u128::from(unit) / 2) / u128::from(unit);
+            u64::try_from(tenths).unwrap_or(u64::MAX)
+        };
+        match tenths(1 << 20) {
+            megabytes if megabytes < 10 << 10 => Amount::Megabytes(megabytes),
+            _ => Amount::Gigabytes(tenths(1 << 30)),
+        }
+    }
+
+    /// As a person reads it, in English: `5.3 MB`, or `at least 5.3 MB` where it is a lower bound.
+    pub fn spelled(&self) -> String {
+        let amount = match self.amount() {
+            Amount::Kilobytes(kilobytes) => format!("{kilobytes} KB"),
+            Amount::Megabytes(tenths) => format!("{}.{} MB", tenths / 10, tenths % 10),
+            Amount::Gigabytes(tenths) => format!("{}.{} GB", tenths / 10, tenths % 10),
+        };
+        if self.whole {
+            amount
+        } else {
+            format!("at least {amount}")
+        }
+    }
+
+    /// Both sizes together, whole only where both are.
+    pub fn and(self, other: Size) -> Size {
+        Size {
+            bytes: self.bytes.saturating_add(other.bytes),
+            whole: self.whole && other.whole,
+        }
+    }
+}
+
+/// Measure the directory at `target`, stopping at `deadline`.
+///
+/// No link is followed, so a link counts as itself and not as what it names, and a link in place
+/// of `target` is not measured at all. Nothing is decided from a name: a build directory is
+/// counted like any other, since that is where the size is.
+pub fn size(target: &Path, deadline: Instant) -> Size {
+    let mut size = Size {
+        bytes: 0,
+        whole: true,
+    };
+    if !std::fs::symlink_metadata(target).is_ok_and(|meta| meta.is_dir()) {
+        size.whole = false;
+        return size;
+    }
+    let mut counted = HashSet::new();
+    let mut pending = vec![target.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            size.whole = false;
+            continue;
+        };
+        for entry in entries {
+            if Instant::now() >= deadline {
+                size.whole = false;
+                return size;
+            }
+            // `DirEntry::metadata` does not follow a link, on Unix or on Windows.
+            let Ok((path, meta)) = entry.and_then(|entry| Ok((entry.path(), entry.metadata()?)))
+            else {
+                size.whole = false;
+                continue;
+            };
+            if meta.is_dir() {
+                pending.push(path);
+            } else if !first_name(&meta, &mut counted) {
+                continue;
+            }
+            size.bytes = size.bytes.saturating_add(on_disk(&meta));
+        }
+    }
+    size
+}
+
+/// Whether this is the first of a file's names the walk has met. A build hard-links what it
+/// produces, so counting each name would count those bytes twice.
+#[cfg(unix)]
+fn first_name(meta: &std::fs::Metadata, counted: &mut HashSet<(u64, u64)>) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    meta.nlink() < 2 || counted.insert((meta.dev(), meta.ino()))
+}
+
+#[cfg(not(unix))]
+fn first_name(_meta: &std::fs::Metadata, _counted: &mut HashSet<(u64, u64)>) -> bool {
+    true
+}
+
+/// The bytes a file takes on disk: the blocks given it, which is what `du` counts.
+#[cfg(unix)]
+fn on_disk(meta: &std::fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt as _;
+    meta.blocks().saturating_mul(512)
+}
+
+#[cfg(not(unix))]
+fn on_disk(meta: &std::fs::Metadata) -> u64 {
+    meta.len()
 }
 
 fn taken_or(error: std::io::Error, taken: Refused) -> Refused {

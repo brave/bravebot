@@ -2219,6 +2219,20 @@ watches-cleared = { $count ->
 ## The checkouts a delegate kept
 
 checkouts-listed = { $id }: made for delegate { $delegate } of commit { $commit }, at { $path }
+# The size is a number of kilobytes, megabytes or gigabytes.
+checkouts-size = { $id }: it took { $size } on disk when its delegate ended
+checkouts-size-partial =
+    { $id }: it took at least { $size } on disk when its delegate ended, since not all of it could be measured
+checkouts-size-unmeasured = { $id }: its size is measured when its delegate ends
+# The remote is a remote branch as git names it, such as origin/main.
+checkouts-pushed =
+    { $id }: on branch { $branch }, and { $remote } is at the same commit, so that commit is pushed
+checkouts-detached-pushed =
+    { $id }: on no branch, and { $remote } is at the same commit, so that commit is pushed
+checkouts-unpushed = { $id }: on branch { $branch }, at a commit no remote branch is at
+checkouts-detached-unpushed = { $id }: on no branch, at a commit no remote branch is at
+checkouts-head-unread =
+    { $id }: which commit it is at could not be read, so whether that commit is pushed is not known
 checkouts-nothing-done = { $id }: nothing was recorded done in it
 # Followed by the names of the files written, separated by commas, which are left as they are.
 checkouts-written = { $id }: written in it: { $paths }
@@ -2283,7 +2297,9 @@ paste-folded = { $lines ->
     [one] [Pasted text #{ $number } +{ $lines } line]
    *[other] [Pasted text #{ $number } +{ $lines } lines]
     }
+kilobytes = { $size } KB
 megabytes = { $size } MB
+gigabytes = { $size } GB
 
 
 ## Running a command the person typed

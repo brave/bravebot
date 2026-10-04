@@ -7895,12 +7895,20 @@ impl Session {
         asked
     }
 
-    /// Say which checkouts the session keeps and what the record shows done in each, or that it
-    /// keeps none (CHECKOUT-15).
+    /// Say which checkouts the session keeps, what each took on disk, whether a remote branch is
+    /// at its commit as `pushed` reads it, and what the record shows done in each, or that it keeps
+    /// none (CHECKOUT-15).
     ///
     /// The names are the ones a planner typed. Twenty at most, since a delegate can write
     /// thousands of files and the transcript is not where to read that many.
-    pub fn report_checkouts(&mut self, checkouts: &[bravebot_agent::workspace::SessionCheckout]) {
+    pub fn report_checkouts(
+        &mut self,
+        checkouts: &[bravebot_agent::workspace::SessionCheckout],
+        mut pushed: impl FnMut(
+            &bravebot_agent::workspace::SessionCheckout,
+        ) -> crate::checkouts_command::Pushed,
+    ) {
+        use crate::checkouts_command::Pushed;
         const NAMED: usize = 20;
         if checkouts.is_empty() {
             self.note(t!(checkouts_none));
@@ -7915,6 +7923,26 @@ impl Session {
                 commit = checkout.commit.get(..10).unwrap_or(&checkout.commit),
                 delegate = checkout.delegate.to_string()
             ));
+            self.note(match checkout.size {
+                Some(size) if size.whole => t!(checkouts_size, id = id, size = on_disk(&size)),
+                Some(size) => t!(checkouts_size_partial, id = id, size = on_disk(&size)),
+                None => t!(checkouts_size_unmeasured, id = id),
+            });
+            self.note(match pushed(checkout) {
+                Pushed::At {
+                    branch: Some(branch),
+                    remote,
+                } => t!(checkouts_pushed, id = id, branch = branch, remote = remote),
+                Pushed::At {
+                    branch: None,
+                    remote,
+                } => t!(checkouts_detached_pushed, id = id, remote = remote),
+                Pushed::Nowhere {
+                    branch: Some(branch),
+                } => t!(checkouts_unpushed, id = id, branch = branch),
+                Pushed::Nowhere { branch: None } => t!(checkouts_detached_unpushed, id = id),
+                Pushed::Unread => t!(checkouts_head_unread, id = id),
+            });
             if !checkout.worked_in {
                 self.note(t!(checkouts_nothing_done, id = id));
                 continue;
@@ -9131,6 +9159,25 @@ fn along(line: &str, column: usize) -> usize {
     line.char_indices()
         .nth(column)
         .map_or(line.len(), |(index, _)| index)
+}
+
+/// What a checkout takes on disk: whole kilobytes, rounded up, under a megabyte, megabytes under a
+/// gigabyte and gigabytes from there.
+fn on_disk(size: &bravebot_agent::git::checkout::Size) -> String {
+    use bravebot_agent::git::checkout::Amount;
+    let tenths = |tenths: u64| {
+        format!(
+            "{}{}{}",
+            tenths / 10,
+            t!(number_decimal_separator),
+            tenths % 10
+        )
+    };
+    match size.amount() {
+        Amount::Kilobytes(kilobytes) => t!(kilobytes, size = kilobytes.to_string()),
+        Amount::Megabytes(megabytes) => t!(megabytes, size = tenths(megabytes)),
+        Amount::Gigabytes(gigabytes) => t!(gigabytes, size = tenths(gigabytes)),
+    }
 }
 
 #[cfg(test)]
@@ -12895,10 +12942,13 @@ mod tests {
         );
     }
 
-    fn reported_checkouts(checkouts: &[bravebot_agent::workspace::SessionCheckout]) -> Vec<String> {
+    fn reported_checkouts(
+        checkouts: &[bravebot_agent::workspace::SessionCheckout],
+        pushed: impl Fn(&bravebot_agent::workspace::SessionCheckout) -> crate::checkouts_command::Pushed,
+    ) -> Vec<String> {
         let mut s = session();
         let before = s.transcript.len();
-        s.report_checkouts(checkouts);
+        s.report_checkouts(checkouts, pushed);
         s.transcript[before..]
             .iter()
             .map(|entry| entry.text.clone())
@@ -12909,16 +12959,22 @@ mod tests {
     /// warning that its status was not read wherever something was.
     #[test]
     fn the_checkouts_report_names_what_was_done_in_each() {
+        use crate::checkouts_command::Pushed;
         use bravebot_agent::workspace::{Candidates, SessionCheckout};
-        assert_eq!(reported_checkouts(&[]), [t!(checkouts_none)]);
+        assert_eq!(
+            reported_checkouts(&[], |_| Pushed::Unread),
+            [t!(checkouts_none)]
+        );
 
         let idle = SessionCheckout {
             id: "c1".into(),
             path: "/state/checkouts/work/c1".into(),
+            repository: "/work/.git".into(),
             commit: "0123456789abcdef0123456789abcdef01234567".into(),
             delegate: bravebot_core::delegate::DelegateId::nth(1),
             worked_in: false,
             candidates: Candidates::default(),
+            size: None,
         };
         let written = SessionCheckout {
             id: "c2".into(),
@@ -12948,17 +13004,177 @@ mod tests {
             )
             .to_string()
         };
+        let unknown = |id: &str| {
+            [
+                t!(checkouts_size_unmeasured, id = id).to_string(),
+                t!(checkouts_head_unread, id = id).to_string(),
+            ]
+        };
         assert_eq!(
-            reported_checkouts(&[idle, written, ran]),
+            reported_checkouts(&[idle, written, ran], |_| Pushed::Unread),
+            [
+                vec![listed("c1")],
+                unknown("c1").to_vec(),
+                vec![t!(checkouts_nothing_done, id = "c1").to_string()],
+                vec![listed("c2")],
+                unknown("c2").to_vec(),
+                vec![
+                    t!(checkouts_written, id = "c2", paths = twenty.join(", ")).to_string(),
+                    t!(checkouts_referenced, id = "c2", count = 3).to_string(),
+                    t!(checkouts_unread, id = "c2").to_string(),
+                ],
+                vec![listed("c3")],
+                unknown("c3").to_vec(),
+                vec![t!(checkouts_unread, id = "c3").to_string()],
+            ]
+            .concat()
+        );
+    }
+
+    /// CHECKOUT-15. Each checkout in the list says what it took on disk, in megabytes or
+    /// gigabytes and as a lower bound where measuring stopped, and whether a remote branch is at
+    /// its commit.
+    #[test]
+    fn the_checkouts_report_says_what_each_takes_and_whether_it_is_pushed() {
+        use crate::checkouts_command::Pushed;
+        use bravebot_agent::git::checkout::Size;
+        use bravebot_agent::workspace::SessionCheckout;
+        const MEGABYTE: u64 = 1024 * 1024;
+        let checkout = |id: &str, size: Option<Size>| SessionCheckout {
+            id: id.into(),
+            path: format!("/state/checkouts/work/{id}").into(),
+            repository: "/work/.git".into(),
+            commit: "0123456789abcdef0123456789abcdef01234567".into(),
+            delegate: bravebot_core::delegate::DelegateId::nth(1),
+            worked_in: false,
+            candidates: Default::default(),
+            size,
+        };
+        let checkouts = [
+            checkout(
+                "c1",
+                Some(Size {
+                    bytes: 5 * MEGABYTE + 300 * 1024,
+                    whole: true,
+                }),
+            ),
+            checkout(
+                "c2",
+                Some(Size {
+                    bytes: 7 * 1024 * MEGABYTE + 512 * MEGABYTE,
+                    whole: false,
+                }),
+            ),
+            checkout(
+                "c3",
+                Some(Size {
+                    bytes: 1023 * MEGABYTE,
+                    whole: true,
+                }),
+            ),
+            // Short of a gigabyte, but 1024.0 megabytes once rounded.
+            checkout(
+                "c4",
+                Some(Size {
+                    bytes: 1024 * MEGABYTE - 50 * 1024,
+                    whole: true,
+                }),
+            ),
+            checkout("c5", None),
+            checkout(
+                "c6",
+                Some(Size {
+                    bytes: 4097,
+                    whole: true,
+                }),
+            ),
+        ];
+        let pushed = |checkout: &SessionCheckout| match checkout.id.as_str() {
+            "c1" => Pushed::At {
+                branch: Some("fix".into()),
+                remote: "origin/fix".into(),
+            },
+            "c2" => Pushed::Nowhere {
+                branch: Some("fix-more".into()),
+            },
+            "c3" => Pushed::At {
+                branch: None,
+                remote: "upstream/main".into(),
+            },
+            "c4" => Pushed::Nowhere { branch: None },
+            _ => Pushed::Unread,
+        };
+        let decimal =
+            |whole: u32, tenth: u32| format!("{whole}{}{tenth}", t!(number_decimal_separator));
+        let listed = |id: &str| {
+            t!(
+                checkouts_listed,
+                id = id,
+                path = format!("/state/checkouts/work/{id}"),
+                commit = "0123456789",
+                delegate = "d1"
+            )
+            .to_string()
+        };
+        let idle = |id: &str| t!(checkouts_nothing_done, id = id).to_string();
+        assert_eq!(
+            reported_checkouts(&checkouts, pushed),
             [
                 listed("c1"),
-                t!(checkouts_nothing_done, id = "c1").to_string(),
+                t!(
+                    checkouts_size,
+                    id = "c1",
+                    size = t!(megabytes, size = decimal(5, 3))
+                )
+                .to_string(),
+                t!(
+                    checkouts_pushed,
+                    id = "c1",
+                    branch = "fix",
+                    remote = "origin/fix"
+                )
+                .to_string(),
+                idle("c1"),
                 listed("c2"),
-                t!(checkouts_written, id = "c2", paths = twenty.join(", ")).to_string(),
-                t!(checkouts_referenced, id = "c2", count = 3).to_string(),
-                t!(checkouts_unread, id = "c2").to_string(),
+                t!(
+                    checkouts_size_partial,
+                    id = "c2",
+                    size = t!(gigabytes, size = decimal(7, 5))
+                )
+                .to_string(),
+                t!(checkouts_unpushed, id = "c2", branch = "fix-more").to_string(),
+                idle("c2"),
                 listed("c3"),
-                t!(checkouts_unread, id = "c3").to_string(),
+                t!(
+                    checkouts_size,
+                    id = "c3",
+                    size = t!(megabytes, size = decimal(1023, 0))
+                )
+                .to_string(),
+                t!(
+                    checkouts_detached_pushed,
+                    id = "c3",
+                    remote = "upstream/main"
+                )
+                .to_string(),
+                idle("c3"),
+                listed("c4"),
+                t!(
+                    checkouts_size,
+                    id = "c4",
+                    size = t!(gigabytes, size = decimal(1, 0))
+                )
+                .to_string(),
+                t!(checkouts_detached_unpushed, id = "c4").to_string(),
+                idle("c4"),
+                listed("c5"),
+                t!(checkouts_size_unmeasured, id = "c5").to_string(),
+                t!(checkouts_head_unread, id = "c5").to_string(),
+                idle("c5"),
+                listed("c6"),
+                t!(checkouts_size, id = "c6", size = t!(kilobytes, size = "5")).to_string(),
+                t!(checkouts_head_unread, id = "c6").to_string(),
+                idle("c6"),
             ]
         );
     }

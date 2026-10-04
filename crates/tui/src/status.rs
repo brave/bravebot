@@ -2068,18 +2068,22 @@ mod tests {
             SessionCheckout {
                 id: "c1".into(),
                 path: "/state/checkouts/work/c1".into(),
+                repository: "/work/.git".into(),
                 commit: "0123456789abcdef0123456789abcdef01234567".into(),
                 delegate: DelegateId::nth(1),
                 worked_in: true,
                 candidates: Default::default(),
+                size: None,
             },
             SessionCheckout {
                 id: "c3".into(),
                 path: "/state/checkouts/work/c3".into(),
+                repository: "/work/.git".into(),
                 commit: "fedcba9876543210fedcba9876543210fedcba98".into(),
                 delegate: DelegateId::nth(2).child(1).expect("a child"),
                 worked_in: true,
                 candidates: Default::default(),
+                size: None,
             },
         ];
         let added = [std::path::PathBuf::from("/tmp/beside")];
