@@ -11,6 +11,7 @@ governs:
 guards:
   - symbol: Session::start_goal
   - symbol: Session::goal_not_met
+  - symbol: Session::goal_judged
   - symbol: goal::assess
   - symbol: goal::read
 documented-by: docs/website/docs/reference/commands.md
@@ -78,7 +79,6 @@ job is deciding whether turns stop. The one round is what leaves nothing for a r
 `verified-by: bravebot_agent::turn::a_goal_check_reaches_the_model_and_comes_back_as_a_verdict`
 `verified-by: bravebot_agent::goal::the_exchange_goes_out_with_the_condition`
 `verified-by: bravebot_agent::goal::checking_leaves_the_exchange_the_length_it_was`
-`verified-by: bravebot_agent::turn::a_goal_check_reaches_the_model_and_comes_back_as_a_verdict`
 `verified-by: bravebot_agent::goal::the_judge_is_told_it_cannot_observe_anything_the_exchange_does_not_show`
 
 ## What a verdict is
@@ -122,7 +122,8 @@ stops goals, rather than handing whoever wrote those bytes the sentence that dec
 program keeps working.
 
 `verified-by: bravebot_agent::goal::the_check_carries_what_the_exchange_had_met`
-`verified-by: bravebot_agent::goal::only_a_condition_that_is_not_met_yet_carries_the_work_on`
+`verified-by: bravebot_agent::turn::a_check_over_an_exchange_that_met_something_untrusted_comes_back_quarantined`
+`verified-by: bravebot_tui::state::only_a_condition_not_met_yet_carries_the_work_on_and_every_other_outcome_ends_the_goal`
 
 <a id="GOAL-6"></a>
 ### GOAL-6: one verdict carries the work on, and every other outcome ends the goal
@@ -140,7 +141,7 @@ program keeps working.
 reason to keep a session working, and the failure this is built to have is a goal that ends early
 rather than one that spends a budget on a judge that has stopped answering.
 
-`verified-by: bravebot_agent::goal::only_a_condition_that_is_not_met_yet_carries_the_work_on`
+`verified-by: bravebot_tui::state::only_a_condition_not_met_yet_carries_the_work_on_and_every_other_outcome_ends_the_goal`
 `verified-by: bravebot_tui::state::a_verdict_against_no_goal_sends_nothing`
 
 <a id="GOAL-7"></a>
@@ -171,6 +172,7 @@ no keystroke behind an `@` inside it. Reading one would let a model open a file 
 endorsement nobody gave, and it would do so on a path the person never saw.
 
 `verified-by: bravebot_tui::app::a_path_named_in_a_sentence_the_driver_wrote_vouches_for_nothing`
+`verified-by: bravebot_tui::app::a_path_named_in_a_line_the_person_queued_still_names_a_file`
 
 ## What ends one
 
@@ -230,6 +232,8 @@ just judged is still standing there.
 `verified-by: bravebot_tui::app::stopping_a_turn_leaves_the_goal_set`
 `verified-by: bravebot_tui::app::a_turn_that_failed_leaves_the_goal_where_it_was`
 `verified-by: bravebot_tui::state::clearing_the_session_takes_the_goal_off`
+`verified-by: bravebot_tui::state::a_verdict_after_the_goal_was_cleared_is_neither_acted_on_nor_announced`
+`verified-by: bravebot_tui::app::a_goal_is_not_judged_after_the_person_asked_to_leave`
 
 <a id="GOAL-11"></a>
 ### GOAL-11: a goal and a loop are never both running
@@ -264,6 +268,7 @@ gone. A session with no goal says nothing about goals.
 the transcript, and the count is the difference between a goal that is converging and one that is
 about to give up.
 
+`verified-by: bravebot_tui::state::each_verdict_is_announced_as_it_arrives`
 `verified-by: bravebot_tui::status::the_report_says_what_the_session_is_working_towards_and_how_many_rounds_are_left`
 `verified-by: bravebot_tui::status::a_session_with_no_goal_does_not_mention_one`
 
