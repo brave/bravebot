@@ -143,8 +143,8 @@ pub fn available(
     tools
 }
 
-/// What the planner is told of the refs its checkouts share, in the description of `isolation` and
-/// in the answer to a spawn that made one (CHECKOUT-7).
+/// What the planner is told of the refs and the stash its checkouts share, in the description of
+/// `isolation` and in the answer to a spawn that made one (CHECKOUT-7).
 fn checkouts_share_refs(running: Running) -> String {
     let fetch = if running.offered() {
         "run it once yourself before starting them rather than asking each to"
@@ -154,7 +154,9 @@ fn checkouts_share_refs(running: Running) -> String {
     format!(
         "Checkouts share remote-tracking refs and tags with your working directory and with each \
          other, so a git fetch in one updates them in all of them, and two fetches at the same \
-         time can fail. Where delegates need a fetch, {fetch}."
+         time can fail. Where delegates need a fetch, {fetch}. Checkouts also share one stash, so \
+         changes git stash sets aside in one can be popped in any of them. Do not ask a delegate \
+         in a checkout to use git stash."
     )
 }
 
@@ -9905,7 +9907,9 @@ mod tests {
 
     /// CHECKOUT-7: the planner reads this before it fans out, and a fetch in each checkout moves
     /// the refs of the working directory and races the others. A planner without `run` cannot
-    /// fetch itself, so it is told to leave the fetch to one delegate.
+    /// fetch itself, so it is told to leave the fetch to one delegate. Either one writes the task
+    /// each delegate gets, so either one is told not to ask for a stash, whose single ref a pop in
+    /// any checkout takes from.
     #[test]
     fn the_isolation_field_says_checkouts_share_refs_and_who_fetches_once() {
         let described = |running: Running| -> String {
@@ -9928,8 +9932,15 @@ mod tests {
         let shared = "Checkouts share remote-tracking refs and tags with your working directory \
                       and with each other, so a git fetch in one updates them in all of them, and \
                       two fetches at the same time can fail.";
+        let stash = "Checkouts also share one stash, so changes git stash sets aside in one can \
+                     be popped in any of them. Do not ask a delegate in a checkout to use git \
+                     stash.";
 
         let running = described(Running::Offered);
+        assert!(
+            running.contains(stash),
+            "a planner with run is not told the checkouts share a stash: {running}"
+        );
         assert!(
             running.contains(shared)
                 && running.contains(
@@ -9939,6 +9950,10 @@ mod tests {
             "a planner with run is not told the checkouts share refs and to fetch first: {running}"
         );
         let withheld = described(Running::Withheld);
+        assert!(
+            withheld.contains(stash),
+            "a planner without run is not told the checkouts share a stash: {withheld}"
+        );
         assert!(
             withheld.contains(shared)
                 && withheld.contains(
