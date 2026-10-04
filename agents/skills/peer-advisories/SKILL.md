@@ -40,9 +40,9 @@ edit there.
 
 **A run never posts by hand.** `peer-advisories.py post` is the only thing here that writes to the
 tracker. It skips an advisory an issue body already cites and a title the tracker already holds,
-posts one issue every ten seconds or so, stops at a cap, and refuses before posting anything when a
-label is missing. `gh` is absent from this skill's `allowed-tools` so that a `gh issue create`
-typed here asks first.
+posts one issue every ten seconds or so, stops after 100 issues, and refuses before posting
+anything when a label is missing. `gh` is absent from this skill's `allowed-tools` so that a
+`gh issue create` typed here asks first.
 
 **A run never fixes anything.** It vets, drafts, files and records. Fixing is a separate task.
 
@@ -122,6 +122,9 @@ planner or steers an approved effect, an `area/*` where one is clear, and never 
 ```bash
 python3 agents/skills/peer-advisories/peer-advisories.py post --work-dir "$WORK_DIR" [--dry-run] [--assignee LOGIN]
 ```
+
+At ten seconds or so an issue, a hundred take about twenty minutes. Run the step in the background
+and wait for it, so that no time limit on a tool call stops it partway.
 
 Pass `--dry-run` on a `dry-run` run, and `--assignee` only where the user named somebody. Print the
 output. A missing label stops the step before anything is posted and prints the `gh label create`

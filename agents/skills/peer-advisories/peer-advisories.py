@@ -29,6 +29,7 @@ ROOT = HERE.parents[2]
 LEDGER = "docs/peer-advisories-vetted"
 REPO = "brave/bravebot"
 MAX = 8
+MAX_POSTS = 100
 
 REPOSITORIES = (
     ("anthropics/claude-code", "Claude Code"),
@@ -764,7 +765,7 @@ def main(argv=None):
     one.add_argument("--repo", default=REPO)
     one.add_argument("--dry-run", action="store_true")
     one.add_argument("--assignee")
-    one.add_argument("--max", type=int, default=12)
+    one.add_argument("--max", type=int, default=MAX_POSTS)
     one.add_argument("--pace", type=float, default=10.0)
 
     one = commands.add_parser("record", help="write the decided verdicts into the ledger")

@@ -50,9 +50,9 @@ tool there adds it here.
 
 **A run never posts by hand.** `peer-features.py post` is the only thing here that writes to the
 tracker, and it is the advisory skill's `post`: it skips a gap an issue body already cites and a
-title the tracker already holds, posts one issue every ten seconds or so, stops at a cap, and refuses
-before posting anything when a label is missing. `gh` is absent from this skill's `allowed-tools` so
-that a `gh issue create` typed here asks first.
+title the tracker already holds, posts one issue every ten seconds or so, stops after 100 issues,
+and refuses before posting anything when a label is missing. `gh` is absent from this skill's
+`allowed-tools` so that a `gh issue create` typed here asks first.
 
 **A run never fixes anything and never edits a spec.** It compares, drafts, files and records. Where
 closing a gap needs a clause, the issue says so. Specs change through their own review.
@@ -137,6 +137,9 @@ the [triage-issues skill](../triage-issues/SKILL.md) judges.
 ```bash
 python3 agents/skills/peer-features/peer-features.py post --work-dir "$WORK_DIR" [--dry-run] [--assignee LOGIN]
 ```
+
+At ten seconds or so an issue, a hundred take about twenty minutes. Run the step in the background
+and wait for it, so that no time limit on a tool call stops it partway.
 
 Pass `--dry-run` on a `dry-run` run, and `--assignee` only where the user named somebody. Print the
 output. A missing label stops the step before anything is posted and prints the `gh label create` for
