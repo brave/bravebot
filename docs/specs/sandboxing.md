@@ -435,7 +435,11 @@ confining a program was for.
 
 On Linux and macOS a look at a path is not bounded by a grant: whether something is there, what
 kind of thing it is, its size, when it changed, and where a link points. Opening a file for what it
-holds and listing a directory's entries are bounded, and outside the grants both are refused.
+holds and listing a directory's entries are bounded, and outside the grants both are refused. The
+one exception is the root directory on macOS: its entries can be listed, because the loader opens
+`/` as the process starts and Seatbelt has no operation that separates opening a directory from
+listing it. The names in `/` are the names of the system's top-level directories, and no file's
+contents are readable through that row.
 
 **Why.** Landlock bounds no look, so on Linux this is the kernel's and not a choice. On macOS a
 profile that refused a look outside the grants refused the walk to them: node resolves its own

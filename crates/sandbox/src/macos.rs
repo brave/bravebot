@@ -92,14 +92,14 @@ impl SeatbeltSandbox {
         // The dynamic loader reads the root directory entry itself, which a subpath
         // grant for e.g. /usr does not cover. Without this the process dies with
         // SIGABRT before main runs, which looks like a mysterious crash rather than a
-        // denied read. Reading `/` alone exposes no file contents.
+        // denied read. Seatbelt has no operation that separates opening `/` from listing
+        // it, so this row also lets a process list the entries of `/`. That is the one
+        // directory listing SANDBOX-13 allows outside the grants; no file contents are
+        // readable through it.
         out.push_str("(allow file-read* (literal \"/\"))\n");
 
-        // The program is sometimes reached through the `ENV` constant above, which the
-        // process reads to exec it, and the profile is built from the policy alone and so
-        // cannot tell which times those are. One file, world-readable, and one a policy
-        // naming any of /usr grants already.
-        out.push_str(&format!("(allow file-read* (literal {}))\n", quote(ENV)));
+        // `ENV` is exec'd under `process-exec` above and is not opened for reading, so no
+        // read row names it: its contents are readable only where a policy grants /usr/bin.
 
         for path in &policy.readable {
             out.push_str(&format!(
@@ -776,6 +776,31 @@ int main(void) {
         assert!(
             !succeeds("/bin/cat", &[shown(&beside.join("secret"))]),
             "a file beside the grant was read"
+        );
+        // The program a loader variable is restored through is a file like any other. A policy
+        // that does not grant /usr/bin cannot read its contents.
+        let without_usr_bin = SandboxPolicy::strict()
+            .allow_read("/bin")
+            .allow_read("/usr/lib");
+        assert!(
+            !SeatbeltSandbox::profile(&without_usr_bin).contains(ENV),
+            "the profile grants {ENV} to a policy that does not name it"
+        );
+        let read_env = sandbox
+            .spawn(
+                "/bin/cat",
+                &[ENV.to_owned()],
+                &without_usr_bin,
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("should spawn")
+            .wait()
+            .expect("should wait");
+        assert_eq!(
+            read_env.code(),
+            Some(1),
+            "{ENV} was read without a grant naming it, or cat did not start: {read_env:?}"
         );
 
         let _ = std::fs::remove_dir_all(&scratch);
