@@ -816,6 +816,35 @@ fn preview_of_dropped(found: &crate::dropped::Dropped) -> Option<crate::preview:
     ))
 }
 
+/// Thumbnails for pictures and files going back into the box, each started again from what was
+/// staged.
+///
+/// A line that is sent clears its previews, and a drawable picture cannot be cloned into the sent
+/// set, so a line that returns to the box (a stopped turn, an unqueue) has its thumbnails made
+/// again. Display only, as the first ones were.
+fn previews_restaged(
+    pasted: &[AttachedImage],
+    attached: &[Attached],
+) -> Vec<(String, crate::preview::Preview)> {
+    let pictures = pasted.iter().map(|picture| {
+        (
+            picture.marker.clone(),
+            crate::preview::Preview::start(
+                crate::preview::Source::Bytes(picture.bytes.clone()),
+                crate::preview::Fit::Thumbnail,
+            ),
+        )
+    });
+    let files = attached.iter().filter_map(|file| {
+        let dropped = crate::dropped::Dropped {
+            path: file.shown.clone(),
+            kind: file.kind,
+        };
+        preview_of_dropped(&dropped).map(|preview| (file.marker.clone(), preview))
+    });
+    pictures.chain(files).collect()
+}
+
 /// A file dropped on the box, and the marker standing for it in the line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attached {
@@ -1661,7 +1690,8 @@ pub struct Session {
     ///
     /// Display only: nothing here is sent anywhere. Held apart from [`AttachedImage`] because a
     /// drawable picture is neither comparable nor cloneable the way the bytes it came from are.
-    /// Emptied when the line is sent, so a picture recalled with its line has no thumbnail.
+    /// Emptied when the line is sent. A line that returns to the box after a stopped turn or an
+    /// unqueue has them made again from the staged pictures.
     previews: Vec<(String, crate::preview::Preview)>,
     /// The pictures the line carried when it was sent.
     ///
@@ -6681,6 +6711,10 @@ impl Session {
         self.set_input(returning);
         // The pictures come back with the words. A line that returned without them would return
         // carrying markers that name nothing, and the user has no way to tell.
+        // The thumbnails were cleared when the line was sent, so they are made again from the
+        // staged pictures, or the line would name pictures it draws nothing for.
+        let restaged = previews_restaged(&self.sent_pasted, &self.sent);
+        self.previews.extend(restaged);
         // A stashed draft can still name attachments staged while this turn ran.
         self.attached.append(&mut self.sent);
         self.pasted.append(&mut self.sent_pasted);
@@ -8115,6 +8149,9 @@ impl Session {
         if !self.input.is_empty() {
             lines.push(std::mem::take(&mut self.input));
         }
+        // Only what the reclaimed lines named: what the box already held still has its own.
+        let restaged = previews_restaged(&pasted, &attached);
+        self.previews.extend(restaged);
         attached.append(&mut self.attached);
         self.attached = attached;
         pasted.append(&mut self.pasted);
@@ -12004,6 +12041,37 @@ mod tests {
         assert_eq!(s.input, "look at [Image #1]");
         s.submit().expect("submitted");
         assert_eq!(s.sent_pasted().len(), 1, "the picture did not come back");
+    }
+
+    /// The thumbnail is cleared when the line is sent, so a line that comes back after a stop has to
+    /// have one made again, or the box names a picture and draws nothing for it (PASTE-6).
+    #[test]
+    fn a_cancelled_turn_restages_the_thumbnail_with_the_picture() {
+        let mut s = session();
+        s.attach(picture(b"pixels"));
+        let sent = s.submit().expect("submitted");
+        assert!(s.previews.is_empty(), "sending kept the thumbnail");
+
+        s.restore(sent);
+
+        let staged: Vec<&str> = s.previews.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(staged, ["[Image #1]"], "the thumbnail was not restaged");
+    }
+
+    /// The same for a prompt taken back out of the queue.
+    #[test]
+    fn taking_the_queue_back_restages_the_thumbnails_of_what_it_named() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        s.attach(picture(b"pixels"));
+        s.queue();
+        assert!(s.previews.is_empty(), "queueing kept the thumbnail");
+
+        assert!(s.unqueue(), "nothing came back");
+
+        let staged: Vec<&str> = s.previews.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(staged, ["[Image #1]"], "the thumbnail was not restaged");
     }
 
     /// A pasted paragraph keeps its lines: it was written with them, and the box draws them.

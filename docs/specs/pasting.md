@@ -142,9 +142,11 @@ size.
 **The thumbnail.** Where the terminal draws pictures, a small drawing of each picture named in the
 line sits under the box, so a person can see it is the screenshot they meant. It is drawn for
 a pasted picture and for a dropped PNG or JPEG. It follows the marker: rubbing the marker out takes
-the drawing with it, and sending or clearing the line does the same. It is presentation only. The
-picture that is sent is the bytes that were pasted, whether or not a drawing was made of them, and a
-picture that will not decode, or a terminal that answers no query, leaves the box as it was.
+the drawing with it, and sending or clearing the line does the same. A line that goes back into the
+box, after a stopped turn or an unqueue, has its drawings made again from the pictures it names. It
+is presentation only. The picture that is sent is the bytes that were pasted, whether or not a
+drawing was made of them, and a picture that will not decode, or a terminal that answers no query,
+leaves the box as it was.
 
 `verified-by: bravebot_tui::app::a_picture_is_refused_in_shell_mode_rather_than_written_into_the_command`
 `verified-by: bravebot_tui::app::a_picture_pasted_into_a_question_goes_with_it`
@@ -162,6 +164,8 @@ picture that will not decode, or a terminal that answers no query, leaves the bo
 `verified-by: bravebot_tui::state::settling_a_marker_for_the_history_does_not_take_the_picture_off_the_turn`
 `verified-by: bravebot_tui::state::a_thumbnail_that_finishes_after_the_paste_is_picked_up_and_drawn_while_named`
 `verified-by: bravebot_tui::state::only_a_dropped_picture_is_given_a_thumbnail`
+`verified-by: bravebot_tui::state::a_cancelled_turn_restages_the_thumbnail_with_the_picture`
+`verified-by: bravebot_tui::state::taking_the_queue_back_restages_the_thumbnails_of_what_it_named`
 `verified-by: bravebot_tui::render::a_staged_picture_is_drawn_under_the_box_while_the_line_names_it`
 `verified-by: bravebot_tui::render::rubbing_out_the_marker_takes_the_thumbnail_with_it`
 `verified-by: bravebot_tui::sessions::cancelled_attachments_return_to_the_editor_and_the_next_request`
