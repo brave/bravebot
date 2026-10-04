@@ -21825,6 +21825,101 @@ fn an_addressed_turn_runs_under_its_definitions_prompt_model_and_kind() {
     }
 }
 
+/// ADDRESS-1 and DELEGATE-23: a definition a person addresses supplies the skills it names as it does
+/// to a delegate. The turn is listed those and no others and cannot load another, where a definition
+/// naming none is offered every skill the turn found and one whose line is empty is offered nothing.
+#[test]
+fn an_addressed_turn_is_offered_only_the_skills_its_definition_names() {
+    let home = Scratch::new("address-skills-home");
+    for (dir, body) in [
+        ("review-style", "REVIEW-STYLE-BODY"),
+        ("commit-style", "COMMIT-STYLE-BODY"),
+    ] {
+        let at = home.path.join("skills").join(dir);
+        std::fs::create_dir_all(&at).expect("create a skill directory");
+        std::fs::write(
+            at.join("SKILL.md"),
+            format!("---\nname: {dir}\ndescription: when to use {dir}\n---\n\n{body}\n"),
+        )
+        .expect("write a skill");
+    }
+    define(
+        &home,
+        "styled",
+        "kind: reader\nskills: review-style\n",
+        "REVIEW",
+    );
+    define(&home, "plain", "kind: reader\n", "REVIEW");
+    define(&home, "bare", "kind: reader\nskills:\n", "REVIEW");
+
+    let run = |name: &str, marker: &'static str, replies: Vec<String>| -> Vec<String> {
+        let scratch = Scratch::new("address-skills");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_by_marker(vec![(marker, replies)]);
+        turn::run_cancellable(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &addressed(marker, &home, name),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+        received.try_iter().collect()
+    };
+    let listed = |body: &str| -> Vec<&str> {
+        ["review-style", "commit-style", "loop"]
+            .into_iter()
+            .filter(|skill| body.contains(&format!("- {skill}: ")))
+            .collect()
+    };
+
+    let styled = run(
+        "styled",
+        "ADDRESSED-NAMED-SKILLS",
+        vec![
+            tool_request("load_skill", r#"{"name":"commit-style"}"#),
+            tool_request("load_skill", r#"{"name":"review-style"}"#),
+            reply_with("reviewed"),
+        ],
+    );
+    assert_eq!(
+        listed(&styled[0]),
+        ["review-style"],
+        "the addressed turn was not listed only the skills its definition named"
+    );
+    let last = styled.last().expect("asked at least once");
+    assert!(
+        last.contains("no skill named 'commit-style'") && !last.contains("COMMIT-STYLE-BODY"),
+        "a skill the definition did not name was loadable by the addressed turn"
+    );
+    assert!(
+        last.contains("REVIEW-STYLE-BODY"),
+        "the skill the definition named could not be loaded"
+    );
+
+    let plain = run(
+        "plain",
+        "ADDRESSED-EVERY-SKILL",
+        vec![reply_with("reviewed")],
+    );
+    assert_eq!(
+        listed(&plain[0]),
+        ["review-style", "commit-style", "loop"],
+        "a definition naming no skills was not offered every skill the turn found"
+    );
+
+    let bare = run("bare", "ADDRESSED-NO-SKILLS", vec![reply_with("reviewed")]);
+    assert_eq!(
+        listed(&bare[0]),
+        Vec::<&str>::new(),
+        "a definition with an empty skills line was offered skills"
+    );
+}
+
 /// Which tools a definition keeps is read after the tool table is written, so a turn addressed to a
 /// reader starts from descriptions written for a turn that may run a program. What `read_git` says to
 /// do where it will not open a repository is the one of them that names `run`, and a turn offered no
