@@ -537,6 +537,46 @@ pub fn survey(git_dir: &Path, query: Query, deadline: Instant) -> Result<Vec<Pat
     Ok(files)
 }
 
+/// What [`survey`] lists for the common directory of a repository, with the `HEAD` and the `index`
+/// of the linked worktree's `worktrees/<id>` entry the driver recorded beside them (CHECKOUT-12).
+/// Nothing else in the entry is read, and the worktree's own `.git` never is.
+pub fn survey_linked(
+    common: &Path,
+    entry: &Path,
+    query: Query,
+    deadline: Instant,
+) -> Result<Vec<PathBuf>, Declined> {
+    let mut files = survey(common, query, deadline)?;
+    match std::fs::symlink_metadata(entry) {
+        Ok(meta) if meta.file_type().is_symlink() => return Err(Declined::Linked),
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => return Err(Declined::NoRepository),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(Declined::NoRepository);
+        }
+        Err(_) => return Err(Declined::Unreadable),
+    }
+    let wanted: &[&str] = if query == Query::Status {
+        &["HEAD", "index"]
+    } else {
+        &["HEAD"]
+    };
+    for name in wanted {
+        let file = entry.join(name);
+        match std::fs::symlink_metadata(&file) {
+            Ok(meta) if meta.file_type().is_symlink() => return Err(Declined::Linked),
+            Ok(meta) if meta.is_file() => files.push(file),
+            Ok(_) => return Err(Declined::NoRepository),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && *name == "index" => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(Declined::NoRepository);
+            }
+            Err(_) => return Err(Declined::Unreadable),
+        }
+    }
+    Ok(files)
+}
+
 /// The pack indexes under `objects/pack` with their pack beside them, which are the packs a read
 /// opens.
 fn pack_indexes(objects: &Path) -> Result<Vec<PathBuf>, Declined> {
@@ -1087,7 +1127,16 @@ type Side = Option<(EntryKind, ObjectId)>;
 
 /// A repository opened for reading, once [`survey`] has passed it.
 pub struct Repository {
+    /// The common directory: refs, objects, configuration and `info/`.
     git_dir: PathBuf,
+    /// Where `HEAD` and `index` are read from. The same directory, except for a linked worktree,
+    /// where it is the `worktrees/<id>` entry (CHECKOUT-12).
+    admin: PathBuf,
+    /// The working tree, where there is one to name.
+    work_tree: Option<PathBuf>,
+    /// Whether this is a linked worktree, whose `config.worktree` git reads from the entry and this
+    /// reader does not read at all.
+    linked: bool,
     refs: gix_ref::file::Store,
     objects: Objects,
     shallow: HashSet<ObjectId>,
@@ -1097,7 +1146,33 @@ impl Repository {
     /// Open the repository at `git_dir`, declining one whose configuration or refs ask for what
     /// this reader does not do.
     pub fn open(git_dir: &Path) -> Result<Self, Declined> {
-        for name in ["config", "config.worktree"] {
+        Self::open_at(
+            git_dir,
+            git_dir,
+            git_dir.parent().map(Path::to_path_buf),
+            false,
+        )
+    }
+
+    /// Open the repository whose common directory is `common`, as the linked worktree at
+    /// `work_tree` whose entry the driver recorded at `entry` (CHECKOUT-12). `HEAD` and `index` are
+    /// the entry's; everything else is the common directory's. Nothing is read at `work_tree/.git`.
+    pub fn open_linked(common: &Path, entry: &Path, work_tree: &Path) -> Result<Self, Declined> {
+        Self::open_at(common, entry, Some(work_tree.to_path_buf()), true)
+    }
+
+    fn open_at(
+        git_dir: &Path,
+        admin: &Path,
+        work_tree: Option<PathBuf>,
+        linked: bool,
+    ) -> Result<Self, Declined> {
+        let configs: &[&str] = if linked {
+            &["config"]
+        } else {
+            &["config", "config.worktree"]
+        };
+        for name in configs {
             if let Some(bytes) = read_if_present(&git_dir.join(name))? {
                 check_config(&bytes)?;
             }
@@ -1109,7 +1184,15 @@ impl Repository {
         {
             return Err(Declined::Replaced);
         }
-        let refs = gix_ref::file::Store::at(git_dir.to_path_buf(), HashKind::Sha1);
+        let refs = if linked {
+            gix_ref::file::Store::for_linked_worktree(
+                admin.to_path_buf(),
+                git_dir.to_path_buf(),
+                HashKind::Sha1,
+            )
+        } else {
+            gix_ref::file::Store::at(git_dir.to_path_buf(), HashKind::Sha1)
+        };
         let objects = Objects::open(git_dir)?;
         let mut shallow = HashSet::new();
         if let Some(bytes) = read_if_present(&git_dir.join("shallow"))? {
@@ -1120,6 +1203,9 @@ impl Repository {
         }
         Ok(Repository {
             git_dir: git_dir.to_path_buf(),
+            admin: admin.to_path_buf(),
+            work_tree,
+            linked,
             refs,
             objects,
             shallow,

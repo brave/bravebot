@@ -7220,23 +7220,116 @@ fn a_kept_checkout_is_removed_by_its_number() {
     );
 }
 
-/// GIT-8. A repository is not opened through a linked worktree, so read_git in a checkout
-/// declines.
+/// The answer to `query` about the repository of the workspace `workspace`, asked as a delegate
+/// working there asks it.
+fn asked_in(
+    workspace: &Workspace,
+    policy: &mut Policy<'_, RecordingSink>,
+    query: bravebot_agent::git::Query,
+) -> Result<String, WorkspaceError> {
+    let repository = Labelled::trusted(".".to_string());
+    let question = bravebot_agent::workspace::GitQuestion {
+        query,
+        ..log_of(&repository)
+    };
+    let answer = workspace.read_git(policy, &question)?;
+    let proof = policy.authorise_content_release("test", "read_git");
+    Ok(answer.declassify(&proof).text)
+}
+
+/// CHECKOUT-12. A status and a log in a checkout are answered from the common directory and the
+/// entry the driver recorded, and the checkout's own `.git` is never read: it names no repository
+/// at all here, and the working directory holds a change the checkout does not.
 #[test]
-fn read_git_declines_in_a_checkout() {
-    let (_scratch, state, workspace) =
+fn read_git_in_a_checkout_is_answered_without_reading_its_dot_git() {
+    use bravebot_agent::git::Query;
+    let (scratch, state, workspace) =
         repository_with_a_state_directory("checkout-read-git", &[("README", "hello\n")]);
+    repository::check_out(&scratch.path, &[("README", "hello\n")]);
+    std::fs::write(scratch.path.join("working-directory-only"), "x\n").unwrap();
     let mut sink = RecordingSink::new();
     let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
     let made = workspace
         .checkout_for(&policy, &state.path, d1())
         .expect("a checkout");
-    let repository = Labelled::trusted(".".to_string());
+    std::fs::write(made.root().join(".git"), "gitdir: /nowhere/at/all\n").unwrap();
 
-    let refused = made.read_git(&mut policy, &log_of(&repository));
     assert!(
-        matches!(refused, Err(WorkspaceError::Git { .. })),
-        "read_git opened a repository through a checkout: {:?}",
-        refused.map(|answer| answer.label())
+        asked_in(&made, &mut policy, Query::Status)
+            .unwrap()
+            .starts_with("Nothing to commit"),
+        "a fresh checkout was not clean"
     );
+    std::fs::write(made.root().join("README"), "changed\n").unwrap();
+    std::fs::write(made.root().join("new.txt"), "x\n").unwrap();
+    assert_eq!(
+        asked_in(&made, &mut policy, Query::Status).unwrap(),
+        " M README\n?? new.txt\n",
+        "the status was not of the checkout's tree"
+    );
+    let log = asked_in(&made, &mut policy, Query::Log).unwrap();
+    assert!(log.contains("first"), "{log}");
+}
+
+/// CHECKOUT-12. The checkout's `HEAD` and index are the entry's, not the common directory's: a
+/// commit made in the working directory after the checkout is not in the checkout's history or its
+/// status.
+#[test]
+fn a_checkout_reads_the_entrys_head_and_index_not_the_common_directorys() {
+    use bravebot_agent::git::Query;
+    let (scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-entry-head", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    repository::commit_files(
+        &scratch.path,
+        &[("README", "hello\n"), ("later.txt", "y\n")],
+        "second",
+    );
+
+    let log = asked_in(&made, &mut policy, Query::Log).unwrap();
+    assert!(log.contains("first") && !log.contains("second"), "{log}");
+    let status = asked_in(&made, &mut policy, Query::Status).unwrap();
+    assert!(
+        status.starts_with("Nothing to commit"),
+        "the checkout was compared with the working directory's HEAD: {status}"
+    );
+    let there = asked_in(&workspace, &mut policy, Query::Log).unwrap();
+    assert!(there.contains("second"), "{there}");
+}
+
+/// CHECKOUT-12. The files a read in a checkout opens are held against the permission rules, the
+/// entry's among them: a rule over the entry's `HEAD` or index declines the question, and one over
+/// a file in the checkout declines nothing but that file.
+#[test]
+fn a_rule_over_a_file_the_entry_holds_declines_a_read_in_a_checkout() {
+    use bravebot_agent::git::{Declined, Query};
+    for (file, query) in [
+        ("HEAD", Query::Log),
+        ("index", Query::Status),
+        ("config", Query::Log),
+    ] {
+        let (_scratch, state, workspace) =
+            repository_with_a_state_directory(&format!("checkout-fenced-{file}"), &[("R", "h\n")]);
+        let rule = match file {
+            "config" => "Read(./.git/config)".to_string(),
+            _ => format!("Read(./.git/worktrees/c1/{file})"),
+        };
+        let mut sink = RecordingSink::new();
+        let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+        let made = workspace
+            .checkout_for(&policy, &state.path, d1())
+            .expect("a checkout");
+        drop(policy);
+        let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[&rule]);
+        match asked_in(&made, &mut policy, query) {
+            Err(WorkspaceError::Git { declined, .. }) => {
+                assert_eq!(declined, Declined::Fenced, "{file}")
+            }
+            other => panic!("{file}: a fenced file was read: {other:?}"),
+        }
+    }
 }

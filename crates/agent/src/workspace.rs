@@ -542,6 +542,14 @@ pub struct CheckoutInfo {
     session_checkouts: Arc<Mutex<Vec<Made>>>,
 }
 
+impl CheckoutInfo {
+    /// The `worktrees/<id>` entry the driver wrote in the repository's common directory when it
+    /// made the checkout (CHECKOUT-12).
+    fn entry(&self) -> PathBuf {
+        self.made.git_dir.join("worktrees").join(&self.made.id)
+    }
+}
+
 /// The writes in a checkout, as the driver recorded them (CHECKOUT-13).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Candidates {
@@ -3064,7 +3072,17 @@ impl Workspace {
             let root = self.resolve(&named)?;
             let git_dir = root.join(".git");
             let spelled = |inside: &str| in_repository(&named, inside);
-            let git_key = self.trusted_git_dir(policy, &named).map_err(declined)?;
+            // A question about a checkout's own repository is answered from the common directory
+            // and the entry the driver recorded, and the checkout's `.git` is never read
+            // (CHECKOUT-12).
+            let routed = self.checkout.as_deref().filter(|_| root == self.root);
+            let git_key = match routed {
+                Some(checkout) => checkout
+                    .source
+                    .trusted_git_dir(policy, ".")
+                    .map_err(declined)?,
+                None => self.trusted_git_dir(policy, &named).map_err(declined)?,
+            };
             // Status compares every file in the working tree, so all of it is its read set.
             let read_set = if query == crate::git::Query::Status {
                 let tree_key = self.trust_key(&named);
@@ -3076,10 +3094,22 @@ impl Workspace {
                 git_key.clone()
             };
             let deadline = Instant::now() + self.search_time;
-            self.surveyed(policy, &named, &root, query, deadline)
-                .map_err(declined)?;
-
-            let opened = crate::git::Repository::open(&git_dir).map_err(declined)?;
+            let opened = match routed {
+                Some(checkout) => {
+                    let entry = checkout.entry();
+                    checkout
+                        .source
+                        .surveyed_linked(policy, &checkout.made.git_dir, &entry, query, deadline)
+                        .map_err(declined)?;
+                    crate::git::Repository::open_linked(&checkout.made.git_dir, &entry, &root)
+                        .map_err(declined)?
+                }
+                None => {
+                    self.surveyed(policy, &named, &root, query, deadline)
+                        .map_err(declined)?;
+                    crate::git::Repository::open(&git_dir).map_err(declined)?
+                }
+            };
             let request = crate::git::Request {
                 query,
                 revision: revision.as_deref(),
@@ -3176,6 +3206,32 @@ impl Workspace {
                 bravebot_core::spelling::to_slash(&below.to_string_lossy(), BACKSLASH_SEPARATES)
                     .into_owned();
             self.denies_in_repository(policy, named, &below)
+        });
+        if fenced {
+            return Err(crate::git::Declined::Fenced);
+        }
+        Ok(())
+    }
+
+    /// Refuse the checkout whose repository's common directory is `common` and whose recorded entry
+    /// is `entry`, unless `query` could read every file [`crate::git::survey_linked`] lists with no
+    /// deny rule covering one. Called on the workspace the checkout was made from, since the files
+    /// are in its `.git` (CHECKOUT-12).
+    fn surveyed_linked<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        common: &Path,
+        entry: &Path,
+        query: crate::git::Query,
+        deadline: Instant,
+    ) -> Result<(), crate::git::Declined> {
+        let files = crate::git::survey_linked(common, entry, query, deadline)?;
+        let fenced = files.iter().any(|file| {
+            let below = file.strip_prefix(&self.root).unwrap_or(file);
+            let below =
+                bravebot_core::spelling::to_slash(&below.to_string_lossy(), BACKSLASH_SEPARATES)
+                    .into_owned();
+            self.denies_in_repository(policy, ".", &below)
         });
         if fenced {
             return Err(crate::git::Declined::Fenced);

@@ -230,9 +230,8 @@ Declined, with a sentence pointing at `run` where the turn is offered one:
 Configuration git reads without changing what history means is read, whatever its comments,
 quoting, line endings and continued lines.
 
-[CHECKOUT-12](../checkouts.md#CHECKOUT-12) would open one kind of linked worktree: a delegate's
-checkout, found from the driver's own record of it and never from its `.git` file. That is not
-built, and `read_git` in a checkout declines.
+[CHECKOUT-12](../checkouts.md#CHECKOUT-12) opens one kind of linked worktree: a delegate's
+checkout, found from the driver's own record of it and never from its `.git` file.
 
 **Why.** Each of these sends a read to files the list in [GIT-2](#GIT-2) does not hold, or answers
 with objects other than the ones stored. Past any of them this reader answers a different question
