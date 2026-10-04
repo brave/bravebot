@@ -495,7 +495,6 @@
 }
 .bot-history-row + .bot-history-row { border-top: 1px solid var(--border-subtle); }
 .bot-history-row:hover { background: var(--surface-hover); }
-button.bot-history-row { cursor: pointer; }
 .bot-history-row:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
 .bot-history-row.unavailable { color: var(--ink-tertiary); }
 .bot-history-row.unavailable code { font: var(--type-code); }

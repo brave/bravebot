@@ -188,7 +188,7 @@
 }
 .connectors-list .settings-block > * { margin: 0; }
 .connectors-foot { padding: var(--leo-spacing-xl) var(--leo-spacing-2xl) 0; }
-.connector-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--leo-spacing-m); }
+.connector-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--leo-spacing-m); }
 .connector-card, .connector-row {
   display: flex;
   align-items: flex-start;
@@ -206,6 +206,8 @@
 }
 .connector-card:hover, .connector-row:hover { background: var(--surface-hover); }
 .connector-icon { flex: none; --leo-icon-size: var(--icon-control); --leo-icon-color: var(--ink-secondary); }
+/* Centred on the first line of the name, whatever height that line is. */
+.connector-card > .connector-icon, .connector-row > .connector-icon { font: var(--type-body-strong); margin-top: calc((1lh - var(--icon-control)) / 2); }
 .connector-card-text { display: flex; flex: 1; flex-direction: column; gap: var(--leo-spacing-xs); min-width: 0; }
 .connector-name { font: var(--type-body-strong); }
 .connector-summary { font: var(--type-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
@@ -239,10 +241,6 @@ code.connector-summary { font: var(--type-code); overflow: hidden; text-overflow
 .connector-variable { display: flex; align-items: flex-end; gap: var(--leo-spacing-m); width: 100%; }
 .connector-variable leo-input { flex: 1; }
 .connector-warnings { margin: 0 0 var(--leo-spacing-s); padding-left: var(--leo-spacing-xl); }
-
-@media (max-width: 640px) {
-  .connector-grid { grid-template-columns: 1fr; }
-}
 
 @media (max-width: 640px) {
   .settings-card dl, .settings-row { grid-template-columns: 1fr; }

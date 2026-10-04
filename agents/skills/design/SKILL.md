@@ -160,8 +160,10 @@ and at the minimum window size.
 - File paths middle-truncate and keep the filename visible (`middleTruncate`).
 
 **Native macOS feel**
-- Chrome has the default cursor (pointer only for links) and `user-select: none`. Transcript text
-  and the readable parts of dialogs stay selectable.
+- Chrome has the default cursor and `user-select: none`. The pointer is for links and for clickable
+  rows (sessions, tree rows, connector and bot-history rows), listed once in `base.css`; a new
+  clickable row is added to that list. Menu items keep the arrow. Transcript text and the readable
+  parts of dialogs stay selectable.
 - Scrollbars are thin, overlay and token-coloured. `::selection` uses a Leo token.
 - Tooltips wait 500ms the first time, then show instantly while the pointer moves between controls.
   There is one tooltip layer, driven by `data-tooltip`; a native `title` is not used.

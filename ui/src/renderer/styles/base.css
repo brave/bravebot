@@ -19,6 +19,9 @@ body {
 button, input, textarea, select { font: inherit; color: inherit; }
 button { cursor: default; }
 a[href] { cursor: pointer; }
+/* A row that opens or selects something shows the pointer, the way a link does. A new clickable
+   row joins this list. Menu items keep the arrow, as native menus do. */
+button:is(.session, .tree-row, .bot-history-row, .connector-card, .connector-row):not(:disabled) { cursor: pointer; }
 
 /* Everything somebody reads rather than operates. */
 .entries,
