@@ -85,6 +85,7 @@ fn check_completion(ending: &str) -> (bool, bool) {
             mcp_requested: Vec::new(),
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             model: None,
+            addressing: None,
             workspace,
             prompt: "hello".into(),
             composed: None,

@@ -33,7 +33,7 @@ import {
   nudgeDue,
   releaseBotSession,
   retireBot,
-  saveBot,
+  saveBotModel,
   saveFormBot,
   migrateBot,
   consolidationPrompt,
@@ -191,7 +191,14 @@ async function sendBotTurn(
   if (composed) params.composed = composed
   const selectedModel = held.model ?? model
   if (selectedModel !== undefined) params.model = selectedModel
-  if (grounded) {
+  if (held.definition !== null) {
+    // Every turn in this bot's conversation is addressed to its definition (MEMORY-10), the ones
+    // this process composes included. The name is the row's, judged a slug when it was stored, and
+    // never anything a window or a reply said. The purpose reaches the run as the definition's body
+    // and the memory's path as the agent puts it, so there is no briefing to attach and nothing
+    // for `grounded` to decide.
+    params.definition = held.definition
+  } else if (grounded) {
     // Made afresh on the way into every send rather than once when the bot was created. A file a
     // turn names and cannot read is not a smaller turn, it is a failed one — so a memory deleted
     // by a `git clean`, or a branch switched to one that never had it, is repaired here instead of
@@ -514,11 +521,12 @@ function sanitised(method: string, params: unknown): Record<string, unknown> {
     return { session: held.session, task: held.task, model: held.model }
   }
   if (method !== 'turn.send') return held
-  // `recall` joins the two lists for a smaller reason than theirs. It decides whether a prompt is
-  // one a person can find again, and that is a claim about who asked — which this process makes
-  // and a window does not get to. Nothing worse than a lost history entry is at stake; it is here
-  // because the answer to "may the renderer say this?" is the same either way.
-  const { files: _files, dropped: _dropped, recall: _recall, attachments, ...rest } = held
+  // `recall` and `definition` join the two lists for a smaller reason than theirs. `recall`
+  // decides whether a prompt is one a person can find again, and `definition` decides which
+  // definition a turn is addressed to (MEMORY-10). Both are claims about who asked and what the
+  // turn is for, which this process makes from a bot's row and a window does not get to. A window
+  // that could name a definition could address a turn to any definition on the machine.
+  const { files: _files, dropped: _dropped, recall: _recall, definition: _definition, attachments, ...rest } = held
   return { ...rest, files: attachmentPaths(typeof rest.session === 'string' ? rest.session : '', attachments) }
 }
 
@@ -687,12 +695,10 @@ app.whenReady().then(() => {
 
   ipcMain.handle('bravebot:bots:read', () => bots())
 
-  ipcMain.handle('bravebot:bots:model', (_event, slug: unknown, model: unknown) => {
+  ipcMain.handle('bravebot:bots:model', async (_event, slug: unknown, model: unknown) => {
     const held = bot(slug)
     if (!held || !isBotModel(model)) return null
-    const next = { ...held, model }
-    saveBot(next)
-    return next
+    return saveBotModel(held, model, bridge ? (method, params) => bridge!.request(method, params) : null)
   })
 
   ipcMain.handle('bravebot:bots:write', async (_event, value: unknown) => {
@@ -701,8 +707,9 @@ app.whenReady().then(() => {
     // somebody opened belongs beside the code that writes there.
     const form = botFromForm(value)
     if (!form) return null
-    // Making a bot writes its definition to `~/.bravebot/agents` (MEMORY-8). This process writes
-    // nothing there itself; the agent does, and `saveFormBot` keeps the name it answers with.
+    // Making a bot writes its definition to `~/.bravebot/agents` (MEMORY-8), and editing one
+    // rewrites the fields the form shows (MEMORY-9). This process writes nothing there itself; the
+    // agent does, and `saveFormBot` keeps the name it answers with.
     const next = await saveFormBot(form, bridge ? (method, params) => bridge!.request(method, params) : null)
     if (noteProject(next.directory)) rebuildMenu()
     return next

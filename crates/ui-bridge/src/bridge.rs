@@ -56,6 +56,13 @@ struct Open {
     /// Settled once, when the session opened, as the terminal does: a session that opened with
     /// the mode on said so at the top, and a later change to the file would make that untrue.
     auto_vetting: bool,
+    /// The definition this session's conversation belongs to, once a turn has said so
+    /// ([MEMORY-10](../../../docs/specs/definition-memory.md#MEMORY-10)).
+    ///
+    /// Set by a `turn.send` from the desktop's main process, which takes it from the bot's row.
+    /// It is read for a turn the bridge starts on its own, the fire of a watch a person armed,
+    /// which has no request to carry one.
+    definition: Option<String>,
 }
 
 /// Drives the agent for a front-end.
@@ -185,6 +192,7 @@ impl Bridge {
             "hooks.inspect" => crate::hooks::inspect(),
             "bot.define" => crate::definitions::make(request),
             "bot.migrate" => crate::definitions::migrate(request),
+            "bot.redefine" => crate::definitions::remake(request),
             "doctor" => Ok(
                 json!({"found": true, "structured": true, "text": serde_json::to_string_pretty(&crate::settings::report(None, self.settings.as_deref())).unwrap_or_default()}),
             ),
@@ -279,6 +287,7 @@ impl Bridge {
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             model: None,
             auto_vetting,
+            definition: None,
         });
         self.ask_about_trust(&handle);
         let rules = self.open_under_rules(&handle, None);
@@ -444,6 +453,7 @@ impl Bridge {
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             model: None,
             auto_vetting,
+            definition: None,
         });
 
         // Nothing is written until the first turn. An opened-and-abandoned window should
@@ -591,6 +601,7 @@ impl Bridge {
             // The parent's, not read again: the child's transcript is the parent's up to the cut,
             // and the notice at its top says what the parent opened under.
             auto_vetting,
+            definition: None,
         });
         self.ask_about_trust(&child);
         // The parent's, not read again, for the reason auto-vetting is: a fork carries on the
@@ -690,6 +701,13 @@ impl Bridge {
             })
             .unwrap_or_default();
         let dropped = dropped_paths(request)?;
+        // The definition a bot's conversation is addressed to (MEMORY-10). Named by the desktop's
+        // main process from the bot's row, never by a window, and checked to be a name a
+        // definition can carry. Once a session has one, every later turn in it is addressed to it
+        // whether or not the request repeats the name: a turn with none would hold the session's
+        // whole reach, wider than the bot's own, and the fire of a watch has no request to carry
+        // one at all.
+        let named = crate::wire::definition(request.params.get("definition"))?;
         // Whether this prompt is one a person will want back when they press up.
         //
         // `~/.bravebot/history` is recall, shared with the terminal front-end, and what belongs in
@@ -723,6 +741,9 @@ impl Bridge {
                 "a turn is already running in this session",
             ));
         }
+        // The name the session was given, kept so a turn with no request behind it is addressed
+        // too.
+        let addressing = named.or_else(|| open.definition.clone());
 
         let model = requested_model.or_else(|| open.model.clone());
         let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
@@ -816,10 +837,12 @@ impl Bridge {
         if let Some(open) = self.open.get_mut(&handle) {
             open.running = Some(running);
             open.model = model;
+            open.definition = addressing.clone();
         }
         thread::spawn(move || {
             work(Work {
                 model: worker_model,
+                addressing,
                 watches,
                 emitter,
                 session,
@@ -1536,6 +1559,9 @@ struct Work {
     mcp_requested: Vec<(PathBuf, String)>,
     watches: Arc<Mutex<bravebot_agent::watch::Watches>>,
     model: Option<String>,
+    /// The definition this turn is addressed to, where it is a turn in a bot's conversation
+    /// (MEMORY-10).
+    addressing: Option<String>,
     workspace: Workspace,
     prompt: String,
     /// What this prompt was composed for, where nobody typed it.
@@ -1585,6 +1611,7 @@ fn work(work: Work) {
         mcp_requested,
         watches,
         model,
+        addressing,
         workspace,
         prompt,
         composed,
@@ -1648,7 +1675,11 @@ fn work(work: Work) {
         .with_auto_vetting(auto_vetting)
         // The rules the session opened under, and not the files as they are now (PERM-12).
         .with_permissions(state.rules.permissions.clone())
-        .with_mcp(mcp);
+        .with_mcp(mcp)
+        // A turn in a bot's conversation is addressed to the bot's definition whatever composed
+        // it (MEMORY-10). The name is the session's, set from the bot's row, so nothing the turn
+        // produced chooses it; the kernel compares it against the set this session resolved.
+        .addressing(addressing);
     if let Some(composed) = composed {
         task = task.composed_rather_than_typed(composed);
     }
@@ -2215,6 +2246,7 @@ mod coverage_tests {
             model: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             auto_vetting: false,
+            definition: None,
         });
         let request = Request::parse(
             &json!({"id": 1, "method": "session.fork", "params": {
@@ -2296,6 +2328,7 @@ mod permissions_tests {
             model: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             auto_vetting: false,
+            definition: None,
         });
         let revoke = Request::parse(
             &json!({"id": 1, "method": "permissions.revoke", "params": {
@@ -2335,6 +2368,7 @@ mod permissions_tests {
             model: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             auto_vetting: false,
+            definition: None,
         });
         let list = Request::parse(
             &json!({"id": 1, "method": "permissions.list", "params": {"session": handle}})
@@ -2408,6 +2442,7 @@ mod watch_tests {
             model: None,
             watches: Arc::clone(&watches),
             auto_vetting: false,
+            definition: None,
         });
         std::fs::write(
             root.join("watched"),
@@ -2479,6 +2514,7 @@ mod watch_tests {
             model: None,
             watches: Arc::clone(&watches),
             auto_vetting: false,
+            definition: None,
         });
         let request = Request::parse(
             &json!({"id": 1, "method": "turn.cancel", "params": {"session": handle}}).to_string(),
@@ -2528,6 +2564,7 @@ mod watch_tests {
             model: None,
             watches: Arc::clone(&watches),
             auto_vetting: false,
+            definition: None,
         });
         bridge.poll_watches_at(now + Duration::from_secs(7 * 24 * 60 * 60));
         assert!(watches.lock().unwrap().is_empty());

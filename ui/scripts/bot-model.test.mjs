@@ -85,9 +85,77 @@ test('making a bot saves nothing unless the agent names the definition it wrote'
     assert.equal(storage.bot(fresh.slug).definition, 'web-dev-2')
     assert.deepEqual(calls, [['bot.define', { slug: 'web-dev', purpose: 'Build websites', model: 'provider/model-a' }]])
 
-    await storage.saveFormBot({ ...saved, purpose: 'Build sites' }, async () => { throw new Error('an edit does not define') })
-    assert.equal(storage.bot(fresh.slug).definition, 'web-dev-2')
+    // MEMORY-9: an edit rewrites the definition it has, and defines nothing new.
+    calls.length = 0
+    const edited = await storage.saveFormBot({ ...saved, purpose: 'Build sites', model: null }, async (method, params) => { calls.push([method, params]); return { name: 'web-dev-2' } })
+    assert.deepEqual(calls, [['bot.redefine', { name: 'web-dev-2', purpose: 'Build sites' }]])
+    assert.equal(edited.definition, 'web-dev-2')
     assert.equal(storage.bot(fresh.slug).purpose, 'Build sites')
+
+    // A rewrite the agent refuses, or answers for another file, saves nothing: the row and the
+    // file say the same thing or the edit did not happen.
+    await assert.rejects(storage.saveFormBot({ ...edited, purpose: 'Changed' }, async () => { throw new Error('refused') }), /refused/)
+    await assert.rejects(storage.saveFormBot({ ...edited, purpose: 'Changed' }, async () => ({ name: 'other' })), /did not rewrite/)
+    await assert.rejects(storage.saveFormBot({ ...edited, purpose: 'Changed' }, null), /not running/)
+    assert.equal(storage.bot(fresh.slug).purpose, 'Build sites')
+
+    // The model picker is an edit too, and names the model the file is to carry.
+    calls.length = 0
+    const switched = await storage.saveBotModel(storage.bot(fresh.slug), 'provider/model-b', async (method, params) => { calls.push([method, params]); return { name: 'web-dev-2' } })
+    assert.deepEqual(calls, [['bot.redefine', { name: 'web-dev-2', purpose: 'Build sites', model: 'provider/model-b' }]])
+    assert.equal(switched.model, 'provider/model-b')
+    await assert.rejects(storage.saveBotModel(switched, null, async () => { throw new Error('refused') }), /refused/)
+    assert.equal(storage.bot(fresh.slug).model, 'provider/model-b')
+
+    // A bot made before definitions existed has no file to rewrite and the agent is not asked.
+    const legacy = { ...parseBots({ bots: [{ ...definition, slug: 'old-bot', model: null }] }).bots[0] }
+    assert.equal(legacy.definition, null)
+    storage.saveBot(legacy)
+    await storage.saveFormBot({ ...legacy, purpose: 'Still old' }, async () => { throw new Error('a bot with no definition is not rewritten') })
+    await storage.saveBotModel(storage.bot('old-bot'), 'provider/model-c', null)
+    assert.equal(storage.bot('old-bot').definition, null)
+    assert.equal(storage.bot('old-bot').model, 'provider/model-c')
+  } finally { rmSync(profile, { recursive: true, force: true }) }
+})
+
+// `sanitised` lives in the Electron entry point, which no test can load, so this pins its source:
+// a window's `turn.send` loses the `definition` it claims, and the only place that parameter is set
+// is the send this process composes from a bot's row. Rejects the fault of forgetting the strip, which
+// would let a window address a turn to any definition on the machine (MEMORY-10).
+test('a window cannot name the definition a turn is addressed to', () => {
+  const main = readFileSync('src/main/index.ts', 'utf8')
+  const strip = main.slice(main.indexOf('function sanitised('), main.indexOf('app.whenReady()'))
+  assert.match(strip, /definition: _definition/, 'the strip no longer removes `definition` from a window’s turn.send')
+  const sets = [...main.matchAll(/params\.definition\s*=/g)]
+  assert.equal(sets.length, 1, 'more than one place sets the definition a turn is addressed to')
+  const sender = main.slice(main.indexOf('async function sendBotTurn('), main.indexOf('async function consolidate('))
+  assert.match(sender, /params\.definition = held\.definition/, 'the definition is not the bot row’s')
+  assert.match(sender, /if \(held\.definition !== null\) \{[\s\S]*?\} else if \(grounded\)/, 'a bot with a definition is also sent a briefing')
+})
+
+test('a bot with a definition keeps its memory where the agent keeps that definition’s', () => {
+  const profile = mkdtempSync(join(tmpdir(), 'bravebot-memory-path-'))
+  const source = buildSync({ entryPoints: ['src/main/bots.ts'], bundle: true, write: false, platform: 'node', format: 'cjs', external: ['electron'] }).outputFiles[0].text
+  const module = { exports: {} }
+  const mockedRequire = (id) => id === 'electron' ? { app: { getPath: () => profile } } : require(id)
+  new Function('require', 'module', 'exports', source)(mockedRequire, module, module.exports)
+  const { memoryPath, nudgeDue, noteBotMemory, saveBot, bot } = module.exports
+  try {
+    const defined = { ...parseBots({ bots: [{ ...definition, definition: 'web-dev-2', quiet: 99 }] }).bots[0] }
+    const legacy = { ...parseBots({ bots: [{ ...definition, slug: 'old-bot', quiet: 99 }] }).bots[0] }
+    // The memory is the definition's, named after it and not after the slug the row is known by.
+    assert.equal(memoryPath(defined), '.bravebot/memory/web-dev-2.md')
+    assert.equal(memoryPath(legacy), '.bravebot-ui/bots/old-bot.md')
+    // The quiet-turn counter decided when the briefing was sent again; a bot that is addressed has
+    // no briefing, so it never asks for one and the turn end never counts.
+    assert.equal(nudgeDue(defined), false)
+    assert.equal(nudgeDue(legacy), true)
+    saveBot(defined)
+    saveBot(legacy)
+    noteBotMemory('web-dev')
+    noteBotMemory('old-bot')
+    assert.equal(bot('web-dev').quiet, 99, 'a turn end counted a quiet turn against an addressed bot')
+    assert.notEqual(bot('old-bot').quiet, 99)
   } finally { rmSync(profile, { recursive: true, force: true }) }
 })
 

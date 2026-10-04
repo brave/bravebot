@@ -18,8 +18,15 @@ Making a bot in the desktop app writes a definition to `~/.bravebot/agents/<name
 description is the first line of the bot's purpose that is not blank, and the body is the whole
 purpose. The name is the bot's slug, or the slug with a number after it where another definition
 already has the name. An existing file is never written over. A model that is not one line, or a
-purpose with no line that is not blank, is refused and no bot is made. Editing the file by hand
-is how you narrow the bot's tools.
+purpose with no line that is not blank, is refused and no bot is made. Editing the bot's purpose or
+model in the app rewrites the description, the body and the model of that file and leaves every
+other line as it is, so a `tools` line you added stays. Every turn in the bot's conversation,
+including the one the app sends after a compaction and the one a watch you armed fires, is
+addressed to that definition, as if you had typed `/agent <name>` for it. The bot's memory is the
+definition's own, `.bravebot/memory/<name>.md` in the bot's folder. If the file is removed or no
+longer loads, the bot runs nothing and says which definition it could not find. Editing the file by
+hand is how you narrow the bot's tools. Bots made before definitions existed keep working as they
+did until they are given one.
 
 ```markdown
 ---

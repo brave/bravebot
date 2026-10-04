@@ -290,6 +290,26 @@ pub fn composed(value: Option<&Value>) -> Result<Option<Composed>, Failure> {
     }
 }
 
+/// The definition a `turn.send` says the session's conversation belongs to, if it says one
+/// ([MEMORY-10](../../../docs/specs/definition-memory.md#MEMORY-10)).
+///
+/// The desktop's main process sets it from the row of the bot a person opened, and strips it from
+/// anything a window sends. It is still checked here: it becomes the name a turn is addressed to,
+/// and it is made into a path when the definition is read, so only a name a definition can be
+/// kept under for a memory is taken. Anything else is refused and not ignored, because a turn that
+/// quietly went out unaddressed would hold the session's whole reach.
+pub fn definition(value: Option<&Value>) -> Result<Option<String>, Failure> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(name)) if bravebot_agent::memory::is_a_slug(name) => {
+            Ok(Some(name.clone()))
+        }
+        Some(_) => Err(Failure::bad_request(
+            "`definition` may only be the name of a bot's definition",
+        )),
+    }
+}
+
 /// A write awaiting a person's decision.
 ///
 /// The complete body is **not** sent, only the diff. A reviewer reads a few lines rather
