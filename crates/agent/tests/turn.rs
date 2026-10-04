@@ -7520,6 +7520,64 @@ fn a_bounded_quarantined_listing_hands_over_the_directories_it_stopped_at() {
     );
 }
 
+/// LABEL-10. Entries in one quarantined listing carry different labels when a person vouched for
+/// some of the files, and the preview the person is shown states a label that covers all of them.
+/// Which entry comes first is not fixed by the test, so each of the two files takes a turn as the
+/// vouched one: a preview that states the label of its first entry alone reads `(T,priv)` in one
+/// of the two runs, over a listing that holds a file nobody vouched for.
+#[test]
+fn the_preview_of_a_mixed_listing_states_the_label_of_the_untrusted_entries() {
+    for vouched in ["a.txt", "z.txt"] {
+        let scratch = Scratch::new("list-mixed-labels-preview");
+        std::fs::write(scratch.path.join("a.txt"), "x").unwrap();
+        std::fs::write(scratch.path.join("z.txt"), "x").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+        trust.trust(vouched);
+
+        let (endpoint, _received) = serve_sequence(vec![
+            tool_request_2("list_files", r#"{"directory":".","depth":1}"#),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+        turn::run_cancellable(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("what is at the top level"),
+            &mut bravebot_agent::Unattended,
+            &mut reporter,
+            &mut sink,
+            trust,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+
+        let shown = reporter
+            .shown
+            .iter()
+            .find(|shown| shown.origin.contains("an entry in"))
+            .expect("the listing was shown to the person");
+        assert_eq!(
+            shown.preview.len(),
+            2,
+            "the listing did not show both files, so it proves nothing: {:?}",
+            shown.preview
+        );
+        assert_eq!(
+            shown.label,
+            bravebot_core::label::Label::untrusted_private().to_string(),
+            "with {vouched} vouched for, the preview states a label that leaves out the file \
+             nobody vouched for: {:?}",
+            shown.preview
+        );
+    }
+}
+
 /// A turn is several requests when the model calls tools, and each re-sends the whole history.
 /// One round's count would understate what the turn cost, so they are summed.
 #[test]

@@ -4292,10 +4292,16 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             reporter.quarantined(crate::report::Shown {
                                 origin: entries.origin.clone(),
                                 reach: crate::report::Reach::NotThePlanner,
-                                label: references
-                                    .first()
-                                    .map(|r| r.label.to_string())
-                                    .unwrap_or_default(),
+                                // Entries in one listing carry different labels, so the preview
+                                // states what all of them and the listing itself degrade to
+                                // (LABEL-10). With no entries that is the listing's own label.
+                                label: bravebot_core::label::taint_all(
+                                    references
+                                        .iter()
+                                        .map(|r| r.label)
+                                        .chain(std::iter::once(entries.paths.label())),
+                                )
+                                .to_string(),
                                 lines: preview.len(),
                                 preview,
                             });
