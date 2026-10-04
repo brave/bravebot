@@ -50,7 +50,8 @@ export function BotView({ notices, bot, history, filtering, backendReady, onOpen
   const start = () => {
     const prompt = draft.trim()
     if (!prompt || backendReady === false) return
-    setDraft('')
+    // The draft stays: a conversation that opens replaces this page, and one that fails to open
+    // leaves the message here to send again.
     onStart(prompt, project)
   }
   const footer: ComposerFooterProps = {
