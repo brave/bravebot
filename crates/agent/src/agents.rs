@@ -201,6 +201,139 @@ fn read_definition(text: &str, origin: &str) -> Read {
     }
 }
 
+/// Why a definition's text was not rewritten.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refused {
+    /// The text has no closed front matter, or its front matter has no `description:` line, so it
+    /// is not a definition and there is nothing to rewrite.
+    NotADefinition,
+    /// The purpose has no line that is not blank, so there is no description to write.
+    NoDescription,
+    /// The model is empty, holds a line break, or is `inherit`, which reads back as no model.
+    Model,
+    /// What was written would not read back as the description, model and body given.
+    WouldNotReadBack,
+}
+
+/// Rewrite the description, the model and the body of a definition's text, and leave every other
+/// line as it is ([MEMORY-9](../../../docs/specs/definition-memory.md#MEMORY-9)).
+///
+/// The description is the first line of `purpose` that is not blank, trimmed, and the body is the
+/// whole purpose. `model` of `None` removes the `model:` line. A `tools:` line, or any key this
+/// module does not read, keeps its place and its text, since the file is the person's as much as
+/// the desktop's. The description and the model are written in single quotes so that nothing
+/// typed into a form becomes a key or a block indicator, and the result is read back before it
+/// is returned, so a text that would not read back as what was given is refused rather than
+/// written.
+pub fn rewrite_definition(
+    text: &str,
+    purpose: &str,
+    model: Option<&str>,
+) -> Result<String, Refused> {
+    let description = purpose
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .ok_or(Refused::NoDescription)?;
+    let model = match model.map(str::trim) {
+        None => None,
+        Some(m)
+            if m.is_empty() || m.contains(['\n', '\r']) || m.eq_ignore_ascii_case("inherit") =>
+        {
+            return Err(Refused::Model);
+        }
+        Some(m) => Some(m),
+    };
+
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    if lines.first().map(|l| l.trim_end()) != Some("---") {
+        return Err(Refused::NotADefinition);
+    }
+    let close = lines[1..]
+        .iter()
+        .position(|l| l.trim_end() == "---")
+        .map(|at| at + 1)
+        .ok_or(Refused::NotADefinition)?;
+    let block = &lines[1..close];
+
+    let quoted = |value: &str| format!("'{}'", value.replace('\'', "''"));
+    let mut out = String::from(lines[0]);
+    let mut wrote_description = false;
+    let mut wrote_model = false;
+
+    let mut at = 0;
+    while at < block.len() {
+        let line = block[at];
+        at += 1;
+        // The lines that belong to this key, by the rule `skills::declarations` reads them with.
+        let opened_at = crate::skills::indent_of(line);
+        let mut end = at;
+        while let Some(next) = block.get(end) {
+            if !next.trim().is_empty() && crate::skills::indent_of(next) <= opened_at {
+                break;
+            }
+            end += 1;
+        }
+        let key = line.split_once(':').map(|(key, _)| key.trim());
+        // A key written twice is read as its last line, so the first is replaced and the rest go.
+        match key {
+            Some("description") => {
+                if !wrote_description {
+                    out.push_str(&format!("description: {}\n", quoted(description)));
+                    wrote_description = true;
+                }
+            }
+            Some("model") => {
+                if let (false, Some(model)) = (wrote_model, model) {
+                    out.push_str(&format!("model: {}\n", quoted(model)));
+                }
+                wrote_model = true;
+            }
+            _ => {
+                out.push_str(line);
+                for kept in &block[at..end] {
+                    out.push_str(kept);
+                }
+                at = end;
+                continue;
+            }
+        }
+        // Blank lines after the replaced value are the file's layout and stay.
+        let mut claimed = end;
+        while claimed > at && block[claimed - 1].trim().is_empty() {
+            claimed -= 1;
+        }
+        at = claimed;
+    }
+    if !wrote_description {
+        return Err(Refused::NotADefinition);
+    }
+    if let (false, Some(model)) = (wrote_model, model) {
+        out.push_str(&format!("model: {}\n", quoted(model)));
+    }
+
+    out.push_str(lines[close].trim_end_matches(['\r', '\n']));
+    out.push_str("\n\n");
+    out.push_str(purpose);
+    if !purpose.ends_with('\n') {
+        out.push('\n');
+    }
+
+    let mut expected_body = purpose.trim_start_matches('\n').to_string();
+    if !expected_body.ends_with('\n') {
+        expected_body.push('\n');
+    }
+    let declared = crate::skills::declarations(&out).ok_or(Refused::WouldNotReadBack)?;
+    let reads_back = declared.get("description").map(String::as_str) == Some(description)
+        && declared.get("model").map(|m| m.trim()) == model
+        && crate::skills::body_after_frontmatter(&out) == expected_body;
+    if reads_back {
+        Ok(out)
+    } else {
+        Err(Refused::WouldNotReadBack)
+    }
+}
+
 /// The count a `rounds:` value names, or nothing where it names none above zero.
 ///
 /// A number too large to hold is still a number past every kind's ceiling, so it is read as the
@@ -717,6 +850,110 @@ mod tests {
             Read::NotACount => panic!("skipped: its rounds are not a count"),
             Read::Skipped(why) => panic!("skipped: {why}"),
         }
+    }
+
+    /// A `tools:` line somebody added by hand, and any key nothing here reads, must survive an
+    /// edit made in a form that does not show them.
+    #[test]
+    fn editing_a_definition_rewrites_the_description_the_model_and_the_body_alone() {
+        let before = "---\nname: helper\ndescription: Old purpose.\nkind: worker\ntools: \
+                      read_file, list_files\nmodel: old-model\nmemory: project\nmcpServers: \
+                      alpha\ncolour: teal\n---\n\nOld purpose.\nMore.\n";
+        let after = rewrite_definition(before, "New purpose.\nSecond line.", Some("new-model"))
+            .expect("rewritten");
+
+        assert_eq!(
+            after,
+            "---\nname: helper\ndescription: 'New purpose.'\nkind: worker\ntools: read_file, \
+             list_files\nmodel: 'new-model'\nmemory: project\nmcpServers: alpha\ncolour: \
+             teal\n---\n\nNew purpose.\nSecond line.\n"
+        );
+        let read = definition_of(&after);
+        assert_eq!(read.description(), "New purpose.");
+        assert_eq!(read.model(), Some("new-model"));
+        assert_eq!(read.prompt(), "New purpose.\nSecond line.\n");
+        assert_eq!(
+            read.tools(),
+            Some(["read_file".to_string(), "list_files".to_string()].as_slice())
+        );
+    }
+
+    #[test]
+    fn editing_a_definition_adds_a_model_it_lacked_and_drops_one_no_longer_chosen() {
+        let bare = "---\nname: helper\ndescription: d\nkind: worker\n---\nbody\n";
+        let with = rewrite_definition(bare, "d", Some("m")).expect("rewritten");
+        assert_eq!(definition_of(&with).model(), Some("m"));
+
+        let without = rewrite_definition(&with, "d", None).expect("rewritten");
+        assert_eq!(definition_of(&without).model(), None);
+        assert!(!without.contains("model:"));
+    }
+
+    /// What is typed into the form never becomes a key, a block indicator or part of the front
+    /// matter, and reads back exactly.
+    #[test]
+    fn a_purpose_or_model_typed_as_yaml_is_written_as_text_and_reads_back() {
+        let before = "---\nname: helper\ndescription: d\nkind: worker\ntools: read_file\n---\nb\n";
+        for purpose in [
+            "kind: reader",
+            "- a list",
+            "> folded",
+            "| literal",
+            "it's quoted ''twice''",
+            "'quoted'",
+            "\"double\"",
+            "tools: *\nsecond",
+            "---\nnot a close",
+        ] {
+            let after = rewrite_definition(before, purpose, Some("a: b")).expect("rewritten");
+            let read = definition_of(&after);
+            assert_eq!(read.kind(), Kind::Worker, "{purpose}");
+            assert_eq!(
+                read.tools(),
+                Some(["read_file".to_string()].as_slice()),
+                "{purpose}"
+            );
+            assert_eq!(read.description(), purpose.lines().next().unwrap().trim());
+            assert_eq!(read.model(), Some("a: b"));
+            assert_eq!(read.prompt(), format!("{purpose}\n"));
+        }
+    }
+
+    #[test]
+    fn an_edit_that_cannot_be_written_as_asked_is_refused() {
+        let before = "---\nname: helper\ndescription: d\nkind: worker\n---\nb\n";
+        assert_eq!(
+            rewrite_definition(before, " \n\n ", None),
+            Err(Refused::NoDescription)
+        );
+        for model in ["", "two\nlines", "inherit"] {
+            assert_eq!(
+                rewrite_definition(before, "d", Some(model)),
+                Err(Refused::Model),
+                "{model:?}"
+            );
+        }
+        assert_eq!(
+            rewrite_definition("no front matter\n", "d", None),
+            Err(Refused::NotADefinition)
+        );
+        assert_eq!(
+            rewrite_definition("---\nname: helper\nkind: worker\n---\nb\n", "d", None),
+            Err(Refused::NotADefinition)
+        );
+    }
+
+    /// A description wrapped over several lines is one value, so replacing it replaces every line
+    /// of it and none of the next key's.
+    #[test]
+    fn a_wrapped_description_is_replaced_whole() {
+        let before = "---\nname: helper\ndescription: >\n  first half\n  second half\nkind: \
+                      worker\n---\nb\n";
+        let after = rewrite_definition(before, "fresh", None).expect("rewritten");
+        assert_eq!(
+            after,
+            "---\nname: helper\ndescription: 'fresh'\nkind: worker\n---\n\nfresh\n"
+        );
     }
 
     /// The whole shape, so the rest of these tests are about one key at a time.

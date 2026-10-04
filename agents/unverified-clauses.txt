@@ -23,6 +23,5 @@ docs/specs/credential-protection.md:CRED-24: a credential never travels as a com
 docs/specs/credential-protection.md:CRED-26: where a credential can be bound to its presenter, that is the form asked for
 docs/specs/definition-memory.md:MEMORY-1: the definition file holds what a bot is for, and the desktop's store holds what happened to it
 docs/specs/definition-memory.md:MEMORY-8: making a desktop bot writes a definition in the person's own directory
-docs/specs/definition-memory.md:MEMORY-9: editing a bot rewrites only the fields the form shows
 docs/specs/definition-memory.md:MEMORY-10: every turn in a bot's conversation addresses the bot's definition
 docs/specs/definition-memory.md:MEMORY-11: a bot made before this keeps its notes where they are, untrusted until a person reads them
