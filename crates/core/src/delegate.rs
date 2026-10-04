@@ -1171,6 +1171,34 @@ impl DelegateSpec {
     }
 }
 
+/// How a delegate's run ended, as the run that collected it knows it.
+///
+/// Every part is something the driver holds: which way the result came back, the run's own
+/// round count and clock, and a fixed name for a failure. Nothing a service or a tool said is
+/// one of them, which is what lets the record it becomes hold no content (TRACE-2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Finish {
+    /// It answered, having made `rounds` rounds of tool calls in `took`.
+    Answered {
+        took: std::time::Duration,
+        rounds: usize,
+    },
+    /// Somebody stopped it before it answered.
+    Stopped {
+        took: std::time::Duration,
+        rounds: usize,
+    },
+    /// It failed before it answered. `why` is the driver's fixed name for the failure.
+    Failed {
+        took: std::time::Duration,
+        rounds: usize,
+        why: &'static str,
+    },
+    /// Its thread ended without handing anything back, so neither its time nor its rounds are
+    /// known.
+    Lost,
+}
+
 /// The routing field a person's line names a definition under, where the line addressed one.
 ///
 /// A routing field because routing is fixed before a turn observes anything, from what the

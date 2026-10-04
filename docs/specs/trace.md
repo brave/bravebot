@@ -190,3 +190,32 @@ The names are the modes' own text, so the entry holds no content (TRACE-2).
 
 `verified-by: bravebot_agent::turn::a_turn_records_the_mode_it_began_with`
 `verified-by: bravebot_agent::turn::an_approval_names_what_answered_it`
+
+<a id="TRACE-8"></a>
+### TRACE-8: the trail says how each delegate ended and why
+
+When the turn collects a delegate, it records the end under `delegate` as its own entry, with the
+delegate's number first, like the entry that started it ([DELEGATE-13](delegation.md#DELEGATE-13)).
+The entry gives how long the delegate ran, how many of its rounds it made out of the most its spec
+allows, and one cause from a fixed set: it answered; it reached its round limit and answered with
+what it had; it was stopped before it answered; it did not finish, with the fixed name of the
+failure (`unavailable`, `refused`, `transport` and the rest); or it ended without handing anything
+back, so its time and rounds are not known.
+
+```
+ok      delegate: d2: ended after 1559.0s and 37 of 120 rounds: it did not finish (unavailable)
+```
+
+The cause comes from which way the result came back, the run's round count and the failure's
+category. None of it is text a service or a tool produced, so the entry holds no content (TRACE-2).
+The note the person sees when the delegate finishes names the same cause. The planner is still told
+only that the delegate did not finish ([BACKEND-37](backends.md#BACKEND-37)).
+
+**Why.** Without it, a delegate that ran for 26 minutes and then did not finish leaves the reader of
+the trail unable to tell whether it ran out of rounds, lost its backend or was stopped. Each calls
+for a different response: raise the bound, retry, or nothing.
+
+`verified-by: bravebot_core::policy::a_delegates_end_is_recorded_with_its_time_its_rounds_and_why`
+`verified-by: bravebot_agent::turn::a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_reply`
+`verified-by: bravebot_agent::turn::a_delegate_that_reached_its_round_limit_says_so_in_the_trail_and_the_note`
+`verified-by: bravebot_agent::turn::a_stopped_delegate_and_a_lost_one_are_each_recorded_as_what_they_were`
