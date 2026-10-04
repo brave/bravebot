@@ -147,6 +147,7 @@ tool list is written out a second time as a refusal.
 `verified-by: bravebot_core::policy::a_delegate_holds_no_more_than_the_run_that_spawned_it`
 `verified-by: bravebot_core::delegate::the_kinds_are_ordered_by_what_they_hold`
 `verified-by: bravebot_core::delegate::a_kind_holds_a_language_server_exactly_where_it_may_run_programs`
+`verified-by: bravebot_core::delegate::naming_lsp_without_run_holds_no_language_server`
 `verified-by: bravebot_agent::lsp::a_checker_and_a_worker_are_offered_lsp_and_a_reader_is_not`
 `verified-by: bravebot_core::delegate::every_kind_can_reach_the_endpoint_and_nothing_else_remote`
 `verified-by: bravebot_agent::tools::no_kind_is_offered_a_tool_that_reaches_the_network`
