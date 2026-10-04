@@ -169,6 +169,11 @@ within each attachment store. Resubmitting includes each once in the new submiss
 request order described by [dropping.md](dropping.md). Editor attachment stores remain in memory
 only.
 
+**A stop withdraws the questions a turn asks after it.** Delegates share one confirmer and take
+turns at it, so when a stop answers one delegate's prompt, the next delegate's question is already on
+its way. It is declined as that stop declined the first, and is never drawn, so one press stops the
+turn however many delegates were waiting.
+
 The prompt stays sent, marked stopped, where any of three things is true: the turn had already
 done something that is on the screen, there are prompts waiting behind it, or the box is not empty.
 The first two mean there is an order to keep, and a line put back in the box would be out of it.
@@ -244,6 +249,9 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_tui::app::a_key_that_would_stop_a_turn_is_answered_during_a_summary`
 `verified-by: bravebot_tui::app::escape_stops_the_turn_without_ending_the_session`
 `verified-by: bravebot_tui::app::ctrl_g_asks_for_the_editor`
+`verified-by: bravebot_tui::app::a_question_queued_behind_a_stop_is_declined_and_never_drawn`
+`verified-by: bravebot_tui::app::a_question_is_drawn_while_nothing_has_been_stopped`
+`verified-by: bravebot_tui::app::a_withdrawn_question_is_declined_in_the_shape_of_its_own_kind`
 
 
 <a id="INPUT-5"></a>
