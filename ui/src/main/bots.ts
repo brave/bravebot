@@ -192,6 +192,8 @@ export function botFromForm(value: unknown): Bot | null {
     // omit it; either way it is stored and survives a rename.
     avatar: typeof avatar === 'string' ? avatar : newAvatarSeed(randomUUID()),
     directory,
+    // Named once the agent has written the definition, in the handler that calls this.
+    definition: null,
     session: null,
     conversations: [],
     archived: 0,

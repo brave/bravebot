@@ -13,6 +13,14 @@ and a definition is one more, written down rather than compiled in.
 Put one in `~/.bravebot/agents/<name>.md` and it is available in every project; put it in
 `<workspace>/.bravebot/agents/<name>.md` and it belongs to that project.
 
+Making a bot in the desktop app writes a definition to `~/.bravebot/agents/<name>.md`. It is a
+`worker` with `memory: project` that names no tools, so it keeps the session's reach. The
+description is the first line of the bot's purpose that is not blank, and the body is the whole
+purpose. The name is the bot's slug, or the slug with a number after it where another definition
+already has the name. An existing file is never written over. A model that is not one line, or a
+purpose with no line that is not blank, is refused and no bot is made. Editing the file by hand
+is how you narrow the bot's tools.
+
 ```markdown
 ---
 name: rule-reviewer
