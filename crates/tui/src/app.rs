@@ -8700,6 +8700,7 @@ mod tests {
 
     fn write_question(path: &str) -> crate::remote_confirm::ToMain {
         crate::remote_confirm::ToMain::Write(bravebot_agent::confirm::WriteRequest {
+            written_since_checkout: false,
             path: path.into(),
             contents: "body\n".into(),
             existing: None,

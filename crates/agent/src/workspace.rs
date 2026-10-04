@@ -461,6 +461,44 @@ pub struct Workspace {
     session_checkouts: Arc<Mutex<Vec<Made>>>,
     /// The number the next checkout takes, shared for the reason `checkouts` is.
     checkout_numbers: Arc<AtomicU64>,
+    /// The writes the session made to the working directory by a name the planner typed, in the
+    /// order they were made (CHECKOUT-14). Shared for the reason `checkouts` is.
+    working_writes: Arc<Mutex<WorkingWrites>>,
+}
+
+/// Which names the session wrote in the working directory, and when, counted in writes.
+///
+/// Names only, placed by their spelling as a checkout's candidates are. Nothing here reads a file.
+#[derive(Debug, Default)]
+struct WorkingWrites {
+    /// The number of writes recorded so far.
+    count: u64,
+    /// For each name, the number of the last write to it.
+    last: std::collections::BTreeMap<String, u64>,
+}
+
+/// `typed`, a name a planner gave a file, placed under `root` by its spelling alone, as the
+/// `/`-joined path relative to `root`. `None` where it lands outside `root` or names `root`.
+///
+/// Following a link to where the file landed would give a name the planner never typed and the
+/// repository supplied.
+fn place_by_spelling(root: &Path, typed: &str) -> Option<String> {
+    let mut placed = root.to_path_buf();
+    for component in Path::new(typed).components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                placed.pop();
+            }
+            other => placed.push(other),
+        }
+    }
+    let inside = placed.strip_prefix(root).ok()?;
+    let relative: Vec<String> = inside
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    (!relative.is_empty()).then(|| relative.join("/"))
 }
 
 /// A checkout the session made and has not removed, as the driver recorded it (CHECKOUT-21).
@@ -504,6 +542,8 @@ struct Made {
     /// The repository it was made from, recorded so `/cd` does not change which one removes it.
     git_dir: PathBuf,
     record: Arc<Record>,
+    /// How many working-directory writes had been recorded when it was made (CHECKOUT-14).
+    after: u64,
 }
 
 impl Made {
@@ -701,28 +741,11 @@ impl CheckoutInfo {
     /// Placed by its spelling alone. Following a link to where the file landed would record the
     /// link's target, a name the planner never typed and the repository supplied.
     pub fn record_typed(&self, typed: &str) {
-        let mut placed = self.made.path.clone();
-        for component in Path::new(typed).components() {
-            match component {
-                std::path::Component::CurDir => {}
-                std::path::Component::ParentDir => {
-                    placed.pop();
-                }
-                other => placed.push(other),
-            }
-        }
-        let Ok(inside) = placed.strip_prefix(&self.made.path) else {
+        let Some(relative) = place_by_spelling(&self.made.path, typed) else {
             return;
         };
-        let relative: Vec<String> = inside
-            .components()
-            .map(|component| component.as_os_str().to_string_lossy().into_owned())
-            .collect();
-        if relative.is_empty() {
-            return;
-        }
         self.mark_worked_in();
-        self.written().named.insert(relative.join("/"));
+        self.written().named.insert(relative);
     }
 
     /// Record a write a planner made through a reference (CHECKOUT-13).
@@ -1020,6 +1043,7 @@ impl Workspace {
             checkouts: Arc::default(),
             session_checkouts: Arc::default(),
             checkout_numbers: Arc::new(AtomicU64::new(1)),
+            working_writes: Arc::default(),
         })
     }
 
@@ -3499,6 +3523,30 @@ impl Workspace {
         .map_err(|_| Unremoved::Stuck)
     }
 
+    /// Whether the session wrote `relative` in the working directory, by a name the planner typed,
+    /// after checkout `id` was made (CHECKOUT-14). False where the session keeps no such checkout.
+    ///
+    /// The driver's own record of its writes. Whether the file differs from the checkout's is a
+    /// comparison of bytes, which is the person's to make from the difference they are shown.
+    pub fn written_since_checkout(&self, id: &str, relative: &str) -> bool {
+        let Some(after) = self
+            .session_checkouts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|made| made.id == id)
+            .map(|made| made.after)
+        else {
+            return false;
+        };
+        self.working_writes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .last
+            .get(relative)
+            .is_some_and(|last| *last > after)
+    }
+
     /// The text of a file the driver recorded a write to in the session's checkout `id`, labelled
     /// as the same path is in the working directory (CHECKOUT-8, CHECKOUT-14).
     ///
@@ -3670,6 +3718,11 @@ impl Workspace {
             delegate: made_for,
             git_dir: self.root.join(".git"),
             record: Arc::default(),
+            after: self
+                .working_writes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .count,
         };
         self.session_checkouts
             .lock()
@@ -3695,6 +3748,15 @@ impl Workspace {
     /// typed, or as one more write through a reference where it gave none.
     pub(crate) fn record_write(&self, typed: Option<&str>) {
         let Some(checkout) = &self.checkout else {
+            if let Some(relative) = typed.and_then(|typed| place_by_spelling(&self.root, typed)) {
+                let mut writes = self
+                    .working_writes
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                writes.count += 1;
+                let count = writes.count;
+                writes.last.insert(relative, count);
+            }
             return;
         };
         match typed {

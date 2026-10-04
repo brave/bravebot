@@ -899,6 +899,10 @@ fn change(request: &WriteRequest) -> Vec<String> {
         lines.extend(request.credentials.iter().map(|found| shown(found)));
     }
 
+    if request.written_since_checkout {
+        lines.push(t!(write_since_checkout).to_string());
+    }
+
     let diff = &request.diff;
     // A change too large to diff says so rather than showing a guess at it, which is what the
     // panel does with the same diff. The summary above still counts the lines.
@@ -1730,6 +1734,7 @@ mod tests {
     #[test]
     fn a_write_is_asked_about_with_the_change_it_would_make() {
         let request = WriteRequest {
+            written_since_checkout: false,
             path: "notes.md".to_string(),
             contents: "kept\nwritten\x1b[2J".to_string(),
             existing: Some("kept\nreplaced".to_string()),
@@ -1757,12 +1762,37 @@ mod tests {
         );
     }
 
+    /// CHECKOUT-14. The question for a file brought back from a checkout says the session wrote the
+    /// path in the working directory since, and one for any other write does not.
+    #[test]
+    fn a_write_since_the_checkout_is_said_in_the_plain_question() {
+        let asked = |since: bool| {
+            change(&WriteRequest {
+                written_since_checkout: since,
+                path: "out.txt".to_string(),
+                contents: "theirs\n".to_string(),
+                existing: Some("mine\n".to_string()),
+                diff: bravebot_agent::diff::Diff::compute("mine\n", "theirs\n"),
+                intent: bravebot_agent::confirm::Intent::Overwrite,
+                untrusted: false,
+                remark: None,
+                credentials: Vec::new(),
+                may_always: false,
+                record: None,
+            })
+            .join("\n")
+        };
+        assert!(asked(true).contains("after the checkout was made"));
+        assert!(!asked(false).contains("after the checkout was made"));
+    }
+
     /// A processor's claim about a body it produced belongs beside the lines it describes. Nothing
     /// checks a remark against the document, and it decides nothing, so a person reading the diff
     /// has to be able to read the claim against it rather than remember it from further up.
     #[test]
     fn a_write_a_processor_produced_carries_what_it_said_about_it() {
         let request = WriteRequest {
+            written_since_checkout: false,
             path: "notes.md".to_string(),
             contents: "written\n".to_string(),
             existing: None,

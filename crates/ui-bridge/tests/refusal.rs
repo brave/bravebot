@@ -33,6 +33,7 @@ fn a_question(id: u64) -> Question {
 
 fn a_write() -> WriteRequest {
     WriteRequest {
+        written_since_checkout: false,
         path: "src/main.rs".into(),
         contents: "new\n".into(),
         existing: Some("old\n".into()),
@@ -121,6 +122,7 @@ fn a_closed_answer_channel_refuses() {
 #[test]
 fn an_answered_write_gets_the_answer_that_was_sent() {
     let write = WriteRequest {
+        written_since_checkout: false,
         may_always: true,
         ..a_write()
     };

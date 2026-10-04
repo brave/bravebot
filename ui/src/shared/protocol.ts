@@ -267,6 +267,11 @@ export interface ConfirmRequest {
    * already a kind, a location and a masked preview, so drawing one repeats no part of the value.
    */
   credentials?: string[]
+  /**
+   * Whether the agent's own record holds a write to this path in the working directory after the
+   * checkout the body comes from was made. Names only: it says nothing of whether the bytes differ.
+   */
+  writtenSinceCheckout?: boolean
   request: number
   path: string
   intent: Intent

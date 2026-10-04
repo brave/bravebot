@@ -318,6 +318,9 @@ pub fn write_request(id: u64, request: &WriteRequest) -> Value {
         // reason `CONTEXT_LINES` is shared: the decision is about these lines, and an
         // approval has to mean the same thing in both front-ends.
         "credentials": request.credentials,
+        // The driver's own record, so a front-end can say the working directory's file was
+        // written after the checkout it is being brought back from was made.
+        "writtenSinceCheckout": request.written_since_checkout,
         "existing": request.existing.is_some(),
         "added": diff.added(),
         "removed": diff.removed(),

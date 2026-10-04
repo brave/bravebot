@@ -24720,17 +24720,36 @@ fn apply_after_a_worker_wrote(
     applies: Vec<&'static str>,
     confirmer: RecordingConfirmer,
 ) -> (Vec<String>, RecordingConfirmer, Scratch, RecordingSink) {
+    apply_between_working_directory_writes(tag, vec![], vec![], applies, confirmer)
+}
+
+/// As [`apply_after_a_worker_wrote`], with the planner's own `write_file` calls (arguments given)
+/// made before it asks for the checkout and after the worker has ended.
+fn apply_between_working_directory_writes(
+    tag: &str,
+    writes_before: Vec<&'static str>,
+    writes_after: Vec<&'static str>,
+    applies: Vec<&'static str>,
+    confirmer: RecordingConfirmer,
+) -> (Vec<String>, RecordingConfirmer, Scratch, RecordingSink) {
     let scratch = Scratch::new(tag);
     let home = Scratch::new(&format!("{tag}-home"));
     repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let mut planner = vec![
-        tool_request(
-            "spawn_agent",
-            r#"{"kind":"worker","task":"WRITE-OUT-TO-APPLY","isolation":"checkout"}"#,
-        ),
-        reply_with("waiting"),
-    ];
+    let mut planner: Vec<String> = writes_before
+        .into_iter()
+        .map(|call| tool_request("write_file", call))
+        .collect();
+    planner.push(tool_request(
+        "spawn_agent",
+        r#"{"kind":"worker","task":"WRITE-OUT-TO-APPLY","isolation":"checkout"}"#,
+    ));
+    planner.push(reply_with("waiting"));
+    planner.extend(
+        writes_after
+            .into_iter()
+            .map(|call| tool_request("write_file", call)),
+    );
     planner.extend(
         applies
             .into_iter()
@@ -24759,6 +24778,40 @@ fn apply_after_a_worker_wrote(
         confirmer,
     );
     (asked, confirmer, scratch, sink)
+}
+
+/// CHECKOUT-14. The question says so where the session wrote the same path in the working
+/// directory after the checkout was made, and does not where it wrote another path, or the same one
+/// before the checkout existed.
+#[test]
+fn the_question_says_the_working_directory_was_written_since_the_checkout() {
+    let mine = r#"{"path":"out.txt","contents":"written by the planner"}"#;
+    let other = r#"{"path":"other.txt","contents":"unrelated"}"#;
+    let apply = vec![r#"{"checkout":"c1"}"#];
+    let cases = [
+        ("checkout-since-same", vec![], vec![mine], true),
+        ("checkout-since-other", vec![], vec![other], false),
+        ("checkout-since-before", vec![mine], vec![], false),
+    ];
+    for (tag, before, after, expected) in cases {
+        let (_asked, confirmer, _scratch, _sink) = apply_between_working_directory_writes(
+            tag,
+            before,
+            after,
+            apply.clone(),
+            RecordingConfirmer::approving(),
+        );
+        let applies: Vec<_> = confirmer
+            .seen
+            .iter()
+            .filter(|request| request.path == "out.txt")
+            .collect();
+        assert_eq!(applies.len(), 1, "{tag}: the apply asked {applies:#?}");
+        assert_eq!(
+            applies[0].written_since_checkout, expected,
+            "{tag}: the question's note is wrong"
+        );
+    }
 }
 
 /// CHECKOUT-14. A file a delegate wrote in its kept checkout comes back into the working
