@@ -59,13 +59,10 @@ The structure is set in `styles/shell.css` and `columns.ts`. New surfaces fit in
   has no arrow, and "Back to BraveBot" in the page list leaves settings.
 - **Dividers.** A divider is a seam. It is invisible until hovered, focused or dragged, then shows
   a 2px accent line.
-- **Dialogs.** Dialogs use `Modal` in one of four widths: `sm` 440, `md` 560, `lg` 760, `xl` 1080.
+- **Dialogs.** Dialogs use `Modal` in one of four widths: `sm` 400, `md` 500, `lg` 760, `xl` 1080.
   The head is a title and at most one line saying what the dialog is for. The primary action is at
   the right of the footer. A secondary action that should stand apart (Cancel, Stop all) carries
   `modal-leading` and goes to the left.
-- **Density.** Comfortable and compact are a preference in Settings. `.app.compact` redefines row
-  heights and gaps, so new rows and gaps use `--row-h`, `--session-row-h`, `--turn-gap` and
-  `--part-gap` and follow it without extra rules.
 
 ## Hard rules
 
@@ -119,7 +116,7 @@ not used in new code.
 
 ## Quality bar for every surface
 
-A surface is done only when all of this holds in light, dark, compact and comfortable, at 1440×900
+A surface is done only when all of this holds in light and dark, at 1440×900
 and at the minimum window size.
 
 **Grid and alignment**
@@ -165,7 +162,7 @@ and at the minimum window size.
   clickable row is added to that list. Menu items keep the arrow. Transcript text and the readable
   parts of dialogs stay selectable.
 - Scrollbars are thin, overlay and token-coloured. `::selection` uses a Leo token.
-- Tooltips wait 500ms the first time, then show instantly while the pointer moves between controls.
+- Tooltips wait 1s the first time, then show instantly while the pointer moves between controls.
   There is one tooltip layer, driven by `data-tooltip`; a native `title` is not used.
 
 **Motion**
