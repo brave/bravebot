@@ -521,6 +521,7 @@ leo-set-and-rebuild = set { $variable } and rebuild
 leo-unknown-channel = unknown channel: { $channel }
 leo-expected-channel = expected one of: stable, beta, nightly, development
 leo-forgotten = forgot the imported subscription
+leo-forget-takes-no-channel = --forget takes no channel: one subscription is stored for every channel
 leo-not-while-incognito = an import stores credentials on disk, which an incognito session will not do
 leo-looking = looking for a Leo subscription in Brave { $channel }
 leo-found = found a { $environment } subscription: { $order }

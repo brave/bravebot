@@ -2163,12 +2163,13 @@ fn import_leo_creds(args: &[String]) -> ExitCode {
         }
     }
 
-    // Stable is what someone importing without saying which install means.
-    let channel = channel.unwrap_or(bravebot_skus::Channel::Stable);
-
     // There is one stored batch, so forgetting takes no channel: naming one would suggest
-    // `--forget nightly` leaves a stable import in place, and it does not.
+    // `--forget nightly` leaves a stable import in place, and it does not. It is refused rather
+    // than ignored, before anything is removed.
     if forget {
+        if channel.is_some() {
+            return fail(Ending::Argument, t!(leo_forget_takes_no_channel));
+        }
         return match bravebot_skus::store::clear() {
             Ok(()) => {
                 println!("{}", t!(leo_forgotten));
@@ -2177,6 +2178,9 @@ fn import_leo_creds(args: &[String]) -> ExitCode {
             Err(err) => fail(Ending::Failed, err),
         };
     }
+
+    // Stable is what someone importing without saying which install means.
+    let channel = channel.unwrap_or(bravebot_skus::Channel::Stable);
 
     // Refused rather than silently skipped, and refused before the device is registered so a
     // batch is not minted that nothing will ever be able to spend. An import is a write by

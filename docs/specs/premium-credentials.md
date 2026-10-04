@@ -210,6 +210,8 @@ no desktop session had no store to open and every such user was silently spendin
 `verified-by: bravebot_skus::store::a_credential_without_a_token_is_rejected_on_load`
 `verified-by: bravebot_skus::store::an_entry_missing_its_order_is_reported_as_malformed`
 `verified-by: bravebot_skus::store::a_batch_survives_a_round_trip_through_the_stored_form`
+`verified-by: bravebot_skus::store::a_write_that_fails_partway_removes_its_temporary_and_keeps_the_last_batch`
+`verified-by: bravebot_cli::running::forgetting_takes_no_channel`
 
 <a id="PREM-8"></a>
 ### PREM-8: a stored subscription that cannot be used is reported rather than skipped

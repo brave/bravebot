@@ -428,6 +428,7 @@ leo-set-and-rebuild = définissez { $variable } et recompilez
 leo-unknown-channel = canal inconnu : { $channel }
 leo-expected-channel = attendu parmi : stable, beta, nightly, development
 leo-forgotten = abonnement importé oublié
+leo-forget-takes-no-channel = --forget n'accepte pas de canal : un seul abonnement est enregistré pour tous les canaux
 leo-not-while-incognito = un import enregistre des identifiants sur le disque, ce qu'une session incognito ne fera pas
 leo-looking = recherche d'un abonnement Leo dans Brave { $channel }
 leo-found = abonnement { $environment } trouvé : { $order }
