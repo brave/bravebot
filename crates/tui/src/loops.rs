@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 const FLOOR: Duration = Duration::from_secs(5);
 
 /// How long a loop may run before it ends itself.
-const MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+pub(crate) const MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// What the driver waits when a self-paced turn ended without saying when to wake.
 const KEEPALIVE: Duration = Duration::from_secs(1_200);
