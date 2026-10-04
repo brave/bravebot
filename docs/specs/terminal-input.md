@@ -160,6 +160,15 @@ press that appeared to do nothing and said nothing reads as an interface that ha
 responding. Any key that is not itself one of the two that leave withdraws the offer, so a press now
 and a byte written later are not the two halves of one gesture.
 
+**A turn asked to stop says so until it ends.** From the press that asks for the stop, the working
+indicator names the stop ahead of every other word it would use, and keeps naming it until the turn
+ends. A further press while the turn is stopping finds the same word, since it asks for the stop
+already underway. The ladder is unchanged: the mark is what the screen says, not a rung.
+
+**Why.** A turn ends once its worker and every delegate it started have returned, which can take
+seconds. An indicator still naming the work through that wait reads as a press nobody heard, and
+the person presses again, toward the presses at an empty box that end the session.
+
 **Stopping shows a cancelled status, and the prompt comes back when the box can take it.**
 The reply stops arriving. When no work followed the prompt, no prompts are queued, and the box is
 empty, the prompt returns for editing. The status identifies a deliberate cancellation rather than
@@ -252,6 +261,8 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_tui::app::a_question_queued_behind_a_stop_is_declined_and_never_drawn`
 `verified-by: bravebot_tui::app::a_question_is_drawn_while_nothing_has_been_stopped`
 `verified-by: bravebot_tui::app::a_withdrawn_question_is_declined_in_the_shape_of_its_own_kind`
+`verified-by: bravebot_tui::render::a_turn_asked_to_stop_says_so_until_it_ends`
+`verified-by: bravebot_tui::state::the_stopping_mark_ends_with_the_turn`
 
 
 <a id="INPUT-5"></a>

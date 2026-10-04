@@ -1710,6 +1710,10 @@ indicator-checking = { $lines ->
 # The same, over a picture or a PDF, which has no lines to count.
 indicator-checking-picture = Checking a picture
 indicator-checking-pdf = Checking a PDF
+# Said while a turn is being stopped, from the press that asks for it until the turn ends. The turn
+# ends once its worker and every delegate it started have returned, which can take seconds, and a
+# screen still saying what it said before the press reads as a press nobody heard.
+indicator-stopping = Stopping
 # Abbreviated counts, already rounded to one place.
 tokens-thousands = { $thousands }k
 tokens-millions = { $millions }M

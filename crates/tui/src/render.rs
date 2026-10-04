@@ -6091,6 +6091,25 @@ mod tests {
             assert!(!output.contains(ITS_OWN_TURN), "{output}");
         }
 
+        /// A stop lands once the worker and every delegate have returned, which can be seconds
+        /// after the press. A screen that stands still that long reads as a press nobody heard,
+        /// and the presses that follow walk toward the two at an empty box that leave.
+        #[test]
+        fn a_turn_asked_to_stop_says_so_until_it_ends() {
+            const STOPPING: &str = "Stopping…";
+            let mut session = working();
+            let output = rendered(&session);
+            assert!(!output.contains(STOPPING), "{output}");
+
+            session.stop_asked();
+            let output = rendered(&session);
+            assert!(output.contains(STOPPING), "{output}");
+
+            session.stopped(Some(0));
+            let output = rendered(&session);
+            assert!(!output.contains(STOPPING), "{output}");
+        }
+
         /// Only the prompt that starts a turn leaves the buffer that turn reads, so the prompts behind
         /// it go into the turn it starts, a command between them or not. Said to be turns of their
         /// own, each would promise a turn that never begins. A command ahead of the first is no

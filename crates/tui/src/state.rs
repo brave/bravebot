@@ -1544,8 +1544,9 @@ pub struct Session {
     /// Whether the person has asked for what is running to stop, since the last turn began.
     ///
     /// A turn being stopped takes nothing more at its round boundaries, so a prompt waiting behind
-    /// it is not going into it. Only the rows under the box read this, and only while a turn is in
-    /// flight, which is why the next turn beginning is the one place it goes down.
+    /// it is not going into it. The rows under the box and the status line read this, and only
+    /// while a turn is in flight, which is why the next turn beginning is the one place it goes
+    /// down.
     stopping: bool,
     /// Whether the terminal tells Ctrl-Enter from Enter.
     ///
@@ -2018,11 +2019,20 @@ impl Session {
 
     /// What the indicator should call what is happening, most specific first.
     ///
-    /// A check in flight is the most immediate answer, then the call the model is writing, then
-    /// the phase it is waiting in. `None` only before the first request goes out, when
-    /// there is genuinely nothing to say yet and the turn's own word is all there is.
+    /// A stop asked for is the first answer, then a check in flight, then the call the model is
+    /// writing, then the phase it is waiting in. `None` only before the first request goes out,
+    /// when there is genuinely nothing to say yet and the turn's own word is all there is.
     fn what_is_happening(&self) -> Option<String> {
-        // A check first, and ahead of every phase: it is a whole model call inside the tool call
+        // A stop ahead of everything, because everything else on this row is what the turn is
+        // being taken away from. The turn ends once its worker and its delegates return, which can
+        // take seconds, and a row still naming the work through that wait reads as a press nobody
+        // heard. Every further press finds the same word, which is its answer too: it asks for the
+        // stop already underway.
+        if self.stopping && self.a_turn_is_running() {
+            return Some(t!(indicator_stopping).to_string());
+        }
+
+        // A check next, and ahead of every phase: it is a whole model call inside the tool call
         // on the row above, so the round's own word is the one thing here that is not what the
         // session is waiting on. With auto-vetting on and a safe verdict no prompt is ever drawn
         // for it either, so without this the two words on that row are the whole of what a person
@@ -16156,6 +16166,37 @@ mod tests {
             s.checking(bravebot_core::vetting::Checking::Lines(3));
             s.complete("done", Vec::new(), 0);
             assert!(s.checking.is_none(), "a check outlived the turn");
+        }
+
+        /// A stop takes the word from everything else on the row and gives it up with the turn it
+        /// was asked of, however that turn ends. What runs next, an aside or another turn, is not
+        /// being stopped, and a word that outlived the turn would say it was.
+        #[test]
+        fn the_stopping_mark_ends_with_the_turn() {
+            let mut s = working();
+            s.set_phase(Phase::Planning);
+            s.checking(bravebot_core::vetting::Checking::Lines(3));
+            s.stop_asked();
+            assert_eq!(s.indicator().expect("working").verb, "Stopping");
+
+            stop(&mut s, "a");
+            s.begin_aside();
+            s.set_phase(Phase::Compacting);
+            assert_eq!(s.indicator().expect("working").verb, "Compacting");
+            s.end_aside(0);
+
+            s.submit().expect("submitted");
+            s.stop_asked();
+            s.complete("an answer that beat the stop", Vec::new(), 0);
+            s.begin_aside();
+            s.set_phase(Phase::Compacting);
+            assert_eq!(s.indicator().expect("working").verb, "Compacting");
+            s.end_aside(0);
+
+            s.type_char('b');
+            s.submit().expect("submitted");
+            s.set_phase(Phase::Planning);
+            assert_eq!(s.indicator().expect("working").verb, "Planning");
         }
 
         /// A call the model is writing has no line of its own yet, and a service holding its

@@ -6929,9 +6929,10 @@ fn run_turn_animated(
                     // go wrong is asking for the answer to stop rather than for the session to
                     // end. The next press, at the box, is the one that leaves.
                     //
-                    // Nothing is said about stopping. The stop is the prompt coming back to the
-                    // box a moment later, which is both the answer and what the person wanted;
-                    // a line saying "cancelling…" is a progress report on a key press.
+                    // The status line says the turn is stopping from this press until it ends.
+                    // The prompt coming back to the box is the answer, but it comes only once the
+                    // worker and every delegate have returned, which can be seconds, and a screen
+                    // that stands still that long reads as a press nobody heard.
                     TermEvent::Key(key) if stops_the_turn(session, key) => {
                         stop_what_is_running(session, &cancel);
                     }
