@@ -9,6 +9,10 @@
 #[cfg(test)]
 mod testutil;
 
+#[cfg(test)]
+#[path = "../../session/test-support/profile.rs"]
+mod test_profile;
+
 pub mod app;
 pub mod ask;
 pub mod checkouts_command;

@@ -9,9 +9,7 @@ pub(super) mod endpoint;
 
 const SENTINEL: &str = "UNTRUSTED_UNDO_REPLACEMENT_92817";
 
-#[path = "../../session/test-support/profile.rs"]
-mod profile;
-use profile::{in_isolated_profile, project as scratch_dir};
+use crate::test_profile::{in_isolated_profile, project as scratch_dir};
 
 fn save(
     stored: &mut sessions::Handle,

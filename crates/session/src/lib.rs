@@ -10,6 +10,10 @@
 #[cfg(test)]
 mod testutil;
 
+#[cfg(test)]
+#[path = "../test-support/profile.rs"]
+mod test_profile;
+
 pub mod audit;
 pub mod sessions;
 pub mod store;
