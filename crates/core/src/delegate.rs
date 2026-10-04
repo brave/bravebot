@@ -498,14 +498,26 @@ impl Definition {
         let Some(tools) = self.tools.as_deref() else {
             return held;
         };
-        held.iter()
+        let named: CapabilitySet = held
+            .iter()
             .filter(|capability| {
                 HELD_WHATEVER_IT_NAMED.contains(capability)
                     || tools
                         .iter()
                         .any(|tool| reachable_by(tool).as_ref() == Some(capability))
             })
-            .collect()
+            .collect();
+        // A language server goes with running programs and never without (DELEGATE-4, LSP-5):
+        // `lsp` and `run` are selected independently by a `tools:` line, so a definition naming
+        // the first alone is cut down to neither.
+        if named.contains(&Capability::ShellExec) {
+            named
+        } else {
+            named
+                .iter()
+                .filter(|capability| *capability != Capability::LanguageServer)
+                .collect()
+        }
     }
 
     /// The servers this definition selects, or `None` for every one its parent holds.
@@ -1767,6 +1779,45 @@ mod tests {
             !held.contains(&Capability::ShellExec),
             "a definition that names no program still held shell_exec"
         );
+    }
+
+    /// A language server goes with running programs: starting one runs the project's build
+    /// tooling, so a definition naming `lsp` without `run` holds and is offered neither.
+    #[test]
+    fn naming_lsp_without_run_holds_no_language_server() {
+        for kind in [Kind::Checker, Kind::Worker] {
+            let lsp_only = Definition::from_file(
+                "lsp-only",
+                "asks a server",
+                kind,
+                Some(["read_file", "lsp"].map(str::to_string).to_vec()),
+                "",
+                "test",
+            );
+            let held = lsp_only.capabilities();
+            assert!(
+                !held.contains(&Capability::LanguageServer),
+                "a definition of kind {} naming lsp without run held a language server",
+                kind.as_str()
+            );
+            assert!(!held.contains(&Capability::ShellExec));
+            assert!(
+                !lsp_only
+                    .held_out_of(&kind.capabilities())
+                    .contains(&Capability::LanguageServer),
+                "the parent's set re-granted the language server"
+            );
+
+            let both = Definition::from_file(
+                "lsp-and-run",
+                "asks a server",
+                kind,
+                Some(["read_file", "lsp", "run"].map(str::to_string).to_vec()),
+                "",
+                "test",
+            );
+            assert!(both.capabilities().contains(&Capability::LanguageServer));
+        }
     }
 
     /// A planner is a model call, so a definition narrowed to one read tool still has to be able
