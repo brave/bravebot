@@ -5583,6 +5583,26 @@ fn opening_trust(
     Some((trust, whence))
 }
 
+/// A key press while a command runs from shell mode.
+///
+/// A scroller left open when the command began (a queued command line begins one as the turn ends,
+/// and nothing closes a view then) answers the press first, so `q`, Escape, Ctrl-O and Ctrl-C close
+/// it and the press that reaches the command is the next one (SCROLL-1). Otherwise a running
+/// command is something to stop, so Ctrl-C stops it and stays, for the reason it stops a turn: the
+/// way out is the press after that, at the box. Every other key waits. A command is brief, and
+/// taking a prompt here would leave it half-typed when the output lands on top of it.
+fn command_key(session: &mut Session, key: KeyEvent, cancel: &Cancel) {
+    if key.kind == KeyEventKind::Release {
+        return;
+    }
+    if session.scrolling() {
+        let action = scroller_key(session, key);
+        act_while_working(session, action, crate::clipboard::paste);
+    } else if stops_a_command(session, key) {
+        stop_what_is_running(session, cancel);
+    }
+}
+
 /// Run a command the user typed in shell mode, redrawing while it runs.
 ///
 /// On a worker thread for the reason a turn is: a command can take as long as it likes, and running
@@ -5624,12 +5644,7 @@ fn run_command(
             let taken = input::read()?;
             took_input(session, &taken);
             match taken {
-                TermEvent::Key(key) if key.kind == KeyEventKind::Release => {}
-                // A running command is something to stop, so Ctrl-C stops it and stays, for the
-                // reason it stops a turn: the way out is the press after that, at the box.
-                TermEvent::Key(key) if stops_a_command(session, key) => {
-                    stop_what_is_running(session, &cancel);
-                }
+                TermEvent::Key(key) => command_key(session, key, &cancel),
                 TermEvent::Mouse(mouse) => {
                     let action = handle_mouse(session, mouse);
                     if action == Action::Copy {
@@ -9611,6 +9626,58 @@ mod tests {
 
             assert_eq!(session.status, Status::Working, "the turn was stopped");
             assert!(session.scrolling(), "the scroller closed on its own");
+        }
+
+        /// A command line queued behind a turn begins as the turn ends, and nothing closes a view
+        /// then, so the scroller can be open when the command starts. The four keys still close
+        /// it, and the press that reaches the command is the next one.
+        #[test]
+        fn the_scroller_left_open_under_a_running_command_still_closes() {
+            for closing in [
+                key(KeyCode::Char('q')),
+                key(KeyCode::Esc),
+                ctrl('o'),
+                ctrl('c'),
+            ] {
+                let mut session = opened();
+                session.status = Status::Running;
+                let cancel = Cancel::new();
+
+                command_key(&mut session, closing, &cancel);
+
+                assert!(!session.scrolling(), "{closing:?} did not close it");
+                assert!(
+                    !cancel.is_cancelled(),
+                    "{closing:?} stopped the command as well as closing the scroller"
+                );
+            }
+        }
+
+        #[test]
+        fn the_press_after_the_scroller_closes_stops_the_command() {
+            for stopping in [ctrl('c'), key(KeyCode::Esc)] {
+                let mut session = opened();
+                session.status = Status::Running;
+                let cancel = Cancel::new();
+
+                command_key(&mut session, ctrl('c'), &cancel);
+                command_key(&mut session, stopping, &cancel);
+
+                assert!(cancel.is_cancelled(), "{stopping:?} did not reach it");
+            }
+        }
+
+        #[test]
+        fn the_scroller_keeps_scrolling_under_a_running_command() {
+            let mut session = opened();
+            session.status = Status::Running;
+            let cancel = Cancel::new();
+
+            command_key(&mut session, key(KeyCode::Char('k')), &cancel);
+
+            assert!(session.scrolling());
+            assert!(session.scroll > 0, "the view did not move");
+            assert!(!cancel.is_cancelled());
         }
 
         /// A mode that leaks its keystrokes into a box nobody can see is the worse half of both:
