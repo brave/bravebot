@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { newAvatarSeed } from '../../shared/avatar'
 import { botFolders, type Bot } from '../../shared/bots'
 import { projectLabel } from '../../shared/recents'
+import { useFitTextArea } from '../hooks'
 import { Dropdown, Input, TextArea } from '../nala'
 import { BotAvatar } from './BotAvatar'
 import { BotMemory } from './BotMemory'
@@ -28,6 +29,8 @@ export function BotDetails({ bot, onSave, onArchive }: {
   useEffect(() => { setPurpose(bot.purpose) }, [bot.slug, bot.purpose])
   useEffect(() => { setFolder(bot.home) }, [bot.slug, bot.home])
   const folders = botFolders(bot)
+  const purposeField = useRef<HTMLElement>(null)
+  useFitTextArea(purposeField, purpose, 3, 8)
 
   const commit = (next: { name?: string; purpose?: string }) => {
     const value = { name: (next.name ?? name).trim(), purpose: (next.purpose ?? purpose).trim() }
@@ -64,7 +67,7 @@ export function BotDetails({ bot, onSave, onArchive }: {
           </Input>
         </div>
         <div className="bot-field">
-          <TextArea value={purpose} minRows={3} maxRows={8} onInput={({ value }) => setPurpose(value)}
+          <TextArea ref={purposeField} value={purpose} minRows={3} maxRows={8} onInput={({ value }) => setPurpose(value)}
             onChange={({ value }) => { setPurpose(value); commit({ purpose: value }) }}>
             Purpose
           </TextArea>
