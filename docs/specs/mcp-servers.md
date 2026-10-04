@@ -405,6 +405,7 @@ these is refused.
 `verified-by: bravebot_ui_bridge::connectors::removing_a_connector_leaves_an_approvals_file_it_cannot_read`
 `verified-by: bravebot_cli::mcp::approve_records_only_on_a_yes_and_a_no_ends_refused`
 `verified-by: bravebot_cli::mcp::the_question_shows_every_argument_as_the_word_it_is`
+`verified-by: bravebot_cli::mcp::the_question_shows_the_path_a_bare_name_resolved_to`
 `verified-by: bravebot_cli::mcp::a_bare_double_dash_declares_the_program_after_it`
 `verified-by: bravebot_cli::running::an_added_server_nobody_was_asked_about_is_declared_and_listed_unapproved`
 `verified-by: bravebot_cli::running::a_flag_of_bravebots_after_the_bare_dashes_is_the_servers_argument`

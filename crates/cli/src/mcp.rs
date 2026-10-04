@@ -1277,7 +1277,14 @@ fn ask<R: BufRead, W: Write>(
         return Asked::Nobody;
     }
     say(person, "");
-    for line in drawn(alias, declaration, &digest.short()) {
+    let mut lines = drawn(alias, declaration, &digest.short());
+    let environment = |name: &str| std::env::var_os(name);
+    if let Some(runs) =
+        bravebot_agent::servers::resolved_program_line(alias, declaration, &environment)
+    {
+        lines.insert(1, runs);
+    }
+    for line in lines {
         say(person, line);
     }
     if !changed.is_empty() {
@@ -2334,6 +2341,51 @@ mod tests {
         let shown = t!(mcp_variables, names = "PATH").to_string();
         assert!(screen.lines().any(|line| line.trim() == shown), "{screen}");
         assert!(approved(&directory, &weather()));
+    }
+
+    /// The `runs` line SERVERS-4 draws is drawn by the question `add` asks as well, since the
+    /// approval covers the declared argv and the path a bare name resolves to is the one place a
+    /// person can see which program a yes starts. It is not drawn for a program given as a path.
+    #[test]
+    fn the_question_shows_the_path_a_bare_name_resolved_to() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = scratch("cli-mcp-runs");
+        let bin = std::fs::canonicalize(&directory).unwrap().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let npx = bin.join("npx");
+        std::fs::write(&npx, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&npx, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = format!("PATH={}", bin.display());
+        let runs = t!(servers_program, path = npx.display().to_string()).to_string();
+
+        let bare = [
+            "add",
+            "weather",
+            "-e",
+            &path,
+            "--",
+            "npx",
+            "-y",
+            "weather-mcp",
+        ];
+        let (_, screen) = typing(&directory, &bare, "n\n");
+        let lines: Vec<&str> = screen.lines().map(str::trim).collect();
+        assert!(lines.contains(&runs.as_str()), "{screen}");
+        let position = |wanted: &str| lines.iter().position(|line| line.starts_with(wanted));
+        assert!(position(&runs) < position("digest"), "{screen}");
+
+        let given = ["add", "shell", "--", "/bin/sh", "-c", "true"];
+        let (_, screen) = typing(&directory, &given, "n\n");
+        let word = runs
+            .split(&npx.display().to_string())
+            .next()
+            .unwrap()
+            .trim();
+        assert!(!word.is_empty());
+        assert!(
+            !screen.lines().any(|line| line.trim().starts_with(word)),
+            "{screen}"
+        );
     }
 
     #[test]
