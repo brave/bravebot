@@ -7625,6 +7625,56 @@ impl Session {
         Some(self.begin_turn(prompt, (Vec::new(), Vec::new()), Vec::new()))
     }
 
+    /// Act on what a check of the goal came back with, and give back the prompt that sends the
+    /// work back where there is one.
+    ///
+    /// `Err` is a check whose request failed, carrying what a person can be told about it.
+    pub fn goal_judged(
+        &mut self,
+        judged: Result<bravebot_agent::goal::Verdict, String>,
+    ) -> Option<String> {
+        use bravebot_agent::goal::Verdict;
+        let verdict = match judged {
+            Ok(verdict) => verdict,
+            Err(problem) => {
+                self.drop_goal();
+                self.note(t!(goal_failed, problem = problem));
+                return None;
+            }
+        };
+
+        // A goal taken off while the check was in flight is a person having said stop. The verdict
+        // is about a goal that no longer exists, so it is not acted on and not reported: telling
+        // them the condition cannot be met, a moment after they cleared it, describes a session
+        // they are no longer in.
+        self.goal.as_ref()?;
+
+        // Four of the five verdicts end the goal, and the person is told which one it was in each
+        // case. Only one sends the work back, and even that one stops where the rounds are spent.
+        match verdict {
+            Verdict::NotMet { reason } => self.goal_not_met(reason),
+            Verdict::Met { reason } => {
+                self.goal_met(reason);
+                None
+            }
+            Verdict::Impossible { reason } => {
+                self.drop_goal();
+                self.note(t!(goal_impossible, reason = &reason));
+                None
+            }
+            Verdict::Unreadable => {
+                self.drop_goal();
+                self.note(t!(goal_unreadable));
+                None
+            }
+            Verdict::Quarantined => {
+                self.drop_goal();
+                self.note(t!(goal_quarantined));
+                None
+            }
+        }
+    }
+
     /// Every live watch, oldest first, for the report that lists them.
     pub fn watches(&self) -> &[watch::Watch] {
         self.watches.live()
@@ -13540,7 +13590,8 @@ mod tests {
 
     /// Both of these keep a session working without anybody typing. Together, the interval stops
     /// meaning anything and the condition is judged against a turn that was going to repeat
-    /// anyway, so whichever was asked for second is the one that stands.
+    /// anyway, so whichever was asked for second is the one that stands, and the one it replaced
+    /// is reported as stopped: otherwise a loop somebody is waiting on ends in silence.
     #[test]
     fn a_goal_and_a_loop_are_never_both_running() {
         let mut s = session();
@@ -13548,12 +13599,24 @@ mod tests {
         s.start_goal("cargo test exits 0".to_string());
         assert!(s.looping().is_none(), "the loop outlived the goal");
         assert!(s.goal().is_some());
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(goal_replaces_loop)),
+            "the goal took the loop off without saying so"
+        );
 
         let mut s = session();
         s.start_goal("cargo test exits 0".to_string());
         s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
         assert!(s.goal().is_none(), "the goal outlived the loop");
         assert!(s.looping().is_some());
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(loop_replaces_goal)),
+            "the loop took the goal off without saying so"
+        );
     }
 
     /// The prompt that carries the work on is the driver's own sentence with the judge's reason
@@ -13576,6 +13639,9 @@ mod tests {
 
     /// A condition nobody can satisfy would otherwise spend the session's whole budget, since
     /// every round is a turn with the conversation re-sent.
+    ///
+    /// Ten written out rather than read from the constant, because the number is what the
+    /// specification promises a person and the constant is what would change.
     #[test]
     fn a_goal_that_runs_out_of_rounds_stops_rather_than_sending_the_work_back_again() {
         let mut s = session();
@@ -13583,7 +13649,7 @@ mod tests {
 
         let sent = spend(&mut s, "still nothing");
 
-        assert!(sent > 0, "the goal gave up before sending anything");
+        assert_eq!(sent, 10, "the goal sent the work back {sent} times");
         assert!(s.goal().is_none(), "a goal that gave up is still armed");
     }
 
@@ -13635,6 +13701,99 @@ mod tests {
         let mut s = session();
         assert!(s.goal_not_met("still nothing".to_string()).is_none());
         assert_eq!(s.status, Status::Idle);
+    }
+
+    /// Every outcome a check can have: the five verdicts, and a request that failed.
+    fn every_check_outcome() -> Vec<Result<bravebot_agent::goal::Verdict, String>> {
+        use bravebot_agent::goal::Verdict;
+        vec![
+            Ok(Verdict::NotMet {
+                reason: "nothing above runs the tests".to_string(),
+            }),
+            Ok(Verdict::Met {
+                reason: "the run above exits 0".to_string(),
+            }),
+            Ok(Verdict::Impossible {
+                reason: "there is no such crate".to_string(),
+            }),
+            Ok(Verdict::Unreadable),
+            Ok(Verdict::Quarantined),
+            Err("the connection was refused".to_string()),
+        ]
+    }
+
+    /// One verdict sends the work back, and every other outcome ends the goal. The two that mean
+    /// nobody can read the judge are the ones a retry would be tempting for, and a stopping
+    /// condition nobody can read is not a reason to keep a session working.
+    #[test]
+    fn only_a_condition_not_met_yet_carries_the_work_on_and_every_other_outcome_ends_the_goal() {
+        for judged in every_check_outcome() {
+            let carries_on = matches!(judged, Ok(bravebot_agent::goal::Verdict::NotMet { .. }));
+            let mut s = session();
+            s.start_goal("cargo test exits 0".to_string());
+
+            let sent = s.goal_judged(judged.clone());
+
+            if carries_on {
+                assert!(sent.is_some(), "{judged:?} did not send the work back");
+                assert!(s.goal().is_some(), "{judged:?} ended the goal");
+                assert_eq!(s.status, Status::Working, "{judged:?}");
+            } else {
+                assert!(sent.is_none(), "{judged:?} sent the work back");
+                assert!(s.goal().is_none(), "{judged:?} left the goal set");
+                assert_eq!(s.status, Status::Idle, "{judged:?}");
+                assert_eq!(s.turns, 0, "{judged:?} started a turn");
+            }
+        }
+    }
+
+    /// Each outcome is said as it arrives, in its own words: a turn nobody typed a prompt for is
+    /// the one thing about a session that cannot be read off the transcript, and a goal that ended
+    /// on a judge nobody could read is a different thing to fix from one that was met.
+    #[test]
+    fn each_verdict_is_announced_as_it_arrives() {
+        let said = [
+            t!(goal_not_met, reason = "nothing above runs the tests"),
+            t!(goal_met, reason = "the run above exits 0"),
+            t!(goal_impossible, reason = "there is no such crate"),
+            t!(goal_unreadable).to_string(),
+            t!(goal_quarantined).to_string(),
+            t!(goal_failed, problem = "the connection was refused"),
+        ];
+        for (judged, said) in every_check_outcome().into_iter().zip(said) {
+            let mut s = session();
+            s.start_goal("cargo test exits 0".to_string());
+            let before = s.transcript.len();
+
+            s.goal_judged(judged.clone());
+
+            assert!(
+                s.transcript[before..]
+                    .iter()
+                    .any(|entry| entry.text == said),
+                "{judged:?} was not announced as {said:?}: {:?}",
+                s.transcript[before..]
+                    .iter()
+                    .map(|entry| &entry.text)
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// A check that comes back after the goal was taken off is about a goal that no longer
+    /// exists, so even the verdict that would send the work back sends nothing and says nothing.
+    #[test]
+    fn a_verdict_after_the_goal_was_cleared_is_neither_acted_on_nor_announced() {
+        for judged in every_check_outcome().into_iter().filter(Result::is_ok) {
+            let mut s = session();
+            s.start_goal("cargo test exits 0".to_string());
+            s.clear_goal();
+            let before = s.transcript.len();
+
+            assert!(s.goal_judged(judged.clone()).is_none(), "{judged:?}");
+            assert_eq!(s.turns, 0, "{judged:?} started a turn");
+            assert_eq!(s.transcript.len(), before, "{judged:?} was announced");
+        }
     }
 
     /// The case that reaches the one above: a check is one request and cannot be stopped part

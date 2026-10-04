@@ -19965,6 +19965,45 @@ fn a_goal_check_reaches_the_model_and_comes_back_as_a_verdict() {
         body.contains("a.txt exists"),
         "the condition did not reach the judge: {body}"
     );
+    // A judge offered a tool could call one, which would make it a turn whose job is deciding
+    // whether turns stop.
+    assert!(
+        !body.contains("\"tools\""),
+        "the judge was sent with tools it could call: {body}"
+    );
+    // The call has returned, so every request it made is already on the channel.
+    let more: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    assert!(
+        more.is_empty(),
+        "the check took more than one request: {more:?}"
+    );
+}
+
+/// GOAL-5 through the path a check takes: an exchange that has met something untrusted gives a
+/// verdict the driver may not read, whatever the judge wrote. Without the gate, `MET` here would
+/// end the goal on a sentence whoever wrote the untrusted bytes could have chosen.
+#[test]
+fn a_check_over_an_exchange_that_met_something_untrusted_comes_back_quarantined() {
+    let (endpoint, _received) =
+        serve_sequence(vec![reply_with("MET\nthe second listing shows a.txt")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = an_exchange_to_ask_beside();
+    conversation.observed(bravebot_core::label::Label::untrusted_public());
+
+    let assessed = turn::goal(
+        &config,
+        &egress,
+        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("judging a stopping condition must not be refused");
+
+    assert_eq!(assessed.verdict, bravebot_agent::goal::Verdict::Quarantined);
 }
 
 /// What `/btw` runs. Its own path, like `/compact`'s: a policy it builds itself, so it has to

@@ -3925,19 +3925,10 @@ fn event_loop(
                     );
                     stored.append_audit(session.turns, &events);
 
-                    // Nothing waiting goes out after somebody has asked to leave.
-                    //
-                    // What the person queued goes before the goal is put to a judge. Their own
-                    // prompts are the session, and a condition judged before they have been sent
-                    // would be judged against an exchange that is missing them.
-                    sending = if session.is_quitting() {
-                        None
-                    } else if let Some(queued) = session.send_queued() {
-                        Some((queued, Wrote::ThePerson))
-                    } else {
+                    sending = next_after_a_turn(&mut session, |session| {
                         let (carrying_on, checked) = goal_check_animated(
                             terminal,
-                            &mut session,
+                            session,
                             config,
                             &conversation,
                             &answers.trust,
@@ -3945,8 +3936,8 @@ fn event_loop(
                         // The check is a request that really went out, and a refusal in one is
                         // exactly what somebody reading the trail afterwards wants to find.
                         stored.append_audit(session.turns, &checked);
-                        carrying_on.map(|prompt| (prompt, Wrote::TheDriver))
-                    };
+                        Ok::<_, io::Error>(carrying_on)
+                    })?;
                 }
             }
             Action::Run(line) => {
@@ -6318,6 +6309,26 @@ fn goal_check_key(session: &mut Session, key: KeyEvent) {
     }
 }
 
+/// What goes out once a turn has ended, and whose line it is, with `judge` being what puts the goal
+/// to a check.
+///
+/// Nothing waiting goes out after somebody has asked to leave. What the person queued goes before
+/// the goal is judged: their own prompts are the session, and a condition judged before they have
+/// been sent would be judged against an exchange that is missing them. The sentence a goal carries
+/// the work on with is this program's, so a `@path` inside it names no file.
+fn next_after_a_turn<E>(
+    session: &mut Session,
+    judge: impl FnOnce(&mut Session) -> Result<Option<String>, E>,
+) -> Result<Option<(String, Wrote)>, E> {
+    if session.is_quitting() {
+        return Ok(None);
+    }
+    if let Some(queued) = session.send_queued() {
+        return Ok(Some((queued, Wrote::ThePerson)));
+    }
+    Ok(judge(session)?.map(|prompt| (prompt, Wrote::TheDriver)))
+}
+
 /// Put the session's stopping condition to a judge, and give back the prompt that carries the work
 /// on where it is not met yet.
 ///
@@ -6432,51 +6443,17 @@ fn goal_check_animated(
         .join()
         .unwrap_or_else(|_| (Err(t!(goal_ended_unexpectedly).to_string()), Trail::new()));
 
-    let assessed = match done {
-        Ok(assessed) => assessed,
+    let judged = match done {
+        Ok(assessed) => {
+            session.end_aside(assessed.usage.total());
+            Ok(assessed.verdict)
+        }
         Err(message) => {
             session.end_aside(0);
-            session.drop_goal();
-            session.note(t!(goal_failed, problem = message));
-            return Ok((None, sink.events().to_vec()));
+            Err(message)
         }
     };
-    session.end_aside(assessed.usage.total());
-
-    // A goal taken off while the check was in flight is a person having said stop. The verdict is
-    // about a goal that no longer exists, so it is not acted on and not reported: telling them the
-    // condition cannot be met, a moment after they cleared it, describes a session they are no
-    // longer in.
-    if session.goal().is_none() {
-        return Ok((None, sink.events().to_vec()));
-    }
-
-    // Four of the five verdicts end the goal, and the person is told which one it was in each
-    // case. Only one sends the work back, and even that one stops where the rounds are spent.
-    let carrying_on = match assessed.verdict {
-        bravebot_agent::goal::Verdict::NotMet { reason } => session.goal_not_met(reason),
-        bravebot_agent::goal::Verdict::Met { reason } => {
-            session.goal_met(reason);
-            None
-        }
-        bravebot_agent::goal::Verdict::Impossible { reason } => {
-            session.drop_goal();
-            session.note(t!(goal_impossible, reason = &reason));
-            None
-        }
-        bravebot_agent::goal::Verdict::Unreadable => {
-            session.drop_goal();
-            session.note(t!(goal_unreadable));
-            None
-        }
-        bravebot_agent::goal::Verdict::Quarantined => {
-            session.drop_goal();
-            session.note(t!(goal_quarantined));
-            None
-        }
-    };
-
-    Ok((carrying_on, sink.events().to_vec()))
+    Ok((session.goal_judged(judged), sink.events().to_vec()))
 }
 
 /// The record of lines remembered past a session for this workspace, and what it holds now.
@@ -13679,19 +13656,61 @@ mod tests {
     /// the work back with is this program's, quoting a judge, so a word beginning with `@` in one
     /// is prose: reading it as a path would open a file on the say-so of a model, wearing an
     /// endorsement nobody gave.
+    ///
+    /// Through what picks the next line after a turn, since that is where the sentence is marked
+    /// as the driver's: a test of [`files_named_in`] alone passes with the mark on the wrong side.
     #[test]
     fn a_path_named_in_a_sentence_the_driver_wrote_vouches_for_nothing() {
-        let carrying_on = bravebot_agent::goal::carry_on(
-            "cargo test exits 0",
-            "the failure is in @crates/core/src/policy.rs",
-        );
+        let mut session = Session::new("none");
+        session.start_goal("cargo test exits 0".to_string());
+
+        let (carrying_on, wrote) = next_after_a_turn(&mut session, |session| {
+            Ok::<_, io::Error>(
+                session.goal_judged(Ok(bravebot_agent::goal::Verdict::NotMet {
+                    reason: "the failure is in @crates/core/src/policy.rs".to_string(),
+                })),
+            )
+        })
+        .expect("judging cannot fail here")
+        .expect("a goal not met yet sends the work back");
 
         assert!(
-            files_named_in(&carrying_on, Wrote::TheDriver).is_empty(),
+            carrying_on.contains("@crates/core/src/policy.rs"),
+            "the reason was not quoted, so nothing here could name a file: {carrying_on}"
+        );
+        assert!(
+            files_named_in(&carrying_on, wrote).is_empty(),
             "a sentence this program wrote opened a file"
         );
+    }
+
+    /// The other half: a line the person queued goes out before the goal is judged, as theirs, so
+    /// a `@path` in it still names a file.
+    #[test]
+    fn a_path_named_in_a_line_the_person_queued_still_names_a_file() {
+        let mut session = Session::new("none");
+        session.start_goal("cargo test exits 0".to_string());
+        for c in "fix the build".chars() {
+            session.type_char(c);
+        }
+        session.submit();
+        for c in "look at @crates/core/src/policy.rs".chars() {
+            session.type_char(c);
+        }
+        assert!(session.queue(), "the line was not queued");
+        session.complete("done", Vec::new(), 0);
+
+        let mut judged = false;
+        let (queued, wrote) = next_after_a_turn(&mut session, |_| {
+            judged = true;
+            Ok::<_, io::Error>(None)
+        })
+        .expect("judging cannot fail here")
+        .expect("the queued line was not sent");
+
+        assert!(!judged, "the goal was judged before the person's line went");
         assert_eq!(
-            files_named_in("look at @crates/core/src/policy.rs", Wrote::ThePerson),
+            files_named_in(&queued, wrote),
             vec!["crates/core/src/policy.rs".to_string()],
             "a line the person typed stopped naming its files"
         );
