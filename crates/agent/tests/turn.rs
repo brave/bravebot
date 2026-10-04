@@ -24303,6 +24303,158 @@ fn a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory() {
     );
 }
 
+/// CHECKOUT-11. A write in a checkout asks what the same write in the working directory asks:
+/// the path a person distrusted and the path a permission rule asks about are put to them in
+/// both, and the path nothing asks about is put to them in neither.
+#[test]
+fn a_write_in_a_checkout_asks_what_the_same_write_in_the_working_directory_asks() {
+    let scratch = Scratch::new("checkout-write-asks");
+    let home = Scratch::new("checkout-write-asks-home");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            ("src/lib.rs", "a\n"),
+            ("vendor/lib.js", "b\n"),
+            ("docs/page.md", "c\n"),
+        ],
+        "first",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let checkout = home
+        .path
+        .canonicalize()
+        .expect("state directory")
+        .join("checkouts")
+        .join(bravebot_agent::home::key_for(workspace.root()))
+        .join("c1");
+    let names = ["src/lib.rs", "vendor/lib.js", "docs/page.md"];
+    // Named relative to the root each run holds, which is how a model names a file there.
+    let writes = || -> Vec<_> {
+        names
+            .iter()
+            .map(|name| {
+                tool_request(
+                    "write_file",
+                    &serde_json::json!({ "path": name, "contents": "changed" }).to_string(),
+                )
+            })
+            .collect()
+    };
+    let mut planner = writes();
+    planner.push(tool_request(
+        "spawn_agent",
+        r#"{"kind":"worker","task":"WRITE-THREE-APART","isolation":"checkout"}"#,
+    ));
+    planner.extend([reply_with("waiting"), reply_with("done")]);
+    let mut delegate = writes();
+    delegate.push(reply_with("wrote them"));
+    let (endpoint, _received) = serve_by_marker(vec![
+        ("WRITE-THREE-HERE-AND-APART", planner),
+        ("WRITE-THREE-APART", delegate),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust("vendor");
+    let task = Task::new("WRITE-THREE-HERE-AND-APART")
+        .with_home(Some(home.path.clone()))
+        .with_permissions(rules(&[], &["Edit(docs/**)"], &[]));
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    // One question per run: the run in each place was asked about the path the rule names and
+    // about nothing else. A checkout that lost its rules would ask about more, and one that
+    // lost the rule would ask about less.
+    let asked: Vec<&str> = confirmer.seen.iter().map(|r| r.path.as_str()).collect();
+    assert_eq!(asked, ["docs/page.md", "docs/page.md"]);
+    // What the gates let through is the same too, for the path a person distrusted as well.
+    let made: Vec<PathBuf> = checkouts_under(&home.path)
+        .iter()
+        .map(|made| made.canonicalize().expect("the checkout exists"))
+        .collect();
+    assert_eq!(made, std::slice::from_ref(&checkout));
+    for name in names {
+        let here = std::fs::read_to_string(scratch.path.join(name)).unwrap();
+        assert_eq!(
+            here,
+            std::fs::read_to_string(checkout.join(name)).unwrap(),
+            "{name} came out differently in the checkout"
+        );
+    }
+}
+
+/// CHECKOUT-10. A command a person vouched for this session in the working directory is asked
+/// about again in a checkout: the entry names the tree it was given in, and a checkout is not
+/// that tree.
+#[test]
+fn a_command_vouched_for_in_the_working_directory_is_asked_about_again_in_a_checkout() {
+    let scratch = Scratch::new("checkout-vouched-run");
+    let home = Scratch::new("checkout-vouched-run-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let line = tool_request("run", r#"{"command":"cat README"}"#);
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "RUN-HERE-TWICE-THEN-APART",
+            vec![
+                line.clone(),
+                line.clone(),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"RUN-IT-APART","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        ("RUN-IT-APART", vec![line, reply_with("ran it")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("RUN-HERE-TWICE-THEN-APART").with_home(Some(home.path.clone())),
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    let seen = confirmer.seen.lock().unwrap();
+    // The second `cat README` in the working directory was not put to the person, which is what
+    // shows the first was vouched for, and the one in the checkout was.
+    let directories: Vec<&std::path::Path> = seen
+        .iter()
+        .map(|request| request.plan.directory.as_path())
+        .collect();
+    assert_eq!(directories.len(), 2, "{directories:#?}");
+    assert_eq!(
+        directories[0].canonicalize().unwrap(),
+        scratch.path.canonicalize().unwrap()
+    );
+    assert!(
+        directories[1].starts_with(home.path.canonicalize().unwrap().join("checkouts")),
+        "{directories:#?}"
+    );
+}
+
 /// CHECKOUT-9. A deny rule written with the full path of a file under the working directory
 /// refuses the same file in the delegate's checkout, so what the rule keeps from the planner is
 /// kept from the delegate too.

@@ -344,6 +344,7 @@ The one test asking from a session that has none asks through a definition
 ([CHECKOUT-2](#CHECKOUT-2)).
 
 `verified-by: bravebot_agent::workspace::each_checkout_is_a_numbered_workspace_under_the_state_directory`
+`verified-by: bravebot_agent::workspace::a_checkout_is_keyed_by_the_workspace_and_readable_by_its_owner_alone`
 `verified-by: bravebot_agent::turn::a_definition_asking_for_a_checkout_with_no_state_directory_is_refused`
 
 ## Working in one
@@ -492,9 +493,9 @@ about unless an entry made this session names the checkout.
 the checkout's file at that path may differ.
 
 Built. A delegate in a checkout is given no remembered lines, and an entry made this session names
-the tree it was given in. No test runs a vouched command in a checkout.
+the tree it was given in.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::a_command_vouched_for_in_the_working_directory_is_asked_about_again_in_a_checkout`
 
 <a id="CHECKOUT-11"></a>
 ### CHECKOUT-11: a write in a checkout asks what the same write in the working directory asks
@@ -507,10 +508,9 @@ Bringing the file back asks again ([CHECKOUT-14](#CHECKOUT-14)). Whether the fir
 is an open question below.
 
 Built. A path in a checkout carries the rule the same path has in the working directory
-([CHECKOUT-8](#CHECKOUT-8)), so it takes the gates that path takes. No test asks what a write asks
-in both places.
+([CHECKOUT-8](#CHECKOUT-8)), so it takes the gates that path takes.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::a_write_in_a_checkout_asks_what_the_same_write_in_the_working_directory_asks`
 
 <a id="CHECKOUT-12"></a>
 ### CHECKOUT-12: `read_git` in a checkout is routed by the driver's record, and history anywhere in the session meets the checkouts' rules
