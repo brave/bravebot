@@ -1467,7 +1467,7 @@ pub struct Session {
     /// Kept after the button comes up, so a user can see what they copied rather than watching
     /// it vanish at the moment it is taken.
     pub selection: Option<crate::select::Selection>,
-    /// How much the last copy took, until the next thing happens.
+    /// How much the last copy took, until the next click or the next prompt.
     pub copied: Option<usize>,
     /// What the turn that just finished cost, until the next one starts.
     ///
@@ -6244,6 +6244,18 @@ impl Session {
         self.copied = Some(characters);
     }
 
+    /// The replies in this session's transcript, the latest first, as the transcript holds them.
+    ///
+    /// A blank one is passed over, since it has nothing to copy and the export skips it too.
+    pub fn replies_newest_first(&self) -> impl Iterator<Item = &str> {
+        self.transcript
+            .iter()
+            .rev()
+            .filter(|entry| entry.speaker == Speaker::Assistant)
+            .map(|entry| entry.text.as_str())
+            .filter(|text| !text.trim().is_empty())
+    }
+
     /// Insert pasted text into the input.
     ///
     /// Kept apart from typing because a paste is one act, not a stream of keys. Pasted text
@@ -8218,6 +8230,9 @@ impl Session {
         // The last turn's figures are not this one's, and a line reporting a finished turn while
         // another is running is a line about the wrong turn.
         self.finished = None;
+        // Left up past the next prompt, a copy's count would hide the hint that a picture is on
+        // the clipboard, and no key would take it down.
+        self.copied = None;
         // The previous turn's plan is not this turn's. Leaving it would show finished work as
         // though the new turn had it outstanding.
         self.todos.clear();

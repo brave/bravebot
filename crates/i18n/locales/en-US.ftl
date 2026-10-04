@@ -1950,6 +1950,7 @@ command-checkouts = List the checkouts delegates kept, and remove one by its num
 command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
 command-agent = Run one of your definitions on a task, by its name
 command-export = Export the session transcript to a markdown file
+command-copy = Put the last reply on the clipboard, or the one that many replies back
 command-undo = Rewind one turn and put back the files it wrote
 command-rewind = List the turns a rewind could go back to, or go back that many
 command-exit = Leave
@@ -2014,6 +2015,14 @@ session-rewind-goes-no-further =
     }
 session-exported = exported transcript to { $path }
 session-export-failed = could not export transcript: { $problem }
+session-copy-needs-a-number = /copy takes how many replies back to copy, as in /copy 2
+session-copy-no-reply = there is no reply in this session to copy
+session-copy-goes-no-further =
+    { $replies ->
+        [one] this session has one reply, so /copy goes no further back than it
+       *[other] this session has { $replies } replies, so /copy goes no further back than { $replies }
+    }
+session-copy-failed = could not put the reply on the clipboard
 session-add-dir-needs-a-path = /add-dir needs a directory, as in /add-dir ~/notes
 session-directory-added = added { $directory }, and trusting it for this session
 session-cd-needs-a-path = /cd needs a directory, as in /cd ~/projects/other

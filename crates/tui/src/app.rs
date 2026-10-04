@@ -161,6 +161,12 @@ const EXIT_COMMAND: &str = "/exit";
 /// The line that writes the transcript as a markdown file.
 const EXPORT_COMMAND: &str = "/export";
 
+/// The line that puts a reply on the clipboard as the transcript holds it, taking how far back.
+///
+/// A sweep with the mouse copies what was drawn, so it carries the marker and indent beside every
+/// row and breaks a paragraph where the terminal wrapped it (CMD-11).
+const COPY_COMMAND: &str = "/copy";
+
 /// The line that rewinds the conversation and restores files changed in the last turn.
 const UNDO_COMMAND: &str = "/undo";
 
@@ -226,7 +232,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 27] {
+pub fn commands() -> [Command; 28] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -373,6 +379,12 @@ pub fn commands() -> [Command; 27] {
             mid_turn: MidTurn::Waits,
         },
         Command {
+            name: COPY_COMMAND,
+            argument: "[n]",
+            description: t!(command_copy),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
             name: UNDO_COMMAND,
             argument: "",
             description: t!(command_undo),
@@ -511,6 +523,9 @@ pub enum Action {
     SendNow,
     /// Take what the selection covers, which needs the screen as it was last drawn.
     Copy,
+    /// Put this reply's text on the clipboard. Runs the platform's clipboard tools, so the loop
+    /// does it rather than the command.
+    CopyReply(String),
     /// Write the prompt somewhere with room to think. Needs the terminal, which the loop hands
     /// over to the editor and takes back afterwards.
     Edit,
@@ -918,6 +933,9 @@ fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut 
         Action::SetEffort(level) => {
             session.answer_while_working(|session| set_effort(session, &level));
         }
+        Action::CopyReply(text) => session.answer_while_working(|session| {
+            copy_reply(session, &text, crate::clipboard::copy);
+        }),
         action => act_while_working(session, action, crate::clipboard::paste),
     }
 }
@@ -1718,6 +1736,15 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
             Action::Export(None)
         } else {
             Action::Export(Some(path.to_string()))
+        };
+    }
+    if let Some(back) = argument_to(line, COPY_COMMAND) {
+        return match reply_to_copy(session, back) {
+            Ok(text) => Action::CopyReply(text),
+            Err(refused) => {
+                session.note(refused);
+                Action::Redraw
+            }
         };
     }
     if line.trim() == UNDO_COMMAND {
@@ -2603,6 +2630,54 @@ fn copy_selection(
         session.note_copied(text.chars().count());
     }
     Ok(())
+}
+
+/// The reply `/copy` was asked for: the latest when nothing follows the word, otherwise the one
+/// that many replies back. What it refuses comes back as the note that says so (CMD-11).
+fn reply_to_copy(session: &Session, back: &str) -> Result<String, String> {
+    // Digits alone: `+2` is a word, and a number too long to hold is still past the oldest reply.
+    let steps = if back.is_empty() {
+        1
+    } else if back.bytes().all(|byte| byte.is_ascii_digit()) {
+        back.parse::<usize>().unwrap_or(usize::MAX)
+    } else {
+        0
+    };
+    if steps == 0 {
+        return Err(t!(session_copy_needs_a_number).to_string());
+    }
+    if let Some(reply) = session.replies_newest_first().nth(steps - 1) {
+        return Ok(copyable(reply));
+    }
+    // Saying how far back it does go, since the next thing the person types is that number.
+    match session.replies_newest_first().count() {
+        0 => Err(t!(session_copy_no_reply).to_string()),
+        replies => Err(t!(session_copy_goes_no_further, replies = replies)),
+    }
+}
+
+/// A reply with every control character left out but its line breaks and tabs.
+///
+/// The screen draws none of them in a reply, and what is pasted into a shell is read as typed, so
+/// a reply holding the sequence that ends a bracketed paste would run whatever followed it.
+fn copyable(reply: &str) -> String {
+    reply
+        .chars()
+        .filter(|&c| matches!(c, '\n' | '\t') || !c.is_control())
+        .collect()
+}
+
+/// Put a reply on the clipboard and say how much went, or say that nothing took it.
+///
+/// Takes the copy as a closure because the real one runs the platform's clipboard tool.
+fn copy_reply(session: &mut Session, text: &str, copy: impl FnOnce(&str) -> bool) {
+    // A sweep's highlight or count left up would say that is what the clipboard holds.
+    session.clear_selection();
+    if copy(text) {
+        session.note_copied(text.chars().count());
+    } else {
+        session.note(t!(session_copy_failed));
+    }
 }
 
 /// What a session begins with.
@@ -3548,6 +3623,7 @@ fn event_loop(
         match action {
             Action::Quit => return Ok(left_behind(&stored)),
             Action::Copy => copy_selection(terminal, &mut session)?,
+            Action::CopyReply(text) => copy_reply(&mut session, &text, crate::clipboard::copy),
             Action::Paste => take_from_clipboard(&mut session, crate::clipboard::paste()),
             Action::Edit => {
                 edit_prompt(terminal, &mut session)?;
@@ -15937,6 +16013,268 @@ mod tests {
         );
     }
 
+    /// A turn sent and answered with `reply`, as the loop records one.
+    fn answered(session: &mut Session, prompt: &str, reply: &str) {
+        type_line(session, prompt);
+        assert!(matches!(
+            handle_key(session, key(KeyCode::Enter)),
+            Action::Submit(_)
+        ));
+        session.complete(reply, Vec::new(), 0);
+    }
+
+    /// What a `/copy` line answered: the text it would copy, or what it said instead.
+    fn copied_by(session: &mut Session, line: &str) -> Result<String, String> {
+        type_line(session, line);
+        match handle_key(session, key(KeyCode::Enter)) {
+            Action::CopyReply(text) => Ok(text),
+            Action::Redraw => Err(said_in_the_transcript(session)
+                .last()
+                .cloned()
+                .unwrap_or_default()),
+            other => panic!("{line} answered {other:?}"),
+        }
+    }
+
+    /// What issue #1327 asks for: the reply as the planner wrote it, its paragraphs whole and none
+    /// of the marker or indent the screen draws beside it.
+    #[test]
+    fn typing_the_copy_command_copies_the_latest_reply_rather_than_prompting() {
+        let reply = "The parser drops the last token because the loop stops one short of the end of \
+                     the buffer, which only shows on input with no trailing newline.\n\n\
+                     - check `lexer.rs`\n- add a test";
+        let mut session = Session::new("none");
+        answered(&mut session, "first", "an older answer");
+        answered(&mut session, "why does it drop a token", reply);
+        let transcript = session.transcript.len();
+
+        assert_eq!(copied_by(&mut session, COPY_COMMAND), Ok(reply.to_string()));
+        assert!(session.input().is_empty(), "the command stayed on the line");
+        assert_eq!(
+            session.transcript.len(),
+            transcript,
+            "the command was sent as a prompt or noted something"
+        );
+    }
+
+    /// `/copy 1` is the latest, so `/copy 2` is the one before it.
+    #[test]
+    fn copy_takes_how_many_replies_back() {
+        let mut session = Session::new("none");
+        answered(&mut session, "first", "one");
+        answered(&mut session, "second", "two");
+        answered(&mut session, "third", "three");
+
+        assert_eq!(copied_by(&mut session, "/copy 1"), Ok("three".to_string()));
+        assert_eq!(copied_by(&mut session, "/copy 2"), Ok("two".to_string()));
+        assert_eq!(copied_by(&mut session, "/copy 3"), Ok("one".to_string()));
+    }
+
+    /// A reply is what the planner said: the answer a turn ends on and what it said on its way to a
+    /// call. A note, a prompt and a tool's row are not, and neither is the quarantined content drawn
+    /// under that row, which the planner never read.
+    #[test]
+    fn copy_counts_only_the_replies() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "read the notes");
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.narrate("looking at the notes");
+        let delegate = bravebot_agent::report::DelegateId::nth(1);
+        session.delegate_started(bravebot_agent::report::Delegation {
+            id: delegate,
+            kind: "checker".to_string(),
+            task: "check the notes".to_string(),
+        });
+        session.reporting_for(Some(delegate));
+        session.narrate("the delegate thinking aloud");
+        session.reporting_for(None);
+        let call = bravebot_agent::report::Activity::running("Read", "notes.md");
+        session.start_activity(call.clone());
+        session.show(bravebot_agent::report::Shown {
+            origin: "notes.md".to_string(),
+            reach: bravebot_agent::report::Reach::NoModel,
+            label: "(U,priv)".to_string(),
+            preview: vec!["a line nobody vouched for".to_string()],
+            lines: 1,
+        });
+        session.finish_activity(call.done("read 1 line"));
+        session.complete("found it", Vec::new(), 0);
+        session.note("a note from the program");
+
+        assert_eq!(copied_by(&mut session, "/copy"), Ok("found it".to_string()));
+        assert_eq!(
+            copied_by(&mut session, "/copy 2"),
+            Ok("looking at the notes".to_string())
+        );
+        assert_eq!(
+            copied_by(&mut session, "/copy 3"),
+            Err(t!(session_copy_goes_no_further, replies = 2))
+        );
+    }
+
+    /// A turn that ended saying nothing leaves a reply with nothing in it, and copying nothing is
+    /// not what `/copy` was asked for.
+    #[test]
+    fn a_blank_reply_is_not_one_to_copy() {
+        let mut session = Session::new("none");
+        answered(&mut session, "first", "kept");
+        answered(&mut session, "second", "  \n");
+
+        assert_eq!(copied_by(&mut session, "/copy"), Ok("kept".to_string()));
+        assert_eq!(
+            copied_by(&mut session, "/copy 2"),
+            Err(t!(session_copy_goes_no_further, replies = 1))
+        );
+    }
+
+    /// Each refusal says why and copies nothing. Past the oldest reply it says how many there are,
+    /// which is the number the person types next, rather than copying the oldest in its place.
+    #[test]
+    fn copy_refuses_what_it_cannot_take_and_copies_nothing() {
+        let mut session = Session::new("none");
+        assert_eq!(
+            copied_by(&mut session, "/copy"),
+            Err(t!(session_copy_no_reply).to_string())
+        );
+
+        answered(&mut session, "first", "the only answer");
+        for line in ["/copy 0", "/copy two", "/copy -1", "/copy +1", "/copy 1 2"] {
+            assert_eq!(
+                copied_by(&mut session, line),
+                Err(t!(session_copy_needs_a_number).to_string()),
+                "{line}"
+            );
+        }
+        for line in ["/copy 2", "/copy 99999999999999999999999"] {
+            assert_eq!(
+                copied_by(&mut session, line),
+                Err(t!(session_copy_goes_no_further, replies = 1)),
+                "{line}"
+            );
+        }
+        assert_eq!(session.copied, None, "a refusal reported a copy");
+    }
+
+    /// The screen draws no control character in a reply, and the clipboard has to get the same:
+    /// pasted into a shell, the sequence that ends a bracketed paste would run what follows it as
+    /// typed. A Windows line ending pastes as the one break the screen drew for it.
+    #[test]
+    fn a_copied_reply_carries_no_control_character_but_its_breaks_and_tabs() {
+        let mut session = Session::new("none");
+        answered(
+            &mut session,
+            "first",
+            "run this:\r\n\tcargo test\x1b[201~\rrm -rf ~\x07\x7f",
+        );
+
+        assert_eq!(
+            copied_by(&mut session, "/copy"),
+            Ok("run this:\n\tcargo test[201~rm -rf ~".to_string())
+        );
+    }
+
+    /// A sweep's highlight or count left up after a copy would say that is what the clipboard
+    /// holds, when the copy put a reply there or failed to put anything.
+    #[test]
+    fn a_copy_takes_down_what_an_earlier_sweep_left_up() {
+        for took in [true, false] {
+            let mut session = Session::new("none");
+            session.begin_selection(0, 0);
+            session.note_copied(42);
+            copy_reply(&mut session, "déjà vu", |_| took);
+
+            assert!(session.selection.is_none(), "the sweep stayed highlighted");
+            assert_eq!(session.copied, took.then_some(7), "took: {took}");
+        }
+    }
+
+    /// Nothing typed takes the count down, so without a rule it would stay for the rest of the
+    /// session, hiding the hint that a picture is on the clipboard.
+    #[test]
+    fn a_copys_count_is_taken_down_by_the_next_prompt() {
+        let mut session = Session::new("none");
+        answered(&mut session, "first", "an answer");
+        copy_reply(&mut session, "an answer", |_| true);
+        assert_eq!(session.copied, Some(9));
+
+        type_line(&mut session, "/cost");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert_eq!(session.copied, Some(9), "a command took the count down");
+
+        type_line(&mut session, "second");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert_eq!(session.copied, None);
+    }
+
+    /// A resumed session's replies are on the screen as its own are, so they are counted with them.
+    #[test]
+    fn copy_reaches_the_replies_a_resumed_session_brought_back() {
+        use bravebot_aichat::protocol::Message;
+
+        let mut conversation = bravebot_agent::Conversation::new();
+        conversation.push(Message::user("first question"));
+        conversation.push(Message::assistant("the first answer"));
+        conversation.push(Message::user("second question"));
+        conversation.push(Message::assistant("the second answer"));
+        let mut session = Session::new("none");
+        session.replay(
+            &conversation,
+            "a title",
+            &bravebot_session::sessions::Recalled {
+                history: None,
+                turns: None,
+                trails: Default::default(),
+                todos: Default::default(),
+                asides: Vec::new(),
+            },
+        );
+        answered(&mut session, "third question", "the third answer");
+
+        assert_eq!(
+            copied_by(&mut session, "/copy 2"),
+            Ok("the second answer".to_string())
+        );
+        assert_eq!(
+            copied_by(&mut session, "/copy 3"),
+            Ok("the first answer".to_string())
+        );
+    }
+
+    /// The count at the right of the hint row is how a person knows the copy went, so it counts
+    /// characters as the eye does, and a copy nothing took says so rather than claiming one.
+    #[test]
+    fn a_copy_says_how_much_it_took_and_a_failed_one_says_so() {
+        let mut session = Session::new("none");
+        let mut handed = String::new();
+        copy_reply(&mut session, "déjà vu", |text| {
+            handed = text.to_string();
+            true
+        });
+        assert_eq!(handed, "déjà vu");
+        assert_eq!(session.copied, Some(7));
+
+        let mut session = Session::new("none");
+        copy_reply(&mut session, "déjà vu", |_| false);
+        assert_eq!(session.copied, None, "a failed copy was reported as taken");
+        assert_eq!(
+            said_in_the_transcript(&session).last().map(String::as_str),
+            Some(t!(session_copy_failed))
+        );
+    }
+
+    /// Asking the planner how to copy something is a question, not a command.
+    #[test]
+    fn a_prompt_containing_the_copy_command_is_still_a_prompt() {
+        let mut session = Session::new("none");
+        answered(&mut session, "first", "an answer");
+        type_line(&mut session, "what does /copy do");
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("what does /copy do".to_string())
+        );
+    }
+
     /// A directory whose own name begins with a tilde is not a home-relative path.
     #[test]
     fn a_tilde_is_expanded_only_as_a_whole_first_segment() {
@@ -16808,6 +17146,7 @@ mod tests {
         assert_eq!(
             skipping,
             vec![
+                COPY_COMMAND,
                 COST_COMMAND,
                 EFFORT_COMMAND,
                 FORGET_TRUST_COMMAND,
@@ -16886,6 +17225,8 @@ mod tests {
     fn a_command_that_reads_or_ends_what_the_session_keeps_answers_mid_turn() {
         for line in [
             "/cost",
+            "/copy",
+            "/copy two",
             "/watch",
             "/watch stop 1",
             "/watch everything",
@@ -16925,6 +17266,28 @@ mod tests {
             );
             assert_eq!(session.input(), "", "{line} was left in the box");
         }
+    }
+
+    /// A reply is wanted on the clipboard while the next turn runs as much as at rest, and the
+    /// clipboard is not something the turn holds. The copy goes ahead of the prompt waiting, which
+    /// stays where it was, and nothing about it is written into the turn's transcript.
+    #[test]
+    fn copy_typed_mid_turn_takes_the_reply_without_waiting() {
+        let mut session = Session::new("none");
+        answered(&mut session, "first", "the earlier answer");
+        type_line(&mut session, "next");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert!(session.a_turn_is_running());
+        type_while_working(&mut session, "waiting");
+        let transcript = session.transcript.len();
+
+        assert_eq!(
+            type_while_working(&mut session, COPY_COMMAND),
+            Action::CopyReply("the earlier answer".to_string())
+        );
+        assert_eq!(session.transcript.len(), transcript);
+        assert_eq!(waiting_prompts(&session), vec!["waiting"]);
+        assert_eq!(session.input(), "", "the command was left in the box");
     }
 
     /// RUN-27. A job runs only while its turn does, so `/jobs stop` is typed mid-turn, and there

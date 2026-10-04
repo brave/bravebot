@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Slash commands
-description: The twenty-seven commands the interface acts on itself, and the rules every one of them shares.
+description: The twenty-eight commands the interface acts on itself, and the rules every one of them shares.
 ---
 
 # Slash commands
@@ -34,6 +34,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/manifest` | `<task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
 | `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
 | `/export` | `[path]` | Export the session transcript to a markdown file |
+| `/copy` | `[n]` | Put the last reply on the clipboard, or the one that many replies back |
 | `/undo` | | Rewind one turn and put back the files it wrote |
 | `/rewind` | `[turns]` | List the turns a rewind could go back to, or go back that many |
 | `/exit` | | Leave |
@@ -626,6 +627,22 @@ tree through a symlink is refused as well. Missing parent directories are create
 **Anything already at the path is refused rather than replaced**, a symlink whose target is missing
 included. The file is written readable by you alone, as the record it came from is.
 
+## `/copy [n]`
+
+Puts the latest reply on the clipboard, and `/copy 2` the one before it. What is copied is the
+markdown the model wrote, so it pastes as whole paragraphs, where a sweep with the mouse copies the
+screen: the `⏺` before the first row, the indent before every other row, and a line break wherever
+the terminal wrapped a paragraph. How many characters went is drawn at the right of the hint row
+until your next prompt.
+
+A reply is what the model said to you: the answer a turn or a `/manifest` run ends on and what it
+said on its way to a tool call, a resumed session's included. Your prompts, notes, tool rows and the
+files they showed, a delegate's work and a `/btw` answer are not counted. A control character other
+than a line break or a tab is left out, as the screen leaves it out, so a pasted reply cannot carry
+the sequence that ends a shell's bracketed paste. Its line breaks are kept, so a shell that does not
+use bracketed paste runs each line as it arrives. A number past the oldest reply says how many there
+are and copies nothing.
+
 ## `/undo`
 
 Puts the session back where it stood before the most recent turn, and **saying it again goes back
@@ -742,8 +759,8 @@ beside the line. A command that cannot carry it gets words in place of a picture
 place of a drop. `/btw`, `/manifest` and `/loop` send their argument, so a marker stays in
 it and the picture or file goes with it.
 
-**While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/watch`,
-`/panel`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+**While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/copy`,
+`/watch`, `/panel`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. The exception is a line of the same command already waiting, which they wait behind, so
