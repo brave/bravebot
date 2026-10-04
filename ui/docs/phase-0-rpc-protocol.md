@@ -399,8 +399,8 @@ Returns `{ "session": "s2", "directory": "…", "branch": "main", "remembered": 
 turn, matching `Session::begin` + `save`, so an opened-and-abandoned window leaves nothing
 behind.
 
-Errors with `not_a_directory` if the path is not one, or `no_home` if `~/.bravebot` cannot be
-located.
+Errors with `not_a_directory` if the path is not one. Where there is no state directory the
+session still opens and its turns run, and nothing is written (SESSION-28).
 
 #### `session.fork`
 
