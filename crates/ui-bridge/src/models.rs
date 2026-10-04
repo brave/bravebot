@@ -12,20 +12,15 @@ pub fn list(config: &Config) -> Value {
     let mut rows = Vec::new();
     let mut warnings = Vec::new();
     if let Some(bedrock) = &config.bedrock {
-        for entry in bedrock.models() {
-            rows.push(Model {
-                key: entry.id.clone(),
-                display_name: entry.display_name().to_string(),
-                premium: false,
-                reads_effort: true,
-                provider: Some("AWS Bedrock".into()),
-                conversation_tokens: Some(entry.window()),
-                // Bedrock has no listing, so nothing has described these models.
-                advertised: Advertised::default(),
-            });
-        }
+        rows.extend(bedrock_rows(bedrock));
     }
     for provider in &config.providers {
+        // An entry naming AWS is served by the Bedrock backend under the bare id it is keyed by,
+        // and there is no listing to ask, so a block that named no models offers none.
+        if let Some(bedrock) = &provider.bedrock {
+            rows.extend(bedrock_rows(bedrock));
+            continue;
+        }
         if !provider.models.is_empty() {
             rows.extend(provider.models.iter().map(|model| Model {
                 key: format!("{}/{}", provider.id, model.id),
@@ -94,6 +89,24 @@ pub fn list(config: &Config) -> Value {
         }
     }
     catalogue(config, rows, warnings)
+}
+
+/// The rows an AWS account offers, keyed by the bare id the Bedrock backend is reached by.
+fn bedrock_rows(bedrock: &bravebot_config::bedrock::Bedrock) -> Vec<Model> {
+    bedrock
+        .models()
+        .iter()
+        .map(|entry| Model {
+            key: entry.id.clone(),
+            display_name: entry.display_name().to_string(),
+            premium: false,
+            reads_effort: true,
+            provider: Some("AWS Bedrock".into()),
+            conversation_tokens: Some(entry.window()),
+            // Bedrock has no listing, so nothing has described these models.
+            advertised: Advertised::default(),
+        })
+        .collect()
 }
 
 /// The token a roster request is made with, where the block named one.
@@ -449,6 +462,51 @@ mod tests {
             google_vertex_rows(&config),
             ["google-vertex/google/gemini-3-flash-preview"]
         );
+    }
+
+    /// BACKEND-29 in the window: an entry naming AWS is offered under the bare id the Bedrock backend
+    /// routes, and is never asked as a gateway, so a block naming no models adds no row and no warning.
+    #[test]
+    fn the_window_offers_an_aws_provider_entry_under_its_bare_id() {
+        use bravebot_config::env_var;
+
+        let with = |models: &str| {
+            let mut config = Config::from_lookup(|key| match key {
+                env_var::USE_BEDROCK => Some("1".into()),
+                env_var::AWS_REGION => Some("us-west-2".into()),
+                env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+                _ => None,
+            })
+            .expect("an account named on its own is a working configuration");
+            config.providers = bravebot_config::Settings::parse(&format!(
+                r#"{{"provider": {{"amazon-bedrock": {{"options": {{"region": "us-east-1"}}{models}}}}}}}"#
+            ))
+            .providers()
+            .to_vec();
+            assert!(config.providers[0].bedrock.is_some());
+            config
+        };
+        let ids = |config: &Config| -> Vec<String> {
+            list(config)["models"]
+                .as_array()
+                .expect("rows")
+                .iter()
+                .filter_map(|row| row["id"].as_str().map(str::to_string))
+                .collect()
+        };
+        let named = with(r#", "models": {"openai.gpt-5.6-sol": {}}"#);
+        let listed = ids(&named);
+        assert!(
+            listed.contains(&"openai.gpt-5.6-sol".to_string()),
+            "{listed:?}"
+        );
+        assert!(
+            listed.iter().all(|id| !id.starts_with("amazon-bedrock/")),
+            "{listed:?}"
+        );
+        let empty = with("");
+        assert!(ids(&empty).iter().all(|id| id != "amazon-bedrock/"));
+        assert_eq!(list(&empty)["warnings"], json!([]));
     }
 
     #[test]
