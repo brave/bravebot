@@ -6948,6 +6948,44 @@ fn a_checkout_is_labelled_as_the_working_directory_is() {
     assert!(authority.is_trusted(&format!("{}/README", workspace.root().display())));
 }
 
+/// CHECKOUT-6. A checkout is at `checkouts/<workspace key>/<id>` under the state directory, and
+/// every directory from `checkouts` down is owner-only, as is every file the tree holds.
+#[cfg(unix)]
+#[test]
+fn a_checkout_is_keyed_by_the_workspace_and_readable_by_its_owner_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_scratch, state, workspace) = repository_with_a_state_directory(
+        "checkout-for-modes",
+        &[("README", "hello\n"), ("deep/er/file.txt", "inside\n")],
+    );
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+
+    let state_directory = state.path.canonicalize().unwrap();
+    let keyed = state_directory
+        .join("checkouts")
+        .join(bravebot_agent::home::key_for(workspace.root()));
+    assert_eq!(made.root(), keyed.join("c1"));
+    let mode =
+        |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    for directory in [
+        state_directory.join("checkouts"),
+        keyed.clone(),
+        made.root().to_path_buf(),
+        made.root().join("deep"),
+        made.root().join("deep/er"),
+    ] {
+        assert_eq!(mode(&directory), 0o700, "{}", directory.display());
+    }
+    for file in ["README", "deep/er/file.txt"] {
+        assert_eq!(mode(&made.root().join(file)), 0o600, "{file}");
+    }
+}
+
 /// CHECKOUT-15. A checkout nothing was done in is removed with its `worktrees` entry and its
 /// rules, and one something was done in is kept.
 #[test]
