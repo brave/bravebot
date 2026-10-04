@@ -617,6 +617,7 @@ what the planner was about to rely on without opening the file or the command's 
 `verified-by: bravebot_agent::turn::a_result_the_planner_read_is_glimpsed_under_its_call`
 `verified-by: bravebot_agent::turn::a_command_the_planner_read_is_glimpsed_from_its_end`
 `verified-by: bravebot_agent::turn::a_sentence_the_driver_wrote_about_a_call_is_not_glimpsed`
+`verified-by: bravebot_agent::turn::a_search_that_found_nothing_glimpses_no_sentence_of_the_drivers`
 `verified-by: bravebot_tui::render::what_the_planner_read_is_drawn_under_its_call`
 `verified-by: bravebot_tui::render::what_the_planner_read_is_not_drawn_as_quarantined`
 `verified-by: bravebot_tui::render::a_glimpse_from_the_end_says_what_came_before_it`

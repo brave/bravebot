@@ -4188,9 +4188,20 @@ fn list_files<S: Sink>(
                 }
                 body
             });
-            Produced::new(rendered, proposed_dir, note)
-                .of_content()
-                .capped(incomplete)
+            // The entries alone: "(no files)" and the notices after a listing are the driver's
+            // words and are not glimpsed (VIEW-24).
+            let glimpsed = policy.render_in_place("list_files", &listing, |listing| {
+                let mut entries: Vec<String> = listing.files.clone();
+                entries.extend(listing.directories.iter().map(|name| format!("{name}/")));
+                entries.sort();
+                entries.join("\n")
+            });
+            Produced {
+                glimpsed: Some(glimpsed),
+                ..Produced::new(rendered, proposed_dir, note)
+                    .of_content()
+                    .capped(incomplete)
+            }
         }
         // Worded about the name typed. The error carries where it landed, which a link can choose.
         Err(e) => Produced::problem(format!(
@@ -8117,6 +8128,16 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
     }
 }
 
+/// The lines a search matched, one `path:line: text` each and nothing of the driver's.
+fn match_lines(found: &crate::workspace::Matches) -> String {
+    found
+        .matches
+        .iter()
+        .map(|m| format!("{}:{}: {}", m.path, m.line, m.text))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn search<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
@@ -8273,12 +8294,7 @@ fn search<S: Sink>(
                         "(no matches)".to_string()
                     }
                 } else {
-                    found
-                        .matches
-                        .iter()
-                        .map(|m| format!("{}:{}: {}", m.path, m.line, m.text))
-                        .collect::<Vec<_>>()
-                        .join("\n")
+                    match_lines(&found)
                 };
                 // The empty result is the one that most needs this. A search that stopped before
                 // it reached the file holding the needle reports nothing, and nothing reads as an
@@ -8321,10 +8337,18 @@ fn search<S: Sink>(
                 }
                 body
             });
-            Produced::new(rendered, proposed_where, note)
-                .of_content()
-                .capped(incomplete)
-                .paging(paging)
+            // The match lines alone, which are empty for a search that found nothing: the
+            // sentence saying so, the count past the end and the notices after the matches are the
+            // driver's words and are not glimpsed (VIEW-24). Built in the same gate as the body, so
+            // whether there is anything to glimpse is not decided here.
+            let glimpsed = policy.render_in_place("search", &found, |found| match_lines(&found));
+            Produced {
+                glimpsed: Some(glimpsed),
+                ..Produced::new(rendered, proposed_where, note)
+                    .of_content()
+                    .capped(incomplete)
+                    .paging(paging)
+            }
         }
         // Worded about the name typed. The error carries where it landed, which a link can choose.
         Err(e) => Produced::problem(format!(
@@ -8632,9 +8656,16 @@ fn read_git<S: Sink, C: Confirmer>(
         }
         body
     });
-    Produced::new(rendered, shown, exposed_note(note, &found))
-        .of_content()
-        .capped(incomplete)
+    // Without the notices appended above, which are the driver's words (VIEW-24).
+    let glimpsed = policy.render_in_place("read_git", &answer, |a| {
+        a.text.trim_end_matches('\n').to_owned()
+    });
+    Produced {
+        glimpsed: Some(glimpsed),
+        ..Produced::new(rendered, shown, exposed_note(note, &found))
+            .of_content()
+            .capped(incomplete)
+    }
 }
 
 #[cfg(test)]
