@@ -359,7 +359,14 @@ checkout is reachable from no run but that delegate and the delegates it starts.
 
 Where that cannot hold, a checkout is refused and no delegate starts: where a directory the parent
 opened ([TRUST-9](trust-map.md#TRUST-9)) holds the working directory or the checkout, or where the
-working directory holds the checkout, as it does for a session in the home directory.
+working directory holds the checkout, as it does for a session in the home directory. The
+refusal the planner is given names that directory and says the person can close it with `/clear`,
+which starts a new conversation, or start bravebot again without it.
+
+A read refused for being outside the workspace says, where opening the directory it is in would
+open one that holds the working directory, that no delegate is given a checkout while that
+directory is open. It names the drop first, which reaches the file and costs nothing. A directory
+that holds nothing of the kind is offered without the warning.
 
 What follows from the root follows unchanged. A command line starts at the checkout's root
 ([CMDLINE-12](tools/command-line.md#CMDLINE-12)), a hook runs there
@@ -390,6 +397,9 @@ answer to the spawn names the commit and says the refs are shared, and so does t
 `verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory`
 `verified-by: bravebot_agent::workspace::each_checkout_is_a_numbered_workspace_under_the_state_directory`
 `verified-by: bravebot_agent::workspace::a_checkout_is_refused_where_it_would_overlap_a_tree_the_session_opened`
+`verified-by: bravebot_agent::workspace::a_checkout_refusal_names_the_added_directory_that_holds_the_working_directory`
+`verified-by: bravebot_agent::workspace::a_checkout_refusal_names_the_added_directory_that_holds_the_checkouts`
+`verified-by: bravebot_agent::workspace::a_read_refusal_for_a_directory_holding_the_workspace_says_what_opening_it_costs`
 `verified-by: bravebot_agent::turn::the_answer_to_a_spawn_in_a_checkout_says_the_checkouts_share_the_repositorys_refs`
 `verified-by: bravebot_agent::tools::the_isolation_field_says_checkouts_share_refs_and_who_fetches_once`
 

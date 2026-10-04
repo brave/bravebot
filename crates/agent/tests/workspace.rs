@@ -2074,6 +2074,14 @@ fn a_failure_is_worded_about_the_name_the_caller_may_say() {
         },
         WorkspaceError::Escapes {
             path: carried.to_string(),
+            remedy: Remedy::OpenEndsCheckouts,
+        },
+        WorkspaceError::Escapes {
+            path: carried.to_string(),
+            remedy: Remedy::DropOrOpenEndsCheckouts,
+        },
+        WorkspaceError::Escapes {
+            path: carried.to_string(),
             remedy: Remedy::Kept,
         },
         WorkspaceError::Escapes {
@@ -6724,11 +6732,153 @@ fn a_checkout_is_refused_where_it_would_overlap_a_tree_the_session_opened() {
         .checkout_for(&policy, &state.path, d1())
         .expect_err("inside an opened directory");
     assert!(
-        refused.contains("holds the working directory or the checkout"),
+        refused.contains("holds the directory checkouts are made in"),
         "{refused}"
     );
     assert!(!state.path.join("checkouts").exists());
     assert!(!scratch.path.join(".git/worktrees").exists());
+}
+
+/// CHECKOUT-7. A refusal because of an opened directory names that directory and a way to close
+/// it, whichever of the two it holds, so the planner can say what to change instead of reporting a
+/// refusal with no cause.
+///
+/// The failure this rejects is the old sentence, which named no directory and no way out, so the
+/// person was told a checkout was refused and not that `/clear` or a restart would allow one.
+#[test]
+fn a_checkout_refusal_names_the_added_directory_that_holds_the_working_directory() {
+    let holder = Scratch::new("checkout-refusal-holder");
+    let project = holder.path.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let state = Scratch::new("checkout-refusal-holder-state");
+    repository::commit_files(&project, &[("README", "hello\n")], "first");
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+
+    let opened = workspace
+        .add_directory(&holder.path.to_string_lossy())
+        .expect("the parent opens");
+    let refused = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect_err("an opened directory holds the working directory");
+    assert!(
+        refused.contains(&opened.display().to_string()),
+        "the directory was not named: {refused}"
+    );
+    assert!(refused.contains("holds the working directory"), "{refused}");
+    assert!(refused.contains("/clear"), "no way out: {refused}");
+    assert!(
+        !state.path.join("checkouts").exists(),
+        "a directory was made before the refusal"
+    );
+}
+
+/// CHECKOUT-7. The other arm: an opened directory that holds the checkouts directory but not the
+/// working directory is named for what it holds, so the person is not told the working directory
+/// is the problem.
+#[test]
+fn a_checkout_refusal_names_the_added_directory_that_holds_the_checkouts() {
+    let (_scratch, state, mut workspace) =
+        repository_with_a_state_directory("checkout-refusal-checkouts", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+
+    let opened = workspace
+        .add_directory(&state.path.to_string_lossy())
+        .expect("the state directory opens");
+    let refused = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect_err("an opened directory holds the checkouts");
+    assert!(
+        refused.contains(&opened.display().to_string()),
+        "the directory was not named: {refused}"
+    );
+    assert!(
+        refused.contains("holds the directory checkouts are made in"),
+        "{refused}"
+    );
+    assert!(
+        !refused.contains("holds the working directory"),
+        "the wrong cause was named: {refused}"
+    );
+    assert!(refused.contains("/clear"), "no way out: {refused}");
+}
+
+/// CHECKOUT-7. A read refused for being outside the workspace warns, where opening its directory
+/// would open one that holds the working directory, that doing so leaves no delegate a checkout.
+/// The drop comes first for a read, since it reaches the file and costs nothing.
+///
+/// The failure this rejects is the plain "open its directory" advice, which sends a person to
+/// `/add-dir` on a directory that silently ends checkouts, and the same warning given for every
+/// directory, which would frighten a person off opening one that costs nothing.
+#[test]
+fn a_read_refusal_for_a_directory_holding_the_workspace_says_what_opening_it_costs() {
+    let holder = Scratch::new("read-refusal-holder");
+    let project = holder.path.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(holder.path.join("todo.txt"), "a list").unwrap();
+    let elsewhere = outside("read-refusal-holder");
+    std::fs::write(elsewhere.path.join("todo.txt"), "a list").unwrap();
+
+    let workspace = Workspace::new(&project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let held = holder.path.join("todo.txt").display().to_string();
+    let error = workspace
+        .read(&mut policy, &Labelled::trusted(held.clone()))
+        .expect_err("a file beside the working directory is outside it");
+    let told = error.describe(&held);
+    assert!(told.contains("no delegate is given a checkout"), "{told}");
+    assert!(
+        told.find("drop the file").expect("the drop is named")
+            < told.find("/add-dir").expect("opening is named"),
+        "the free way was not named first: {told}"
+    );
+
+    let error = workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted(held.clone()),
+            &Labelled::trusted("text".to_string()),
+        )
+        .expect_err("a write there is refused too");
+    let told = error.describe(&held);
+    assert!(told.contains("no delegate is given a checkout"), "{told}");
+    assert!(
+        !told.contains("drop"),
+        "a drop was offered for a write: {told}"
+    );
+
+    let unrelated = elsewhere.path.join("todo.txt").display().to_string();
+    let told = workspace
+        .read(&mut policy, &Labelled::trusted(unrelated.clone()))
+        .expect_err("a file elsewhere is outside the working directory")
+        .describe(&unrelated);
+    assert!(told.contains("--add-dir"), "{told}");
+    assert!(
+        !told.contains("checkout"),
+        "a directory that costs nothing was warned about: {told}"
+    );
+
+    let kept = Workspace::new(&project)
+        .expect("workspace")
+        .with_reads_kept_inside(true);
+    let told = kept
+        .read(&mut policy, &Labelled::trusted(held.clone()))
+        .expect_err("confined reads refuse it")
+        .describe(&held);
+    assert!(
+        told.contains("permissions.readsStayInWorkspace") && !told.contains("checkout"),
+        "{told}"
+    );
 }
 
 /// CHECKOUT-3. A workspace that is a checkout makes no checkout of its own.
