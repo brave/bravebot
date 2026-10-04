@@ -947,6 +947,9 @@ pub struct Tick {
     pub number: usize,
     /// Whether nobody gave an interval, so this turn says when the next tick is due.
     pub self_paced: bool,
+    /// Whether this turn is not offered the tool that sets the pace, though nobody gave an
+    /// interval: it is addressed to a definition (ADDRESS-8), so the loop ends after it.
+    pub unpaceable: bool,
 }
 
 /// An image on its way into a prompt, before it has been encoded for the wire.
@@ -2914,7 +2917,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             workspace,
             task.home.as_deref(),
             &catalogue,
-            task.tick,
+            task.tick.map(|tick| Tick {
+                unpaceable: tick.self_paced && task.addressing.is_some(),
+                ..tick
+            }),
             task.working_towards.as_deref(),
             &task.attribution,
             task.system_prompts.appending.as_deref(),

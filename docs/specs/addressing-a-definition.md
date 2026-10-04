@@ -309,6 +309,7 @@ does not apply to them.
 `verified-by: bravebot_core::policy::the_tools_no_delegate_is_offered_are_offered_to_an_addressed_turn`
 `verified-by: bravebot_agent::turn::an_addressed_turn_runs_under_its_definitions_prompt_model_and_kind`
 `verified-by: bravebot_agent::turn::an_addressed_turn_arranges_no_later_look_and_arms_no_watch`
+`verified-by: bravebot_agent::turn::an_addressed_self_paced_tick_is_not_told_to_schedule_the_next`
 
 ## How long it lasts
 

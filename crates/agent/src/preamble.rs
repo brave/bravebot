@@ -189,11 +189,19 @@ pub fn compose_in<S: Sink>(
         preamble.text.push_str(&format!(
             "\n\nThis turn is tick {} of a loop the user started. Every tick sends the same line \
              they typed, so you are being asked this again about a world that may have moved; \
-             what earlier ticks did is above, so read it rather than repeating it. Load the loop \
-             skill before working.\n\n",
-            tick.number
+             what earlier ticks did is above, so read it rather than repeating it.{}\n\n",
+            tick.number,
+            if tick.unpaceable {
+                ""
+            } else {
+                " Load the loop skill before working."
+            }
         ));
-        preamble.text.push_str(if tick.self_paced {
+        preamble.text.push_str(if tick.self_paced && tick.unpaceable {
+            "Nobody gave an interval, and this turn is addressed to a definition, so there is no \
+             tool for setting the pace of the next tick: do this tick's work and answer, and \
+             this loop ends with it.\n"
+        } else if tick.self_paced {
             "Nobody gave an interval, so this loop runs for exactly as long as you keep pacing \
              it: call schedule_next once, at the end of this turn, or the loop ends.\n"
         } else {

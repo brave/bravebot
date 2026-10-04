@@ -1546,6 +1546,7 @@ fn a_tick_of_a_self_paced_loop_says_when_to_run_again() {
     let task = Task::new("watch the build").ticking(Some(turn::Tick {
         number: 1,
         self_paced: true,
+        unpaceable: false,
     }));
     let outcome = turn::run(
         &config,
@@ -1590,6 +1591,7 @@ fn a_tick_is_told_that_it_is_one_and_which_kind_of_loop_it_is_in() {
         let task = Task::new("watch the build").ticking(Some(turn::Tick {
             number: 3,
             self_paced,
+            unpaceable: false,
         }));
         turn::run(
             &config,
@@ -1640,6 +1642,7 @@ fn a_tick_is_told_what_its_kind_of_loop_lasts_on() {
         let task = Task::new("watch the build").ticking(Some(turn::Tick {
             number: 2,
             self_paced,
+            unpaceable: false,
         }));
         turn::run(
             &config,
@@ -1781,6 +1784,7 @@ fn a_tick_the_person_timed_cannot_reschedule_itself() {
     let task = Task::new("watch the build").ticking(Some(turn::Tick {
         number: 2,
         self_paced: false,
+        unpaceable: false,
     }));
     let outcome = turn::run(
         &config,
@@ -21605,6 +21609,62 @@ fn an_addressed_turn_arranges_no_later_look_and_arms_no_watch() {
     assert!(
         leaked.is_empty(),
         "an addressed turn was offered or told of {leaked:?}: {confined}"
+    );
+}
+
+/// ADDRESS-8's last clause: nothing else the run is offered tells it to use what is withheld. The
+/// first tick of a self-paced `/loop` in a session started under a definition is addressed, so it
+/// is not offered `schedule_next`, and the preamble must not tell it to call it. The same tick
+/// with nobody addressed is the control.
+#[test]
+fn an_addressed_self_paced_tick_is_not_told_to_schedule_the_next() {
+    let scratch = Scratch::new("address-tick");
+    let home = Scratch::new("address-tick-home");
+    define(&home, "rule-reviewer", "kind: reader\n", "REVIEW");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        ("UNADDRESSED-TASK", vec![reply_with("looked")]),
+        ("ADDRESSED-TASK", vec![reply_with("reviewed")]),
+    ]);
+    let config = config_for(&endpoint);
+    let tick = turn::Tick {
+        number: 1,
+        self_paced: true,
+        unpaceable: false,
+    };
+    for task in [
+        Task::new("UNADDRESSED-TASK").with_home(Some(home.path.clone())),
+        addressed("ADDRESSED-TASK", &home, "rule-reviewer"),
+    ] {
+        turn::run_cancellable(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &task.ticking(Some(tick)),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+    }
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let [open, confined] = requests.as_slice() else {
+        panic!("one request a turn: {requests:?}");
+    };
+    assert!(
+        open.contains("call schedule_next once"),
+        "the unaddressed tick was not told to pace the loop, so this says nothing: {open}"
+    );
+    assert!(
+        !confined.contains("schedule_next"),
+        "an addressed tick was offered or told of schedule_next: {confined}"
+    );
+    assert!(
+        confined.contains("this loop ends with it"),
+        "an addressed tick was not told the loop ends with it: {confined}"
     );
 }
 
