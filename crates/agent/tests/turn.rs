@@ -1407,6 +1407,57 @@ fn a_model_cannot_escape_the_workspace_with_a_picture() {
     );
 }
 
+/// The refusal the planner reads for a file outside the workspace says what the person can do
+/// about it, so the planner has something to tell them rather than a reason to try `run`.
+#[test]
+fn a_read_outside_the_workspace_tells_the_planner_what_the_person_can_do() {
+    let elsewhere = Scratch::new("escape-remedy-elsewhere");
+    std::fs::write(elsewhere.path.join("todo.txt"), "buy milk").unwrap();
+
+    let scratch = Scratch::new("escape-remedy");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let outside = elsewhere
+        .path
+        .join("todo.txt")
+        .to_string_lossy()
+        .to_string();
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", &format!(r#"{{"path":"{outside}"}}"#)),
+        reply_with("could not read it"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("read my todo list");
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    for remedy in [
+        "with /add-dir in the terminal",
+        "drop the file on the window",
+    ] {
+        assert!(
+            second.contains(remedy),
+            "the refusal did not name {remedy}: {second}"
+        );
+    }
+    assert!(
+        !second.contains("buy milk"),
+        "content from outside the workspace reached the model"
+    );
+}
+
 /// Cancellation is what stops a model that never stops calling tools. There is no round
 /// limit any more, so this is the whole of the answer: the token is checked before every
 /// request and before every tool call, and setting it ends the turn at the next one.

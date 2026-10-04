@@ -3,7 +3,7 @@
 mod repository;
 
 use bravebot_agent::SessionScratch;
-use bravebot_agent::workspace::{Paging, Workspace, WorkspaceError};
+use bravebot_agent::workspace::{Paging, Remedy, Workspace, WorkspaceError};
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::{Event, Principle, RecordingSink};
 use bravebot_core::label::{Integrity, Label};
@@ -2062,6 +2062,23 @@ fn a_failure_is_worded_about_the_name_the_caller_may_say() {
         }),
         WorkspaceError::Escapes {
             path: carried.to_string(),
+            remedy: Remedy::Nothing,
+        },
+        WorkspaceError::Escapes {
+            path: carried.to_string(),
+            remedy: Remedy::Open,
+        },
+        WorkspaceError::Escapes {
+            path: carried.to_string(),
+            remedy: Remedy::OpenOrDrop,
+        },
+        WorkspaceError::Escapes {
+            path: carried.to_string(),
+            remedy: Remedy::Kept,
+        },
+        WorkspaceError::Escapes {
+            path: carried.to_string(),
+            remedy: Remedy::Drop,
         },
         WorkspaceError::Invalid {
             path: carried.to_string(),
@@ -2633,6 +2650,81 @@ fn an_absolute_path_outside_every_added_directory_is_still_refused() {
     assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
 }
 
+/// A refusal the planner cannot act on sends it looking for another way to the same file, which it
+/// found in `run`. So the refusal names what the person can do, and the first of those, once done,
+/// reaches the file by the path that was refused.
+#[test]
+fn a_refusal_outside_the_workspace_says_what_the_person_can_do() {
+    let scratch = Scratch::new("refusal-remedy");
+    let other = outside("refusal-remedy");
+    std::fs::write(other.path.join("todo.txt"), "a list").unwrap();
+
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let typed = other.path.join("todo.txt").display().to_string();
+    let error = workspace
+        .read(&mut policy, &Labelled::trusted(typed.clone()))
+        .expect_err("a path outside the workspace must be refused");
+    let told = error.describe(&typed);
+    for remedy in [
+        "/add-dir in the terminal",
+        "--add-dir",
+        "drop the file on the window",
+    ] {
+        assert!(told.contains(remedy), "{remedy} was not named: {told}");
+    }
+    assert!(
+        !told.contains("readsStayInWorkspace"),
+        "a key that is not set was named: {told}"
+    );
+
+    workspace
+        .add_directory(other.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    workspace
+        .read(&mut policy, &Labelled::trusted(typed))
+        .expect("the refused path reaches the file once its directory is open");
+}
+
+/// Opening a directory does nothing for a path that climbs with `..`, and a directory inside the
+/// root cannot be opened at all, so a refusal of either offers neither.
+#[test]
+fn a_refusal_that_opening_a_directory_would_not_cure_offers_nothing() {
+    let scratch = Scratch::new("refusal-no-remedy");
+    std::fs::write(scratch.path.join("main.rs"), "fn main() {}").unwrap();
+
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let inside_named_absolutely = workspace.root().join("main.rs").display().to_string();
+    for typed in [inside_named_absolutely.as_str(), "../todo.txt"] {
+        let error = workspace
+            .read(&mut policy, &Labelled::trusted(typed.to_string()))
+            .expect_err("the path is refused");
+        assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
+        let told = error.describe(typed);
+        assert!(
+            !told.contains("add-dir") && !told.contains("drop"),
+            "{typed}: a remedy that does not reach the file was offered: {told}"
+        );
+    }
+}
+
 /// With nothing added, an absolute path is refused as it always was.
 #[test]
 fn an_absolute_path_is_refused_when_nothing_was_added() {
@@ -3014,6 +3106,87 @@ fn a_directory_already_open_is_unreachable_where_reads_stay_in_the_workspace() {
         workspace.confines(&added.join("fresh.md")).is_err(),
         "a destination a command line would open was still admitted"
     );
+}
+
+/// PERM-16: a path refused for leaving the workspace names the key that refused it, and does not
+/// send the person to `/add-dir`, which the same key refuses. A drop keeps its reach under the key,
+/// so it is still named.
+#[test]
+fn a_refusal_where_reads_stay_in_the_workspace_names_the_key_and_not_add_dir() {
+    let scratch = Scratch::new("inside-refusal-remedy");
+    let other = outside("inside-refusal-remedy");
+    std::fs::write(other.path.join("todo.txt"), "a list").unwrap();
+
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_reads_kept_inside(true);
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let typed = other.path.join("todo.txt").display().to_string();
+    let error = workspace
+        .read(&mut policy, &Labelled::trusted(typed.clone()))
+        .expect_err("a path outside the workspace must be refused");
+    let told = error.describe(&typed);
+    assert!(
+        told.contains("permissions.readsStayInWorkspace"),
+        "the key was not named: {told}"
+    );
+    assert!(
+        told.contains("drop the file on the window"),
+        "the drop was not named: {told}"
+    );
+    assert!(
+        !told.contains("add-dir"),
+        "a door the key refuses was named: {told}"
+    );
+}
+
+/// A drop only ever reads (DROP-3), so a refusal of a write that names it would send the person to
+/// something that cannot work. Opening the directory still can, unless the key forbids it.
+#[test]
+fn a_refused_write_outside_the_workspace_does_not_offer_a_drop() {
+    for kept_inside in [false, true] {
+        let scratch = Scratch::new("write-refusal-remedy");
+        let other = outside("write-refusal-remedy");
+        let workspace = Workspace::new(&scratch.path)
+            .expect("workspace")
+            .with_reads_kept_inside(kept_inside);
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy");
+
+        let typed = other.path.join("new.txt").display().to_string();
+        let error = workspace
+            .write(
+                &mut policy,
+                &Labelled::trusted(typed.clone()),
+                &Labelled::trusted("text".to_string()),
+            )
+            .expect_err("a path outside the workspace must be refused");
+        assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
+        let told = error.describe(&typed);
+        assert!(
+            !told.contains("drop"),
+            "kept_inside={kept_inside}: a drop was offered for a write: {told}"
+        );
+        assert_eq!(
+            told.contains("--add-dir"),
+            !kept_inside,
+            "kept_inside={kept_inside}: {told}"
+        );
+    }
 }
 
 /// PERM-16 stops at the session's own directory, which is not something a rule, a mode or an answer

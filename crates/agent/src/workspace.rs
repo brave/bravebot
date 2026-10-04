@@ -102,7 +102,7 @@ pub enum WorkspaceError {
     /// The policy refused the operation.
     Denied(Denial),
     /// The path resolved outside the workspace root.
-    Escapes { path: String },
+    Escapes { path: String, remedy: Remedy },
     /// The path was not usable as a relative workspace path.
     Invalid { path: String, reason: &'static str },
     /// The operation failed on disk.
@@ -151,9 +151,44 @@ impl WorkspaceError {
     pub fn describe(&self, named: &str) -> String {
         match self {
             Self::Denied(d) => d.to_string(),
-            Self::Escapes { .. } => {
-                format!("'{named}' resolves outside the workspace; refusing to touch it")
-            }
+            Self::Escapes {
+                remedy: Remedy::Nothing,
+                ..
+            } => format!("'{named}' resolves outside the workspace; refusing to touch it"),
+            // What the person can do is part of the sentence, since the planner cannot do it and has
+            // otherwise been seen to reach the same file through `run` instead.
+            Self::Escapes {
+                remedy: Remedy::Open,
+                ..
+            } => format!(
+                "'{named}' resolves outside the workspace; refusing to touch it. The person can \
+                 open the directory it is in, with /add-dir in the terminal or --add-dir when \
+                 starting bravebot, after which this path reaches it"
+            ),
+            Self::Escapes {
+                remedy: Remedy::OpenOrDrop,
+                ..
+            } => format!(
+                "'{named}' resolves outside the workspace; refusing to touch it. The person can \
+                 open the directory it is in, with /add-dir in the terminal or --add-dir when \
+                 starting bravebot, after which this path reaches it, or drop the file on the \
+                 window to have it read with their next message"
+            ),
+            Self::Escapes {
+                remedy: Remedy::Kept,
+                ..
+            } => format!(
+                "'{named}' resolves outside the workspace, and permissions.readsStayInWorkspace \
+                 keeps the file tools inside it; refusing to touch it"
+            ),
+            Self::Escapes {
+                remedy: Remedy::Drop,
+                ..
+            } => format!(
+                "'{named}' resolves outside the workspace, and permissions.readsStayInWorkspace \
+                 keeps the file tools inside it; refusing to touch it. The person can drop the \
+                 file on the window to have it read with their next message"
+            ),
             Self::Invalid { reason, .. } => format!("'{named}' is not usable: {reason}"),
             Self::Io { detail, .. } => format!("'{named}': {detail}"),
             Self::Stale { .. } => {
@@ -182,10 +217,31 @@ impl WorkspaceError {
     /// read without saying which file would be the opposite problem. Every sentence the planner
     /// reads is worded through [`WorkspaceError::describe`] instead, for the reason written
     /// there.
+    /// This refusal as a call that reads the file reports it, which may also name a drop.
+    fn for_a_read(self) -> Self {
+        match self {
+            Self::Escapes {
+                path,
+                remedy: Remedy::Open,
+            } => Self::Escapes {
+                path,
+                remedy: Remedy::OpenOrDrop,
+            },
+            Self::Escapes {
+                path,
+                remedy: Remedy::Kept,
+            } => Self::Escapes {
+                path,
+                remedy: Remedy::Drop,
+            },
+            other => other,
+        }
+    }
+
     fn carried_path(&self) -> &str {
         match self {
             Self::Denied(_) | Self::Pattern { .. } => "",
-            Self::Escapes { path }
+            Self::Escapes { path, .. }
             | Self::Invalid { path, .. }
             | Self::Io { path, .. }
             | Self::Stale { path }
@@ -196,6 +252,28 @@ impl WorkspaceError {
             | Self::Checkout { path, .. } => path,
         }
     }
+}
+
+/// What a person can do so that a path refused for leaving the workspace reaches its file.
+///
+/// Chosen where the refusal is made, since only there is it known whether opening a directory would
+/// make the same path work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Remedy {
+    /// None is offered: the path climbs with `..`, a link carries it out, it is inside the root,
+    /// where a directory cannot be opened, or what was refused is a command's redirection or a
+    /// rewind.
+    Nothing,
+    /// Opening the directory makes the same path reach the file, for whatever the call does to it.
+    Open,
+    /// [`Remedy::Open`] for a call that reads the file, where dropping it is a second way to have
+    /// it read. A drop only ever reads (DROP-3), so no other call is told of it.
+    OpenOrDrop,
+    /// `permissions.readsStayInWorkspace` refuses opening a directory, and the call is not a read,
+    /// which a drop would not serve (PERM-16).
+    Kept,
+    /// [`Remedy::Kept`] for a call that reads the file, where a drop is the one way to have it read.
+    Drop,
 }
 
 impl fmt::Display for WorkspaceError {
@@ -852,6 +930,7 @@ impl Workspace {
     pub fn confines(&self, path: &Path) -> Result<(), WorkspaceError> {
         let escapes = || WorkspaceError::Escapes {
             path: path.display().to_string(),
+            remedy: Remedy::Nothing,
         };
         let resolved = destination(path).ok_or_else(escapes)?;
         if resolved.starts_with(&self.root) || self.is_opened(&resolved) {
@@ -1087,6 +1166,7 @@ impl Workspace {
                 Component::ParentDir => {
                     return Err(WorkspaceError::Escapes {
                         path: relative.to_string(),
+                        remedy: Remedy::Nothing,
                     });
                 }
                 Component::Prefix(_) | Component::RootDir => {
@@ -1103,6 +1183,7 @@ impl Workspace {
 
         let escapes = || WorkspaceError::Escapes {
             path: relative.to_string(),
+            remedy: Remedy::Nothing,
         };
         let resolved = destination(&self.root.join(candidate)).ok_or_else(escapes)?;
         if !resolved.starts_with(&self.root) {
@@ -1159,7 +1240,7 @@ impl Workspace {
                 detail: e.to_string(),
             })?
         } else {
-            self.resolve(named)?
+            self.resolve(named).map_err(WorkspaceError::for_a_read)?
         };
 
         if resolved.is_dir() {
@@ -1185,17 +1266,27 @@ impl Workspace {
         {
             return Err(WorkspaceError::Escapes {
                 path: named.to_string(),
+                remedy: Remedy::Nothing,
             });
         }
 
         refuse_misleading_names(candidate, named, true, cfg!(windows))?;
 
-        let escapes = || WorkspaceError::Escapes {
+        let escapes = |remedy| WorkspaceError::Escapes {
             path: named.to_string(),
+            remedy,
         };
-        let resolved = destination(candidate).ok_or_else(escapes)?;
+        let resolved = destination(candidate).ok_or_else(|| escapes(Remedy::Nothing))?;
         if !self.is_opened(&resolved) {
-            return Err(escapes());
+            // Inside the root a directory cannot be opened, and the relative path reaches the file.
+            let remedy = if resolved.starts_with(&self.root) {
+                Remedy::Nothing
+            } else if self.reads_stay_inside {
+                Remedy::Kept
+            } else {
+                Remedy::Open
+            };
+            return Err(escapes(remedy));
         }
         if let Some(below) = self
             .landed_in(&resolved)
@@ -1277,7 +1368,9 @@ impl Workspace {
         // Not a decision taken from the bytes: the caller says which of the two reads this is,
         // and it says so from the shape of the gesture that produced the path.
         let resolved = match reach {
-            Reach::Confined => self.resolve(&relative)?,
+            Reach::Confined => self
+                .resolve(&relative)
+                .map_err(WorkspaceError::for_a_read)?,
             Reach::Dropped => self.resolve_attachment(&relative, reach)?,
         };
         let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
@@ -1470,7 +1563,7 @@ impl Workspace {
         offset: usize,
         limit: usize,
     ) -> Result<Page, WorkspaceError> {
-        let resolved = self.resolve(relative)?;
+        let resolved = self.resolve(relative).map_err(WorkspaceError::for_a_read)?;
         let io = |e: std::io::Error| WorkspaceError::Io {
             path: relative.to_string(),
             detail: e.to_string(),
@@ -1532,7 +1625,7 @@ impl Workspace {
     /// verdict on the same file. A file that turns to rubbish after that prefix is caught when
     /// the bytes are actually read, which is where an eager read would have caught it too.
     pub fn survey(&self, relative: &str) -> Result<usize, WorkspaceError> {
-        let resolved = self.resolve(relative)?;
+        let resolved = self.resolve(relative).map_err(WorkspaceError::for_a_read)?;
         let io = |e: std::io::Error| WorkspaceError::Io {
             path: relative.to_string(),
             detail: e.to_string(),
@@ -1932,6 +2025,7 @@ impl Workspace {
     pub(crate) fn put_back(&self, path: &Path, was: &Before) -> Result<(), WorkspaceError> {
         let escapes = || WorkspaceError::Escapes {
             path: path.display().to_string(),
+            remedy: Remedy::Nothing,
         };
         let reached = match was {
             Before::Nothing => path.parent(),

@@ -746,7 +746,9 @@ read from a settings file by whoever assembled the session, on the footing the s
 here is decided from a byte of content.
 
 A refusal says which key made it. Nothing a session did explains one, so a refusal that named neither
-the key nor a file would send somebody looking for a fault in the program.
+the key nor a file would send somebody looking for a fault in the program. An absolute path refused
+for leaving the workspace names the key too, and offers a call that reads the drop and not `/add-dir`,
+which the same key refuses. A call that writes, edits, lists or searches is offered neither.
 
 **What it does not refuse.** The directory the session was given for itself stays reachable: nobody
 was asked for it, no rule opened it, and a session whose own directory went unreachable would fail
@@ -767,6 +769,7 @@ which is [PERM-13](#PERM-13)'s reasoning about a question that changes nothing.
 
 `verified-by: bravebot_agent::workspace::a_directory_by_name_is_refused_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::a_directory_already_open_is_unreachable_where_reads_stay_in_the_workspace`
+`verified-by: bravebot_agent::workspace::a_refusal_where_reads_stay_in_the_workspace_names_the_key_and_not_add_dir`
 `verified-by: bravebot_agent::workspace::the_sessions_own_directory_stays_reachable_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::a_move_outward_is_refused_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::a_move_inward_is_allowed_where_reads_stay_in_the_workspace`
