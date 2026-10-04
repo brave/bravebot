@@ -57,6 +57,9 @@ one.
 `verified-by: bravebot_tui::app::ctrl_c_closes_the_scroller_before_it_reaches_anything_else`
 `verified-by: bravebot_tui::app::the_scroller_answers_the_stop_keys_before_the_turn_does`
 `verified-by: bravebot_tui::app::a_turn_goes_on_running_while_the_scroller_is_open`
+`verified-by: bravebot_tui::app::the_scroller_left_open_under_a_running_command_still_closes`
+`verified-by: bravebot_tui::app::the_press_after_the_scroller_closes_stops_the_command`
+`verified-by: bravebot_tui::app::the_scroller_keeps_scrolling_under_a_running_command`
 `verified-by: bravebot_tui::app::the_chords_that_close_the_scroller_close_it_while_a_search_is_typed`
 `verified-by: bravebot_tui::app::escape_abandons_a_count_before_it_clears_a_search_or_closes_the_scroller`
 
