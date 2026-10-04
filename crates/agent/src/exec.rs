@@ -57,7 +57,7 @@
 //! attempted: what holds is narrow and exact rather than broad and approximate.
 
 use bravebot_core::Pipeline;
-use bravebot_core::cancel::{Cancel, Handoff};
+use bravebot_core::cancel::{Cancel, Handoff, JobStop};
 use bravebot_core::command::{Joiner, Plan, Route, Step, Steps, is_the_null_device};
 use std::fmt;
 use std::io::{Read, Write};
@@ -1270,13 +1270,13 @@ impl Background {
         stop(&mut self.children);
     }
 
-    /// Wait for something to happen, and return at the first of four things.
+    /// Wait for something to happen, and return at the first of five things.
     ///
-    /// Output past `seen` being there, every step having exited, `bound` running out, and `cancel`
-    /// being set. `seen` is where the caller's last look left off, so output that arrived after that
-    /// look and before this call ends the wait at once. Which of the four it was is not reported,
-    /// because the caller then takes the account [`Background::ended`] and [`Background::printed`]
-    /// give and that account says it.
+    /// Output past `seen` being there, every step having exited, `bound` running out, `cancel`
+    /// being set, and one of `stops` being set. `seen` is where the caller's last look left off, so output
+    /// that arrived after that look and before this call ends the wait at once. Which it was is not
+    /// reported, because the caller then takes the account [`Background::ended`] and
+    /// [`Background::printed`] give and that account says it.
     ///
     /// **Nothing of the output is read.** Both conditions are counts this struct kept about a
     /// pipeline it started: how many bytes each pipe has delivered against how many the caller has
@@ -1285,16 +1285,29 @@ impl Background {
     /// asked for, and the bytes themselves still reach anybody only under the label the plan was
     /// given.
     ///
-    /// `cancel` is checked on every pass rather than once at the end, and nothing inside a pass
-    /// blocks. The bound runs to ten minutes, and a person who has changed their mind should not have
-    /// to sit through the rest of somebody else's `tail -f`. This is also why the steps are asked
-    /// about with [`Background::steps_exited`] and not with [`Background::ended`]: the latter waits
-    /// out [`DRAIN_GRACE`] for the pipes, which would carry the wait past `bound` and would not look
-    /// at `cancel` while it did.
-    pub fn wait_for_more(&mut self, seen: &Seen, bound: Duration, cancel: &Cancel) {
+    /// `stops` holds the token of every job the turn has not finished with, this one's among them,
+    /// since a stop of any of them is carried out by the turn's next step and this wait holds that
+    /// step back. The tokens are checked on every pass rather than once at the end, and nothing
+    /// inside a pass blocks. The bound runs to ten minutes, and a person who has changed their
+    /// mind, about the turn or about one job, should not have to sit through the rest of somebody
+    /// else's `tail -f`. This is also why the steps are asked about with
+    /// [`Background::steps_exited`] and not with [`Background::ended`]: the latter waits out
+    /// [`DRAIN_GRACE`] for the pipes, which would carry the wait past `bound` and would not look at
+    /// the tokens while it did.
+    pub fn wait_for_more(
+        &mut self,
+        seen: &Seen,
+        bound: Duration,
+        cancel: &Cancel,
+        stops: &[JobStop],
+    ) {
         let until = Instant::now() + bound;
         loop {
-            if cancel.is_cancelled() || self.has_more(seen) || self.steps_exited() {
+            if cancel.is_cancelled()
+                || stops.iter().any(JobStop::is_requested)
+                || self.has_more(seen)
+                || self.steps_exited()
+            {
                 return;
             }
             if Instant::now() >= until {

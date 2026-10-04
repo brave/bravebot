@@ -2417,6 +2417,9 @@ fn collect_jobs<S: Sink, R: Reporter>(
     // Every finish is told before any is presented. A presentation that fails ends the turn, and a
     // job it never reached is marked reported already, so it would read as stopped with the turn.
     for ended in &finished {
+        if let crate::report::Outcome::StoppedByTheUser(after) = ended.outcome {
+            policy.record_job_stop(&ended.name, after);
+        }
         reporter.job(crate::report::JobEvent::Ended {
             name: ended.name.clone(),
             outcome: ended.outcome.clone(),
@@ -4820,7 +4823,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         });
         // Whatever way the rounds ended, a stop and a failed request included: each leaves the jobs
         // to die with the turn, and the person is told which ones before they do.
-        jobs.stop_all(&mut reporter);
+        jobs.stop_all(&mut policy, &mut reporter);
         spent.wall = began.elapsed();
         reporter.spent(crate::outcome::Spent {
             tokens,

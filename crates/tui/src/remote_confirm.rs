@@ -1087,6 +1087,7 @@ mod tests {
             name: "job:1".to_string(),
             line: "cargo build".to_string(),
             moved_after: Some(std::time::Duration::from_secs(3)),
+            stop: bravebot_core::cancel::JobStop::new(),
         };
 
         let mut reporter = RemoteReporter::new(outbound);

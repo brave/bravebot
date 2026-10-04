@@ -252,7 +252,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches only what the session keeps | `/cost`; `/rename`; `/forget-trust`; `/theme <name>` and `/effort <level>`; `/watch` in every form; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| touches only what the session keeps | `/cost`; `/rename`; `/forget-trust`; `/theme <name>` and `/effort <level>`; `/watch` and `/jobs` in every form; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
 | everything else | every other command, `/theme` and `/effort` alone, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something goes ahead of every line already waiting, and a line behind
@@ -309,6 +309,12 @@ does not read:
 - **`/theme <name>` and `/effort <level>`.** A theme changes only how the screen is drawn. A turn is
   sent with the level in force when it begins and does not read it again, so a level set mid-turn
   is the next turn's.
+
+**Why `/jobs stop` is in the first kind.** A job is the turn's, and stopping one changes what the
+turn is running. The command does it only by setting a token the driver made for that job, which the
+turn reads at its own next step ([RUN-27](tools/run.md#RUN-27)), as the turn reads the stop key. A
+job lives only as long as its turn, so a stop that waited for the turn to end would find nothing to
+stop.
 
 **Nothing enters the transcript while the turn runs.** What a keystroke wrote into the transcript
 would count as the turn having done something, which is what decides whether a stopped prompt comes

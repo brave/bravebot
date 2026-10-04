@@ -154,21 +154,26 @@ pub struct JobView {
     /// How long the run had been waited for when the person moved it, where they did.
     pub moved_after: Option<Duration>,
     pub state: JobState,
+    /// The token `/jobs stop` sets, which the turn reads at its next step (RUN-27).
+    pub stop: bravebot_core::cancel::JobStop,
 }
 
 /// Where a background job is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobState {
     Running,
-    /// It exited, or the planner stopped it, and somebody was told how.
+    /// The person asked to stop it and the turn has not reached its next step to do so.
+    Stopping,
+    /// It exited, or the planner or the person stopped it, and somebody was told how.
     Ended,
     /// Still running when its turn ended, and stopped with the turn.
     EndedWithTurn,
 }
 
 impl JobView {
+    /// Whether its program may still be going, which a job being stopped still is.
     pub fn is_running(&self) -> bool {
-        self.state == JobState::Running
+        matches!(self.state, JobState::Running | JobState::Stopping)
     }
 
     /// Where it is, in the words the row's view and `/status` say it in.
@@ -185,6 +190,7 @@ impl JobView {
                 )
             )
             .to_string(),
+            JobState::Stopping => t!(job_stopping).to_string(),
             JobState::Ended => outcome.summary(),
             JobState::EndedWithTurn => t!(job_ended_with_turn).to_string(),
         }
@@ -2761,6 +2767,7 @@ impl Session {
                 name,
                 line,
                 moved_after,
+                stop,
             } => self.outputs.push(Output {
                 command: line,
                 lines: Vec::new(),
@@ -2777,6 +2784,7 @@ impl Session {
                     since: Instant::now(),
                     moved_after,
                     state: JobState::Running,
+                    stop,
                 }),
             }),
             JobEvent::Ended { name, outcome } => {
@@ -7807,6 +7815,86 @@ impl Session {
         }
     }
 
+    /// Say which background jobs the turn in flight has, or the last one had, and where each is,
+    /// or that there are none (RUN-27).
+    ///
+    /// Named as `/jobs stop` takes them, with the words `/status` uses for where each one is. Every
+    /// word is the driver's or this end's clock, and none is anything a job printed.
+    pub fn report_jobs(&mut self) {
+        let lines: Vec<String> = self
+            .jobs()
+            .map(|(row, job)| {
+                let command = crate::status::cut(&row.command, crate::status::JOB_LINE);
+                let standing = job.standing(&row.outcome);
+                match job.delegate {
+                    Some(delegate) => t!(
+                        jobs_listed_of_delegate,
+                        name = job.name.clone(),
+                        number = delegate.to_string(),
+                        command = command,
+                        standing = standing
+                    )
+                    .to_string(),
+                    None => t!(
+                        jobs_listed,
+                        name = job.name.clone(),
+                        command = command,
+                        standing = standing
+                    )
+                    .to_string(),
+                }
+            })
+            .collect();
+        if lines.is_empty() {
+            self.note(t!(jobs_none));
+            return;
+        }
+        for line in lines {
+            self.note(line);
+        }
+    }
+
+    /// Ask for one background job to be stopped, and say whether it is (RUN-27).
+    ///
+    /// Sets the job's token and nothing else: the turn reads it at its next step and does the
+    /// stopping, so the row says the job is being stopped until the driver says it was. A job of
+    /// another delegate by the same name is a different job, which is why the delegate is part of
+    /// the match.
+    pub fn stop_job(&mut self, name: &str, delegate: Option<&str>) -> bool {
+        let label = match delegate {
+            Some(number) => t!(
+                job_of_delegate,
+                name = name.to_string(),
+                number = number.to_string()
+            )
+            .to_string(),
+            None => name.to_string(),
+        };
+        let job = self.outputs[self.jobs_from..]
+            .iter_mut()
+            .rev()
+            .filter_map(|row| row.job.as_mut())
+            .find(|job| {
+                job.name == name && job.delegate.map(|id| id.to_string()).as_deref() == delegate
+            });
+        let (said, asked) = match job {
+            None => (t!(jobs_no_such, name = label).to_string(), false),
+            Some(job) => match job.state {
+                JobState::Running => {
+                    job.stop.request();
+                    job.state = JobState::Stopping;
+                    (t!(job_stop_asked, name = label).to_string(), true)
+                }
+                JobState::Stopping => (t!(job_stop_already_asked, name = label).to_string(), false),
+                JobState::Ended | JobState::EndedWithTurn => {
+                    (t!(jobs_already_ended, name = label).to_string(), false)
+                }
+            },
+        };
+        self.note(said);
+        asked
+    }
+
     /// Say which checkouts the session keeps and what the record shows done in each, or that it
     /// keeps none (CHECKOUT-15).
     ///
@@ -9855,6 +9943,7 @@ mod tests {
                 name: name.to_string(),
                 line: line.to_string(),
                 moved_after: None,
+                stop: bravebot_core::cancel::JobStop::new(),
             });
         }
 
@@ -10053,6 +10142,149 @@ mod tests {
                 row.outcome,
                 bravebot_agent::report::Outcome::Running { .. }
             ));
+        }
+
+        fn job_with_stop(
+            session: &mut Session,
+            name: &str,
+            line: &str,
+        ) -> bravebot_core::cancel::JobStop {
+            let stop = bravebot_core::cancel::JobStop::new();
+            session.job(bravebot_agent::report::JobEvent::Started {
+                name: name.to_string(),
+                line: line.to_string(),
+                moved_after: None,
+                stop: stop.clone(),
+            });
+            stop
+        }
+
+        fn noted(session: &mut Session, said: impl FnOnce(&mut Session)) -> Vec<String> {
+            let before = session.transcript.len();
+            said(session);
+            session.transcript[before..]
+                .iter()
+                .map(|entry| entry.text.clone())
+                .collect()
+        }
+
+        /// RUN-27. Each job is listed by the name `/jobs stop` takes, with its command and the
+        /// words `/status` uses for where it is; and a turn with none says so.
+        #[test]
+        fn jobs_lists_each_job_by_the_name_a_stop_takes_and_where_it_is() {
+            let mut session = Session::new("none");
+            assert_eq!(noted(&mut session, Session::report_jobs), [t!(jobs_none)]);
+
+            job_started(&mut session, "job:1", "cargo build");
+            job_started(&mut session, "job:2", "cargo test");
+            job_ended(&mut session, "job:2");
+            let id = spawn(&mut session, "reader", "find the parser");
+            job_started(&mut session, "job:1", "./serve");
+            session.reporting_for(None);
+
+            let said = noted(&mut session, Session::report_jobs);
+            assert_eq!(said.len(), 3, "{said:?}");
+            assert!(
+                said[0].starts_with("job:1: cargo build, running "),
+                "{said:?}"
+            );
+            assert_eq!(said[1], "job:2: cargo test, succeeded");
+            assert!(
+                said[2].starts_with(&format!("job:1 {id}: ./serve, running ")),
+                "{said:?}"
+            );
+            assert!(
+                said[2].ends_with(&format!(", started by delegate {id}")),
+                "{said:?}"
+            );
+        }
+
+        /// RUN-27. A stop sets the job's token and nothing more, so the row says it is being
+        /// stopped, and counts as running, until the driver says it ended and who ended it.
+        #[test]
+        fn a_stop_sets_the_jobs_token_and_the_row_waits_for_the_driver() {
+            let mut session = Session::new("none");
+            let stop = job_with_stop(&mut session, "job:1", "sleep 600");
+            let other = job_with_stop(&mut session, "job:2", "sleep 600");
+
+            let said = noted(&mut session, |session| {
+                assert!(session.stop_job("job:1", None));
+            });
+            assert_eq!(said, [t!(job_stop_asked, name = "job:1")]);
+            assert!(stop.is_requested());
+            assert!(!other.is_requested(), "the stop reached another job");
+            let (row, job) = session.jobs().next().unwrap();
+            assert_eq!(job.state, JobState::Stopping);
+            assert_eq!(job.standing(&row.outcome), "being stopped");
+            assert_eq!(session.jobs_running(), 2);
+
+            let said = noted(&mut session, |session| {
+                assert!(!session.stop_job("job:1", None));
+            });
+            assert_eq!(said, [t!(job_stop_already_asked, name = "job:1")]);
+
+            session.job(bravebot_agent::report::JobEvent::Ended {
+                name: "job:1".to_string(),
+                outcome: bravebot_agent::report::Outcome::StoppedByTheUser(Duration::from_secs(3)),
+            });
+            let (row, job) = session.jobs().next().unwrap();
+            assert_eq!(job.state, JobState::Ended);
+            assert!(
+                job.standing(&row.outcome)
+                    .starts_with("stopped by you after"),
+                "{}",
+                job.standing(&row.outcome)
+            );
+            assert_eq!(session.jobs_running(), 1);
+        }
+
+        /// RUN-27. Each delegate numbers its own jobs, so the delegate's number is what tells two
+        /// `job:1`s apart, and a stop without one is the turn's own.
+        #[test]
+        fn a_stop_reaches_the_job_of_the_delegate_it_names_and_no_other() {
+            let mut session = Session::new("none");
+            let turns = job_with_stop(&mut session, "job:1", "cargo build");
+            let id = spawn(&mut session, "reader", "find the parser");
+            let delegates = job_with_stop(&mut session, "job:1", "cargo test");
+            session.reporting_for(None);
+
+            assert!(session.stop_job("job:1", Some(&id.to_string())));
+            assert!(delegates.is_requested());
+            assert!(!turns.is_requested(), "the turn's job:1 was stopped");
+
+            assert!(session.stop_job("job:1", None));
+            assert!(turns.is_requested());
+        }
+
+        /// RUN-27. A job that is not there, or has already ended, is only answered: no token is
+        /// set, since there is nothing left to stop.
+        #[test]
+        fn a_stop_of_a_job_that_is_not_running_says_so_and_sets_nothing() {
+            let mut session = Session::new("none");
+            let ended = job_with_stop(&mut session, "job:1", "cargo build");
+            job_ended(&mut session, "job:1");
+            let dropped = job_with_stop(&mut session, "job:2", "sleep 600");
+            session.job(bravebot_agent::report::JobEvent::Dropped {
+                name: "job:2".to_string(),
+            });
+
+            let said = noted(&mut session, |session| {
+                assert!(!session.stop_job("job:9", None));
+                assert!(!session.stop_job("job:1", Some("d1")));
+                assert!(!session.stop_job("job:1", None));
+                assert!(!session.stop_job("job:2", None));
+            });
+            assert_eq!(
+                said,
+                [
+                    t!(jobs_no_such, name = "job:9").to_string(),
+                    t!(jobs_no_such, name = "job:1 of delegate d1").to_string(),
+                    t!(jobs_already_ended, name = "job:1").to_string(),
+                    t!(jobs_already_ended, name = "job:2").to_string(),
+                ]
+            );
+            assert!(!ended.is_requested());
+            assert!(!dropped.is_requested());
         }
 
         /// Stepping through the list reaches both kinds, since it is one list and the keys that

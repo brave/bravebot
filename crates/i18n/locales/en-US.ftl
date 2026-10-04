@@ -1852,8 +1852,26 @@ jobs-hint = { $count ->
 # counted from when the line started.
 job-running = running { $ran_for }
 job-ended-with-turn = stopped when the turn ended
+# Where a job is between /jobs stop and the turn's next step, which is when the turn stops it.
+job-stopping = being stopped
 # A background job's name where a delegate started it: each delegate numbers its jobs from one.
 job-of-delegate = { $name } of delegate { $number }
+# One line of /jobs. The name is the one /jobs stop takes, and the standing is a job-* message above
+# or how the job ended.
+jobs-listed = { $name }: { $command }, { $standing }
+# A line of /jobs for a delegate's job, named as /jobs stop takes it: the job's name, then the
+# delegate's number, as in job:1 d2.
+jobs-listed-of-delegate = { $name } { $number }: { $command }, { $standing }, started by delegate { $number }
+jobs-none =
+    there is no background job to list. A turn starts one when it runs a command in the
+    background, and /jobs lists a turn's jobs until the next turn starts
+jobs-no-such = there is no job { $name } to stop. /jobs lists the jobs there are
+jobs-already-ended = { $name } has already ended
+job-stop-asked = { $name } will be stopped at the turn's next step
+job-stop-already-asked = { $name } is already being stopped
+jobs-command-takes =
+    /jobs lists the background jobs of this turn, and /jobs stop <name> stops one. A delegate's
+    job takes the delegate's number too, as in /jobs stop job:1 d2
 
 
 ## The commands a line beginning with a slash may be
@@ -1874,6 +1892,7 @@ command-forget-trust = Stop remembering that this directory is trusted, so later
 command-loop = Send a prompt again and again, say what is repeating, or stop it
 command-goal = Keep working until a condition you set is judged met
 command-watch = List the files this session is watching, and stop one by its number
+command-jobs = List this turn's background jobs, and stop one by its name
 command-checkouts = List the checkouts delegates kept, and remove one by its number
 command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
 command-agent = Run one of your definitions on a task, by its name

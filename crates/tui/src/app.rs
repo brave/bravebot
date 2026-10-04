@@ -137,6 +137,12 @@ const GOAL_COMMAND: &str = "/goal";
 /// the half they cannot read off the transcript: which watches are live, and how to end one.
 const WATCH_COMMAND: &str = "/watch";
 
+/// The line that lists the turn's background jobs, and asks for one to be stopped by its name.
+///
+/// The stop is a request the turn carries out at its next step (RUN-27), so a person can stop a
+/// job while the turn goes on with everything else.
+const JOBS_COMMAND: &str = "/jobs";
+
 /// The line that lists the checkouts delegates kept, and removes one by its number.
 ///
 /// A checkout something was done in outlives its delegate, and nothing else removes it.
@@ -189,7 +195,7 @@ pub struct Command {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MidTurn {
     /// Carried out as it is typed. It reads what the session keeps or ends something it has
-    /// standing, and the turn holds none of that.
+    /// standing, which the turn does not hold, or sets a token the turn reads at its own next step.
     Runs,
     /// Carried out as it is typed where it reads or ends what is standing, and waiting where it
     /// would start something: a loop or a goal armed mid-turn needs a look of its own.
@@ -213,7 +219,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 23] {
+pub fn commands() -> [Command; 24] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -309,6 +315,12 @@ pub fn commands() -> [Command; 23] {
             name: WATCH_COMMAND,
             argument: "[stop <n>]",
             description: t!(command_watch),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: JOBS_COMMAND,
+            argument: "[stop <name> [<delegate>]]",
+            description: t!(command_jobs),
             mid_turn: MidTurn::Runs,
         },
         Command {
@@ -1646,6 +1658,18 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
                 session.stop_watch(number);
             }
             crate::watch_command::Asked::Unreadable => session.note(t!(watch_command_takes)),
+        }
+        return Action::Redraw;
+    }
+    // Sends nothing to the turn: a stop sets the job's token, which the turn reads at its next
+    // step (RUN-27).
+    if let Some(argument) = argument_to(line, JOBS_COMMAND) {
+        match crate::jobs_command::parse(argument) {
+            crate::jobs_command::Asked::List => session.report_jobs(),
+            crate::jobs_command::Asked::Stop { name, delegate } => {
+                session.stop_job(&name, delegate.as_deref());
+            }
+            crate::jobs_command::Asked::Unreadable => session.note(t!(jobs_command_takes)),
         }
         return Action::Redraw;
     }
@@ -16097,6 +16121,7 @@ mod tests {
                 EFFORT_COMMAND,
                 FORGET_TRUST_COMMAND,
                 GOAL_COMMAND,
+                JOBS_COMMAND,
                 LOOP_COMMAND,
                 RENAME_COMMAND,
                 THEME_COMMAND,
@@ -16122,9 +16147,11 @@ mod tests {
     }
 
     /// What issue #1128 asks for: a word that reads or ends a loop, a goal, a watch or the spend
-    /// answers when it is typed, because the turn holds none of those. Ahead of a prompt already
-    /// waiting, too, which is left where it was and still within the turn's reach, while the
-    /// command is never handed to the turn and its answer is kept out of the turn's transcript.
+    /// answers when it is typed, because the turn holds none of those, and so does a word that
+    /// lists the jobs or asks for one to be stopped, which sets a token the turn reads later. Ahead
+    /// of a prompt already waiting, too, which is left where it was and still within the turn's
+    /// reach, while the command is never handed to the turn and its answer is kept out of the
+    /// turn's transcript.
     #[test]
     fn a_command_that_reads_or_ends_what_the_session_keeps_answers_mid_turn() {
         for line in [
@@ -16132,6 +16159,9 @@ mod tests {
             "/watch",
             "/watch stop 1",
             "/watch everything",
+            "/jobs",
+            "/jobs stop job:1",
+            "/jobs everything",
             "/loop",
             "/loop stop",
             "/goal",
@@ -16165,6 +16195,25 @@ mod tests {
             );
             assert_eq!(session.input(), "", "{line} was left in the box");
         }
+    }
+
+    /// RUN-27. A job runs only while its turn does, so `/jobs stop` is typed mid-turn, and there
+    /// it sets the token of the job it names and of no other.
+    #[test]
+    fn jobs_stop_typed_mid_turn_sets_the_token_of_the_job_it_names() {
+        let mut session = a_turn_running_on("first");
+        let stop = bravebot_core::cancel::JobStop::new();
+        session.job(bravebot_agent::report::JobEvent::Started {
+            name: "job:1".to_string(),
+            line: "sleep 600".to_string(),
+            moved_after: None,
+            stop: stop.clone(),
+        });
+
+        type_while_working(&mut session, "/jobs stop 2");
+        assert!(!stop.is_requested(), "a stop of job:2 reached job:1");
+        type_while_working(&mut session, "/jobs stop 1");
+        assert!(stop.is_requested());
     }
 
     /// The form that would start something waits, though its word does not. A loop or a goal
