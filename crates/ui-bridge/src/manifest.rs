@@ -15,9 +15,9 @@ use crate::emit::Emitter;
 use crate::protocol::{ErrorCode, Event, Failure, Request};
 use crate::running::State;
 use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink};
-use bravebot_agent::Workspace;
 use bravebot_agent::manifest::Attempt;
 use bravebot_agent::turn::{Task, TurnError};
+use bravebot_agent::{Confining, PermissionMode, Workspace};
 use bravebot_config::Config;
 use bravebot_core::cancel::Cancel;
 use bravebot_net::Egress;
@@ -36,6 +36,9 @@ pub(crate) struct Walk {
     pub output_cap: Option<usize>,
     pub deadlines: bravebot_agent::exec::Deadlines,
     pub model: Option<String>,
+    /// The session's as it stood when the run was accepted. Plan mode refuses a plan that writes
+    /// (MODE-3).
+    pub permission_mode: PermissionMode,
     pub workspace: Workspace,
     pub task: String,
     pub run: usize,
@@ -70,6 +73,7 @@ pub(crate) fn walk(walk: Walk) {
         output_cap,
         deadlines,
         model,
+        permission_mode,
         workspace,
         task: asked,
         run,
@@ -99,11 +103,15 @@ pub(crate) fn walk(walk: Walk) {
         // The rules the session opened under, as the terminal passes them. The agent's manifest
         // runner does not read them today, so no rule holds in a run. A front end says so on the
         // plan it puts to the person.
-        .with_permissions(state.rules.permissions.clone());
+        .with_permissions(state.rules.permissions.clone())
+        .with_permission_mode(permission_mode);
 
     let mut reporter = BridgeReporter::new(emitter.clone(), &session);
-    let mut confirmer =
+    let mut asking =
         BridgeConfirmer::new(emitter.clone(), &session, pending, answers, cancel.clone());
+    // Screening off the task, which asks for none: nothing fills in a verdict before the plan is
+    // fixed, so a confirmer told to screen would refuse on a word nobody made.
+    let mut confirmer = Confining::new(&mut asking, permission_mode, task.auto_vetting);
     let mut sink = BridgeSink::for_run(emitter.clone(), &session, run);
     let egress = Egress::new();
 
@@ -181,7 +189,7 @@ pub(crate) fn walk(walk: Walk) {
                     "run": run,
                     "stopped": stopped,
                     // Sent as a flag so a front end does not read the sentence below to find out.
-                    "declined": !stopped && confirmer.declined_a_plan(),
+                    "declined": !stopped && asking.declined_a_plan(),
                     "problem": problem,
                     "attempt": attempt.map(attempt_json),
                     "record": recorded,

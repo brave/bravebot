@@ -1088,6 +1088,8 @@ impl Bridge {
         let attribution = settings.attribution().clone();
         let output_cap = settings.run_output_cap();
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
+        // Read when the run is accepted and kept to its end, as a turn keeps its own (MODE-8).
+        let permission_mode = open.permission_mode;
         let mut workspace = turn_workspace(
             open.project.clone(),
             &settings,
@@ -1136,7 +1138,7 @@ impl Bridge {
         self.emitter.send(Event::new(
             "manifest.started",
             &handle,
-            json!({ "run": run }),
+            json!({ "run": run, "mode": wire::permission_mode_name(permission_mode) }),
         ));
 
         if let Some(open) = self.open.get_mut(&handle) {
@@ -1156,6 +1158,7 @@ impl Bridge {
                 output_cap,
                 deadlines,
                 model,
+                permission_mode,
                 workspace,
                 task,
                 run,

@@ -555,6 +555,27 @@ fn approving_a_plan_does_not_approve_its_writes() {
     assert_eq!(scratch.written(), None, "a refused write landed");
 }
 
+/// MODE-3: a session planning refuses a plan that writes before the plan is put to the window,
+/// even in a directory the person vouched for, where the write would have raised no prompt.
+#[test]
+fn a_session_in_plan_mode_refuses_a_plan_that_writes() {
+    let scratch = Scratch::new("bridge-manifest-plan-mode");
+    let (endpoint, _rounds) = a_planner_with_one_write();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+    front.call("session.mode", json!({"session": session, "mode": "plan"}));
+
+    let started = front.call("manifest.run", json!({"session": session, "task": TASK}));
+    assert_eq!(started["run"], 1, "{started}");
+    let ended = front.question_or_the_end();
+    assert_eq!(
+        ended["event"], "manifest.error",
+        "a plan that writes was not refused: {ended}"
+    );
+    assert_eq!(ended["data"]["kind"], "precommit", "{ended}");
+    assert_eq!(scratch.written(), None, "plan mode wrote a file");
+}
+
 /// Only the method a plan is answered by answers one. A yes sent through any other is refused as
 /// an answer to nothing, and no step runs on it.
 #[test]

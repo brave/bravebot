@@ -9,6 +9,7 @@ governs:
   - crates/cli/src/main.rs
   - crates/tui/src/state.rs
   - crates/ui-bridge/src/bridge.rs
+  - crates/ui-bridge/src/manifest.rs
 guards:
   - symbol: Confining
   - symbol: PermissionMode
@@ -133,6 +134,7 @@ made from less than the person can see themselves.
 `verified-by: bravebot_agent::turn::plan_mode_refuses_a_write_a_settings_rule_would_have_let_through`
 `verified-by: bravebot_agent::manifest::plan_mode_refuses_a_plan_that_writes`
 `verified-by: bravebot_agent::manifest::plan_mode_runs_a_plan_that_writes_nothing`
+`verified-by: bravebot_ui_bridge::manifest::a_session_in_plan_mode_refuses_a_plan_that_writes`
 
 <a id="MODE-4"></a>
 ### MODE-4: bypassing answers every permission question, including the ones that decide trust
@@ -377,8 +379,8 @@ to be given on, so a request naming bypass is refused rather than read as anothe
 The mode belongs to one open session, and every session opens asking, a resumed session and a fork
 included (MODE-10). The bridge holds it, rather than each turn's request carrying it, because a
 watch starts a turn that no request asked for, and that turn runs in the mode the window shows. A
-turn reads the mode once, when it is accepted, and keeps it to its end (MODE-8). A change while a
-turn runs is accepted and describes the next turn.
+turn or a manifest run reads the mode once, when it is accepted, and keeps it to its end (MODE-8).
+A change while one runs is accepted and describes the next.
 
 **Why.** Refusing bypass rather than reading it as asking keeps a window from drawing a mode its
 session is not in. A fork opens asking rather than taking its parent's mode for MODE-10's reason: a

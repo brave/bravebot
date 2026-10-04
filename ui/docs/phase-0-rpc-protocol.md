@@ -780,7 +780,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `fetch.request` | `{ request, url, host, ambient, summary }` | fetch one URL; `host` is the agent's reading of `url` and is drawn as sent |
 | `server.request` | `{ request, language, program, workspace, runsBuildTooling, summary }` | start a language server for the session |
 | `manifest.request` | `{ request, task, steps }` | run a frozen plan; one line per step |
-| `manifest.started` | `{ run }` | a manifest run began; `run` counts runs in this open session |
+| `manifest.started` | `{ run, mode }` | a manifest run began; `run` counts runs in this open session |
 | `manifest.done` | `{ run, reply, model, steps, clean, tokens, outputTokens, notices, attempt, record, trust }` | a run finished |
 | `manifest.error` | `{ run, kind, message, category, attempts, status, stopped, declined, problem, attempt, record, notices }` | a run stopped |
 | `exposure.request` | `{ request, path, credentials, summary }` | let the planner read a file holding a credential |
@@ -1302,7 +1302,8 @@ Still open:
   next turn, not the running one (MODE-8).
 - `session.new`, `session.open` and `session.fork` carry `permissionMode`, which is always `ask`.
   A mode is not written to the record and a fork does not take its parent's (MODE-10).
-- `turn.started` carries `mode`, the mode the turn reads once and keeps to its end.
+- `turn.started` and `manifest.started` carry `mode`, the mode the turn or run reads once and
+  keeps to its end.
 
 ## Shared session view, version 1
 
