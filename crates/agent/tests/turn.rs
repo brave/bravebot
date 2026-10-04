@@ -22373,6 +22373,53 @@ fn an_addressed_reader_reads_a_read_git_that_names_no_run() {
     );
 }
 
+/// TOOL-6. A definition that keeps `ask_user` and drops `run` is read by a turn whose `ask_user`
+/// description must not send it to `run`.
+#[test]
+fn an_addressed_turn_without_run_reads_an_ask_user_that_names_no_run() {
+    let scratch = Scratch::new("address-ask-user");
+    let home = Scratch::new("address-ask-user-home");
+    define(
+        &home,
+        "asker",
+        "kind: reader\ntools: ask_user, read_file\n",
+        "ASK-WHEN-YOU-MUST",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![("ADDRESSED-ASK", vec![reply_with("read")])]);
+    let config = config_for(&endpoint);
+
+    turn::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-ASK", &home, "asker"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let [request] = requests.as_slice() else {
+        panic!("one request, for one round: {requests:?}");
+    };
+    assert!(
+        request.contains(r#""name":"ask_user""#) && !request.contains(r#""name":"run""#),
+        "the definition did not keep ask_user and drop run: {request}"
+    );
+    assert!(
+        request.contains("look with list_files, search or read_file instead"),
+        "ask_user was not written for a turn without run: {request}"
+    );
+    assert!(
+        !request.contains("search, read_file or run instead"),
+        "ask_user sent the turn to a tool it was not offered: {request}"
+    );
+}
+
 /// `--model` is a person choosing the model for this run (CLI-9), so it outranks the model a
 /// definition names. The definition's prompt and tools still apply, and the turn says which model
 /// it did not ask for, so nobody takes the reply for the definition model's.
