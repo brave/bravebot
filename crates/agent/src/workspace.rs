@@ -127,6 +127,9 @@ pub enum WorkspaceError {
         path: String,
         refused: crate::git::checkout::Refused,
     },
+    /// The working directory was not changed because the session keeps the checkouts carried, by
+    /// their numbers (CHECKOUT-16).
+    KeepsCheckouts { ids: Vec<String> },
 }
 
 impl WorkspaceError {
@@ -226,6 +229,18 @@ impl WorkspaceError {
             Self::Pattern { detail } => format!("the search pattern is not usable: {detail}"),
             Self::Git { declined, .. } => declined.describe(named),
             Self::Checkout { refused, .. } => refused.describe(named),
+            Self::KeepsCheckouts { ids } => {
+                let (noun, them) = if ids.len() == 1 {
+                    ("checkout", "it")
+                } else {
+                    ("checkouts", "them")
+                };
+                format!(
+                    "the session keeps {noun} {}; moving would leave {them} keyed under the \
+                     directory the session is in, so remove {them} with /checkouts remove first",
+                    ids.join(", "),
+                )
+            }
         }
     }
 
@@ -266,7 +281,7 @@ impl WorkspaceError {
 
     fn carried_path(&self) -> &str {
         match self {
-            Self::Denied(_) | Self::Pattern { .. } => "",
+            Self::Denied(_) | Self::Pattern { .. } | Self::KeepsCheckouts { .. } => "",
             Self::Escapes { path, .. }
             | Self::Invalid { path, .. }
             | Self::Io { path, .. }
@@ -1263,7 +1278,19 @@ impl Workspace {
     /// **The session's own directory is not a working directory.** It is removed when the session
     /// ends, so a root inside it is a root that goes while the session is still using it, and every
     /// read, write and run afterwards fails against a directory that is no longer there.
+    ///
+    /// **Refused while the session keeps a checkout** (CHECKOUT-16). The checkout is keyed under
+    /// the directory the session is in, and the record that lists it moves with the session, so a
+    /// move would leave the checkout keyed under the directory it left. The refusal names each one.
     pub fn change_root(&mut self, directory: &str) -> Result<Moved, WorkspaceError> {
+        let kept: Vec<String> = self
+            .session_checkouts()
+            .into_iter()
+            .map(|checkout| checkout.id)
+            .collect();
+        if !kept.is_empty() {
+            return Err(WorkspaceError::KeepsCheckouts { ids: kept });
+        }
         let candidate = Path::new(directory);
         if !candidate.is_absolute() {
             return Err(WorkspaceError::Invalid {

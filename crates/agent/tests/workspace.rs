@@ -7383,6 +7383,57 @@ fn a_distrusted_path_in_a_checkout_labels_history_that_shows_it() {
     assert!(!made.root().exists());
 }
 
+/// CHECKOUT-16. `/cd` is refused while the session keeps a checkout, and the refusal names it, since
+/// the record listing it would move with the session and leave the checkout keyed under the
+/// directory it left. Nothing moves, and a session keeping none moves as before.
+#[test]
+fn a_move_is_refused_while_the_session_keeps_a_checkout_and_names_it() {
+    use bravebot_agent::workspace::Retired;
+    let (scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-cd", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let authority = policy.file_authority();
+    let elsewhere = state.path.display().to_string();
+
+    let mut before = workspace.clone();
+    before
+        .change_root(&elsewhere)
+        .expect("moved with none kept");
+
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    let mut session = workspace.clone();
+    let refusal = session
+        .change_root(&elsewhere)
+        .expect_err("a move was allowed while a checkout was kept");
+    assert!(
+        matches!(&refusal, WorkspaceError::KeepsCheckouts { ids } if ids == &["c1"]),
+        "{refusal:?}"
+    );
+    let said = refusal.to_string();
+    assert!(
+        said.contains("keeps checkout c1;") && said.contains("remove it with /checkouts remove"),
+        "the refusal does not name it and say how to remove it: {said}"
+    );
+    assert_eq!(session.root(), scratch.path.canonicalize().unwrap());
+
+    made.checkout().unwrap().record_typed("README");
+    assert_eq!(made.checkout().unwrap().retire(&authority), Retired::Kept);
+    assert!(matches!(
+        session.change_root(&elsewhere),
+        Err(WorkspaceError::KeepsCheckouts { .. })
+    ));
+    let mut trust = authority.snapshot();
+    session
+        .remove_session_checkout("c1", &mut trust)
+        .expect("removed");
+    session
+        .change_root(&elsewhere)
+        .expect("moved once none is kept");
+}
+
 /// CHECKOUT-15. A kept checkout is removed by its number, with its `worktrees` entry and its rules,
 /// from any clone of the workspace, wherever it has moved since. A rule that distrusts a path in it stays, and history showing
 /// that path is still labelled by it. A number the session does not keep removes nothing.
@@ -7394,6 +7445,12 @@ fn a_kept_checkout_is_removed_by_its_number() {
     let mut sink = RecordingSink::new();
     let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
     let authority = policy.file_authority();
+    // A clone the session moved out of the repository with `/cd` before any checkout was kept;
+    // clones share the session's checkout list, so it reaches them all from there (CHECKOUT-16).
+    let mut elsewhere = workspace.clone();
+    elsewhere
+        .change_root(&state.path.display().to_string())
+        .expect("moved");
     let made: Vec<Workspace> = (0..2)
         .map(|_| {
             let made = workspace
@@ -7415,28 +7472,25 @@ fn a_kept_checkout_is_removed_by_its_number() {
     assert!(trust.is_trusted(&trusted));
     drop(policy);
 
-    // Clones the session has moved into c1 with `/cd`, or opened c1 in with `/add-dir`.
+    // A clone the session has moved into c1 with `/cd` cannot exist (CHECKOUT-16), and one that
+    // opened c1 with `/add-dir` keeps it.
     let c1 = distrusting.root().display().to_string();
     let mut moved_in = workspace.clone();
-    moved_in.change_root(&c1).expect("moved");
+    assert!(matches!(
+        moved_in.change_root(&c1),
+        Err(WorkspaceError::KeepsCheckouts { .. })
+    ));
     let mut added = workspace.clone();
     added.add_directory(&c1).expect("added");
-    for open in [&moved_in, &added] {
-        assert_eq!(
-            open.remove_session_checkout("c1", &mut trust),
-            Err(Unremoved::WorkedFrom)
-        );
-        assert!(
-            distrusting.root().exists(),
-            "a checkout worked from was removed"
-        );
-    }
+    assert_eq!(
+        added.remove_session_checkout("c1", &mut trust),
+        Err(Unremoved::WorkedFrom)
+    );
+    assert!(
+        distrusting.root().exists(),
+        "a checkout worked from was removed"
+    );
 
-    // A clone the session has since moved out of the repository with `/cd`.
-    let mut elsewhere = workspace.clone();
-    elsewhere
-        .change_root(&state.path.display().to_string())
-        .expect("moved");
     assert_eq!(
         elsewhere.remove_session_checkout("c3", &mut trust),
         Err(Unremoved::NoSuch)

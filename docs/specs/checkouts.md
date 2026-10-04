@@ -749,9 +749,13 @@ and leaves it to the person.
 take a checkout that session is still making, or made since it last wrote its record, for a
 leftover.
 
-Nothing builds this yet.
+Partly built. `/cd` is refused while the session lists a checkout, and the refusal names each one
+by its number and says to remove it with `/checkouts remove`. The resume, the fork rule, the lock
+and the opening sweep are not built: no session record holds a checkout
+([CHECKOUT-15](#CHECKOUT-15)), `scratch.rs`'s lock covers the session's own directory alone, and
+nothing removes an unlisted directory under `checkouts/`.
 
-`verified-by: none`
+`verified-by: bravebot_agent::workspace::a_move_is_refused_while_the_session_keeps_a_checkout_and_names_it`
 
 <a id="CHECKOUT-17"></a>
 ### CHECKOUT-17: a rewind leaves a checkout as it is, and says so

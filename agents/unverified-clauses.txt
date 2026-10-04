@@ -7,7 +7,6 @@
 # where the lists themselves merge cleanly, and a count nothing reads is wrong quietly. Count the
 # lines, or read the warnings check-spec prints.
 
-docs/specs/checkouts.md:CHECKOUT-16: a resume brings kept checkouts back, a fork does not, and an opening session removes what no session lists
 docs/specs/credential-protection.md:CRED-4: nothing climbs a tier without the arrangement changing
 docs/specs/credential-protection.md:CRED-6: a handle the agent can redeem alone is not a handle
 docs/specs/credential-protection.md:CRED-7: a bound is decided before issue and enforced beyond the agent's reach
