@@ -1629,6 +1629,7 @@ command-checkouts = Lister les copies de travail gardées par les délégués, e
 command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
 command-agent = Exécuter l'une de vos définitions sur une tâche, par son nom
 command-export = Exporter la transcription de la session vers un fichier markdown
+command-copy = Copier la dernière réponse dans le presse-papiers, ou une plus ancienne en reculant d'autant de réponses
 command-undo = Rembobiner d'un tour et restaurer les fichiers qu'il a écrits
 command-rewind = Lister les tours qu'un rembobinage peut atteindre, ou reculer d'autant
 command-exit = Partir
@@ -1699,6 +1700,14 @@ session-rewind-cause-backup = sauvegardes indisponibles
 session-rewind-cause-unknown = couverture inconnue
 session-exported = transcription exportée vers { $path }
 session-export-failed = impossible d'exporter la transcription : { $problem }
+session-copy-needs-a-number = /copy demande de combien de réponses reculer, comme /copy 2
+session-copy-no-reply = cette session n'a aucune réponse à copier
+session-copy-goes-no-further =
+    { $replies ->
+        [one] cette session a une seule réponse, /copy ne peut donc pas reculer plus loin
+       *[other] cette session a { $replies } réponses, /copy ne peut donc pas reculer de plus de { $replies }
+    }
+session-copy-failed = impossible de copier la réponse dans le presse-papiers
 session-add-dir-needs-a-path = /add-dir demande un répertoire, comme /add-dir ~/notes
 session-directory-added = { $directory } ajouté, et approuvé pour cette session
 session-cd-needs-a-path = /cd demande un répertoire, comme /cd ~/projets/autre

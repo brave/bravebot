@@ -12,9 +12,9 @@
 //! looking at is the one thing the ordinary paste cannot carry. Reading the clipboard here goes
 //! around the pty entirely, which is why Control-V can move what Command-V cannot.
 //!
-//! Nothing labelled passes through here. What is copied was read off the screen, and everything on
-//! the screen was released for display before it was drawn. What is pasted is the user's own input,
-//! on the footing of the prompt it lands in, which
+//! Nothing labelled passes through here. What is copied was read off the screen, or is a reply's
+//! text as the transcript holds it for `/copy`, and both were released for display before they were
+//! drawn. What is pasted is the user's own input, on the footing of the prompt it lands in, which
 //! [`bravebot_core::policy::Policy::admit_pasted_image`] states in full.
 
 use std::io::Write;

@@ -21,7 +21,8 @@ trust map's, in [trust-map.md](trust-map.md); `/compact` is [compaction.md](comp
 `/clear` begins a session, which is [sessions.md](sessions.md)'s; `/btw` asks something the
 conversation never sees, and where its answer is drawn is [watching.md](watching.md)'s;
 `/manifest` starts the other kind of run, which is [manifest.md](manifest.md)'s. The `!` prompt is
-a different surface entirely and is [shell-mode.md](shell-mode.md).
+a different surface entirely and is [shell-mode.md](shell-mode.md). `/copy` has no other spec to
+belong to, so what it copies is CMD-11.
 
 **Skills are offered here, and are never commands.** A slash word is offered the skills a turn
 starting now would advertise to the planner, beneath the commands at the start of a line and alone
@@ -72,6 +73,7 @@ stay a question. Prefix matching would have made `/add-dirs are useful` open a d
 `verified-by: bravebot_tui::app::a_prompt_containing_the_add_dir_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_status_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_cost_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_copy_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_clear_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_compact_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_model_command_is_still_a_prompt`
@@ -141,6 +143,7 @@ the conversation with a question on the end of it, which [watching.md](watching.
 
 `verified-by: bravebot_tui::app::typing_the_status_command_reports_rather_than_prompting`
 `verified-by: bravebot_tui::app::typing_the_cost_command_reports_rather_than_prompting`
+`verified-by: bravebot_tui::app::typing_the_copy_command_copies_the_latest_reply_rather_than_prompting`
 `verified-by: bravebot_tui::app::typing_the_clear_command_starts_a_new_session`
 `verified-by: bravebot_tui::app::the_compact_command_asks_for_a_summary_rather_than_being_sent`
 `verified-by: bravebot_tui::app::the_add_dir_command_carries_its_directory`
@@ -252,7 +255,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches only what the session keeps | `/cost`; `/status`; `/rename`, `/issue` and `/pr`; `/forget-trust`; `/theme <name>` and `/effort <level>`; `/watch` and `/jobs` in every form; `/panel`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| touches only what the session keeps | `/cost`; `/status`; `/copy`; `/rename`, `/issue` and `/pr`; `/forget-trust`; `/theme <name>` and `/effort <level>`; `/watch` and `/jobs` in every form; `/panel`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
 | everything else | every other command, `/theme` and `/effort` alone, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something goes ahead of every line already waiting, and a line behind
@@ -312,6 +315,10 @@ does not read:
   sent with the level in force when it begins and does not read it again, so a level set mid-turn
   is the next turn's.
 
+- **`/copy`.** It reads the transcript and writes to the clipboard, which a sweep with the mouse
+  may do at any time. Mid-turn the latest reply may be what the running turn said on its way to a
+  tool call, since that is in the transcript once it is drawn.
+
 - **`/status`.** It reads what the session keeps, the workspace and the configuration the turn was
   started with, none of which it changes. The trust map and the vouched programs are the turn's: it
   answers into both as it runs, so a copy taken when it began would state "every run is asked" about
@@ -361,6 +368,7 @@ been folded in.
 `verified-by: bravebot_tui::app::a_prompt_queued_behind_a_command_is_sent_once_the_command_has_run`
 `verified-by: bravebot_tui::app::a_queued_command_is_not_what_the_turn_took`
 `verified-by: bravebot_tui::app::a_queued_command_comes_back_to_the_box`
+`verified-by: bravebot_tui::app::copy_typed_mid_turn_takes_the_reply_without_waiting`
 
 ## What a slash word is offered
 
@@ -440,6 +448,54 @@ is not drawn as recognised then, while a command is.
 `verified-by: bravebot_tui::render::a_turn_running_draws_no_skill_as_recognised`
 `verified-by: bravebot_tui::render::a_hint_is_cut_to_the_row_and_holds_no_escape`
 `verified-by: bravebot_tui::app::the_skills_are_resolved_once_a_line_and_let_go_after_it`
+
+## Copying a reply
+
+<a id="CMD-11"></a>
+### CMD-11: `/copy` puts a reply on the clipboard as the transcript holds it
+
+`/copy` puts the latest reply on the clipboard, and `/copy <n>` the reply `n` back, so `/copy 1` is
+the latest. A reply is what the planner said to the person: the answer a turn or a manifest run ends
+on, and what it said on its way to a tool call, in this session or in the one it resumed. A prompt,
+a note, a tool's row, a delegate's work, an aside's answer and a reply still arriving are not
+replies, and a blank reply is not counted. What is copied is the markdown the planner wrote, with
+none of the marker, indent or wrapping the screen draws it with. Every control character but a line
+break and a tab is left out, as the screen leaves it out of a reply, so a Windows line ending is
+copied as one break. How many characters went is drawn at the right of the hint row, where a
+sweep's copy is reported, until the next prompt is sent. A sweep's highlight is taken down.
+
+Anything but digits after the word, zero, a session with no reply, and a number past the oldest
+reply are each refused with a note, and nothing reaches the clipboard. The note for a number past
+the oldest says how many replies there are. A copy that no clipboard tool took and that could not be
+written to the terminal says so. A terminal that ignores the request gives no answer, so that case
+is reported as a copy, as it is after a sweep.
+
+**Why.** A sweep with the mouse copies what was drawn: the marker before a reply's first row, the
+indent before every other row, and a line break wherever the terminal wrapped a paragraph. Pasted
+into an editor or a message, all of that has to be removed by hand. The transcript holds the reply
+before any of it was drawn. A control character is left out because the screen showed none, and
+because what is pasted into a shell is read as typed: a reply holding the sequence that ends a
+bracketed paste would run what followed it. The count goes with the next prompt because no key
+takes it down, and while it is drawn the hint that a picture is on the clipboard is not. A
+highlight left up would say the swept text is what the clipboard holds.
+
+Nothing labelled is copied. A tool's quarantined content is drawn in a margin of its own
+([terminal-transcript.md](terminal-transcript.md#VIEW-3)) and is never part of a reply, since the
+planner never read it. A reply is planner output released for display
+([terminal-transcript.md](terminal-transcript.md#VIEW-6)), which a sweep could already copy off the
+screen and `/export` already writes to a file.
+
+`verified-by: bravebot_tui::app::typing_the_copy_command_copies_the_latest_reply_rather_than_prompting`
+`verified-by: bravebot_tui::app::copy_takes_how_many_replies_back`
+`verified-by: bravebot_tui::app::copy_counts_only_the_replies`
+`verified-by: bravebot_tui::app::a_blank_reply_is_not_one_to_copy`
+`verified-by: bravebot_tui::app::copy_refuses_what_it_cannot_take_and_copies_nothing`
+`verified-by: bravebot_tui::app::a_copied_reply_carries_no_control_character_but_its_breaks_and_tabs`
+`verified-by: bravebot_tui::app::a_copy_says_how_much_it_took_and_a_failed_one_says_so`
+`verified-by: bravebot_tui::app::a_copy_takes_down_what_an_earlier_sweep_left_up`
+`verified-by: bravebot_tui::app::a_copys_count_is_taken_down_by_the_next_prompt`
+`verified-by: bravebot_tui::app::copy_reaches_the_replies_a_resumed_session_brought_back`
+`verified-by: bravebot_tui::app::copy_typed_mid_turn_takes_the_reply_without_waiting`
 
 ## Known costs
 
