@@ -1244,6 +1244,7 @@ alone.
 `verified-by: bravebot_tui::app::a_press_that_is_not_a_character_abandons_an_instruction_still_waiting_for_a_key`
 `verified-by: bravebot_tui::app::sending_the_line_abandons_an_instruction_still_waiting_for_a_key`
 `verified-by: bravebot_tui::app::a_press_while_a_turn_runs_abandons_an_instruction_still_waiting_for_a_key`
+`verified-by: bravebot_tui::app::stopping_a_goal_check_abandons_an_instruction_still_waiting_for_a_key`
 `verified-by: bravebot_tui::render::the_hint_line_draws_an_instruction_still_waiting_beside_the_mode`
 `verified-by: bravebot_tui::app::the_chord_that_enters_normal_mode_does_nothing_to_the_ordinary_box`
 `verified-by: bravebot_tui::app::escape_from_insert_mode_mid_turn_enters_normal_mode_and_the_turn_keeps_running`
