@@ -1185,29 +1185,23 @@ impl Config {
         !self.budget_was_chosen && !self.budget_was_advertised
     }
 
-    /// Take the window the endpoint advertised for the model in use, where it is worth taking.
+    /// Take the window the endpoint advertised for the model in use, or let the default stand in.
     ///
-    /// Ignored when a budget was set by hand, and when the endpoint advertised nothing or something
-    /// too small to work in: in both cases what is already here stands. Returns whether the budget
-    /// changed, so a caller can say so once rather than every turn.
-    ///
-    /// A window that was not advertised still stops the budget claiming to be one. What stands is
-    /// then a figure taken for a model that is no longer in force, which is a guess in the sense
-    /// [`Config::budget_is_guessed`] means: good enough to compact against, not good enough to
-    /// state a percentage against without saying so.
+    /// Ignored when a budget was set by hand. Where the endpoint advertised nothing, or something
+    /// too small to work in, the default stands in: a figure adopted for an earlier model describes
+    /// a model that is no longer in force, so it is dropped rather than kept. The default sits below
+    /// the smallest useful window, so falling back to it cannot put the budget above a window.
+    /// Returns whether the budget changed, so a caller can say so once rather than every turn.
     pub fn adopt_window(&mut self, advertised: Option<u64>) -> bool {
         if self.budget_was_chosen {
             return false;
         }
         let advertised = budget_for_window(advertised);
         self.budget_was_advertised = advertised.is_some();
-        match advertised {
-            Some(budget) if budget != self.context_budget => {
-                self.context_budget = budget;
-                true
-            }
-            _ => false,
-        }
+        let budget = advertised.unwrap_or(DEFAULT_CONTEXT_BUDGET);
+        let changed = budget != self.context_budget;
+        self.context_budget = budget;
+        changed
     }
 
     /// The gateway serving `model`, and the name to ask it for.
@@ -1526,19 +1520,35 @@ mod tests {
         assert!(!config.budget_is_guessed());
     }
 
-    /// A budget that came from one model's window is not a claim about the next one, and the
-    /// figure on the hint line says so. Reverting to the default instead would raise the budget
-    /// above a cramped window still in force, and a budget above the window does not delay
-    /// compaction, it removes it.
+    /// A window adopted for one model describes that model only. Once a model that advertises
+    /// nothing is in force, the default stands in, as it would for a session that started on it,
+    /// and the figure is marked as a guess.
     #[test]
-    fn a_window_nobody_advertised_leaves_an_adopted_budget_standing_and_marks_it_guessed() {
+    fn a_window_nobody_advertised_puts_the_default_back_in_place_of_an_adopted_budget() {
         let mut config = Config::from_lookup(complete_env).unwrap();
-        assert!(config.adopt_window(Some(6_400)));
+        assert!(config.adopt_window(Some(102_400)));
         assert!(!config.budget_is_guessed());
 
-        assert!(!config.adopt_window(None));
-        assert_eq!(config.context_budget, 6_400);
+        assert!(config.adopt_window(None));
+        assert_eq!(config.context_budget, DEFAULT_CONTEXT_BUDGET);
         assert!(config.budget_is_guessed());
+
+        // The placeholder is the same answer as nothing.
+        assert!(config.adopt_window(Some(6_400)));
+        assert!(config.adopt_window(Some(1)));
+        assert_eq!(config.context_budget, DEFAULT_CONTEXT_BUDGET);
+    }
+
+    /// A budget set by hand outranks the default standing in as well as an advertised window.
+    #[test]
+    fn a_window_nobody_advertised_leaves_a_budget_set_by_hand_alone() {
+        let mut config = Config::from_lookup(|k| match k {
+            env_var::CONTEXT_BUDGET => Some("4096".into()),
+            other => complete_env(other),
+        })
+        .unwrap();
+        assert!(!config.adopt_window(None));
+        assert_eq!(config.context_budget, 4096);
     }
 
     #[test]
