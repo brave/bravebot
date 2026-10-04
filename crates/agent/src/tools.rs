@@ -1466,6 +1466,13 @@ pub struct Output {
     /// Read beside `changed_a_file` and the outcome for the same reason: a run the person
     /// declined leaves the change as unbuilt as it was before.
     pub ran_a_program: bool,
+    /// Whether a program was started, whatever came of the call.
+    ///
+    /// Wider than `ran_a_program`, which says a change was built: a line refused for a credential
+    /// it left behind, or one that failed after an earlier stage had spawned, built nothing the
+    /// planner may rely on and still started a program. Read for the checkout, which is kept
+    /// wherever one was started (CHECKOUT-15).
+    pub started_a_program: bool,
     /// Whether a stage of the command was git, so a result sealed from the planner can name the
     /// tool that reads history without a prompt.
     pub ran_git: bool,
@@ -2026,6 +2033,8 @@ struct Produced {
     /// happen, and a turn that counted it would say a change had been built when nothing had
     /// compiled it.
     ran_a_program: bool,
+    /// Whether a program was started, including a call that was then refused or failed.
+    started_a_program: bool,
     /// Whether a stage of the command was git.
     ran_git: bool,
     /// Which document a processor's answer is about, where it produced one.
@@ -2111,6 +2120,7 @@ impl Produced {
             untrusted: false,
             changed_a_file: false,
             ran_a_program: false,
+            started_a_program: false,
             ran_git: false,
             answers_for: None,
             said: None,
@@ -2151,6 +2161,7 @@ impl Produced {
             untrusted: false,
             changed_a_file: false,
             ran_a_program: false,
+            started_a_program: false,
             ran_git: false,
             answers_for: None,
             said: None,
@@ -2216,6 +2227,16 @@ impl Produced {
     /// built nothing.
     fn having_run_a_program(mut self) -> Self {
         self.ran_a_program = true;
+        self.started_a_program = true;
+        self
+    }
+
+    /// Say that a program was started, though the call did not end as a run.
+    ///
+    /// For the returns after a stage has spawned: the checkout holds what the program did, and
+    /// the driver has no record of it (CHECKOUT-15).
+    fn having_started_a_program(mut self) -> Self {
+        self.started_a_program = true;
         self
     }
 
@@ -2745,6 +2766,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                 content: produced.content,
                 changed_a_file: produced.changed_a_file,
                 ran_a_program: produced.ran_a_program,
+                started_a_program: produced.started_a_program,
                 ran_git: produced.ran_git,
                 usage: produced.usage,
                 inference_interval: produced.inference_interval,
@@ -2907,6 +2929,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         content: produced.content,
         changed_a_file: produced.changed_a_file,
         ran_a_program: produced.ran_a_program,
+        started_a_program: produced.started_a_program,
         ran_git: produced.ran_git,
         usage: produced.usage,
         inference_interval: produced.inference_interval,
@@ -6403,7 +6426,8 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                 .started_in_the_background(name)
                 .having_run_a_program()
             }
-            Err(error) => Produced::problem(format!("error: `{displayed}` did not start: {error}")),
+            Err(error) => Produced::problem(format!("error: `{displayed}` did not start: {error}"))
+                .having_started_a_program(),
         };
     }
 
@@ -6609,7 +6633,8 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         policy.record_ambient(&spends);
     }
     if !left.scanned.refused().is_empty() {
-        return credential_refusal_after_a_line(&displayed, &left, &stuck);
+        return credential_refusal_after_a_line(&displayed, &left, &stuck)
+            .having_started_a_program();
     }
 
     match ran {
@@ -6692,12 +6717,15 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             produced.covered_by_record = covered_by_record;
             produced.read_asked = read_asked;
             produced.ran_a_program = true;
+            produced.started_a_program = true;
             produced.ran_git = plan.steps().into_iter().any(runs_git);
             produced
         }
         // A run that produced nothing still says what happened. The plan is safe to repeat back:
         // a person endorsed it, so it is not something an attacker chose.
-        Err(error) => Produced::problem(format!("error: `{displayed}` did not run: {error}")),
+        // A stage may have spawned before the one that failed, so the checkout is marked.
+        Err(error) => Produced::problem(format!("error: `{displayed}` did not run: {error}"))
+            .having_started_a_program(),
     }
 }
 

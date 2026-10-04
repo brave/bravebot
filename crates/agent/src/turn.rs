@@ -4018,7 +4018,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             changed_at.get_or_insert(steps);
                         }
                         ran_a_program = ran_a_program || output.ran_a_program;
-                        if (output.changed_a_file || output.ran_a_program)
+                        if (output.changed_a_file || output.started_a_program)
                             && let Some(checkout) = workspace.checkout()
                         {
                             checkout.mark_worked_in();
