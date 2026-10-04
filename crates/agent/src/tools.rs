@@ -6014,6 +6014,22 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         return refused_by_a_rule(&denial);
     }
 
+    // The plan holds a redirection's target as an absolute path, and a project-relative rule such
+    // as `Edit(.env)` does not cover one. Asked again under the name the file tools hold the file
+    // by, and under the name it lands on, so the rule refuses the redirection as it refuses the
+    // same file named in a call (PERM-7).
+    for (paths, purpose) in [
+        (&plan.writes, Purpose::Effect),
+        (&plan.reads, Purpose::Read),
+    ] {
+        for path in paths {
+            let named = tools.workspace.relative_display(path);
+            if let Err(refusal) = refuse_denied_path(policy, tools.workspace, purpose, &named) {
+                return Produced::problem(refusal);
+            }
+        }
+    }
+
     // What the planner named for standard input, turned into bytes and a label before anybody is
     // asked. Three gates, as a write's `contents_ref` has: the name is accepted as a reference
     // rather than read as content, the file behind it is opened if the slot was still deferring
