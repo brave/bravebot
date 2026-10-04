@@ -67,7 +67,7 @@ try {
   await page.getByText('No bots match this search.',{exact:true}).waitFor();
   await bots.press('Escape');
   // A bot's page: its recent conversations, a composer that starts another, and its details.
-  const conversations=page.locator('[data-test="bot-conversations"] .bot-history-row');
+  const conversations=page.locator('[data-test="bot-conversations"] button.bot-history-row');
   const overview=async()=>{
     if(!(await page.locator('.bot-open').count())) await page.getByRole('button',{name:'Bots',exact:true}).click();
     await page.locator('.bot').filter({hasText:'Review Bot'}).locator('.bot-open-button').click();
@@ -82,7 +82,7 @@ try {
   // Saved, archived and associated conversations, the unsent draft, and a record the list no longer
   // has, which is said rather than dropped.
   assert.equal(await conversations.count(),3);
-  assert.equal(await page.locator('.bot-history-unavailable').count(),1);
+  assert.equal(await page.locator('[data-test="bot-conversations"] .bot-history-row.unavailable').count(),1);
   await conversations.filter({hasText:'Review the sample project'}).getByText(/Archived/).waitFor();
   assert.equal(await page.locator('[data-test="bot-details"]').count(),1,'the bot page shows its details beside the list');
   await snap('01-all-history');
