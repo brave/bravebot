@@ -55,7 +55,7 @@ export function SettingsView({ page, onPage, onBack, session, chosen, onAppearan
   useEffect(() => {
     const keys = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return
-      if (document.querySelector('[role="dialog"]')) return
+      if (document.querySelector('[role="dialog"]') || menuOpen()) return
       event.preventDefault()
       if (inner) inner()
       else back()
@@ -111,4 +111,9 @@ export function SettingsView({ page, onPage, onBack, session, chosen, onAppearan
       </main>
     </div>
   )
+}
+
+/** Whether a Leo menu or dropdown list is open, which closes on the same Escape itself. */
+function menuOpen(): boolean {
+  return [...document.querySelectorAll('leo-buttonmenu, leo-dropdown')].some((menu) => menu.shadowRoot?.querySelector('[role="menu"]'))
 }
