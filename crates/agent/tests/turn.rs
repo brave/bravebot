@@ -9626,6 +9626,68 @@ fn a_sentence_the_driver_wrote_about_a_call_is_not_glimpsed() {
     );
 }
 
+/// VIEW-24: a search that found nothing, and the notices a listing or a search adds after what it
+/// found, are the driver's sentences and are not glimpsed as if the workspace had said them.
+#[test]
+fn a_search_that_found_nothing_glimpses_no_sentence_of_the_drivers() {
+    let scratch = Scratch::new("glimpsed-search");
+    std::fs::write(
+        scratch.path.join("notes.md"),
+        "alpha one\nbeta\nalpha two\n",
+    )
+    .unwrap();
+    std::fs::create_dir(scratch.path.join("empty")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("search", r#"{"pattern":"zzz-not-there"}"#),
+        tool_request("search", r#"{"pattern":"alpha","offset":500}"#),
+        tool_request("list_files", r#"{"directory":"empty"}"#),
+        tool_request("search", r#"{"pattern":"alpha"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("search"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    let drawn: Vec<&[String]> = reporter
+        .returned
+        .iter()
+        .map(|glimpse| glimpse.lines.as_slice())
+        .collect();
+    assert_eq!(
+        drawn,
+        [
+            &[][..],
+            &[][..],
+            &[][..],
+            &[
+                "notes.md:1: alpha one".to_string(),
+                "notes.md:3: alpha two".to_string()
+            ][..],
+        ],
+        "a sentence the driver wrote was glimpsed, or the matches were not: {:?}",
+        reporter.returned
+    );
+}
+
 /// VIEW-24: a command the planner may read is glimpsed from its end, where how it went is, and one
 /// whose output was kept from the planner is shown in the marked block and not also plainly.
 #[test]
