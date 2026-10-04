@@ -660,6 +660,8 @@ No session record holds a checkout, and leaving the session names none, so one n
 stays until a person deletes it and runs `git worktree prune`.
 
 `verified-by: bravebot_agent::turn::a_checkout_nothing_was_done_in_is_removed_when_its_delegate_ends`
+`verified-by: bravebot_agent::turn::a_checkout_is_kept_when_a_line_in_it_was_refused_for_a_credential`
+`verified-by: bravebot_agent::turn::a_checkout_is_kept_when_a_line_in_it_failed_after_a_stage_started`
 `verified-by: bravebot_agent::workspace::a_checkout_is_removed_unless_something_was_done_in_it`
 `verified-by: bravebot_agent::workspace::a_kept_checkout_is_removed_by_its_number`
 `verified-by: bravebot_agent::git::removing_a_checkout_takes_its_directory_and_its_entry_alone`

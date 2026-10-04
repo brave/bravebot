@@ -23302,6 +23302,148 @@ fn run_in_a_repository(
     (every_request(received), confirmer)
 }
 
+/// Runs `command` as a worker given a checkout of a one-commit repository, and returns the
+/// checkouts left under the state directory and what the planner was told about its delegate.
+fn checkouts_after_a_worker_ran(
+    tag: &str,
+    committed: &[(&str, &str)],
+    command: &str,
+    vouched: Option<(&str, &[&str])>,
+) -> (Vec<PathBuf>, Vec<String>) {
+    let scratch = Scratch::new(&format!("checkout-started-{tag}"));
+    let home = Scratch::new(&format!("checkout-started-{tag}-home"));
+    repository::commit_files(&scratch.path, committed, "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let arguments = serde_json::json!({ "command": command }).to_string();
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "SEND-A-WORKER-TO-RUN",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"RUN-THE-LINE","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("the delegate ended"),
+            ],
+        ),
+        (
+            "RUN-THE-LINE",
+            vec![tool_request("run", &arguments), reply_with("done")],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    // Vouched for in the directory the session's first checkout is made at, which is known before
+    // it exists: its name is the first number, under the project's key in the state directory.
+    // What the scan of a destination reads is decided by whether the line's program was vouched
+    // for, so a line nobody vouched for would never reach the refusal under test.
+    let programs =
+        bravebot_core::programs::TrustedPrograms::from_iter(vouched.map(|(program, arguments)| {
+            let found =
+                bravebot_agent::programs::find(program, &scratch.path).expect("the program exists");
+            let made = home
+                .path
+                .canonicalize()
+                .expect("the state directory exists")
+                .join("checkouts")
+                .join(bravebot_agent::home::key_for(workspace.root()))
+                .join("c1");
+            bravebot_core::programs::Command::new(
+                found.resolved,
+                arguments.iter().map(|a| a.to_string()).collect(),
+                made,
+            )
+            .started_as(found.started_as)
+        }));
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("SEND-A-WORKER-TO-RUN").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trust,
+        programs,
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+    let asked = every_request(&received);
+    (checkouts_under(&home.path), asked)
+}
+
+/// CHECKOUT-15. A line refused for a credential it left in a redirection destination was still a
+/// program started in the checkout, so the checkout is kept and the planner is not told nothing
+/// was done in it.
+#[test]
+fn a_checkout_is_kept_when_a_line_in_it_was_refused_for_a_credential() {
+    let (made, asked) = checkouts_after_a_worker_ran(
+        "credential",
+        // A program prints what it was handed, so the line itself carries nothing and is not refused
+        // before it runs.
+        &[("key.txt", "AKIAIOSFODNN7EXAMPLE\n")],
+        "cat key.txt > build.log",
+        Some(("cat", &["key.txt"])),
+    );
+    assert!(
+        asked.iter().any(|body| body.contains("refused: ")),
+        "the line was not refused for the credential, so this is not the case under test: {:?}",
+        asked.last().map(|body| body
+            .chars()
+            .rev()
+            .take(1500)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>())
+    );
+    assert_eq!(
+        made.len(),
+        1,
+        "a checkout a program ran in was removed: {asked:#?}"
+    );
+    assert!(
+        !asked
+            .iter()
+            .any(|body| body.contains("since nothing was done in it")),
+        "the planner was told nothing was done in a checkout a program ran in"
+    );
+}
+
+/// CHECKOUT-15. A line whose later stage cannot open its redirection fails after an earlier stage
+/// has been spawned, and that checkout is kept too.
+#[test]
+fn a_checkout_is_kept_when_a_line_in_it_failed_after_a_stage_started() {
+    let (made, asked) = checkouts_after_a_worker_ran(
+        "late-failure",
+        &[("README", "committed\n")],
+        "true | cat > missing-directory/out.txt",
+        None,
+    );
+    assert!(
+        asked.iter().any(|body| body.contains("did not run")),
+        "the line did not fail after starting, so this is not the case under test"
+    );
+    assert_eq!(
+        made.len(),
+        1,
+        "a checkout a program ran in was removed: {asked:#?}"
+    );
+    assert!(
+        !asked
+            .iter()
+            .any(|body| body.contains("since nothing was done in it")),
+        "the planner was told nothing was done in a checkout a program ran in"
+    );
+}
+
 /// CHECKOUT-1, CHECKOUT-7. A delegate asked to work in a checkout writes there, the working
 /// directory is left as it was, and the delegate is told which commit it holds.
 #[test]
