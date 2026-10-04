@@ -15,6 +15,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("peer_features", HERE / "peer-features.py")
@@ -452,6 +453,18 @@ class Work(unittest.TestCase):
         filed = json.loads((self.work / "filed.json").read_text())
         self.assertEqual(filed["parity-session-fork"], {"issue": 5, "how": "existing"})
         self.assertEqual(filed["beyond-fork-anywhere"]["how"], "filed")
+
+    def test_post_files_a_hundred_by_default_and_names_the_drafts_past_the_cap(self):
+        """A confirmed gap left unfiled keeps its unit unreviewed for the next run, and a runaway run must still stop."""
+        drafts = [{"id": f"parity-gap-{n}", "title": f"gap {n}", "labels": ["parity"]} for n in range(101)]
+        (self.work / "drafts.json").write_text(json.dumps(drafts))
+        calls, poster = self.poster()
+        with mock.patch.object(pf.pa, "load_poster", lambda: poster):
+            code, out = quiet(pf.main, ["post", "--work-dir", str(self.work), "--pace", "0"])
+        self.assertEqual(code, 0)
+        self.assertEqual([c[1] for c in calls if c[0] == "create"], [d["id"] for d in drafts[:100]])
+        self.assertEqual(out.splitlines()[-1], f"1 not attempted, at the cap of 100: {drafts[100]['id']}")
+        self.assertNotIn(drafts[100]["id"], json.loads((self.work / "filed.json").read_text()))
 
 
 class Tree(unittest.TestCase):

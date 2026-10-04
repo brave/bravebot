@@ -14,6 +14,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("peer_advisories", HERE / "peer-advisories.py")
@@ -357,6 +358,42 @@ class Work(unittest.TestCase):
         code, _ = quiet(pa.post, self.post_args(), poster=poster)
         self.assertEqual(code, 2)
         self.assertEqual(calls, [])
+
+    def test_post_files_a_hundred_by_default_and_names_the_drafts_past_the_cap(self):
+        """A confirmed defect left unfiled is vetted again by the next run, and a runaway run must still stop."""
+        drafts = [{"id": f"GHSA-{n:04d}-0000-0000", "title": f"defect {n}", "labels": ["bug"]} for n in range(101)]
+        (self.work / "drafts.json").write_text(json.dumps(drafts))
+        calls, poster = self.poster()
+        with mock.patch.object(pa, "load_poster", lambda: poster):
+            code, out = quiet(pa.main, ["post", "--work-dir", str(self.work), "--pace", "0"])
+        self.assertEqual(code, 0)
+        self.assertEqual([c[1] for c in calls if c[0] == "create"], [d["id"] for d in drafts[:100]])
+        self.assertEqual(out.splitlines()[-1], f"1 not attempted, at the cap of 100: {drafts[100]['id']}")
+        self.assertNotIn(drafts[100]["id"], json.loads((self.work / "filed.json").read_text()))
+
+    def test_post_stopped_by_a_gh_failure_files_only_the_rest_when_run_again(self):
+        """Both SKILL.md files tell a run whose post stopped on a gh failure to run it again, which must not file twice."""
+        drafts = [{"id": ghsa, "title": f"defect {ghsa}", "labels": ["bug"]} for ghsa in (A, B, C)]
+        (self.work / "drafts.json").write_text(json.dumps(drafts))
+        _, poster = self.poster()
+        files = poster.post
+
+        def files_b_and_reports_a_failure(repo, draft, assignee=None):
+            url = files(repo, draft, assignee)
+            if draft["id"] == B:
+                raise RuntimeError("HTTP 502")
+            return url
+
+        poster.post = files_b_and_reports_a_failure
+        code, _ = quiet(pa.post, self.post_args(), poster=poster)
+        self.assertEqual(code, 1)
+        self.assertEqual(list(json.loads((self.work / "filed.json").read_text())), [A])
+
+        calls, poster = self.poster(cited=[B])
+        code, _ = quiet(pa.post, self.post_args(), poster=poster)
+        self.assertEqual(code, 0)
+        self.assertEqual([c[1] for c in calls if c[0] == "create"], [C])
+        self.assertEqual(json.loads((self.work / "filed.json").read_text())[B]["issue"], 5)
 
 
 class Tree(unittest.TestCase):
