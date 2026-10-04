@@ -34,10 +34,11 @@ import {
   releaseBotSession,
   retireBot,
   saveBot,
+  saveFormBot,
   consolidationPrompt,
   AFTER_COMPACTION,
 } from './bots'
-import { isBotModel, isSlug, withoutBot, type Bot } from '../shared/bots'
+import { isBotModel, withoutBot, type Bot } from '../shared/bots'
 import { isSessionId, parseForkResult } from '../shared/forks'
 import { rootForSession, forgetRoot, list, noteRoot, open as openInApp, preview, search, chooseAttachments, attachmentPaths } from './files'
 import { isSubpath } from '../shared/files'
@@ -689,23 +690,11 @@ app.whenReady().then(() => {
     // Composed in `bots.ts` and not here, because the folder a new bot is pinned to is the one
     // field on this channel that decides where files land, and the check that it is a folder
     // somebody opened belongs beside the code that writes there.
-    let next = botFromForm(value)
-    if (!next) return null
+    const form = botFromForm(value)
+    if (!form) return null
     // Making a bot writes its definition to `~/.bravebot/agents` (MEMORY-8). This process writes
-    // nothing there itself; the agent does, and names what it wrote. A refusal, such as a model
-    // of several lines, throws here and no bot is made. Only a new bot is defined: an edit keeps
-    // the definition it has.
-    if (!bot(next.slug)) {
-      if (!bridge) throw new Error('The agent is not running, so a bot cannot be made.')
-      const made = (await bridge.request('bot.define', {
-        slug: next.slug,
-        purpose: next.purpose,
-        ...(next.model === null ? {} : { model: next.model }),
-      })) as { name?: unknown } | null
-      if (!isSlug(made?.name)) throw new Error('The agent did not name the bot’s definition.')
-      next = { ...next, definition: made.name }
-    }
-    saveBot(next)
+    // nothing there itself; the agent does, and `saveFormBot` keeps the name it answers with.
+    const next = await saveFormBot(form, bridge ? (method, params) => bridge!.request(method, params) : null)
     if (noteProject(next.directory)) rebuildMenu()
     return next
   })

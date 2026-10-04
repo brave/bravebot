@@ -208,6 +208,30 @@ export function botFromForm(value: unknown): Bot | null {
   }
 }
 
+/**
+ * Save the bot a form described. A new bot is first defined by the agent (MEMORY-8), which names
+ * what it wrote; that name is kept as `definition`. A refusal, an absent agent or an answer that
+ * is not a slug throws and saves nothing. An existing bot keeps the definition it has.
+ */
+export async function saveFormBot(
+  next: Bot,
+  define: ((method: 'bot.define', params: Record<string, unknown>) => Promise<unknown>) | null,
+): Promise<Bot> {
+  let kept = next
+  if (!bot(next.slug)) {
+    if (!define) throw new Error('The agent is not running, so a bot cannot be made.')
+    const made = (await define('bot.define', {
+      slug: next.slug,
+      purpose: next.purpose,
+      ...(next.model === null ? {} : { model: next.model }),
+    })) as { name?: unknown } | null
+    if (!isSlug(made?.name)) throw new Error('The agent did not name the bot’s definition.')
+    kept = { ...next, definition: made.name }
+  }
+  saveBot(kept)
+  return kept
+}
+
 /** Write a bot down, replacing whatever shared its slug, and stamp when that happened. */
 export function saveBot(next: Bot): void {
   putBots(withBot(bots(), { ...next, updated: Date.now() }))

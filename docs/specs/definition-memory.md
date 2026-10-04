@@ -428,6 +428,7 @@ keeps the name the agent answers with. Nothing yet addresses the definition in a
 `verified-by: bravebot_agent::agents::a_numbered_name_is_still_a_slug`
 `verified-by: bravebot_ui_bridge::definitions::a_bot_is_answered_with_the_name_its_definition_was_given`
 `verified-by: bravebot_ui_bridge::definitions::a_refused_bot_writes_nothing`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-model.test.mjs pins its half: a new bot is saved only with the name the agent answers with, and nothing is saved when the agent is absent, refuses, or answers with something that is not a slug; an edit does not define again; a stored definition name that is not a slug is dropped; make check-ui runs it)`
 
 <a id="MEMORY-9"></a>
 ### MEMORY-9: editing a bot rewrites only the fields the form shows
@@ -444,7 +445,7 @@ The rewrite is built: `bravebot_agent::agents::rewrite_definition` takes a defin
 purpose and the model, and returns the text with the description, the `model:` line and the body
 replaced and every other line as it was. It writes the description and the model in single quotes
 and reads the result back, refusing a text that would not read back as what was given. Nothing in
-the desktop calls it yet, because [MEMORY-8](#MEMORY-8) does not write the file it would rewrite.
+the desktop calls it yet.
 
 `verified-by: bravebot_agent::agents::editing_a_definition_rewrites_the_description_the_model_and_the_body_alone`
 `verified-by: bravebot_agent::agents::editing_a_definition_adds_a_model_it_lacked_and_drops_one_no_longer_chosen`

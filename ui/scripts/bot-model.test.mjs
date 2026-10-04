@@ -53,3 +53,40 @@ test('main-process storage retains model changes across a fresh module load', ()
     assert.equal(load().bot(definition.slug).model, 'provider/model-b')
   } finally { rmSync(profile, { recursive: true, force: true }) }
 })
+
+test('a stored definition name is kept only where it is a slug', () => {
+  for (const value of ['web-dev', 'web-dev-2']) {
+    assert.equal(parseBots({ bots: [{ ...definition, definition: value }] }).bots[0].definition, value)
+  }
+  for (const value of ['../x', 'a/b', '', 42, {}, undefined, null]) {
+    assert.equal(parseBots({ bots: [{ ...definition, definition: value }] }).bots[0].definition, null)
+  }
+})
+
+test('making a bot saves nothing unless the agent names the definition it wrote', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'bravebot-define-'))
+  const source = buildSync({ entryPoints: ['src/main/bots.ts'], bundle: true, write: false, platform: 'node', format: 'cjs', external: ['electron'] }).outputFiles[0].text
+  const module = { exports: {} }
+  const mockedRequire = (id) => id === 'electron' ? { app: { getPath: () => profile } } : require(id)
+  new Function('require', 'module', 'exports', source)(mockedRequire, module, module.exports)
+  const storage = module.exports
+  const fresh = { ...parseBots({ bots: [{ ...definition, model: null }] }).bots[0], definition: null }
+  try {
+    await assert.rejects(storage.saveFormBot(fresh, null), /not running/)
+    await assert.rejects(storage.saveFormBot(fresh, async () => { throw new Error('refused') }), /refused/)
+    for (const answer of [null, {}, { name: '../x' }, { name: 42 }]) {
+      await assert.rejects(storage.saveFormBot(fresh, async () => answer), /did not name/)
+    }
+    assert.equal(storage.bot(fresh.slug), null)
+
+    const calls = []
+    const saved = await storage.saveFormBot({ ...fresh, model: 'provider/model-a' }, async (method, params) => { calls.push([method, params]); return { name: 'web-dev-2' } })
+    assert.equal(saved.definition, 'web-dev-2')
+    assert.equal(storage.bot(fresh.slug).definition, 'web-dev-2')
+    assert.deepEqual(calls, [['bot.define', { slug: 'web-dev', purpose: 'Build websites', model: 'provider/model-a' }]])
+
+    await storage.saveFormBot({ ...saved, purpose: 'Build sites' }, async () => { throw new Error('an edit does not define') })
+    assert.equal(storage.bot(fresh.slug).definition, 'web-dev-2')
+    assert.equal(storage.bot(fresh.slug).purpose, 'Build sites')
+  } finally { rmSync(profile, { recursive: true, force: true }) }
+})
