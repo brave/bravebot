@@ -3563,12 +3563,33 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         String::new()
     };
 
+    // The way into the view, for as long as it holds anything. The row that reports what the turn
+    // is doing names the key too, but that row goes when the turn ends, and what the view holds is
+    // most worth opening afterwards: the transcript keeps one sentence about a delegate and a
+    // preview of what a command printed. The count is there because a key with nothing behind it
+    // does nothing at all, and this line is read at a glance.
+    //
+    // Everything the view opens, not the delegates alone. A session that ran commands and spawned
+    // no delegate has a key that works and, counted the other way, no line saying so.
+    //
+    // Read before the shell line as well as the ordinary one (WATCH-11): the view holds the same
+    // things whichever mode the box is in, and this is the line that is always drawn.
+    let watchable = match session.watchable().len() {
+        0 => String::new(),
+        count => t!(
+            watching_hint,
+            chord = session.bindings().watch_name(),
+            count = count
+        ),
+    };
+
     // In shell mode the usual bindings are beside the point: the line goes to a shell, so what a
     // user needs to know is which shell and how to get back out again.
     if session.shell {
         // Fitted like the ordinary line, so a narrow terminal drops a part whole rather than
         // cutting one at the last column. The shell is the mode and goes last; what it says about
-        // the line goes before the things that are spending something unwatched.
+        // the line goes before the things that are spending something unwatched. The way into the
+        // view is a thing learned once, so it is given up right after the sentences about the line.
         let parts = [
             format!("! {}", bravebot_agent::shell::shell()),
             "esc to cancel".to_string(),
@@ -3576,8 +3597,9 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
             movable,
             looping,
             jobs,
+            watchable,
         ];
-        let kept = fitted(&parts, &[2, 1, 3, 5, 4], area.width);
+        let kept = fitted(&parts, &[2, 1, 6, 3, 5, 4], area.width);
         let mut spans = Vec::new();
         for (position, index) in kept.iter().enumerate() {
             let part = parts[*index].clone();
@@ -3609,23 +3631,6 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         t!(panel_hint, chord = session.bindings().panel_name()).to_string()
     } else {
         String::new()
-    };
-
-    // The way into the view, for as long as it holds anything. The row that reports what the turn
-    // is doing names the key too, but that row goes when the turn ends, and what the view holds is
-    // most worth opening afterwards: the transcript keeps one sentence about a delegate and a
-    // preview of what a command printed. The count is there because a key with nothing behind it
-    // does nothing at all, and this line is read at a glance.
-    //
-    // Everything the view opens, not the delegates alone. A session that ran commands and spawned
-    // no delegate has a key that works and, counted the other way, no line saying so.
-    let watchable = match session.watchable().len() {
-        0 => String::new(),
-        count => t!(
-            watching_hint,
-            chord = session.bindings().watch_name(),
-            count = count
-        ),
     };
 
     let cache = if panel_shows_context {
@@ -7192,6 +7197,33 @@ mod tests {
         assert!(
             hint.contains("ctrl-l") && hint.contains("1 to open"),
             "the hint line does not say a delegate can be opened: {hint}"
+        );
+    }
+
+    /// WATCH-11: shell mode has its own line, and it names the key and the count as the ordinary
+    /// line does, since the view holds the same things in either mode.
+    #[test]
+    fn the_shell_hint_line_names_the_view_key_once_something_can_be_opened() {
+        let mut session = Session::new("kernel-enforced");
+        session.shell = true;
+        assert!(
+            !hint_row_at(&session, 120, 24).contains("ctrl-l"),
+            "a shell line with nothing to open offered the key anyway"
+        );
+
+        session.command_printed(bravebot_agent::report::Printed {
+            command: "cargo test".to_string(),
+            lines: vec!["first".to_string()],
+            total: 1,
+            read_by_the_planner: false,
+            outcome: bravebot_agent::report::Outcome::Succeeded,
+            job: None,
+        });
+
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(
+            hint.contains("! ") && hint.contains("ctrl-l") && hint.contains("1 to open"),
+            "the shell line does not say the view can be opened: {hint}"
         );
     }
 

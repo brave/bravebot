@@ -304,6 +304,7 @@ foot, reads as two things to press. The line that is always drawn is the one to 
 `verified-by: bravebot_tui::render::the_row_that_says_what_the_turn_is_doing_leaves_the_key_to_the_hint_line`
 `verified-by: bravebot_tui::render::the_hint_line_names_the_delegate_key_once_one_has_run`
 `verified-by: bravebot_tui::render::the_hint_line_counts_the_commands_as_well_as_the_delegates`
+`verified-by: bravebot_tui::render::the_shell_hint_line_names_the_view_key_once_something_can_be_opened`
 `verified-by: bravebot_tui::render::the_shortcut_list_names_the_key_that_watches`
 
 <a id="WATCH-12"></a>
