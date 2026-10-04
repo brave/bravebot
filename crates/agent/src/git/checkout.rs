@@ -57,7 +57,10 @@ pub enum Refused {
     AttributesWithheld,
     /// An attributes file the map does not trust, whose contents are therefore not read.
     AttributesUntrusted,
+    /// More files than [`Bound::files`].
     TooManyFiles,
+    /// More directories than [`Bound::files`], each name of one counted.
+    TooManyDirectories,
     TooManyBytes,
     Name(Name),
     /// The checkout's directory, or its entry under `worktrees/`, already exists.
@@ -133,10 +136,10 @@ impl Refused {
                  it sets was not read."
             ),
             Refused::TooManyFiles => {
-                format!(
-                    "{made}: HEAD in {named} holds more files or directories than a checkout \
-                     writes."
-                )
+                format!("{made}: HEAD in {named} holds more files than a checkout writes.")
+            }
+            Refused::TooManyDirectories => {
+                format!("{made}: HEAD in {named} holds more directories than a checkout walks.")
             }
             Refused::TooManyBytes => {
                 format!("{made}: HEAD in {named} holds more bytes than a checkout writes.")
@@ -349,6 +352,8 @@ fn plan(
     let mut bytes: u64 = 0;
     // Counted because a tree may name one subtree many times, and each is walked again.
     let mut dirs = 0usize;
+    // Indexes into `planned` of the attributes files, which are read once the walk is over.
+    let mut attributes = Vec::new();
     let mut pending = vec![(tree, String::new(), 0usize)];
     while let Some((tree, prefix, depth)) = pending.pop() {
         if depth > TREE_DEPTH {
@@ -370,7 +375,7 @@ fn plan(
             if kind == EntryKind::Tree {
                 dirs += 1;
                 if dirs > bound.files {
-                    return Err(Refused::TooManyFiles);
+                    return Err(Refused::TooManyDirectories);
                 }
                 pending.push((id, path, depth + 1));
                 continue;
@@ -393,16 +398,7 @@ fn plan(
                 && kind != EntryKind::Link
                 && kind != EntryKind::Commit
             {
-                if left_out {
-                    return Err(Refused::AttributesWithheld);
-                }
-                if !trusted(&path) {
-                    return Err(Refused::AttributesUntrusted);
-                }
-                let blob = repo.object(&id, Kind::Blob)?;
-                if let Some(found) = conversion(&blob, settings.text_converts()) {
-                    return Err(Refused::Converts(found));
-                }
+                attributes.push(planned.len());
             }
             planned.push(Planned {
                 path,
@@ -410,6 +406,21 @@ fn plan(
                 id,
                 left_out,
             });
+        }
+    }
+    // Second pass: the bounds have held for the whole tree, so an attributes file is read only
+    // from a tree the checkout may write.
+    for at in attributes {
+        let file = &planned[at];
+        if file.left_out {
+            return Err(Refused::AttributesWithheld);
+        }
+        if !trusted(&file.path) {
+            return Err(Refused::AttributesUntrusted);
+        }
+        let blob = repo.object(&file.id, Kind::Blob)?;
+        if let Some(found) = conversion(&blob, settings.text_converts()) {
+            return Err(Refused::Converts(found));
         }
     }
     planned.sort_by(|a, b| a.path.cmp(&b.path));

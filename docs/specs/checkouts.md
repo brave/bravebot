@@ -203,7 +203,8 @@ the system file, a checkout is refused unless the repository's own configuration
 It is refused where HEAD's tree holds more than 100,000 files, more than 100,000 directories or
 more than 2 GiB, a bound the driver fixes. Directories count because a tree may name one subtree
 many times, and each name is walked. The sizes are read from the object store's own headers, before
-any file is written and before an attributes file is read.
+any file is written and before an attributes file is read, so a tree past a bound is refused for
+that bound whatever an attributes file in it sets.
 
 It is refused where the tree holds an entry named `.` or `..`, an entry whose name holds a
 separator, an entry git's own checks take for `.git` (in any case, as NTFS reads `git~1` or a name
@@ -244,6 +245,7 @@ Built, and a spawn is refused where a checkout is.
 `verified-by: bravebot_agent::git::a_name_windows_cannot_hold_is_refused_on_windows_alone`
 `verified-by: bravebot_agent::git::directories_count_against_the_file_bound`
 `verified-by: bravebot_agent::git::an_attributes_file_past_the_byte_bound_is_not_read`
+`verified-by: bravebot_agent::git::a_tree_past_a_bound_is_refused_for_it_before_an_attributes_file_is_read`
 `verified-by: bravebot_agent::git::an_attributes_file_named_in_another_case_is_taken_for_one`
 `verified-by: bravebot_agent::git::a_setting_in_config_worktree_does_not_refuse_the_checkout`
 
