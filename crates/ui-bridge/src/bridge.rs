@@ -1606,6 +1606,9 @@ fn work(work: Work) {
         .already_asked_about(state.asked_about.clone())
         .already_exposed(state.exposed.clone())
         .with_home(bravebot_agent::home::directory())
+        // What a leading `~` in a run line stands for, which is the home directory and not the
+        // state directory above (CMDLINE-4). Without it the line is refused as having no home.
+        .with_profile(bravebot_agent::home::profile())
         .with_cache(bravebot_agent::home::cache())
         // No bound on the rounds, as the terminal passes: there is a person in front of this
         // window, they see what the turn is doing, and `turn.cancel` reaches it mid-round. A

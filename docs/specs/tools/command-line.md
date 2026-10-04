@@ -252,6 +252,7 @@ everything and asks nothing.
 `verified-by: bravebot_agent::turn::a_tilde_in_a_command_line_stands_for_the_home_directory_and_not_the_state_directory`
 `verified-by: bravebot_agent::turn::a_delegate_resolves_a_tilde_against_the_home_its_parent_did`
 `verified-by: bravebot_tui::app::a_typed_tilde_and_a_compiled_one_stand_for_the_same_directory`
+`verified-by: bravebot_ui_bridge::retention::worker::a_tilde_in_a_desktop_run_line_stands_for_the_home_directory`
 
 <a id="CMDLINE-5"></a>
 ### CMDLINE-5: a redirection target is a write destination and takes the write gates
