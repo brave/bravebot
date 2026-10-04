@@ -328,7 +328,7 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
         &state.first_prompt.clone().unwrap_or_default(),
         Standing {
             history: None,
-            rewind: &state.rewind,
+            rewind: state.rewind.points(),
             checkouts: &[],
             asides: &state.asides,
             conversation: &state.conversation.snapshot(),
@@ -797,7 +797,7 @@ fn a_fork_gets_an_id_of_its_own_rather_than_the_one_it_came_from() {
         &state.first_prompt.clone().unwrap_or_default(),
         Standing {
             history: None,
-            rewind: &state.rewind,
+            rewind: state.rewind.points(),
             checkouts: &[],
             asides: &state.asides,
             conversation: &state.conversation.snapshot(),

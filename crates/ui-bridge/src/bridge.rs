@@ -925,11 +925,8 @@ impl Bridge {
         let (turn_number, directories, scratch) = state
             .lock()
             .map(|mut s| {
-                for point in &mut s.rewind {
-                    point
-                        .coverage
-                        .record([bravebot_agent::rewind::CoverageGap::Desktop]);
-                }
+                s.rewind
+                    .record_gap(bravebot_agent::rewind::CoverageGap::Desktop);
                 (
                     s.turns + 1,
                     s.directories.clone(),
@@ -1107,11 +1104,8 @@ impl Bridge {
             .lock()
             .map(|mut s| {
                 // A run writes files as a turn does, so the same coverage gap applies.
-                for point in &mut s.rewind {
-                    point
-                        .coverage
-                        .record([bravebot_agent::rewind::CoverageGap::Desktop]);
-                }
+                s.rewind
+                    .record_gap(bravebot_agent::rewind::CoverageGap::Desktop);
                 s.runs += 1;
                 (
                     s.runs,
@@ -2230,7 +2224,7 @@ fn save(
             model: state.model.as_deref(),
             todos: &state.todos,
             asides: &state.asides,
-            rewind: &state.rewind,
+            rewind: state.rewind.points(),
             trust: &state.trust,
             programs: &state.programs,
             directories: &state.directories,

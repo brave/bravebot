@@ -641,13 +641,13 @@ whether or not it is ever read.
 `verified-by: bravebot_session::sessions::discarding_keeps_a_name_chosen_before_the_turn`
 `verified-by: bravebot_tui::app::a_rewind_point_excludes_the_turn_it_undoes`
 `verified-by: bravebot_tui::state::clearing_drops_the_transcript_and_what_it_spent`
-`verified-by: bravebot_tui::state::closing_the_rewind_window_leaves_nothing_to_rewind_to`
-`verified-by: bravebot_tui::state::a_rewind_reaches_past_the_turn_that_just_ended`
-`verified-by: bravebot_tui::state::going_back_further_than_the_session_remembers_rewinds_nothing`
-`verified-by: bravebot_tui::state::a_path_written_in_two_undone_turns_goes_back_to_before_the_first`
-`verified-by: bravebot_tui::state::a_session_keeps_no_more_points_than_it_may`
-`verified-by: bravebot_tui::state::one_turns_writes_can_cost_the_session_the_turns_behind_it`
-`verified-by: bravebot_tui::state::backups_with_no_point_to_hang_them_on_are_dropped`
+`verified-by: bravebot_session::rewind::closing_the_rewind_window_leaves_nothing_to_rewind_to`
+`verified-by: bravebot_session::rewind::a_rewind_reaches_past_the_turn_that_just_ended`
+`verified-by: bravebot_session::rewind::going_back_further_than_the_session_remembers_rewinds_nothing`
+`verified-by: bravebot_session::rewind::a_path_written_in_two_undone_turns_goes_back_to_before_the_first`
+`verified-by: bravebot_session::rewind::a_session_keeps_no_more_points_than_it_may`
+`verified-by: bravebot_session::rewind::one_turns_writes_can_cost_the_session_the_turns_behind_it`
+`verified-by: bravebot_session::rewind::backups_with_no_point_to_hang_them_on_are_dropped`
 `verified-by: bravebot_tui::app::a_session_renamed_mid_turn_gives_up_the_running_turns_rewind_point`
 
 `verified-by: bravebot_tui::undo_tests::oversized_original_preserves_unrelated_grants_after_live_and_resumed_successful_undo`
@@ -730,7 +730,7 @@ takes a number cannot also have it, so the number is on a word that has one.
 `verified-by: bravebot_tui::app::undo_with_something_after_it_is_still_a_prompt`
 `verified-by: bravebot_tui::app::the_list_names_what_each_point_would_put_back`
 `verified-by: bravebot_tui::app::the_list_of_a_session_with_no_points_says_there_is_nothing`
-`verified-by: bravebot_tui::state::going_back_further_than_the_session_remembers_rewinds_nothing`
+`verified-by: bravebot_session::rewind::going_back_further_than_the_session_remembers_rewinds_nothing`
 
 
 <a id="SESSION-22"></a>
