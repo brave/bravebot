@@ -713,9 +713,16 @@ fn bridge_handoff(ending: &str) {
         SENTINEL
     );
     let record = sessions::load(root, stored.id()).unwrap();
-    assert_eq!(record.rewind.len(), 2);
-    assert!(record.rewind_points(root).iter().all(|p| {
-        p.coverage
+    // The desktop turn opened a point of its own and kept what it wrote over.
+    let points = record.rewind_points(root);
+    assert_eq!(points.len(), 3);
+    assert_eq!(points[2].prompt, "copy");
+    assert!(points[2].backups.iter().any(|backup| {
+        backup.path.ends_with("output.txt")
+            && backup.was == bravebot_agent::workspace::Before::Bytes(b"original".to_vec())
+    }));
+    assert!(points.iter().all(|p| {
+        !p.coverage
             .gaps()
             .contains(&bravebot_agent::rewind::CoverageGap::Desktop)
     }));
@@ -771,7 +778,11 @@ fn bridge_handoff(ending: &str) {
         &mut None,
         1,
     );
-    assert_eq!(trust.integrity_of("output.txt"), Some(Integrity::Untrusted));
+    assert_eq!(
+        std::fs::read_to_string(root.join("output.txt")).unwrap(),
+        "original"
+    );
+    assert_eq!(trust.integrity_of("output.txt"), Some(Integrity::Trusted));
     turn::resume(
         &config,
         &Egress::new(),

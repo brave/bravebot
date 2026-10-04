@@ -924,9 +924,7 @@ impl Bridge {
         let watches = Arc::clone(&open.watches);
         let (turn_number, directories, scratch) = state
             .lock()
-            .map(|mut s| {
-                s.rewind
-                    .record_gap(bravebot_agent::rewind::CoverageGap::Desktop);
+            .map(|s| {
                 (
                     s.turns + 1,
                     s.directories.clone(),
@@ -1902,6 +1900,7 @@ fn work(work: Work) {
     // cannot reach it. The screening value is the task's, so the confirmer and the tools that fill
     // in a verdict read the same answer.
     let mut confirmer = Confining::new(&mut confirmer, permission_mode, task.auto_vetting);
+    open_rewind_point(&mut state, &workspace, &prompt);
     let completed = agent_turn::resume(
         &config,
         &egress,
@@ -1919,6 +1918,8 @@ fn work(work: Work) {
     // Put the set back even if the turn failed or was cancelled. Otherwise its servers would
     // stop here, and the next turn would ask about the same language again.
     state.servers = Some(servers);
+    // Kept whatever the outcome: a failed or cancelled turn may still have written.
+    state.rewind.keep_backups(workspace.take_backups());
 
     // Cleanup has finished on every return, including cancellation and request errors.
     // Taken apart with no `..`, so an answer a turn learns to remember does not build until this
@@ -2158,6 +2159,52 @@ pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -
     };
     json!({ "kind": kind, "message": category.unwrap_or("cancelled"), "category": category,
         "attempts": attempts, "status": diagnosis.and_then(|d| d.status) })
+}
+
+/// Open the point the turn about to run can be rewound to (SESSION-19), as the terminal does.
+///
+/// The workspace is built per turn, so a language server an earlier turn started is not on it.
+/// The record remembers one, and the warning is put back before the point binds to it.
+fn open_rewind_point(state: &mut State, workspace: &Workspace, prompt: &str) {
+    use bravebot_agent::rewind::CoverageGap;
+    if state
+        .handle
+        .as_ref()
+        .is_some_and(Handle::server_children_may_run)
+    {
+        workspace.mark_rewind_gap(CoverageGap::LanguageServer);
+    }
+    let snapshot = bravebot_session::sessions::TurnSnapshot {
+        conversation: state.conversation.snapshot(),
+        turns: state.turns,
+        tokens: state.tokens,
+        spend: state.spend.clone(),
+        timing: state.timing.clone(),
+        cached: None,
+        cached_prompt_tokens: None,
+        // With the record's rules, so a yes this turn gives to a recorded memory does not outlive
+        // rewinding past it.
+        trust: bravebot_agent::memory::with_recorded(
+            &state.trust,
+            workspace,
+            bravebot_agent::home::directory().as_deref(),
+        ),
+        programs: state.programs.clone(),
+        // A terminal index the desktop has no transcript for. Not stored; a terminal resuming the
+        // record places each point again.
+        transcript_len: 0,
+        title: state
+            .handle
+            .as_ref()
+            .map(|handle| handle.title().to_string())
+            .unwrap_or_default(),
+        was_wrote: state
+            .handle
+            .as_ref()
+            .is_some_and(|handle| handle.resumable().is_some()),
+    };
+    state.rewind.open(snapshot, prompt.to_string());
+    state.rewind.bind_coverage(workspace);
 }
 
 /// Add the turn that just ran to the session's history, if it keeps one (SESSION-23).
@@ -2400,6 +2447,42 @@ mod test_profile;
 #[cfg(test)]
 mod coverage_tests {
     use super::*;
+
+    /// A turn's workspace is new, so the server warning the record kept has to reach the point a
+    /// later turn opens, even once every earlier point has been rewound past.
+    #[test]
+    fn a_desktop_turn_after_the_last_point_keeps_the_server_warning() {
+        use bravebot_agent::rewind::CoverageGap;
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = test_profile::project("desktop-point-coverage");
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut state = State::fresh(TrustStore::new(&directory));
+        state.handle = Some(Handle::begin(
+            &directory,
+            crate::FRONT,
+            crate::agent_build(),
+        ));
+
+        let first = Workspace::new(&directory).unwrap();
+        open_rewind_point(&mut state, &first, "start a server");
+        state.rewind.record_gap(CoverageGap::LanguageServer);
+        let point = state.rewind.take(1).unwrap();
+        state
+            .handle
+            .as_mut()
+            .unwrap()
+            .retain_rewind_coverage(&point.coverage);
+
+        let second = Workspace::new(&directory).unwrap();
+        open_rewind_point(&mut state, &second, "after the rewind");
+
+        assert_eq!(
+            state.rewind.points()[0].coverage.gaps(),
+            [CoverageGap::LanguageServer].into()
+        );
+    }
 
     /// A fork cannot prove that server descendants from the parent stopped writing.
     #[test]

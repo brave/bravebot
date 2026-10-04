@@ -584,7 +584,7 @@ checkpoints. Save the resulting file decisions. Do not compare file contents to 
 
 Every attempted tracked mutation records coverage, including same-label writes, partial failures
 and files whose original bytes were not kept. Programs, matching hooks, scratch writes, language
-servers, desktop execution and backup-lock failures record coverage gaps without discarding points.
+servers, desktop plan runs and backup-lock failures record coverage gaps without discarding points.
 The persistent server warning is also saved outside the checkpoint list, so consuming the final
 point and reopening again cannot erase it. Forks discard checkpoints but retain this warning,
 since forking cannot stop those processes. These reasons survive save/resume, rebinding to a workspace and repeated undo, including undo
@@ -656,6 +656,7 @@ whether or not it is ever read.
 `verified-by: bravebot_tui::undo_tests::immediate_undo_after_resume_keeps_server_warnings_for_later_turns`
 `verified-by: bravebot_ui_bridge::bridge::a_resumed_server_warning_survives_a_desktop_save_without_checkpoints`
 `verified-by: bravebot_ui_bridge::bridge::a_desktop_fork_keeps_the_server_warning_without_checkpoints`
+`verified-by: bravebot_ui_bridge::bridge::a_desktop_turn_after_the_last_point_keeps_the_server_warning`
 `verified-by: bravebot_tui::undo_tests::complete_and_failed_restores_keep_files_trust_programs_and_history_aligned`
 `verified-by: bravebot_tui::undo_tests::editing_then_running_a_program_keeps_undo_and_warns`
 `verified-by: bravebot_tui::undo_tests::matching_hooks_keep_undo_with_saved_coverage_warnings`
@@ -934,10 +935,12 @@ resumed and continued by the other. Everything above decides what a record holds
 found, whichever surface is asking: one directory per working directory, the naming, the ordering,
 the modes, and degrading to nothing where there is no directory to write into.
 
-Before bridge engine execution begins, imported rewind points record a desktop coverage gap.
-The bridge does not collect the terminal's byte backups. It retains current file decisions on
-every turn ending. Later terminal undo keeps the points and applies the per-path trust rule,
-so an uncovered write cannot gain trust from an older snapshot.
+The desktop opens a rewind point before each turn and keeps that turn's byte backups, under the
+same depth and budget as the terminal, so a terminal resuming the record can undo a desktop turn
+as it would one of its own. A desktop plan run keeps no backups, so before one begins every point
+the session holds records a desktop coverage gap. Each turn ending retains current file
+decisions, and a later undo applies the per-path trust rule, so an uncovered write cannot gain
+trust from an older snapshot.
 
 A surface showing one list across every project asks a question a terminal never asks, and that
 question is the whole of what it adds. Which projects have sessions is read from the store rather
