@@ -942,6 +942,11 @@ the session holds records a desktop coverage gap. Each turn ending retains curre
 decisions, and a later undo applies the per-path trust rule, so an uncovered write cannot gain
 trust from an older snapshot.
 
+The desktop rewinds as the terminal does, with what it puts back and what it reports the same.
+One difference follows from what the desktop can do that the terminal cannot: a command approval
+can be revoked between turns, so a desktop rewind returns to the snapshot's approvals that are
+still held rather than to all of them. A rewind never hands back an approval the person withdrew.
+
 A surface showing one list across every project asks a question a terminal never asks, and that
 question is the whole of what it adds. Which projects have sessions is read from the store rather
 than reconstructed from a directory name, because the name a working directory reduces to is lossy
@@ -959,6 +964,10 @@ ask about. Adding the discovery and borrowing the listing is what keeps that dif
 place it genuinely is.
 
 `verified-by: bravebot_tui::undo_tests::terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions`
+`verified-by: bravebot_ui_bridge::rewind::undoing_a_desktop_turn_puts_back_its_file_and_its_conversation`
+`verified-by: bravebot_ui_bridge::rewind::undoing_two_desktop_turns_puts_a_file_back_to_before_the_first`
+`verified-by: bravebot_ui_bridge::rewind::a_session_with_no_turns_has_nothing_to_undo`
+`verified-by: bravebot_ui_bridge::bridge::undoing_a_turn_does_not_hand_back_a_revoked_command`
 `verified-by: bravebot_ui_bridge::interop::a_record_written_here_is_read_back_by_the_agents_own_reader`
 `verified-by: bravebot_ui_bridge::interop::resuming_a_session_writes_back_to_it_rather_than_forking`
 `verified-by: bravebot_ui_bridge::interop::every_project_is_listed_in_one_order_rather_than_project_by_project`
