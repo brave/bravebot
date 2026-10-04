@@ -12,7 +12,7 @@ import { IconMenu } from './IconMenu'
 /**
  * A bot's details in the right column: its face, its name and purpose, and its memory.
  *
- * Name and purpose are saved when a field is left, and only when what it holds is not empty. The
+ * Name and purpose are saved when a field is left. A field left empty goes back to what is stored. The
  * memory is the one kept in a folder this bot has worked in; its home folder first.
  */
 export function BotDetails({ bot, onSave, onArchive }: {
@@ -23,12 +23,17 @@ export function BotDetails({ bot, onSave, onArchive }: {
   const [name, setName] = useState(bot.name)
   const [purpose, setPurpose] = useState(bot.purpose)
   const [folder, setFolder] = useState(bot.home)
-  useEffect(() => { setName(bot.name); setPurpose(bot.purpose) }, [bot.slug, bot.name, bot.purpose])
+  // One field at a time, so saving one does not overwrite what is being typed in the other.
+  useEffect(() => { setName(bot.name) }, [bot.slug, bot.name])
+  useEffect(() => { setPurpose(bot.purpose) }, [bot.slug, bot.purpose])
   useEffect(() => { setFolder(bot.home) }, [bot.slug, bot.home])
   const folders = botFolders(bot)
 
   const commit = (next: { name?: string; purpose?: string }) => {
     const value = { name: (next.name ?? name).trim(), purpose: (next.purpose ?? purpose).trim() }
+    // An emptied field is not saved, and shows what is stored again rather than a blank.
+    if (!value.name) setName(bot.name)
+    if (!value.purpose) setPurpose(bot.purpose)
     if (!value.name || !value.purpose) return
     if (value.name === bot.name && value.purpose === bot.purpose) return
     void onSave({ slug: bot.slug, ...value })
