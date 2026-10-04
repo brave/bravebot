@@ -248,6 +248,13 @@ doctor-noticed-aws-session =
 doctor-outlives = survit
 doctor-outlives-aws-access-key =
     une identification de session déjà émise par STS sous cette clé d'accès, qui court jusqu'à sa propre expiration : la suppression de la clé ne l'atteint pas
+doctor-binding = liaison
+doctor-binding-sender-constrained =
+    liée à l'émetteur de la requête : l'émetteur vérifie qui la présente, donc une copie prise sur cette machine ne sert à rien ailleurs
+doctor-binding-bearer-refused =
+    un secret au porteur : tout ce qui en détient une copie peut l'utiliser jusqu'à son expiration, et son émetteur n'offre aucune forme liée à celui qui la présente
+doctor-binding-bearer-not-attempted =
+    un secret au porteur : tout ce qui en détient une copie peut l'utiliser, et personne n'a demandé à son émetteur une forme liée à celui qui la présente
 doctor-dropped = descente
 doctor-dropped-refused = la contrepartie a refusé
 doctor-dropped-not-attempted = personne ne l'a demandé

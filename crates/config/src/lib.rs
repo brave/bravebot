@@ -508,6 +508,27 @@ impl Tier {
     ];
 }
 
+/// Whether a derived credential can be used only by the party it was issued to, or by whoever holds
+/// the value.
+///
+/// CRED-26 asks for the sender-constrained form (mutual TLS, a proof-of-possession scheme such as
+/// DPoP, or a workload identity the issuer checks) wherever the issuer offers one, and asks the
+/// record to say so where none is held. Scope and expiry say what a credential may do and for how
+/// long; this says whether a copy taken from this machine is usable elsewhere. It sits beside the
+/// tier and moves none: a bound and an unbound derivative that pass gate 2 are both Granted.
+///
+/// A bearer secret carries the same two answers a drop of the gate walk does, for the same reason:
+/// an issuer that offers no bound form is a fact about the world, and one that might offer it and
+/// is not asked is a decision made here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Binding {
+    /// The issuer checks who presents the credential, and this program asked for that form.
+    SenderConstrained,
+    /// Whoever holds the value can use it. [`Attempt::Refused`] records that the issuer offers no
+    /// sender-constrained form, and [`Attempt::NotAttempted`] that it may and nothing here asks.
+    Bearer(Attempt),
+}
+
 /// A credential this program holds itself, and so owes an account of what would end it.
 ///
 /// CRED-25 asks three things about every credential at Held or Held briefly: who issued it, the
@@ -798,6 +819,29 @@ impl<'a> Held<'a> {
     /// it, and the order is not a credential this program holds.
     pub fn outlives_revocation(self) -> bool {
         matches!(self, Self::AwsAccessKey)
+    }
+
+    /// Whether this derived credential is bound to its presenter or a bearer secret, which CRED-26
+    /// asks the record to say.
+    ///
+    /// `None` for a credential that is not derived from another: the signing key, a long-lived
+    /// access key and a gateway's token are each issued once and held as they were issued, so
+    /// there is no derivative for a bound form to be asked of. The two derived credentials are
+    /// both bearer secrets today.
+    ///
+    /// An AWS session is [`Attempt::Refused`]: STS issues session credentials that any holder of
+    /// the three values can sign with, and offers no form checked against the presenter. A
+    /// subscription batch is [`Attempt::NotAttempted`]: a presentation is signed over a resource
+    /// string and is single-use and bound to its issuer, which does not identify the presenter,
+    /// and nothing here has asked Brave's subscription service for a form that would.
+    ///
+    /// A claim about the arrangement, so it moves only when the arrangement does.
+    pub fn binding(self) -> Option<Binding> {
+        match self {
+            Self::AwsSession => Some(Binding::Bearer(Attempt::Refused)),
+            Self::SubscriptionBatch => Some(Binding::Bearer(Attempt::NotAttempted)),
+            Self::SigningKey | Self::AwsAccessKey | Self::GatewayToken { .. } => None,
+        }
     }
 }
 
@@ -2087,6 +2131,57 @@ mod tests {
                 "a figure that is not whole minutes is reported as a shorter one: {window:?}"
             );
         }
+    }
+
+    /// CRED-26: a derived credential records whether it is bound to its presenter or a bearer
+    /// secret, and the record keeps a refusal apart from a request nobody made. The AWS session and
+    /// the subscription batch are the two derived credentials and both are bearer secrets, for
+    /// different reasons: STS offers no bound form, and nobody has asked the subscription service.
+    /// A record that answered both alike, or answered neither, would leave a bound and an unbound
+    /// credential at one tier indistinguishable, which is what the clause is for.
+    ///
+    /// The credentials issued once and held as issued have no derivative to bind, so a record that
+    /// called them bearer would state a reason that is not the reason.
+    #[test]
+    fn a_derived_credential_records_whether_it_is_bound_to_its_presenter() {
+        assert_eq!(
+            Held::AwsSession.binding(),
+            Some(Binding::Bearer(Attempt::Refused))
+        );
+        assert_eq!(
+            Held::SubscriptionBatch.binding(),
+            Some(Binding::Bearer(Attempt::NotAttempted))
+        );
+        assert_ne!(
+            Held::AwsSession.binding(),
+            Held::SubscriptionBatch.binding(),
+            "an issuer that offers no bound form and one nobody asked are recorded alike"
+        );
+
+        for held in [
+            Held::SigningKey,
+            Held::AwsAccessKey,
+            Held::GatewayToken {
+                host: "gateway.invalid",
+            },
+        ] {
+            assert_eq!(
+                held.binding(),
+                None,
+                "{held:?} is not derived from another credential and has no bound form to ask for"
+            );
+        }
+    }
+
+    /// CRED-26: recording the binding moves no tier. The subscription batch stays at Granted
+    /// whether or not it is bound, and the session stays at Held, so the walk and the binding are
+    /// two facts about a credential rather than one derived from the other.
+    #[test]
+    fn a_credentials_binding_does_not_move_its_tier() {
+        assert_eq!(Held::SubscriptionBatch.tier(), Tier::Granted);
+        assert_eq!(Held::AwsSession.tier(), Tier::Held);
+        assert_eq!(Held::SubscriptionBatch.walk().len(), 1);
+        assert_eq!(Held::AwsSession.walk().len(), 3);
     }
 
     /// Without Bedrock the aichat credentials are still required. Relaxing them for everyone would
