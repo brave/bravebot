@@ -2346,6 +2346,7 @@ mod tests {
     /// The `runs` line SERVERS-4 draws is drawn by the question `add` asks as well, since the
     /// approval covers the declared argv and the path a bare name resolves to is the one place a
     /// person can see which program a yes starts. It is not drawn for a program given as a path.
+    #[cfg(unix)]
     #[test]
     fn the_question_shows_the_path_a_bare_name_resolved_to() {
         use std::os::unix::fs::PermissionsExt;
