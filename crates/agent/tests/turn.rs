@@ -34267,6 +34267,53 @@ fn a_credential_the_line_itself_carries_stops_the_line() {
         !told.contains(DECLARED_KEY),
         "the value itself was put on the screen: {told}"
     );
+
+    let drawn = reporter
+        .started
+        .iter()
+        .chain(reporter.finished.iter())
+        .map(|activity| activity.line())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        drawn,
+        vec!["Run".to_string(); 2],
+        "the line was drawn with a credential in it, ahead of the refusal"
+    );
+}
+
+/// A line that needs no prompt was drawn as a bare `Run`, so a person watching could not tell
+/// which command the turn had started. The command is on the line from the moment the call is
+/// announced to the moment it is summarised.
+#[test]
+fn a_run_call_is_drawn_with_the_command_it_runs() {
+    let scratch = Scratch::new("run-drawn-with-its-command");
+
+    let (_home, reporter, _answered) = a_run_turn_scanning(
+        &scratch,
+        "printf hello",
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+
+    let started = reporter.started.first().expect("the call was announced");
+    assert_eq!(started.line(), "Run(printf hello)");
+    let finished = reporter.finished.first().expect("the call was summarised");
+    assert_eq!(finished.line(), "Run(printf hello)");
+}
+
+/// A command of several lines is one row of a transcript. Drawn whole, the lines after the first
+/// would reach the screen as control glyphs inside the row.
+#[test]
+fn a_run_call_of_several_lines_is_drawn_as_its_first() {
+    let scratch = Scratch::new("run-drawn-first-line");
+
+    let (_home, reporter, _answered) = a_run_turn_scanning(
+        &scratch,
+        "printf one\\nprintf two",
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+
+    let started = reporter.started.first().expect("the call was announced");
+    assert_eq!(started.line(), "Run(printf one ...)");
 }
 
 /// A finding at a destination a line opened outlives the turn, exactly as one a write tool

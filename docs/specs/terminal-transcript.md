@@ -638,6 +638,12 @@ while the call runs and once it is over. A reason of several lines is drawn to i
 headline is one row of a transcript and not a paragraph. A call given no reason is headed by the
 call itself.
 
+The call is its verb and what it is about. For `run` that is the command line, so a command that
+needs no prompt is still shown on screen. A command of several lines is drawn as its first line
+and "...", since a call is one row. A command line that carries a credential the planner declared,
+on any of its lines, is drawn as the verb alone, since `run` refuses it before anyone is shown it
+([CRED-11](credential-protection.md#CRED-11)).
+
 The desktop window draws the reason after the call on the call's own row. A resumed session draws
 each recorded call with the reason it was made with, as it draws the calls themselves under
 [VIEW-2](#VIEW-2).
@@ -653,6 +659,10 @@ one place left to say what each of them was for.
 `verified-by: bravebot_cli::progress::a_call_is_printed_with_the_reason_it_was_made`
 `verified-by: bravebot_ui_bridge::wire::a_call_carries_the_reason_it_was_made`
 `verified-by: bravebot_agent::conversation::every_call_in_a_round_is_recounted`
+`verified-by: bravebot_agent::tools::a_stored_call_names_its_command_output_and_file_but_not_a_credential`
+`verified-by: bravebot_agent::turn::a_run_call_is_drawn_with_the_command_it_runs`
+`verified-by: bravebot_agent::turn::a_run_call_of_several_lines_is_drawn_as_its_first`
+`verified-by: bravebot_agent::turn::a_credential_the_line_itself_carries_stops_the_line`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which renders the real transcript row through react-dom, live and replayed, and asserts that the reason reaches the markup while the call runs and once it is over and that a call with none draws nothing for it; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`
 
 <a id="VIEW-26"></a>

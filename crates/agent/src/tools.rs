@@ -2403,7 +2403,37 @@ fn target_key(tool: &str) -> Option<&'static str> {
         "fetch_url" => Some("url"),
         "job_output" => Some("job"),
         "vet_content" => Some("ref"),
+        "run" => Some("command"),
+        "read_output" => Some("ref"),
+        "watch_file" => Some("path"),
         _ => None,
+    }
+}
+
+/// How a `run` command line is drawn: its first line, and nothing at all when it carries a
+/// value that declared itself a credential.
+///
+/// `run` refuses such a line before anyone is shown it (CRED-11), and the call is announced
+/// before `run` is reached, so the line is scanned here first. The whole of it is scanned, since a
+/// value on a later line is as visible as one on the first. Several lines are drawn as the first
+/// and "...", because a transcript row is one row.
+fn command_as_drawn(line: &str) -> String {
+    let declared = bravebot_core::credentials::scan(
+        "the command line",
+        line,
+        bravebot_core::credentials::run_salt(),
+    )
+    .iter()
+    .any(|finding| finding.kind.is_declared());
+    if declared {
+        return String::new();
+    }
+    let mut lines = line.lines().map(str::trim).filter(|line| !line.is_empty());
+    let first = lines.next().unwrap_or_default();
+    if lines.next().is_some() {
+        format!("{first} ...")
+    } else {
+        first.to_string()
     }
 }
 
@@ -2461,8 +2491,14 @@ fn target_of<S: Sink>(
     // screen, which LABEL-6 refuses. Text with no reference in it comes back as it went in, so
     // there is nothing left here to test it for.
     let display_names = policy.names_for_display(slots);
-    let shaped =
-        policy.render_in_place(tool, &named, |text| name_references(&text, &display_names));
+    let shaped = policy.render_in_place(tool, &named, |text| {
+        let text = if tool == "run" {
+            command_as_drawn(&text)
+        } else {
+            text
+        };
+        name_references(&text, &display_names)
+    });
     let proof = policy.authorise_display_release("what a tool is working on");
     shaped.declassify(&proof)
 }
@@ -2519,6 +2555,13 @@ pub fn describe_stored_call(tool: &str, arguments: &str) -> String {
     } else {
         target_key(tool)
             .and_then(|key| target_text(&parsed, key))
+            .map(|text| {
+                if tool == "run" {
+                    command_as_drawn(&text)
+                } else {
+                    text
+                }
+            })
             .unwrap_or_default()
     };
 
@@ -10587,6 +10630,46 @@ mod tests {
                 reshaped < released,
                 "the target was released before it was reshaped, so the driver held the bytes it searched: {:?}",
                 sink.events()
+            );
+        }
+
+        /// A session read back off disk draws a `run` call with its command, as it was drawn
+        /// live, and draws the other two calls that name a target the same way. A command of
+        /// several lines is drawn as its first. A line that declares a credential, on any of
+        /// its lines, is drawn as the bare verb, since `run` refused it unseen.
+        #[test]
+        fn a_stored_call_names_its_command_output_and_file_but_not_a_credential() {
+            let drawn = |tool: &str, arguments: &str| describe_stored_call(tool, arguments);
+
+            assert_eq!(
+                drawn("run", r#"{"command":"git branch --show-current"}"#),
+                "Run(git branch --show-current)"
+            );
+            assert_eq!(
+                drawn("read_output", r#"{"ref":"ref:4"}"#),
+                "Read output(ref:4)"
+            );
+            assert_eq!(
+                drawn("watch_file", r#"{"path":"log/out.txt"}"#),
+                "Watch(log/out.txt)"
+            );
+            assert_eq!(
+                drawn(
+                    "run",
+                    r#"{"command":"printf AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE > .env"}"#
+                ),
+                "Run"
+            );
+            assert_eq!(
+                drawn("run", r#"{"command":"cat <<EOF > notes.txt\nhello\nEOF"}"#),
+                "Run(cat <<EOF > notes.txt ...)"
+            );
+            assert_eq!(
+                drawn(
+                    "run",
+                    r#"{"command":"echo start\nprintf AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"}"#
+                ),
+                "Run"
             );
         }
     }
