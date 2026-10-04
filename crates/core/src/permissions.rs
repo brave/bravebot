@@ -338,6 +338,35 @@ impl Rule {
         }
     }
 
+    /// Add the same pattern under `to` for each absolute pattern this rule holds under `from`
+    /// (CHECKOUT-9).
+    ///
+    /// Both are keyed segments. A pattern is under `from` where its first segments are `from`'s,
+    /// written out: a wildcard in that stretch is a pattern about more than the one directory and
+    /// is left to cover what it covers. The copy is part of this rule, as a spelling reached
+    /// through a link is, and never floats.
+    fn copy_beneath(&mut self, from: &[String], to: &[String]) {
+        let copies: Vec<Pattern> = std::iter::once(&self.pattern)
+            .chain(&self.landed)
+            .filter_map(|pattern| match pattern {
+                Pattern::Absolute(pattern) if pattern.segments.starts_with(from) => {
+                    let mut segments = to.to_vec();
+                    segments.extend_from_slice(&pattern.segments[from.len()..]);
+                    Some(Pattern::Absolute(PathPattern {
+                        segments,
+                        floats_when_restricting: false,
+                    }))
+                }
+                _ => None,
+            })
+            .collect();
+        for copy in copies {
+            if copy != self.pattern && !self.landed.contains(&copy) {
+                self.landed.push(copy);
+            }
+        }
+    }
+
     /// Whether this rule covers reading or editing `path`.
     ///
     /// `path` is workspace-relative or absolute, as the gates hold it. `restricting` selects the
@@ -571,6 +600,27 @@ impl Permissions {
         let (backslash_separates, folds_case) = (self.backslash_separates, self.folds_case);
         for rule in self.deny.iter_mut().chain(self.ask.iter_mut()) {
             rule.follow_links(&land, backslash_separates, folds_case);
+        }
+    }
+
+    /// Have every path rule written about a place under `from` cover the same place under `to`
+    /// as well (CHECKOUT-9), as [`crate::trust::TrustMap::copy_beneath`] does for the trust map.
+    ///
+    /// Both are full paths, spelled as a gate holds one. A relative pattern needs no copy, since it
+    /// is held against the root of whichever workspace asks. A rule is copied with the list it is
+    /// in, an allow rule included, since the checkout is the same tree. The rules are the delegate's
+    /// own copy, so the copies go when the delegate does.
+    pub fn copy_beneath(&mut self, from: &str, to: &str) {
+        let (backslash_separates, folds_case) = (self.backslash_separates, self.folds_case);
+        let from = split(&key_of(from, backslash_separates, folds_case));
+        let to = split(&key_of(to, backslash_separates, folds_case));
+        for rule in self
+            .deny
+            .iter_mut()
+            .chain(self.ask.iter_mut())
+            .chain(self.allow.iter_mut())
+        {
+            rule.copy_beneath(&from, &to);
         }
     }
 
@@ -1621,6 +1671,75 @@ mod tests {
                 "a/b.md"
             ],
             "a rule was followed from the wrong segments, or one with nothing to follow was asked about"
+        );
+    }
+
+    /// CHECKOUT-9. A rule about a full path under the working directory also covers the same
+    /// place under the checkout, in every list. A rule about a place outside it, a pattern whose
+    /// written-out stretch stops short of it, and a relative rule gain nothing, so the copy is not
+    /// a widening of what the rule says.
+    #[test]
+    fn a_rule_under_the_working_directory_is_copied_to_the_checkout() {
+        let mut permissions = rules(
+            &["Read(//work/repo/secrets/key.pem)", "Edit(//work/repo/**)"],
+            &["Read(//work/repo/ask/**)"],
+            &["Read(//work/repo/granted/**)"],
+        );
+        permissions.copy_beneath("/work/repo", "/state/c1");
+        for (subject, path, decision) in [
+            (Subject::Read, "/state/c1/secrets/key.pem", Ruling::Deny),
+            (Subject::Edit, "/state/c1/src/lib.rs", Ruling::Deny),
+            (Subject::Read, "/state/c1/ask/notes", Ruling::Ask),
+            (Subject::Read, "/state/c1/granted/a", Ruling::Allow),
+            (Subject::Read, "/work/repo/secrets/key.pem", Ruling::Deny),
+        ] {
+            assert_eq!(
+                permissions.for_path(subject, path),
+                Decision::Ruled(decision),
+                "{path} was not ruled as the working directory's copy is"
+            );
+        }
+        assert_eq!(
+            permissions.for_path(Subject::Read, "/state/c1/secrets/other.pem"),
+            Decision::Unmatched,
+            "the copy covers more than the file the rule names"
+        );
+        assert_eq!(
+            permissions.len(),
+            4,
+            "a copy was counted as a rule of its own"
+        );
+    }
+
+    /// CHECKOUT-9. Only a rule written under the working directory is copied, and only to the
+    /// checkout it was asked for.
+    #[test]
+    fn a_rule_outside_the_working_directory_is_not_copied_to_the_checkout() {
+        let mut permissions = rules(
+            &[
+                "Read(//work/other/key.pem)",
+                "Read(//work/repo-two/key.pem)",
+                "Read(//work/*/key.pem)",
+                "Read(key.pem)",
+            ],
+            &[],
+            &[],
+        );
+        permissions.copy_beneath("/work/repo", "/state/c1");
+        assert_eq!(
+            permissions.for_path(Subject::Read, "/state/c1/key.pem"),
+            Decision::Unmatched,
+            "a rule about another directory reached the checkout"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "/state/c1/other/key.pem"),
+            Decision::Unmatched,
+            "a rule about a sibling was copied under the checkout"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "/state/c2/key.pem"),
+            Decision::Unmatched,
+            "a copy was made for a checkout nobody asked for"
         );
     }
 

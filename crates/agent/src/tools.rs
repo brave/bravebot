@@ -7448,6 +7448,13 @@ fn spawn_agent<S: Sink, R: Reporter>(
         if let Some(made) = made {
             if let Some(checkout) = made.checkout() {
                 seeded.file_authority = seeded.file_authority.rooted_at(checkout.key());
+                // A rule written about a full path under the working directory is about the
+                // same place in the checkout (CHECKOUT-9). These rules are the delegate's own
+                // copy, so they are withdrawn with it.
+                seeded.permissions.copy_beneath(
+                    &tools.workspace.root().to_string_lossy(),
+                    &made.root().to_string_lossy(),
+                );
                 commits.push(checkout.commit().to_string());
             }
             seeded.workspace = Some(made);
