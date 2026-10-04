@@ -481,20 +481,44 @@ pub fn create_private(_path: &Path) -> std::io::Result<std::fs::File> {
 fn write_at(destination: &Path, credentials: &StoredCredentials) -> Result<(), StoreError> {
     use std::io::Write;
 
-    let unusable = |detail: String| StoreError::Unusable { detail };
-    let temporary = destination.with_file_name(format!("{FILE}.{}.tmp", std::process::id()));
+    write_through(destination, |file| {
+        file.write_all(encode(credentials).expose().as_bytes())
+    })
+}
 
-    let mut file = create_private(&temporary)
+/// Fill a temporary beside `destination` with `fill` and rename it over, removing the temporary
+/// when any step fails.
+///
+/// The temporary holds tokens, so one left by a failed write (a full disk, for one) would stay in
+/// the directory, and each failing process would leave another named for its id.
+fn write_through(
+    destination: &Path,
+    fill: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> Result<(), StoreError> {
+    let temporary = destination.with_file_name(format!("{FILE}.{}.tmp", std::process::id()));
+    let placed = stage_and_rename(&temporary, destination, fill);
+    if placed.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    placed
+}
+
+/// The steps of [`write_through`] that can fail, in order: create the temporary, fill it, rename it.
+fn stage_and_rename(
+    temporary: &Path,
+    destination: &Path,
+    fill: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> Result<(), StoreError> {
+    let unusable = |detail: String| StoreError::Unusable { detail };
+
+    let mut file = create_private(temporary)
         .map_err(|e| unusable(format!("{}: {e}", destination.display())))?;
-    file.write_all(encode(credentials).expose().as_bytes())
-        .map_err(|e| unusable(format!("{}: {e}", temporary.display())))?;
+    fill(&mut file).map_err(|e| unusable(format!("{}: {e}", temporary.display())))?;
     // Closed before the rename, which Windows refuses while a handle is still open on either name.
     drop(file);
 
-    std::fs::rename(&temporary, destination).map_err(|e| {
-        let _ = std::fs::remove_file(&temporary);
-        unusable(format!("{}: {e}", destination.display()))
-    })
+    std::fs::rename(temporary, destination)
+        .map_err(|e| unusable(format!("{}: {e}", destination.display())))
 }
 
 /// Write the batch, replacing whatever was there.
@@ -1644,6 +1668,46 @@ mod tests {
             left.sort();
 
             assert_eq!(left, [FILE]);
+        });
+    }
+
+    /// A write that fails partway leaves the last good batch in place and no temporary beside it.
+    ///
+    /// PREM-7 says the temporary is either renamed over the credentials or removed. The partial
+    /// temporary holds some of the tokens, and a failing process leaves one named for its id each
+    /// time it runs, so a full disk would fill the directory with them.
+    #[test]
+    fn a_write_that_fails_partway_removes_its_temporary_and_keeps_the_last_batch() {
+        use std::io::Write;
+
+        with_temp_home("failed-write", || {
+            save(&batch()).expect("a write");
+            let path = path().expect("a path");
+            let before = std::fs::read(&path).expect("the batch just written");
+
+            let failed = write_through(&path, |file| {
+                file.write_all(b"{\"credentials\": [")?;
+                Err(std::io::Error::other("no space left on device"))
+            });
+
+            assert!(failed.is_err(), "a failed write was reported as written");
+            let mut left: Vec<String> = std::fs::read_dir(path.parent().expect("a directory"))
+                .expect("a listing")
+                .map(|entry| {
+                    entry
+                        .expect("an entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect();
+            left.sort();
+            assert_eq!(left, [FILE], "a temporary was left beside the credentials");
+            assert_eq!(
+                std::fs::read(&path).expect("the batch"),
+                before,
+                "the last good batch was changed by a write that failed"
+            );
         });
     }
 

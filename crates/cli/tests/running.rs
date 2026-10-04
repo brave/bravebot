@@ -2045,6 +2045,47 @@ fn forgetting_an_import_is_allowed_in_an_incognito_session() {
     );
 }
 
+/// A stored subscription is one batch for every channel, so `--forget` naming one is refused
+/// rather than read as forgetting only that channel's import, and nothing is removed.
+#[test]
+fn forgetting_takes_no_channel() {
+    let scratch = Scratch::new("cli-running-forget-channel");
+    let stored = scratch.credentials();
+    std::fs::create_dir_all(stored.parent().expect("the state directory"))
+        .expect("create the state directory");
+    std::fs::write(&stored, "{}").expect("write credentials to keep");
+
+    for arguments in [
+        &["import-leo-creds", "--forget", "nightly"][..],
+        &["import-leo-creds", "nightly", "--forget"][..],
+    ] {
+        let output = bravebot(&scratch.path, &[], arguments);
+        let (stdout, stderr) = said(&output);
+
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{arguments:?} was not refused as an argument: {stderr}"
+        );
+        assert!(
+            stderr.contains("--forget takes no channel"),
+            "{arguments:?} did not say why: {stderr}"
+        );
+        assert!(
+            stdout.is_empty(),
+            "{arguments:?} reported a forget: {stdout}"
+        );
+        assert!(
+            stored.exists(),
+            "{arguments:?} removed the stored subscription"
+        );
+    }
+
+    let output = bravebot(&scratch.path, &[], &["import-leo-creds", "--forget"]);
+    assert!(output.status.success(), "forgetting with no channel failed");
+    assert!(!stored.exists(), "forgetting left the subscription behind");
+}
+
 /// A gateway that answers one roster and keeps what was asked of it.
 ///
 /// Stood up rather than mocked because the subject is what a *process* puts on the wire: the level
