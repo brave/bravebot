@@ -99,6 +99,7 @@ relaxing them would leave the reasons behind and keep the words, and the next th
 planner would inherit the relaxation.
 
 `verified-by: bravebot_agent::turn::an_addressed_turn_runs_under_its_definitions_prompt_model_and_kind`
+`verified-by: bravebot_agent::turn::an_addressed_turn_is_offered_only_the_skills_its_definition_names`
 
 ## The line
 

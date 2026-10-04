@@ -2883,10 +2883,83 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         notices.extend(crate::agents::servers_not_found(&delegates, &reached));
         policy.install_delegates(delegates.clone());
 
-        // A delegate whose definition named skills is offered those of them this turn found, and is
-        // listed and can load no others. Taken after discovery rather than instead of it, so a name
-        // can only choose among skills that passed the same gates they pass for the turn.
-        let catalogue = match task.delegate.as_ref().and_then(|spec| spec.skills()) {
+        // The tool that says when this turn is asked again is offered to every turn except a tick the
+        // person timed, and describes a different job on either side of that. Nothing else changes.
+        //
+        // A delegate is offered what its capabilities reach, minus the five no delegate ever gets, and
+        // a way to delegate while it sits above the bottom of the tree. Derived from the set rather
+        // than named per kind, so a tool cannot be offered to a run whose gates would refuse it on
+        // every call.
+        //
+        // A turn the person addressed to a definition is offered the planner's list less what the
+        // kernel narrowed away. Decided here, before the prompt is composed and before anything is
+        // sent, so a name matching nothing ends the turn having spent nothing (ADDRESS-5).
+        //
+        // A delegate in a checkout is offered no `lsp`, whatever its kind holds: the session's
+        // servers are rooted at the working directory, and a path in the checkout is outside it
+        // (CHECKOUT-20).
+        let resolved = 'resolved: {
+            match &task.delegate {
+                Some(spec) => {
+                    let mut offered = tools::for_delegate(
+                        spec.capabilities(),
+                        spec.tools(),
+                        spec.may_delegate().then_some(&delegates),
+                        task.deadlines,
+                    );
+                    if workspace.checkout().is_some() {
+                        offered.retain(|tool| tool.function.name != "lsp");
+                    }
+                    Ok((None, offered))
+                }
+                None => {
+                    let mut offered = tools::for_planner(
+                        scheduling,
+                        arming,
+                        &delegates,
+                        task.deadlines,
+                        tools::Running::Offered,
+                    );
+                    let names: Vec<&str> = offered
+                        .iter()
+                        .map(|tool| tool.function.name.as_str())
+                        .collect();
+                    let addressed = match policy.address(&names) {
+                        Ok(addressed) => addressed,
+                        Err(denial) => break 'resolved Err(denial),
+                    };
+                    if let Some(addressed) = &addressed {
+                        // Which names a definition keeps is read after the table is written, so a
+                        // definition narrowed past `run` leaves descriptions naming a tool that is no
+                        // longer beside them. Written again against what is left, which costs a second
+                        // table only in that case.
+                        if !addressed.tools().iter().any(|tool| tool == "run") {
+                            offered = tools::for_planner(
+                                scheduling,
+                                arming,
+                                &delegates,
+                                task.deadlines,
+                                tools::Running::Withheld,
+                            );
+                        }
+                        offered.retain(|tool| addressed.tools().contains(&tool.function.name));
+                    }
+                    Ok((addressed, offered))
+                }
+            }
+        };
+
+        // A run whose definition named skills is offered those of them this turn found, and is listed
+        // and can load no others. Taken after discovery rather than instead of it, so a name can only
+        // choose among skills that passed the same gates they pass for the turn. A delegate's come
+        // from its spec and a person's addressed turn's from the definition they addressed
+        // (ADDRESS-1), which is why that is resolved first.
+        let named = match (&task.delegate, &resolved) {
+            (Some(spec), _) => spec.skills(),
+            (None, Ok((Some(addressed), _))) => addressed.skills(),
+            (None, _) => None,
+        };
+        let catalogue = match named {
             Some(named) => catalogue.only(named),
             None => catalogue,
         };
@@ -2937,74 +3010,15 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             }
         }
 
-        // The tool that says when this turn is asked again is offered to every turn except a tick the
-        // person timed, and describes a different job on either side of that. Nothing else changes.
-        //
-        // A delegate is offered what its capabilities reach, minus the five no delegate ever gets, and
-        // a way to delegate while it sits above the bottom of the tree. Derived from the set rather
-        // than named per kind, so a tool cannot be offered to a run whose gates would refuse it on
-        // every call.
-        //
-        // A turn the person addressed to a definition is offered the planner's list less what the
-        // kernel narrowed away. Decided here, before the prompt is composed and before anything is
-        // sent, so a name matching nothing ends the turn having spent nothing (ADDRESS-5).
-        //
-        // A delegate in a checkout is offered no `lsp`, whatever its kind holds: the session's
-        // servers are rooted at the working directory, and a path in the checkout is outside it
-        // (CHECKOUT-20).
-        let (addressed, mut offered) = match &task.delegate {
-            Some(spec) => {
-                let mut offered = tools::for_delegate(
-                    spec.capabilities(),
-                    spec.tools(),
-                    spec.may_delegate().then_some(&delegates),
-                    task.deadlines,
-                );
-                if workspace.checkout().is_some() {
-                    offered.retain(|tool| tool.function.name != "lsp");
-                }
-                (None, offered)
-            }
-            None => {
-                let mut offered = tools::for_planner(
-                    scheduling,
-                    arming,
-                    &delegates,
-                    task.deadlines,
-                    tools::Running::Offered,
-                );
-                let names: Vec<&str> = offered
-                    .iter()
-                    .map(|tool| tool.function.name.as_str())
-                    .collect();
-                let addressed = match policy.address(&names) {
-                    Ok(addressed) => addressed,
-                    Err(denial) => {
-                        reporter.notice(t!(
-                            agent_no_such_definition,
-                            name = task.addressing.as_deref().unwrap_or_default(),
-                            names = delegates.names().join(", ")
-                        ));
-                        return Err(TurnError::Precommit(denial.to_string()));
-                    }
-                };
-                if let Some(addressed) = &addressed {
-                    // Which names a definition keeps is read after the table is written, so a
-                    // definition narrowed past `run` leaves descriptions naming a tool that is no
-                    // longer beside them. Written again against what is left, which costs a second
-                    // table only in that case.
-                    if !addressed.tools().iter().any(|tool| tool == "run") {
-                        offered = tools::for_planner(
-                            scheduling,
-                            arming,
-                            &delegates,
-                            task.deadlines,
-                            tools::Running::Withheld,
-                        );
-                    }
-                    offered.retain(|tool| addressed.tools().contains(&tool.function.name));
-                }
-                (addressed, offered)
+        let (addressed, mut offered) = match resolved {
+            Ok(resolved) => resolved,
+            Err(denial) => {
+                reporter.notice(t!(
+                    agent_no_such_definition,
+                    name = task.addressing.as_deref().unwrap_or_default(),
+                    names = delegates.names().join(", ")
+                ));
+                return Err(TurnError::Precommit(denial.to_string()));
             }
         };
 

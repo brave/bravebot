@@ -1175,6 +1175,7 @@ pub struct Addressed {
     kind: Kind,
     model: Option<String>,
     prompt: String,
+    skills: Option<Vec<String>>,
     memory: bool,
     checkout: bool,
     held: CapabilitySet,
@@ -1188,6 +1189,7 @@ impl Addressed {
             kind: definition.kind(),
             model: definition.model().map(str::to_string),
             prompt: definition.prompt().to_string(),
+            skills: definition.skills().map(<[String]>::to_vec),
             memory: definition.keeps_memory(),
             checkout: definition.asks_for_checkout(),
             held,
@@ -1217,6 +1219,12 @@ impl Addressed {
     /// The definition's standing instruction, empty where its file had no body.
     pub fn prompt(&self) -> &str {
         &self.prompt
+    }
+
+    /// The skills the definition named, where it named any (DELEGATE-23), and `None` where every
+    /// skill the turn found is offered.
+    pub fn skills(&self) -> Option<&[String]> {
+        self.skills.as_deref()
     }
 
     /// Whether the definition keeps a memory, which the file of [`Self::name`]'s name is.
