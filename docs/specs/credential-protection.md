@@ -802,7 +802,9 @@ exists for the operation. Accepting changes nothing and owes what Held owes.
 trade and is not custody. A credential enrolled with no performer to use it is a Held credential in
 a better cupboard.
 
-`verified-by: none`
+`verified-by: bravebot_config::lib::removing_denying_or_accepting_changes_no_tier`
+`verified-by: bravebot_config::lib::enrolling_reaches_delegated_only_where_a_performer_exists`
+`verified-by: bravebot_config::lib::only_enrolling_attempts_a_gate`
 
 <a id="CRED-21"></a>
 ### CRED-21: accepting a finding expires
