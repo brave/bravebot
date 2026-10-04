@@ -59,18 +59,18 @@ objects, VISUAL selection and REPLACE mode, and how each treats a [marker](#mark
 
 A `keybindings` block in [`settings.json`](../customize/configuration.md) names an action and the
 chord you want to answer it. Write a chord as `ctrl-x`, `alt-o` or `ctrl+x`. The block layers per
-action the way `env` does, so a project file moving one action says nothing about the other seven.
+action the way `env` does, so a project file moving one action says nothing about the other eight.
 
 ```json
 {
   "keybindings": {
-    "scroller": "ctrl-x",
+    "scroller": "alt-o",
     "stash": "alt-s"
   }
 }
 ```
 
-**Eight actions can be moved, and nothing else can:**
+**Nine actions can be moved, and nothing else can:**
 
 | Action | Default | What it does |
 |---|---|---|
@@ -82,6 +82,7 @@ action the way `env` does, so a project file moving one action says nothing abou
 | `stash` | `ctrl-s` | put the line away, or bring it back |
 | `trail` | `ctrl-t` | show or hide the audit trail |
 | `paste` | `ctrl-v` | paste from the clipboard |
+| `panel` | `ctrl-x` | show or hide the [info panel](sessions.md#telling-sessions-apart) |
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is typed,
 Enter sends, Escape clears, Tab takes what is offered, and the arrows walk the caret and the history.
@@ -273,8 +274,8 @@ the turn ends becomes a turn of its own.
 **A [slash command](../reference/commands.md) is never sent.** Most wait to be carried out: one
 comes off the box and is drawn under it like anything else waiting, but it is not offered to the turn
 in flight, so nothing about it reaches the planner. It runs when the queue is reached after the turn
-has ended, and a prompt behind it goes once it has. During a turn, `/cost`, `/watch`, `/loop` and
-`/goal` are carried out as you press Enter instead, except a `/loop` that starts a loop and a `/goal`
+has ended, and a prompt behind it goes once it has. During a turn, `/cost`, `/watch`, `/panel`, `/loop`
+and `/goal` are carried out as you press Enter instead, except a `/loop` that starts a loop and a `/goal`
 that sets one, which wait. `/rename`, `/forget-trust`, `/theme <name>` and `/effort <level>` are too
 when nothing is waiting, and `/theme` and `/effort` alone wait. What they answer is drawn under the
 turn and joins the transcript after it, and nothing waiting moves. During a compaction, a `/btw` question, a `/manifest` run or a goal check,

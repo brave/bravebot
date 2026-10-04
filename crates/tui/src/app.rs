@@ -143,6 +143,9 @@ const WATCH_COMMAND: &str = "/watch";
 /// job while the turn goes on with everything else.
 const JOBS_COMMAND: &str = "/jobs";
 
+/// The line that opens or closes the info panel, as its key does.
+const PANEL_COMMAND: &str = "/panel";
+
 /// The line that lists the checkouts delegates kept, and removes one by its number.
 ///
 /// A checkout something was done in outlives its delegate, and nothing else removes it.
@@ -219,7 +222,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 24] {
+pub fn commands() -> [Command; 25] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -321,6 +324,12 @@ pub fn commands() -> [Command; 24] {
             name: JOBS_COMMAND,
             argument: "[stop <name> [<delegate>]]",
             description: t!(command_jobs),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: PANEL_COMMAND,
+            argument: "",
+            description: t!(command_panel),
             mid_turn: MidTurn::Runs,
         },
         Command {
@@ -1673,6 +1682,10 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         }
         return Action::Redraw;
     }
+    if line.trim() == PANEL_COMMAND {
+        session.toggle_panel();
+        return Action::Redraw;
+    }
     if let Some(argument) = argument_to(line, CHECKOUTS_COMMAND) {
         return match crate::checkouts_command::parse(argument) {
             crate::checkouts_command::Asked::List => Action::ListCheckouts,
@@ -1880,6 +1893,12 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
         // for it to finish before they were allowed to ask.
         _ if session.bindings().is_trail(&key) => {
             session.toggle_trail();
+            Action::Redraw
+        }
+        // In the shared ladder for the trail's reason: it changes what is drawn and sends nothing,
+        // and the plan it shows is most worth reading while a turn is working through it.
+        _ if session.bindings().is_panel(&key) => {
+            session.toggle_panel();
             Action::Redraw
         }
         // What a delegate is doing, which is drawn nowhere else in full. In the shared ladder
@@ -3169,6 +3188,7 @@ fn event_loop(
     // line's switch is read here and nowhere else in the interface.
     session.adopt_vetting(bravebot_core::vetting::asked_for(), settings.auto_vetting());
     session.adopt_keybindings(settings.keybindings());
+    session.adopt_panel();
     crate::title::adopt(
         settings.terminal_title(),
         bravebot_core::incognito::engaged(),
@@ -3268,6 +3288,13 @@ fn event_loop(
         });
         // A picture decoded since the last pass is drawn on this one rather than at the next key.
         needs_draw |= session.settle_previews();
+        // Before the frame rather than after it, so the first frame of an open panel names the
+        // session, and a name that changed by any path reaches the panel without waiting for a key.
+        needs_draw |= session.identify(
+            stored.title(),
+            crate::status::abbreviate(workspace.root()),
+            stored.branch(),
+        );
 
         // Waiting for the burst to end, but not indefinitely: a drag that never pauses would
         // otherwise show nothing until it stopped.
@@ -8626,7 +8653,7 @@ mod tests {
             }
         }
 
-        /// The view asks the bindings about Watch alone, so the other seven chords are nobody's in
+        /// The view asks the bindings about Watch alone, so the other eight chords are nobody's in
         /// here. Moved onto the keys the view walks with, one read as its key would open, close or
         /// move the view on a chord the person gave to something else. The second set is the
         /// view's own chords with Alt added, and keys that are not letters.
@@ -8715,6 +8742,7 @@ mod tests {
             session.open_watched();
             session.note_layout(crate::state::Laid {
                 width: 80,
+                columns: 80,
                 height: 10,
                 rows: 100,
                 prompts: Vec::new(),
@@ -9101,6 +9129,7 @@ mod tests {
             let mut session = Session::new("kernel-enforced");
             session.note_layout(Laid {
                 width: 80,
+                columns: 80,
                 height: 10,
                 rows: 100,
                 prompts: vec![0, 30, 60],
@@ -9556,6 +9585,7 @@ mod tests {
             let mut session = Session::new("kernel-enforced");
             session.note_layout(Laid {
                 width: 80,
+                columns: 80,
                 height: 100,
                 rows: 300,
                 prompts: Vec::new(),
@@ -9578,6 +9608,7 @@ mod tests {
             let mut session = Session::new("kernel-enforced");
             session.note_layout(Laid {
                 width: 80,
+                columns: 80,
                 height: 10,
                 rows: 100,
                 prompts: vec![10, 40, 70],
@@ -9608,6 +9639,7 @@ mod tests {
             let mut session = Session::new("kernel-enforced");
             session.note_layout(Laid {
                 width: 80,
+                columns: 80,
                 height: 10,
                 rows: 100,
                 prompts: Vec::new(),
@@ -16133,11 +16165,47 @@ mod tests {
                 GOAL_COMMAND,
                 JOBS_COMMAND,
                 LOOP_COMMAND,
+                PANEL_COMMAND,
                 RENAME_COMMAND,
                 THEME_COMMAND,
                 WATCH_COMMAND,
             ]
         );
+    }
+
+    /// The key and the command are two ways to one toggle, and a moved key leaves the old chord
+    /// doing nothing, or the default would still answer a key the person gave away.
+    #[test]
+    fn the_panel_key_and_the_panel_command_both_toggle_it() {
+        let wide = crate::state::Laid {
+            columns: 120,
+            ..crate::state::Laid::default()
+        };
+        let mut session = Session::new("none");
+        session.note_layout(wide.clone());
+        handle_key(&mut session, ctrl('x'));
+        assert!(session.panel_open(), "ctrl-x did not open the panel");
+        assert_eq!(
+            dispatch_command(&mut session, commanded(PANEL_COMMAND)),
+            Action::Redraw
+        );
+        assert!(!session.panel_open(), "/panel did not close the panel");
+
+        let mut moved = Session::new("none");
+        let mut bindings = std::collections::BTreeMap::new();
+        bindings.insert("panel".to_string(), "alt-i".to_string());
+        moved.adopt_keybindings(&bindings);
+        moved.note_layout(wide);
+        handle_key(&mut moved, ctrl('x'));
+        assert!(
+            !moved.panel_open(),
+            "the chord the panel was moved off still opened it"
+        );
+        handle_key(
+            &mut moved,
+            KeyEvent::new(KeyCode::Char('i'), KeyModifiers::ALT),
+        );
+        assert!(moved.panel_open(), "the moved chord did not open the panel");
     }
 
     /// A session that has typed one prompt and has a turn in flight on it.

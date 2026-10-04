@@ -1368,6 +1368,11 @@ impl Handle {
         &self.title
     }
 
+    /// The branch checked out where the session runs, as the resume list shows it.
+    pub fn branch(&self) -> Option<&str> {
+        self.branch.as_deref()
+    }
+
     /// Call the session something the user chose.
     ///
     /// Takes effect at once rather than at the next turn, by rewriting the record where there is

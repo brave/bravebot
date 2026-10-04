@@ -31,6 +31,7 @@ pub mod logo;
 pub mod loops;
 pub mod markdown;
 pub mod model_prompt;
+pub mod panel;
 pub mod preview;
 pub mod reasoning;
 pub mod remote_confirm;

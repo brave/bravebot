@@ -205,6 +205,27 @@ does, and your shell's own title comes back when you leave. A terminal that cann
 left with an empty one rather than this session's name. An incognito session leaves the title alone,
 and so does setting [`terminalTitle`](../customize/configuration.md#terminaltitle) to `false`.
 
+## Telling sessions apart
+
+The title says which session a terminal holds. The info panel says the rest: press Ctrl-X, or type
+`/panel`, and a column 36 wide opens on the right of the screen with
+
+- the session's name, its directory and its branch,
+- the goal, while one stands,
+- how full the context is, the cache hit rate, and what the last turn read from the cache and wrote
+  into it, as two figures,
+- the plan, which stays after the turn ends. Where it runs past the bottom it keeps the task in
+  progress in view and counts the rows left out above and below it, as `+12 earlier` or
+  `+3 more`.
+
+Its last row names the key that hides it. While it is drawn, the context and cache figures leave the
+hint line under the box, unless the terminal is too short for the panel to show them; the mode, a
+running loop and the job count stay there. It needs a terminal at least 100 columns wide: a press
+to open it on a narrower one leaves a note, and narrowing the terminal while the panel is open hides
+it until the terminal is wide again. A press to close it works at any width. Whether it was left open is kept in
+`~/.bravebot/panel` for the next session. The panel draws only what you typed, the plan, the
+session's own counters and where the session runs, and never a reply or anything a tool returned.
+
 ## Starting over
 
 ```

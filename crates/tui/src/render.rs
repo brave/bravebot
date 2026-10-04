@@ -603,6 +603,14 @@ fn diff_lines(changes: &[Change], untrusted: bool, width: usize) -> Vec<Line<'st
 /// and none of them exist before a frame: how tall the transcript is, and where in it the rows
 /// worth jumping to are, are both answers about a paragraph wrapped at a particular width.
 pub fn draw(frame: &mut Frame, session: &Session) -> Laid {
+    let columns = frame.area().width;
+    Laid {
+        columns,
+        ..draw_frame(frame, session)
+    }
+}
+
+fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
     // A named theme paints the frame so chrome and text share one background. `brave` leaves the
     // terminal's own colours alone. It is painted before the mode is chosen, since the scroller
     // covers the same frame.
@@ -632,15 +640,32 @@ pub fn draw(frame: &mut Frame, session: &Session) -> Laid {
         return draw_history_search(frame, session);
     }
 
+    // The hint line keeps the whole width, and the panel takes the right of everything above it
+    // (PANEL-6). Everything in the left column is measured against the left column's width.
+    let [body, hint_row] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .areas(frame.area());
+    let (left, panel) = if crate::panel::drawn(session, frame.area().width) {
+        let [left, panel] = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(1), Constraint::Length(crate::panel::WIDTH)])
+            .areas(body);
+        (left, Some(panel))
+    } else {
+        (body, None)
+    };
+    let width = left.width;
+
     // What is running sits above the box rather than in place of it, so the two are measured
     // together: whatever the indicator takes is height the input no longer has.
-    let status_height = status_height(session, frame.area().width, frame.area().height);
+    let status_height = status_height(session, width, frame.area().height);
 
     // The input's height depends on how far the text wraps, so it is measured before the layout
     // rather than fixed: a fixed height is what made typing past the edge disappear.
     let input_height = input_height(
         session,
-        frame.area().width,
+        width,
         frame.area().height.saturating_sub(status_height),
     );
 
@@ -656,7 +681,7 @@ pub fn draw(frame: &mut Frame, session: &Session) -> Laid {
         .saturating_sub(status_height)
         .saturating_sub(input_height + 1)
         .saturating_sub(1);
-    let beneath = lines_beneath_the_box(session, frame.area().width, &offered);
+    let beneath = lines_beneath_the_box(session, width, &offered);
     let offered_height = (beneath.len() as u16).min(room);
 
     // Thumbnails of the pictures the line carries, between the box and the rows that describe
@@ -679,16 +704,23 @@ pub fn draw(frame: &mut Frame, session: &Session) -> Laid {
             Constraint::Length(input_height),   // input
             Constraint::Length(preview_height), // pictures the line carries
             Constraint::Length(offered_height), // what is being offered
-            Constraint::Length(1),              // hint line
         ])
-        .split(frame.area());
+        .split(left);
 
     let laid = draw_transcript(frame, areas[0], session);
     draw_status(frame, areas[1], session);
     draw_input(frame, areas[2], session);
     draw_previews(frame, areas[3], &thumbs);
     frame.render_widget(Paragraph::new(beneath), areas[4]);
-    draw_hint(frame, areas[5], session);
+    draw_hint(frame, hint_row, session);
+    if let Some(panel) = panel {
+        frame.render_widget(Clear, panel);
+        frame.render_widget(
+            Paragraph::new(crate::panel::lines(session, panel.width, panel.height))
+                .block(Block::default().borders(Borders::LEFT).border_style(dim())),
+            panel,
+        );
+    }
 
     // Last, over everything: the selection is of the screen rather than of any one widget, and
     // the user swept it over whatever happened to be there.
@@ -3251,7 +3283,7 @@ const COMPACTED_CONTEXT: &str = "context compacted";
 /// The chords a settings file can move are asked of the bindings rather than written here, so the
 /// list names the key that answers rather than the key that used to. The eight the file can move are
 /// the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
-fn shortcuts(editing: crate::vim::Editing, bindings: &Keybindings) -> [(String, &'static str); 23] {
+fn shortcuts(editing: crate::vim::Editing, bindings: &Keybindings) -> [(String, &'static str); 24] {
     let escape = match editing {
         crate::vim::Editing::Ordinary => "clear the line",
         crate::vim::Editing::Vi => "letters as commands, then stop",
@@ -3279,6 +3311,7 @@ fn shortcuts(editing: crate::vim::Editing, bindings: &Keybindings) -> [(String, 
         (bindings.trail_name(), "show what a turn did"),
         (bindings.paste_name(), "paste, pictures too"),
         (bindings.background_name(), "background a running command"),
+        (bindings.panel_name(), "show or hide the info panel"),
         ("drag".to_string(), "select, copy on release"),
     ]
 }
@@ -3451,7 +3484,7 @@ fn loop_part(until: Option<std::time::Duration>) -> String {
     }
 }
 
-fn cache_hit_rate(session: &Session) -> Option<String> {
+pub(crate) fn cache_hit_rate(session: &Session) -> Option<String> {
     let cached = session.cached().filter(|cached| cached.read_tokens > 0)?;
     let prompt_tokens = session
         .cached_prompt_tokens()
@@ -3465,6 +3498,32 @@ fn cache_hit_rate(session: &Session) -> Option<String> {
         tenths % 10
     );
     Some(t!(hint_cache_hit_rate, rate = rate).to_string())
+}
+
+/// How the context currently stands: unmeasured, compacted, or measured as a percentage.
+///
+/// Each of them says which it is, and none of them is drawn as nothing: a reading that comes and
+/// goes is one people stop reading, and this is the only account of the size of a conversation
+/// there is.
+pub(crate) fn context_reading(session: &Session) -> String {
+    match session.occupancy() {
+        crate::state::Occupancy::Unmeasured => UNMEASURED_CONTEXT.to_string(),
+        // How much of the budget the compaction won back, which is what somebody who has just
+        // shortened a conversation is asking. Approximate, and marked so: the summariser counted
+        // its own instructions along with the exchange it read, and there is no tokeniser here to
+        // take them off again, so the figure is a little larger than the room really is.
+        crate::state::Occupancy::Compacted { .. } => match session.won_back() {
+            Some(percent) => format!("{COMPACTED_CONTEXT}, ~{percent}% won back"),
+            None => COMPACTED_CONTEXT.to_string(),
+        },
+        crate::state::Occupancy::Measured { guessed, .. } => match session.fullness() {
+            Some(percent) if guessed => format!("context ~{percent}%"),
+            Some(percent) => format!("context {percent}%"),
+            // A count with no budget to divide it by is no reading of how full the context is, so
+            // the session knows no more here than one that has measured nothing and says the same.
+            None => UNMEASURED_CONTEXT.to_string(),
+        },
+    }
 }
 
 /// The shortcut line. Keeps the bindings discoverable without a help command.
@@ -3536,28 +3595,21 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         return;
     }
 
-    // How the context currently stands: unmeasured, compacted, or measured as a percentage. Each of
-    // them says which it is, and none of them is drawn as nothing: a reading that comes and goes is
-    // one people stop reading, and this is the only account of the size of a conversation there is.
-    let context = match session.occupancy() {
-        crate::state::Occupancy::Unmeasured => UNMEASURED_CONTEXT.to_string(),
-        // How much of the budget the compaction won back, which is what somebody who has just
-        // shortened a conversation is asking. Approximate, and marked so: the summariser counted
-        // its own instructions along with the exchange it read, and there is no tokeniser here to
-        // take them off again, so the figure is a little larger than the room really is.
-        crate::state::Occupancy::Compacted { .. } => match session.won_back() {
-            Some(percent) => format!("{COMPACTED_CONTEXT}, ~{percent}% won back"),
-            None => COMPACTED_CONTEXT.to_string(),
-        },
-        crate::state::Occupancy::Measured { guessed, .. } => match session.fullness() {
-            Some(percent) if guessed => format!("context ~{percent}%"),
-            Some(percent) => format!("context {percent}%"),
-            // A count with no budget to divide it by is no reading of how full the context is, so
-            // the session knows no more here than one that has measured nothing and says the same.
-            None => UNMEASURED_CONTEXT.to_string(),
-        },
+    // The panel shows the context and the cache while it has the rows for them, so the line drops
+    // both rather than saying them twice (PANEL-8). Offered while it is closed and there is room to
+    // draw it.
+    let panel_shows_context = crate::panel::shows_context(session, area.width, frame.area().height);
+    let context = if panel_shows_context {
+        String::new()
+    } else {
+        context_reading(session)
     };
     let context_is_unmeasured = context == UNMEASURED_CONTEXT;
+    let info = if !session.panel_open() && crate::panel::fits(area.width) {
+        t!(panel_hint, chord = session.bindings().panel_name()).to_string()
+    } else {
+        String::new()
+    };
 
     // The way into the view, for as long as it holds anything. The row that reports what the turn
     // is doing names the key too, but that row goes when the turn ends, and what the view holds is
@@ -3576,7 +3628,11 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         ),
     };
 
-    let cache = cache_hit_rate(session).unwrap_or_default();
+    let cache = if panel_shows_context {
+        String::new()
+    } else {
+        cache_hit_rate(session).unwrap_or_default()
+    };
 
     // Not a list of bindings any more. Every one of them, with what it does, is a `?` away, which
     // is both more than this line could hold and the moment a person wants to know; what stays here
@@ -3627,10 +3683,13 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         watchable,
         movable,
         SHORTCUTS_HINT.to_string(),
+        info,
     ];
-    // Indices into `parts`, in the order they are given up: the way to the bindings first, then the
-    // trail toggle, both being things somebody learns once. Then the figures. Neither mode is ever
-    // listed, because of everything here they are what changes what the next keystroke does.
+    // Indices into `parts`, in the order they are given up: the way to the panel before anything,
+    // since the panel is a press away whether or not the line names it (PANEL-7), then the way to
+    // the bindings, then the trail toggle, both being things somebody learns once. Then the
+    // figures. Neither mode is ever listed, because of everything here they are what changes what
+    // the next keystroke does.
     //
     // A reading with no figure in it goes before any of them. The readings are kept late because a
     // figure is the one thing on this line nothing else can tell somebody, and a sentence saying
@@ -3647,9 +3706,9 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // reading this line for a way out of the wait; a job is spending something unwatched, as the
     // loop is.
     let expendable: &[usize] = if context_is_unmeasured {
-        &[3, 9, 2, 4, 7, 8, 6, 5]
+        &[10, 3, 9, 2, 4, 7, 8, 6, 5]
     } else {
-        &[9, 2, 3, 4, 7, 8, 6, 5]
+        &[10, 9, 2, 3, 4, 7, 8, 6, 5]
     };
     // A note is drawn over the right of this same row, so what the parts may occupy is the width
     // less that note. Fitted against the whole width instead, the last part that fits is one the
@@ -7368,6 +7427,7 @@ mod tests {
         );
 
         let word = t!(loop_hint).to_string();
+        let info = t!(panel_hint, chord = "ctrl-x").to_string();
         for session in [
             Session::new("kernel").allowing_bypass(),
             looping,
@@ -7389,7 +7449,8 @@ mod tests {
                             || part == UNMEASURED_CONTEXT
                             || part == SHORTCUTS_HINT
                             || part == word
-                            || part == counting,
+                            || part == counting
+                            || part == info,
                         "at width {width} a part was cut: {part:?} in {drawn:?}"
                     );
                 }
@@ -7718,7 +7779,7 @@ mod tests {
         let mut session = Session::new("none");
         let mut custom = std::collections::BTreeMap::new();
         custom.insert("scroller".to_string(), "ctrl-u".to_string());
-        custom.insert("stash".to_string(), "ctrl-x".to_string());
+        custom.insert("stash".to_string(), "alt-x".to_string());
         session.adopt_keybindings(&custom);
 
         session.type_char('?');
@@ -7728,7 +7789,7 @@ mod tests {
             "custom scroller chord missing: {output}"
         );
         assert!(
-            output.contains("ctrl-x"),
+            output.contains("alt-x"),
             "custom stash chord missing: {output}"
         );
         assert!(
@@ -7746,7 +7807,7 @@ mod tests {
     fn the_stashed_line_names_the_custom_stash_chord() {
         let mut session = Session::new("none");
         let mut custom = std::collections::BTreeMap::new();
-        custom.insert("stash".to_string(), "ctrl-x".to_string());
+        custom.insert("stash".to_string(), "alt-x".to_string());
         session.adopt_keybindings(&custom);
 
         for c in "hold this for later".chars() {
@@ -7759,7 +7820,7 @@ mod tests {
         assert_eq!(lines.len(), 1);
         let rendered = lines[0].to_string();
         assert!(
-            rendered.contains("ctrl-x to bring it back"),
+            rendered.contains("alt-x to bring it back"),
             "custom stash chord missing from stashed line: {rendered}"
         );
         assert!(

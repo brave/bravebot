@@ -27,6 +27,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
 | `/jobs` | `[stop <name> [<delegate>]]` | List this turn's background jobs, and stop one by its name |
+| `/panel` | | Show or hide the info panel beside the transcript |
 | `/checkouts` | `[remove <n>]` | List the checkouts delegates kept, and remove one by its number |
 | `/manifest` | `<task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
 | `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
@@ -443,6 +444,14 @@ The rest of the turn goes on. The stop is recorded in the session's trail as you
 `/jobs` is carried out as you type it while a turn runs, since a job ends with its turn and a stop
 that waited would find nothing left to stop.
 
+## `/panel`
+
+Shows or hides the info panel on the right of the screen, as Ctrl-X does. The panel holds the
+session's name, directory and branch, the goal, how full the context is with the cache figures, and
+the plan. It needs a terminal at least 100 columns wide, and says so on a narrower one. Whether it is
+open is kept for the next session. [Telling sessions apart](../using/sessions.md#telling-sessions-apart)
+has the rest.
+
 ## `/checkouts [remove <n>]`
 
 Lists the checkouts this session keeps for its delegates, and removes one by its number.
@@ -721,7 +730,7 @@ place of a drop. `/btw`, `/manifest` and `/loop` send their argument, so a marke
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/watch`,
-and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/panel`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. The exception is a line of the same command already waiting, which they wait behind, so

@@ -718,7 +718,7 @@ fn within(root: &Path, path: &Path) -> String {
 }
 
 /// A path with the home directory written as `~`, which is shorter and less personal.
-fn abbreviate(path: &Path) -> String {
+pub(crate) fn abbreviate(path: &Path) -> String {
     let shown = path.display().to_string();
     let Some(home) = std::env::var_os("HOME") else {
         return shown;

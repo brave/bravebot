@@ -1009,6 +1009,8 @@ pub struct PastedText {
 pub struct Laid {
     /// Columns the transcript was drawn in.
     pub width: u16,
+    /// Columns the whole frame had, which is what decides whether the info panel fits.
+    pub columns: u16,
     /// Rows it had room for.
     pub height: u16,
     /// Rows the whole of it came to.
@@ -1027,6 +1029,17 @@ pub struct Laid {
     /// A match is reached at the row the line holding it begins at, as a prompt is: a line the
     /// width wraps is several rows of the screen and one entry here.
     pub matches: Vec<u16>,
+}
+
+/// What the info panel names the session by: its name, its directory and its branch.
+///
+/// The name is the session record's title, which is the person's first prompt or what they typed
+/// at `/rename`. The directory and the branch are the ones the resume list shows.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Identity {
+    pub name: String,
+    pub directory: String,
+    pub branch: Option<String>,
 }
 
 /// The scroller, while it is open.
@@ -1325,6 +1338,10 @@ pub struct Session {
     pub status: Status,
     /// Whether the audit trail is shown alongside replies.
     pub show_trail: bool,
+    /// Whether the person has the info panel open, which the frame then draws only where it fits.
+    panel: bool,
+    /// What the info panel says this session is.
+    identity: Identity,
     /// Scroll offset from the bottom, in lines.
     pub scroll: u16,
     /// The scroller, while it is open.
@@ -1828,6 +1845,8 @@ impl Session {
             inserting: None,
             status: Status::Idle,
             show_trail: false,
+            panel: false,
+            identity: Identity::default(),
             scroll: 0,
             scroller: None,
             watching: None,
@@ -8702,6 +8721,74 @@ impl Session {
 
     pub fn toggle_trail(&mut self) {
         self.show_trail = !self.show_trail;
+    }
+
+    /// Open the info panel where it was left open last time.
+    ///
+    /// Read only for a session that persists, as the editing style is, so a test is not handed the
+    /// developer's own choice. Closed where nothing was recorded.
+    pub fn adopt_panel(&mut self) {
+        self.panel = self
+            .persist
+            .then(bravebot_session::store::load_panel)
+            .flatten()
+            .unwrap_or(false);
+    }
+
+    /// Whether the person has the info panel open, whether or not the last frame had room for it.
+    pub fn panel_open(&self) -> bool {
+        self.panel
+    }
+
+    /// Open or close the info panel.
+    ///
+    /// On a terminal too narrow to draw it, a press to open changes nothing and a note says why.
+    /// Opening a panel the screen cannot show would leave the press looking as if it did nothing,
+    /// and the next widening would bring back a panel nobody remembered opening. A press to close
+    /// always closes, so a panel left open before the terminal was narrowed can be put away.
+    pub fn toggle_panel(&mut self) {
+        if !self.panel && !crate::panel::fits(self.laid.columns) {
+            self.note(t!(panel_too_narrow, columns = crate::panel::NARROWEST));
+            return;
+        }
+        self.panel = !self.panel;
+        if self.persist {
+            bravebot_session::store::save_panel(self.panel);
+        }
+    }
+
+    /// Record what the info panel names the session by. True where an open panel now has
+    /// something to show that the last frame did not, so the caller draws another.
+    pub fn identify(&mut self, name: &str, directory: String, branch: Option<&str>) -> bool {
+        let identity = Identity {
+            name: name.to_string(),
+            directory,
+            branch: branch.map(str::to_string),
+        };
+        let changed = self.identity != identity;
+        self.identity = identity;
+        changed && self.panel
+    }
+
+    /// What the info panel names the session by.
+    pub fn identity(&self) -> &Identity {
+        &self.identity
+    }
+
+    /// The task list the panel shows: the one the turn in flight reported, or else the last one a
+    /// turn finished with.
+    ///
+    /// Read off the transcript rather than kept, so a resumed session shows the plan it was left
+    /// with and `/clear`, which empties the transcript, empties this too.
+    pub fn plan(&self) -> &[bravebot_core::todo::Row] {
+        if !self.todos.is_empty() {
+            return &self.todos;
+        }
+        self.transcript
+            .iter()
+            .rev()
+            .find(|entry| !entry.todos.is_empty())
+            .map_or(&[], |entry| entry.todos.as_slice())
     }
 
     /// Whether any turn has left a trail, meaning the toggle has something to reveal.

@@ -1610,6 +1610,7 @@ command-loop = Renvoyer une consigne encore et encore, dire ce qui se répète, 
 command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie
 command-watch = Lister les fichiers que cette session surveille, et en arrêter un par son numéro
 command-jobs = Lister les tâches en arrière-plan de ce tour, et en arrêter une par son nom
+command-panel = Afficher ou masquer le panneau d'informations à côté de la transcription
 command-checkouts = Lister les copies de travail gardées par les délégués, et en supprimer une par son numéro
 command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
 command-agent = Exécuter l'une de vos définitions sur une tâche, par son nom
@@ -2157,6 +2158,18 @@ job-stop-already-asked = { $name } est déjà en cours d'arrêt
 jobs-command-takes =
     /jobs liste les tâches en arrière-plan de ce tour, et /jobs stop <nom> en arrête une. Une
     tâche d'un délégué prend aussi le numéro du délégué, comme dans /jobs stop job:1 d2
+panel-hint = { $chord } infos
+panel-hide = { $chord } masquer le panneau
+panel-too-narrow = Le panneau d'informations demande un terminal d'au moins { $columns } colonnes.
+panel-session = Session
+panel-goal = Objectif
+panel-context = Contexte
+panel-plan = Plan
+panel-cache-read = cache lu { $tokens }
+panel-cache-written = cache écrit { $tokens }
+panel-more = +{ $count } de plus
+panel-earlier = +{ $count } avant
+panel-earlier-and-more = +{ $earlier } avant, +{ $later } de plus
 
 # Vérifications indicatives affichées uniquement dans un dépôt de sources de Bravebot.
 doctor-development = environnement de développement { $path }

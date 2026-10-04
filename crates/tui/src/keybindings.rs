@@ -192,6 +192,7 @@ pub struct Keybindings {
     pub trail: KeyChord,
     pub watch: KeyChord,
     pub paste: KeyChord,
+    pub panel: KeyChord,
 }
 
 impl Default for Keybindings {
@@ -205,18 +206,20 @@ impl Default for Keybindings {
             trail: KeyChord::ctrl('t'),
             watch: KeyChord::ctrl('l'),
             paste: KeyChord::ctrl('v'),
+            panel: KeyChord::ctrl('x'),
         }
     }
 }
 
 impl Keybindings {
     /// Every action by the name a settings file calls it, in one list so that resolving one chord
-    /// can see the seven it has to differ from.
-    fn slots(&mut self) -> [(&'static str, &mut KeyChord); 8] {
+    /// can see the eight it has to differ from.
+    fn slots(&mut self) -> [(&'static str, &mut KeyChord); 9] {
         [
             ("background", &mut self.background),
             ("editor", &mut self.editor),
             ("history", &mut self.history),
+            ("panel", &mut self.panel),
             ("paste", &mut self.paste),
             ("scroller", &mut self.scroller),
             ("stash", &mut self.stash),
@@ -237,8 +240,8 @@ impl Keybindings {
     pub fn from_map(configured: &BTreeMap<String, String>) -> Self {
         let mut active = Self::default();
         let mut slots = active.slots();
-        let defaults: [KeyChord; 8] = std::array::from_fn(|i| *slots[i].1);
-        let mut asked: [Option<KeyChord>; 8] = std::array::from_fn(|i| {
+        let defaults: [KeyChord; 9] = std::array::from_fn(|i| *slots[i].1);
+        let mut asked: [Option<KeyChord>; 9] = std::array::from_fn(|i| {
             configured
                 .get(slots[i].0)
                 .and_then(|spelling| KeyChord::parse(spelling))
@@ -249,7 +252,7 @@ impl Keybindings {
         // given, so this settles rather than deciding once. Every round drops at least one request
         // or is the last, and with no requests left the defaults are what stand, which differ.
         loop {
-            let standing: [KeyChord; 8] = std::array::from_fn(|i| asked[i].unwrap_or(defaults[i]));
+            let standing: [KeyChord; 9] = std::array::from_fn(|i| asked[i].unwrap_or(defaults[i]));
             let contested =
                 |chord: KeyChord| standing.iter().filter(|on| **on == chord).count() > 1;
             let mut given_up = false;
@@ -302,6 +305,10 @@ impl Keybindings {
         self.paste.matches(key)
     }
 
+    pub fn is_panel(&self, key: &KeyEvent) -> bool {
+        self.panel.matches(key)
+    }
+
     pub fn background_name(&self) -> String {
         self.background.display()
     }
@@ -334,7 +341,11 @@ impl Keybindings {
         self.paste.display()
     }
 
-    /// Whether any of the eight configurable actions answers this key event.
+    pub fn panel_name(&self) -> String {
+        self.panel.display()
+    }
+
+    /// Whether any of the nine configurable actions answers this key event.
     pub fn claims(&self, key: &KeyEvent) -> bool {
         self.is_background(key)
             || self.is_stash(key)
@@ -344,6 +355,7 @@ impl Keybindings {
             || self.is_trail(key)
             || self.is_watch(key)
             || self.is_paste(key)
+            || self.is_panel(key)
     }
 }
 
@@ -500,7 +512,7 @@ mod tests {
     }
 
     /// Moving a running command to the background is an action a settings file can move like the
-    /// other seven, since Ctrl-B is also the prefix tmux waits for and a person inside tmux would
+    /// others, since Ctrl-B is also the prefix tmux waits for and a person inside tmux would
     /// otherwise press it twice every time.
     #[test]
     fn the_background_chord_is_ctrl_b_and_can_be_moved() {
@@ -517,6 +529,26 @@ mod tests {
         let vacated = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL);
         assert!(bindings.is_background(&moved) && bindings.claims(&moved));
         assert!(!bindings.is_background(&vacated) && !bindings.claims(&vacated));
+    }
+
+    /// The panel is opened and closed from the box, so a person whose terminal or multiplexer
+    /// already uses Ctrl-X needs to put it somewhere else and have the old chord stop answering.
+    /// The panel is the ninth action a settings file can move, and a moved panel gives up the
+    /// chord it was on, or that chord would answer for an action the person moved away from it.
+    #[test]
+    fn the_panel_chord_is_ctrl_x_and_can_be_moved() {
+        let defaults = Keybindings::default();
+        assert_eq!(defaults.panel, KeyChord::ctrl('x'));
+        assert_eq!(defaults.panel_name(), "ctrl-x");
+
+        let mut map = BTreeMap::new();
+        map.insert("panel".to_string(), "alt-i".to_string());
+        let bindings = Keybindings::from_map(&map);
+        assert_eq!(bindings.panel_name(), "alt-i");
+        let moved = KeyEvent::new(KeyCode::Char('i'), KeyModifiers::ALT);
+        let vacated = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
+        assert!(bindings.is_panel(&moved) && bindings.claims(&moved));
+        assert!(!bindings.is_panel(&vacated) && !bindings.claims(&vacated));
     }
 
     #[test]
