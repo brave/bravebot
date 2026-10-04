@@ -6953,7 +6953,9 @@ fn run_turn_animated(
             }
         }
 
-        let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| match message {
+        // A question that arrives once the work has been stopped is refused undrawn, by the
+        // wrapper below; see [`drain_worker_until_stopped`].
+        let mut handle = |message| match message {
             crate::remote_confirm::ToMain::Write(request) => {
                 let answer = crate::confirm::ask(terminal, &request);
                 // Ctrl-C at the prompt is the same request it is anywhere else in a turn: stop.
@@ -7183,7 +7185,14 @@ fn run_turn_animated(
                 failed,
                 reported,
             } => session.delegate_finished(id, note, failed, reported),
-        });
+        };
+        let carrying_on = drain_worker_until_stopped(
+            &from_worker,
+            Duration::ZERO,
+            &cancel,
+            &answer_tx,
+            &mut handle,
+        );
 
         // The worker dropped its senders, so the turn is over.
         if !carrying_on {
@@ -7373,6 +7382,79 @@ fn drain_worker(
             mpsc::TryRecvError::Disconnected => mpsc::RecvTimeoutError::Disconnected,
         });
     }
+}
+
+/// The refusal for a question the worker is blocked on, or `None` for a message that asks nothing.
+///
+/// The same answer an interrupt at that prompt gives: the question is declined and nothing is
+/// granted.
+fn refusal(message: &crate::remote_confirm::ToMain) -> Option<crate::remote_confirm::Reply> {
+    use crate::remote_confirm::{Reply, ToMain};
+    use bravebot_agent::confirm::{CallDecision, Decision, RunDecision, WriteDecision};
+    Some(match message {
+        ToMain::Write(_) => Reply::Write(WriteDecision::reject()),
+        ToMain::Run(_) => Reply::Run(RunDecision::reject()),
+        ToMain::ReadOutput(_) => Reply::ReadOutput(Decision::Reject),
+        ToMain::Vet(_) => Reply::Vet(Decision::Reject),
+        ToMain::Fetch(_) => Reply::Fetch(Decision::Reject),
+        ToMain::Vouch(_) => Reply::Vouch(Decision::Reject),
+        ToMain::Exposure(_) => Reply::Exposure(Decision::Reject),
+        ToMain::Server(_) => Reply::Server(Decision::Reject),
+        ToMain::Manifest(_) => Reply::Manifest(Decision::Reject),
+        ToMain::ToolList(_) => Reply::ToolList(Decision::Reject),
+        ToMain::McpCall(_) => Reply::McpCall(CallDecision::reject()),
+        ToMain::Move(_) => Reply::Move(Decision::Reject),
+        ToMain::Ask(_) => Reply::Ask(Vec::new()),
+        ToMain::PromptRecorded(_)
+        | ToMain::Todos(_)
+        | ToMain::Written(_)
+        | ToMain::Spent(_)
+        | ToMain::Phase(_)
+        | ToMain::Narration(_)
+        | ToMain::Notice(_)
+        | ToMain::Streaming(_)
+        | ToMain::Composing(_)
+        | ToMain::Started(_)
+        | ToMain::Finished(_)
+        | ToMain::Movable(_)
+        | ToMain::Job(_)
+        | ToMain::CheckStarted(_)
+        | ToMain::CheckFinished
+        | ToMain::Quarantined(_)
+        | ToMain::Printed(_)
+        | ToMain::Returned(_)
+        | ToMain::Landed(_)
+        | ToMain::Interjected(_)
+        | ToMain::DelegateStarted(_)
+        | ToMain::DelegateFinished { .. }
+        | ToMain::ReportingFor(_) => return None,
+    })
+}
+
+/// [`drain_worker`] for a loop that draws the worker's questions, which refuses one without
+/// drawing it once the work has been stopped (INPUT-4).
+///
+/// Delegates share one confirmer and take turns at it, so when a person answers one delegate's
+/// prompt with a stop, the next delegate's question is already on its way. Drawn, it would put a
+/// prompt in front of someone who has just asked for the work to end, and stopping would take a
+/// press for each delegate waiting. Everything that is not a question goes to `handle` as usual.
+fn drain_worker_until_stopped(
+    from_worker: &mpsc::Receiver<crate::remote_confirm::ToMain>,
+    wait: Duration,
+    cancel: &Cancel,
+    answer_tx: &mpsc::Sender<crate::remote_confirm::Reply>,
+    mut handle: impl FnMut(crate::remote_confirm::ToMain),
+) -> bool {
+    drain_worker(from_worker, wait, |message| {
+        if cancel.is_cancelled()
+            && let Some(reply) = refusal(&message)
+        {
+            // A closed channel means the worker is already gone, as at every other reply.
+            let _ = answer_tx.send(reply);
+            return;
+        }
+        handle(message);
+    })
 }
 
 /// Whether a key press asks for whatever is in flight to stop, and nothing more.
@@ -8570,6 +8652,128 @@ mod tests {
             "what was already said was dropped on the floor"
         );
         assert!(!carrying_on, "the loop would have gone on waiting");
+    }
+
+    fn write_question(path: &str) -> crate::remote_confirm::ToMain {
+        crate::remote_confirm::ToMain::Write(bravebot_agent::confirm::WriteRequest {
+            path: path.into(),
+            contents: "body\n".into(),
+            existing: None,
+            diff: bravebot_agent::diff::Diff::compute("", "body\n"),
+            intent: bravebot_agent::confirm::Intent::Create,
+            untrusted: false,
+            remark: None,
+            credentials: Vec::new(),
+            may_always: false,
+            record: None,
+        })
+    }
+
+    fn fetch_question() -> crate::remote_confirm::ToMain {
+        crate::remote_confirm::ToMain::Fetch(bravebot_agent::confirm::FetchRequest {
+            url: "https://example.test/".into(),
+            host: "example.test".into(),
+        })
+    }
+
+    /// A worker blocked on a question takes the reply tagged for that kind of question and treats
+    /// any other as a protocol error, so each kind is declined in its own shape. A message that
+    /// asks nothing has no reply to give: inventing one would leave a stray answer in the channel
+    /// for the next question to read.
+    #[test]
+    fn a_withdrawn_question_is_declined_in_the_shape_of_its_own_kind() {
+        use crate::remote_confirm::{Reply, ToMain};
+        use bravebot_agent::confirm::{Decision, WriteDecision};
+
+        assert_eq!(
+            refusal(&write_question("notes.md")),
+            Some(Reply::Write(WriteDecision::reject()))
+        );
+        assert_eq!(
+            refusal(&fetch_question()),
+            Some(Reply::Fetch(Decision::Reject))
+        );
+        assert_eq!(
+            refusal(&ToMain::Ask(bravebot_core::ask::Asking::default())),
+            Some(Reply::Ask(Vec::new()))
+        );
+        assert_eq!(refusal(&ToMain::Streaming("text".into())), None);
+    }
+
+    /// The case INPUT-4 names: delegates share one confirmer, so when a stop answers the first
+    /// delegate's prompt the second's question is already queued. It is declined without being
+    /// drawn, and what the worker said besides a question still reaches the screen.
+    #[test]
+    fn a_question_queued_behind_a_stop_is_declined_and_never_drawn() {
+        use crate::remote_confirm::{Reply, ToMain};
+        use bravebot_agent::confirm::WriteDecision;
+
+        let (outbound, inbound) = std::sync::mpsc::channel();
+        let (answer_tx, answer_rx) = std::sync::mpsc::channel();
+        outbound.send(write_question("first.md")).expect("queued");
+        outbound.send(write_question("second.md")).expect("queued");
+        outbound
+            .send(ToMain::Narration("still talking".into()))
+            .expect("queued");
+
+        let cancel = Cancel::new();
+        let mut reached_the_screen = Vec::new();
+        let carrying_on =
+            drain_worker_until_stopped(&inbound, Duration::ZERO, &cancel, &answer_tx, |message| {
+                match message {
+                    ToMain::Write(request) => {
+                        reached_the_screen.push(request.path);
+                        // The press that answers this prompt with a stop.
+                        cancel.cancel();
+                    }
+                    ToMain::Narration(text) => reached_the_screen.push(text),
+                    other => panic!("unexpected message {other:?}"),
+                }
+            });
+
+        assert!(carrying_on, "the worker is still there");
+        assert_eq!(
+            reached_the_screen,
+            vec!["first.md", "still talking"],
+            "the second delegate's prompt was drawn after the stop"
+        );
+        assert_eq!(
+            answer_rx.try_recv(),
+            Ok(Reply::Write(WriteDecision::reject())),
+            "the second write was not declined"
+        );
+        assert!(
+            answer_rx.try_recv().is_err(),
+            "more than one answer went back for one withdrawn question"
+        );
+    }
+
+    /// Withdrawing has to wait for the stop. A question asked while nothing has been stopped is
+    /// the ordinary case, and declining it would refuse every write the turn makes.
+    #[test]
+    fn a_question_is_drawn_while_nothing_has_been_stopped() {
+        let (outbound, inbound) = std::sync::mpsc::channel();
+        let (answer_tx, answer_rx) = std::sync::mpsc::channel();
+        outbound.send(write_question("notes.md")).expect("queued");
+
+        let mut reached_the_screen = Vec::new();
+        drain_worker_until_stopped(
+            &inbound,
+            Duration::ZERO,
+            &Cancel::new(),
+            &answer_tx,
+            |message| {
+                if let crate::remote_confirm::ToMain::Write(request) = message {
+                    reached_the_screen.push(request.path);
+                }
+            },
+        );
+
+        assert_eq!(reached_the_screen, vec!["notes.md"]);
+        assert!(
+            answer_rx.try_recv().is_err(),
+            "a question nobody stopped was declined"
+        );
     }
 
     fn ctrl(c: char) -> KeyEvent {
