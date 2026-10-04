@@ -199,6 +199,10 @@
 .session-row.current .session-title,
 .bot-open .bot-name { font: var(--type-body-strong); }
 
+/* The more-actions control is laid over the title line. The title leaves room for it, so a long
+   one ends in its ellipsis before the control and nothing moves when the control appears. */
+.session-row .session-title { padding-right: calc(var(--hit) + var(--leo-spacing-s) - var(--leo-spacing-l)); }
+
 .session-pin,
 .fork-mark { flex: none; display: inline-flex; --leo-icon-size: var(--icon-meta); --leo-icon-color: var(--ink-tertiary); }
 .fork-icon { display: inline-flex; --leo-icon-size: var(--icon-meta); }
