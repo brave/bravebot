@@ -813,7 +813,17 @@ An acceptance carries an expiry, and lapses into a finding again when it passes.
 
 **Why.** An acceptance with no end is a finding that was deleted slowly.
 
-`verified-by: none`
+**What exists.** `Store::accept` in `crates/agent/src/findings.rs` takes the expiry as a required
+argument and writes the acceptance beside the record of findings, and `Store::open_at` reads the
+findings back without the ones a current acceptance covers. No command calls `accept` yet, and
+because a fingerprint is salted per run an acceptance applies only to findings made by the run
+it was made in.
+
+`verified-by: bravebot_agent::findings::an_acceptance_lapses_into_a_finding_when_its_expiry_passes`
+`verified-by: bravebot_agent::findings::an_acceptance_covers_only_the_finding_it_names`
+`verified-by: bravebot_agent::findings::an_acceptance_repeats_no_part_of_the_value`
+`verified-by: bravebot_agent::findings::an_acceptance_this_build_does_not_fully_understand_leaves_its_finding_open`
+`verified-by: bravebot_agent::incognito::no_acceptance_is_written_down`
 
 <a id="CRED-22"></a>
 ### CRED-22: the baseline is not writable by a turn
