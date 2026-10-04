@@ -170,8 +170,10 @@ is meant to trust, an inch above them.
 ### LAYER-6: what a message is comes from the record, not from its words
 
 A conversation holds messages composed rather than typed: a file somebody named, put in front of
-the planner as a user-role message, a watch that fired while no turn was running to notice it, and
-a prompt a front end sent on its own account rather than on anybody's instruction. Each is recorded
+the planner as a user-role message, a watch that fired while no turn was running to notice it, a
+prompt a front end sent on its own account rather than on anybody's instruction, and the messages
+the agent writes for the planner alone: a tool result sent as prose, the note a resume adds and the
+summary a compaction leaves. Each is recorded
 with a tag saying which it is, the tag rides beside the message rather than inside it so that no
 part of it reaches a backend, and a surface drawing the conversation back decides what to draw from
 the tag. Reading the words to decide instead is a
@@ -208,12 +210,15 @@ turn it is the context that turn worked from.
 `verified-by: bravebot_agent::conversation::a_message_the_agent_composed_is_recorded_as_one`
 `verified-by: bravebot_agent::conversation::the_tag_is_not_part_of_what_the_planner_is_sent`
 `verified-by: bravebot_agent::conversation::a_record_written_before_the_tag_still_reads`
+`verified-by: bravebot_agent::conversation::a_typed_prompt_that_opens_like_a_note_is_still_a_prompt`
+`verified-by: bravebot_agent::conversation::a_typed_prompt_that_opens_like_a_note_is_a_place_to_cut`
 `verified-by: bravebot_ui_bridge::wire::a_message_the_agent_composed_crosses_as_a_tag_and_no_prose`
 `verified-by: bravebot_ui_bridge::wire::a_prompt_a_front_end_composed_crosses_as_a_tag_and_no_prose`
 `verified-by: bravebot_ui_bridge::wire::a_front_end_may_name_its_own_tag_and_none_of_the_agents`
 `verified-by: bravebot_tui::state::a_replayed_composed_message_is_drawn_as_the_message_it_was`
 `verified-by: bravebot_ui_bridge::fork::a_file_the_agent_put_in_front_of_the_planner_is_not_a_prompt`
 `verified-by: bravebot_ui_bridge::fork::a_prompt_that_reads_like_a_composed_message_is_still_where_the_cut_lands`
+`verified-by: bravebot_ui_bridge::fork::a_typed_prompt_that_opens_like_a_note_is_a_fork_point`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which loads the real transcript module and asserts that a tagged message is drawn from its fields, that a typed prompt imitating one, the app's own house-keeping included, is drawn as the prompt somebody typed and keeps the ordinal a fork of it cuts on, that a tag the build does not know is quoted rather than dropped, and that the two places counting prompts count the same list; make check-ui and the Front end CI job both run it, while the governs list above holds the file's existence to make check-spec)`
 
 ## Open questions

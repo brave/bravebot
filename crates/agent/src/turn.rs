@@ -4771,12 +4771,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         // A result answers the call it belongs to by id where the round replayed calls at
                         // all. Where it did not, the result is a plain message, as everything here was
                         // before: a conversation may hold both shapes, so long as no call goes unanswered.
-                        conversation.push(
-                            match call.id.as_deref().filter(|_| replayed.is_some()) {
-                                Some(id) => Message::tool_result(id, body),
-                                None => Message::user(body),
-                            },
-                        );
+                        // The prose one is tagged, so nothing has to recognise it by the words it opens with.
+                        match call.id.as_deref().filter(|_| replayed.is_some()) {
+                            Some(id) => conversation.push(Message::tool_result(id, body)),
+                            None => conversation
+                                .push_composed(Message::user(body), Composed::ToolResult),
+                        }
                         if let Some(cancelled) = cancellation {
                             attach_vetted_pictures(&mut policy, conversation, &mut attached);
                             return Err(TurnError::Cancelled {
