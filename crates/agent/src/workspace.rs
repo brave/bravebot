@@ -1760,6 +1760,26 @@ impl Workspace {
         )
     }
 
+    /// The same bytes as [`Workspace::peek_labelled_for_review`], and again labelled as the trust
+    /// map holds the path, for the credential scan of a write.
+    ///
+    /// One read, two labels, so the diff somebody approves and the pre-image the scan places a
+    /// value in are of the same version. The first is the pessimistic one for the review; the
+    /// second is what [`bravebot_core::policy::Policy::scan_a_write`] reads the pre-image through,
+    /// where a path nobody vouched for comes back untrusted and the gate there refuses it.
+    pub fn peek_labelled_for_write<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        relative: &str,
+    ) -> (Labelled<String>, Labelled<String>) {
+        let text = self.peek_for_review(relative).unwrap_or_default();
+        let label = policy.label_in_force(&self.trust_key(relative));
+        (
+            Labelled::new(text.clone(), read_label()),
+            Labelled::new(text, label),
+        )
+    }
+
     /// How long ago a workspace file was last written, for telling a reviewer what they are
     /// about to lose.
     ///
