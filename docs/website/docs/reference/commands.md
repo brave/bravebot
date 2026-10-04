@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Slash commands
-description: The twenty-four commands the interface acts on itself, and the rules every one of them shares.
+description: The twenty-seven commands the interface acts on itself, and the rules every one of them shares.
 ---
 
 # Slash commands
@@ -28,6 +28,8 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
 | `/jobs` | `[stop <name> [<delegate>]]` | List this turn's background jobs, and stop one by its name |
 | `/panel` | | Show or hide the info panel beside the transcript |
+| `/pr` | `[<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
+| `/issue` | `[<url> \| clear]` | Say which issue this session is for, show it, or clear it |
 | `/checkouts` | `[remove <n>]` | List the checkouts delegates kept, and remove one by its number |
 | `/manifest` | `<task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
 | `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
@@ -565,6 +567,15 @@ refused. Typed while a turn runs with nothing waiting, it is carried out at once
 for the turn to end. Renaming leaves `/undo` nothing to go back to, including the turn running when
 you renamed.
 
+## `/issue` and `/pr`
+
+`/issue <url>` and `/pr <url>` say which issue and which pull request the session is for, and the
+[info panel](../using/sessions.md#telling-sessions-apart) shows both. Each takes one `http` or `https`
+link with a host: a value with a space, a line break, an escape, a character outside ASCII or
+another scheme sets nothing and is not repeated back. Alone, each says what is set, and `clear` removes that one. The session record is
+rewritten at once, so a resume brings the links back, and nothing a turn reads includes them. Typed
+while a turn runs with nothing waiting, each is carried out at once, as `/rename` is.
+
 ## `/compact`
 
 Summarises the conversation so far and keeps the recent part, on demand, at any size, without
@@ -734,8 +745,8 @@ it and the picture or file goes with it.
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. The exception is a line of the same command already waiting, which they wait behind, so
-`/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/rename`, `/forget-trust`,
-`/theme <name>` and `/effort <level>` change only what the session keeps, and are carried out as you
+`/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/rename`, `/issue`, `/pr`,
+`/forget-trust`, `/theme <name>` and `/effort <level>` change only what the session keeps, and are carried out as you
 type them when nothing is waiting. Behind a waiting line they wait too, so `/rename` typed after a
 waiting `/clear` names the new session. What they say is drawn under the turn and joins the
 transcript once the turn has ended. `/theme` and `/effort` alone open a picker, so they wait.

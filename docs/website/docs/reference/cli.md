@@ -529,6 +529,8 @@ are in [Reading the transcript](../using/transcript.md#the-scroller).
 | `/goal [<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch [stop <n>]` | List the files this session is watching, and stop one by its number |
 | `/panel` | Show or hide the info panel beside the transcript |
+| `/pr [<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
+| `/issue [<url> \| clear]` | Say which issue this session is for, show it, or clear it |
 | `/manifest <task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
 | `/export [path]` | Export the session transcript to a markdown file |
 | `/undo` | Rewind one turn and put back the files it wrote |

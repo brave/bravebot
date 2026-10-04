@@ -212,6 +212,8 @@ The title says which session a terminal holds. The info panel says the rest: pre
 
 - the session's name, its directory and its branch,
 - the goal, while one stands,
+- the pull request and the issue the session is for, once you give them with `/pr` and `/issue`,
+  each cut from the left where it is long so the number at the end stays in view,
 - how full the context is, the cache hit rate, and what the last turn read from the cache and wrote
   into it, as two figures,
 - the plan, which stays after the turn ends. Where it runs past the bottom it keeps the task in
@@ -225,6 +227,16 @@ to open it on a narrower one leaves a note, and narrowing the terminal while the
 it until the terminal is wide again. A press to close it works at any width. Whether it was left open is kept in
 `~/.bravebot/panel` for the next session. The panel draws only what you typed, the plan, the
 session's own counters and where the session runs, and never a reply or anything a tool returned.
+
+```
+/issue https://github.com/brave/bravebot/issues/1267
+/pr https://github.com/brave/bravebot/pull/1
+```
+
+Each takes one `http` or `https` link with a host and refuses anything else, a link with a space, a
+line break, an escape or a character outside ASCII in it included. Alone, each says what is set, and `/issue clear` or `/pr clear` removes
+one. Both are written to the session record at once, a resume brings them back, and `/clear` starts
+a session with neither.
 
 ## Starting over
 

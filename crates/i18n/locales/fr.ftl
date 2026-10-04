@@ -1602,6 +1602,8 @@ command-config = Choisir le mode d'édition de la zone de saisie
 command-add-dir = Ouvrir un autre répertoire, et l'approuver pour cette session
 command-cd = Travailler désormais dans un autre répertoire, et l'approuver pour cette session
 command-rename = Appeler cette conversation autrement
+command-issue = Dire pour quel ticket est cette session, l'afficher ou l'effacer
+command-pr = Dire pour quelle pull request est cette session, l'afficher ou l'effacer
 command-compact = Résumer la conversation jusqu'ici, en gardant la partie récente
 command-btw = Demander quelque chose à côté du travail, sans le mettre dans la conversation
 command-clear = Démarrer une nouvelle session ici, celle-ci restant reprenable
@@ -1640,6 +1642,22 @@ session-resumed = session reprise : { $title }
 session-renamed = renommée en { $title }
 session-rename-needs-a-name = /rename demande un nom, comme /rename le bug de l'analyseur
 session-rename-needs-something = /rename demande un nom qui contienne quelque chose
+# Ce que répondent /issue et /pr. Une valeur refusée n'est pas répétée, car elle peut contenir un
+# caractère de contrôle.
+session-issue-is = cette session est pour { $url }. /issue clear l'enlève
+session-pull-request-is = la pull request de cette session est { $url }. /pr clear l'enlève
+session-issue-none = aucun ticket n'est fixé. /issue <url> en fixe un
+session-pull-request-none = aucune pull request n'est fixée. /pr <url> en fixe une
+session-issue-set = cette session est pour { $url }
+session-pull-request-set = la pull request de cette session est { $url }
+session-issue-cleared = le ticket est effacé
+session-pull-request-cleared = la pull request est effacée
+session-issue-refused =
+    /issue prend un seul lien http ou https sur une ligne, en ASCII sans espace, comme
+    /issue https://github.com/brave/bravebot/issues/1. Rien n'a été fixé
+session-pull-request-refused =
+    /pr prend un seul lien http ou https sur une ligne, en ASCII sans espace, comme
+    /pr https://github.com/brave/bravebot/pull/1. Rien n'a été fixé
 session-cleared = effacée : une nouvelle session, la précédente restant reprenable
 session-rewound = session rembobinée avant le tour { $turn }
 session-rewound-partly =
@@ -2165,6 +2183,10 @@ panel-session = Session
 panel-goal = Objectif
 panel-context = Contexte
 panel-plan = Plan
+panel-links = Liens
+# Les lignes de la section Liens du panneau d'informations, chacune suivie du lien.
+panel-pull-request = Pull request
+panel-issue = Ticket
 panel-cache-read = cache lu { $tokens }
 panel-cache-written = cache écrit { $tokens }
 panel-more = +{ $count } de plus
