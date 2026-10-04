@@ -213,7 +213,7 @@ function ArchivedRow({
         <span className="bot-name">{bot.name}</span>
         {asking ? (
           // Keep the retention notice visible and wrapping at narrow sidebar widths.
-          <span className="bot-warning">Deletes local memory history. Project files and conversations stay.</span>
+          <span className="bot-warning">Deletes local memory history. Project files, conversations and the home folder stay.</span>
         ) : (
           <span className="bot-purpose" data-tooltip={bot.purpose}>{bot.purpose}</span>
         )}
@@ -227,7 +227,7 @@ function ArchivedRow({
             kind="outline"
             size="tiny"
             className="bot-delete bot-delete-armed"
-            data-tooltip={`Delete ${bot.name} and its local memory history for good. Project files and conversations are kept.`}
+            data-tooltip={`Delete ${bot.name} and its local memory history for good. Project files, conversations and the home folder are kept.`}
             onClick={onDelete}
           >
             Delete
@@ -248,7 +248,7 @@ function ArchivedRow({
             kind="plain-faint"
             size="tiny"
             className="bot-delete"
-            data-tooltip={`Delete ${bot.name} for good. Local memory history is deleted. Project files and conversations are kept.`}
+            data-tooltip={`Delete ${bot.name} for good. Local memory history is deleted. Project files, conversations and the home folder are kept.`}
             onClick={onAsk}
           >
             Delete
