@@ -41,7 +41,7 @@ import {
   consolidationPrompt,
   AFTER_COMPACTION,
 } from './bots'
-import { isBotModel, withoutBot, type Bot } from '../shared/bots'
+import { botFolders, isBotModel, withoutBot, type Bot } from '../shared/bots'
 import { isSessionId, parseForkResult } from '../shared/forks'
 import { rootForSession, forgetRoot, list, noteRoot, open as openInApp, preview, search, chooseAttachments, attachmentPaths } from './files'
 import { isSubpath } from '../shared/files'
@@ -705,9 +705,15 @@ app.whenReady().then(() => {
   // two figures that decide when a bot is reminded to write are reports of what the agent did, are
   // taken off its answers and off the filesystem below, and have no way in from here.
 
+  // A bot's home and the folders it has worked in are offered as the recents are: this process
+  // composed them, so a window may open a session there. Whether a bot's turn may run there is
+  // still `worksIn`'s, in `sendBotTurn`.
   ipcMain.handle('bravebot:bots:read', () => {
     const all = bots()
-    for (const each of all) ensureHome(each)
+    for (const each of all) {
+      ensureHome(each)
+      offerDirectories(botFolders(each))
+    }
     return all
   })
 
@@ -728,6 +734,7 @@ app.whenReady().then(() => {
     // agent does, and `saveFormBot` keeps the name it answers with.
     const next = await saveFormBot(form, bridge ? (method, params) => bridge!.request(method, params) : null)
     ensureHome(next)
+    offerDirectories(botFolders(next))
     return next
   })
 
