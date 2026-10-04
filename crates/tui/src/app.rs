@@ -6471,6 +6471,9 @@ fn goal_check_key(session: &mut Session, key: KeyEvent) {
     // For the reason [`one_request_key`] does it: the press is answered here, and the offer to
     // leave lives for one press wherever that press lands.
     session.cleared_by_interrupt = false;
+    // The press that stops a turn is not a character, so an instruction still waiting for a key
+    // does not survive it (INPUT-24), as in [`stop_what_is_running`].
+    session.abandon_half_typed();
 
     if session.goal().is_some() {
         session.clear_goal();
@@ -12011,6 +12014,34 @@ mod tests {
         let mut session = working();
         stop_what_is_running(&mut session, &Cancel::new());
         assert_eq!(session.half_typed(), None, "stopping the turn");
+    }
+
+    /// The press that stops a goal check is not a character either, so it abandons an instruction
+    /// still waiting for a key, with the goal armed or already off.
+    #[test]
+    fn stopping_a_goal_check_abandons_an_instruction_still_waiting_for_a_key() {
+        for stopping in [ctrl('c'), key(KeyCode::Esc)] {
+            for goal in [true, false] {
+                let mut session = having_sent(&["first question"]);
+                session.choose_editing(crate::vim::Editing::Vi);
+                session.begin_aside();
+                if goal {
+                    session.start_goal("cargo test exits 0".to_string());
+                }
+                // Escape leaves INSERT, and `d` then waits for a motion.
+                goal_check_key(&mut session, key(KeyCode::Esc));
+                goal_check_key(&mut session, key(KeyCode::Char('d')));
+                assert_eq!(session.half_typed(), Some("d"), "{stopping:?}");
+
+                goal_check_key(&mut session, stopping);
+
+                assert_eq!(
+                    session.half_typed(),
+                    None,
+                    "{stopping:?} left the instruction standing (goal armed: {goal})"
+                );
+            }
+        }
     }
 
     /// A session in NORMAL mode over a paragraph, which is what gives the row keys somewhere to go.
