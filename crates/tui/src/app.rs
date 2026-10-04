@@ -11255,7 +11255,8 @@ mod tests {
     }
 
     /// What a turn's loop holds beside the session, where a test reads none of it: a record that
-    /// is never written, and no home to keep an answer in.
+    /// is never written, and no home to keep an answer in. A `/rename` through it still makes the
+    /// store's directory for `/work`, so a test that renames runs in `in_isolated_profile`.
     fn nothing_beside<R>(press: impl FnOnce(&mut Beside<'_>) -> R) -> R {
         let root = std::path::Path::new("/work");
         let mut stored = bravebot_session::sessions::Handle::begin(
@@ -16545,6 +16546,9 @@ mod tests {
     /// nothing the turn does reads the name. What it says is held under the turn.
     #[test]
     fn a_session_renamed_mid_turn_is_renamed_as_it_is_typed() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
         let mut session = a_turn_running_on("first");
         let transcript = session.transcript.len();
         let root = std::path::Path::new("/work");
@@ -16584,6 +16588,9 @@ mod tests {
     /// put that name back.
     #[test]
     fn a_session_renamed_mid_turn_gives_up_the_running_turns_rewind_point() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
         let mut session = a_turn_running_on("first");
         session.open_rewind_point(a_point_before(0), "first".to_string());
 
@@ -16628,6 +16635,9 @@ mod tests {
     /// rename is done as it is typed, so there is nothing to stop the turn for.
     #[test]
     fn ctrl_enter_on_a_rename_mid_turn_hurries_nothing() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
         let mut session = a_turn_running_on("first");
         let root = std::path::Path::new("/work");
         let mut stored = bravebot_session::sessions::Handle::begin(
@@ -19054,8 +19064,10 @@ mod tests {
             );
         }
 
-        let root = crate::testutil::scratch_dir("bravebot-app-rewind-cache");
-        let _ = std::fs::remove_dir_all(&root);
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-rewind-cache");
         std::fs::create_dir_all(&root).expect("create");
         let workspace = Workspace::new(&root).expect("a workspace");
         let mut trust = TrustStore::new(&root);
@@ -19190,8 +19202,6 @@ mod tests {
             None,
             "a rewind in a resumed session put back a cache figure the previous process measured"
         );
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// `/rename` gives up every rewind point and then writes the record, so the session it wrote
@@ -19204,8 +19214,10 @@ mod tests {
         use bravebot_aichat::protocol::Message;
         use bravebot_session::sessions::{self, Standing};
 
-        let root = crate::testutil::scratch_dir("bravebot-app-rewind-rename");
-        let _ = std::fs::remove_dir_all(&root);
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-rewind-rename");
         std::fs::create_dir_all(&root).expect("create");
         let workspace = Workspace::new(&root).expect("a workspace");
         let mut trust = TrustStore::new(&root);
@@ -19298,8 +19310,6 @@ mod tests {
             "the rewind put back the name the session had before it was renamed"
         );
         assert_eq!(after.turns, 1, "the turn left the record with the rewind");
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// The bare word is the list, which is the surface the command exists for: seeing what a
@@ -20969,7 +20979,10 @@ mod tests {
                 }],
             );
         }
-        let root = crate::testutil::scratch_dir("reopened-history-rewind");
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("reopened-history-rewind");
         std::fs::create_dir_all(&root).unwrap();
         let workspace = Workspace::new(&root).unwrap();
         let mut trust = TrustStore::new(&root);
@@ -21064,10 +21077,6 @@ mod tests {
             e.speaker,
             crate::state::Speaker::Failure | crate::state::Speaker::Stopped
         )));
-        if let Some(directory) = sessions::project_directory(&root) {
-            std::fs::remove_dir_all(directory).unwrap();
-        }
-        std::fs::remove_dir_all(root).unwrap();
     }
 }
 

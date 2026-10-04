@@ -2,10 +2,11 @@
 
 use std::path::PathBuf;
 
+const CHILD_TEST: &str = "BRAVEBOT_SESSION_TEST";
+
 /// Run each test in its own process so profile variables never affect parallel tests.
 /// The parent owns cleanup, including when a child test panics.
 pub fn in_isolated_profile() -> bool {
-    const CHILD_TEST: &str = "BRAVEBOT_SESSION_TEST";
     let thread = std::thread::current();
     let name = thread.name().expect("a named test thread");
     if std::env::var(CHILD_TEST).as_deref() == Ok(name) {
@@ -44,6 +45,10 @@ pub fn in_isolated_profile() -> bool {
 
 /// Projects share the child's profile lifetime, including cleanup after a panic.
 pub fn project(name: &str) -> PathBuf {
+    assert!(
+        std::env::var_os(CHILD_TEST).is_some(),
+        "project({name:?}) outside in_isolated_profile would be in the person's home"
+    );
     bravebot_agent::home::profile()
         .unwrap()
         .join("projects")

@@ -2068,6 +2068,7 @@ pub fn fork(project: &Path, source_id: &str) -> Option<Record> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_profile::in_isolated_profile;
 
     /// The name is printed on the way out and pasted into a command, so it has to be the shape a
     /// person recognises as an id and nothing else. It used to be the time and the process id.
@@ -2845,6 +2846,9 @@ mod tests {
     fn a_record_says_which_build_wrote_it() {
         const LATER: &str = "0.0.0-test+1111111";
 
+        if !in_isolated_profile() {
+            return;
+        }
         let root = an_empty_project("bravebot-session-build-stamp");
 
         let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
@@ -2865,8 +2869,6 @@ mod tests {
             Some(LATER),
             "the record names the build that wrote the turns before the resume"
         );
-
-        forget_the_project(&root);
     }
 
     /// Resuming on different code is a caveat on the transcript above it, exactly as resuming on
@@ -2891,6 +2893,9 @@ mod tests {
     /// reason the build stamp is taken from the program resuming.
     #[test]
     fn a_record_says_which_front_end_wrote_it() {
+        if !in_isolated_profile() {
+            return;
+        }
         let root = an_empty_project("bravebot-session-front-stamp");
 
         let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
@@ -2911,8 +2916,6 @@ mod tests {
             Some("desktop"),
             "the record names the front end that wrote the turns before the resume"
         );
-
-        forget_the_project(&root);
     }
 
     /// Resuming in the other surface is a caveat on the transcript above it, exactly as resuming
@@ -3360,29 +3363,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// An empty project, and an empty store for it.
-    ///
-    /// The store is under `~/.bravebot` rather than under the project, so removing the project
-    /// leaves the records behind and the next run of the test counts them too. Cleared at both
-    /// ends: at the start so a run that was killed does not fail the next one, and at the end so
-    /// a checkout is not left with test records in the picker.
+    /// An empty project in the profile [`in_isolated_profile`] made, which is removed with the
+    /// records written about it whether or not the test passes.
     fn an_empty_project(name: &str) -> PathBuf {
-        let root = crate::testutil::scratch_dir(name);
-        forget_the_project(&root);
+        let root = crate::test_profile::project(name);
         std::fs::create_dir_all(&root).expect("create");
         root
     }
 
     /// A stamp shaped like the one a front end passes in: a version and the commit behind it.
     const A_BUILD: &str = "0.0.0-test+0000000";
-
-    /// Remove a test project and every record written about it.
-    fn forget_the_project(root: &Path) {
-        let _ = std::fs::remove_dir_all(root);
-        if let Some(store) = project_directory(root) {
-            let _ = std::fs::remove_dir_all(store);
-        }
-    }
 
     /// Write a plain turn session down, so a run recorded beside it has something to be beside.
     ///
@@ -3434,6 +3424,9 @@ mod tests {
     /// picker would have to ask which half of it Enter was about.
     #[test]
     fn a_manifest_run_is_recorded_apart_from_the_session() {
+        if !in_isolated_profile() {
+            return;
+        }
         let root = an_empty_project("bravebot-session-manifest-run");
 
         let mut session = Handle::begin(&root, Front::Terminal, A_BUILD);
@@ -3467,14 +3460,15 @@ mod tests {
             "the plan is not in the record: {}",
             stored.describe()
         );
-
-        forget_the_project(&root);
     }
 
     /// The other half of the same clause, and the reason for splitting the records at all: a
     /// conversation with a manifest run in it must not become unresumable.
     #[test]
     fn a_session_that_started_a_run_can_still_be_resumed() {
+        if !in_isolated_profile() {
+            return;
+        }
         let root = an_empty_project("bravebot-session-manifest-resumable");
 
         let mut session = Handle::begin(&root, Front::Terminal, A_BUILD);
@@ -3501,8 +3495,6 @@ mod tests {
             !row.manifest,
             "the picker would refuse Enter on the session"
         );
-
-        forget_the_project(&root);
     }
 
     /// A run the person stopped has nothing in it to read, so it leaves nothing, exactly as it
@@ -3510,6 +3502,9 @@ mod tests {
     /// rows whose whole content is that somebody changed their mind.
     #[test]
     fn a_cancelled_run_leaves_no_record() {
+        if !in_isolated_profile() {
+            return;
+        }
         let root = an_empty_project("bravebot-session-manifest-cancelled");
 
         let cancelled = Err(bravebot_agent::TurnError::Cancelled { attempts: None });
@@ -3524,15 +3519,14 @@ mod tests {
             .is_none()
         );
         assert!(list(&root).is_empty(), "a stopped run was written down");
-
-        forget_the_project(&root);
     }
 
     #[test]
     fn forking_a_manifest_session_is_refused() {
-        let root = crate::testutil::scratch_dir("bravebot-fork-manifest");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("create");
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-fork-manifest");
 
         let record = Record {
             id: "manifest-sess".to_string(),
@@ -3556,15 +3550,14 @@ mod tests {
         std::fs::write(&path, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
 
         assert!(fork(&root, "manifest-sess").is_none());
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn truncating_an_audit_log_removes_events_from_undone_turns() {
-        let root = crate::testutil::scratch_dir("bravebot-audit-truncate");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("create");
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-audit-truncate");
 
         let handle = Handle::begin(&root, Front::Terminal, A_BUILD);
         let stamped = crate::audit::Stamped {
@@ -3588,17 +3581,16 @@ mod tests {
         assert_eq!(audit_after.len(), 1);
         assert!(audit_after.contains_key(&1));
         assert!(!audit_after.contains_key(&2));
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A rewind past a session's only turn leaves a conversation nobody can resume into anything,
     /// so the record goes rather than standing in the list as a row with nothing behind it.
     #[test]
     fn discarding_a_record_leaves_nothing_to_resume() {
-        let root = crate::testutil::scratch_dir("bravebot-discard-unwritten");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("create");
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-discard-unwritten");
 
         let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
         let empty = bravebot_agent::Conversation::new().snapshot();
@@ -3643,17 +3635,16 @@ mod tests {
             handle.title().is_empty(),
             "the undone turn still names the session"
         );
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A name somebody chose outlives the turn that was rewound: it was not the turn's to give, so
     /// dropping it would make the next prompt rename a session that had already been named.
     #[test]
     fn discarding_keeps_a_name_chosen_before_the_turn() {
-        let root = crate::testutil::scratch_dir("bravebot-discard-renamed");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("create");
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-discard-renamed");
 
         let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
         assert!(handle.rename("release audit"), "the name was refused");
@@ -3661,8 +3652,6 @@ mod tests {
         handle.discard_unwritten("release audit");
 
         assert_eq!(handle.title(), "release audit");
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// The lexical check on `..` says nothing about where a directory inside the tree actually
