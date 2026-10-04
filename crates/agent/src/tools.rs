@@ -7363,7 +7363,16 @@ fn spawn_agent<S: Sink, R: Reporter>(
         let made = match state {
             None => None,
             Some(state) => match tools.workspace.checkout_for(policy, state, id) {
-                Ok(made) => Some(made),
+                Ok(made) => {
+                    if let Some(checkout) = made.checkout() {
+                        crate::workspace::record_checkout(
+                            policy.sink(),
+                            crate::workspace::Happened::Made,
+                            checkout.path(),
+                        );
+                    }
+                    Some(made)
+                }
                 Err(refusal) => {
                     // Said as the definition's, since the call that met the refusal may not have
                     // asked.

@@ -23662,6 +23662,19 @@ fn run_in_a_repository(
     received: &MockRequests,
     prompt: &str,
 ) -> (Vec<String>, RecordingConfirmer) {
+    let (asked, confirmer, _) =
+        run_in_a_repository_recording(workspace, home, endpoint, received, prompt);
+    (asked, confirmer)
+}
+
+/// [`run_in_a_repository`] that also hands back the trail the turn recorded.
+fn run_in_a_repository_recording(
+    workspace: &Workspace,
+    home: &std::path::Path,
+    endpoint: &str,
+    received: &MockRequests,
+    prompt: &str,
+) -> (Vec<String>, RecordingConfirmer, RecordingSink) {
     let config = config_for(endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -23678,7 +23691,21 @@ fn run_in_a_repository(
         trust,
     )
     .expect("turn runs");
-    (every_request(received), confirmer)
+    (every_request(received), confirmer, sink)
+}
+
+/// The checkout events a trail holds, each with the run it is attributed to, as the trail words
+/// them.
+fn checkout_events(sink: &RecordingSink) -> Vec<(Option<String>, String)> {
+    sink.recorded()
+        .filter_map(|(from, event)| match event {
+            Event::GatePassed {
+                gate: "checkout",
+                detail,
+            } => Some((from.map(|id| id.to_string()), detail.clone())),
+            _ => None,
+        })
+        .collect()
 }
 
 /// CHECKOUT-1, CHECKOUT-7. A delegate asked to work in a checkout writes there, the working
@@ -24088,6 +24115,180 @@ fn a_checkout_nothing_was_done_in_is_removed_when_its_delegate_ends() {
         .map(|entries| entries.count())
         .unwrap_or(0);
     assert_eq!(entries, 0, "the repository still lists the checkout");
+}
+
+/// CHECKOUT-19. A checkout made for a delegate and removed when it ends, because nothing was done
+/// in it, is two events in the trail with the checkout's path, the same in both. The turn made it,
+/// so neither carries a delegate's number.
+#[test]
+fn the_trail_records_a_checkout_made_and_removed_with_its_path() {
+    let scratch = Scratch::new("checkout-trail-removed");
+    let home = Scratch::new("checkout-trail-removed-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAVE-A-DELEGATE-LOOK-TRAILED",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"LOOK-TRAILED","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "LOOK-TRAILED",
+            vec![
+                tool_request("read_file", r#"{"path":"README"}"#),
+                reply_with("saw it"),
+            ],
+        ),
+    ]);
+    let (_, _, sink) = run_in_a_repository_recording(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "HAVE-A-DELEGATE-LOOK-TRAILED",
+    );
+
+    let events = checkout_events(&sink);
+    assert_eq!(events.len(), 2, "{events:?}");
+    let (made_by, made) = &events[0];
+    let (removed_by, removed) = &events[1];
+    let path = made.strip_prefix("made ").expect("the first is the making");
+    assert_eq!(removed, &format!("removed {path}"), "{events:?}");
+    assert!(
+        path.starts_with(&*home.path.canonicalize().unwrap().to_string_lossy()),
+        "the event names no checkout path: {path}"
+    );
+    assert_eq!(
+        made_by, &None,
+        "the turn's own making was numbered: {events:?}"
+    );
+    assert_eq!(removed_by, &None, "{events:?}");
+}
+
+/// CHECKOUT-19. A checkout the delegate wrote in is kept, so the trail holds the making and no
+/// removal, and the event carries neither the commit nor the checkout's number.
+#[test]
+fn the_trail_records_no_removal_for_a_checkout_that_was_kept_and_holds_neither_commit_nor_number() {
+    let scratch = Scratch::new("checkout-trail-kept");
+    let home = Scratch::new("checkout-trail-kept-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAVE-A-DELEGATE-WRITE-TRAILED",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"WRITE-TRAILED","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("the delegate wrote it"),
+            ],
+        ),
+        (
+            "WRITE-TRAILED",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"out.txt","contents":"from the delegate"}"#,
+                ),
+                reply_with("wrote it"),
+            ],
+        ),
+    ]);
+    let (_, _, sink) = run_in_a_repository_recording(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "HAVE-A-DELEGATE-WRITE-TRAILED",
+    );
+
+    let kept = checkouts_under(&home.path);
+    assert_eq!(kept.len(), 1);
+    let events = checkout_events(&sink);
+    assert_eq!(
+        events,
+        vec![(
+            None,
+            format!("made {}", kept[0].canonicalize().unwrap().display())
+        )]
+    );
+    let commit = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&scratch.path)
+        .output()
+        .expect("git runs");
+    let commit = String::from_utf8_lossy(&commit.stdout).trim().to_string();
+    assert!(
+        !events[0].1.contains(&commit[..7]),
+        "the commit is in the event: {events:?}"
+    );
+}
+
+/// CHECKOUT-19. A checkout a delegate's own run made for a delegate of its own is recorded under
+/// that run's number, as every other decision that run takes is. Without it a trail with two
+/// delegates making checkouts cannot say whose each was.
+#[test]
+fn a_checkout_a_delegate_made_is_recorded_under_that_delegates_number() {
+    let scratch = Scratch::new("checkout-trail-nested");
+    let home = Scratch::new("checkout-trail-nested-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-NESTED-LOOK",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"RELAY-THE-LOOK"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "RELAY-THE-LOOK",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"LOOK-DEEPER","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("relayed"),
+            ],
+        ),
+        (
+            "LOOK-DEEPER",
+            vec![
+                tool_request("read_file", r#"{"path":"README"}"#),
+                reply_with("saw it"),
+            ],
+        ),
+    ]);
+    let (_, _, sink) = run_in_a_repository_recording(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "DELEGATE-THE-NESTED-LOOK",
+    );
+
+    let events = checkout_events(&sink);
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert!(events[0].1.starts_with("made "), "{events:?}");
+    assert!(events[1].1.starts_with("removed "), "{events:?}");
+    assert_eq!(events[0].0.as_deref(), Some("d1"), "{events:?}");
+    assert_eq!(events[1].0.as_deref(), Some("d1"), "{events:?}");
 }
 
 /// CHECKOUT-21. After a turn that fanned out over two delegates in checkouts, the session lists

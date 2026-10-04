@@ -505,6 +505,31 @@ pub enum Unremoved {
     Stuck,
 }
 
+/// What happened to a checkout, as the trail words it (CHECKOUT-19).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Happened {
+    Made,
+    Removed,
+}
+
+/// Record in the trail that a checkout was made or removed (CHECKOUT-19).
+///
+/// The event holds the checkout's path. The sink attributes it as it does any decision, to the run
+/// whose gates it is recording, so a checkout a delegate's run made for a delegate of its own keeps
+/// that run's number. The commit and the checkout's number are left out: the trail holds gate
+/// names, capabilities, labels, paths, hosts and slot ids (TRACE-2). Both are in the session
+/// record, against the path.
+pub fn record_checkout<S: Sink + ?Sized>(sink: &mut S, happened: Happened, path: &Path) {
+    let did = match happened {
+        Happened::Made => "made",
+        Happened::Removed => "removed",
+    };
+    sink.emit(bravebot_core::event::Event::GatePassed {
+        gate: "checkout",
+        detail: format!("{did} {}", path.display()),
+    });
+}
+
 /// A checkout a delegate works in, as the driver recorded it (CHECKOUT-5, CHECKOUT-7).
 #[derive(Debug)]
 pub struct CheckoutInfo {

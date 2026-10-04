@@ -762,9 +762,15 @@ Each is an event with the checkout's path, and one a delegate's run took keeps t
 trail's fields are gate names, capabilities, labels, paths, hosts and slot ids
 ([TRACE-2](trace.md#TRACE-2)). The session record holds both against the path.
 
-Nothing builds this yet.
+Built for the making and the removal, whether the delegate's ending or `/checkouts remove` removed
+it. A checkout a delegate's own run made for a delegate of its own carries that run's number, and
+one the turn made carries none. Applying from a checkout is not built ([CHECKOUT-14](#CHECKOUT-14)),
+so nothing records it.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::the_trail_records_a_checkout_made_and_removed_with_its_path`
+`verified-by: bravebot_agent::turn::the_trail_records_no_removal_for_a_checkout_that_was_kept_and_holds_neither_commit_nor_number`
+`verified-by: bravebot_agent::turn::a_checkout_a_delegate_made_is_recorded_under_that_delegates_number`
+`verified-by: bravebot_tui::app::removing_a_checkout_is_recorded_with_its_path_and_a_kept_one_is_not`
 
 <a id="CHECKOUT-20"></a>
 ### CHECKOUT-20: a delegate in a checkout is offered no `lsp`
