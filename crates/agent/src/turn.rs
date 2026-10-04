@@ -2561,16 +2561,23 @@ fn collect_jobs<S: Sink, R: Reporter>(
             Some(Presentation::Quarantined(reference)) => {
                 policy.came_from_command(&reference.slot, &ended.line, conversation.quarantine());
                 // Where nobody is asked, nobody is shown it either, and the mode goes unnamed for
-                // the reason a run's result leaves it out.
+                // the reason a run's result leaves it out. Where somebody is asked, the account
+                // says how to stop being asked, as a run's result does (RUN-14), unless a record
+                // already stops the asking for this exact line: no prompt will return there for a
+                // person to answer, and read_output is then the whole of what is said.
                 let then = if reads_unasked {
-                    " and it comes back as text you can read"
+                    " and it comes back as text you can read."
+                } else if ended.covered_by_record {
+                    ": the user is shown it and decides."
                 } else {
-                    ": the user is shown it and decides"
+                    ": the user is shown it and decides. To stop being asked, a person vouching \
+                     for every stage of the exact command makes what it prints visible from \
+                     then on."
                 };
                 format!(
                     "{told} What it printed could not be shown to you: {}\n\nThis is about who \
                      answered for the command rather than about what it printed. To see it, call \
-                     read_output with the reference{then}.",
+                     read_output with the reference{then} To read a file, use read_file.",
                     reference.describe()
                 )
             }

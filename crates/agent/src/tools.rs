@@ -1748,6 +1748,10 @@ struct Job {
     /// it a planner that waited for a build would be told a second time, with the output gone,
     /// since the bytes go to whoever was handed them.
     reported: bool,
+    /// Whether a record of lines remembered past the session, and not an answer, stopped the
+    /// asking for this line (RUN-19). Decides whether the account of its finish may advise
+    /// vouching for the command (RUN-14).
+    covered_by_record: bool,
     /// The token the person sets to stop this job, read here at the turn's next step.
     stop: bravebot_core::cancel::JobStop,
     /// How long it had run when the person's stop was carried out, so a look after the account
@@ -1816,6 +1820,9 @@ pub struct Ended {
     /// Beside the sample for the reason a run's is: the cap bounds what a conversation holds and
     /// not what the program printed, so the middle has to exist somewhere a later call can reach.
     pub whole: Option<Labelled<String>>,
+    /// Whether a record of remembered lines stopped the asking for this line (RUN-19), in which
+    /// case the account of a quarantined output leaves out the advice about vouching (RUN-14).
+    pub covered_by_record: bool,
 }
 
 impl Jobs {
@@ -1841,6 +1848,7 @@ impl Jobs {
         label: bravebot_core::label::Label,
         file_authority: bravebot_core::file_authority::FileAuthority,
         file_revision: u64,
+        covered_by_record: bool,
     ) -> (String, bravebot_core::cancel::JobStop) {
         self.started += 1;
         let name = format!("job:{}", self.started);
@@ -1855,6 +1863,7 @@ impl Jobs {
                 label,
                 seen: crate::exec::Seen::default(),
                 reported: false,
+                covered_by_record,
                 stop: stop.clone(),
                 stopped_by_the_person: None,
             },
@@ -1913,6 +1922,7 @@ impl Jobs {
                 outcome,
                 printed: (!printed.is_empty()).then(|| Labelled::new(printed, job.label)),
                 whole,
+                covered_by_record: job.covered_by_record,
             });
         }
         finished
@@ -6427,6 +6437,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                     label,
                     authority.clone(),
                     started_revision,
+                    covered_by_record,
                 );
                 reporter.job(crate::report::JobEvent::Started {
                     name: name.clone(),
@@ -6503,6 +6514,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                     label,
                     authority.clone(),
                     started_revision,
+                    covered_by_record,
                 );
                 policy.record_handoff(&name, moved.after);
                 reporter.job(crate::report::JobEvent::Started {
@@ -8679,6 +8691,7 @@ mod tests {
                 Label::trusted_public(),
                 authority.clone(),
                 0,
+                false,
             );
             if changed {
                 // Even a same-label effect invalidates the earlier proof. No output is inspected.
@@ -8723,6 +8736,7 @@ mod tests {
                 Label::trusted_public(),
                 FileAuthority::new(TrustStore::new(&root)),
                 0,
+                false,
             );
             stops.push(stop);
         }
@@ -8796,6 +8810,7 @@ mod tests {
                 Label::trusted_public(),
                 FileAuthority::new(TrustStore::new(&root)),
                 0,
+                false,
             );
             let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
             while !jobs.running.get_mut(&name).unwrap().running.ended() {

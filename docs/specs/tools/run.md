@@ -600,6 +600,8 @@ is not inferring it: the planner still cannot vouch for anything, and a person s
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_does_not_ask_to_read_hands_back_a_reference_and_says_how_to`
 `verified-by: bravebot_agent::turn::what_a_job_printed_says_how_to_read_it_where_nobody_is_asked`
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_says_how_to_read_it_where_nobody_is_asked`
+`verified-by: bravebot_agent::turn::what_an_ended_job_printed_says_how_to_stop_being_asked`
+`verified-by: bravebot_agent::turn::what_an_ended_job_from_a_remembered_line_printed_says_nothing_about_vouching`
 
 <a id="RUN-15"></a>
 ### RUN-15: a pipeline may be left running, and the turn that started it ends it

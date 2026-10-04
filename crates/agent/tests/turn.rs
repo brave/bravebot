@@ -17758,6 +17758,136 @@ fn what_an_ended_job_printed_says_how_to_read_it_where_nobody_is_asked() {
     );
 }
 
+/// RUN-14: where somebody is asked, the account of an ended job whose output is quarantined says
+/// how to see it, how to stop being asked, and where a file is read.
+#[test]
+fn what_an_ended_job_printed_says_how_to_stop_being_asked() {
+    let scratch = Scratch::new("background-finish-asked-advice");
+    std::fs::write(scratch.path.join("notes.txt"), "SENTINEL-ASKED-PLUGH\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_until_job_1_finishes(tool_request(
+        "run",
+        r#"{"command":"cat notes.txt","background":true}"#,
+    ));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let body = sent
+        .iter()
+        .find(|body| body.contains("you started as job:1 has finished"))
+        .expect("the turn was never told the job ended");
+    let told = message_from(body, "you started as job:1 has finished");
+    assert!(
+        told.contains("call read_output with the reference: the user is shown it and decides."),
+        "the planner was not told how to see what the job printed: {told}"
+    );
+    assert!(
+        told.contains("vouching for every stage of the exact command"),
+        "the planner was not told what stops it being asked: {told}"
+    );
+    assert!(
+        told.contains("To read a file, use read_file."),
+        "the planner was not pointed at the tool that reads a file visibly: {told}"
+    );
+}
+
+/// RUN-14, RUN-19: no prompt returns for a line a record covers, so the account of its ended job
+/// says how to see the output and nothing about vouching.
+#[test]
+fn what_an_ended_job_from_a_remembered_line_printed_says_nothing_about_vouching() {
+    let scratch = Scratch::new("background-finish-remembered-advice");
+    let home = Scratch::new("background-finish-remembered-advice-home");
+    std::fs::write(
+        scratch.path.join("notes.txt"),
+        "SENTINEL-REMEMBERED-PLUGH\n",
+    )
+    .unwrap();
+
+    let mut first = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_and_record());
+    a_run_turn_remembering(
+        &scratch,
+        &home.path,
+        Some("the-first-session"),
+        r#"{"command":"cat notes.txt"}"#,
+        &mut first,
+    )
+    .expect("the turn runs");
+
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_until_job_1_finishes(tool_request(
+        "run",
+        r#"{"command":"cat notes.txt","background":true}"#,
+    ));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut later = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it")
+            .with_home(Some(home.path.clone()))
+            .remembering(Some("a-later-session".to_string())),
+        &mut bravebot_agent::Conversation::new(),
+        &mut later,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert!(
+        later
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| request.plan.display() != "cat notes.txt"),
+        "this test needs the record to have stopped the prompt for the job's line"
+    );
+    let sent: Vec<String> = received.try_iter().collect();
+    let body = sent
+        .iter()
+        .find(|body| body.contains("you started as job:1 has finished"))
+        .expect("the turn was never told the job ended");
+    let told = message_from(body, "you started as job:1 has finished");
+    assert!(
+        told.contains("call read_output with the reference"),
+        "the planner was not told how to see what the job printed: {told}"
+    );
+    assert!(
+        !told.contains("vouching for every stage"),
+        "the planner was pointed at a prompt that will not be drawn again: {told}"
+    );
+    assert!(
+        told.contains("To read a file, use read_file."),
+        "the planner was not pointed at the tool that reads a file visibly: {told}"
+    );
+}
+
 /// A release asked for with `read` and refused leaves the output behind the reference, and the
 /// planner is not told to ask for it the same way again. The confirmer here was given a mode that
 /// asks while the turn bypasses, which a caller must not do; it is the one way to make the release
