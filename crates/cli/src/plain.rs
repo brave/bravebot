@@ -728,11 +728,33 @@ fn opening_trust<R: BufRead, W: Write>(
 pub struct Prompting<R: BufRead, W: Write> {
     input: R,
     output: W,
+    /// What the person answered, by the question's key, for the rest of the session (ASK-8).
+    answers: Vec<(String, Answer)>,
 }
 
 impl<R: BufRead, W: Write> Prompting<R, W> {
     pub(crate) fn new(input: R, output: W) -> Self {
-        Self { input, output }
+        Self {
+            input,
+            output,
+            answers: Vec::new(),
+        }
+    }
+
+    /// What the person answered the last time this exact question was put to them, if it was.
+    fn recall_answer(&self, key: &str) -> Option<Answer> {
+        self.answers
+            .iter()
+            .find(|(asked, _)| asked == key)
+            .map(|(_, answer)| answer.clone())
+    }
+
+    /// Remember an answer, replacing any earlier one for the same question.
+    fn remember_answer(&mut self, key: String, answer: Answer) {
+        match self.answers.iter_mut().find(|(asked, _)| *asked == key) {
+            Some(slot) => slot.1 = answer,
+            None => self.answers.push((key, answer)),
+        }
     }
 
     /// Say something beside the work. A failed write is dropped: stderr closed means nobody is
@@ -1199,8 +1221,31 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
     /// options, and there is nothing here to move a cursor between rows with. Nothing typed is
     /// declining, which is a first-class answer, and so is the end of the input.
     fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
-        let mut answers = Vec::new();
-        for prompt in &asking.prompts {
+        // A planner that loops back over the same decision does not make the person restate it
+        // (ASK-8). Each settled question is said to have been answered already, so an answer
+        // reused silently is not mistaken for a question that was never put.
+        let known: Vec<Option<Answer>> = asking
+            .prompts
+            .iter()
+            .map(|prompt| self.recall_answer(&prompt.key))
+            .collect();
+        for (prompt, earlier) in asking.prompts.iter().zip(&known) {
+            if earlier.is_some() {
+                self.say(&t!(
+                    session_answered_already,
+                    question = shown(&prompt.question)
+                ));
+            }
+        }
+
+        let mut fresh = Vec::new();
+        for prompt in asking
+            .prompts
+            .iter()
+            .zip(&known)
+            .filter(|(_, earlier)| earlier.is_none())
+            .map(|(prompt, _)| prompt)
+        {
             self.say(&shown(&prompt.header));
             self.say(&shown(&prompt.question));
             for row in &prompt.rows {
@@ -1211,10 +1256,15 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             }
             let _ = write!(self.output, "{} ", t!(ask_own_words));
             let _ = self.output.flush();
-            answers.push(match self.line() {
+            fresh.push(match self.line() {
                 Some(typed) if !typed.trim().is_empty() => Answer::Typed(typed),
                 _ => Answer::Declined,
             });
+        }
+
+        let answers = bravebot_tui::ask::in_order(known, fresh);
+        for (prompt, answer) in asking.prompts.iter().zip(&answers) {
+            self.remember_answer(prompt.key.clone(), answer.clone());
         }
         answers
     }
@@ -1823,6 +1873,84 @@ mod tests {
         assert!(
             lines.contains("already logged in"),
             "the question does not say what the line spends: {lines}"
+        );
+    }
+
+    fn series_of(questions: &[(&str, &str)]) -> Asking {
+        bravebot_core::ask::asking(&bravebot_core::ask::Series::new(
+            questions
+                .iter()
+                .map(|(tag, sentence)| {
+                    bravebot_core::ask::Question::new(
+                        *tag,
+                        *sentence,
+                        vec![bravebot_core::ask::Choice::new("yes", None)],
+                        false,
+                    )
+                })
+                .collect(),
+        ))
+    }
+
+    /// A planner that loops back over the same decision does not make the person restate it
+    /// (ASK-8). The script holds one line, so a second question put to the reader would be
+    /// declined by the end of the input and the answers would differ.
+    #[test]
+    fn a_question_asked_again_in_a_session_in_lines_is_answered_from_memory() {
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"the first one\n".to_vec())),
+            Vec::new(),
+        );
+        let series = series_of(&[("Region", "Which region?")]);
+
+        let first = asking.ask_user(&series);
+        let before = asking.output.len();
+        let second = asking.ask_user(&series);
+
+        assert_eq!(first, vec![Answer::Typed("the first one".to_string())]);
+        assert_eq!(second, first, "the person was asked again");
+        let later = String::from_utf8(asking.output[before..].to_vec()).expect("text");
+        assert!(
+            later.contains(&t!(session_answered_already, question = "Which region?")),
+            "the reuse was not said: {later}"
+        );
+        assert!(
+            !later.contains(t!(ask_own_words)),
+            "the question was put to the person again: {later}"
+        );
+    }
+
+    /// A set where some questions are settled shows only the rest, and the answers keep the
+    /// places of the questions they belong to. Questions differing only in their tag are
+    /// different questions.
+    #[test]
+    fn a_series_with_some_questions_settled_puts_only_the_rest() {
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"east\nblue\n".to_vec())),
+            Vec::new(),
+        );
+        let first = asking.ask_user(&series_of(&[("Region", "Which?")]));
+        assert_eq!(first, vec![Answer::Typed("east".to_string())]);
+
+        let before = asking.output.len();
+        let both = asking.ask_user(&series_of(&[("Colour", "Which?"), ("Region", "Which?")]));
+
+        assert_eq!(
+            both,
+            vec![
+                Answer::Typed("blue".to_string()),
+                Answer::Typed("east".to_string())
+            ],
+            "the remembered answer lost its place or the tag was ignored"
+        );
+        let later = String::from_utf8(asking.output[before..].to_vec()).expect("text");
+        assert!(
+            later.contains("Colour"),
+            "the fresh question was not put: {later}"
+        );
+        assert!(
+            !later.contains("Region"),
+            "the settled question was put again: {later}"
         );
     }
 }

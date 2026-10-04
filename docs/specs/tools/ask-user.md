@@ -144,3 +144,5 @@ their tag, are different questions.
 `verified-by: bravebot_core::ask::two_series_holding_the_same_questions_in_a_different_order_have_different_keys`
 `verified-by: bravebot_tui::ask::a_series_answered_entirely_from_memory_asks_nothing`
 `verified-by: bravebot_tui::ask::remembered_answers_keep_their_places_beside_the_fresh_ones`
+`verified-by: bravebot_cli::plain::a_question_asked_again_in_a_session_in_lines_is_answered_from_memory`
+`verified-by: bravebot_cli::plain::a_series_with_some_questions_settled_puts_only_the_rest`
