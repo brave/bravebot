@@ -219,10 +219,12 @@ yourself with `/agent` is yours, so it works in your working tree and says so. A
 checkout keeps no [memory](#memory), so a definition with both keeps its memory only in a `/agent`
 turn, and bravebot says so when it loads the definition.
 
-A checkout shares its branches, tags and remote-tracking refs with your working tree and with every
-other checkout, as any git worktree does. A `git fetch` a delegate runs in one moves `origin/main`
-in your working tree too, and several fetching at once can fail. The planner and each delegate are
-told this, and the planner is told to have the fetch done once rather than by each delegate.
+A checkout shares its branches, tags, remote-tracking refs and stash with your working tree and with
+every other checkout, as any git worktree does. A `git fetch` a delegate runs in one moves
+`origin/main` in your working tree too, and several fetching at once can fail. A `git stash pop` in
+one can take an entry you stashed in your working tree. The planner and each delegate are told
+this. Each delegate is told not to use `git stash`, and the planner is told not to ask one to and to
+have the fetch done once rather than by each delegate.
 
 A checkout a delegate wrote in is kept, and the agent's reply names it by number with the paths the
 delegate typed for what it wrote. The agent brings those files back with

@@ -274,10 +274,12 @@ driver's own: two paths, a commit id, and the index of a tree the map trusts. No
 no ref under `refs/` changes. A person's own git, and a line a person approved running git, work in
 the checkout as in any worktree, and `git worktree list` shows it.
 
-Branches, tags and remote-tracking refs are in the common directory, so a checkout shares them with
-the working directory and with every other checkout. A `git fetch` in one updates a remote-tracking
-branch such as `upstream/main` in all of them, and fetches in several at once fail on each other's
-ref locks. [CHECKOUT-7](#CHECKOUT-7) says who is told.
+Branches, tags, remote-tracking refs and `refs/stash` are in the common directory, so a checkout
+shares them with the working directory and with every other checkout. A `git fetch` in one updates
+a remote-tracking branch such as `upstream/main` in all of them, and fetches in several at once
+fail on each other's ref locks. A `git stash pop` in one applies whatever was stashed last in any
+of them, which can be the person's own entry, and drops it unless applying it conflicts.
+[CHECKOUT-7](#CHECKOUT-7) says who is told.
 
 A checkout whose directory or `worktrees/<id>/` entry already exists is refused, and what is there
 is left as it was. A `worktrees` directory that is a link is refused before anything is written,
@@ -378,14 +380,14 @@ What follows from the root follows unchanged. A command line starts at the check
 ([HOOK-4](hooks.md#HOOK-4)), and a relative path means a path in the checkout.
 
 The delegate is told, in the driver's words, which commit the checkout holds, that changes the
-person has not committed are not in it, which paths a deny rule left out, and that a `git fetch` in
-it updates the refs of the working directory and of every other checkout
-([CHECKOUT-5](#CHECKOUT-5)).
+person has not committed are not in it, which paths a deny rule left out, that a `git fetch` in
+it updates the refs of the working directory and of every other checkout, and that it shares one
+stash with them, so it is not to use `git stash` ([CHECKOUT-5](#CHECKOUT-5)).
 
-The planner is told that last part too, in the description of `isolation` and in the answer to a
-spawn that made one checkout or several. Where its list holds `run`, it is told to fetch once
+The planner is told those last two parts too, in the description of `isolation` and in the answer
+to a spawn that made one checkout or several. Where its list holds `run`, it is told to fetch once
 itself before starting the delegates that need a fetch, and where it does not, to ask one of them
-for it.
+for it. With or without `run`, it is told not to ask a delegate in a checkout to use `git stash`.
 
 **Why reach without a person opening it.** On grounds like those the session's own directory is
 reached on ([TRUST-16](trust-map.md#TRUST-16)): it was created here and is owned by this account.
@@ -395,9 +397,9 @@ carries the label the same path has in the working directory ([CHECKOUT-8](#CHEC
 reach brings no file into the session that nobody has an answer about.
 
 Built. The overlap refusals are made before anything is created. The delegate is told the commit,
-that changes not committed are not in it, the paths left out, and that its refs are shared. The
-answer to the spawn names the commit and says the refs are shared, and so does the description of
-`isolation`.
+that changes not committed are not in it, the paths left out, and that its refs and its stash are
+shared. The answer to the spawn names the commit and says the refs and the stash are shared, and so
+does the description of `isolation`.
 
 `verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory`
 `verified-by: bravebot_agent::workspace::each_checkout_is_a_numbered_workspace_under_the_state_directory`
@@ -895,6 +897,9 @@ it made before it was left, until [CHECKOUT-16](#CHECKOUT-16) is built.
   program in a checkout can run, and `git pull`, `git remote update` or a build script move the
   same refs. A lock on the command's name would cover one way of spelling it, and the working
   directory's refs would still move ([CHECKOUT-5](#CHECKOUT-5)).
+- **`run` refuses `git stash` in a checkout.** `git rebase --autostash`, `git pull --autostash`, an
+  alias or a script stash as well, so a refusal on the command's name would cover one way of
+  spelling it ([CHECKOUT-5](#CHECKOUT-5)).
 
 ## Open questions
 
@@ -928,6 +933,9 @@ it made before it was left, until [CHECKOUT-16](#CHECKOUT-16) is built.
   remote-tracking refs of the working directory and of every other checkout, and fetches in several
   at once fail ([CHECKOUT-5](#CHECKOUT-5)). The planner is told to have the fetch done once
   ([CHECKOUT-7](#CHECKOUT-7)), and nothing stops a delegate fetching anyway.
+- **Checkouts share one stash.** A `git stash pop` a delegate runs in one can apply an entry the
+  person or another checkout stashed, and drop it ([CHECKOUT-5](#CHECKOUT-5)). Each delegate is
+  told not to use `git stash` ([CHECKOUT-7](#CHECKOUT-7)), and nothing stops one stashing anyway.
 - **A repository with a filter or an end-of-line conversion gets no checkout**, and that includes
   every repository using LFS.
 - **A worker's first build is asked about.** A command vouched for in the working directory is not

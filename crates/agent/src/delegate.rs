@@ -236,7 +236,9 @@ pub(crate) fn checkout_notice(checkout: &crate::workspace::CheckoutInfo) -> Stri
          has not committed are not in it. You have no memory and no language servers here. This \
          checkout shares remote-tracking refs and tags with the person's working directory and \
          with every other checkout, so a git fetch here updates them there too, and two fetches \
-         at the same time can fail.",
+         at the same time can fail. It shares one stash with them as well, so a git stash pop \
+         here can take changes another checkout or the person set aside. Do not use git stash \
+         here.",
         checkout.commit(),
         checkout.path().display()
     );

@@ -25002,11 +25002,12 @@ fn a_deny_rule_with_an_absolute_specifier_holds_in_a_delegates_checkout() {
     );
 }
 
-/// CHECKOUT-7. Remote-tracking refs and tags live in the repository's common directory, so a git
-/// fetch in a checkout updates them in the working directory and in every other checkout, and
-/// fetches in several at once race for them. The answer to a spawn that made one checkout or
-/// several says so, and so does what each delegate in one is told. A spawn that made none says
-/// nothing of it.
+/// CHECKOUT-7. Remote-tracking refs, tags and the stash live in the repository's common directory.
+/// A git fetch in a checkout updates the refs and tags in the working directory and in every other
+/// checkout, fetches in several at once race for them, and a stash pop in one takes what another
+/// set aside.
+/// The answer to a spawn that made one checkout or several says so, and so does what each delegate
+/// in one is told. A spawn that made none says nothing of it.
 #[test]
 fn the_answer_to_a_spawn_in_a_checkout_says_the_checkouts_share_the_repositorys_refs() {
     let answered = |tag: &str, spawn: &str| -> (String, String) {
@@ -25051,7 +25052,9 @@ fn the_answer_to_a_spawn_in_a_checkout_says_the_checkouts_share_the_repositorys_
     };
     let told = "This checkout shares remote-tracking refs and tags with the person's working \
                 directory and with every other checkout, so a git fetch here updates them there \
-                too, and two fetches at the same time can fail.";
+                too, and two fetches at the same time can fail. It shares one stash with them as \
+                well, so a git stash pop here can take changes another checkout or the person set \
+                aside. Do not use git stash here.";
     let one = answered(
         "one",
         r#"{"kind":"worker","task":"LOOK-ONE","isolation":"checkout"}"#,
@@ -25074,14 +25077,18 @@ fn the_answer_to_a_spawn_in_a_checkout_says_the_checkouts_share_the_repositorys_
                 "Checkouts share remote-tracking refs and tags with your working directory and \
                  with each other, so a git fetch in one updates them in all of them, and two \
                  fetches at the same time can fail. Where delegates need a fetch, run it once \
-                 yourself before starting them rather than asking each to."
+                 yourself before starting them rather than asking each to. Checkouts also share \
+                 one stash, so changes git stash sets aside in one can be popped in any of them. \
+                 Do not ask a delegate in a checkout to use git stash."
             ),
-            "the answer to {spawned} in a checkout does not say the checkouts share refs: {answer}"
+            "the answer to {spawned} in a checkout does not say the checkouts share refs and a \
+             stash: {answer}"
         );
         assert_eq!(
             delegates.matches(told).count(),
             started,
-            "not every delegate of {spawned} in a checkout was told it shares refs: {delegates}"
+            "not every delegate of {spawned} in a checkout was told it shares refs and a stash: \
+             {delegates}"
         );
     }
     let (answer, delegates) = &none;
@@ -25090,12 +25097,14 @@ fn the_answer_to_a_spawn_in_a_checkout_says_the_checkouts_share_the_repositorys_
         "the spawn without a checkout was not answered: {answer}"
     );
     assert!(
-        !answer.contains("remote-tracking refs"),
-        "a spawn that made no checkout was told about a checkout's refs: {answer}"
+        !answer.contains("remote-tracking refs") && !answer.contains("git stash"),
+        "a spawn that made no checkout was told about a checkout's refs or stash: {answer}"
     );
     assert!(
-        delegates.contains("LOOK-ONE") && !delegates.contains("This checkout shares"),
-        "a delegate in the working directory was told about a checkout's refs: {delegates}"
+        delegates.contains("LOOK-ONE")
+            && !delegates.contains("This checkout shares")
+            && !delegates.contains("Do not use git stash here"),
+        "a delegate in the working directory was told about a checkout's refs or stash: {delegates}"
     );
 }
 
