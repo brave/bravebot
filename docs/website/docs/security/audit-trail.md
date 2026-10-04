@@ -141,3 +141,13 @@ is the turn's own:
 ```sh
 jq -r 'select(.delegate == "d1")' ~/.bravebot/sessions/*/….audit.jsonl
 ```
+
+How each delegate ended is the turn's own entry under `delegate`, with the delegate's name first. It
+gives how long the delegate ran, how many of its rounds it made out of the most it was allowed, and a
+cause from a fixed list: it answered, it reached its round limit, it was stopped, or it did not finish
+with the name of the failure, such as `unavailable` or `refused`. The cause never quotes what a
+service or a tool said:
+
+```sh
+jq -r 'select(.event.gate == "delegate" and (.event.detail | contains(": ended "))) | .event.detail' ~/.bravebot/sessions/*/….audit.jsonl
+```

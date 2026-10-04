@@ -368,8 +368,6 @@ pub struct Delegated {
     /// Its kind's own name where nothing was defined, so a session with no definition files says
     /// exactly what it always did.
     pub kind: String,
-    /// How many rounds of tool calls it took.
-    pub rounds: usize,
     /// What it cost, so the turn can report the whole of what it spent.
     pub usage: Usage,
 }
@@ -441,6 +439,13 @@ pub struct Ended {
     /// wrote about the person's own hooks file and definitions, rather than anything the delegate
     /// read or its model said (HOOK-7, DELEGATE-22).
     pub notices: Vec<String>,
+    /// How many rounds of tool calls it made, however it ended.
+    ///
+    /// Outside the result, since a run that failed is the one the record of its end has to
+    /// account for (TRACE-8).
+    pub rounds: usize,
+    /// How long it ran, however it ended.
+    pub took: std::time::Duration,
 }
 
 /// Settle everything a delegate needs from the run that spawned it.
@@ -529,6 +534,7 @@ pub fn run(
     // (LSP-8).
     mut servers: Option<crate::lsp::LanguageServers>,
 ) -> Ended {
+    let began = std::time::Instant::now();
     let definition_model = seeded
         .spec
         .model()
@@ -551,6 +557,8 @@ pub fn run(
             )),
             vouched: seeded.vouched.clone(),
             notices: vec![said],
+            rounds: 0,
+            took: began.elapsed(),
         };
     }
     // Refused rather than run on the turn's model, which would spend past a boundary the definition
@@ -570,6 +578,8 @@ pub fn run(
             )),
             vouched: seeded.vouched.clone(),
             notices: vec![said],
+            rounds: 0,
+            took: began.elapsed(),
         };
     }
     let delegate_model = definition_model
@@ -617,6 +627,8 @@ pub fn run(
     // lands is what the calls it made fired.
     let mut notices = Vec::new();
 
+    let mut rounds = 0;
+
     let outcome = match turn::delegated(
         config,
         egress,
@@ -631,6 +643,7 @@ pub fn run(
         cancel,
         &mut vouched,
         &mut notices,
+        &mut rounds,
         wallet,
         servers.as_mut(),
     ) {
@@ -642,6 +655,8 @@ pub fn run(
                 delegated: Err(error),
                 vouched,
                 notices,
+                rounds,
+                took: began.elapsed(),
             };
         }
     };
@@ -668,7 +683,6 @@ pub fn run(
         delegated: Ok(Delegated {
             report: outcome.answer,
             kind: seeded.spec.definition().to_string(),
-            rounds: outcome.steps,
             usage: Usage {
                 // What the rounds cost, split the way the turn counted it: everything it spent,
                 // less what the model wrote, is what the requests carried.
@@ -683,6 +697,8 @@ pub fn run(
         }),
         vouched,
         notices,
+        rounds,
+        took: began.elapsed(),
     }
 }
 

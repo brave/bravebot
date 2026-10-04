@@ -3364,6 +3364,53 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Record how a delegate this run started ended: how long it ran, how many of its `bound`
+    /// rounds it made, and why it stopped.
+    ///
+    /// A delegate that reached its bound answers like one that did not, so the bound is what tells
+    /// the two apart: a run at its bound was told it had no rounds left.
+    pub fn record_delegate_end(
+        &mut self,
+        id: crate::delegate::DelegateId,
+        bound: usize,
+        finish: crate::delegate::Finish,
+    ) {
+        use crate::delegate::Finish;
+        let (took, rounds, cause) = match finish {
+            Finish::Answered { took, rounds } if rounds >= bound => (
+                took,
+                rounds,
+                "it reached its round limit and answered with what it had".to_string(),
+            ),
+            Finish::Answered { took, rounds } => (took, rounds, "it answered".to_string()),
+            Finish::Stopped { took, rounds } => (
+                took,
+                rounds,
+                "it was stopped before it answered".to_string(),
+            ),
+            Finish::Failed { took, rounds, why } => {
+                (took, rounds, format!("it did not finish ({why})"))
+            }
+            Finish::Lost => {
+                self.allow(
+                    "delegate",
+                    format!(
+                        "{id}: ended without handing anything back, so how long it ran and how \
+                         many of its {bound} rounds it made are not known"
+                    ),
+                );
+                return;
+            }
+        };
+        self.allow(
+            "delegate",
+            format!(
+                "{id}: ended after {:.1}s and {rounds} of {bound} rounds: {cause}",
+                took.as_secs_f64()
+            ),
+        );
+    }
+
     /// Select the definition a person's line addressed, and narrow this turn to it.
     ///
     /// `None` where the line addressed none. The name is the [`crate::delegate::ADDRESSED`]
@@ -14828,6 +14875,56 @@ five
                     Event::GatePassed { detail, .. } if detail.contains("d1: withdrawn")
                 )),
                 "the trail did not say the approved delegate was withdrawn"
+            );
+        }
+
+        /// TRACE-8: each way a delegate can end is its own record, with its time and its rounds
+        /// against its bound, and a run that answered at its bound reads as one the bound stopped
+        /// rather than as one that finished.
+        #[test]
+        fn a_delegates_end_is_recorded_with_its_time_its_rounds_and_why() {
+            use crate::delegate::Finish;
+            let took = std::time::Duration::from_millis(1_563_040);
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            let id = DelegateId::nth(1);
+            turn.record_delegate_end(id, 120, Finish::Answered { took, rounds: 7 });
+            turn.record_delegate_end(id, 120, Finish::Answered { took, rounds: 120 });
+            turn.record_delegate_end(id, 120, Finish::Stopped { took, rounds: 12 });
+            turn.record_delegate_end(
+                id,
+                120,
+                Finish::Failed {
+                    took,
+                    rounds: 37,
+                    why: "unavailable",
+                },
+            );
+            turn.record_delegate_end(id, 120, Finish::Lost);
+            drop(turn);
+            let recorded: Vec<&str> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GatePassed {
+                        gate: "delegate",
+                        detail,
+                    } => Some(detail.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                recorded,
+                [
+                    "d1: ended after 1563.0s and 7 of 120 rounds: it answered",
+                    "d1: ended after 1563.0s and 120 of 120 rounds: it reached its round limit \
+                     and answered with what it had",
+                    "d1: ended after 1563.0s and 12 of 120 rounds: it was stopped before it \
+                     answered",
+                    "d1: ended after 1563.0s and 37 of 120 rounds: it did not finish (unavailable)",
+                    "d1: ended without handing anything back, so how long it ran and how many of \
+                     its 120 rounds it made are not known",
+                ]
             );
         }
 

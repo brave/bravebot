@@ -1605,6 +1605,8 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
         Some(&mut decisions),
         // A turn a person asked for reads what its hooks said off the [`Outcome`].
         None,
+        // And how many rounds it made, off the same [`Outcome`].
+        None,
         // And it opens the run's wallet rather than being lent one: it is the run.
         None,
     );
@@ -1650,6 +1652,8 @@ pub fn run_cancellable<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
         None,
         // A turn a person asked for reads what its hooks said off the [`Outcome`].
         None,
+        // And how many rounds it made, off the same [`Outcome`].
+        None,
         // And it opens the run's wallet rather than being lent one: it is the run.
         None,
     )
@@ -1681,6 +1685,9 @@ pub(crate) fn delegated(
     // delegate's outcome dies at the boundary, so this is the only copy the parent can fold into
     // the account of itself a run with nowhere to draw reads (HOOK-7).
     notices: &mut Vec<String>,
+    // How many rounds of tool calls it made, written however the turn ended, for the same reason
+    // (TRACE-8).
+    rounds: &mut usize,
     // The wallet the turn that started this one is spending from, where it found one. A delegate
     // opens none of its own (PREM-5).
     wallet: Option<&dyn crate::shared::Spends>,
@@ -1708,6 +1715,7 @@ pub(crate) fn delegated(
         cancel,
         Some(&mut decisions),
         Some(notices),
+        Some(rounds),
         wallet,
     );
     *vouched = Vouched {
@@ -1747,6 +1755,8 @@ pub fn run_with_trust<S: Sink + Send, C: Confirmer + Send>(
         &Cancel::new(),
         None,
         // A turn a person asked for reads what its hooks said off the [`Outcome`].
+        None,
+        // And how many rounds it made, off the same [`Outcome`].
         None,
         // And it opens the run's wallet rather than being lent one: it is the run.
         None,
@@ -2084,6 +2094,9 @@ struct Working<'scope> {
     seeded: Vouched,
     /// The checkout it works in, where it was given one (CHECKOUT-15).
     checkout: Option<std::sync::Arc<crate::workspace::CheckoutInfo>>,
+    /// The most rounds of tool calls its spec allows, which the record of how it ended counts
+    /// against (TRACE-8).
+    rounds: usize,
     handle: std::thread::ScopedJoinHandle<
         'scope,
         (
@@ -2254,7 +2267,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
             // A closed receiver means the test observer has already exited.
             let _ = started.send(());
         }
-        let (delegated, partial, requests) = match working.handle.join() {
+        let (delegated, ran, partial, requests) = match working.handle.join() {
             Ok((ended, partial, requests)) => {
                 // Before anything else, and on both of the ways a run can end. A person who
                 // vouched for the build inside this delegate is not asked again by a delegate
@@ -2266,7 +2279,8 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 // the person whose formatter would not start is owed the sentence whether or not
                 // the delegate that fired it went on to report.
                 notices.extend(ended.notices);
-                (ended.delegated, partial, requests)
+                let ran = Some((ended.took, ended.rounds));
+                (ended.delegated, ran, partial, requests)
             }
             // A thread that panicked is a delegate that stopped, which is all anybody can be
             // told about it: what it was doing died with it, and the turn is still running.
@@ -2277,12 +2291,35 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 Err(TurnError::Precommit(
                     "the delegate stopped without finishing".to_string(),
                 )),
+                None,
                 Default::default(),
                 Vec::new(),
             ),
         };
 
         spent.inference += waits.collected(crate::timing::Interval::since(joined_at), requests);
+
+        // Built from which way the result came back, the run's own counts and the fixed name of a
+        // failure, so the record says why it stopped without holding what any service or tool said
+        // (TRACE-8). The planner is still told only that it did not finish (BACKEND-37).
+        let finish = {
+            use bravebot_core::delegate::Finish;
+            match (&delegated, ran) {
+                (_, None) => Finish::Lost,
+                (Ok(_), Some((took, rounds))) => Finish::Answered { took, rounds },
+                (Err(error), Some((took, rounds))) => match error.ending() {
+                    crate::outcome::Ending::Stopped { .. } => Finish::Stopped { took, rounds },
+                    ending => Finish::Failed {
+                        took,
+                        rounds,
+                        why: ending
+                            .diagnosis()
+                            .map_or("internal", |diagnosis| diagnosis.category.name()),
+                    },
+                },
+            }
+        };
+        policy.record_delegate_end(id, working.rounds, finish);
 
         // After the decisions it made are taken back, so a rule that distrusts a path survives the
         // withdrawal of the rest (CHECKOUT-12).
@@ -2305,10 +2342,15 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 cached.add(delegated.usage.cached);
 
                 let kind = delegated.kind;
-                let note = format!(
-                    "a {kind} delegate answered after {}",
-                    tools::tally(delegated.rounds, "round", "rounds")
-                );
+                let rounds = ran.map_or(0, |(_, rounds)| rounds);
+                let tally = tools::tally(rounds, "round", "rounds");
+                let note = match rounds >= working.rounds {
+                    true => format!(
+                        "a {kind} delegate reached its limit of {tally} and answered with what it \
+                         had"
+                    ),
+                    false => format!("a {kind} delegate answered after {tally}"),
+                };
                 let slot = conversation.next_reference();
                 let presented = policy
                     .present(
@@ -2355,12 +2397,16 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 };
                 (note, body, false, Some(reported))
             }
-            Err(error) => {
+            Err(_) => {
                 *tokens += partial.tokens;
                 *output_tokens += partial.output_tokens;
                 cached.add(partial.cached);
-                let note = match error.ending() {
-                    crate::outcome::Ending::Stopped { .. } => {
+                // The same fixed name the trail records, and never the error's own text.
+                let note = match finish {
+                    bravebot_core::delegate::Finish::Failed { why, .. } => {
+                        format!("the delegate could not finish ({why})")
+                    }
+                    bravebot_core::delegate::Finish::Stopped { .. } => {
                         "the delegate was stopped".to_string()
                     }
                     _ => "the delegate could not finish".to_string(),
@@ -2677,6 +2723,9 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // asked for hands these back on its [`Outcome`], and a delegate's outcome dies at the
     // boundary while the hooks it fired are still the person's own to hear about (HOOK-7).
     said_about_hooks: Option<&mut Vec<String>>,
+    // How many rounds of tool calls the turn made, written however it ended. Only a delegate's
+    // caller passes one, for the record of how the delegate ended (TRACE-8).
+    rounds_taken: Option<&mut usize>,
     // The credential store the run that started this one is spending from. Only a delegate's
     // caller passes one, and a delegate spends nothing else: there is one subscription per
     // process and a credential is single-use, so a second wallet opened here would re-read a
@@ -2708,6 +2757,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // a turn which failed part way through still has them: the outcome that would have carried
     // them is the thing that did not arrive.
     let mut fired: Vec<String> = Vec::new();
+    let mut taken = 0;
 
     let mut outcome = one_turn(
         config,
@@ -2725,6 +2775,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         &hooks,
         retained,
         &mut fired,
+        &mut taken,
         lent_wallet,
     );
 
@@ -2743,6 +2794,9 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // for a delegate, so a call it made is the whole of what one has to hand back.
     if let Some(collected) = said_about_hooks {
         collected.clone_from(&fired);
+    }
+    if let Some(rounds) = rounds_taken {
+        *rounds = taken;
     }
 
     // In the order the moments came, which is not the order the turn produced them: what it found
@@ -2778,6 +2832,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // Written as the rounds go rather than gathered from the outcome, so that a turn which ends
     // in an error has still said what it found (HOOK-7).
     hook_notices: &mut Vec<String>,
+    // How many rounds of tool calls the turn made, written before a stop or a failed request
+    // returns as well as on an answer.
+    rounds_taken: &mut usize,
     // The wallet the run that started this one is spending from, where this is a delegate's turn.
     // See [`run_inner`].
     lent_wallet: Option<&dyn crate::shared::Spends>,
@@ -4121,6 +4178,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 None => servers.as_deref().map(crate::lsp::LanguageServers::share),
                             };
                             let spawning_model = spawning_model.clone();
+                            let rounds = seeded.spec.rounds();
                             let handle = scope.spawn(move || {
                                 let mut confirmer = confirming.delegate(id);
                                 let mut reporter = reporting.delegate(id);
@@ -4155,6 +4213,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 id,
                                 seeded: vouched,
                                 checkout,
+                                rounds,
                                 handle,
                             });
                         }
@@ -4905,6 +4964,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // Whatever way the rounds ended, a stop and a failed request included: each leaves the jobs
         // to die with the turn, and the person is told which ones before they do.
         jobs.stop_all(&mut policy, &mut reporter);
+        *rounds_taken = steps;
         spent.wall = began.elapsed();
         reporter.spent(crate::outcome::Spent {
             tokens,
@@ -5131,6 +5191,8 @@ mod tests {
                         delegated: Err(TurnError::Cancelled { attempts: None }),
                         vouched: seeded_for_worker,
                         notices: Vec::new(),
+                        rounds: 0,
+                        took: Duration::ZERO,
                     },
                     crate::outcome::Spent {
                         tokens: 17,
@@ -5154,6 +5216,7 @@ mod tests {
                 id: DelegateId::nth(1),
                 seeded,
                 checkout: None,
+                rounds: 60,
                 handle: worker,
             }];
             let mut tokens = 0;
@@ -5183,6 +5246,99 @@ mod tests {
         assert!(
             spent.inference >= Duration::from_millis(100),
             "cancelled cleanup lost its request interval: {spent:?}"
+        );
+    }
+
+    /// TRACE-8 for the two endings no reply from a model produces: a delegate somebody stopped,
+    /// and one whose thread died and handed nothing back.
+    #[test]
+    fn a_stopped_delegate_and_a_lost_one_are_each_recorded_as_what_they_were() {
+        type Joined = (
+            crate::delegate::Ended,
+            crate::outcome::Spent,
+            Vec<crate::timing::Interval>,
+        );
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "collect two delegates");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::default(),
+            &mut sink,
+        )
+        .unwrap();
+        let seeded = policy.vouched();
+        let mut reporter = crate::report::RecordingReporter::default();
+        std::thread::scope(|scope| {
+            let handed = seeded.clone();
+            let stopped = scope.spawn(move || -> Joined {
+                (
+                    crate::delegate::Ended {
+                        delegated: Err(TurnError::Cancelled { attempts: None }),
+                        vouched: handed,
+                        notices: Vec::new(),
+                        rounds: 12,
+                        took: Duration::from_millis(4_200),
+                    },
+                    Default::default(),
+                    Vec::new(),
+                )
+            });
+            let lost = scope.spawn(|| -> Joined { panic!("the delegate's thread died") });
+            let mut delegates = vec![
+                Working {
+                    join_started: None,
+                    id: DelegateId::nth(1),
+                    seeded: seeded.clone(),
+                    checkout: None,
+                    rounds: 120,
+                    handle: stopped,
+                },
+                Working {
+                    join_started: None,
+                    id: DelegateId::nth(2),
+                    seeded: seeded.clone(),
+                    checkout: None,
+                    rounds: 60,
+                    handle: lost,
+                },
+            ];
+            collect_delegates(
+                &mut delegates,
+                &mut policy,
+                &mut Conversation::new(),
+                &mut reporter,
+                &mut 0,
+                &mut 0,
+                &mut Cached::default(),
+                true,
+                &mut crate::timing::DelegateWait::default(),
+                &mut Elapsed::default(),
+                &mut Vec::new(),
+            )
+            .unwrap();
+        });
+        drop(policy);
+
+        let ends: Vec<&str> = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                bravebot_core::event::Event::GatePassed {
+                    gate: "delegate",
+                    detail,
+                } if detail.contains(": ended ") => Some(detail.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            ends,
+            [
+                "d1: ended after 4.2s and 12 of 120 rounds: it was stopped before it answered",
+                "d2: ended without handing anything back, so how long it ran and how many of its \
+                 60 rounds it made are not known",
+            ]
         );
     }
 

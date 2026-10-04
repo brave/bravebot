@@ -338,6 +338,9 @@ its own record: where a delegate's checkout is and the commit it holds, or that 
 for a kept one the paths written in it whose names the delegate typed. A write through a reference
 is counted, so the name a reference held stays with the delegate.
 
+The driver's own count of the delegate's rounds and time, and the fixed cause of its end, go to the
+trail and to the person's note and never to the planner ([TRACE-8](trace.md#TRACE-8)).
+
 **Why.** This is the feature rather than a restriction on it. A delegate whose reading reached
 its parent's context would have moved the log rather than absorbed it.
 
@@ -377,8 +380,8 @@ one-use grants nor prompt history cross back, and no command grant is widened.
 
 `verified-by: bravebot_agent::turn::overlapping_delegate_writes_follow_effect_order_in_both_collection_orders`
 
-**Whether or not it finished.** A delegate that stopped on a failed model call has no report and
-no round count for the parent to take, and it hands the record back anyway. A person answered
+**Whether or not it finished.** A delegate that stopped on a failed model call has no report
+for the parent to take, and it hands the record back anyway. A person answered
 inside it, and an answer is a standing decision about their own machine rather than a part of the
 work that failed. A record coming back only from a run that reported would leave the next one
 asking about the build this one was already told it could run. A run that stopped before it

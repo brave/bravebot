@@ -23655,6 +23655,187 @@ fn a_delegate_that_could_not_finish_is_reported_as_a_failure() {
     );
 }
 
+/// Every record the turn itself wrote of a delegate ending, with whose record each was.
+fn delegate_ends(sink: &RecordingSink) -> Vec<(bool, String)> {
+    sink.recorded()
+        .filter_map(|(from, event)| match event {
+            Event::GatePassed {
+                gate: "delegate",
+                detail,
+            } if detail.contains(": ended ") => Some((from.is_none(), detail.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// TRACE-8 for a delegate whose model call failed: the trail says how long it ran, how many of its
+/// rounds it made and the fixed name of the failure, the person's note names the same failure,
+/// and neither holds a word of what the service answered. The planner is still told only that it
+/// did not finish (BACKEND-37).
+#[test]
+fn a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_reply() {
+    let scratch = Scratch::new("delegate-end-failed");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // Only the turn has a script, so the delegate's first request is refused with the mock's 400
+    // and its words, rather than hung up on.
+    let mut script = vec![
+        tool_request(
+            "spawn_agent",
+            r#"{"kind":"reader","task":"NOTHING-ANSWERS-THIS-ONE"}"#,
+        ),
+        reply_with("waiting"),
+        reply_with("it failed"),
+    ]
+    .into_iter();
+    let (endpoint, received) = serve_rounds(Vec::new(), false, move |body| {
+        match body.contains("SEND-ONE-THAT-FAILS") {
+            true => script.next().map(Some),
+            false => None,
+        }
+    });
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("SEND-ONE-THAT-FAILS"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn survives a delegate that did not");
+
+    let ends = delegate_ends(&sink);
+    let [(own, detail)] = ends.as_slice() else {
+        panic!("the trail did not record the delegate ending once: {ends:?}");
+    };
+    assert!(
+        *own,
+        "the end was attributed to the delegate rather than the turn: {detail}"
+    );
+    assert!(
+        detail.starts_with("d1: ended after ")
+            && detail.ends_with("s and 0 of 60 rounds: it did not finish (refused)"),
+        "the trail does not say how the delegate ended: {detail}"
+    );
+
+    let trail = format!("{:?}", sink.events());
+    assert!(
+        !trail.contains("ran out of scripted replies"),
+        "what the service answered reached the trail: {trail}"
+    );
+
+    let (_, note, failed) = reporter
+        .delegates_finished
+        .first()
+        .expect("no delegate was reported as finishing");
+    assert!(
+        *failed,
+        "the failed delegate was drawn as an answer: {note}"
+    );
+    assert_eq!(note, "the delegate could not finish (refused)");
+
+    let told = received
+        .try_iter()
+        .find(|body| body.contains("The delegate d1 did not finish."))
+        .expect("the planner was never told the delegate did not finish");
+    assert!(
+        !told.contains("(refused)") && !told.contains("ran out of scripted replies"),
+        "the planner was told why the delegate failed: {told}"
+    );
+}
+
+/// TRACE-8 for a delegate held to its rounds: one that reached its bound was told it had no rounds
+/// left and answered anyway, which reads like any other answer unless the trail and the note say
+/// it was the limit.
+#[test]
+fn a_delegate_that_reached_its_round_limit_says_so_in_the_trail_and_the_note() {
+    let scratch = Scratch::new("delegate-end-limit");
+    std::fs::write(scratch.path.join("notes.txt"), "a line\n").expect("write the file");
+    let home = Scratch::new("delegate-end-limit-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("one-round.md"),
+        "---\nname: one-round\ndescription: Looks once.\nkind: reader\nrounds: 1\n---\n\nLook once.\n",
+    )
+    .expect("write the definition");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "SEND-ONE-WITH-ONE-ROUND",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"one-round","task":"LOOK-ONLY-ONCE"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("relayed"),
+            ],
+        ),
+        (
+            "LOOK-ONLY-ONCE",
+            vec![
+                tool_request("read_file", r#"{"path":"notes.txt"}"#),
+                reply_with("what one look found"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("SEND-ONE-WITH-ONE-ROUND").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let ends = delegate_ends(&sink);
+    let [(own, detail)] = ends.as_slice() else {
+        panic!("the trail did not record the delegate ending once: {ends:?}");
+    };
+    assert!(
+        *own,
+        "the end was attributed to the delegate rather than the turn: {detail}"
+    );
+    assert!(
+        detail.starts_with("d1: ended after ")
+            && detail.ends_with(
+                "s and 1 of 1 rounds: it reached its round limit and answered with what it had"
+            ),
+        "the trail does not say the delegate was held to its rounds: {detail}"
+    );
+
+    let (_, note, failed) = reporter
+        .delegates_finished
+        .first()
+        .expect("no delegate was reported as finishing");
+    assert!(
+        !failed,
+        "a delegate that answered was drawn as a failure: {note}"
+    );
+    assert_eq!(
+        note,
+        "a one-round delegate reached its limit of 1 round and answered with what it had"
+    );
+}
+
 /// DELEGATE-11 over the whole path, for a delegate that stopped rather than reported: a person
 /// who answered "always" inside one has said the build may run, and the list they said it about
 /// belongs to the session. A delegate that fails a round later is the ordinary case rather than
