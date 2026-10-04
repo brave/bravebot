@@ -25,7 +25,7 @@ tests are [ui/docs/development.md](../../ui/docs/development.md).
 | Read | For |
 |---|---|
 | [checks.md](checks.md) | what to run and when, why local clippy is not CI's, and a failure that is not yours |
-| [commits.md](commits.md) | what one commit contains, what its message says, and what closes an issue |
+| [commits.md](commits.md) | what one commit contains, what its message says, what closes an issue, and how to open the pull request |
 | [reviewing-for-the-rule.md](reviewing-for-the-rule.md) | reading a diff against the guarantee the repository exists for |
 | [spec-enforced-development.md](spec-enforced-development.md) | developing against the mini-specs, and what ships with a clause |
 | [security-scan.md](security-scan.md) | the scan that comments on pull requests, run before pushing |
