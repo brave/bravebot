@@ -11,6 +11,7 @@ governs:
 guards:
   - symbol: Session::start_goal
   - symbol: Session::goal_not_met
+  - symbol: Session::goal_judged
   - symbol: goal::assess
   - symbol: goal::read
 documented-by: docs/website/docs/reference/commands.md
@@ -232,6 +233,7 @@ just judged is still standing there.
 `verified-by: bravebot_tui::app::a_turn_that_failed_leaves_the_goal_where_it_was`
 `verified-by: bravebot_tui::state::clearing_the_session_takes_the_goal_off`
 `verified-by: bravebot_tui::state::a_verdict_after_the_goal_was_cleared_is_neither_acted_on_nor_announced`
+`verified-by: bravebot_tui::app::a_goal_is_not_judged_after_the_person_asked_to_leave`
 
 <a id="GOAL-11"></a>
 ### GOAL-11: a goal and a loop are never both running

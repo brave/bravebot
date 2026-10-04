@@ -13784,6 +13784,7 @@ mod tests {
     /// exists, so even the verdict that would send the work back sends nothing and says nothing.
     #[test]
     fn a_verdict_after_the_goal_was_cleared_is_neither_acted_on_nor_announced() {
+        // A request that failed is not a verdict, and is still said.
         for judged in every_check_outcome().into_iter().filter(Result::is_ok) {
             let mut s = session();
             s.start_goal("cargo test exits 0".to_string());

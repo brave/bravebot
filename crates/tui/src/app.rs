@@ -3936,7 +3936,7 @@ fn event_loop(
                         // The check is a request that really went out, and a refusal in one is
                         // exactly what somebody reading the trail afterwards wants to find.
                         stored.append_audit(session.turns, &checked);
-                        Ok::<_, io::Error>(carrying_on)
+                        Ok(carrying_on)
                     })?;
                 }
             }
@@ -6312,14 +6312,14 @@ fn goal_check_key(session: &mut Session, key: KeyEvent) {
 /// What goes out once a turn has ended, and whose line it is, with `judge` being what puts the goal
 /// to a check.
 ///
-/// Nothing waiting goes out after somebody has asked to leave. What the person queued goes before
-/// the goal is judged: their own prompts are the session, and a condition judged before they have
-/// been sent would be judged against an exchange that is missing them. The sentence a goal carries
-/// the work on with is this program's, so a `@path` inside it names no file.
-fn next_after_a_turn<E>(
+/// Nothing waiting goes out after somebody has asked to leave. A prompt the person queued goes
+/// before the goal is judged: their own prompts are the session, and a condition judged before they
+/// have been sent would be judged against an exchange that is missing them. The sentence a goal
+/// carries the work on with is this program's, so a `@path` inside it names no file.
+fn next_after_a_turn(
     session: &mut Session,
-    judge: impl FnOnce(&mut Session) -> Result<Option<String>, E>,
-) -> Result<Option<(String, Wrote)>, E> {
+    judge: impl FnOnce(&mut Session) -> io::Result<Option<String>>,
+) -> io::Result<Option<(String, Wrote)>> {
     if session.is_quitting() {
         return Ok(None);
     }
@@ -6443,17 +6443,11 @@ fn goal_check_animated(
         .join()
         .unwrap_or_else(|_| (Err(t!(goal_ended_unexpectedly).to_string()), Trail::new()));
 
-    let judged = match done {
-        Ok(assessed) => {
-            session.end_aside(assessed.usage.total());
-            Ok(assessed.verdict)
-        }
-        Err(message) => {
-            session.end_aside(0);
-            Err(message)
-        }
-    };
-    Ok((session.goal_judged(judged), sink.events().to_vec()))
+    session.end_aside(done.as_ref().map_or(0, |assessed| assessed.usage.total()));
+    Ok((
+        session.goal_judged(done.map(|assessed| assessed.verdict)),
+        sink.events().to_vec(),
+    ))
 }
 
 /// The record of lines remembered past a session for this workspace, and what it holds now.
@@ -13665,7 +13659,7 @@ mod tests {
         session.start_goal("cargo test exits 0".to_string());
 
         let (carrying_on, wrote) = next_after_a_turn(&mut session, |session| {
-            Ok::<_, io::Error>(
+            Ok(
                 session.goal_judged(Ok(bravebot_agent::goal::Verdict::NotMet {
                     reason: "the failure is in @crates/core/src/policy.rs".to_string(),
                 })),
@@ -13703,7 +13697,7 @@ mod tests {
         let mut judged = false;
         let (queued, wrote) = next_after_a_turn(&mut session, |_| {
             judged = true;
-            Ok::<_, io::Error>(None)
+            Ok(None)
         })
         .expect("judging cannot fail here")
         .expect("the queued line was not sent");
@@ -13713,6 +13707,31 @@ mod tests {
             files_named_in(&queued, wrote),
             vec!["crates/core/src/policy.rs".to_string()],
             "a line the person typed stopped naming its files"
+        );
+    }
+
+    /// Leaving ends a goal, so a person who asked to leave during a turn does not wait on a check
+    /// of it, or have the work carried on, before the session closes.
+    #[test]
+    fn a_goal_is_not_judged_after_the_person_asked_to_leave() {
+        let mut session = Session::new("none");
+        session.start_goal("cargo test exits 0".to_string());
+        session.quit();
+
+        let mut judged = false;
+        let sending = next_after_a_turn(&mut session, |_| {
+            judged = true;
+            Ok(Some("carry on".to_string()))
+        })
+        .expect("judging cannot fail here");
+
+        assert!(
+            !judged,
+            "the goal was judged after the person asked to leave"
+        );
+        assert_eq!(
+            sending, None,
+            "a line went out after the person asked to leave"
         );
     }
 
