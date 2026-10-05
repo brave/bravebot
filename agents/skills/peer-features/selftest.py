@@ -73,15 +73,17 @@ class Ledger(unittest.TestCase):
                 "spec:HOOK": {"verdict": "reviewed", "issue": "-", "commit": "abc", "date": "2026-10-01", "reason": "2 candidates\n1 filed"},
                 "parity-a-b": {"verdict": "filed", "issue": "#12", "commit": "abc", "date": "2026-10-01", "reason": f"x {EM_DASH} y"},
                 "peer:claude-code": {"verdict": "reviewed", "issue": "-", "commit": "abc", "date": "2026-10-01", "reason": ""},
+                "parity-c-d": {"verdict": "merged", "issue": "#12", "commit": "abc", "date": "2026-10-01", "reason": "into parity-a-b: one change"},
             }
             pf.write_ledger(path, entries)
             text = path.read_text()
             self.assertTrue(text.startswith(pf.HEADER))
             self.assertNotIn(EM_DASH, text)
             body = [line for line in text.splitlines() if not line.startswith("#")]
-            self.assertEqual([line.split()[0] for line in body], ["parity-a-b", "peer:claude-code", "spec:HOOK"])
+            self.assertEqual([line.split()[0] for line in body], ["parity-a-b", "parity-c-d", "peer:claude-code", "spec:HOOK"])
             back = pf.read_ledger(path)
             self.assertEqual(back["parity-a-b"]["issue"], "#12")
+            self.assertEqual((back["parity-c-d"]["verdict"], back["parity-c-d"]["reason"]), ("merged", "into parity-a-b: one change"))
             self.assertEqual(back["spec:HOOK"]["reason"], "2 candidates 1 filed")
 
     def test_a_malformed_line_is_refused_rather_than_dropped(self):
@@ -165,6 +167,7 @@ class Templates(unittest.TestCase):
             ("research-spec.md", shared | {"spec_id", "spec_title", "spec_path", "governs", "gap_rules"}),
             ("research-peer.md", shared | {"peer_name", "peer_source", "gap_rules"}),
             ("verify.md", {"unit", "candidates", "root", "commit", "today", "tracker", "known_gaps", "results_file"}),
+            ("merge.md", {"candidates", "issues", "results_file"}),
         ):
             with self.subTest(name=name):
                 used = set(re.findall(r"\{\{(\w+)\}\}", (HERE / name).read_text()))
@@ -197,6 +200,27 @@ class Candidates(unittest.TestCase):
             with self.subTest(problem=problem, change=list(change)):
                 self.assertIn(problem, pf.check_gap(gap(**change)))
         self.assertIsNone(pf.check_gap(gap()))
+
+    def test_a_group_that_cannot_be_applied_is_refused_with_the_reason(self):
+        confirmed = {g: ("spec:HOOK", gap(g)) for g in ("parity-a", "parity-b", "parity-c", "beyond-d")}
+        for group, problem in (
+            ("parity-a", "not an object"),
+            ({"gaps": "parity-a", "reason": "r"}, "list of gap ids"),
+            ({"gaps": [], "reason": "r"}, "list of gap ids"),
+            ({"gaps": ["parity-a", "parity-z"], "reason": "r"}, "parity-z is not a gap"),
+            ({"gaps": ["parity-a", "parity-a"], "reason": "r"}, "parity-a is in more than one group"),
+            ({"gaps": ["parity-a", "parity-b"], "reason": "r"}, "parity-b is in more than one group"),
+            ({"gaps": ["parity-a", "beyond-d"], "reason": "r"}, "a parity gap and a beyond gap"),
+            ({"gaps": ["parity-a", "parity-c"], "existing_issue": 13, "reason": "r"}, "existing_issue 13"),
+            ({"gaps": ["parity-a", "parity-c"], "existing_issue": "12", "reason": "r"}, "existing_issue '12'"),
+            ({"gaps": ["parity-a"], "reason": "r"}, "one gap and no existing_issue"),
+            ({"gaps": ["parity-a", "parity-c"]}, "no reason"),
+        ):
+            with self.subTest(problem=problem):
+                self.assertIn(problem, pf.check_group(group, confirmed, {12}, {"parity-b"}))
+        for group in ({"gaps": ["parity-a"], "existing_issue": 12, "reason": "r"}, {"gaps": ["parity-a", "parity-c"], "reason": "r"}):
+            with self.subTest(group=group):
+                self.assertIsNone(pf.check_group(group, confirmed, {12}, {"parity-b"}))
 
     def test_a_beyond_gap_must_say_what_it_beats(self):
         self.assertIsNone(pf.check_gap(gap("beyond-fork-anywhere")))
@@ -324,11 +348,20 @@ class Work(unittest.TestCase):
         self.research(unit, *gaps)
         self.check(unit, *({"id": g["id"], "verdict": "confirmed"} for g in gaps))
 
+    def grouped(self, *groups, issues=()):
+        """The merge step's files for the gaps confirmed so far, holding these groups."""
+        folder = self.work / "merge"
+        folder.mkdir(exist_ok=True)
+        confirmed = list(pf.confirmed_gaps(pf.outcomes(self.work)[1]))
+        (folder / "asked.json").write_text(json.dumps({"gaps": confirmed, "issues": list(issues)}))
+        (folder / "groups.json").write_text(json.dumps({"groups": [dict({"reason": "One change closes both."}, **g) for g in groups]}))
+
     def test_a_draft_is_labelled_by_kind_has_no_em_dash_pings_nobody_and_cites_its_id(self):
         self.confirmed(
             gap(summary=f"bravebot {EM_DASH} cannot fork. Ask @someone, or `@kept`.", proposal=f"Add it {EM_DASH} carefully. {self.root}/x"),
             gap("beyond-fork-anywhere", area="interface", constraints="SESSION-3 applies."),
         )
+        self.grouped()
         code, _ = quiet(pf.draft, self.args())
         self.assertEqual(code, 0)
         drafts = {d["id"]: d for d in json.loads((self.work / "drafts.json").read_text())}
@@ -355,10 +388,179 @@ class Work(unittest.TestCase):
     def test_a_tool_review_names_the_tool_as_the_source_and_a_gap_found_twice_is_drafted_once(self):
         self.confirmed(gap(), unit="spec:HOOK")
         self.confirmed(gap(), unit="peer:codex")
+        self.grouped()
         quiet(pf.draft, self.args())
         drafts = json.loads((self.work / "drafts.json").read_text())
         self.assertEqual([d["unit"] for d in drafts], ["spec:HOOK"])
         self.assertEqual(len(list((self.work / "issues").iterdir())), 1)
+
+    def test_merge_lists_each_confirmed_gap_once_with_every_parity_and_beyond_parity_issue(self):
+        calls = []
+
+        def gh(args):
+            calls.append(args)
+            fork = {"number": 12, "state": "OPEN", "title": "Add forking", "body": "bravebot cannot fork.\r\n\r\n## What Codex does\r\n\r\nx"}
+            older = {"number": 3, "state": "CLOSED", "title": "Beyond x", "body": None}
+            ours = {"number": 40, "state": "OPEN", "title": "Filed by this run", "body": "x"}
+            return json.dumps({"parity": [fork, ours], "beyond-parity": [fork, older]}[args[args.index("--label") + 1]])
+
+        with mock.patch.object(pf.pa, "gh", gh):
+            code, out = quiet(pf.merge, self.args())
+            self.assertEqual((code, json.loads(out)["merge"], calls), (0, [], []))
+
+            self.confirmed(gap(), gap("parity-loop-detection", title="Stop a turn that repeats one call"), unit="spec:HOOK")
+            self.confirmed(gap(), unit="peer:codex")
+            self.research("spec:RUN", gap("parity-unverified"))
+            (self.work / "filed.json").write_text(json.dumps({"parity-loop-detection": {"issue": 40, "how": "filed"}}))
+            (self.work / "merge").mkdir()
+            (self.work / "merge" / "groups.json").write_text(json.dumps({"groups": []}))
+            code, out = quiet(pf.merge, self.args())
+        self.assertEqual(code, 0)
+        self.assertFalse((self.work / "merge" / "groups.json").exists())
+        self.assertEqual(sorted(c[c.index("--label") + 1] for c in calls), ["beyond-parity", "parity"])
+        self.assertEqual({c[c.index("--state") + 1] for c in calls}, {"all"})
+        prompt = Path(json.loads(out)["merge"][0]["prompt_file"]).read_text()
+        self.assertEqual(prompt.count('"id": "parity-session-fork"'), 1)
+        self.assertIn('"kind": "parity"', prompt)
+        self.assertIn('"title": "Stop a turn that repeats one call"', prompt)
+        self.assertNotIn("parity-unverified", prompt)
+        self.assertIn("#3 closed: Beyond x\n#12 open: Add forking | bravebot cannot fork.\n", prompt)
+        self.assertNotIn("What Codex does", prompt)
+        self.assertNotIn("#40", prompt)
+        self.assertNotIn("{{", prompt)
+        asked = json.loads((self.work / "merge" / "asked.json").read_text())
+        self.assertEqual(asked, {"gaps": ["parity-session-fork", "parity-loop-detection"], "issues": [3, 12]})
+
+        def down(args):
+            raise RuntimeError("HTTP 502")
+
+        with mock.patch.object(pf.pa, "gh", down):
+            self.assertEqual(quiet(pf.main, ["merge", "--work-dir", str(self.work)])[0], 2)
+
+    def test_a_group_is_drafted_as_one_issue_that_says_what_each_other_review_adds(self):
+        self.confirmed(gap(), unit="spec:HOOK")
+        self.confirmed(
+            gap(
+                "parity-fork-conversation",
+                peer_behaviour="`/branch` starts a copy of the conversation.",
+                sources=["https://example.com/docs/fork", "https://example.org/branch"],
+                proposal="Add `/branch`.",
+                constraints="The copy must not share a lock with the original.",
+            ),
+            unit="peer:codex",
+        )
+        self.confirmed(gap("parity-image-paste", title="Paste an image into the prompt"), unit="spec:RUN")
+        self.grouped({"gaps": ["parity-session-fork", "parity-fork-conversation"], "reason": "Both ask for one `/fork` command."})
+        code, out = quiet(pf.draft, self.args())
+        self.assertEqual(code, 0)
+        drafts = json.loads((self.work / "drafts.json").read_text())
+        self.assertEqual([(d["id"], d["merged"]) for d in drafts], [("parity-session-fork", ["parity-fork-conversation"]), ("parity-image-paste", [])])
+        self.assertEqual(sorted(p.name for p in (self.work / "issues").iterdir()), ["parity-image-paste.md", "parity-session-fork.md"])
+        self.assertIn("also parity-fork-conversation", out)
+        body = Path(drafts[0]["body_file"]).read_text()
+        self.assertIn("## Also found by\n\nThis run found the same change more than once. Both ask for one `/fork` command.", body)
+        self.assertIn(
+            "### What Codex does, found by the review of the Codex documentation\n\n`/branch` starts a copy of the conversation.\n\n"
+            "Sources:\n\n- <https://example.org/branch>\n\nIts proposal:\n\nAdd `/branch`.\n\n"
+            "Its constraints:\n\nThe copy must not share a lock with the original.\n\nGap id: `parity-fork-conversation`",
+            body,
+        )
+        self.assertNotIn("## Constraints", body)
+        self.assertEqual(body.count("https://example.com/docs/fork"), 1)
+        self.assertLess(body.index("## Also found by"), body.index("## Where this comes from"))
+        self.assertTrue(body.endswith("Gap id: `parity-session-fork`\n"))
+        alone = Path(drafts[1]["body_file"]).read_text()
+        self.assertNotIn("Also found by", alone)
+
+    def test_a_group_an_issue_already_asks_for_files_nothing_and_is_recorded_tracked_and_merged(self):
+        self.confirmed(gap(), gap("parity-fork-conversation"))
+        self.grouped({"gaps": ["parity-session-fork", "parity-fork-conversation"], "existing_issue": 12, "reason": "#12 asks for `/fork`."}, issues=[12])
+        quiet(pf.draft, self.args())
+        self.assertEqual(json.loads((self.work / "drafts.json").read_text()), [])
+        quiet(pf.record, self.args(), today="2026-10-04")
+        entries = pf.read_ledger(self.root / pf.LEDGER)
+        self.assertEqual(
+            {g: (entries[g]["verdict"], entries[g]["issue"], entries[g]["reason"]) for g in ("parity-session-fork", "parity-fork-conversation")},
+            {
+                "parity-session-fork": ("tracked", "#12", "#12 asks for `/fork`."),
+                "parity-fork-conversation": ("merged", "#12", "into parity-session-fork: #12 asks for `/fork`."),
+            },
+        )
+        self.assertEqual(entries["spec:HOOK"]["reason"], "2 candidates, 1 merged, 1 tracked")
+
+    def test_a_merged_gap_is_recorded_once_the_gap_it_joined_has_an_issue(self):
+        self.confirmed(gap(), unit="spec:HOOK")
+        self.confirmed(gap("parity-fork-conversation"), unit="peer:codex")
+        self.grouped({"gaps": ["parity-session-fork", "parity-fork-conversation"]})
+        quiet(pf.draft, self.args())
+        _, out = quiet(pf.record, self.args(), today="2026-10-04")
+        self.assertFalse((self.root / pf.LEDGER).exists())
+        self.assertIn("left   parity-fork-conversation  merged into parity-session-fork, which is not filed", out)
+
+        (self.work / "filed.json").write_text(json.dumps({"parity-session-fork": {"issue": 99, "how": "filed"}}))
+        quiet(pf.record, self.args(), today="2026-10-04")
+        entries = pf.read_ledger(self.root / pf.LEDGER)
+        self.assertEqual((entries["parity-session-fork"]["verdict"], entries["parity-session-fork"]["issue"]), ("filed", "#99"))
+        self.assertEqual(
+            (entries["parity-fork-conversation"]["verdict"], entries["parity-fork-conversation"]["issue"], entries["parity-fork-conversation"]["reason"]),
+            ("merged", "#99", "into parity-session-fork: One change closes both."),
+        )
+        self.assertEqual(entries["peer:codex"]["reason"], "1 candidates, 1 merged")
+        self.assertEqual(self.states("peer:codex")[1], {"parity-fork-conversation": "held"})
+
+    def test_a_group_filed_after_another_was_recorded_still_records_its_merged_gap(self):
+        self.confirmed(gap(), gap("parity-image-paste"), unit="spec:HOOK")
+        self.confirmed(gap("parity-fork-conversation"), gap("parity-paste-image"), unit="peer:codex")
+        self.grouped(
+            {"gaps": ["parity-session-fork", "parity-fork-conversation"]},
+            {"gaps": ["parity-image-paste", "parity-paste-image"]},
+        )
+        quiet(pf.draft, self.args())
+        filed = {"parity-session-fork": {"issue": 99, "how": "filed"}}
+        (self.work / "filed.json").write_text(json.dumps(filed))
+        quiet(pf.record, self.args(), today="2026-10-04")
+        self.assertEqual(set(pf.read_ledger(self.root / pf.LEDGER)), {"parity-session-fork", "parity-fork-conversation"})
+
+        filed["parity-image-paste"] = {"issue": 100, "how": "filed"}
+        (self.work / "filed.json").write_text(json.dumps(filed))
+        quiet(pf.record, self.args(), today="2026-10-04")
+        entries = pf.read_ledger(self.root / pf.LEDGER)
+        self.assertEqual((entries["parity-paste-image"]["verdict"], entries["parity-paste-image"]["issue"]), ("merged", "#100"))
+        self.assertEqual(entries["peer:codex"]["reason"], "2 candidates, 1 already decided, 1 merged")
+        self.assertEqual(entries["spec:HOOK"]["reason"], "2 candidates, 1 already decided, 1 filed")
+
+    def test_draft_refuses_while_the_merge_is_missing_stale_or_unreadable(self):
+        self.confirmed(gap(), gap("parity-fork-conversation"))
+        with self.assertRaisesRegex(pf.Problem, "2 confirmed gaps are not drafted: merge has not run"):
+            quiet(pf.draft, self.args())
+        self.assertFalse((self.work / "drafts.json").exists())
+
+        self.grouped({"gaps": ["parity-session-fork"]})
+        with self.assertRaisesRegex(pf.Problem, "group 1: one gap and no existing_issue"):
+            quiet(pf.draft, self.args())
+
+        self.grouped()
+        self.confirmed(gap("parity-image-paste"), unit="peer:codex")
+        with self.assertRaisesRegex(pf.Problem, "another set of confirmed gaps"):
+            quiet(pf.draft, self.args())
+        self.assertEqual(quiet(pf.main, ["draft", "--work-dir", str(self.work)])[0], 2)
+
+        self.grouped()
+        (self.work / "merge" / "groups.json").write_text("not json")
+        with self.assertRaisesRegex(pf.Problem, "holds no readable groups"):
+            quiet(pf.draft, self.args())
+        self.assertFalse((self.work / "drafts.json").exists())
+
+        self.grouped({"gaps": ["parity-session-fork", "parity-image-paste"]})
+        self.assertEqual(quiet(pf.draft, self.args())[0], 0)
+        self.assertEqual(len(json.loads((self.work / "drafts.json").read_text())), 2)
+        self.assertTrue((self.work / "merge" / "applied.json").exists())
+
+        self.confirmed(gap("parity-late"), unit="spec:RUN")
+        with self.assertRaisesRegex(pf.Problem, "another set of confirmed gaps"):
+            quiet(pf.draft, self.args())
+        self.assertFalse((self.work / "drafts.json").exists())
+        self.assertFalse((self.work / "merge" / "applied.json").exists())
 
     def test_a_dropped_gap_or_a_decided_one_is_not_drafted_and_unfinished_ones_are_named(self):
         self.research("spec:HOOK", gap("parity-a"), gap("parity-b"), gap("parity-c"))
@@ -440,6 +642,7 @@ class Work(unittest.TestCase):
 
     def test_post_skips_a_gap_the_tracker_already_cites_and_a_missing_label_stops_everything(self):
         self.confirmed(gap(), gap("beyond-fork-anywhere", area="interface"))
+        self.grouped()
         quiet(pf.draft, self.args())
         calls, poster = self.poster(cited=["parity-session-fork"], labels=["parity"])
         code, _ = quiet(pf.pa.post, self.post_args(), poster=poster)
@@ -453,6 +656,18 @@ class Work(unittest.TestCase):
         filed = json.loads((self.work / "filed.json").read_text())
         self.assertEqual(filed["parity-session-fork"], {"issue": 5, "how": "existing"})
         self.assertEqual(filed["beyond-fork-anywhere"]["how"], "filed")
+
+    def test_post_skips_a_draft_when_the_tracker_cites_a_gap_merged_into_it(self):
+        self.confirmed(gap(), unit="spec:HOOK")
+        self.confirmed(gap("parity-fork-conversation"), unit="peer:codex")
+        self.grouped({"gaps": ["parity-session-fork", "parity-fork-conversation"]})
+        quiet(pf.draft, self.args())
+        calls, poster = self.poster(cited=["parity-fork-conversation"])
+        code, out = quiet(pf.pa.post, self.post_args(), poster=poster)
+        self.assertEqual(code, 0)
+        self.assertEqual([c for c in calls if c[0] == "create"], [])
+        self.assertIn("skip   parity-session-fork  #5 holds it", out)
+        self.assertEqual(json.loads((self.work / "filed.json").read_text()), {"parity-session-fork": {"issue": 5, "how": "existing"}})
 
     def test_post_files_a_hundred_by_default_and_names_the_drafts_past_the_cap(self):
         """A confirmed gap left unfiled keeps its unit unreviewed for the next run, and a runaway run must still stop."""
