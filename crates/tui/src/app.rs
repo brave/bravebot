@@ -8881,6 +8881,163 @@ mod tests {
         );
     }
 
+    /// A loopback server answering every request with `body`, and the path of each request it
+    /// answered. A path is sent before its answer is written, so a caller whose request has returned
+    /// finds it already there.
+    fn a_listing_server(body: &'static str) -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{BufRead, BufReader, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+        let address = format!("http://{}", listener.local_addr().expect("an address"));
+        let (sender, asked) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+                let mut reader = BufReader::new(stream);
+                let mut request = String::new();
+                if reader.read_line(&mut request).is_err() {
+                    continue;
+                }
+                let mut header = String::new();
+                while matches!(reader.read_line(&mut header), Ok(read) if read > 2) {
+                    header.clear();
+                }
+                let Some(path) = request.split(' ').nth(1) else {
+                    continue;
+                };
+                if sender.send(path.to_string()).is_err() {
+                    return;
+                }
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = reader.into_inner().write_all(response.as_bytes());
+            }
+        });
+        (address, asked)
+    }
+
+    /// BACKEND-5: the Brave roster is asked for only where this build holds the keys to sign for it.
+    /// The listing itself is unsigned, so a build pointed at AWS with the endpoint set and a key
+    /// blank would be answered, and would offer models whose every request then fails unsigned.
+    ///
+    /// The same endpoint is asked once both keys are there, so a server that answered nothing cannot
+    /// be what keeps the roster out.
+    #[test]
+    fn the_brave_roster_is_offered_only_where_this_build_can_sign_for_it() {
+        use bravebot_config::env_var;
+
+        let (endpoint, asked) = a_listing_server(
+            r#"[{"key": "brave-model", "display_name": "Brave Model",
+                "capabilities": ["chat", "tools"], "options": {"access": "basic_and_premium"}}]"#,
+        );
+        let holding = |key_id: bool, signing_key: bool| {
+            Config::from_lookup(|name| match name {
+                env_var::USE_BEDROCK => Some("1".into()),
+                env_var::AWS_REGION => Some("us-west-2".into()),
+                env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+                env_var::ENDPOINT => Some(endpoint.clone()),
+                env_var::KEY_ID if key_id => Some("a-key-id".into()),
+                env_var::SIGNING_KEY if signing_key => Some("a-signing-key".into()),
+                _ => None,
+            })
+            .expect("an account named on its own is a working configuration")
+        };
+        let offered = |config: &Config| -> Vec<String> {
+            list_models(config, None)
+                .expect("a roster")
+                .into_iter()
+                .map(|model| model.key)
+                .collect()
+        };
+
+        for (key_id, signing_key) in [(false, false), (true, false), (false, true)] {
+            let unsigned = holding(key_id, signing_key);
+            let state = format!("key id held: {key_id}, signing key held: {signing_key}");
+            assert_eq!(offered(&unsigned), ["opus-arn"], "{state}");
+            assert!(!unsigned.serves_aichat(), "{state}");
+        }
+        assert_eq!(
+            offered(&holding(true, true)),
+            ["opus-arn", bravebot_config::DEFAULT_MODEL, "brave-model"]
+        );
+        assert_eq!(asked.try_iter().collect::<Vec<_>>(), ["/v1/models"]);
+    }
+
+    /// BACKEND-5: a gateway whose block names a credential nothing holds is not asked for its
+    /// models. Its listing would be refused and every row from it would fail the same way, so the
+    /// only useful thing to say about it is what `doctor` says: no credential found.
+    ///
+    /// A block naming no credential is asked by the same server. That is a local Ollama's block, and
+    /// it shows the refusal is about the credential rather than about asking.
+    #[test]
+    fn a_gateway_whose_credential_nothing_holds_is_not_asked_for_its_models() {
+        let (base, asked) = a_listing_server(r#"{"data": [{"id": "llama3"}]}"#);
+        let with = |credential: &str| {
+            let mut config = a_config_with_a_named_roster();
+            config.providers = bravebot_config::Settings::parse(&format!(
+                r#"{{"provider": {{"local": {{"options": {{"baseURL": "{base}/v1"}}{credential}}}}}}}"#
+            ))
+            .providers()
+            .to_vec();
+            assert_eq!(config.providers.len(), 1, "the block configured no gateway");
+            config
+        };
+        let offered = |config: &Config| -> Vec<String> {
+            list_models(config, None)
+                .expect("a roster")
+                .into_iter()
+                .map(|model| model.key)
+                .filter(|key| key.starts_with("local/"))
+                .collect()
+        };
+
+        assert_eq!(
+            offered(&with(r#", "env": ["BRAVEBOT_TEST_UNSET_GATEWAY_KEY"]"#)),
+            Vec::<String>::new()
+        );
+        assert_eq!(offered(&with("")), ["local/llama3"]);
+        assert_eq!(asked.try_iter().collect::<Vec<_>>(), ["/v1/models"]);
+    }
+
+    /// BACKEND-5, BACKEND-29: a model an AWS `provider` entry names is offered under a name the
+    /// Bedrock backend answers to, and that name reaches the entry's own account. Qualified by the
+    /// entry's id, as a gateway's rows are, the name reaches no Bedrock account and no gateway, and
+    /// the request goes to Brave's endpoint naming a model it does not serve.
+    #[test]
+    fn an_aws_provider_entrys_models_are_offered_under_names_bedrock_answers_to() {
+        let mut config = a_config_with_a_named_roster();
+        config.providers = bravebot_config::Settings::parse(
+            r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-east-1"},
+                "models": {"openai.gpt-5.6-sol": {}}}}}"#,
+        )
+        .providers()
+        .to_vec();
+        assert_eq!(
+            config.providers.len(),
+            1,
+            "the block configured no AWS entry"
+        );
+        assert!(config.providers[0].bedrock.is_some());
+
+        let offered: Vec<String> = list_models(&config, None)
+            .expect("a roster")
+            .into_iter()
+            .map(|model| model.key)
+            .collect();
+        assert_eq!(offered, ["opus-arn", "openai.gpt-5.6-sol"]);
+        let regions: Vec<Option<&str>> = offered
+            .iter()
+            .map(|key| {
+                config
+                    .bedrock_for(key)
+                    .map(|account| account.region.as_str())
+            })
+            .collect();
+        assert_eq!(regions, [Some("us-west-2"), Some("us-east-1")]);
+    }
+
     /// A model chosen in an earlier session is read back off disk, and the window that came with it
     /// is not: it is reported by the listing and nowhere else. Until this was looked up, a session
     /// with room for a hundred thousand tokens compacted at twenty-four thousand.

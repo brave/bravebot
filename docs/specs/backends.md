@@ -144,6 +144,9 @@ request fails unsigned.
 `verified-by: bravebot_tui::app::only_the_gateway_models_the_file_named_are_offered`
 `verified-by: bravebot_config::provider::a_provider_may_offer_no_models`
 `verified-by: bravebot_config::provider::a_provider_without_a_base_url_is_not_offered`
+`verified-by: bravebot_tui::app::the_brave_roster_is_offered_only_where_this_build_can_sign_for_it`
+`verified-by: bravebot_tui::app::a_gateway_whose_credential_nothing_holds_is_not_asked_for_its_models`
+`verified-by: bravebot_tui::app::an_aws_provider_entrys_models_are_offered_under_names_bedrock_answers_to`
 
 <a id="BACKEND-6"></a>
 ### BACKEND-6: a row says which service will answer it
@@ -1073,6 +1076,7 @@ reads, which is why this is worth stating rather than left to fall out of the id
 `verified-by: bravebot_config::lib::a_name_qualified_by_the_aws_id_is_not_a_gateway_either`
 `verified-by: bravebot_agent::backend::a_model_an_aws_block_named_selects_the_bedrock_backend`
 `verified-by: bravebot_tui::app::a_bedrock_model_a_block_named_is_shown_under_that_name`
+`verified-by: bravebot_tui::app::an_aws_provider_entrys_models_are_offered_under_names_bedrock_answers_to`
 
 <a id="BACKEND-30"></a>
 ### BACKEND-30: what a commit or a pull request carries is a settings key, and empty says none
