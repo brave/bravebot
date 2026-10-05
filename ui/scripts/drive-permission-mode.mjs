@@ -99,6 +99,24 @@ try {
   // The Leo host has no box of its own, so the mode is read off its attribute, not its visibility.
   const inMode = (wanted) => page.waitForFunction((wanted) =>
     document.querySelector('[data-test="mode-trigger"]')?.getAttribute('data-mode') === wanted, wanted)
+  // A refused line carries a long note. The path it names stays whole and the note sits after
+  // it, inside the row, rather than over the verb or past the column.
+  const refusedWriteLaysOut = async (path) => {
+    const row = page.locator('.tool.failed').filter({ has: page.locator('.target', { hasText: path }) }).last()
+    await row.waitFor()
+    const target = await row.locator('.target').evaluate((element) => {
+      const box = element.getBoundingClientRect()
+      return { left: box.left, right: box.right, width: box.width, clipped: element.scrollWidth > element.clientWidth }
+    })
+    const verb = await row.locator('.verb').boundingBox()
+    const note = await row.locator('.note').boundingBox()
+    const edge = await row.boundingBox()
+    assert.ok(target.width > 0 && !target.clipped, `the refused write of ${path} shows its whole path: ${JSON.stringify(target)}`)
+    assert.ok(target.left >= verb.x + verb.width, `the path of ${path} follows the verb`)
+    assert.ok(note.x >= target.right, `the note on ${path} starts after the path`)
+    assert.ok(note.x + note.width <= edge.x + edge.width + 0.5, `the note on ${path} stays inside the row`)
+  }
+  const changeState = (path) => page.locator('.file-row', { hasText: path }).locator('.tag').innerText()
   const cycle = () => app.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('mode.cycle').click())
 
   assert.equal(await mode.getAttribute('data-mode'), 'ask', 'a session opens asking')
@@ -132,13 +150,28 @@ try {
   assert.equal(existsSync(join(project, 'plan.md')), false, 'planning wrote a file')
   assert.ok(rounds[sentBefore].includes('Plan mode.'), 'the planner was told it is planning')
   assert.match(toolResults(rounds.at(-1)), /refused|declined|not/, 'the planner was told the write did not happen')
+  await refusedWriteLaysOut('plan.md')
+  assert.equal(await changeState('plan.md'), 'refused', 'a write plan mode refused is listed as refused, not failed')
+  assert.equal(await changeState('notes.md'), 'applied', 'the write that landed is listed as applied')
   await page.screenshot({ path: join(output, 'mode-plan.png') })
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: join(output, 'mode-plan-dark.png') })
+  await page.emulateMedia({ colorScheme: 'light' })
 
   await cycle()
   await inMode('ask')
+  await send('Write later.md')
+  await writeCards.first().waitFor()
+  await writeCards.first().locator('.reject').click()
+  await stop.waitFor({ state: 'hidden' })
+  assert.equal(existsSync(join(project, 'later.md')), false, 'a write the person refused landed')
+  await refusedWriteLaysOut('later.md')
+  assert.equal(await changeState('later.md'), 'refused', 'a write the person refused is listed as refused')
+  await page.screenshot({ path: join(output, 'mode-ask-refused.png') })
 
   assert.deepEqual(errors, [])
-  console.log(`PASS: accepting edits writes with no card and still asks about a command, the control works while a turn runs, planning writes nothing and asks nothing, and the menu shortcut walks back to asking. Screenshots in ${output}/mode-*.png`)
+  console.log(`PASS: accepting edits writes with no card and still asks about a command, the control works while a turn runs, planning writes nothing and asks nothing, a refused write keeps its path in view and is listed as refused, and the menu shortcut walks back to asking. Screenshots in ${output}/mode-*.png`)
 } catch (error) {
   if (page) await page.screenshot({ path: join(output, 'mode-failure.png') }).catch(() => undefined)
   throw error
