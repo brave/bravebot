@@ -375,6 +375,12 @@ open one that holds the working directory, that no delegate is given a checkout 
 directory is open. It names the drop first, which reaches the file and costs nothing. A directory
 that holds nothing of the kind is offered without the warning.
 
+The warning is given where the directory is opened as well, by `/add-dir` and by `--add-dir`, and
+not only where a read or a spawn is refused afterwards, which is after the planner has spent the
+turn and when the person's two ways out both discard the conversation. It is decided from the
+directory's resolved path and the working directory's, both of which a person typed, and says
+what the refusals above say: while the directory is open no delegate is given a checkout.
+
 What follows from the root follows unchanged. A command line starts at the checkout's root
 ([CMDLINE-12](tools/command-line.md#CMDLINE-12)), a hook runs there
 ([HOOK-4](hooks.md#HOOK-4)), and a relative path means a path in the checkout.
@@ -407,6 +413,9 @@ does the description of `isolation`.
 `verified-by: bravebot_agent::workspace::a_checkout_refusal_names_the_added_directory_that_holds_the_working_directory`
 `verified-by: bravebot_agent::workspace::a_checkout_refusal_names_the_added_directory_that_holds_the_checkouts`
 `verified-by: bravebot_agent::workspace::a_read_refusal_for_a_directory_holding_the_workspace_says_what_opening_it_costs`
+`verified-by: bravebot_agent::workspace::a_directory_that_holds_the_working_directory_is_the_one_that_ends_checkouts`
+`verified-by: bravebot_tui::app::add_dir_of_a_directory_holding_the_project_says_it_ends_checkouts`
+`verified-by: bravebot_cli::main::a_directory_holding_the_working_directory_is_said_to_end_checkouts`
 `verified-by: bravebot_agent::turn::the_answer_to_a_spawn_in_a_checkout_says_the_checkouts_share_the_repositorys_refs`
 `verified-by: bravebot_agent::tools::the_isolation_field_says_checkouts_share_refs_and_who_fetches_once`
 

@@ -443,6 +443,10 @@ about the place (TRUST-2) and the project is in it, so there is nothing to excep
 rules are the more specific ones and still decide wherever they exist, which is what keeps a no
 given inside the project from being undone by a yes given above it.
 
+Opening such a directory ends checkouts ([CHECKOUT-7](checkouts.md#CHECKOUT-7)), so `/add-dir` and
+`--add-dir` both say so when it opens, naming `/add-dir close` as the way back, rather than leaving a
+person to find out from a spawn refused after the turn is spent.
+
 **Why.** Either half alone is no use, one leaving a rule about files nothing can open and the other
 leaving a directory that prompts on every edit. It closes with the session for the reason every
 other answer here does (TRUST-6): leaving a tree reachable once nothing vouches for it would
@@ -460,6 +464,8 @@ outlive the answer that allowed it. Closing one takes both halves for the same r
 `verified-by: bravebot_core::trust::withdrawing_trust_beneath_a_trusted_rule_leaves_the_path_undecided`
 `verified-by: bravebot_core::trust::withdrawing_trust_reaches_every_spelling_a_folding_volume_reads_as_one`
 `verified-by: bravebot_tui::app::add_dir_close_withdraws_the_reach_and_the_rule_together`
+`verified-by: bravebot_tui::app::add_dir_of_a_directory_holding_the_project_says_it_ends_checkouts`
+`verified-by: bravebot_cli::main::a_directory_holding_the_working_directory_is_said_to_end_checkouts`
 `verified-by: bravebot_agent::workspace::a_new_file_can_be_created_in_an_added_directory`
 `verified-by: bravebot_agent::turn::a_turn_can_read_a_file_in_an_added_directory`
 `verified-by: bravebot_tui::sessions::a_resumed_session_can_still_open_the_directory_it_added`
