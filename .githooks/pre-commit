@@ -11,6 +11,26 @@
 # half of it that is cheap enough to check here, and it reads the working tree rather than
 # what is staged, so a partial `git add` can still commit something these did not see.
 
+# A commit that stages only documents and agent files has nothing for fmt or clippy to read: no
+# build script or include! in crates/ names a path under docs/ or agents/. Anything else, or a
+# commit staging nothing, runs the checks, so a path this list does not know about is never skipped.
+only_prose=1
+staged="$(git diff --cached --name-only --no-renames)"
+if [ -z "$staged" ]; then
+    only_prose=0
+fi
+while IFS= read -r path; do
+    case "$path" in
+        docs/*|agents/*|*.md|LICENSE|.github/CODEOWNERS) ;;
+        *) only_prose=0; break ;;
+    esac
+done <<EOF
+$staged
+EOF
+if [ "$only_prose" = 1 ]; then
+    exit 0
+fi
+
 # Git hooks do not inherit direnv. Without this, `cargo clippy` rebuilds `bravebot-config`
 # with no SERVICES_KEY_* and the build script refuses, which looks like a clippy failure.
 if command -v direnv >/dev/null 2>&1; then
