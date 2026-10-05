@@ -3287,6 +3287,69 @@ mod tests {
         assert_eq!(config.endpoint, "https://baked.invalid");
     }
 
+    /// BACKEND-35 through the composition [`Config::from_env_and_settings`] performs, not a copy of
+    /// it: all three layers name the endpoint and each loses to the one above it. A composition that
+    /// put the file or the build first would answer one of the three steps wrongly, which a test
+    /// that rebuilds the chain from its parts cannot see.
+    #[test]
+    fn an_exported_value_outranks_the_build_which_outranks_the_file() {
+        let settings = Settings::parse(
+            r#"{"env": {"BRAVE_AI_CHAT_ENDPOINT": "https://from-the-file.invalid"}}"#,
+        );
+        let endpoint = |exported: Option<&'static str>, baked: Option<&'static str>| {
+            resolved(
+                &settings,
+                |name| match name {
+                    env_var::ENDPOINT => exported.map(str::to_string),
+                    _ => None,
+                },
+                |name| match name {
+                    env_var::ENDPOINT => baked.map(str::to_string),
+                    other => complete_env(other),
+                },
+            )
+            .expect("configured")
+            .endpoint
+        };
+        assert_eq!(
+            endpoint(
+                Some("https://exported.invalid"),
+                Some("https://baked.invalid")
+            ),
+            "https://exported.invalid"
+        );
+        assert_eq!(
+            endpoint(None, Some("https://baked.invalid")),
+            "https://baked.invalid"
+        );
+        assert_eq!(endpoint(None, None), "https://from-the-file.invalid");
+    }
+
+    /// BACKEND-35: where the build carries nothing, a name exported blank is what the configuration
+    /// holds, so the file under it is hidden and the credential is reported empty rather than
+    /// answered from a file the person did not export. A composition that treated blank as absent
+    /// would quietly sign with the checkout's key; one that let blank beat the build would fail
+    /// the second half.
+    #[test]
+    fn a_blank_export_hides_the_file_but_not_the_build() {
+        let settings = Settings::parse(
+            r#"{"env": {"SERVICES_KEY_AICHAT": "key-from-the-file", "BRAVE_AI_CHAT_ENDPOINT": "https://from-the-file.invalid"}}"#,
+        );
+        let blank = |name: &str| match name {
+            env_var::SIGNING_KEY => Some(String::new()),
+            _ => None,
+        };
+        let err = resolved(&settings, blank, |name| match name {
+            env_var::SIGNING_KEY => None,
+            other => complete_env(other),
+        })
+        .unwrap_err();
+        assert_eq!(err, ConfigError::Empty(env_var::SIGNING_KEY));
+
+        let config = resolved(&settings, blank, complete_env).expect("configured");
+        assert_eq!(config.signing_key.expose(), "test-signing-key");
+    }
+
     /// A name nothing reads is kept so that a file written for another tool, or for a later
     /// version, does not stop a session. Kept is the whole of it: the switch that hands this
     /// agent's credentials back to a subprocess is read from the environment alone, and a file
