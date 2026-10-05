@@ -118,6 +118,49 @@ fn a_hook_is_told_the_moment_and_nothing_else() {
     assert_eq!(told.trim(), r#"{"event":"tool-finished"}"#);
 }
 
+/// HOOK-5: the moment and the tool an entry names reach the hook on its standard input only. Its
+/// environment is this process's own, less what is scrubbed, with no name added and no value
+/// carrying the tool or the moment.
+#[test]
+fn a_hook_is_given_no_environment_of_its_own() {
+    let scratch = Scratch::new("environment");
+    // `exec env` so the shell that reads the script is replaced before it can export anything.
+    let program = script(
+        &scratch.path,
+        "dump-env",
+        "#!/bin/sh\nexec env > seen.env\n",
+    );
+    let hooks = declaring("tool-finished", &[program.to_str().expect("a path")]);
+
+    fire(
+        &hooks,
+        Moment::ToolFinished,
+        Some("write_file"),
+        &scratch.path,
+    );
+
+    let seen = std::fs::read_to_string(scratch.path.join("seen.env")).expect("the hook ran");
+    let ours: std::collections::HashSet<String> = std::env::vars_os()
+        .map(|(name, _)| name.to_string_lossy().into_owned())
+        .collect();
+    // Set by the shell itself before `exec` replaces it, so not something the agent added.
+    let by_the_shell = ["PWD", "OLDPWD", "SHLVL", "_"];
+    for line in seen.lines() {
+        let Some((name, value)) = line.split_once('=') else {
+            continue;
+        };
+        assert!(
+            ours.contains(name) || by_the_shell.contains(&name),
+            "the hook was given {name}, which this process did not have"
+        );
+        assert!(
+            !value.contains("write_file") && !value.contains("tool-finished"),
+            "{name} carries what the hook should only have been told on standard input"
+        );
+    }
+    assert!(!seen.is_empty(), "the hook saw no environment at all");
+}
+
 /// HOOK-3: the words in the file are an argument vector. One holding a space and a semicolon is
 /// one argument, because there is no shell between the file and the process.
 #[test]
