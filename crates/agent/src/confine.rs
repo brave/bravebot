@@ -28,6 +28,10 @@ pub struct Confinement {
     home: Option<PathBuf>,
     roots: Vec<PathBuf>,
     scratch: Option<PathBuf>,
+    /// The program a test has the platform fail to confine, which no machine's real mechanism does
+    /// on demand.
+    #[cfg(test)]
+    unconfinable: Option<String>,
 }
 
 impl Confinement {
@@ -66,7 +70,17 @@ impl Confinement {
             home: home.map(canonical),
             roots: roots.iter().map(|root| canonical(root)).collect(),
             scratch: scratch.map(canonical),
+            #[cfg(test)]
+            unconfinable: None,
         }
+    }
+
+    /// This confinement, failing for the step that starts `program` as the platform would for one
+    /// it cannot confine.
+    #[cfg(test)]
+    pub(crate) fn failing_for(mut self, program: &str) -> Self {
+        self.unconfinable = Some(program.to_string());
+        self
     }
 
     /// The policy one step runs under, started in `directory`.
@@ -146,6 +160,10 @@ impl Confinement {
             program: step.program.clone(),
             detail,
         };
+        #[cfg(test)]
+        if self.unconfinable.as_deref() == Some(step.program.as_str()) {
+            return Err(not_confined("a test made the platform refuse".to_string()));
+        }
         let sandbox = bravebot_sandbox::for_current_platform()
             .map_err(|error| not_confined(error.to_string()))?;
         let capabilities = sandbox.capabilities();
@@ -493,5 +511,98 @@ mod tests {
         assert!(rows.contains(&PathBuf::from("/opt/tools/bin")));
         assert!(rows.contains(&PathBuf::from("/opt/tools")));
         assert!(!rows.contains(&PathBuf::from(format!("{HOME}/.cargo"))));
+    }
+
+    /// A session directory under the build directory, which no row of the base reaches, and a
+    /// confinement of this machine's own over it.
+    fn a_session(name: &str) -> (PathBuf, Confinement) {
+        let session = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!("confine-unit-{name}"));
+        let _ = std::fs::remove_dir_all(&session);
+        std::fs::create_dir_all(&session).expect("session directory");
+        let session = session.canonicalize().expect("canonical session");
+        let confinement = Confinement::new(
+            Prelude::current().expect("a platform with a base"),
+            canonical(&temporary_directory()),
+            developer_directory(),
+            None,
+            vec![session.clone()],
+            None,
+        );
+        (session, confinement)
+    }
+
+    /// The line a refusal is tested with: the first stage would write `late.txt` a second from
+    /// now, and the second is the one the platform cannot confine.
+    const A_SLOW_WRITER_INTO_A_PIPE: &str = "sh -c 'sleep 1; touch late.txt' | cat";
+
+    fn can_confine() -> bool {
+        Prelude::current().is_some() && bravebot_sandbox::confinement_works_here()
+    }
+
+    fn plan_of(line: &str, session: &Path) -> bravebot_core::command::Plan {
+        crate::cmdline::compile(line, session, None, &mut |_, _| Ok(()))
+            .unwrap_or_else(|error| panic!("`{line}` should compile: {error}"))
+    }
+
+    /// A stage the platform cannot confine is refused and nothing is started in its place. The
+    /// regression it rejects is a fall back to the plain command when confining fails, which is
+    /// every program run without its profile on exactly the machines that cannot apply one: the
+    /// earlier stage is then left running and writes, or the refused stage runs and the call
+    /// returns a result.
+    #[test]
+    fn a_stage_that_cannot_be_confined_is_refused_with_no_stage_left_running() {
+        if !can_confine() {
+            return;
+        }
+        let (session, confinement) = a_session("foreground-refusal");
+        let confinement = confinement.failing_for("cat");
+        let plan = plan_of(A_SLOW_WRITER_INTO_A_PIPE, &session);
+
+        let refused = crate::exec::run_plan_observed(
+            &plan,
+            &bravebot_core::cancel::Cancel::new(),
+            crate::exec::LIMIT,
+            None,
+            None,
+            Some(&confinement),
+            &mut |_| Ok(()),
+        );
+
+        assert!(
+            matches!(&refused, Err(ExecError::NotConfined { program, .. }) if program == "cat"),
+            "{refused:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        assert!(
+            !session.join("late.txt").exists(),
+            "the stage before the refused one was left running"
+        );
+    }
+
+    /// The same refusal for a job left running, which is a second place a stage is started.
+    #[test]
+    fn a_job_with_a_stage_that_cannot_be_confined_is_refused_with_no_stage_left_running() {
+        if !can_confine() {
+            return;
+        }
+        let (session, confinement) = a_session("background-refusal");
+        let confinement = confinement.failing_for("cat");
+        let plan = plan_of(A_SLOW_WRITER_INTO_A_PIPE, &session);
+        let steps = plan.steps.unrouted_pipeline().expect("one pipeline");
+
+        let refused = crate::exec::start_steps(steps, &session, None, Some(&confinement));
+
+        assert!(
+            matches!(&refused, Err(ExecError::NotConfined { program, .. }) if program == "cat"),
+            "{:?}",
+            refused.err()
+        );
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        assert!(
+            !session.join("late.txt").exists(),
+            "the stage before the refused one was left running"
+        );
     }
 }
