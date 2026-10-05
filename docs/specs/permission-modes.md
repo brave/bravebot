@@ -302,6 +302,7 @@ mode that answered these would be putting words in the mouth of a person sitting
 session. That a mode stops prompts is not a reason to think they wanted this one stopped.
 
 `verified-by: bravebot_agent::permission_mode::no_mode_answers_a_question_that_is_not_a_permission`
+`verified-by: bravebot_agent::permission_mode::no_mode_answers_for_a_line_the_person_typed`
 
 <a id="MODE-8"></a>
 ### MODE-8: a turn keeps the mode it began with, and both halves read one value

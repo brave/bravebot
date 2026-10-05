@@ -1130,6 +1130,85 @@ mod tests {
         }
     }
 
+    /// Has one line to hand over when asked whether the person typed anything, and refuses the rest.
+    struct Interjects(Option<String>);
+
+    impl Confirmer for Interjects {
+        fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
+            Unattended.confirm_write(request)
+        }
+        fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+            Unattended.confirm_run(request)
+        }
+        fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
+            Unattended.confirm_read_output(request)
+        }
+        fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+            Unattended.confirm_vetted_read(request)
+        }
+        fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
+            Unattended.confirm_fetch(request)
+        }
+        fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
+            Unattended.confirm_server(request)
+        }
+        fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+            Unattended.confirm_manifest(request)
+        }
+        fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
+            Unattended.confirm_vouch(request)
+        }
+        fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
+            Unattended.confirm_exposing_read(request)
+        }
+        fn confirm_tool_list(&mut self, request: &crate::confirm::ToolListRequest) -> Decision {
+            Unattended.confirm_tool_list(request)
+        }
+        fn confirm_mcp_call(
+            &mut self,
+            request: &crate::confirm::McpCallRequest,
+        ) -> crate::confirm::CallDecision {
+            Unattended.confirm_mcp_call(request)
+        }
+        fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
+            Unattended.confirm_move(request)
+        }
+        fn ask_user(
+            &mut self,
+            asking: &bravebot_core::ask::Asking,
+        ) -> Vec<bravebot_core::ask::Answer> {
+            Unattended.ask_user(asking)
+        }
+        fn interjection(&mut self) -> Option<String> {
+            self.0.take()
+        }
+    }
+
+    /// A line the person typed unprompted is their own words, so every mode hands it on as it
+    /// arrived, and a mode has no line of its own to hand on in its place.
+    #[test]
+    fn no_mode_answers_for_a_line_the_person_typed() {
+        for mode in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+            PermissionMode::Bypass,
+        ] {
+            let mut typing = Interjects(Some("use the other file".to_string()));
+            let mut confining = Confining::new(&mut typing, mode, false);
+            assert_eq!(
+                confining.interjection().as_deref(),
+                Some("use the other file"),
+                "{mode:?} did not pass on what the person typed"
+            );
+            assert_eq!(
+                confining.interjection(),
+                None,
+                "{mode:?} made up a line when the person had typed nothing"
+            );
+        }
+    }
+
     /// A session started in bypass by the flag can still be cycled out of and back into it, so the
     /// key means the same thing wherever the session began.
     #[test]
