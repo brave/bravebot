@@ -12644,6 +12644,40 @@ mod tests {
         assert!(session.input().is_empty(), "the slash was typed");
     }
 
+    /// A running turn answers the two letters the way an idle one does, since neither sends anything.
+    /// The path a turn in flight takes is a second one through the keys, so an idle session's
+    /// answer says nothing about it: `k` has to recall the last prompt and `/` has to open the
+    /// search, not move a caret or type into a box that is waiting for the turn to end.
+    #[test]
+    fn the_letters_that_spell_keys_reach_the_history_and_the_search_mid_turn() {
+        let mut session = editing_vis_way();
+        type_line(&mut session, "an earlier prompt");
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.complete("an answer", Vec::new(), 0);
+        type_line(&mut session, "the running prompt");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert!(session.indicator().is_some(), "no turn is running");
+        handle_key_while_working(&mut session, key(KeyCode::Esc));
+
+        handle_key_while_working(&mut session, key(KeyCode::Char('k')));
+        assert_eq!(
+            session.input(),
+            "the running prompt",
+            "k did not reach the history mid-turn"
+        );
+
+        handle_key_while_working(&mut session, key(KeyCode::Char('/')));
+        assert!(
+            session.searching_history(),
+            "the slash did not open the search mid-turn"
+        );
+        assert_eq!(
+            session.input(),
+            "the running prompt",
+            "the slash was typed into the line"
+        );
+    }
+
     /// In INSERT mode every one of those letters is a letter, which is the whole of what the mode
     /// means. A `/` typed there is the start of a command, and a `j` is a `j`.
     #[test]
