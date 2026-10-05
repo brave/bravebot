@@ -517,6 +517,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             .with_system_prompts(self.prompts.clone())
             .with_output_cap(self.output_cap)
             .with_deadlines(self.deadlines)
+            .with_confined_runs(true)
             .with_auto_vetting(self.auto_vetting)
             .already_asked_about(self.asked_about.clone())
             .already_exposed(self.exposed.clone())

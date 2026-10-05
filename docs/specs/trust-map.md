@@ -1335,8 +1335,8 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   confined stage reads what a turn left here without its plan naming the path, and a file it
   writes here is answered by what was said about the workspace (TRUST-16). What keeps TRUST-16's
   grounds standing after the first instant is the ownership and the mode, and neither tells a
-  program this session started from the session itself. A program `run` starts is unconfined, so
-  what this costs arrives with the profile rather than before it.
+  program this session started from the session itself. A program `run` starts on Linux and macOS
+  is confined ([SANDBOX-17](sandboxing.md#SANDBOX-17)), and this row is in its profile.
 - **Confinement is decided before an operation runs, not while it runs.** Where a path lands is
   worked out by resolving it, and the operation happens after that, so a component that is a
   directory when it is resolved and a symlink when the file is opened carries the bytes with it.

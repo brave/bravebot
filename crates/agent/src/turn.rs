@@ -825,6 +825,13 @@ pub struct Task {
     /// where it is done, and [`crate::exec::Deadlines::BUILT_IN`] is what a caller that read no
     /// settings file gets.
     pub deadlines: crate::exec::Deadlines,
+    /// Whether a program `run` starts is confined to what its plan accounts for.
+    ///
+    /// Off unless the caller turns it on, which every front end does: a test that runs a program
+    /// in a scratch directory outside the places a session is opened on would otherwise be
+    /// refused. A delegate inherits the spawning turn's answer, since the person's answer about
+    /// what a program may reach does not stop being theirs because the work moved.
+    pub confine_runs: bool,
     /// Rules the user wrote in advance about which actions to ask them about.
     ///
     /// Supplied per turn for the reason `home` and `model` are: which file they came from is the
@@ -1037,6 +1044,8 @@ impl Task {
             output_cap: None,
             // And the built-in figures for how long one may run, for the same reason.
             deadlines: crate::exec::Deadlines::BUILT_IN,
+            // Unconfined, which is what a turn has always done.
+            confine_runs: false,
             permissions: Permissions::new(),
             // Asking, which is what a turn has always done.
             permission_mode: crate::PermissionMode::default(),
@@ -1222,6 +1231,13 @@ impl Task {
     /// [`Task::deadlines`].
     pub fn with_deadlines(mut self, deadlines: crate::exec::Deadlines) -> Self {
         self.deadlines = deadlines;
+        self
+    }
+
+    /// Hold every program `run` starts to the profile its plan accounts for. See
+    /// [`Task::confine_runs`].
+    pub fn with_confined_runs(mut self, confine: bool) -> Self {
+        self.confine_runs = confine;
         self
     }
 
@@ -1932,6 +1948,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             permission_mode: task.permission_mode,
             auto_vetting: task.auto_vetting,
             run_directory: &mut run_directory,
+            confine_runs: false,
         },
         confirmer,
         id,
@@ -4265,6 +4282,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 permission_mode: task.permission_mode,
                                 auto_vetting: task.auto_vetting,
                                 run_directory: &mut run_directory,
+                                confine_runs: task.confine_runs,
                             },
                             &mut asking,
                             &mut reporter,
@@ -4344,6 +4362,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     task.system_prompts.appending.as_deref(),
                                     task.output_cap,
                                     task.deadlines,
+                                    task.confine_runs,
                                     task.mcp.as_ref(),
                                     cancel,
                                     &mut confirmer,

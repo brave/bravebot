@@ -324,15 +324,15 @@ because its body is read to the end without a stop being looked at.
   ([tools/run.md](tools/run.md)) executes programs, and a line the user typed in shell mode
   ([shell-mode.md](shell-mode.md)) goes to a real shell with nothing asked first, so an approved
   `curl`, `git push` or package install reaches the network without passing this gate. Unlike
-  `bravebot-skus`, this path can carry the user's own data: a program runs with the access their
-  shell would give it, so it can read a private file and send it. Nothing routes or inspects those
+  `bravebot-skus`, this path can carry the user's own data: a program reads what its profile reaches
+  (everything the account can on Windows), so it can read a file in the session and send it. Nothing routes or inspects those
   requests, and the host rules a `fetch_url` call is held to do not reach them. What stands in front
   of the path is the prompt that asks before a program runs and a `Bash` deny rule
   ([permissions.md](permissions.md)), both of which refuse a command rather than govern its traffic.
-  Operating-system confinement can govern traffic, and is applied to the stdio servers it exists for
-  rather than to a program somebody asked for. Confining one is decided in
-  [sandboxing.md](sandboxing.md) as a bound on the paths it may reach and not on its egress, because
-  a profile cannot tell an approved `git push` from an exfiltration, so this cost stands either way.
+  Operating-system confinement can govern traffic. A program somebody asked for is confined by
+  [sandboxing.md](sandboxing.md) ([SANDBOX-17](sandboxing.md#SANDBOX-17)) as a bound on the paths it
+  may reach and not on its egress, because a profile cannot tell an approved `git push` from an
+  exfiltration, so this cost stands either way.
 
 - **Within https, a hop on this program's own connection may go to any host.** Every hop re-sends the
   whole request, which on those connections means the `authorization` header the aichat and gateway

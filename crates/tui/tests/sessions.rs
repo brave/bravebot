@@ -1854,6 +1854,7 @@ fn backup_capture_trust_overrides_a_stale_pre_turn_grant() {
         std::time::Duration::from_secs(5),
         None,
         None,
+        None,
         &mut |path| {
             let _capture = authority.capture();
             effects.push(_capture.begin(path.to_str().unwrap()).unwrap());

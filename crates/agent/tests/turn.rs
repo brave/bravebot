@@ -24002,6 +24002,7 @@ fn a_delegate_spends_the_wallet_the_turn_lent_it() {
         None,
         None,
         bravebot_agent::exec::Deadlines::BUILT_IN,
+        false,
         None,
         &bravebot_core::cancel::Cancel::new(),
         &mut bravebot_agent::confirm::ApproveWrites,

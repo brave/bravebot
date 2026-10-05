@@ -13,6 +13,7 @@ governs:
   - crates/sandbox/src/process.rs
   - crates/sandbox/src/toolchain.rs
   - crates/sandbox/src/scope.rs
+  - crates/agent/src/confine.rs
 documented-by: docs/website/docs/security/security.md
 ---
 
@@ -21,8 +22,9 @@ documented-by: docs/website/docs/security/security.md
 Operating-system confinement for processes that run code we did not write, which today means the
 stdio servers in [mcp.md](mcp.md). What this is *not* for is our own code: a processor is a model
 call made by our own code, and confining that would fence in the trusted half and leave the
-untrusted half free. A program the user asked for runs with the access their own shell would give
-it, and what confining one would mean is the last section here. The inhibitor `/caffeinate` starts
+untrusted half free. A program the user asked for is the one case of our own that this does cover,
+because the code it runs is not ours: `run` starts it under the profile its plan accounts for on
+Linux and macOS ([SANDBOX-17](#SANDBOX-17)), and the last section here is what that profile is. The inhibitor `/caffeinate` starts
 is neither: its program and arguments are fixed in our code
 ([commands.md](commands.md#CMD-12)), so it is not confined.
 
@@ -76,6 +78,11 @@ what keeps a reader from taking the present tense for a claim about what runs to
 If confinement cannot be established the process does not run. An unavailable backend refuses to
 spawn rather than falling back, and the platform lookup never hands back a backend that would
 confine nothing.
+
+The one place a program starts without a backend is a platform with no base to build a profile on,
+which is Windows: a program `run` starts there is not confined until a base exists
+([SANDBOX-17](#SANDBOX-17)). No other caller is carved out, and on Linux and macOS a program `run`
+starts is refused when the backend will not apply its profile.
 
 **Why.** Silently degrading is worse than an error: the caller believes it has a guarantee it does
 not have, and the audit trail records a sandbox that was never applied.
@@ -471,7 +478,9 @@ holds and every name a directory lists, which is where a credential is.
 On macOS a policy that grants any write refuses a write to every path with a `.git` component, in
 any case: creating, changing, renaming into or removing a file or directory named `.git` or inside
 one, under a row the policy writes as under any other. Every other write a row grants is granted.
-On Linux Landlock grants a directory with everything beneath it and has no way to hold one
+A policy can lift the refusal, as the profile of a program a person asked for does so that `git`
+works in the directories it was given ([SANDBOX-18](#SANDBOX-18)), and then a write row reaches a
+`.git` as it does on Linux. On Linux Landlock grants a directory with everything beneath it and has no way to hold one
 subdirectory back, so this clause does not hold there, which is
 [mcp-servers.md](mcp-servers.md)'s known cost. The Windows backend withholds nothing of the kind,
 and no server is started there ([SERVERS-10](mcp-servers.md#SERVERS-10)).
@@ -483,6 +492,8 @@ the refusal follows the rows it narrows. The default macOS volume opens `.GIT` w
 the case of the name does not matter.
 
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_a_git_directory_beneath_it`
+`verified-by: bravebot_sandbox::macos::a_policy_allowing_git_directory_writes_reaches_a_git_directory`
+`verified-by: bravebot_sandbox::macos::the_git_refusal_is_in_the_profile_only_for_a_policy_that_writes_and_has_not_lifted_it`
 
 <a id="SANDBOX-15"></a>
 ### SANDBOX-15: a toolchain's list is keyed on the file its program resolved to, and names a cache and never the token beside it
@@ -498,8 +509,8 @@ directory, `~/.config`, `~/.cache`, `~/Library` or `~/Library/Caches`. Each writ
 names, so a backend that cannot name an absent path has the cache created as the directory or file
 the toolchain expects there. A list is added to the policy it is given and takes nothing from it.
 What decides a row is the table and the platform: nothing on the machine is read, so `CARGO_HOME`,
-`GOCACHE` and `XDG_CACHE_HOME` move no row. No stage is started with a list yet, since `run` builds
-no profile; this is the list one adds.
+`GOCACHE` and `XDG_CACHE_HOME` move no row. `run` adds the list for each stage it starts
+([SANDBOX-18](#SANDBOX-18)).
 
 **Why.** The paths a build resolves through belong to that build and not to every program that runs,
 and the file a stage resolved to is the part of the plan a person read, where a name the model wrote
@@ -543,8 +554,8 @@ No scope names a private key or `~/.ssh` as a directory. The remote scope reads 
 `~/.ssh/known_hosts`, the public key at each name ssh looks for by default, `~/.gitconfig`,
 `~/.git-credentials`, `~/.config/git/credentials`, `~/.netrc` and `~/.config/gh`, and writes
 `~/.ssh/known_hosts` alone, as a file. A tool's directory is read and never written. A scope is
-added to the policy it is given and takes nothing from it. No stage is started with a scope yet,
-since `run` builds no profile; this is the scope one adds.
+added to the policy it is given and takes nothing from it. `run` adds the scope for each stage it
+starts ([SANDBOX-18](#SANDBOX-18)).
 
 **Why.** A push is how most sessions end, so a profile that refuses one is one somebody turns off.
 `git` runs whatever its argv or its environment names, so a scope granted on the first word of a
@@ -576,15 +587,95 @@ an exec plugin, a `credsStore` helper.
 `verified-by: bravebot_sandbox::scope::a_scope_leaves_the_policy_it_is_added_to_as_it_was`
 `verified-by: bravebot_sandbox::macos::a_remote_stage_reads_what_ssh_reads_and_never_a_private_key`
 
+<a id="SANDBOX-17"></a>
+### SANDBOX-17: a program `run` starts is started under its plan's profile, or not started
+
+On Linux and macOS every stage of a plan `run` starts is started under the profile
+[SANDBOX-18](#SANDBOX-18) composes for it: each stage of a pipeline, a stage of a line left running
+in the background, and a stage of a plan a subagent runs. The profile is applied after the stage's
+environment is set and scrubbed and before its standard streams are connected, so it is the process
+that reads its arguments that is confined. A stage the platform cannot confine, because the backend
+is unavailable or will not apply the policy, is not started, the pipeline's other stages are
+stopped, and the turn is told the program was not started since it could not be confined. No setting
+turns this off.
+
+Confinement is a property of the session and not of the plan: the terminal, desktop, plain and
+one-shot front ends each ask for it when they open a session. A caller that does not ask, which is a
+test driving the executor directly, starts stages as the user's own shell would.
+
+A platform with no base to build a profile on starts a stage as it always has. That is Windows, where
+the decision is to confine Linux and macOS first and leave coverage of the third to
+[brave/bravebot#1632](https://github.com/brave/bravebot/issues/1632). The carve-out is the absence
+of a base and no other reason: a platform that has one and cannot apply a policy refuses.
+
+**Why.** A profile that is applied when it can be and skipped when it cannot is the silent
+degradation [SANDBOX-1](#SANDBOX-1) exists to forbid, and the person who endorsed a line believes it
+ran under what the plan accounts for. An off switch would be the setting a person reaches for after
+one refusal and forgets, and every session after it would run the way these did before. Starting the
+process already confined, through a command the caller spawns, keeps the stage's pipes and process
+group its own, so the executor's cancellation and job handling are unchanged.
+
+**What it costs.** A program argument that names a path outside the directories the session was
+opened on is refused by the kernel, since only redirections are opened by this process on the
+stage's behalf. A `cat ~/notes.txt` that worked before fails, and a person adds the directory
+([trust-map.md](trust-map.md)). On macOS the refusal of a `.git` write is lifted for these stages
+([SANDBOX-14](#SANDBOX-14)), which gives them the reach Linux gives.
+
+`verified-by: bravebot_agent::confine::a_confined_program_cannot_read_a_file_outside_the_session`
+`verified-by: bravebot_agent::confine::a_confined_program_reads_and_writes_inside_the_session`
+`verified-by: bravebot_agent::confine::a_confined_program_cannot_write_outside_the_session`
+`verified-by: bravebot_agent::confine::a_program_left_running_is_confined_as_well`
+`verified-by: bravebot_agent::tools::a_turn_that_confines_runs_is_confined_to_its_workspace_and_a_turn_that_does_not_is_not`
+`verified-by: bravebot_sandbox::linux::a_command_handed_back_is_confined_when_the_caller_spawns_it`
+`verified-by: bravebot_sandbox::macos::a_command_handed_back_is_confined_when_the_caller_spawns_it`
+
+<a id="SANDBOX-18"></a>
+### SANDBOX-18: the profile a stage runs under is composed from the plan and the session's directories
+
+A stage's policy is the fixed base ([SANDBOX-12](#SANDBOX-12)), with `.git` writes allowed, plus:
+the toolchain list its resolved binary brings ([SANDBOX-15](#SANDBOX-15)); the credential scope its
+argv names ([SANDBOX-16](#SANDBOX-16)); the directories its program is read from, which are the
+directories on the `PATH` it starts with and the directory it resolved into, each with its links
+followed, the parent of a `bin` directory among them, and none that is the home directory, above it
+or a parent inside it; the two files the step names as read, the one it was started as and the one
+it resolved to; each directory the session was opened on, to read and write; the session's scratch
+directory, to read and write; and the plan's directory as the place it starts. Where the stage
+carries the remote scope, the socket `SSH_AUTH_SOCK` names in its own environment is a write row,
+since a socket is reached through a write ([SANDBOX-3](#SANDBOX-3)). Nothing else is in it: no
+credential directory, no directory above a session directory, and no socket for a stage without the
+remote scope.
+
+Every input is the compiled step a person read, the session's own directories or the process's own
+environment. Nothing a program printed, and no value the model supplied beyond the plan, reaches a
+row. Rows that name an absent path are created or left out as [SANDBOX-9](#SANDBOX-9) and
+[SANDBOX-11](#SANDBOX-11) say, by what the backend can grant.
+
+**Why.** The grant is the plan, so a line nobody is asked about gets the same profile as one
+somebody answered. The `.git` hold-back ([SANDBOX-14](#SANDBOX-14)) is lifted because a stage
+started in a directory it may write is where a person runs `git commit`, and a profile that refused
+it would be one somebody turns off; it is the same reach Linux gives. A program installed inside the
+home is read as the file a person read and not as its directory, so that granting a program does not
+open the home.
+
+`verified-by: bravebot_agent::confine::the_session_directories_are_read_and_written_and_nothing_else_of_the_persons`
+`verified-by: bravebot_agent::confine::a_step_whose_plan_names_no_credential_reaches_nothing_in_the_home`
+`verified-by: bravebot_agent::confine::a_toolchains_cache_is_granted_to_its_own_binary_only`
+`verified-by: bravebot_agent::confine::a_push_reaches_the_remote_scope_and_a_status_does_not`
+`verified-by: bravebot_agent::confine::the_agent_socket_goes_to_a_remote_step_and_to_no_other`
+`verified-by: bravebot_agent::confine::an_assignment_in_front_of_a_push_removes_its_scope`
+`verified-by: bravebot_agent::confine::a_program_at_the_top_of_the_home_is_granted_as_a_file_and_not_as_the_home`
+`verified-by: bravebot_agent::confine::the_path_outside_the_home_is_read_and_the_homes_own_bin_brings_no_parent`
+
 ## Programs a person asked for
 
-A program `run` ([tools/run.md](tools/run.md)) starts is unconfined: it gets the access the user's
-own shell would give it, and the reason `run` gives is that `git push` needs `~/.ssh` and the
-programs somebody might ask for cannot be listed in advance. The decision is that confinement is
-added, and that what it bounds is the filesystem: a program is held to the paths the plan a person
-endorsed accounts for, and not to whatever else it could open. Nothing in this section is in force.
-A `run` profile is what puts it in force, and the clauses above are what such a profile is then held
-to.
+A program `run` ([tools/run.md](tools/run.md)) starts used to get the access the user's own shell
+would give it, on the ground that `git push` needs `~/.ssh` and the programs somebody might ask for
+cannot be listed in advance. The decision is that it is confined, and that what confinement bounds
+is the filesystem: a program is held to the paths the plan a person endorsed accounts for, and not
+to whatever else it could open. On Linux and macOS this section is in force
+([SANDBOX-17](#SANDBOX-17), [SANDBOX-18](#SANDBOX-18)), and the clauses above are what the profile
+is held to. Windows has no base yet, so a program there is unconfined. Each part of the decision
+that is not built is marked where it appears.
 
 **The grant is the plan, not the prompt.** A command line compiles to a plan carrying its read set,
 its write set and each stage's resolved binary, and that plan is what a person is shown and what an
@@ -708,7 +799,9 @@ is never the terminal ([tools/run.md](tools/run.md)), so a terminal editor has n
 confined or not. A graphical one such as `code --wait` needs no terminal, and it is a program the
 plan never showed, so no list is keyed on it.
 
-**A command no list knows is asked about, and the answer lasts the session.** A wrapper is the
+**A command no list knows is asked about, and the answer lasts the session.** Not built: a stage no
+list knows runs under the base and its plan and nothing asks about it, so a build inside it that
+needs a cache fails and stays failed. The rest of this paragraph is the decision. A wrapper is the
 common case rather than the edge one: `make check` here, a `just` recipe or an `npm run` target
 elsewhere, and the binary such a stage resolves is `make` or `just` and not the build it goes on to
 drive. That stage gets the base and its plan and nothing else, so a build inside it that needs a
@@ -750,10 +843,11 @@ disk. The remote scope is `~/.ssh/config` and `~/.ssh/known_hosts` to read with 
 to write, that write row naming a file rather than a directory so that an account with no
 `known_hosts` gets one rather than a push that fails ([SANDBOX-11](#SANDBOX-11)), the public key at
 each name ssh looks for by default, `~/.gitconfig`, and the stores an https helper reads:
-`~/.git-credentials`, `~/.config/git/credentials`, `~/.netrc` and `~/.config/gh`. The agent socket
-`$SSH_AUTH_SOCK` and the login keychain are in no row: a stage reaches the socket while its profile
-leaves egress open and the keychain through the system service that holds it, whatever scope it
-carries (the last section's list of what has to exist first). On macOS, where the backend creates
+`~/.git-credentials`, `~/.config/git/credentials`, `~/.netrc` and `~/.config/gh`. The login keychain
+is in no row and is reached through the system service that holds it, whatever scope a stage
+carries (the last section's list of what has to exist first). The agent socket `$SSH_AUTH_SOCK`
+names is a write row for a stage that carries the remote scope and for no other
+([SANDBOX-18](#SANDBOX-18)), and on macOS it is reached only while the profile leaves egress open. On macOS, where the backend creates
 nothing, the file is made by ssh, which can do so only into a `~/.ssh` already there, so an account
 without one records no host a confined push meets. A push signs through the agent and needs no
 private key, and the public half is in the scope because that is what ssh reads to name an identity
@@ -812,7 +906,8 @@ because such a rule stops a question rather than extending reach. Only this rout
 nameable without being vouched for, since a scope the compiler adds is a grant in a profile and
 records nothing about what anybody trusts.
 
-**Turning the scopes off.** `--credential-scopes` takes `planned` or `withheld`, and
+**Turning the scopes off.** Not built: neither setting exists, and every plan carries the scopes its
+stages name. The rest of this paragraph is the decision. `--credential-scopes` takes `planned` or `withheld`, and
 `run.credentialScopes` in a settings file takes the same two values. `withheld` leaves every scope
 out of every plan, so a stage reaches a credential only where a person named its directory. What it
 is for is a machine whose secrets are not this session's to lend: a shared build host, or one an
@@ -853,15 +948,16 @@ reported as what it is.
   file's contents trusted content. The command-line form already separates them, and the two session
   forms do not. A scope the compiler adds needs none of this, since it grants reach inside a profile
   and writes nothing to the record of what a person vouched for.
-- A policy names paths, in a list to read and a list to write, and a socket is reached only through
-  the second ([SANDBOX-3](#SANDBOX-3)). The remote scope lists the agent socket to read, so a `run`
-  profile has to name it as a write row, or a policy needs a row that carries a connect and no
-  write. On macOS that row reaches the socket only while the profile grants egress.
+- The agent socket is a write row because a socket is reached only through the second list
+  ([SANDBOX-3](#SANDBOX-3)), which is wider than a row that carried a connect and no write. A
+  policy row for a connect alone would narrow it. The row has not been exercised against a running
+  agent.
 - What a program needs in order to start on Windows is not written down, so there is no base
   there and nothing to assemble a profile from. The rows above are the Unix ones, and what a
   Windows base has to settle first is whether a container reaches the system directories through
   an access entry the platform already wrote, or whether the base names them and every run writes
-  an entry of its own onto a directory of the machine's.
+  an entry of its own onto a directory of the machine's. Until it does, a program `run` starts there is
+  unconfined ([SANDBOX-17](#SANDBOX-17)).
 - Subprocess denial has no mechanism on Windows or on Linux. A container bounds what a process
   reaches rather than whether it creates children, and a child of a confined process is inside the
   same container rather than outside it, so a policy asking for that denial is refused on both
@@ -872,12 +968,14 @@ reported as what it is.
   under the home or in a folder inside `/Applications`, is in no row, so on that machine every
   `/usr/bin` developer shim is refused under the base. A row for it names a directory of the
   person's on the word of a setting, and nothing has decided that yet.
-- A program installed outside the system binary directories cannot start under the base, and
-  that is where many of the programs a list or a scope exists for are: `gh`, `aws`, `go` and a
-  Homebrew `python3` are commonly under `/opt/homebrew` or `/usr/local`, and Docker's `docker` and
-  `kubectl` are inside its application bundle. A list or a scope for one of them can apply only
-  once the base or the stage's own list names where it is installed, and which of the two that
-  should be is not settled.
+- A stage's program directory and the `PATH` directories outside the home are read by every stage
+  ([SANDBOX-18](#SANDBOX-18)), so a program installed under `/opt/homebrew` or `/usr/local` starts.
+  That makes every directory on a person's `PATH` outside the home readable to every stage, which is
+  wider than the stage's own program needs and is the price of a runner finding the interpreter it
+  names.
+- A `run` argument that names a path outside the directories the session was opened on is refused
+  ([SANDBOX-17](#SANDBOX-17)). Whether the compiler should read such an argument as a path and put
+  it in the plan is not settled.
 - Seatbelt profiles here allow every `mach-lookup`, so the keychain service is reachable from every
   stage and not only from one carrying the remote scope. A profile holding the keychain to that
   scope has to name the service instead, the same step the socket above needs.
