@@ -61,6 +61,10 @@ alone. If they could not, it does not get built.
 
 ## Working here
 
+Before adding a client, adapter, or behavior that multiple clients need, use
+[shared-implementation-preflight](agents/skills/shared-implementation-preflight/SKILL.md).
+Check where the behavior belongs before editing and verify reuse against the final diff.
+
 Before changing behaviour or adding, removing, or weakening test assertions, use
 [testing-preflight](agents/skills/testing-preflight/SKILL.md). Apply it before choosing the
 test approach, and use its evidence requirements when reporting the result.

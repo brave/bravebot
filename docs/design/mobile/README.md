@@ -8,7 +8,7 @@ Start with the [executive summary](executive-summary.md). It is written to stand
 
 Bravebot mobile should support both an agent executing on the device and remote control of sessions executing on a user's host machine. Coding is an initial proving task; the mobile product should also support other useful work as its tools and permissions expand.
 
-Use React Native for the mobile UI to share screens and TypeScript logic across Android and iOS. Coding agents are highly familiar with React Native, which should support efficient implementation. The plan does not prioritize either platform; choose the first device proof based on integration effort and available hardware, and record platform coverage. Give it one session client interface with embedded and remote adapters. The user explicitly chooses an execution target such as “This device” or a paired host. A session has one execution owner, with its own files, tools, credentials, permissions, and records. Switching targets selects or creates a session; it does not migrate live execution or copy grants.
+Use React Native for native mobile controls and shared Android/iOS screens, with device validation of the first session and approval screens before expanding the UI. Keep shareable session behavior and presentation transforms in Rust; TypeScript supplies thin adapters and UI wiring. See the [UI and Rust decisions](decisions-and-tradeoffs.md#1-react-native-for-both-mobile-modes). The plan does not prioritize either platform; choose the first device proof based on integration effort and available hardware, and record platform coverage. Give it one session client interface with embedded and remote adapters. The user explicitly chooses an execution target such as “This device” or a paired host. A session has one execution owner, with its own files, tools, credentials, permissions, and records. Switching targets selects or creates a session; it does not migrate live execution or copy grants.
 
 On-device agent execution means the Rust agent runs on the phone. Model inference is a separate configuration choice: the agent may still use a remote model service. On-device execution does not promise an on-device model or offline operation.
 
@@ -18,36 +18,37 @@ The first deliverable remains a TypeScript client interface and client on the lo
 
 ## Delivery rule
 
-Start stages 1 and 2a now: define the small client interface, implement it locally, and prove it against a real RPC process. Later-stage questions do not block that deliverable. The plan sets security boundaries and milestone evidence; it is not intended to settle every implementation detail in advance.
+Start stages 1 and 2a now: define the thin client interface and shared Rust view, expose that view as an additive RPC capability, and prove the client against the real process. Later-stage questions do not block that deliverable. The plan sets security boundaries and milestone evidence; it is not intended to settle every implementation detail in advance.
 
 This is intentionally a high-level plan, not an exhaustive specification of every edge case or behavior. Implementation will reveal gaps, platform limits, and better choices. Some discoveries will require implementation and behavior changes not described here. Resolve them as they arise and update the affected design, specs, and tests. The acceptance checks are a starting set; extend them for risks found during implementation.
 
 Resolve a gap before enabling the behavior it could make unsafe. Prefer a narrow supported behavior and a clear refusal or unknown outcome over a larger recovery system. Choose routine names, limits, timeouts, and libraries during implementation, record them in the contract, and test the chosen boundary. Revise design decisions when implementation evidence warrants it; completing the plan in advance is not a condition for starting work.
 
-The early embedded demonstration uses one on-device session and one supported interaction. The minimum remote demonstration uses fresh host-owned sessions that desktop and phone can both access. Existing saved-record import, full desktop parity, automatic restart, crash-safe queues, and complete retained history may follow independently. The remote prototype uses one controller with explicit takeover and viewers, an isolated session store, and no shared follow-up queue. Scope reductions must be visible in the UI and capability contract. Authentication, correct approval targets, content labels, and single-writer ownership are not optional.
+The first planned on-device agent proof (stage 2b) uses one session and demonstrates a turn with one supported question or approval. The first secure remote checkpoint uses fresh host-owned sessions shared by the phone and a local test client. The full demonstration adds Electron handoff and the embedded proof; see the [delivery checkpoints](implementation-plan.md#first-secure-remote-checkpoint). Existing saved-record import, full desktop parity, automatic restart, crash-safe queues, and complete retained history may follow independently. The remote prototype uses one controller with explicit takeover and viewers, an isolated session store, and no shared follow-up queue. Scope reductions must be visible in the UI and capability contract. Authentication, correct approval targets, content labels, and single-writer ownership are not optional.
 
 ## Documents
 
-- [Decisions and tradeoffs](decisions-and-tradeoffs.md): deliberate scope choices, costs, revisit criteria, and unresolved security decisions for reviewers.
+- [Decisions and tradeoffs](decisions-and-tradeoffs.md): deliberate scope choices, costs, and revisit criteria.
+- [Open questions](open-questions.md): unresolved decisions, choices awaiting validation, and the evidence needed before enabling each capability.
 - [Executive summary](executive-summary.md): standalone human-readable plan, implementation steps, security boundaries, and completion criteria.
 - [Client interface and local validation](client-contract.md): operations, transport responsibilities, capability stages, and shared contract tests.
 - [Architecture and security](architecture.md): session ownership, protocol changes, reconnect behavior, permission boundaries, and tradeoffs.
-- [Implementation plan](implementation-plan.md): scope, stages, open questions, and completion criteria.
+- [Implementation plan](implementation-plan.md): scope, stages, checkpoints, reduced deliverables, and completion criteria.
 
 These documents are the authoritative mobile design proposal. They describe planned work, not implemented guarantees, and do not replace Bravebot's [normative specs](../../specs/README.md). The findings below come from source review; they are not runtime validation.
 
 ## Current mobile status
 
-The [android-shell](https://github.com/brave/bravebot/tree/android-shell) prototype provides a substantial starting point for Bravebot on mobile. Its contributor has already brought together:
+The [android-shell](https://github.com/brave/bravebot/tree/android-shell) branch is an unmerged Android proof of concept. The reviewed revision contains:
 
 - **On-device execution:** the Rust agent and UI bridge run inside the Android app through JNI.
 - **A mobile application:** the existing renderer runs in a WebView, with phone navigation, drawers, sheets, and touch-layout work.
 - **Input checks and focused tests:** the Android host checks allowed methods and filters turn inputs. `android-host.test.mjs` checks source consistency with the desktop host; `compact-layout.test.mjs` exercises layout functions and checks layout source. Neither tests JNI or Kotlin runtime behavior.
 - **Build and integration guidance:** Android build scripts and instructions document how the native runtime, app, and backend configuration fit together.
 
-This work informs the proposed client interface, native bindings, approval screens, and tests. React Native changes how the mobile UI is built; the runtime integration and interaction work remain useful foundations.
+This work informs the proposed client interface, native bindings, approval screens, and tests. Review the runtime integration for reuse; the WebView screens do not determine the React Native architecture.
 
-The mobile implementation owner should track this branch at mobile-stage planning checkpoints, before stage 2b and later integration work that uses it, and revisit relevant updates during integration. Record the revision used, assess new work before duplicating it, and build on applicable code, tests, and design lessons while preserving contributor attribution through cherry-picking or merging applicable commits where feasible. For adaptations that need a fresh commit, retain original author credit and source-commit references.
+Review this branch before stage 2b and later work that uses it, and revisit relevant updates during integration. Record the revision used, assess new work before duplicating it, and build on applicable code, tests, and design lessons while preserving contributor attribution through cherry-picking or merging applicable commits where feasible. For adaptations that need a fresh commit, retain original author credit and source-commit references.
 
 The source findings here use [`9635f16b`](https://github.com/brave/bravebot/tree/9635f16b49798624e6174b0d15818227773e81a8) for reproducibility. That revision's Android work is separate from the plan's `main` baseline. Refresh the reference when development reaches mobile integration and record build/device validation for the selected revision.
 
@@ -79,7 +80,7 @@ The following are proposed additions: a React Native UI, shared session interfac
 
 ## Recommendation
 
-Create a standalone TypeScript package at `packages/agent-client/` with its own build, tests, and local test program. Keep Node, DOM, Electron, and JNI dependencies out of its common module. Reuse suitable framing/correlation logic from `ui/src/main/bridge.ts` without depending on the Electron app. Desktop integration waits until the handoff stage. Validate it against a real stdio RPC process with isolated files, a controlled model backend, and portable scenario fixtures. Existing process tests provide agent-behavior evidence; the new tests must prove the new client mapping.
+Create a standalone TypeScript adapter package at `packages/agent-client/` with its own build, tests, and local test program. The Rust execution owner supplies shared session view state; no parallel TypeScript domain reducer is planned. Keep Node, DOM, Electron, and JNI dependencies out of its common module. Reuse suitable framing/correlation logic from `ui/src/main/bridge.ts` without depending on the Electron app. Desktop integration waits until the handoff stage. Validate it against a real stdio RPC process with isolated files, a controlled model backend, and portable scenario fixtures. Existing process tests provide agent-behavior evidence; the new tests must prove the new client mapping.
 
 Prove a small React Native embedded adapter through the chosen platform’s native/Rust boundary independently of host work. Implement the persistent host as one Rust process owning the bridge library and listening on a local socket. Exact action targets, readiness/loss handling, close completion, and storage isolation precede reattached control.
 
@@ -91,7 +92,7 @@ A private network is sufficient for the remote demo. Tailscale Serve is a candid
 
 The host track is client contract and shared screen state, local stdio proof, exact bridge targets, local Rust host/controller lifecycle, a synthetic phone experiment, bounded recovery, two-client takeover, authenticated networking, and the remote phone demonstration. Embedded execution and Electron integration are separate tracks; both remain part of full prototype completion. Shared queues, concurrent control, saved import, automatic restart, and broader on-device tools are not prerequisites.
 
-The proposal includes React Native for both remote control and embedded execution. Existing WebView code provides an integration reference. Source findings do not establish demonstrated behavior.
+The proposal includes React Native for both remote control and embedded execution. The unmerged WebView proof of concept provides an integration reference, not a requirement to retain its UI architecture. Embedded real-backend use requires the [credential lifecycle](architecture.md#embedded-model-credentials); iOS capability and distribution claims require the [platform checks](architecture.md#ios-capability-and-distribution-limits). New packages follow the [dependency plan](decisions-and-tradeoffs.md#9-mobile-dependencies-and-builds). Source findings do not establish demonstrated behavior.
 
 ## Persistent-host gaps to implement
 

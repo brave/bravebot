@@ -6,19 +6,33 @@ This is a high-level starting plan, not an exhaustive account of edge cases or b
 
 ## Code location and reuse
 
-Create a standalone TypeScript package at `packages/agent-client/` with its own build and test commands. Its common module contains domain types and the session interface without Node, DOM, Electron, or JNI dependencies. Put the Node/stdin/stdout adapter in a separate submodule and a small local test program under `packages/agent-client/scripts/`. Building and testing this package must not require the Electron app or its build configuration.
+Create a standalone TypeScript package at `packages/agent-client/` with its own build and test commands. Its common module contains wire types, a thin session interface, and client-local UI state without Node, DOM, Electron, or JNI dependencies. Shared session behavior and presentation transforms live in Rust, as required by [UI-006](../../best-practices/ui.md#UI-006). Put the Node/stdin/stdout adapter in a separate submodule and a small local test program under `packages/agent-client/scripts/`. Building and testing this package must not require the Electron app or its build configuration.
 
 Review `ui/src/main/bridge.ts` for reusable framing/correlation code and tests. Reuse suitable logic without importing Electron modules or requiring desktop migration during the local client proof. Electron binary discovery and app lifecycle remain in the desktop app. Desktop adoption of the shared client belongs to the later handoff stage.
 
 Use a small language-independent scenario fixture directory, proposed `packages/agent-client/test-fixtures/`, for typed operations, serialized boundary payloads, expected responses/events, labels, and symbolic IDs. Thin runners bind fixtures to the TypeScript client, real stdio process, local socket, and the actual platform native module. Run native scenarios on each supported platform; success on one does not establish support on the other. Framing cases apply only to stream transports. Use explicit synchronization steps rather than timing-dependent transcripts.
 
-The React Native app imports the package’s dependency-free common module through the app shell and package-consumption setup owned by stage 3d. Stage 2b reuses that setup; if embedded work starts first, it may bring forward this shared setup without creating a second shell or making stage 3d depend on the embedded runtime. Keep package setup small; repository-wide workspace tooling is not a prerequisite for the local proof. A new Rust crate is not required for the client. Any new crate introduced later needs the corresponding layering spec entry.
+The React Native app imports the package’s dependency-free common module through the app shell and package-consumption setup owned by stage 3d. Stage 2b reuses that setup; if embedded work starts first, it may bring forward this shared setup without creating a second shell or making stage 3d depend on the embedded runtime. Keep package setup small; repository-wide workspace tooling is not a prerequisite for the local proof. Reuse and extend the Rust crates that own each behavior. Extract a small presentation crate if shared display transforms need a separate home under the layering rules; add its spec entry and tests with its first caller. The client package does not require a root npm workspace.
 
 ## Shared screen state
 
-The shared package owns a pure reducer: snapshot plus ordered events produces transcript rows, busy state, pending approvals, and controller status. Both React Native and the later Electron prototype consume it. The host remains authoritative for execution and supplies one documented snapshot/event shape; client screen state never grants authority. Shared fixtures keep the Rust host projection and TypeScript reducer consistent.
+The execution owner computes session view state in one shared Rust implementation: transcript rows, turn status, pending approvals, and, when supported, controller status. The stdio process, embedded runtime, and persistent host call the same code. Start with the state needed for the local proof, then extend it at the named milestones. Put session transitions beside the bridge and carry content opaquely. Keep transforms that inspect released display content in the separate [Rust presentation layer](architecture.md#rust-sharing-boundary), outside bridge dispatch, `bravebot-core`, and `bravebot-agent`. Display results never decide execution or become planner input.
 
-Also share presentation-only label and control-character handling as display segments. Native components still need tests for visible marking, layout, and complete approval details. For each supported approval kind, enumerate every payload field as displayed or deliberately excluded with a reason; never omit a field needed for informed consent.
+Expose that view through an additive, negotiated bridge capability. Existing callers retain their current protocol. The new client requires the capability and refuses an older runtime that lacks it; it does not reconstruct the view from legacy events. The local proof therefore includes a small Rust bridge addition as well as the TypeScript adapter. It preserves legacy behavior but is not a claim that the unmodified RPC already provides the new view.
+
+An initial view supplies the current state before updates begin; stage 4a adds bounded history snapshots for recovery at one sequence boundary. Subsequent updates carry replacement rows and authoritative status fields with stable IDs and sequence numbers. TypeScript applies those replacements, detects sequence gaps, and requests resynchronization once supported. It does not infer session state from content or implement a second domain reducer. Before stage 4a, a lost connection ends the transcript view without claiming history recovery; stage 3's control snapshot can still restore current control state. Drafts, selection, focus, scrolling, and connection indicators stay client-local; an optimistic send stays separate until Rust reports acceptance with its message ID.
+
+Rust also supplies reusable approval field descriptions and presentation-only label/control-character transforms. Native components draw the supplied segments and trusted markings and still need tests for legibility, accessibility, and complete approval details. Every supported approval field must be displayed or explicitly excluded with a reason. Shared fixtures verify serialization and bindings against the single Rust implementation, rather than keep two implementations of its rules in step.
+
+| Responsibility | Home and access |
+|---|---|
+| Policy, tools, settings, credentials, session records | Existing Rust crates, extended through typed bridge operations when needed; no TypeScript reimplementation. |
+| Session view state and approval semantics | Shared Rust code called by stdio, embedded, and host execution owners; serialized view updates to clients. |
+| Released-content display transforms | Shared Rust presentation code; transport preserves labels and components draw markings that content cannot forge. |
+| Framing, request correlation, view-update application | Thin TypeScript adapters; wire types generated from or checked against the Rust schema. |
+| Layout, navigation, focus, local drafts, platform lifecycle | React Native or Electron UI; narrow native bindings for OS services. |
+
+Remote-only clients need no local Rust agent or Rust state engine: the host supplies the same view that the embedded binding returns in-process. This avoids adding WebAssembly or a second native Rust runtime merely to share the reducer. Full snapshots on every event are unnecessary; stage 4a tests bounded row updates and snapshot replacement under load.
 
 Stage 1 covers supported stdio behavior and one unsupported-operation case. Add listener allowlist scenarios with stage 3b. Give the package one build/type/test command and wire it into the relevant CI and local checks when the package is added.
 
@@ -41,7 +55,7 @@ Every session, draft, message, and pending action is qualified by target and run
 | Close | Enter `closing`; reach `closed` only after writer shutdown. | Existing `session.close` acknowledges before the worker necessarily finishes; add completion evidence. |
 | Detach | End this client's subscription/control availability. | Does not close a persistent host session. Stdio EOF retains its current process-ending semantics. |
 
-Local host trust controls and embedded trust remain explicit typed capabilities. Remote workspace trust is unavailable in the first prototype. The user answers it on the host before the session can run. Creating a session from the phone can therefore produce `awaiting host setup` rather than immediately executing. The demo may use a workspace explicitly prepared on the host; project pairing alone never answers trust.
+Local host trust controls and embedded trust remain explicit typed capabilities. Remote workspace trust is unavailable in the first prototype. The person answers through a capable host-local controller before the session can run. Before Electron attachment, the stage-5a local test client provides this typed startup-trust interaction over the U1-protected control channel. The host grants that capability based on authenticated local access; a phone cannot obtain it by advertising another answerable kind. Creating a session from the phone can therefore produce `awaiting host setup` rather than immediately executing. The demo may use a workspace explicitly prepared on the host; project pairing alone never answers trust.
 
 ## First non-stdio listener allowlist
 
@@ -61,7 +75,7 @@ The initial remote operations are target description, authorized workspace/live-
 | User question (`ask.reply`) | Exact question target and answers validated against the offered question schema. |
 | Cancel/close/takeover | Only their typed identity and expected-state fields. Read-only grants cannot invoke them. |
 
-Require host handling for workspace trust, vouching, command-output admission, vetted-content promotion, credential-exposure approval, language-server startup, and other unlisted reply kinds. Some have session-lived authority even without `remember`; do not classify all replies as one-use. The phone advertises only the kinds it can actually render and answer. Host-only handling requires desktop control; when nobody capable is ready, refusal applies. Adding another phone kind is a small later contract/test change.
+Require host handling for workspace trust, vouching, command-output admission, vetted-content promotion, credential-exposure approval, language-server startup, and other unlisted reply kinds. Some have session-lived authority even without `remember`; do not classify all replies as one-use. The phone advertises only the kinds it can actually render and answer. Host-only handling requires a capable host-local controller under the [same takeover rules](architecture.md#one-controller-and-explicit-takeover); the initial local test client supports startup trust among those host-only kinds. The phone cannot widen this set through capability advertisement. When nobody capable is ready, refusal applies; startup trust remains unanswered. Adding another phone kind is a small later contract/test change.
 
 Reject unknown request fields. Unknown additive event fields may be ignored, but unknown labels/kinds must degrade safely and unsupported approval kinds cannot be answered. Keep content labels and paths needed for informed consent; sanitizing target metadata must not hide an approval's actual destination.
 
@@ -83,7 +97,7 @@ Other mutations are not automatically retried. Recover current state after a los
 
 | Milestone | Passing establishes | Does not establish |
 |---|---|---|
-| 1–2a Local stdio client | New typed client and fixtures work against a real process; framing/correlation preserves existing behavior. | Reconnect, takeover, retry recovery, or remote access. |
+| 1–2a Local stdio client | The new typed client consumes the shared Rust view through a real process; legacy framing/correlation behavior is preserved. | Reconnect, takeover, retry recovery, or remote access. |
 | 2b Embedded device proof | Common session semantics cross the React Native/native/Rust boundary for selected capabilities. | Background survival, full host tools, offline inference, or support on an untested platform. |
 | 3a–3c Persistent local host | Exact targets, isolated ownership, safe close, minimum control state, and loss handling. | Networking, full transcript history, or phone recovery. |
 | 4a–4b Bounded recovery | Retained display state and send-ID lookup survive connection loss while the host lives. | Crash-safe acceptance, generic mutation retries, shared queues. |
@@ -92,7 +106,7 @@ Other mutations are not automatically retried. Recover current state after a los
 
 ## Evidence required
 
-Stages 1–2a exercise the reducer with interleaved events and later snapshot-boundary fixtures. Stage 2 relies on existing bridge tests for agent behavior and adds evidence through the new client. Inventory `protocol.rs`, `refusal.rs`, `dispatch.rs`, `remembered_trust.rs`, `rules.rs`, and `fetch.rs` before writing overlapping tests. None has been run for this proposal; passing the existing suite alone does not prove the new client.
+Stages 1–2a exercise the shared Rust view through interleaved events and the TypeScript adapter; stage 4a adds snapshot-boundary fixtures. Stage 2 relies on existing bridge tests for agent behavior and adds evidence through the new client. Inventory `protocol.rs`, `refusal.rs`, `dispatch.rs`, `remembered_trust.rs`, `rules.rs`, and `fetch.rs` before writing overlapping tests. None has been run for this proposal; passing the existing suite alone does not prove the new client.
 
 Use a controllable byte/frame proxy to delay, split, combine, or drop transport messages, plus a model stub that blocks on test-controlled gates. Native-module runners consume the same domain fixtures without inventing socket semantics. Use narrow internal barriers for atomic dispatch/pending-state races and snapshot publication boundaries that a proxy cannot force. Bounded waits report failure; sleeps are not proof of reaching a state.
 

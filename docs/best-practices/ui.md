@@ -70,24 +70,10 @@ word-for-word. A driver left asserting on the old place is a broken gate.
 
 ## The desktop UI reuses existing code instead of copying it
 
-**A change under `ui/` calls the Rust crates and the UI code that already exist, and adds no second
-copy of either.** Behaviour the agent already has (reading settings, deciding what a session or
-record holds, parsing or formatting a result, validating a name or a path) is used from the crate
-that owns it, reached through `bravebot-ui-bridge` or `bravebot-ui-files`. When no crate answers
-what the UI needs, the crate is widened so the terminal client can use the addition too, and the UI
-does not compute it in TypeScript.
+**A change under `ui/` follows [SHARE-001](shared-implementation.md#SHARE-001) for shared
+Rust behavior and reuses existing UI code.** Reach the owning Rust crates through
+`bravebot-ui-bridge` or `bravebot-ui-files` as appropriate.
 
-A reviewer looks for two things in the diff:
-
-- TypeScript in `ui/src/main` or `ui/src/renderer` that re-derives something a crate already
-  answers, or that `bravebot-tui` would have to reimplement to behave the same way.
-- A new component, hook, helper or constant that does what one already under `ui/src` does. The
-  existing one is used and, where it falls short, extended.
-
-Logic only the window has (layout, focus, animation, menu wiring) has no crate to come from and
-stays in `ui/`.
-
-**Why:** two copies of a behaviour diverge, so the desktop app and the terminal client disagree
-about the same session and a fix lands in only one. A crate's behaviour is pinned by the spec that
-governs it ([specs](../specs/README.md)) and by the tests that name its clauses, and a copy in
-TypeScript does not follow either when the spec changes.
+A new component, hook, helper, or constant uses and, where needed, extends the existing UI
+implementation instead of copying it. Window-only behavior such as layout, focus, animation,
+and menu wiring stays in `ui/`.
