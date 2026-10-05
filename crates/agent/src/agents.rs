@@ -1003,6 +1003,50 @@ fn single_quoted(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
+/// Why a bot's definition was not rewritten, in which case the file is as it was.
+#[derive(Debug)]
+pub enum RedefineRefused {
+    /// The name is not a slug, so it names no file this module wrote.
+    Name,
+    /// The file is not there, could not be read, or is no longer a definition.
+    Missing,
+    /// The purpose or the model is one [`rewrite_definition`] refuses.
+    Refused(Refused),
+    /// The file could not be written.
+    Io(std::io::Error),
+}
+
+/// Rewrite the description, the model and the body of the definition written for a desktop bot,
+/// leaving every other line of `agents/<name>.md` as it is ([MEMORY-9], [MEMORY-10]).
+///
+/// `home` is the state directory, `~/.bravebot`. The file is the one [`make_definition`] wrote,
+/// so a name that is no slug is refused before any path is made from it, and a file that is gone
+/// is reported rather than made again: the bot's definition is the person's as much as the
+/// desktop's, and remaking one here would undo a removal they chose.
+///
+/// [MEMORY-9]: ../../../docs/specs/definition-memory.md
+/// [MEMORY-10]: ../../../docs/specs/definition-memory.md
+pub fn redefine(
+    home: &Path,
+    name: &str,
+    purpose: &str,
+    model: Option<&str>,
+) -> Result<(), RedefineRefused> {
+    if !crate::memory::is_a_slug(name) {
+        return Err(RedefineRefused::Name);
+    }
+    let file = home.join(AGENTS).join(format!("{name}.md"));
+    let text = std::fs::read_to_string(&file).map_err(|_| RedefineRefused::Missing)?;
+    let rewritten = rewrite_definition(&text, purpose, model).map_err(|refused| match refused {
+        Refused::NotADefinition => RedefineRefused::Missing,
+        other => RedefineRefused::Refused(other),
+    })?;
+    if rewritten == text {
+        return Ok(());
+    }
+    crate::home::write_file(&file, rewritten.as_bytes()).map_err(RedefineRefused::Io)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2151,5 +2195,77 @@ mod tests {
         assert!(crate::memory::is_a_slug(&second.name), "{}", second.name);
         assert_ne!(second.name, first.name);
         assert!(second.name.ends_with("-2"));
+    }
+
+    /// MEMORY-9, MEMORY-10: editing a bot rewrites the description, model and body of the file
+    /// made for it and leaves a `tools:` line somebody added by hand where it was.
+    #[test]
+    fn editing_a_bot_rewrites_its_definition_file_and_keeps_a_hand_added_tools_line() {
+        let home = Home::new("redefine-keeps-tools");
+        make_definition(&home.0, "editor", "Reviews.", Some("old-model")).expect("made");
+        let file = home.file("editor");
+        let made = std::fs::read_to_string(&file).unwrap();
+        std::fs::write(
+            &file,
+            made.replace("memory: project\n", "memory: project\ntools: read_file\n"),
+        )
+        .unwrap();
+
+        redefine(
+            &home.0,
+            "editor",
+            "Audits the parser.\nSecond.",
+            Some("new-model"),
+        )
+        .expect("rewritten");
+
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains("\ntools: read_file\n"), "{text}");
+        let definition = home.read("editor");
+        assert_eq!(definition.description(), "Audits the parser.");
+        assert_eq!(definition.model(), Some("new-model"));
+        assert_eq!(definition.prompt(), "Audits the parser.\nSecond.\n");
+        assert_eq!(definition.name(), "editor");
+    }
+
+    /// MEMORY-10: a definition that is gone is not made again by an edit, a name that is no slug
+    /// reaches no path, and a purpose that cannot be written leaves the file as it was.
+    #[test]
+    fn editing_a_bot_whose_definition_is_gone_or_whose_purpose_is_blank_writes_nothing() {
+        let home = Home::new("redefine-refuses");
+        assert!(matches!(
+            redefine(&home.0, "gone", "Purpose.", None),
+            Err(RedefineRefused::Missing)
+        ));
+        assert!(
+            !home.0.join(AGENTS).exists(),
+            "an edit of a missing definition made the directory or a file"
+        );
+
+        std::fs::write(
+            home.0.join("outside.md"),
+            "---\ndescription: x\n---\nkept\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            redefine(&home.0, "../outside", "Purpose.", None),
+            Err(RedefineRefused::Name)
+        ));
+        assert_eq!(
+            std::fs::read_to_string(home.0.join("outside.md")).unwrap(),
+            "---\ndescription: x\n---\nkept\n"
+        );
+
+        make_definition(&home.0, "kept", "Original.", None).expect("made");
+        let before = std::fs::read_to_string(home.file("kept")).unwrap();
+        assert!(matches!(
+            redefine(&home.0, "kept", "  \n", None),
+            Err(RedefineRefused::Refused(Refused::NoDescription))
+        ));
+        assert!(matches!(
+            redefine(&home.0, "kept", "Purpose.", Some("a\nb")),
+            Err(RedefineRefused::Refused(Refused::Model))
+        ));
+        assert_eq!(std::fs::read_to_string(home.file("kept")).unwrap(), before);
     }
 }

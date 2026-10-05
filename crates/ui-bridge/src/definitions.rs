@@ -9,7 +9,7 @@
 //! [MEMORY-8]: ../../../docs/specs/definition-memory.md
 
 use crate::protocol::{ErrorCode, Failure, Request};
-use bravebot_agent::agents::{self, MakeRefused};
+use bravebot_agent::agents::{self, MakeRefused, RedefineRefused};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -25,6 +25,44 @@ pub fn make(request: &Request) -> Result<Value, Failure> {
         )
     })?;
     make_in(&home, request)
+}
+
+/// Rewrite the definition of a bot being edited, and answer with its name.
+///
+/// `name`, `purpose` are required and `model` is a string or absent, which removes the `model:`
+/// line. Only the description, the model and the body change (MEMORY-9); a refusal leaves the file
+/// as it was, and the desktop then saves no edit.
+pub fn remake(request: &Request) -> Result<Value, Failure> {
+    let home = bravebot_agent::home::directory().ok_or_else(|| {
+        Failure::new(
+            ErrorCode::NoHome,
+            "this machine names no state directory, so a bot has nowhere to keep its definition",
+        )
+    })?;
+    remake_in(&home, request)
+}
+
+fn remake_in(home: &Path, request: &Request) -> Result<Value, Failure> {
+    let name = request.string("name")?;
+    let purpose = request.string("purpose")?;
+    let model = request.optional_string("model");
+
+    match agents::redefine(home, &name, &purpose, model.as_deref()) {
+        Ok(()) => Ok(json!({ "name": name })),
+        Err(RedefineRefused::Name) => Err(Failure::bad_request(
+            "the bot's definition is not named as a definition can be",
+        )),
+        Err(RedefineRefused::Missing) => Err(Failure::bad_request(format!(
+            "the definition {name} is not there to edit"
+        ))),
+        Err(RedefineRefused::Refused(_)) => Err(Failure::bad_request(
+            "the purpose needs a line that is not blank, and the model must be one line",
+        )),
+        Err(RedefineRefused::Io(error)) => Err(Failure::new(
+            ErrorCode::NoHome,
+            format!("the bot's definition could not be written: {error}"),
+        )),
+    }
 }
 
 fn make_in(home: &Path, request: &Request) -> Result<Value, Failure> {
@@ -186,6 +224,55 @@ mod tests {
             .prefix("bravebot-bridge-folder-")
             .tempdir()
             .expect("a scratch folder")
+    }
+
+    /// MEMORY-9: a model of several lines, or a purpose with nothing in it, makes no edit and no
+    /// file.
+    #[test]
+    fn an_edit_the_agent_refuses_or_cannot_find_is_a_bad_request() {
+        let home = home("remake-refused");
+        let made = request(json!({"slug": "ed", "purpose": "Original."}));
+        make_in(home.path(), &made).expect("made");
+        let path = home.path().join("agents/ed.md");
+        let before = std::fs::read_to_string(&path).expect("written");
+
+        for params in [
+            json!({"name": "ed", "purpose": " \n "}),
+            json!({"name": "ed", "purpose": "P.", "model": "m\nkind: reader"}),
+            json!({"name": "absent", "purpose": "P."}),
+            json!({"name": "../ed", "purpose": "P."}),
+            json!({"name": "ed"}),
+        ] {
+            let refused = remake_in(home.path(), &request(params.clone()));
+            assert!(refused.is_err(), "{params} rewrote the definition");
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        assert!(!home.path().join("agents/absent.md").exists());
+    }
+
+    /// MEMORY-9: an edit answers with the name it rewrote, and the file carries the new purpose.
+    #[test]
+    fn an_edit_rewrites_the_file_made_for_the_bot() {
+        let home = home("remake-rewrites");
+        make_in(
+            home.path(),
+            &request(json!({"slug": "ed", "purpose": "Original.", "model": "m"})),
+        )
+        .expect("made");
+
+        let answer = remake_in(
+            home.path(),
+            &request(json!({"name": "ed", "purpose": "Changed.\nMore."})),
+        )
+        .expect("rewritten");
+
+        assert_eq!(answer["name"], json!("ed"));
+        let text = std::fs::read_to_string(home.path().join("agents/ed.md")).expect("written");
+        assert!(text.contains("description: 'Changed.'"), "{text}");
+        assert!(
+            !text.contains("model:"),
+            "a model no longer chosen stays: {text}"
+        );
     }
 
     /// MEMORY-8: a model of several lines, or a purpose with nothing in it, makes no bot and no

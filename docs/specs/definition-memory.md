@@ -34,11 +34,12 @@ What a definition is, where one is read from and what it is trusted for is
 paths are trusted is [trust-map.md](trust-map.md). Where a clause here changes one of those, that
 file says so at the place it changes.
 
-The memory and the checkout are built, [MEMORY-2](#MEMORY-2) to [MEMORY-7](#MEMORY-7), and so is
-writing a bot's definition, [MEMORY-8](#MEMORY-8), and the part of [MEMORY-11](#MEMORY-11) that
-migrates an existing bot. The rest of the desktop half is not:
-[MEMORY-1](#MEMORY-1), [MEMORY-9](#MEMORY-9), [MEMORY-10](#MEMORY-10), the composed turn in
-[MEMORY-11](#MEMORY-11), and the
+The memory and the checkout are built, [MEMORY-2](#MEMORY-2) to [MEMORY-7](#MEMORY-7), and so are
+writing a bot's definition, [MEMORY-8](#MEMORY-8), rewriting it on an edit,
+[MEMORY-9](#MEMORY-9), addressing it in a bot's turns, [MEMORY-10](#MEMORY-10), for a bot that has
+one, and the part of [MEMORY-11](#MEMORY-11) that migrates an existing bot. The rest of the desktop
+half is not: [MEMORY-1](#MEMORY-1), the composed turn in [MEMORY-11](#MEMORY-11), the briefing and
+quiet-turn counter a bot made before definitions still uses, and the
 sentences in [MEMORY-4](#MEMORY-4) about the desktop's panel are a design, written to be agreed
 before that work starts.
 
@@ -54,14 +55,16 @@ whose `isolation:` asks for a checkout works in a checkout of it
 
 The desktop front end's bots are a format of their own. A bot is a row in the desktop's store: a
 name, a purpose, a model, a folder chosen when it was made, the name of the definition written for
-it ([MEMORY-8](#MEMORY-8)), and a history of conversations. Its
-purpose reaches a turn as a briefing file the desktop composes under its own data directory and
-hands over as a dropped file, on the first turn of a session, after a compaction, and after a run
-of turns in which its memory did not change. Its memory is a file in its folder,
-`.bravebot-ui/bots/<slug>.md`, which the briefing names and the bot reads and writes with its
-ordinary tools. The desktop keeps up to thirty earlier versions of that file in its own data
-directory, and a person can edit the memory and restore an earlier version from a panel. The
-desktop addresses no definition.
+it ([MEMORY-8](#MEMORY-8)), and a history of conversations. A bot that has a definition has every
+turn addressed to it ([MEMORY-10](#MEMORY-10)): the purpose reaches the run as the definition's
+body, and its memory is `.bravebot/memory/<definition>.md`, which the run is told about and reads
+with its ordinary tools. A bot made before definitions existed has none. Its purpose reaches a turn
+as a briefing file the desktop composes under its own data directory and hands over as a dropped
+file, on the first turn of a session, after a compaction, and after a run of turns in which its
+memory did not change. Its memory is a file in its folder, `.bravebot-ui/bots/<slug>.md`, which the
+briefing names and the bot reads and writes with its ordinary tools. The desktop keeps up to thirty
+earlier versions of that file in its own data directory, and a person can edit the memory and
+restore an earlier version from a panel.
 
 ## The comparison
 
@@ -417,9 +420,9 @@ narrows it further by editing the file.
 
 The crate that reads the person's definitions writes it (`bravebot_agent::agents::make_definition`),
 and the desktop asks for it through the bridge method `bot.define` when a bot is made. The row
-keeps the name the agent answers with. Nothing yet addresses the definition in a bot's turns
-([MEMORY-10](#MEMORY-10)), moves the briefing's purpose into it, or rewrites it on an edit
-([MEMORY-9](#MEMORY-9)).
+keeps the name the agent answers with. A bot's turns are addressed to that definition
+([MEMORY-10](#MEMORY-10)); moving the briefing's purpose into it for a bot made before this is
+[MEMORY-11](#MEMORY-11).
 
 `verified-by: bravebot_agent::agents::making_a_bot_writes_a_worker_keeping_a_project_memory`
 `verified-by: bravebot_agent::agents::a_bot_with_no_model_chosen_names_none`
@@ -446,8 +449,10 @@ whole file back would undo whatever it does not show, such as a narrowing somebo
 The rewrite is built: `bravebot_agent::agents::rewrite_definition` takes a definition's text, the
 purpose and the model, and returns the text with the description, the `model:` line and the body
 replaced and every other line as it was. It writes the description and the model in single quotes
-and reads the result back, refusing a text that would not read back as what was given. Nothing in
-the desktop calls it yet.
+and reads the result back, refusing a text that would not read back as what was given.
+`bravebot_agent::agents::redefine` applies it to the file [MEMORY-8](#MEMORY-8) wrote, and the
+desktop asks for it through the bridge method `bot.redefine` when a bot's purpose or model is
+edited. The row is saved only if the file was rewritten.
 
 `verified-by: bravebot_agent::agents::editing_a_definition_rewrites_the_description_the_model_and_the_body_alone`
 `verified-by: bravebot_agent::agents::editing_a_definition_adds_a_model_it_lacked_and_drops_one_no_longer_chosen`
@@ -501,9 +506,37 @@ This amends [ADDRESS-3](addressing-a-definition.md#ADDRESS-3), which admits only
 the box, [ADDRESS-12](addressing-a-definition.md#ADDRESS-12), and the sentence in
 [addressing-a-definition.md](addressing-a-definition.md) saying the desktop addresses nothing.
 
-Nothing builds this yet.
+**What is built.** A bot that has a definition ([MEMORY-8](#MEMORY-8)) is addressed on every turn.
+The desktop's main process sends the row's definition name as the `definition` parameter of
+`turn.send`, and strips that parameter from anything a window sends. The bridge takes only a name
+that is a slug, refusing anything else when the turn is asked for. It keeps the name on the session,
+so the turn the bridge starts when a watch fires is addressed without a request to carry one, and
+it hands the name to the turn as `Task::addressing`. The kernel then resolves it as it does a line
+typed after `/agent` ([ADDRESS-5](addressing-a-definition.md#ADDRESS-5)): a name that does not
+resolve runs nothing and names the definition. Such a bot is sent no briefing. The counter of quiet
+turns stops counting for it and never asks for a briefing, and the bot's memory is
+`.bravebot/memory/<definition>.md`, where the agent keeps it ([MEMORY-2](#MEMORY-2)). The desktop
+sends the definition name on the turn it composes after a compaction like any other, and the panel
+saves the memory to the same file. Editing a bot's purpose or model, or changing its model, rewrites
+its definition through the bridge method `bot.redefine`, which calls
+`bravebot_agent::agents::redefine` ([MEMORY-9](#MEMORY-9)); the row is saved only if the file was.
 
-`verified-by: none`
+**What is not built.** A bot made before definitions existed has none, and keeps the briefing, the
+counter and the memory file it had until [MEMORY-11](#MEMORY-11) gives it one. The recorded
+modification time stays on the row for those bots. The history of earlier memory versions is not
+retired ([MEMORY-4](#MEMORY-4)). A reply is drawn under the name the row gives, as it was before
+this clause.
+
+`verified-by: bravebot_ui_bridge::addressing::a_turn_naming_a_bots_definition_runs_under_it`
+`verified-by: bravebot_ui_bridge::addressing::a_later_turn_in_the_conversation_is_addressed_without_naming_the_definition_again`
+`verified-by: bravebot_ui_bridge::addressing::a_definition_that_no_longer_resolves_runs_nothing_and_is_named`
+`verified-by: bravebot_ui_bridge::addressing::a_definition_that_is_no_slug_is_refused_before_a_turn_starts`
+`verified-by: bravebot_ui_bridge::addressing::the_turn_a_watch_fires_in_a_bots_conversation_is_addressed`
+`verified-by: bravebot_ui_bridge::definitions::an_edit_rewrites_the_file_made_for_the_bot`
+`verified-by: bravebot_ui_bridge::definitions::an_edit_the_agent_refuses_or_cannot_find_is_a_bad_request`
+`verified-by: bravebot_agent::agents::editing_a_bot_rewrites_its_definition_file_and_keeps_a_hand_added_tools_line`
+`verified-by: bravebot_agent::agents::editing_a_bot_whose_definition_is_gone_or_whose_purpose_is_blank_writes_nothing`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-model.test.mjs pins its half: the definition name a turn carries is the row's and a window's definition parameter is stripped by sanitised, a bot with a definition keeps its memory at the definition's path and is never counted quiet or sent a briefing, and an edit or a model change is saved only when the agent rewrote the file; make check-ui runs it)`
 
 <a id="MEMORY-11"></a>
 ### MEMORY-11: a bot made before this keeps its notes where they are, untrusted until a person reads them
