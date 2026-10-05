@@ -454,6 +454,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `keybindings` | keys rebound to your own choice ([below](#keybindings)) |
 | `search` | how large a tree a search may walk ([below](#search)) |
 | `terminalTitle` | whether the terminal's title is set to the session's name ([below](#terminaltitle)) |
+| `tui.wheelRows` | how many rows one mouse wheel notch scrolls ([below](#tuiwheelrows)) |
 | `updateCheck` | whether startup checks for a newer release ([below](#updatecheck)) |
 | `vetting` | whether quarantined content is checked without asking you ([below](#vetting)) |
 
@@ -609,6 +610,24 @@ The terminal's title names the session, as `bravebot · dependency audit`
 terminal or multiplexer that manages titles itself. Only the boolean `false` turns it off: `"false"`
 in quotes, or any other value, leaves it on. An incognito session leaves the title alone whatever this
 says.
+
+### `tui.wheelRows`
+
+```json
+{ "tui": { "wheelRows": 5 } }
+```
+
+How many rows of the transcript one mouse wheel notch scrolls, in the session view and in
+[the scroller](../using/transcript.md) alike. Without this key it is 3, which is what a terminal's
+own scrollback moves.
+
+Terminals disagree about how many events a notch sends, and a trackpad swipe sends a stream of them,
+so the same figure crawls on one and jumps a screen on another. Raise it where the transcript barely
+moves, lower it where one swipe overshoots what you were reading.
+
+Whole numbers from 1 to 100. A figure outside that range is brought to the nearest end of it rather
+than refused, and a zero, a fraction or a word leaves the built-in 3 in force. The value is read when
+the session opens, so editing it describes your next session.
 
 ### `updateCheck`
 

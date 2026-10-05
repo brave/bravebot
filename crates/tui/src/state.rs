@@ -25,6 +25,25 @@ const FOLD_AT_NEWLINES: usize = 3;
 /// copies of a prompt, where a prompt is sentences rather than a file.
 const UNDO_DEPTH: usize = 1000;
 
+/// How many rows one mouse wheel event moves the view by where nothing says otherwise.
+///
+/// Three is what a terminal's own scrollback moves for a notch, so the transcript moves the way the
+/// rest of the screen does for somebody who has configured nothing.
+pub const WHEEL_ROWS: u16 = 3;
+
+/// The fewest rows a wheel event may be configured to move.
+///
+/// One, a wheel that moves nothing being indistinguishable from one that is not answered at all.
+pub const WHEEL_ROWS_FLOOR: u16 = 1;
+
+/// The most rows a wheel event may be configured to move.
+///
+/// A screen's worth is the most a single notch can usefully do: past it one event has moved further
+/// than the person can see, so the row they were reading is gone and there is nothing on the screen
+/// relating where they are now to where they were. Counted in rows rather than in screens because
+/// the figure is read once at startup and a screen changes shape while the session runs.
+pub const WHEEL_ROWS_CEILING: u16 = 100;
+
 /// Text with the line endings every clipboard uses turned into the one the box draws.
 fn normalised(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
@@ -1238,6 +1257,14 @@ pub struct Session {
     vetting: bool,
     /// Configurable keybindings for navigation and shortcuts.
     bindings: crate::keybindings::Keybindings,
+    /// How many rows one mouse wheel event moves the view by.
+    ///
+    /// A preference about the person's terminal rather than about the session, read once at startup
+    /// the way the editing style is. Terminals differ in how many events a notch or a trackpad
+    /// swipe sends, so the same number of rows per event is a different amount of movement on each,
+    /// and nothing the program can measure says which. Held on the session because the wheel is
+    /// answered against it on every event.
+    wheel_rows: u16,
     /// Which vi mode the box is in, where vi is the style.
     ///
     /// Every session opens in INSERT, where a typed character is a typed character. Opening in NORMAL
@@ -1826,6 +1853,7 @@ impl Session {
             // constructed by a test reads nothing from disk and asks.
             vetting: false,
             bindings: crate::keybindings::Keybindings::default(),
+            wheel_rows: WHEEL_ROWS,
             mode: crate::vim::Mode::default(),
             half_typed: None,
             count: None,
@@ -3575,6 +3603,25 @@ impl Session {
     /// The active keybindings for this session.
     pub fn bindings(&self) -> &crate::keybindings::Keybindings {
         &self.bindings
+    }
+
+    /// Record how many rows one wheel event moves the view by, from `tui.wheelRows`.
+    ///
+    /// Clamped rather than refused, which is the decision [`bravebot_agent::exec`] takes about a
+    /// deadline and for the same reason: the movement a figure asks for is visible the moment the
+    /// wheel is turned, so a count held to the range says so on the screen. A count nobody named
+    /// leaves [`WHEEL_ROWS`] in force.
+    pub fn adopt_wheel_rows(&mut self, configured: Option<usize>) {
+        let Some(rows) = configured else {
+            return;
+        };
+        let rows = u16::try_from(rows).unwrap_or(WHEEL_ROWS_CEILING);
+        self.wheel_rows = rows.clamp(WHEEL_ROWS_FLOOR, WHEEL_ROWS_CEILING);
+    }
+
+    /// How many rows one wheel event moves the view by.
+    pub fn wheel_rows(&self) -> u16 {
+        self.wheel_rows
     }
 
     /// Record the style of editing the person chose, keeping it for later sessions.
