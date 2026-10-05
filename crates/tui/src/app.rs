@@ -121,6 +121,9 @@ const COMPACT_COMMAND: &str = "/compact";
 /// The line that starts a new session in place of this one.
 const CLEAR_COMMAND: &str = "/clear";
 
+/// The line that copies this session and moves onto the copy, taking its name as an option.
+const BRANCH_COMMAND: &str = "/branch";
+
 /// The line that renames this session, taking the new name as its argument.
 const RENAME_COMMAND: &str = "/rename";
 
@@ -238,7 +241,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 29] {
+pub fn commands() -> [Command; 30] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -310,6 +313,12 @@ pub fn commands() -> [Command; 29] {
             name: CLEAR_COMMAND,
             argument: "",
             description: t!(command_clear),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
+            name: BRANCH_COMMAND,
+            argument: "[<name>]",
+            description: t!(command_branch),
             mid_turn: MidTurn::Waits,
         },
         Command {
@@ -598,6 +607,9 @@ pub enum Action {
     Clear,
     /// Call this session something else. Needs the session record, which the loop owns.
     Rename(String),
+    /// Copy this session and carry on in the copy, named as given or marked as a fork. Needs the
+    /// conversation and the session record, which the loop owns.
+    Branch(String),
     /// Show, set or clear one of the session's links. Needs the session record, which the loop
     /// owns, and carries the argument unparsed, since what it says back goes in the transcript.
     Link(bravebot_session::sessions::Link, String),
@@ -1790,6 +1802,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     }
     if let Some(name) = argument_to(line, RENAME_COMMAND) {
         return Action::Rename(name.to_string());
+    }
+    if let Some(name) = argument_to(line, BRANCH_COMMAND) {
+        return Action::Branch(name.to_string());
     }
     if let Some(argument) = argument_to(line, ISSUE_COMMAND) {
         return Action::Link(
@@ -3820,6 +3835,14 @@ fn event_loop(
                 }
             }
             Action::Rename(name) => rename_session(&mut session, &mut stored, &name),
+            Action::Branch(name) => branch_session(
+                &mut session,
+                &mut stored,
+                &conversation,
+                &answers,
+                &workspace,
+                &name,
+            ),
             Action::Link(kind, argument) => {
                 link_session(&mut session, &mut stored, kind, &argument)
             }
@@ -5156,6 +5179,60 @@ fn rename_session(
         session.note(t!(session_renamed, title = stored.title()));
     } else {
         session.note(t!(session_rename_needs_something));
+    }
+}
+
+/// Copy the session as `--fork` does and carry on in the copy, saying where the original is.
+///
+/// The copy is made from the original's record, which this leaves as the last turn wrote it, and is
+/// then written again from what the session holds, so anything newer than that record is in the
+/// copy and not lost to a copy that was only as current as the record. The rewind points go,
+/// because a fork inherits none (SESSION-18) and the ones held describe the original's turns. A
+/// loop and a goal are not written down, so neither carries over (SESSION-18).
+fn branch_session(
+    session: &mut Session,
+    stored: &mut bravebot_session::sessions::Handle,
+    conversation: &Conversation,
+    answers: &Answers,
+    workspace: &Workspace,
+    name: &str,
+) {
+    use bravebot_session::sessions::Unbranched;
+    match stored.branch_off(name) {
+        Ok(original) => {
+            session.close_rewind_window();
+            session.stop_loop();
+            session.clear_goal();
+            let title = stored.title().to_string();
+            stored.save(
+                &title,
+                bravebot_session::sessions::Standing {
+                    history: Some(session.turn_history()),
+                    conversation: &conversation.snapshot(),
+                    turns: session.turns,
+                    tokens: session.tokens,
+                    spend: session.spend_by_turn(),
+                    timing: session.timing_by_turn(),
+                    model: session.served_model(),
+                    todos: &session.todos_by_turn(),
+                    asides: session.asides(),
+                    trust: &answers.trust,
+                    programs: &answers.programs,
+                    directories: workspace.added_directories(),
+                    manifest: None,
+                    rewind: session.rewind_points(),
+                },
+            );
+            session.note(t!(
+                session_branched,
+                title = stored.title(),
+                id = original.id,
+                directory = original.directory.display().to_string()
+            ));
+        }
+        Err(Unbranched::NothingWritten) => session.note(t!(session_branch_nothing_written)),
+        Err(Unbranched::Unwritable) => session.note(t!(session_branch_unwritable)),
+        Err(Unbranched::Refused) => session.note(t!(session_branch_refused)),
     }
 }
 
@@ -20934,6 +21011,194 @@ mod tests {
             None,
             "a rewind in a resumed session put back a cache figure the previous process measured"
         );
+    }
+
+    /// CMD-2: `/branch` is a command only as the whole line or with a name after it, so a question
+    /// about it is a prompt, and so is a longer word that starts with it.
+    #[test]
+    fn a_prompt_containing_the_branch_command_is_still_a_prompt() {
+        for line in ["what does /branch copy", "/branches are useful"] {
+            let mut session = Session::new("none");
+            for c in line.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit(line.to_string())
+            );
+        }
+    }
+
+    /// CMD-1: `/branch` alone and `/branch <name>` both reach the loop, the name unparsed.
+    #[test]
+    fn the_branch_command_carries_its_name() {
+        for (line, name) in [
+            ("/branch", ""),
+            ("/branch try the other parser", "try the other parser"),
+        ] {
+            let mut session = Session::new("none");
+            for c in line.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Branch(name.to_string())
+            );
+        }
+    }
+
+    /// CMD-8: `/branch` typed during a turn waits for it, since the copy is read from the record
+    /// the turn is still to write.
+    #[test]
+    fn the_branch_command_waits_for_the_turn_in_flight() {
+        let mut session = a_turn_running_on("first");
+        for c in "/branch".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        assert_eq!(waiting_prompts(&session), vec!["/branch"]);
+    }
+
+    /// SESSION-20: the session moves onto a marked copy of its record and says where the original
+    /// is. The goal and the loop, which no record holds, end with the original; the rewind points,
+    /// which a fork inherits none of, go too. The original's record is left as it was.
+    #[test]
+    fn branching_a_session_moves_onto_the_copy_and_leaves_the_original() {
+        use bravebot_aichat::protocol::Message;
+        use bravebot_session::sessions::{self, Standing};
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-branch");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let trust = TrustStore::new(&root);
+        let programs = TrustedPrograms::new();
+        let mut session = Session::new("none");
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let answers = Answers::opening(trust, programs, rules);
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        let mut conversation = Conversation::new();
+
+        let prompt = "write a line saying hello into notes.txt";
+        let start = conversation.recounted().len();
+        type_line(&mut session, prompt);
+        session.submit().expect("the prompt is sent");
+        let point = rewind_point(
+            &session,
+            &conversation,
+            &answers.trust,
+            &answers.programs,
+            &stored,
+        );
+        session.open_rewind_point(point, prompt.to_string());
+        session.prompt_recorded(conversation.recounted().len());
+        conversation.push(Message::user(prompt));
+        conversation.push(Message::assistant("written"));
+        session.complete("written", vec![], 10);
+        session.record_turn(start, &conversation);
+        stored.save(
+            prompt,
+            Standing {
+                history: Some(session.turn_history()),
+                conversation: &conversation.snapshot(),
+                turns: session.turns,
+                tokens: session.tokens,
+                spend: session.spend_by_turn(),
+                timing: session.timing_by_turn(),
+                model: None,
+                todos: &session.todos_by_turn(),
+                asides: &[],
+                trust: &answers.trust,
+                programs: &answers.programs,
+                directories: &[],
+                manifest: None,
+                rewind: session.rewind_points(),
+            },
+        );
+        session.start_goal("cargo test exits 0".to_string());
+        session.start_loop(crate::loops::request("watch"), Vec::new(), Vec::new());
+        assert!(!session.rewind_points().is_empty());
+
+        let original = stored.id().to_string();
+        let original_path = sessions::project_directory(&root)
+            .expect("the store")
+            .join(format!("{original}.json"));
+        let before = std::fs::read(&original_path).expect("the original's record");
+
+        branch_session(
+            &mut session,
+            &mut stored,
+            &conversation,
+            &answers,
+            &workspace,
+            "",
+        );
+
+        assert_ne!(stored.id(), original, "the session stayed on the original");
+        assert_eq!(
+            stored.title(),
+            format!("{} (fork)", sessions::title_from(prompt))
+        );
+        assert!(session.goal().is_none(), "a goal carried over to the copy");
+        assert!(
+            session.looping().is_none(),
+            "a loop carried over to the copy"
+        );
+        assert!(
+            session.rewind_points().is_empty(),
+            "the copy kept the original's rewind points"
+        );
+        let said = session.transcript.last().expect("a note").text.clone();
+        assert!(
+            said.contains(&format!("bravebot --resume {original}")),
+            "the original's id is not in {said:?}"
+        );
+        let copy = sessions::load(&root, stored.id()).expect("the copy's record");
+        assert_eq!(copy.turns, session.turns);
+        assert_eq!(
+            std::fs::read(&original_path).expect("the original's record"),
+            before,
+            "the original's record changed"
+        );
+    }
+
+    /// SESSION-20: a session with no turn has no record, and says so rather than copying nothing.
+    #[test]
+    fn branching_a_session_with_no_turn_says_so_and_stays_put() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-branch-empty");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let mut session = Session::new("none");
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let answers = Answers::opening(TrustStore::new(&root), TrustedPrograms::new(), rules);
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            &root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        let id = stored.id().to_string();
+
+        branch_session(
+            &mut session,
+            &mut stored,
+            &Conversation::new(),
+            &answers,
+            &workspace,
+            "",
+        );
+
+        assert_eq!(stored.id(), id);
+        assert_eq!(
+            session.transcript.last().expect("a note").text,
+            t!(session_branch_nothing_written)
+        );
+        assert!(bravebot_session::sessions::list(&root).is_empty());
     }
 
     /// `/rename` gives up every rewind point and then writes the record, so the session it wrote

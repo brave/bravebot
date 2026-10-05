@@ -466,7 +466,7 @@ be a way to write it anywhere.
 <a id="SESSION-18"></a>
 ### SESSION-18: an interactive session can be forked to explore an alternative path
 
-The `--fork` flag duplicates an existing session into a new session record with its own identifier,
+The `--fork` flag, and [`/branch`](#SESSION-31) from inside a session, duplicate an existing session into a new session record with its own identifier,
 preserving the conversation transcript, spend history, and audit trail while resetting the start
 time and marking the title. Manifest runs plan their entire sequence and cannot be forked, matching
 the continuation rule in SESSION-10.
@@ -992,6 +992,41 @@ deleted an open session would have the next save write the record back.
 `verified-by: bravebot_ui_bridge::deleting::a_session_a_window_has_open_is_not_deleted_from_under_it`
 `verified-by: bravebot_ui_bridge::deleting::a_session_with_a_turn_running_is_refused_as_such`
 `verified-by: bravebot_ui_bridge::deleting::a_turn_in_another_session_is_named_as_such_and_deletes_nothing`
+
+<a id="SESSION-31"></a>
+### SESSION-31: `/branch` forks the running session and moves onto the copy
+
+`/branch [name]` writes the copy `--fork` writes ([SESSION-18](#SESSION-18)): its own id, and the
+transcript, spend history and audit trail of the session. The start time is reset and the title is
+marked, or is the name where one is given. It moves the running session onto the copy, so the next
+turn is written to the copy, and it says in the transcript where the original is: its id, the
+directory it is in, and `bravebot --resume` as [SESSION-8](#SESSION-8) prints it. The original's
+record and audit trail are left byte for byte as the last turn wrote them. The copy is written
+again from what the session holds, so it is not older than the session it was made from.
+
+A loop and a goal are not written down ([LOOP-11](loop.md#LOOP-11), [GOAL-12](goal.md#GOAL-12)),
+so neither carries over: each ends and says so. Nor do the rewind points, which a fork inherits none
+of, so `/undo` in the copy has nothing to go back to. Nothing is rewound on disk. The command is
+refused, with a line saying why and nothing copied, where there is no record to copy because no turn
+has ended, where records are not written (an incognito session), and for a manifest run, which
+[SESSION-18](#SESSION-18) refuses to fork. Typed during a turn it waits for the turn to end
+([CMD-8](commands.md#CMD-8)), since the copy is made from the record the turn is still to write.
+
+**Why.** Trying a second approach from the middle of a session otherwise means leaving it, finding
+its id and starting `--fork`, and losing the screen the person was looking at. Keeping the original
+unchanged is what lets the person return to it, and saying its id is what makes that possible
+without having written it down. A goal or loop that continued into the copy would send its next turn
+into a conversation it was not started in.
+
+`verified-by: bravebot_session::sessions::branching_moves_onto_a_marked_copy_and_leaves_the_original_untouched`
+`verified-by: bravebot_session::sessions::a_named_branch_takes_the_name_as_its_title`
+`verified-by: bravebot_session::sessions::branching_before_anything_is_written_refuses_and_stays_put`
+`verified-by: bravebot_session::sessions::branching_a_manifest_run_is_refused`
+`verified-by: bravebot_tui::app::branching_a_session_moves_onto_the_copy_and_leaves_the_original`
+`verified-by: bravebot_tui::app::branching_a_session_with_no_turn_says_so_and_stays_put`
+`verified-by: bravebot_tui::app::the_branch_command_waits_for_the_turn_in_flight`
+`verified-by: bravebot_tui::app::the_branch_command_carries_its_name`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_branch_command_is_still_a_prompt`
 
 ## Known costs
 
