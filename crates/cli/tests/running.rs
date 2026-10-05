@@ -5365,3 +5365,233 @@ fn doctor_names_a_refusing_key_that_is_not_a_boolean() {
         "the file holding them was not named: {stdout}"
     );
 }
+
+/// Paid requests remain in failed JSON; an unfinished request adds no guessed cost.
+#[test]
+fn failed_json_retains_planner_and_vetting_usage() {
+    let count = Arc::new(AtomicUsize::new(0));
+    let requests = count.clone();
+    let gateway = a_gateway("[]", move |_| {
+        match requests.fetch_add(1, Ordering::SeqCst) {
+            0 => usage_reply(Some("read_file"), "", 12, 5),
+            1 => usage_reply(None, "{}", 20, 9),
+            _ => http(401, r#"{"error":{"message":"denied"}}"#),
+        }
+    });
+    let scratch = Scratch::new("failed-json-usage")
+        .with_settings(&settings_for(&gateway))
+        .with_file("a.md", "hello")
+        .with_file("b.md", "second");
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--json", "-p", "read a.md"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert!(!output.status.success(), "{stderr}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).expect("one JSON report");
+    assert_eq!(report["tokens"]["total"], 46, "{stderr}");
+    assert_eq!(report["tokens"]["output"], 14);
+    // Vetting costs tokens but does not replace planner occupancy.
+    assert_eq!(report["tokens"]["context"], 12);
+    assert_eq!(count.load(Ordering::SeqCst), 3);
+}
+
+fn usage_reply(tool: Option<&str>, text: &str, prompt: u64, output: u64) -> String {
+    let delta = match tool {
+        Some(name) => serde_json::json!({"role":"assistant", "tool_calls":[{
+            "index":0,"id":format!("call-{prompt}"),"type":"function","function":{
+                "name":name,"arguments":if prompt == 12 {"{\"path\":\"a.md\"}"} else {"{\"path\":\"b.md\"}"}}}]}),
+        None => serde_json::json!({"role":"assistant","content":text}),
+    };
+    let frame = serde_json::json!({"model":"reasons-only","choices":[{
+        "index":0,"delta":delta,"finish_reason":if tool.is_some() {"tool_calls"} else {"stop"}}],
+        "usage":{"prompt_tokens":prompt,"completion_tokens":output}});
+    let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+    format!(
+        "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// Manifest failures retain both planning calls in the report and the saved run.
+#[test]
+fn failed_manifest_usage_survives_json_and_reload() {
+    let count = Arc::new(AtomicUsize::new(0));
+    let requests = count.clone();
+    let plan = r#"{"steps":[
+        {"capability":"FILE_READ","args":{"path":"a.md","out_slot":"raw"}},
+        {"capability":"TRANSFORM","args":{"reads":["raw"],"instruction":"summarise","out_slot":"summary"}},
+        {"capability":"ANSWER","args":{"from_slot":"summary"}}]}"#;
+    let gateway = a_gateway("[]", move |_| {
+        match requests.fetch_add(1, Ordering::SeqCst) {
+            0 => usage_reply(None, "Read and summarise a.md", 12, 5),
+            1 => usage_reply(None, plan, 20, 9),
+            _ => http(401, r#"{"error":{"message":"denied"}}"#),
+        }
+    });
+    let scratch = Scratch::new("failed-manifest-usage")
+        .with_settings(&settings_for(&gateway))
+        .with_file("a.md", "hello");
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &[
+            "--mode",
+            "manifest",
+            "--dangerously-skip-permissions",
+            "--json",
+            "-p",
+            "summarise a.md",
+        ],
+    );
+    let (stdout, stderr) = said(&output);
+    assert!(!output.status.success(), "{stderr}");
+    assert_eq!(count.load(Ordering::SeqCst), 3, "{stderr}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).expect("one JSON report");
+    // Read the actual record without changing this process's home directory.
+    fn records_under(path: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(path).expect("saved directory") {
+            let path = entry.expect("entry").path();
+            if path.is_dir() {
+                found.extend(records_under(&path));
+            } else if path.extension().is_some_and(|ext| ext == "json") {
+                found.push(path);
+            }
+        }
+        found
+    }
+    let records = records_under(&scratch.path.join(".bravebot/sessions"));
+    assert_eq!(records.len(), 1);
+    let record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&records[0]).unwrap()).unwrap();
+    assert_eq!(record["tokens"], 46, "{stderr}");
+    assert_eq!(record["spend"]["1"], 46);
+    assert!(record["timing"]["1"]["wall_ms"].as_u64().unwrap() > 0);
+    assert!(record["timing"]["1"]["inference_ms"].as_u64().unwrap() > 0);
+    assert_eq!(report["tokens"]["total"], 46);
+    assert_eq!(report["tokens"]["output"], 14);
+}
+
+/// Success replaces progress, unusable completed replies still cost tokens, and zero stays zero.
+#[test]
+fn json_usage_controls_do_not_double_charge_or_guess() {
+    for (case, prompt, written, succeeds) in [
+        ("success", 12, 5, true),
+        ("unusable", 12, 5, false),
+        ("zero", 0, 0, false),
+    ] {
+        let count = Arc::new(AtomicUsize::new(0));
+        let requests = count.clone();
+        let gateway = a_gateway("[]", move |_| {
+            let index = requests.fetch_add(1, Ordering::SeqCst);
+            if case == "zero" || index > 0 {
+                http(401, r#"{"error":{"message":"denied"}}"#)
+            } else {
+                usage_reply(None, if succeeds { "done" } else { "" }, prompt, written)
+            }
+        });
+        let scratch =
+            Scratch::new(&format!("json-usage-{case}")).with_settings(&settings_for(&gateway));
+        let output = bravebot_started_in(
+            &scratch.path,
+            &scratch.path,
+            AT_A_GATEWAY,
+            &["--json", "-p", "answer"],
+        );
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.success(), succeeds, "{stderr}");
+        let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(
+            report["tokens"]["total"],
+            prompt + written,
+            "{case}: {stderr}"
+        );
+        assert_eq!(report["tokens"]["output"], written);
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            if case == "unusable" { 2 } else { 1 }
+        );
+    }
+}
+
+/// Manifest outcomes replace progress; a processor's unusable completed reply still costs tokens.
+#[test]
+fn manifest_usage_controls_survive_storage() {
+    for (case, expected, succeeds) in [
+        ("success", 77, true),
+        ("unusable", 77, false),
+        ("shape-unusable", 17, false),
+        ("zero", 0, false),
+    ] {
+        let count = Arc::new(AtomicUsize::new(0));
+        let requests = count.clone();
+        let gateway = a_gateway("[]", move |_| {
+            let index = requests.fetch_add(1, Ordering::SeqCst);
+            match (case, index) {
+                ("zero", _) => http(401, r#"{"error":{"message":"denied"}}"#),
+                ("shape-unusable", 0) => usage_reply(None, "", 12, 5),
+                (_, 0) => usage_reply(None, "Read a.md", 12, 5),
+                (_, 1) => usage_reply(
+                    None,
+                    r#"{"steps":[
+                    {"capability":"FILE_READ","args":{"path":"a.md","out_slot":"raw"}},
+                    {"capability":"TRANSFORM","args":{"reads":["raw"],"instruction":"summarise","out_slot":"summary"}},
+                    {"capability":"ANSWER","args":{"from_slot":"summary"}}]}"#,
+                    20,
+                    9,
+                ),
+                ("success", 2) => {
+                    usage_reply(None, "===== the document starts here =====\nsummary", 24, 7)
+                }
+                ("unusable", 2) => usage_reply(None, "", 24, 7),
+                _ => http(401, r#"{"error":{"message":"denied"}}"#),
+            }
+        });
+        let scratch = Scratch::new(&format!("manifest-usage-{case}"))
+            .with_settings(&settings_for(&gateway))
+            .with_file("a.md", "hello");
+        let output = bravebot_started_in(
+            &scratch.path,
+            &scratch.path,
+            AT_A_GATEWAY,
+            &[
+                "--mode",
+                "manifest",
+                "--dangerously-skip-permissions",
+                "--json",
+                "-p",
+                "summarise",
+            ],
+        );
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.success(), succeeds, "{case}: {stderr}");
+        let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(report["tokens"]["total"], expected, "{case}: {stderr}");
+        fn find_record(path: &Path) -> Option<PathBuf> {
+            for entry in std::fs::read_dir(path).ok()? {
+                let path = entry.ok()?.path();
+                if path.is_dir() {
+                    if let Some(record) = find_record(&path) {
+                        return Some(record);
+                    }
+                } else if path.extension().is_some_and(|ext| ext == "json") {
+                    return Some(path);
+                }
+            }
+            None
+        }
+        let path = find_record(&scratch.path.join(".bravebot/sessions")).expect("manifest record");
+        let record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(record["tokens"], expected, "{case}");
+        assert_eq!(record["spend"]["1"], expected, "{case}");
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            if expected >= 46 { 3 } else { 1 }
+        );
+    }
+}

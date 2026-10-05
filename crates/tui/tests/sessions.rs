@@ -4423,3 +4423,221 @@ mod preserved_history {
         );
     }
 }
+
+/// Live manifests charge the continuing session once; stopping creates no separate record.
+#[test]
+fn failed_and_stopped_manifest_usage_survives_session_reload() {
+    use bravebot_tui::remote_confirm::{
+        Interjections, RemoteConfirmer, RemoteReporter, Reply, ToMain,
+    };
+    use bravebot_tui::state::Session;
+    use std::sync::mpsc;
+    use std::time::Duration;
+    for case in ["plan-stop", "declined", "processor-stop", "success", "zero"] {
+        let at_plan = matches!(case, "declined" | "plan-stop");
+        let stopped = matches!(case, "plan-stop" | "processor-stop");
+        let charged = if case == "success" {
+            77
+        } else if case == "zero" {
+            0
+        } else {
+            46
+        };
+        let scratch = Scratch::new(&format!("manifest-{case}"));
+        std::fs::write(scratch.project.join("a.md"), "hello").unwrap();
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let frame = |text: &str, prompt: u64, written: u64| {
+            format!(
+                "data: {}\n\ndata: [DONE]\n\n",
+                serde_json::json!({
+                "choices":[{"delta":{"content":text},"finish_reason":"stop"}],
+                "usage":{"prompt_tokens":prompt,"completion_tokens":written}})
+            )
+        };
+        let plan = r#"{"steps":[
+            {"capability":"FILE_READ","args":{"path":"a.md","out_slot":"raw"}},
+            {"capability":"TRANSFORM","args":{"reads":["raw"],"instruction":"summarise","out_slot":"summary"}},
+            {"capability":"ANSWER","args":{"from_slot":"summary"}}]}"#;
+        let (accepted, acceptance) = mpsc::channel();
+        let (endpoint, requests) = completed_usage::endpoint_stopping_after_acceptance(
+            if case == "zero" {
+                vec![String::new()]
+            } else {
+                vec![
+                    frame("Read a.md", 12, 5),
+                    frame(plan, 20, 9),
+                    frame("===== the document starts here =====\nsummary", 24, 7),
+                ]
+            },
+            (case == "processor-stop").then(|| (2, cancel.clone())),
+            (case == "processor-stop").then_some(acceptance),
+        );
+        let config = bravebot_config::Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.clone()),
+            _ => None,
+        })
+        .unwrap();
+        let workspace = Workspace::new(&scratch.project).unwrap();
+        let root = workspace.root().to_path_buf();
+        let (outbound, inbound) = mpsc::channel();
+        let (answers, answer_rx) = mpsc::channel();
+        let (finished, completion) = mpsc::channel();
+        let worker_cancel = cancel.clone();
+        let mut session = Session::new("test");
+        session.type_char('x');
+        session.submit().unwrap();
+        session.complete("earlier reply", vec![], 7);
+        session.begin_aside();
+        let worker = std::thread::spawn(move || {
+            let mut asking =
+                RemoteConfirmer::new(outbound.clone(), answer_rx, Interjections::new());
+            let mut reporter = RemoteReporter::new(outbound);
+            let outcome = bravebot_agent::manifest::run(
+                &config,
+                &bravebot_net::Egress::new(),
+                &workspace,
+                &bravebot_agent::Task::new("summarise a.md"),
+                &mut asking,
+                &mut reporter,
+                &mut bravebot_core::RecordingSink::new(),
+                TrustStore::new(&root),
+                &worker_cancel,
+            );
+            finished.send(outcome).unwrap();
+        });
+        let mut run = bravebot_tui::manifest_run::Run::default();
+        let mut observed = None;
+        loop {
+            let message = match inbound.recv_timeout(Duration::from_secs(5)) {
+                Ok(message) => message,
+                Err(mpsc::RecvTimeoutError::Disconnected) if case == "zero" => break,
+                other => panic!("manifest progress or plan: {other:?}"),
+            };
+            if let ToMain::Spent(spent) = &message {
+                observed = Some(*spent);
+            }
+            if let Some(ToMain::Manifest(_)) = run.progress(&mut session, message) {
+                assert_eq!(
+                    observed.unwrap().tokens,
+                    46,
+                    "both calls observed before stopping"
+                );
+                if at_plan && stopped {
+                    cancel.cancel();
+                }
+                answers
+                    .send(Reply::Manifest(if at_plan {
+                        bravebot_agent::Decision::Reject
+                    } else {
+                        bravebot_agent::Decision::Approve
+                    }))
+                    .unwrap();
+                if case == "processor-stop" {
+                    accepted.send(()).unwrap();
+                }
+                break;
+            }
+        }
+        let outcome = completion
+            .recv_timeout(Duration::from_secs(5))
+            .expect("bounded cancellation");
+        worker.join().unwrap();
+        for message in inbound.try_iter() {
+            if let ToMain::Spent(spent) = &message {
+                observed = Some(*spent);
+            }
+            run.progress(&mut session, message);
+        }
+        assert_eq!(outcome.is_ok(), case == "success");
+        assert_eq!(cancel.is_cancelled(), stopped);
+        assert_eq!(
+            requests.try_iter().count(),
+            if case == "zero" {
+                1
+            } else if at_plan {
+                2
+            } else {
+                3
+            }
+        );
+        let recorded = run.complete(
+            &mut session,
+            &scratch.project,
+            "summarise",
+            &outcome,
+            &cancel,
+        );
+        assert_eq!(recorded.is_none(), stopped);
+        if let Some(id) = &recorded {
+            assert_eq!(
+                sessions::load(&scratch.project, id).unwrap().tokens,
+                charged
+            );
+        }
+        assert_eq!(
+            sessions::list(&scratch.project).len(),
+            usize::from(!stopped)
+        );
+        let usage = observed.unwrap();
+        assert_eq!(usage.tokens, charged);
+        assert_eq!(
+            usage.output_tokens,
+            if case == "success" {
+                21
+            } else if case == "zero" {
+                0
+            } else {
+                14
+            }
+        );
+        assert!(usage.timing.wall_ms >= usage.timing.inference_ms);
+        assert_eq!(
+            session.tokens,
+            7 + charged,
+            "one charge added to the existing turn"
+        );
+        assert_eq!(session.spend_by_turn(), &BTreeMap::from([(1, 7 + charged)]));
+        let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
+        let save = |handle: &mut Handle, turns| {
+            bravebot_tui::manifest_run::save_session(
+                handle,
+                Standing {
+                    history: Some(session.turn_history()),
+                    conversation: &Conversation::new().snapshot(),
+                    turns,
+                    tokens: session.tokens,
+                    spend: session.spend_by_turn(),
+                    timing: session.timing_by_turn(),
+                    model: None,
+                    todos: &BTreeMap::new(),
+                    asides: &[],
+                    trust: &a_trust_map(),
+                    programs: &a_program_list(),
+                    directories: &[],
+                    manifest: None,
+                    rewind: &[],
+                },
+                &[],
+            )
+        };
+        save(&mut handle, session.turns);
+        let record = sessions::load(&scratch.project, handle.id()).unwrap();
+        assert_eq!(record.tokens, 7 + charged);
+        assert_eq!(record.spend[&1], 7 + charged);
+        assert_eq!(record.timing[&1].inference_ms, usage.timing.inference_ms);
+        assert!(record.manifest.is_none());
+        assert_eq!(
+            sessions::list(&scratch.project).len(),
+            if stopped { 1 } else { 2 }
+        );
+        let mut empty = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
+        save(&mut empty, 0);
+        assert!(sessions::load(&scratch.project, empty.id()).is_none());
+        assert_eq!(
+            sessions::list(&scratch.project).len(),
+            if stopped { 1 } else { 2 }
+        );
+    }
+}

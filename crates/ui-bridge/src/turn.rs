@@ -182,6 +182,7 @@ impl Kind {
 
 /// Tells a front-end what a turn is doing.
 pub struct BridgeReporter {
+    spent: Option<bravebot_agent::Spent>,
     emitter: Emitter,
     session: String,
     /// The last token count actually sent. See [`Reporter::output_tokens`].
@@ -198,12 +199,18 @@ impl BridgeReporter {
     pub fn new(emitter: Emitter, session: impl Into<String>) -> Self {
         Self {
             emitter,
+            spent: None,
             session: session.into(),
             last_tokens: None,
             notices: Vec::new(),
             reporting_for: None,
             prompt_at: None,
         }
+    }
+
+    /// The latest cumulative measurements, retained for manifest storage on failure.
+    pub fn spent(&self) -> Option<bravebot_agent::Spent> {
+        self.spent
     }
 
     /// Where the turn's prompt landed in the recounted conversation, if it got that far.
@@ -226,6 +233,10 @@ impl BridgeReporter {
 }
 
 impl Reporter for BridgeReporter {
+    fn spent(&mut self, spent: bravebot_agent::Spent) {
+        self.spent = Some(spent);
+    }
+
     fn prompt_recorded(&mut self, at: usize) {
         self.prompt_at = Some(at);
     }

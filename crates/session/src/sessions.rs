@@ -975,6 +975,24 @@ impl StoredManifest {
     }
 }
 
+/// A finished outcome replaces cumulative progress; an interrupted run keeps the last report.
+pub fn manifest_usage(
+    outcome: &Result<bravebot_agent::Outcome, bravebot_agent::TurnError>,
+    retained: Option<bravebot_agent::Spent>,
+) -> Option<bravebot_agent::Spent> {
+    outcome
+        .as_ref()
+        .ok()
+        .map(|done| bravebot_agent::Spent {
+            tokens: done.tokens,
+            output_tokens: done.output_tokens,
+            context_tokens: done.context_tokens,
+            cached: done.cached,
+            timing: done.timing,
+        })
+        .or(retained)
+}
+
 /// Write a manifest run into the session store, finished or not, and say what it is called.
 ///
 /// One function for both callers, because a run started from a session and a run started from the
@@ -992,6 +1010,7 @@ pub fn record_manifest_run(
     project: &Path,
     prompt: &str,
     outcome: &Result<bravebot_agent::Outcome, bravebot_agent::TurnError>,
+    retained: Option<bravebot_agent::Spent>,
     front: Front,
     build: &str,
 ) -> Option<String> {
@@ -1020,14 +1039,18 @@ pub fn record_manifest_run(
     let snapshot = conversation.snapshot();
     let todos = BTreeMap::new();
     let programs = TrustedPrograms::new();
-    let tokens = outcome.as_ref().map(|o| o.tokens).unwrap_or(0);
+    let usage = manifest_usage(outcome, retained);
+    let tokens = usage.map_or(0, |s| s.tokens);
     // One turn, so the breakdown and the total say the same thing. Written anyway, because a
     // reader comparing runs should not have to special-case where the figure came from.
     let spend = BTreeMap::from([(1, tokens)]);
     // Where that one turn's time went, on the same footing. A manifest run is the case where this
     // matters most: a run nobody is watching that spent its afternoon blocked on an approval
     // nobody was there to give leaves this as the only trace of it.
-    let timing = BTreeMap::from([(1, outcome.as_ref().map(|o| o.timing).unwrap_or_default())]);
+    let measured = usage.map(|s| s.timing);
+    let timing = measured
+        .map(|timing| BTreeMap::from([(1, timing)]))
+        .unwrap_or_default();
     let mut handle = Handle::begin(project, front, build);
     handle.save(
         prompt,
@@ -3786,6 +3809,7 @@ mod tests {
             &root,
             "summarise the specs",
             &a_failed_run(),
+            None,
             Front::Terminal,
             A_BUILD,
         )
@@ -3827,6 +3851,7 @@ mod tests {
             &root,
             "summarise the specs",
             &a_failed_run(),
+            None,
             Front::Terminal,
             A_BUILD,
         )
@@ -3863,12 +3888,51 @@ mod tests {
                 &root,
                 "summarise the specs",
                 &cancelled,
+                None,
                 Front::Terminal,
                 A_BUILD
             )
             .is_none()
         );
         assert!(list(&root).is_empty(), "a stopped run was written down");
+    }
+
+    /// Missing timing remains absent; measured zero and measured failed spend survive reload.
+    #[test]
+    fn failed_manifest_records_distinguish_unknown_timing_from_measured_zero() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("manifest-measured-zero");
+        for retained in [
+            None,
+            Some(bravebot_agent::Spent::default()),
+            Some(bravebot_agent::Spent {
+                tokens: 46,
+                timing: bravebot_agent::timing::Timing {
+                    wall_ms: 101,
+                    inference_ms: 37,
+                    tools_ms: 19,
+                    stalled_ms: 11,
+                },
+                ..Default::default()
+            }),
+        ] {
+            let id = record_manifest_run(
+                &root,
+                "summarise",
+                &a_failed_run(),
+                retained,
+                Front::Terminal,
+                A_BUILD,
+            )
+            .unwrap();
+            let record = load(&root, &id).unwrap();
+            assert_eq!(record.tokens, retained.map_or(0, |s| s.tokens));
+            assert_eq!(record.spend[&1], record.tokens);
+            assert_eq!(record.timing.get(&1).copied(), retained.map(|s| s.timing));
+            assert!(record.model.is_none());
+        }
     }
 
     #[test]

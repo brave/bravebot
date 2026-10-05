@@ -497,6 +497,11 @@ cost in tokens, every tool it called with what it acted on and whether that call
 matched it rather than by the word a person is shown. What a call acted on is the name it was given
 rather than a resolved path, since the driver carries that argument without reading it.
 
+A failed run retains measured cumulative token usage from completed work. The latest report
+replaces earlier reports; a successful outcome is charged once. Required numeric token fields
+remain zero when no measurement exists. Failure reports do not invent a model, reply or round
+count.
+
 The object takes the reply's place on stdout and nothing else goes there. Progress, the message and
 the trail stay on stderr, exactly as they are without the flag.
 
@@ -522,6 +527,8 @@ The schema number is what makes the object an interface rather than a rendering.
 job is code somebody else wrote against fields this program chose, and without a stated rule about
 what may change, every field is either frozen by accident or broken without warning.
 
+`verified-by: bravebot_cli::running::failed_json_retains_planner_and_vetting_usage`
+`verified-by: bravebot_cli::running::json_usage_controls_do_not_double_charge_or_guess`
 `verified-by: bravebot_cli::running::a_run_asked_for_a_result_object_puts_one_on_stdout`
 `verified-by: bravebot_cli::running::a_refused_command_line_asking_for_a_result_object_gets_one_instead_of_the_usage`
 `verified-by: bravebot_cli::json::a_finished_run_says_what_it_did_in_fields_a_program_can_read`

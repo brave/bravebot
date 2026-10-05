@@ -135,6 +135,7 @@ pub(crate) fn walk(walk: Walk) {
             &project,
             &asked,
             &outcome,
+            reporter.spent(),
             crate::FRONT,
             crate::agent_build(),
         ),

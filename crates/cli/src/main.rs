@@ -1121,6 +1121,7 @@ fn run_task(
             workspace.root(),
             &task.prompt,
             &outcome,
+            Some(reporter.spent()),
             // The same surface the full-screen interface records: one binary, one terminal, and a
             // run started from a session written down the same way as one started from here.
             bravebot_session::sessions::Front::Terminal,
@@ -1230,6 +1231,7 @@ fn run_task(
                 say_the_result(&what_ran(
                     ending,
                     &cause.to_string(),
+                    reporter.spent(),
                     reporter.calls(),
                     &refusals(&sink),
                     reporter.notices(),
@@ -1249,6 +1251,7 @@ fn run_task(
                 say_the_result(&what_ran(
                     ending,
                     &err.to_string(),
+                    reporter.spent(),
                     reporter.calls(),
                     &refusals(&sink),
                     reporter.notices(),
@@ -1277,7 +1280,14 @@ fn stopped_before_the_turn(
     let message = message.to_string();
     let stopped = fail(ending, &message);
     if as_json {
-        say_the_result(&what_ran(ending, &message, &[], &[], &[]));
+        say_the_result(&what_ran(
+            ending,
+            &message,
+            Default::default(),
+            &[],
+            &[],
+            &[],
+        ));
     }
     stopped
 }
@@ -1361,6 +1371,7 @@ fn refusals(sink: &RecordingSink) -> Vec<json::Refusal> {
 fn what_ran(
     ending: Ending,
     message: &str,
+    spent: bravebot_agent::Spent,
     calls: &[json::Call],
     refusals: &[json::Refusal],
     notices: &[String],
@@ -1372,7 +1383,13 @@ fn what_ran(
         model: "",
         agent: None,
         steps: 0,
-        tokens: json::Tokens::default(),
+        tokens: json::Tokens {
+            total: spent.tokens,
+            output: spent.output_tokens,
+            context: spent.context_tokens,
+            cache_read: spent.cached.read_tokens,
+            cache_written: spent.cached.written_tokens,
+        },
         calls,
         refusals,
         notices,
@@ -4670,6 +4687,7 @@ mod tests {
         let object = what_ran(
             Ending::Failed,
             "BB1001: nothing answered",
+            Default::default(),
             &[],
             &[],
             &["hook turn-finished: /usr/bin/fmt could not be started".to_string()],
