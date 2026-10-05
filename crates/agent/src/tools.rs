@@ -13653,6 +13653,29 @@ mod tests {
             );
         }
 
+        /// A skill's name reaches no gate but the promotion, so that gate alone holds it to the
+        /// context. Without its refusal a fallen context would still choose which instructions
+        /// the planner is handed next. The catalogue is empty, so a name that got past the gate
+        /// would come back as an unknown skill rather than as this refusal.
+        #[test]
+        fn a_skill_name_is_refused_once_the_context_has_met_something_untrusted() {
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink).resuming(Integrity::Untrusted);
+
+            let produced = load_skill(
+                &mut policy,
+                &crate::skills::Catalogue::default(),
+                &json!({"name": "commit-style"}),
+            );
+            let said = told(&mut policy, &produced.text);
+
+            assert!(said.starts_with("refused:"), "{said}");
+            assert!(
+                said.contains("load_skill.name") && said.contains("must not decide anything"),
+                "the refusal does not say which argument or why: {said}"
+            );
+        }
+
         /// A backend that streams arguments as the model writes them hands on whatever arrived,
         /// with no service checking first that it parses, so a call can come in cut off inside a
         /// string. It reaches the planner as a failed call and never runs. Repaired instead, by
