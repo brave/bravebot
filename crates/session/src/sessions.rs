@@ -4055,7 +4055,7 @@ mod tests {
         assert!(fork(&root, "manifest-sess").is_none());
     }
 
-    /// SESSION-20: the copy has its own id and the marked title, the handle moves onto it, and the
+    /// SESSION-31: the copy has its own id and the marked title, the handle moves onto it, and the
     /// original is left byte for byte as it was, including after the copy saves a turn of its own.
     #[test]
     fn branching_moves_onto_a_marked_copy_and_leaves_the_original_untouched() {
@@ -4094,7 +4094,7 @@ mod tests {
         );
     }
 
-    /// SESSION-20: a name given to `/branch` is the copy's title, in place of the mark.
+    /// SESSION-31: a name given to `/branch` is the copy's title, in place of the mark.
     #[test]
     fn a_named_branch_takes_the_name_as_its_title() {
         if !in_isolated_profile() {
@@ -4113,7 +4113,7 @@ mod tests {
         );
     }
 
-    /// SESSION-20: nothing is copied before the session has a record, and the handle stays where
+    /// SESSION-31: nothing is copied before the session has a record, and the handle stays where
     /// it was.
     #[test]
     fn branching_before_anything_is_written_refuses_and_stays_put() {
@@ -4128,7 +4128,37 @@ mod tests {
         assert_eq!(handle.id(), id);
     }
 
-    /// SESSION-20: a manifest run is refused as `--fork` refuses it, and writes no copy.
+    /// SESSION-31: where the session directory cannot be written, as in an incognito session, the
+    /// command is refused, the handle keeps its id, and no copy is written.
+    #[test]
+    fn branching_where_records_cannot_be_written_refuses_and_writes_no_copy() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-branch-unwritable");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut handle);
+        let id = handle.id().to_string();
+        let directory = project_directory(&root).expect("dir");
+        std::fs::remove_dir_all(&directory).expect("remove the records");
+        std::fs::write(&directory, b"not a directory").expect("block the directory");
+
+        assert_eq!(handle.branch_off(""), Err(Unbranched::Unwritable));
+
+        assert_eq!(
+            handle.id(),
+            id,
+            "the handle moved although nothing was copied"
+        );
+        assert_eq!(
+            std::fs::read(&directory).expect("the blocker is untouched"),
+            b"not a directory",
+            "a copy was written"
+        );
+        std::fs::remove_file(&directory).expect("unblock the directory");
+    }
+
+    /// SESSION-31: a manifest run is refused as `--fork` refuses it, and writes no copy.
     #[test]
     fn branching_a_manifest_run_is_refused() {
         if !in_isolated_profile() {

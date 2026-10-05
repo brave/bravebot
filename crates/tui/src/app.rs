@@ -21059,7 +21059,7 @@ mod tests {
         assert_eq!(waiting_prompts(&session), vec!["/branch"]);
     }
 
-    /// SESSION-20: the session moves onto a marked copy of its record and says where the original
+    /// SESSION-31: the session moves onto a marked copy of its record and says where the original
     /// is. The goal and the loop, which no record holds, end with the original; the rewind points,
     /// which a fork inherits none of, go too. The original's record is left as it was.
     #[test]
@@ -21165,7 +21165,7 @@ mod tests {
         );
     }
 
-    /// SESSION-20: a session with no turn has no record, and says so rather than copying nothing.
+    /// SESSION-31: a session with no turn has no record, and says so rather than copying nothing.
     #[test]
     fn branching_a_session_with_no_turn_says_so_and_stays_put() {
         if !crate::test_profile::in_isolated_profile() {

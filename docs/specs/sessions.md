@@ -1021,6 +1021,7 @@ into a conversation it was not started in.
 `verified-by: bravebot_session::sessions::branching_moves_onto_a_marked_copy_and_leaves_the_original_untouched`
 `verified-by: bravebot_session::sessions::a_named_branch_takes_the_name_as_its_title`
 `verified-by: bravebot_session::sessions::branching_before_anything_is_written_refuses_and_stays_put`
+`verified-by: bravebot_session::sessions::branching_where_records_cannot_be_written_refuses_and_writes_no_copy`
 `verified-by: bravebot_session::sessions::branching_a_manifest_run_is_refused`
 `verified-by: bravebot_tui::app::branching_a_session_moves_onto_the_copy_and_leaves_the_original`
 `verified-by: bravebot_tui::app::branching_a_session_with_no_turn_says_so_and_stays_put`
