@@ -1005,8 +1005,8 @@ record and audit trail are left byte for byte as the last turn wrote them. The c
 again from what the session holds, so it is not older than the session it was made from.
 
 A loop, a goal and the live watches are not written down ([LOOP-11](loop.md#LOOP-11),
-[GOAL-12](goal.md#GOAL-12)), so none carries over: each ends and says so. Nor do the rewind points, which a fork inherits none
-of, so `/undo` in the copy has nothing to go back to. Nothing is rewound on disk. The command is
+[GOAL-12](goal.md#GOAL-12)), so none carries over: each ends and says so. Nor do the rewind
+points, which a fork inherits none of, so `/undo` in the copy has nothing to go back to. Nothing is rewound on disk. The command is
 refused, with a line saying why and nothing copied, where there is no record to copy because no turn
 has ended, where records are not written (an incognito session), for a manifest run, which
 [SESSION-18](#SESSION-18) refuses to fork, and while the session keeps a checkout. A fork carries
