@@ -642,6 +642,32 @@ fn the_loop_skill_is_advertised_for_a_tick_and_for_nothing_else() {
     }
 }
 
+/// The condition is the last thing the description says and the only one it names. A second
+/// sentence inviting the planner to load the skill for some other request, such as polling a
+/// build, keeps the required words and the two banned ones while widening the invitation.
+#[test]
+fn the_loop_skill_description_names_one_condition_and_ends_with_it() {
+    let scratch = Scratch::new("loop-one-condition");
+    let workspace = Workspace::new(scratch.workspace()).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, _) = {
+        let mut policy = policy(&mut sink, &[]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    let description = &catalogue.get("loop").expect("the loop skill").description;
+    assert!(
+        description.ends_with("Load it when this turn is a tick of a loop."),
+        "something follows the condition: {description}"
+    );
+    assert_eq!(
+        description.to_lowercase().matches("load").count(),
+        1,
+        "the description invites a load more than once: {description}"
+    );
+}
+
 /// The order a filesystem hands back entries varies by machine, and the prompt would vary with
 /// it. Two runs of the same session must offer the same skills in the same order.
 #[test]
