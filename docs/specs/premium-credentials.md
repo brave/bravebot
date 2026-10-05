@@ -100,7 +100,8 @@ own and reads the store not at all. Between runs the file is where they agree. A
 under an exclusive claim on the store, from what the file says at that moment, and recorded on the
 file before the credential leaves the wallet, so every other `bravebot` reads it as gone. A claim
 older than any live hold belongs to a process that died holding it and is broken rather than
-waited on.
+waited on. It is broken by moving it aside and judging it there, and a claim that turns out to be live is
+put back rather than deleted.
 
 **Why.** A spend held only in memory reaches the file when the wallet is written back, so a second
 wallet over the same batch would read every spend the first has made as unspent and offer the
@@ -121,6 +122,8 @@ guarantee holding inside a process and failing between them.
 `verified-by: bravebot_skus::store::a_failed_spend_write_leaves_another_wallets_spends_on_the_file_when_the_session_ends`
 `verified-by: bravebot_skus::store::a_claim_left_by_a_dead_process_is_broken_rather_than_waited_on`
 `verified-by: bravebot_skus::store::a_claim_taken_a_moment_ago_is_not_treated_as_abandoned`
+`verified-by: bravebot_skus::store::breaking_a_claim_that_is_no_longer_abandoned_leaves_it_in_place`
+`verified-by: bravebot_skus::store::breaking_an_abandoned_claim_removes_it_and_leaves_nothing_beside_it`
 `verified-by: bravebot_agent::shared::two_runs_holding_one_wallet_are_never_offered_the_same_credential`
 `verified-by: bravebot_agent::turn::a_delegate_spends_the_wallet_the_turn_lent_it`
 `verified-by: bravebot_agent::home::a_delegate_does_not_open_a_wallet_of_its_own`

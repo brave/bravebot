@@ -1508,6 +1508,10 @@ indicator-checking = { $lines ->
 indicator-checking-picture = Vérification d'une image
 indicator-checking-pdf = Vérification d'un PDF
 indicator-stopping = Arrêt en cours
+indicator-stopping-delegates = { $count ->
+    [one] Arrêt en cours, en attente de { $count } délégué
+   *[other] Arrêt en cours, en attente de { $count } délégués
+    }
 tokens-thousands = { $thousands } k
 tokens-millions = { $millions } M
 turn-done = tour { $turn } terminé

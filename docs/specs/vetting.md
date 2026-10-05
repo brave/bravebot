@@ -96,6 +96,7 @@ nobody else. Where a check cannot tell, it warns.
 `verified-by: bravebot_core::policy::a_check_is_given_the_one_slot_its_spec_names`
 `verified-by: bravebot_agent::vet::a_checker_is_not_told_to_keep_quiet_about_what_it_notices`
 `verified-by: bravebot_agent::vet::a_checker_that_cannot_tell_is_told_to_warn`
+`verified-by: bravebot_agent::turn::a_check_is_sent_as_three_messages_with_no_tools_and_the_drivers_words_last`
 `verified-by: by-construction (what fixes a check holds one piece of content and the planner's sentence, has no output label, no output reference and no destination, and is built only by taking an authority minted inside the policy layer; every field is private and no method takes &mut self)`
 
 <a id="CHECK-2"></a>
@@ -123,6 +124,7 @@ A check over a picture has no string to encode: the picture goes in a part of it
 `verified-by: bravebot_core::policy::the_metadata_is_a_separate_block_before_the_content`
 `verified-by: bravebot_core::policy::a_composed_check_input_is_still_quarantined`
 `verified-by: bravebot_agent::vet::control_is_re_asserted_after_the_content`
+`verified-by: bravebot_agent::turn::a_check_is_sent_as_three_messages_with_no_tools_and_the_drivers_words_last`
 `verified-by: bravebot_core::policy::a_check_over_a_picture_carries_the_file_apart_from_its_metadata`
 
 <a id="CHECK-3"></a>
@@ -651,6 +653,7 @@ What the rest of the route costs is in [tools/vet-content.md](tools/vet-content.
 `verified-by: bravebot_core::policy::a_check_over_a_picture_carries_the_file_apart_from_its_metadata`
 `verified-by: bravebot_core::policy::a_picture_the_model_is_listed_as_not_taking_is_refused_before_a_check`
 `verified-by: bravebot_agent::vet::a_checker_over_a_file_is_told_it_is_a_file_under_the_same_rules`
+`verified-by: bravebot_agent::turn::a_check_over_a_file_carries_it_in_a_part_between_the_facts_and_the_closing_words`
 `verified-by: bravebot_agent::turn::a_picture_a_person_opens_and_lets_through_is_attached_after_the_results`
 `verified-by: bravebot_agent::turn::a_pdf_a_person_lets_through_is_attached_as_a_file`
 `verified-by: bravebot_agent::turn::a_picture_a_person_keeps_out_is_never_attached`
