@@ -20336,6 +20336,7 @@ fn the_summariser_asks_for_no_cache_of_the_exchange_it_gives_up() {
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
+        None,
     )
     .expect("compacting runs")
     .expect("a long conversation has something to summarise");
@@ -20619,6 +20620,7 @@ fn compacting_on_request_reaches_the_model_and_shortens_the_conversation() {
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
+        None,
     )
     .expect("compacting on request must not be refused")
     .expect("a long conversation has something to summarise");
@@ -20658,6 +20660,7 @@ fn the_trail_says_what_a_compaction_gave_up_and_what_it_cost() {
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
+        None,
     )
     .expect("compacting runs")
     .expect("a long conversation has something to summarise");
@@ -20694,6 +20697,98 @@ fn the_trail_says_what_a_compaction_gave_up_and_what_it_cost() {
         recorded.iter().any(|line| line.contains("round 0")),
         "the trail did not say which round this was: {recorded:?}"
     );
+}
+
+/// What a person typed after `/compact` has to reach the summariser, or the argument is
+/// decoration. It goes on the closing instruction, after the exchange, so the system prompt that
+/// carries the cache mark stays the same bytes.
+#[test]
+fn a_focus_typed_after_compact_reaches_the_summariser_after_the_exchange() {
+    let (endpoint, received) = serve_sequence(vec![reply_with("they were porting the parser")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = a_long_conversation();
+
+    turn::compact(
+        &config,
+        &egress,
+        &mut conversation,
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Some("keep the lexer benchmarks"),
+    )
+    .expect("compacting runs")
+    .expect("a long conversation has something to summarise");
+
+    let body = received.recv().expect("the summariser's request");
+    let focus = body
+        .find("keep the lexer benchmarks")
+        .unwrap_or_else(|| panic!("the focus did not reach the summariser: {body}"));
+    let exchange = body
+        .find("port the parser to the new lexer")
+        .unwrap_or_else(|| panic!("the exchange did not reach the summariser: {body}"));
+    assert!(
+        focus > exchange,
+        "the focus came before the exchange: {body}"
+    );
+    // The focus does not cost the prompt its mark or give the exchange one.
+    only_the_prompt_is_marked(&body);
+}
+
+/// Without a focus the request is the one it always was, and the trail says a focus was given
+/// only where one was, by length and not by content.
+#[test]
+fn the_trail_records_that_a_focus_was_given_and_never_its_words() {
+    let run = |focus: Option<&str>| {
+        let (endpoint, received) = serve_sequence(vec![reply_with("they were porting the parser")]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut conversation = a_long_conversation();
+        turn::compact(
+            &config,
+            &egress,
+            &mut conversation,
+            None,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            bravebot_core::trust::TrustStore::new("/work"),
+            focus,
+        )
+        .expect("compacting runs")
+        .expect("a long conversation has something to summarise");
+        let recorded: Vec<String> = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed { gate, detail } if *gate == "compact" => Some(detail.clone()),
+                _ => None,
+            })
+            .collect();
+        (recorded, received.recv().expect("the summariser's request"))
+    };
+
+    let (recorded, _) = run(Some("keep the lexer benchmarks"));
+    assert!(
+        recorded
+            .iter()
+            .any(|line| line.contains("a focus of 25 character(s)")),
+        "the trail did not record the focus: {recorded:?}"
+    );
+    assert!(
+        recorded.iter().all(|line| !line.contains("benchmarks")),
+        "the trail carries the person's words: {recorded:?}"
+    );
+
+    let (recorded, body) = run(None);
+    assert!(
+        recorded.iter().all(|line| !line.contains("focus")),
+        "the trail claims a focus nobody gave: {recorded:?}"
+    );
+    assert!(!body.contains("particular attention"), "{body}");
 }
 
 /// A short exchange to ask a question beside.
@@ -21181,6 +21276,7 @@ fn compacting_on_request_grants_itself_nothing_but_reaching_the_model() {
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
+        None,
     )
     .expect("compacting runs");
 

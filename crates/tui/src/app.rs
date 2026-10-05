@@ -296,7 +296,7 @@ pub fn commands() -> [Command; 29] {
         },
         Command {
             name: COMPACT_COMMAND,
-            argument: "",
+            argument: "[focus]",
             description: t!(command_compact),
             mid_turn: MidTurn::Waits,
         },
@@ -563,7 +563,7 @@ pub enum Action {
     ChangeDirectory(String),
     /// Summarise the conversation so far. Needs the conversation and the network, which the loop
     /// owns.
-    Compact,
+    Compact(String),
     /// Ask something beside the work, over a copy of the conversation. Needs the conversation and
     /// the network, which the loop owns, and gives the conversation nothing back.
     ///
@@ -1735,8 +1735,10 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         session.report_spend();
         return Action::Redraw;
     }
-    if line.trim() == COMPACT_COMMAND {
-        return Action::Compact;
+    // What the summary must keep is typed by the person and goes to the summariser as it was
+    // typed, so it is never a prompt: nothing about it joins the exchange.
+    if let Some(focus) = argument_to(line, COMPACT_COMMAND) {
+        return Action::Compact(focus.to_string());
     }
     // The question is taken verbatim and never sent as a prompt: it goes out over a copy of the
     // conversation and the copy is thrown away, so nothing about it joins the exchange.
@@ -3861,12 +3863,18 @@ fn event_loop(
                 stored.append_audit(session.turns, removal.events());
                 needs_draw = true;
             }
-            Action::Compact => {
+            Action::Compact(focus) => {
                 // The snapshot holds the conversation as it was before it was shortened.
                 session.close_rewind_window();
                 let events;
-                (conversation, events) =
-                    compact_animated(terminal, &mut session, config, conversation, &answers.trust)?;
+                (conversation, events) = compact_animated(
+                    terminal,
+                    &mut session,
+                    config,
+                    conversation,
+                    &answers.trust,
+                    &focus,
+                )?;
 
                 // Written now rather than at the end of the next turn: the shortening is the
                 // change, and a session that compacted and then slept should resume compacted.
@@ -5938,6 +5946,7 @@ fn compact_animated(
     config: &Config,
     conversation: Conversation,
     trust: &TrustStore,
+    focus: &str,
 ) -> io::Result<(Conversation, Vec<Stamped>)> {
     // For the reason a turn does it: the summary is one request to the same backend, and a sign-in
     // is not something a worker thread can ask for.
@@ -5948,6 +5957,7 @@ fn compact_animated(
     let worker_config = config.clone();
     let worker_trust = trust.clone();
     let model = session.model().map(str::to_string);
+    let focus = (!focus.is_empty()).then(|| focus.to_string());
 
     session.begin_aside();
 
@@ -5966,6 +5976,7 @@ fn compact_animated(
             &mut reporter,
             &mut sink,
             worker_trust,
+            focus.as_deref(),
         )
         .map_err(|error| error.category().name().to_string());
         (done, conversation, sink)
@@ -13989,7 +14000,7 @@ mod tests {
 
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
-            Action::Compact
+            Action::Compact(String::new())
         );
         assert!(session.input().is_empty(), "the command stayed on the line");
         assert!(
@@ -14009,6 +14020,39 @@ mod tests {
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
             Action::Submit("how does /compact work".to_string())
+        );
+    }
+
+    /// The focus is what the person wants the summary to keep, so the whole of it has to arrive,
+    /// spaces and punctuation included, and the line is never sent as a prompt (CMD-5).
+    #[test]
+    fn the_compact_command_carries_its_focus_verbatim() {
+        let mut session = Session::new("none");
+        for c in "/compact keep the lexer's benchmarks, and  the paths".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Compact("keep the lexer's benchmarks, and  the paths".to_string())
+        );
+        assert!(
+            session.transcript.is_empty(),
+            "the focus was sent as a prompt"
+        );
+    }
+
+    /// A longer word is not the command, as for every other (CMD-2).
+    #[test]
+    fn a_word_longer_than_compact_is_still_a_prompt() {
+        let mut session = Session::new("none");
+        for c in "/compacted the parser".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("/compacted the parser".to_string())
         );
     }
 

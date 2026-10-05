@@ -1,5 +1,6 @@
 ## [0.13.0](https://github.com/brave/bravebot/releases/tag/v0.13.0)
 
+ - Added an optional `[focus]` to `/compact`, which tells the summariser what the summary must keep. ([#1325](https://github.com/brave/bravebot/issues/1325))
  - Added `bravebot auth login`, which lists the ways to sign in (Leo Premium, an AWS account for Bedrock, an import from another tool) and runs the one you pick. `bravebot auth login <way>` runs it without asking, and `bravebot auth logout leo` forgets the import. ([#1105](https://github.com/brave/bravebot/issues/1105))
  - Added `bravebot auth login gateway [id]`, which keeps an OpenAI-compatible gateway's key in a file only your account can read, so it need not sit in a shell profile. `bravebot auth logout gateway [id]` forgets it. ([#1105](https://github.com/brave/bravebot/issues/1105))
  - Added a record of the Bedrock opt-in: once `bravebot auth login bedrock` signs in, it sets `BRAVEBOT_USE_BEDROCK` in `~/.bravebot/settings.json`, so you no longer export it in every shell. `bravebot doctor` now says whether each AWS account is signed in. ([#1105](https://github.com/brave/bravebot/issues/1105))

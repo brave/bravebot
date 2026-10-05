@@ -276,3 +276,27 @@ prefix warm, which trades a request the server will refuse for one cache read. A
 cannot be shortened stays long, and that is the outcome this document is here to prevent.
 
 `verified-by: bravebot_agent::turn::a_compaction_leaves_the_prompt_a_breakpoint_covers_alone`
+
+<a id="COMPACT-13"></a>
+### COMPACT-13: a person may say what the summary must keep, and the trail records that they did
+
+`/compact [focus]` takes what follows the space as the focus, verbatim, as the command rules in commands.md have it, and the
+summariser is told it on the closing instruction, after the exchange. The system prompt is not
+touched, so the instructions COMPACT-11 marks for caching stay the same bytes. Nothing else about
+the request changes: no tools (COMPACT-2), and a summary adopted only while the context is trusted
+(COMPACT-1).
+
+The focus is typed by the person, so it is trusted text and carries no label beyond their own, as a
+prompt does. A compaction the budget forces has no person to ask and carries none.
+
+The COMPACT-10 line says a focus was given and how many characters it was, and not the words, so
+the trail still carries no more content than it did. A compaction with no focus says nothing of one.
+
+**Why.** A person about to switch to another part of the task knows which facts must survive, and
+the summariser does not. Without the argument they find out what was dropped on the next turn.
+
+`verified-by: bravebot_agent::turn::a_focus_typed_after_compact_reaches_the_summariser_after_the_exchange`
+`verified-by: bravebot_agent::turn::the_trail_records_that_a_focus_was_given_and_never_its_words`
+`verified-by: bravebot_tui::app::the_compact_command_carries_its_focus_verbatim`
+`verified-by: bravebot_tui::app::a_word_longer_than_compact_is_still_a_prompt`
+`verified-by: bravebot_tui::render::the_compact_command_offers_a_focus_after_its_word`

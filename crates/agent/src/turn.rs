@@ -1778,6 +1778,7 @@ pub fn run_with_trust<S: Sink + Send, C: Confirmer + Send>(
 /// anybody anything: the whole of it is one model call over an exchange the planner has already
 /// seen. So [`Capability::WebFetch`] is granted, because reaching the model is egress and the
 /// gate asks, and nothing else is, because there is nothing else to do.
+#[allow(clippy::too_many_arguments)]
 pub fn compact<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
@@ -1786,6 +1787,7 @@ pub fn compact<S: Sink, R: Reporter>(
     reporter: &mut R,
     sink: &mut S,
     trust: TrustStore,
+    focus: Option<&str>,
 ) -> Result<Option<crate::compact::Compacted>, crate::compact::CompactError> {
     let mut routing = Routing::new();
     routing.insert_trusted("task", "summarise the conversation so far");
@@ -1816,7 +1818,7 @@ pub fn compact<S: Sink, R: Reporter>(
 
     // Zero: `/compact` is asked for between rounds rather than during one, so there is no round
     // for it to have landed in the middle of.
-    let done = crate::compact::compact(&mut policy, &mut chat, conversation, 0);
+    let done = crate::compact::compact(&mut policy, &mut chat, conversation, 0, focus);
     policy.finish();
     done
 }
@@ -3630,8 +3632,13 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         // A summary is a model call, so it belongs in the inference figure for the same reason
                         // its tokens belong in the total: the turn was waiting on the endpoint for it.
                         let summarising = Instant::now();
-                        let summary =
-                            crate::compact::compact(&mut policy, &mut chat, conversation, steps);
+                        let summary = crate::compact::compact(
+                            &mut policy,
+                            &mut chat,
+                            conversation,
+                            steps,
+                            None,
+                        );
                         let interval = crate::timing::Interval::since(summarising);
                         spent.inference += interval.duration();
                         reporter.inference_interval(interval);
