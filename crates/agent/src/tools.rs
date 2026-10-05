@@ -3939,6 +3939,12 @@ fn refuse_denied_path<S: Sink>(
         Purpose::Effect => policy.before_write(name),
     };
     ask(policy, path).map_err(|_| denied_by_rule(path))?;
+    // Spelled out as well, because the landing needs the home directory open, and otherwise the
+    // refusal would offer opening it for a file a rule refuses once it is.
+    let expanded = workspace.expanded(path);
+    if expanded != path {
+        ask(policy, &expanded).map_err(|_| denied_by_rule(path))?;
+    }
     match workspace.landing(path) {
         Some(landed) => ask(policy, &landed).map_err(|_| denied_by_rule(path)),
         None => Ok(()),
@@ -5454,7 +5460,10 @@ fn watch_file<S: Sink>(
     if let Err(denial) = policy.promote_confined_read("watch_file", "path", &found.path) {
         return Produced::problem(format!("refused: {denial}"));
     }
-    let path = found.released;
+    // Armed on the absolute path a `~` stands for. The session looks at a watch through a
+    // workspace of its own, which knows no home, and keeps it across a `/cd` only when its path
+    // is absolute.
+    let path = workspace.expanded(&found.released);
 
     // A directory is refused at the surface rather than watched and reported on. What changed
     // inside one is a file name the filesystem produced, and putting that in a fire's prompt is

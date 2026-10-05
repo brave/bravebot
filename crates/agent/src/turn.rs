@@ -740,11 +740,12 @@ pub struct Task {
     pub home: Option<PathBuf>,
     /// The user's profile directory, which is the directory `home` sits inside.
     ///
-    /// What a leading `~` in a command line the planner sends stands for (CMDLINE-4). Carried
-    /// beside `home` rather than derived from it, because the two answer different questions and
-    /// the four things read out of `home` all want the state directory: a `~` names a file of the
-    /// user's, and resolving it against `~/.bravebot` would put every home-relative path the
-    /// planner writes inside the directory this program keeps its own files in.
+    /// What a leading `~` in a command line the planner sends stands for (CMDLINE-4), and in a
+    /// path it hands a file tool (READ-4). Carried beside `home` rather than derived from it,
+    /// because the two answer different questions and the four things read out of `home` all want
+    /// the state directory: a `~` names a file of the user's, and resolving it against
+    /// `~/.bravebot` would put every home-relative path the planner writes inside the directory
+    /// this program keeps its own files in.
     ///
     /// Supplied by the caller for the reason `home` is, and `None` by default, which refuses a
     /// `~` for want of anything to stand for rather than guessing at one.
@@ -1115,9 +1116,9 @@ impl Task {
 
     /// Name the directory a leading `~` stands for, usually [`crate::home::profile`].
     ///
-    /// Without one a command line that starts a path with `~` is refused, which is the correct
-    /// answer for a caller that has not said where the user's home is: the alternative is showing
-    /// somebody an approval prompt naming a directory this program invented.
+    /// Without one a command line or a file tool's path that starts with `~` is refused, which is
+    /// the correct answer for a caller that has not said where the user's home is: the alternative
+    /// is showing somebody an approval prompt naming a directory this program invented.
     pub fn with_profile(mut self, profile: Option<PathBuf>) -> Self {
         self.profile = profile;
         self
@@ -2958,11 +2959,13 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     let mut spent = Elapsed::default();
 
     // Every route into a file this turn takes goes through this copy, so a write that leaves a
-    // definition's memory untrusted is recorded wherever it comes from (MEMORY-5).
+    // definition's memory untrusted is recorded wherever it comes from (MEMORY-5), and a `~` in a
+    // path means the home directory a `~` in a command line does (READ-4).
     let workspace = &match workspace.checkout() {
         Some(_) => workspace.clone(),
         None => workspace.clone().keeping_memories(task.home.clone()),
-    };
+    }
+    .with_profile(task.profile.clone());
 
     let mut routing = Routing::new();
     routing.insert_trusted("task", task.prompt.clone());

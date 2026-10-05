@@ -107,6 +107,13 @@ pub enum WorkspaceError {
     Invalid { path: String, reason: &'static str },
     /// The operation failed on disk.
     Io { path: String, detail: String },
+    /// There is no file at `looked_for`, which is `path` joined to the working directory, or to
+    /// the home directory for a `~`, with no link followed on the way.
+    Missing {
+        path: String,
+        detail: String,
+        looked_for: PathBuf,
+    },
     /// The file changed after it was read, so the approved change no longer applies.
     Stale { path: String },
     /// Another effect already holds the path, so this write was refused rather than interleaved.
@@ -213,6 +220,19 @@ impl WorkspaceError {
             ),
             Self::Invalid { reason, .. } => format!("'{named}' is not usable: {reason}"),
             Self::Io { detail, .. } => format!("'{named}': {detail}"),
+            // The place is said only to the caller that named the file, since it holds the
+            // carried name, and under a reference that is a name the planner was never shown.
+            Self::Missing {
+                path,
+                detail,
+                looked_for,
+            } if path.as_str() == named => {
+                format!(
+                    "'{named}': {detail}, looked for at {}",
+                    looked_for.display()
+                )
+            }
+            Self::Missing { detail, .. } => format!("'{named}': {detail}"),
             Self::Stale { .. } => {
                 format!("'{named}' changed after it was read; read it again before editing")
             }
@@ -285,6 +305,7 @@ impl WorkspaceError {
             Self::Escapes { path, .. }
             | Self::Invalid { path, .. }
             | Self::Io { path, .. }
+            | Self::Missing { path, .. }
             | Self::Stale { path }
             | Self::Contended { path }
             | Self::Binary { path }
@@ -445,6 +466,12 @@ pub struct Workspace {
     /// standing refusal to override, and a session whose own directory went unreachable would fail
     /// every read and write in it (TRUST-16).
     reads_stay_inside: bool,
+    /// The person's home directory, which a path whose first component is `~` names a file in
+    /// (READ-4). `None` refuses such a path.
+    ///
+    /// Handed over by the turn from the task, which is where a command line's `~` comes from
+    /// (CMDLINE-4), so a file tool and a command line read one `~` as the same directory.
+    profile: Option<PathBuf>,
     /// What the files this turn has written held before it wrote to them.
     ///
     /// Behind a lock and a handle because a workspace is cloned into the turn that uses it, and a
@@ -1048,6 +1075,7 @@ impl Workspace {
             search_files: MAX_SEARCH_FILES,
             search_time: MAX_SEARCH_TIME,
             reads_stay_inside: false,
+            profile: None,
             backups: Arc::new(Mutex::new(Vec::new())),
             rewind: Arc::default(),
             checkout: None,
@@ -1132,6 +1160,99 @@ impl Workspace {
     /// The state directory [`Workspace::keeping_memories`] named.
     pub(crate) fn memories(&self) -> Option<&Path> {
         self.memories.as_deref()
+    }
+
+    /// Read a path whose first component is `~` as one in `profile`, the person's home directory
+    /// (READ-4).
+    ///
+    /// `None` refuses such a path rather than looking for a directory named `~`.
+    #[must_use]
+    pub fn with_profile(mut self, profile: Option<PathBuf>) -> Self {
+        self.profile = profile;
+        self
+    }
+
+    /// `named` with a first component of `~` replaced by the home directory, or `None` where its
+    /// first component is anything else.
+    ///
+    /// Only a whole component counts, so `~notes/x` names a directory `~notes` in the project, as a
+    /// typed command reads it (CMD-5). `./~/x` names a directory `~` in the project for the same
+    /// reason.
+    ///
+    /// A relative home is no home: joined to the working directory, it would name the directory
+    /// `~` was never meant to.
+    fn expand_home(&self, named: &str) -> Result<Option<PathBuf>, WorkspaceError> {
+        let mut components = Path::new(named).components();
+        if components.next() != Some(Component::Normal("~".as_ref())) {
+            return Ok(None);
+        }
+        let Some(profile) = self
+            .profile
+            .as_ref()
+            .filter(|profile| profile.is_absolute())
+        else {
+            return Err(WorkspaceError::Invalid {
+                path: named.to_string(),
+                reason: "starts with ~, which stands for the home directory, and none is known \
+                         here; name the file by its absolute path",
+            });
+        };
+        let rest = components.as_path();
+        Ok(Some(match rest.as_os_str().is_empty() {
+            true => profile.clone(),
+            false => profile.join(rest),
+        }))
+    }
+
+    /// `named` with a first component of `~` spelled out as the home directory (READ-4), and as
+    /// given otherwise, including where no home is known, which [`Workspace::resolve`] refuses.
+    pub(crate) fn expanded(&self, named: &str) -> String {
+        match self.expand_home(named) {
+            Ok(Some(path)) => path.to_string_lossy().into_owned(),
+            _ => named.to_string(),
+        }
+    }
+
+    /// Why `resolved`, the file `named` resolved to, could not be read.
+    ///
+    /// A missing file says where it was looked for when that is `named` joined to the working
+    /// directory, or to the home directory for a `~` (READ-4), so a name looked up somewhere the
+    /// writer did not mean reads differently from a file that is absent. Nowhere else: an absolute
+    /// name already says it, and a link followed on the way would put its target, which nobody
+    /// vouched for, into the sentence.
+    fn unreadable(&self, named: &str, resolved: &Path, e: &std::io::Error) -> WorkspaceError {
+        let looked_in = match self.expand_home(named) {
+            Ok(Some(_)) => self
+                .profile
+                .as_deref()
+                .and_then(|home| home.canonicalize().ok())
+                .zip(Path::new(named).strip_prefix("~").ok()),
+            Ok(None) if Path::new(named).is_relative() => {
+                Some((self.root.clone(), Path::new(named)))
+            }
+            _ => None,
+        };
+        // Pushed a component at a time, so a `/` in the name is a separator under a Windows
+        // root written with `\\?\`, as it was when the name was resolved.
+        let looked_for = looked_in.map(|(mut at, rest)| {
+            at.extend(rest.components());
+            at
+        });
+        match looked_for {
+            Some(looked_for)
+                if e.kind() == std::io::ErrorKind::NotFound && looked_for == resolved =>
+            {
+                WorkspaceError::Missing {
+                    path: named.to_string(),
+                    detail: e.to_string(),
+                    looked_for,
+                }
+            }
+            _ => WorkspaceError::Io {
+                path: named.to_string(),
+                detail: e.to_string(),
+            },
+        }
     }
 
     /// Reach the session's own directory outside the project, or stop reaching one.
@@ -1448,6 +1569,9 @@ impl Workspace {
     /// directory the user added by name, and is refused otherwise: an absolute path was refused
     /// outright before `/add-dir` existed, and naming a directory is what makes one reachable.
     ///
+    /// A path starting with a `~` component is the absolute path it stands for (READ-4), expanded
+    /// before anything is checked, so it is confined as that absolute path would be.
+    ///
     /// Rejects any `..` component rather than resolving one. Resolving would admit it: a path
     /// that climbs out of the root and back in by its own name lands inside, and would pass a
     /// test on where it lands.
@@ -1458,6 +1582,10 @@ impl Workspace {
     /// lexical test that saw nothing wrong. What comes back is that destination, so a caller that
     /// needs the file rather than the name has it.
     pub(crate) fn resolve(&self, relative: &str) -> Result<PathBuf, WorkspaceError> {
+        if let Some(expanded) = self.expand_home(relative)? {
+            return self.resolve_added(&expanded, relative);
+        }
+
         let candidate = Path::new(relative);
 
         if candidate.is_absolute() {
@@ -1683,10 +1811,8 @@ impl Workspace {
         };
         let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
 
-        let raw = std::fs::read(&resolved).map_err(|e| WorkspaceError::Io {
-            path: relative.clone(),
-            detail: e.to_string(),
-        })?;
+        let raw =
+            std::fs::read(&resolved).map_err(|e| self.unreadable(&relative, &resolved, &e))?;
 
         // Named as binary rather than surfacing a decoding error. "stream did not contain
         // valid UTF-8" is an implementation detail that leaves a reader unable to tell a
@@ -1810,10 +1936,7 @@ impl Workspace {
         relative: &str,
         media: &str,
     ) -> Result<String, WorkspaceError> {
-        let raw = std::fs::read(resolved).map_err(|e| WorkspaceError::Io {
-            path: relative.to_string(),
-            detail: e.to_string(),
-        })?;
+        let raw = std::fs::read(resolved).map_err(|e| self.unreadable(relative, resolved, &e))?;
 
         if raw.len() > MAX_ATTACHMENT_BYTES {
             return Err(WorkspaceError::TooLarge {
@@ -1872,10 +1995,7 @@ impl Workspace {
         limit: usize,
     ) -> Result<Page, WorkspaceError> {
         let resolved = self.resolve(relative).map_err(WorkspaceError::for_a_read)?;
-        let io = |e: std::io::Error| WorkspaceError::Io {
-            path: relative.to_string(),
-            detail: e.to_string(),
-        };
+        let io = |e: std::io::Error| self.unreadable(relative, &resolved, &e);
 
         // Before the bytes rather than after them. A file written while it is being read hands back
         // the new content, and a token taken afterwards describes that same new state: the next look
@@ -1934,10 +2054,7 @@ impl Workspace {
     /// the bytes are actually read, which is where an eager read would have caught it too.
     pub fn survey(&self, relative: &str) -> Result<usize, WorkspaceError> {
         let resolved = self.resolve(relative).map_err(WorkspaceError::for_a_read)?;
-        let io = |e: std::io::Error| WorkspaceError::Io {
-            path: relative.to_string(),
-            detail: e.to_string(),
-        };
+        let io = |e: std::io::Error| self.unreadable(relative, &resolved, &e);
 
         let size = std::fs::metadata(&resolved).map_err(io)?.len();
 
@@ -4146,6 +4263,10 @@ impl Workspace {
     /// therefore still has two rules, which is a cost of keying on the name that the spec records
     /// rather than one this closes.
     ///
+    /// A leading `~` is expanded first, as [`Workspace::resolve`] expands it, so a file in the home
+    /// directory is asked about under the rule for that directory and never under a project
+    /// directory named `~`.
+    ///
     /// A `..` component leaves the name alone, for the same reason the kernel's own normalisation
     /// leaves one as written: confinement refuses such a path rather than resolving it (TRUST-10),
     /// so it is refused before anything reads it, and reducing it here would be guessing at which
@@ -4161,6 +4282,8 @@ impl Workspace {
 
     /// The same with the host's answer supplied, for the reason [`Workspace::displayed`] takes one.
     fn keyed(&self, named: &str, backslash_separates: bool) -> String {
+        let expanded = self.expanded(named);
+        let named = expanded.as_str();
         let candidate = Path::new(named);
         let climbs = candidate
             .components()

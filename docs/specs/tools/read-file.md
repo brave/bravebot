@@ -70,12 +70,41 @@ comes back. A picture read into a `data:` URI is held to the working directory a
 the user added exactly as a page of text is: what the file turns out to contain is not a reason to
 resolve its path differently.
 
+A path whose first component is `~` and nothing else names a file in the person's home directory,
+the directory `~/.bravebot` sits in and the one a `~` in a command line stands for
+([CMDLINE-4](command-line.md#CMDLINE-4)). It is expanded before anything is checked, so it is then
+an absolute path and is confined as one ([TRUST-10](../trust-map.md#TRUST-10)), and the deny rules
+and the trust map are asked about the file it expands to. Only a whole first component counts:
+`~notes/x` and `./~/x` are relative paths into the project, as they are in a typed command
+([CMD-5](../commands.md#CMD-5)). Where no home directory is known the path is refused with that
+reason, and it is never looked up as a directory named `~`. The same holds for every file tool,
+since they all resolve a path the same way.
+
+A file that is missing under a name not written as an absolute path is reported with the path it
+was looked for at, so a name joined to a directory the writer did not mean reads differently from a
+file that does not exist. The path is left out where a link was followed on the way, since the
+link's target is a name read from the disk, and for a name given through a reference, which the
+planner was never shown ([LIST-2](list-files.md#LIST-2)).
+
+**Why `~` is expanded rather than refused.** The planner writes `~/x` because the person wrote it
+in the prompt. Read as a relative path it names a directory called `~` in the project: a read
+reports the person's file missing, and a write creates that directory. Refusing the `~` and asking
+for the absolute path would also leave each file one spelling, at the cost of a round each time,
+and after expansion the rules see one spelling either way.
+
 `verified-by: bravebot_core::policy::a_model_proposal_can_be_promoted_for_a_confined_read`
 `verified-by: bravebot_core::policy::a_read_and_a_write_leave_different_trails`
 `verified-by: bravebot_agent::turn::a_model_cannot_escape_the_workspace`
 `verified-by: bravebot_agent::turn::a_model_cannot_escape_the_workspace_with_a_picture`
 `verified-by: bravebot_agent::workspace::only_a_dropped_attachment_may_come_from_outside_the_workspace`
 `verified-by: bravebot_agent::workspace::an_attachment_inside_an_added_directory_is_readable`
+`verified-by: bravebot_agent::workspace::a_path_from_the_home_directory_reaches_a_file_in_it_once_it_is_opened`
+`verified-by: bravebot_agent::workspace::a_path_from_the_home_directory_is_refused_where_no_home_is_known`
+`verified-by: bravebot_agent::workspace::only_a_whole_first_component_of_tilde_names_the_home_directory`
+`verified-by: bravebot_agent::workspace::a_missing_file_named_relatively_says_where_it_was_looked_for`
+`verified-by: bravebot_agent::workspace::a_missing_file_behind_a_link_does_not_say_where_the_link_points`
+`verified-by: bravebot_agent::workspace::a_missing_file_read_through_a_reference_does_not_say_where_it_was_looked_for`
+`verified-by: bravebot_agent::turn::a_turn_reads_a_file_named_from_the_home_directory_the_task_names`
 
 <a id="READ-5"></a>
 ### READ-5: a picture is quarantined whatever the trust map says, and leaves quarantine only through `vet_content`

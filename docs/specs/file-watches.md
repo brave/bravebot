@@ -246,10 +246,14 @@ nobody armed a watch on. So the move ends them as it happens, and every look is 
 directory its watch was armed under rather than against wherever the session is now: a watch that
 has already seen a change is a fire waiting to go out, and a look is due at most every five
 seconds. A path named absolutely is not a path the working directory decides, so a watch on one
-inside an added directory that survived the move survives with it.
+inside an added directory that survived the move survives with it. A path written from the home
+directory with `~` is armed on the absolute path it stands for ([READ-4](tools/read-file.md#READ-4)),
+since the session that looks at the watch does not know the home directory the turn expanded it
+against.
 
 `verified-by: bravebot_agent::tools::a_path_outside_the_workspace_is_refused_the_way_a_read_of_it_would_be`
 `verified-by: bravebot_agent::watch::a_path_the_session_no_longer_reaches_ends_its_watch_and_says_so`
+`verified-by: bravebot_agent::turn::a_watch_on_a_path_from_the_home_directory_is_armed_on_the_file_it_stands_for`
 `verified-by: bravebot_agent::watch::each_look_is_asked_for_the_directory_that_watch_was_armed_under`
 `verified-by: bravebot_agent::watch::a_move_ends_a_watch_that_has_a_fire_waiting_rather_than_letting_it_go_out`
 `verified-by: bravebot_agent::workspace::a_relative_look_is_out_of_reach_once_the_working_directory_has_moved`

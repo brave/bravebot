@@ -13012,6 +13012,202 @@ fn a_turn_cannot_read_outside_the_workspace_without_adding_it() {
     );
 }
 
+/// READ-4, end to end: a `~` the planner writes in a file tool's path is the home directory the
+/// task names, which is the one a `~` in a command line stands for, so a file in an opened home
+/// directory reaches the model by the spelling the person used in their prompt.
+#[test]
+fn a_turn_reads_a_file_named_from_the_home_directory_the_task_names() {
+    let scratch = Scratch::new("tilde-turn");
+    let home = Scratch::new("tilde-turn-home");
+    std::fs::write(home.path.join("todo.txt"), "buy milk").unwrap();
+
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let added = workspace
+        .add_directory(home.path.to_str().expect("utf-8 path"))
+        .expect("the home directory is added");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"~/todo.txt"}"#),
+        reply_with("read it"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut trust = trusting_the_workspace();
+    trust.trust(&added.display().to_string());
+
+    let outcome = turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the task list in ~/todo.txt").with_profile(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+    assert!(outcome.clean, "a gate refused the read");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("buy milk"),
+        "the file in the home directory never reached the model: {second}"
+    );
+}
+
+/// READ-4: a watch on a path from the home directory is armed on the absolute path it stands for.
+/// The session looks at a watch through a workspace of its own, which knows no home, and after a
+/// `/cd` keeps looking only at an absolute path, so a watch armed on `~/todo.txt` as typed would be
+/// one the planner was told of and nothing ever looked at.
+#[test]
+fn a_watch_on_a_path_from_the_home_directory_is_armed_on_the_file_it_stands_for() {
+    let scratch = Scratch::new("tilde-watch");
+    let home = Scratch::new("tilde-watch-home");
+    std::fs::write(home.path.join("todo.txt"), "buy milk").unwrap();
+
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    workspace
+        .add_directory(home.path.to_str().expect("utf-8 path"))
+        .expect("the home directory is added");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("watch_file", r#"{"path":"~/todo.txt"}"#),
+        reply_with("watching"),
+    ]);
+    let config = config_for(&endpoint);
+
+    let outcome = turn::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("watch ~/todo.txt")
+            .looking_again(true)
+            .arming(bravebot_agent::watch::Arming::Allowed { free: 8 })
+            .with_profile(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let armed = home.path.join("todo.txt").display().to_string();
+    assert_eq!(outcome.watches, vec![armed.clone()]);
+    for under in [workspace.root(), home.path.as_path()] {
+        let looked = workspace.look(&armed, under);
+        assert!(
+            matches!(looked, bravebot_agent::watch::Looked::Saw(_)),
+            "the session could not look at the watch armed under {}: {looked:?}",
+            under.display()
+        );
+    }
+}
+
+/// PERM-7 and READ-4: a deny rule written about a file in the home directory covers it named from
+/// `~`, since the rules are asked about where the name lands as well as how it was typed.
+#[cfg(unix)]
+#[test]
+fn a_deny_rule_covers_a_home_file_named_from_the_home_directory() {
+    let scratch = Scratch::new("tilde-deny");
+    let home = Scratch::new("tilde-deny-home");
+    std::fs::write(home.path.join("secret.txt"), "SECRET_TOKEN=hunter2").unwrap();
+
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let added = workspace
+        .add_directory(home.path.to_str().expect("utf-8 path"))
+        .expect("the home directory is added");
+    let settings =
+        bravebot_config::Settings::parse(r#"{"permissions": {"deny": ["Read(~/secret.txt)"]}}"#);
+    let (permissions, rejected) =
+        bravebot_agent::permissions::from_settings(&settings, Some(&added), workspace.root());
+    assert!(rejected.is_empty(), "the rule did not parse");
+    let mut trust = trusting_the_workspace();
+    trust.trust(&added.display().to_string());
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"~/secret.txt"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the secret")
+            .with_permissions(permissions)
+            .with_profile(Some(added.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        !bodies.iter().any(|b| b.contains("hunter2")),
+        "a file a deny rule covers reached the planner named from ~"
+    );
+    assert!(
+        bodies
+            .iter()
+            .any(|b| b.contains("deny rule in the user's settings covers")),
+        "the planner was not told a rule refused the read: {bodies:?}"
+    );
+}
+
+/// PERM-7 and READ-4: the same rule refuses the read before the home directory is opened, rather
+/// than the planner being told the person can open it, after which the rule would refuse it anyway.
+#[cfg(unix)]
+#[test]
+fn a_deny_rule_covers_a_home_file_named_from_the_home_directory_before_it_is_opened() {
+    let scratch = Scratch::new("tilde-deny-unopened");
+    let home = Scratch::new("tilde-deny-unopened-home");
+    std::fs::write(home.path.join("secret.txt"), "SECRET_TOKEN=hunter2").unwrap();
+    let profile = home.path.canonicalize().expect("the home directory");
+
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let settings =
+        bravebot_config::Settings::parse(r#"{"permissions": {"deny": ["Read(~/secret.txt)"]}}"#);
+    let (permissions, rejected) =
+        bravebot_agent::permissions::from_settings(&settings, Some(&profile), workspace.root());
+    assert!(rejected.is_empty(), "the rule did not parse");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"~/secret.txt"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the secret")
+            .with_permissions(permissions)
+            .with_profile(Some(profile)),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    let last = bodies.last().expect("a last round");
+    assert!(
+        last.contains("deny rule in the user's settings covers"),
+        "the planner was not told a rule refused the read: {last}"
+    );
+    assert!(
+        !last.contains("open the directory"),
+        "the planner was told opening the directory would reach a file a rule refuses: {last}"
+    );
+}
+
 /// Answers a series with fixed replies, and records what it was shown.
 ///
 /// Given no replies it answers nothing, which is what a test asserting that the person was never

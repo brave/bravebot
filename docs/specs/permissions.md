@@ -273,7 +273,9 @@ denied host is not fetched: the refusal comes before the file is opened, before 
 looked for, and before the request goes out. A `Read` deny rule also stops a write to the path it
 covers.
 
-The rule is about the file, not about the spelling used to ask for it. Naming a path through a
+The rule is about the file, not about the spelling used to ask for it. A path written from the home
+directory with `~` is the file it expands to ([READ-4](tools/read-file.md#READ-4)), so a rule about
+that file refuses it, whether or not the home directory has been opened. Naming a path through a
 reference reaches the same refusal, including on the one route that may read quarantined content: a
 processor is handed no denied file either. The planner is told the rule refused and that retrying is
 not the answer, and where the path arrived through a reference the refusal names the reference rather
@@ -382,6 +384,8 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::workspace::a_listing_does_not_enumerate_a_tree_a_deny_rule_covers`
 `verified-by: bravebot_agent::workspace::a_denied_file_does_not_spend_a_searchs_budget`
 `verified-by: bravebot_agent::turn::a_walk_does_not_report_a_link_to_a_denied_file`
+`verified-by: bravebot_agent::turn::a_deny_rule_covers_a_home_file_named_from_the_home_directory`
+`verified-by: bravebot_agent::turn::a_deny_rule_covers_a_home_file_named_from_the_home_directory_before_it_is_opened`
 
 <a id="PERM-8"></a>
 ### PERM-8: an allow rule answers a prompt and grants nothing else

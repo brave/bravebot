@@ -480,7 +480,10 @@ Reading, writing, editing, listing and searching are confined to the working dir
 whatever has been opened beside it, the directory the session was given among them (TRUST-16). `..`
 and an absolute path outside those are refused rather than resolved, in an added directory exactly as
 in the project, and a symlink leaving one is refused.
-A relative path always means the project, so no file has two spellings. Naming a directory
+A relative path always means the project, so no file has two spellings. A path whose first
+component is `~` is not a relative one: it is the absolute path in the home directory it stands for
+([READ-4](tools/read-file.md#READ-4)) and is confined as that path is, so it reaches nothing until
+the directory it lands in is opened, and a write to it creates nothing named `~`. Naming a directory
 includes nothing, since a directory is somewhere to type through rather than a file to read.
 [CHECKOUT-7](checkouts.md#CHECKOUT-7) gives a delegate a checkout of its
 own as its working directory, from which the session's working directory is not reachable.
@@ -535,6 +538,8 @@ tree makes of it then, and a pull in between can turn a directory on it into a l
 `verified-by: bravebot_agent::workspace::a_rewind_removes_a_created_file_since_replaced_by_a_link_without_following_it`
 `verified-by: bravebot_tui::undo_tests::undo_refuses_the_paths_a_directory_since_linked_out_of_the_workspace_would_carry_outside`
 `verified-by: bravebot_agent::turn::a_refused_line_is_not_put_back_through_a_directory_it_linked_out_of_the_workspace`
+`verified-by: bravebot_agent::workspace::a_path_from_the_home_directory_is_refused_as_outside_the_workspace_until_the_home_is_opened`
+`verified-by: bravebot_agent::workspace::a_write_to_a_path_from_the_home_directory_creates_nothing_named_tilde`
 
 <a id="TRUST-11"></a>
 ### TRUST-11: the map does not govern `~/.bravebot`
@@ -881,7 +886,9 @@ only a filesystem can tell apart: a directory named through a link is the same d
 `/tmp` being a link to `/private/tmp` is what a person types rather than a corner. A path landing
 in no open directory is asked about as written, and so is one that reaches an open directory by a
 link straight into the middle of it rather than through that directory's own name: neither has a
-spelling under a recorded name, and nothing covers either.
+spelling under a recorded name, and nothing covers either. A name whose first component is `~` is
+expanded to the home directory first ([READ-4](tools/read-file.md#READ-4)), so it is asked about
+under the directory it lands in and never under a directory in the project named `~`.
 
 A `..` component keeps the name it was given. Confinement refuses such a path rather than resolving
 it (TRUST-10), so it is refused before anything reads it, and reducing it here would be guessing at
@@ -936,6 +943,7 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_agent::workspace::a_project_file_named_through_a_symlinked_ancestor_is_read_under_its_relative_rule`
 `verified-by: bravebot_agent::workspace::a_file_reached_by_a_link_into_the_middle_of_an_added_directory_is_not_covered_by_its_rule`
 `verified-by: bravebot_agent::turn::vouching_for_a_project_file_named_absolutely_records_its_relative_rule`
+`verified-by: bravebot_agent::workspace::a_file_named_from_the_home_directory_is_read_under_the_home_directorys_rule`
 
 ## What a rewind puts back
 
