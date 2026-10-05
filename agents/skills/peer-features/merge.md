@@ -11,7 +11,7 @@ added to its issue and never filed.
 
 ## The gaps
 
-Every gap confirmed in this run, as `id`, the `unit` that found it, `title`, `summary` and
+Every gap confirmed in this run, as `id`, `kind`, the `unit` that found it, `title`, `summary` and
 `proposal`:
 
 {{candidates}}
@@ -36,6 +36,10 @@ gaps with different ids and titles that describe that one piece of work are the 
 Two gaps that sit next to each other are not. Dropping an image into the prompt and pasting one from
 the clipboard are different surfaces, and building one does not build the other. Keep gaps like those
 apart unless your reason says why one change closes both.
+
+A `parity` gap and a `beyond` gap are never one group, since they are filed under different labels.
+A `beyond` gap asks for more than the capability, so it stays its own issue even where a `parity`
+gap names the same one.
 
 A gap is already filed where an issue above, open or closed, asks for the same change. A closed one
 counts: somebody has already answered it.

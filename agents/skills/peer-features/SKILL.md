@@ -49,8 +49,8 @@ tool there adds it here.
 ## Four things a run must not do
 
 **A run never posts by hand.** `peer-features.py post` is the only thing here that writes to the
-tracker, and it is the advisory skill's `post`: it skips a gap an issue body already cites and a
-title the tracker already holds, posts one issue every ten seconds or so, stops after 100 issues,
+tracker, and it is the advisory skill's `post`: it skips a gap an issue body already cites, by its
+own id or by one merged into it, and a title the tracker already holds, posts one issue every ten seconds or so, stops after 100 issues,
 and refuses before posting anything when a label is missing. `gh` is absent from this skill's
 `allowed-tools` so that a `gh issue create` typed here asks first.
 
@@ -130,8 +130,8 @@ it their own way, and the verifiers confirmed both.
 python3 agents/skills/peer-features/peer-features.py merge --work-dir "$WORK_DIR"
 ```
 
-Print its stderr: the confirmed gaps, the units they came from and the `parity` and `beyond-parity`
-issues listed with them. Stdout is `{"merge": [{"prompt_file": ...}]}`. Where `merge` is empty no gap
+Print its stderr: how many gaps are confirmed, from how many units, and how many `parity` and
+`beyond-parity` issues are listed with them. Stdout is `{"merge": [{"prompt_file": ...}]}`. Where `merge` is empty no gap
 was confirmed, and step 6 is skipped.
 
 ### Step 6: group the gaps that are the same change
@@ -162,8 +162,7 @@ step 9, which leaves those units for the next run.
 Print its output: one title and label set per issue to file, and the ids merged into it. The labels
 follow [labelling-issues.md](../../../docs/development/labelling-issues.md): `parity`, or
 `enhancement` with `beyond-parity`, and an `area/*` where one is clear. Never `importance`, `urgency`
-or `size`, which
-the [triage-issues skill](../triage-issues/SKILL.md) judges.
+or `size`, which the [triage-issues skill](../triage-issues/SKILL.md) judges.
 
 ### Step 8: file (zero model tokens)
 

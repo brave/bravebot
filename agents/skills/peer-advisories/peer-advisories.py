@@ -664,7 +664,8 @@ def post(args, poster=None):
             left.append(d)
             continue
         try:
-            duplicate = cited_by(poster, args.repo, d["id"]) or poster.already_filed(args.repo, d)
+            cited = (cited_by(poster, args.repo, gid) for gid in [d["id"], *d.get("merged", [])])
+            duplicate = next(filter(None, cited), None) or poster.already_filed(args.repo, d)
         except (RuntimeError, ValueError) as problem:
             print(f"could not search {args.repo}: {problem}", file=sys.stderr)
             return 2

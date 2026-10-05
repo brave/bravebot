@@ -202,7 +202,7 @@ class Candidates(unittest.TestCase):
         self.assertIsNone(pf.check_gap(gap()))
 
     def test_a_group_that_cannot_be_applied_is_refused_with_the_reason(self):
-        confirmed = {"parity-a": None, "parity-b": None, "parity-c": None}
+        confirmed = {g: ("spec:HOOK", gap(g)) for g in ("parity-a", "parity-b", "parity-c", "beyond-d")}
         for group, problem in (
             ("parity-a", "not an object"),
             ({"gaps": "parity-a", "reason": "r"}, "list of gap ids"),
@@ -210,6 +210,7 @@ class Candidates(unittest.TestCase):
             ({"gaps": ["parity-a", "parity-z"], "reason": "r"}, "parity-z is not a gap"),
             ({"gaps": ["parity-a", "parity-a"], "reason": "r"}, "parity-a is in more than one group"),
             ({"gaps": ["parity-a", "parity-b"], "reason": "r"}, "parity-b is in more than one group"),
+            ({"gaps": ["parity-a", "beyond-d"], "reason": "r"}, "a parity gap and a beyond gap"),
             ({"gaps": ["parity-a", "parity-c"], "existing_issue": 13, "reason": "r"}, "existing_issue 13"),
             ({"gaps": ["parity-a", "parity-c"], "existing_issue": "12", "reason": "r"}, "existing_issue '12'"),
             ({"gaps": ["parity-a"], "reason": "r"}, "one gap and no existing_issue"),
@@ -398,9 +399,10 @@ class Work(unittest.TestCase):
 
         def gh(args):
             calls.append(args)
-            fork = {"number": 12, "state": "OPEN", "title": "Add forking", "body": "bravebot cannot fork.\n\n## What Codex does\n\nx"}
+            fork = {"number": 12, "state": "OPEN", "title": "Add forking", "body": "bravebot cannot fork.\r\n\r\n## What Codex does\r\n\r\nx"}
             older = {"number": 3, "state": "CLOSED", "title": "Beyond x", "body": None}
-            return json.dumps({"parity": [fork], "beyond-parity": [fork, older]}[args[args.index("--label") + 1]])
+            ours = {"number": 40, "state": "OPEN", "title": "Filed by this run", "body": "x"}
+            return json.dumps({"parity": [fork, ours], "beyond-parity": [fork, older]}[args[args.index("--label") + 1]])
 
         with mock.patch.object(pf.pa, "gh", gh):
             code, out = quiet(pf.merge, self.args())
@@ -409,16 +411,22 @@ class Work(unittest.TestCase):
             self.confirmed(gap(), gap("parity-loop-detection", title="Stop a turn that repeats one call"), unit="spec:HOOK")
             self.confirmed(gap(), unit="peer:codex")
             self.research("spec:RUN", gap("parity-unverified"))
+            (self.work / "filed.json").write_text(json.dumps({"parity-loop-detection": {"issue": 40, "how": "filed"}}))
+            (self.work / "merge").mkdir()
+            (self.work / "merge" / "groups.json").write_text(json.dumps({"groups": []}))
             code, out = quiet(pf.merge, self.args())
         self.assertEqual(code, 0)
+        self.assertFalse((self.work / "merge" / "groups.json").exists())
         self.assertEqual(sorted(c[c.index("--label") + 1] for c in calls), ["beyond-parity", "parity"])
         self.assertEqual({c[c.index("--state") + 1] for c in calls}, {"all"})
         prompt = Path(json.loads(out)["merge"][0]["prompt_file"]).read_text()
         self.assertEqual(prompt.count('"id": "parity-session-fork"'), 1)
+        self.assertIn('"kind": "parity"', prompt)
         self.assertIn('"title": "Stop a turn that repeats one call"', prompt)
         self.assertNotIn("parity-unverified", prompt)
         self.assertIn("#3 closed: Beyond x\n#12 open: Add forking | bravebot cannot fork.\n", prompt)
         self.assertNotIn("What Codex does", prompt)
+        self.assertNotIn("#40", prompt)
         self.assertNotIn("{{", prompt)
         asked = json.loads((self.work / "merge" / "asked.json").read_text())
         self.assertEqual(asked, {"gaps": ["parity-session-fork", "parity-loop-detection"], "issues": [3, 12]})
@@ -437,6 +445,7 @@ class Work(unittest.TestCase):
                 peer_behaviour="`/branch` starts a copy of the conversation.",
                 sources=["https://example.com/docs/fork", "https://example.org/branch"],
                 proposal="Add `/branch`.",
+                constraints="The copy must not share a lock with the original.",
             ),
             unit="peer:codex",
         )
@@ -449,12 +458,14 @@ class Work(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in (self.work / "issues").iterdir()), ["parity-image-paste.md", "parity-session-fork.md"])
         self.assertIn("also parity-fork-conversation", out)
         body = Path(drafts[0]["body_file"]).read_text()
-        self.assertIn("## Also found by\n\nOther reviews in this run found the same change. Both ask for one `/fork` command.", body)
+        self.assertIn("## Also found by\n\nThis run found the same change more than once. Both ask for one `/fork` command.", body)
         self.assertIn(
-            "### What Codex does, from the Codex documentation\n\n`/branch` starts a copy of the conversation.\n\n"
-            "Sources:\n\n- <https://example.org/branch>\n\nIts proposal:\n\nAdd `/branch`.\n\nGap id: `parity-fork-conversation`",
+            "### What Codex does, found by the review of the Codex documentation\n\n`/branch` starts a copy of the conversation.\n\n"
+            "Sources:\n\n- <https://example.org/branch>\n\nIts proposal:\n\nAdd `/branch`.\n\n"
+            "Its constraints:\n\nThe copy must not share a lock with the original.\n\nGap id: `parity-fork-conversation`",
             body,
         )
+        self.assertNotIn("## Constraints", body)
         self.assertEqual(body.count("https://example.com/docs/fork"), 1)
         self.assertLess(body.index("## Also found by"), body.index("## Where this comes from"))
         self.assertTrue(body.endswith("Gap id: `parity-session-fork`\n"))
@@ -481,6 +492,7 @@ class Work(unittest.TestCase):
         self.confirmed(gap(), unit="spec:HOOK")
         self.confirmed(gap("parity-fork-conversation"), unit="peer:codex")
         self.grouped({"gaps": ["parity-session-fork", "parity-fork-conversation"]})
+        quiet(pf.draft, self.args())
         _, out = quiet(pf.record, self.args(), today="2026-10-04")
         self.assertFalse((self.root / pf.LEDGER).exists())
         self.assertIn("left   parity-fork-conversation  merged into parity-session-fork, which is not filed", out)
@@ -495,6 +507,27 @@ class Work(unittest.TestCase):
         )
         self.assertEqual(entries["peer:codex"]["reason"], "1 candidates, 1 merged")
         self.assertEqual(self.states("peer:codex")[1], {"parity-fork-conversation": "held"})
+
+    def test_a_group_filed_after_another_was_recorded_still_records_its_merged_gap(self):
+        self.confirmed(gap(), gap("parity-image-paste"), unit="spec:HOOK")
+        self.confirmed(gap("parity-fork-conversation"), gap("parity-paste-image"), unit="peer:codex")
+        self.grouped(
+            {"gaps": ["parity-session-fork", "parity-fork-conversation"]},
+            {"gaps": ["parity-image-paste", "parity-paste-image"]},
+        )
+        quiet(pf.draft, self.args())
+        filed = {"parity-session-fork": {"issue": 99, "how": "filed"}}
+        (self.work / "filed.json").write_text(json.dumps(filed))
+        quiet(pf.record, self.args(), today="2026-10-04")
+        self.assertEqual(set(pf.read_ledger(self.root / pf.LEDGER)), {"parity-session-fork", "parity-fork-conversation"})
+
+        filed["parity-image-paste"] = {"issue": 100, "how": "filed"}
+        (self.work / "filed.json").write_text(json.dumps(filed))
+        quiet(pf.record, self.args(), today="2026-10-04")
+        entries = pf.read_ledger(self.root / pf.LEDGER)
+        self.assertEqual((entries["parity-paste-image"]["verdict"], entries["parity-paste-image"]["issue"]), ("merged", "#100"))
+        self.assertEqual(entries["peer:codex"]["reason"], "2 candidates, 1 already decided, 1 merged")
+        self.assertEqual(entries["spec:HOOK"]["reason"], "2 candidates, 1 already decided, 1 filed")
 
     def test_draft_refuses_while_the_merge_is_missing_stale_or_unreadable(self):
         self.confirmed(gap(), gap("parity-fork-conversation"))
@@ -518,9 +551,16 @@ class Work(unittest.TestCase):
             quiet(pf.draft, self.args())
         self.assertFalse((self.work / "drafts.json").exists())
 
-        self.grouped()
+        self.grouped({"gaps": ["parity-session-fork", "parity-image-paste"]})
         self.assertEqual(quiet(pf.draft, self.args())[0], 0)
-        self.assertEqual(len(json.loads((self.work / "drafts.json").read_text())), 3)
+        self.assertEqual(len(json.loads((self.work / "drafts.json").read_text())), 2)
+        self.assertTrue((self.work / "merge" / "applied.json").exists())
+
+        self.confirmed(gap("parity-late"), unit="spec:RUN")
+        with self.assertRaisesRegex(pf.Problem, "another set of confirmed gaps"):
+            quiet(pf.draft, self.args())
+        self.assertFalse((self.work / "drafts.json").exists())
+        self.assertFalse((self.work / "merge" / "applied.json").exists())
 
     def test_a_dropped_gap_or_a_decided_one_is_not_drafted_and_unfinished_ones_are_named(self):
         self.research("spec:HOOK", gap("parity-a"), gap("parity-b"), gap("parity-c"))
@@ -616,6 +656,18 @@ class Work(unittest.TestCase):
         filed = json.loads((self.work / "filed.json").read_text())
         self.assertEqual(filed["parity-session-fork"], {"issue": 5, "how": "existing"})
         self.assertEqual(filed["beyond-fork-anywhere"]["how"], "filed")
+
+    def test_post_skips_a_draft_when_the_tracker_cites_a_gap_merged_into_it(self):
+        self.confirmed(gap(), unit="spec:HOOK")
+        self.confirmed(gap("parity-fork-conversation"), unit="peer:codex")
+        self.grouped({"gaps": ["parity-session-fork", "parity-fork-conversation"]})
+        quiet(pf.draft, self.args())
+        calls, poster = self.poster(cited=["parity-fork-conversation"])
+        code, out = quiet(pf.pa.post, self.post_args(), poster=poster)
+        self.assertEqual(code, 0)
+        self.assertEqual([c for c in calls if c[0] == "create"], [])
+        self.assertIn("skip   parity-session-fork  #5 holds it", out)
+        self.assertEqual(json.loads((self.work / "filed.json").read_text()), {"parity-session-fork": {"issue": 5, "how": "existing"}})
 
     def test_post_files_a_hundred_by_default_and_names_the_drafts_past_the_cap(self):
         """A confirmed gap left unfiled keeps its unit unreviewed for the next run, and a runaway run must still stop."""

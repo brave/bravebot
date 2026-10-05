@@ -481,7 +481,7 @@ def verify(args):
 
 def merge_paths(work):
     folder = Path(work) / "merge"
-    return folder / "prompt.md", folder / "asked.json", folder / "groups.json"
+    return folder / "prompt.md", folder / "asked.json", folder / "groups.json", folder / "applied.json"
 
 
 def confirmed_gaps(decided):
@@ -510,7 +510,8 @@ def labelled_issues():
 def issue_line(one):
     """An issue as number, state, title and the first paragraph of its body, which for an issue this
     skill filed is the gap's summary."""
-    summary = pa.one_line(str(one.get("body") or "").strip().split("\n\n", 1)[0], ISSUE_SUMMARY)
+    body = str(one.get("body") or "").replace("\r\n", "\n").strip()
+    summary = pa.one_line(body.split("\n\n", 1)[0], ISSUE_SUMMARY)
     return f"#{one['number']} {one['state'].lower()}: {pa.one_line(one['title'], 300)}" + (f" | {summary}" if summary else "")
 
 
@@ -526,11 +527,16 @@ def merge(args):
         issues = labelled_issues()
     except (RuntimeError, ValueError) as problem:
         raise Problem(f"could not list the {' and '.join(GAP_LABELS)} issues on {REPO}: {pa.one_line(problem, 160)}") from problem
+    # An issue this run filed holds one of the gaps listed, so it is not another place to merge into.
+    ours = {how.get("issue") for how in (pa.read_json(work / "filed.json") or {}).values() if isinstance(how, dict)}
+    issues = [one for one in issues if one["number"] not in ours]
 
-    prompt, asked, result = merge_paths(work)
+    prompt, asked, result, _ = merge_paths(work)
     prompt.parent.mkdir(exist_ok=True)
+    result.unlink(missing_ok=True)
     candidates = [
-        {"id": gid, "unit": unit, "title": gap["title"], "summary": gap["summary"], "proposal": gap["proposal"]}
+        {"id": gid, "kind": gap["kind"], "unit": unit, "title": gap["title"], "summary": gap["summary"],
+         "proposal": gap["proposal"]}
         for gid, (unit, gap) in confirmed.items()
     ]
     listed = "\n".join(issue_line(one) for one in issues)
@@ -565,6 +571,8 @@ def check_group(group, confirmed, issues, placed):
     again = [g for n, g in enumerate(ids) if g in placed or g in ids[:n]]
     if again:
         return f"{again[0]} is in more than one group"
+    if len({confirmed[g][1]["kind"] for g in ids}) > 1:
+        return "it puts a parity gap and a beyond gap together"
     issue = group.get("existing_issue")
     if issue is not None and pa.issue_number(issue) not in issues:
         return f"existing_issue {issue!r} is not one of the {' or '.join(GAP_LABELS)} issues listed"
@@ -577,7 +585,7 @@ def check_group(group, confirmed, issues, placed):
 
 def load_merge(work, confirmed):
     """The merge subagent's groups, or (None, why)."""
-    _, asked_path, groups_path = merge_paths(work)
+    _, asked_path, groups_path, _ = merge_paths(work)
     asked = pa.read_json(asked_path)
     if asked is None:
         return None, "merge has not run"
@@ -595,34 +603,37 @@ def load_merge(work, confirmed):
     return data["groups"], None
 
 
-def merged(work, decided):
-    """`decided` with the merge's groups applied, and why they could not be, or None.
+def merge_plan(work, decided):
+    """What the merge's groups change, by gap id, and why they could not be applied, or None.
 
-    The group's first gap keeps `file`, carrying the others as `also`, or becomes `final` and
-    `tracked` where the group names an existing issue. Each other gap becomes `merged`, `into` the
-    first. With no confirmed gap there is nothing to merge, and `decided` is returned as it is.
+    A group's first gap stays `file` and `absorbs` the others, or becomes `final` and `tracked`
+    where the group names an existing issue. Each other gap becomes `merged`, `into` the first.
     """
     confirmed = confirmed_gaps(decided)
     if not confirmed:
-        return decided, None
+        return {}, None
     groups, problem = load_merge(work, confirmed)
     if groups is None:
-        return decided, problem
-    changes = {}
+        return {}, problem
+    plan = {}
     for group in groups:
         first, *rest = group["gaps"]
         reason, issue = pa.one_line(group["reason"]), group.get("existing_issue")
         if issue is None:
-            changes[first] = {"also": {"reason": reason, "gaps": [confirmed[gid] for gid in rest]}}
+            plan[first] = {"absorbs": rest, "group_reason": reason}
         else:
-            changes[first] = {"state": "final", "verdict": "tracked", "issue": issue, "reason": reason}
+            plan[first] = {"state": "final", "verdict": "tracked", "issue": issue, "reason": reason}
         for gid in rest:
-            changes[gid] = {"state": "merged", "into": first, "issue": issue, "reason": reason}
+            plan[gid] = {"state": "merged", "into": first, "issue": issue, "reason": reason}
+    return plan, None
+
+
+def apply_plan(decided, plan):
     for info in decided.values():
         for gid, result in info["gaps"].items():
-            if result["state"] == "file" and gid in changes:
-                result.update(changes[gid])
-    return decided, None
+            if result["state"] == "file" and gid in plan:
+                result.update(plan[gid])
+    return decided
 
 
 # Drafting.
@@ -647,19 +658,23 @@ def subject_of(manifest, unit):
 
 def also_found(gap, also, manifest):
     """What the gaps merged into this one add to it: each peer's behaviour, sources not yet listed, its
-    proposal where that differs, and its id, so a search for that id finds this issue."""
+    proposal, constraints and delta where they differ, and its id, so a search for that id finds this
+    issue."""
     root = manifest["root"]
     listed = set(gap["sources"])
-    parts = [f"## Also found by\n\nOther reviews in this run found the same change. {pa.clean(also['reason'], root)}"]
+    parts = [f"## Also found by\n\nThis run found the same change more than once. {pa.clean(also['reason'], root)}"]
     for unit, other in also["gaps"]:
-        part = f"### What {pa.clean(other['peer'], root)} does, from {subject_of(manifest, unit)}\n\n"
+        part = f"### What {pa.clean(other['peer'], root)} does, found by the review of {subject_of(manifest, unit)}\n\n"
         part += pa.clean(other["peer_behaviour"], root)
         new = [url for url in other["sources"] if url not in listed]
         listed.update(new)
         if new:
             part += "\n\nSources:\n\n" + "\n".join(f"- <{url}>" for url in new)
-        if pa.one_line(other["proposal"]) != pa.one_line(gap["proposal"]):
-            part += "\n\nIts proposal:\n\n" + pa.clean(other["proposal"], root)
+        for field, label in (("proposal", "Its proposal"), ("delta", "Where it goes past parity"),
+                             ("constraints", "Its constraints")):
+            text = pa.one_line(other.get(field))
+            if text and text != pa.one_line(gap.get(field)):
+                part += f"\n\n{label}:\n\n" + pa.clean(other[field], root)
         parts.append(part + f"\n\nGap id: `{other['id']}`")
     return "\n\n".join(parts)
 
@@ -695,9 +710,18 @@ def body_for(gap, unit, manifest, also=None):
 def draft(args):
     work = Path(args.work_dir)
     manifest, decided = outcomes(work)
-    decided, problem = merged(work, decided)
+    confirmed = confirmed_gaps(decided)
+    plan, problem = merge_plan(work, decided)
+    applied = merge_paths(work)[3]
     if problem:
-        raise Problem(f"{len(confirmed_gaps(decided))} confirmed gaps are not drafted: {problem}; run merge and its subagent first")
+        (work / "drafts.json").unlink(missing_ok=True)
+        applied.unlink(missing_ok=True)
+        raise Problem(f"{len(confirmed)} confirmed gaps are not drafted: {problem}; run merge and its subagent first")
+    if plan:
+        applied.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+    else:
+        applied.unlink(missing_ok=True)
+    decided = apply_plan(decided, plan)
     out = work / "issues"
     out.mkdir(exist_ok=True)
     drafts, seen = [], set()
@@ -706,12 +730,12 @@ def draft(args):
             if result["state"] != "file" or gid in seen:
                 continue
             seen.add(gid)
-            gap, also = result["gap"], result.get("also")
+            gap, absorbed = result["gap"], result.get("absorbs", [])
+            also = {"reason": result["group_reason"], "gaps": [confirmed[g] for g in absorbed]} if absorbed else None
             body = out / f"{gid}.md"
             body.write_text(body_for(gap, unit, manifest, also), encoding="utf-8")
             title = pa.title_for(gap)
             key = pa.one_line(gap.get("key"), 80)
-            absorbed = [other["id"] for _, other in also["gaps"]] if also else []
             drafts.append(
                 {
                     "id": gid,
@@ -750,7 +774,9 @@ def summary_of(info):
 def record(args, today=None):
     work = Path(args.work_dir)
     manifest, decided = outcomes(work)
-    decided, _ = merged(work, decided)
+    # The plan draft applied, since a gap recorded earlier no longer counts as confirmed and so
+    # changes the set the merge was asked about.
+    decided = apply_plan(decided, pa.read_json(merge_paths(work)[3]) or {})
     filed = pa.read_json(work / "filed.json") or {}
     path = Path(manifest["root"]) / LEDGER
     ledger = read_ledger(path)
