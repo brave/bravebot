@@ -851,6 +851,35 @@ mod tests {
         assert!(!failed.exists(), "the file was left behind after a failure");
     }
 
+    /// The file holds the user's own words in a shared temporary directory, so no group or other
+    /// bit may be set on it while the editor has it open. A stricter umask only narrows it.
+    #[cfg(unix)]
+    #[test]
+    fn the_file_the_editor_opens_is_readable_by_nobody_else() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode_of = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+
+        let mut prompt = 0;
+        round_trip("something private", |path| {
+            prompt = mode_of(path);
+            Ok(())
+        })
+        .expect("the round trip completes");
+        assert_eq!(prompt & 0o077, 0, "the prompt file had mode {prompt:o}");
+
+        let mut transcript = 0;
+        show_through("what happened", |path| {
+            transcript = mode_of(path);
+            Ok(())
+        })
+        .expect("the editor opens");
+        assert_eq!(
+            transcript & 0o077,
+            0,
+            "the transcript file had mode {transcript:o}"
+        );
+    }
+
     /// An editor that failed says nothing about what the user wanted, so the line stays as it
     /// was rather than being replaced by whatever happened to be in the file.
     #[test]
