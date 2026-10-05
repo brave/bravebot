@@ -8,8 +8,8 @@
 # (agents/skills/update-docs) to fold it in. The skill rewrites the sha below; nothing
 # else should.
 #
-# Draw a recognised slash word in its own colour and show what it takes (#1000)
-# 2026-09-29
-# https://github.com/brave/bravebot/commit/2b19bd7488ec891451dcaf742e476972dcab890c
+# skus: test that a failed spend write does not re-offer another wallet's spends (PREM-5) (#1529)
+# 2026-10-04
+# https://github.com/brave/bravebot/commit/0bf4e997ebe54b07cb4b1069dec174c01b3f0501
 
-2b19bd7488ec891451dcaf742e476972dcab890c
+0bf4e997ebe54b07cb4b1069dec174c01b3f0501

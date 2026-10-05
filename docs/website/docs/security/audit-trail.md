@@ -14,7 +14,7 @@ would not answer "why did it not do the thing I asked", which is most of what an
 | Where | How |
 |---|---|
 | in a session, live | **Ctrl-T** toggles the trail |
-| a one-shot run | `--trace`, which puts it on stderr |
+| a one-shot run | `--trace`, which puts it on stderr, after the error too when the run ends in one |
 | after the fact | `~/.bravebot/sessions/<directory>/<id>.audit.jsonl` |
 
 An [incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind) shows its gate
@@ -102,6 +102,18 @@ or `bypass`. A command or write that was put to you gets an `approval` line afte
 `no mode answered, left to the confirmer` or `answered by <mode> mode, nobody was asked`, so an entry
 ending in "asking" is never the only thing the trail says about who answered. A fetch or a server
 start that a mode answers carries no such line.
+
+## Delegates and checkouts are recorded
+
+A [delegate](../how-it-works.md#delegates) gets a line when it starts and another when it ends. The
+ending line says how long it ran, how many rounds it made out of the most it may, and one cause: it
+answered, it reached its round limit and answered with what it had, it was stopped, it did not finish
+(with the kind of failure), or its thread died and returned nothing. A delegate that ran for
+twenty minutes and produced nothing can be told apart this way from one that ran out of rounds. The
+same cause is in the note you are shown. The planner is told only that the delegate did not finish.
+
+Each [checkout](../customize/agents.md#a-checkout-of-its-own) made for a delegate, and each one
+removed, is recorded as well.
 
 ## The trail holds no content
 

@@ -97,7 +97,10 @@ on, and the **standing permissions its user granted**:
 - every question you asked with [`/btw`](../reference/commands.md#btw-question), and the answers the
   record could keep, which come back into the view Ctrl-L opens and into no conversation;
 - the [turns a rewind can still reach](#a-rewind-survives-a-resume), so `/undo` after a resume reaches
-  the same turns it reached before.
+  the same turns it reached before;
+- the model the record names, which stays in force for the first save outside a turn as well, and the
+  pull request and issue you gave with `/pr` and `/issue`. `bravebot --fork` copies both, and
+  `/clear` begins a session with neither.
 
 Each turn also keeps its number, the prompt as it was shown, what came of it, and its task list,
 spend and timing, a turn that failed or was cancelled included. A recorded failure carries the reason
@@ -114,6 +117,11 @@ session's own user gave. A record from before maps were kept has none, and is as
 session recorded by a different build says so, beside the note about a changed branch, and so does
 resuming one the other front end wrote: the terminal and the desktop app keep their sessions in the
 same place, and the transcript you are looking at was drawn by whichever of them recorded it.
+
+The record holds the directory as a path and nothing that identifies the checkout standing there. If
+you remove a checkout, put a different one at the same path and resume an old session in it, the
+trust map and the commands you said to stop asking about come back for the new checkout, and it is
+not asked the startup trust question. Start a fresh session there instead, which asks both.
 
 ## What the record accounts for
 
@@ -366,7 +374,9 @@ asks for that work on demand, at any size, without consulting the budget.
 The budget is the window the endpoint advertises for **whichever model is in force**, where it
 advertises one, so a one-shot run and a session both get the window of the model they are asking for.
 The built-in default only stands in, for a model resolved per request and for an entry that advertises
-nothing. See [Configuration](../customize/configuration.md#context-budget) for setting it by hand.
+nothing, including when you switch to such a model from one that advertised a window: the default
+replaces the earlier figure rather than leaving it standing. See
+[Configuration](../customize/configuration.md#context-budget) for setting it by hand.
 
 A cut has to free more than it keeps, so a conversation with nothing worth giving up is left long
 rather than summarised once per round.

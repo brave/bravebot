@@ -19,7 +19,13 @@ they do in your terminal. `$SHELL` falls back to a POSIX shell when it is unset.
 run.
 
 The `!` is a mode rather than a character: the prompt changes colour, the hint names the shell the line
-is about to go to, Backspace or Escape leaves it, and the mode lasts one command.
+is about to go to, Backspace or Escape leaves it, and the mode lasts one command. The hint line
+in this mode also names the key that opens what a turn started, once there is something to open,
+and how many rows there are.
+
+**A file dragged onto an armed line is written as its path** and attaches nothing, which is what a
+terminal does for a file dropped into a shell. There is no `[Image #1]` marker in the line, so the
+shell is handed exactly what you see. See [dropping a file](context.md#dropping-a-file).
 
 ## While a turn is running
 

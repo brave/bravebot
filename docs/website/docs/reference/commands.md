@@ -611,7 +611,9 @@ that the planner could not have held.
 
 Begins a new session in this directory and keeps the current one resumable. Because it is a new
 session it asks the trust question again, restores no standing permissions, and closes any directory
-`/add-dir` had opened.
+`/add-dir` had opened. A running [loop](#loop-interval-prompt) or [goal](#goal-condition) ends with
+the old session, and says so. With neither running it says nothing about them. The session's pull
+request and issue are not carried over.
 
 ## `/export [path]`
 
