@@ -2022,6 +2022,10 @@ session-branch-nothing-written = nothing to branch yet: the session has no recor
 session-branch-unwritable = /branch needs a session record to copy, and this session does not write one
 # Left in the transcript when /branch is typed in a session that cannot be forked.
 session-branch-refused = this session cannot be branched
+session-branch-keeps-checkouts = { $count ->
+    [one] the session keeps checkout { $ids }, which a copy would not carry, so remove it with /checkouts remove before /branch
+   *[other] the session keeps checkouts { $ids }, which a copy would not carry, so remove them with /checkouts remove before /branch
+    }
 session-rewound = rewound the session to before turn { $turn }
 session-rewound-partly =
     rewound the session to before turn { $turn }, but these files still hold what was

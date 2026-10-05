@@ -1004,13 +1004,23 @@ directory it is in, and `bravebot --resume` as [SESSION-8](#SESSION-8) prints it
 record and audit trail are left byte for byte as the last turn wrote them. The copy is written
 again from what the session holds, so it is not older than the session it was made from.
 
-A loop and a goal are not written down ([LOOP-11](loop.md#LOOP-11), [GOAL-12](goal.md#GOAL-12)),
-so neither carries over: each ends and says so. Nor do the rewind points, which a fork inherits none
+A loop, a goal and the live watches are not written down ([LOOP-11](loop.md#LOOP-11),
+[GOAL-12](goal.md#GOAL-12)), so none carries over: each ends and says so. Nor do the rewind points, which a fork inherits none
 of, so `/undo` in the copy has nothing to go back to. Nothing is rewound on disk. The command is
 refused, with a line saying why and nothing copied, where there is no record to copy because no turn
-has ended, where records are not written (an incognito session), and for a manifest run, which
-[SESSION-18](#SESSION-18) refuses to fork. Typed during a turn it waits for the turn to end
+has ended, where records are not written (an incognito session), for a manifest run, which
+[SESSION-18](#SESSION-18) refuses to fork, and while the session keeps a checkout. A fork carries
+none ([CHECKOUT-16](checkouts.md#CHECKOUT-16)), so a session carrying on in the copy would go on
+working in a checkout its record does not list; the refusal names each by its id and says to remove
+it with `/checkouts remove`. Typed during a turn it waits for the turn to end
 ([CMD-8](commands.md#CMD-8)), since the copy is made from the record the turn is still to write.
+
+The copy holds what `--resume` of it would. The trust map, the programs vouched for and the rules
+are in the record, so they stay. What no record keeps goes with the original: the language servers
+shut down and are asked about again ([LSP-8](tools/lsp.md#LSP-8)), the run prompts already drawn
+are forgotten, a file agreed to be shown or to hold a secret is asked about again
+([CRED-13](credential-protection.md#CRED-13), [CRED-15](credential-protection.md#CRED-15)), and the
+session's own directory is replaced ([TRUST-15](trust-map.md#TRUST-15)).
 
 **Why.** Trying a second approach from the middle of a session otherwise means leaving it, finding
 its id and starting `--fork`, and losing the screen the person was looking at. Keeping the original
@@ -1026,6 +1036,9 @@ into a conversation it was not started in.
 `verified-by: bravebot_tui::app::branching_a_session_moves_onto_the_copy_and_leaves_the_original`
 `verified-by: bravebot_tui::app::branching_a_session_with_no_turn_says_so_and_stays_put`
 `verified-by: bravebot_tui::app::the_branch_command_waits_for_the_turn_in_flight`
+`verified-by: bravebot_tui::app::branching_a_session_with_a_goal_takes_the_goal_off`
+`verified-by: bravebot_tui::app::a_branch_keeps_what_the_record_holds_and_forgets_the_rest`
+`verified-by: bravebot_tui::app::branching_is_refused_while_the_session_keeps_a_checkout`
 `verified-by: bravebot_tui::app::the_branch_command_carries_its_name`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_branch_command_is_still_a_prompt`
 

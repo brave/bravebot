@@ -655,12 +655,18 @@ trail so far, and its title is marked `(fork)`, or is the name you give. The ori
 as it was, and the transcript says its id and the directory it is in, so `bravebot --resume <id>`
 returns to it.
 
-A running [loop](#loop-interval-prompt) or [goal](#goal-condition) is not written down and ends,
-saying so. The copy starts with no turns for `/undo` to rewind. Nothing on disk is rewound.
+A running [loop](#loop-interval-prompt), [goal](#goal-condition) or live watch is not written down
+and ends, saying so. The copy starts with no turns for `/undo` to rewind. Nothing on disk is
+rewound.
+
+The copy holds what `--resume` of it would. The folders and programs you trusted stay trusted, and
+you are asked again about language servers, run prompts already shown and files you agreed to show
+despite the credential scan. The copy gets a scratch directory of its own.
 
 It needs a record to copy, so it says there is nothing to branch until the first turn has ended. It
-is refused in an incognito session, which writes none. Typed while a turn runs it waits for the turn
-to end.
+is refused in an incognito session, which writes none, and while the session keeps a checkout, which
+a copy does not carry: remove it with `/checkouts remove` first. Typed while a turn runs it waits
+for the turn to end.
 
 ## `/export [path]`
 

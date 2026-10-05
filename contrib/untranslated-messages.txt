@@ -24,6 +24,7 @@ fr:command-branch
 fr:command-caffeinate
 fr:gigabytes
 fr:kilobytes
+fr:session-branch-keeps-checkouts
 fr:session-branch-nothing-written
 fr:session-branch-refused
 fr:session-branch-unwritable
