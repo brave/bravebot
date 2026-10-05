@@ -1109,12 +1109,11 @@ mod tests {
             .is_transient()
         };
 
-        assert!(at(429));
-        assert!(at(503));
-        assert!(at(504));
-        assert!(!at(400));
-        assert!(!at(401));
-        assert!(!at(404));
+        // Every status a server can send, so a status added to the set or dropped from it is
+        // named here: 501 and 505 are server statuses that will not change on a second try, and
+        // 403 and 451 are refusals.
+        let retryable: Vec<u16> = (100..=599).filter(|status| at(*status)).collect();
+        assert_eq!(retryable, [408, 429, 500, 502, 503, 504]);
     }
 
     #[test]
