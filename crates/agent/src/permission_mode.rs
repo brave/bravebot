@@ -76,6 +76,35 @@ impl PermissionMode {
         }
     }
 
+    /// The name the audit trail gives this mode.
+    ///
+    /// Static text and never a word of anything a turn read, so the trail can hold it (TRACE-2).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Ask => "ask",
+            Self::AcceptEdits => "accept-edits",
+            Self::Plan => "plan",
+            Self::Bypass => "bypass",
+        }
+    }
+
+    /// Whether a command the policy would ask about is answered yes without drawing a prompt.
+    pub fn answers_a_run_unasked(self) -> bool {
+        self == Self::Bypass
+    }
+
+    /// Whether a write the policy would ask about is answered without drawing a prompt.
+    ///
+    /// A write that would create a credential is the exception in accept-edits: the diff shows the
+    /// person the value only after it is in the tree.
+    pub fn answers_a_write_unasked(self, creates_a_credential: bool) -> bool {
+        match self {
+            Self::Plan | Self::Bypass => true,
+            Self::AcceptEdits => !creates_a_credential,
+            Self::Ask => false,
+        }
+    }
+
     /// Whether writing is refused however the person would have answered.
     pub fn refuses_writes(self) -> bool {
         self == Self::Plan
@@ -211,9 +240,8 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         let creates_a_credential = !request.credentials.is_empty();
         match self.mode {
             PermissionMode::Plan => WriteDecision::reject(),
-            PermissionMode::Bypass => WriteDecision::approve(),
-            PermissionMode::AcceptEdits if !creates_a_credential => WriteDecision::approve(),
-            PermissionMode::Ask | PermissionMode::AcceptEdits => self.inner.confirm_write(request),
+            mode if mode.answers_a_write_unasked(creates_a_credential) => WriteDecision::approve(),
+            _ => self.inner.confirm_write(request),
         }
     }
 
@@ -228,11 +256,10 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// Accepting edits does not accept runs. A write lands in a tree that `git diff` will show in
     /// full afterwards; a command runs with everything the user's shell has and leaves no diff.
     fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
-        match self.mode {
-            PermissionMode::Bypass => RunDecision::approve(),
-            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.inner.confirm_run(request)
-            }
+        if self.mode.answers_a_run_unasked() {
+            RunDecision::approve()
+        } else {
+            self.inner.confirm_run(request)
         }
     }
 
@@ -424,6 +451,7 @@ mod tests {
 
     fn a_write() -> WriteRequest {
         WriteRequest {
+            written_since_checkout: false,
             path: "src/main.rs".to_string(),
             contents: "fn main() {}\n".to_string(),
             existing: None,
@@ -441,6 +469,7 @@ mod tests {
     /// is already described, as the write tools describe one, so nothing here is the value.
     fn a_credential_write() -> WriteRequest {
         WriteRequest {
+            written_since_checkout: false,
             path: "config/master.key".to_string(),
             contents: "a generated value\n".to_string(),
             credentials: vec!["line 1: a value rare enough to be a secret".to_string()],

@@ -92,7 +92,9 @@ decided as it was before.
 
 Promotion lets the model choose which file to read next, because a read
 changes nothing and is confined to the workspace. Every such choice is recorded as a promotion, so
-an audit separates the model's decisions from the user's.
+an audit separates the model's decisions from the user's. The proposal is an argument the planner
+wrote, so it is held to the context as every argument is ([LABEL-5](labels.md#LABEL-5)): once the
+context has met something untrusted, it is refused rather than promoted.
 
 It **must never be used for an effect**. Private content cannot be promoted, and content cannot be
 promoted by being read aloud: what is promoted is the model's own proposal, not bytes that came
@@ -100,6 +102,7 @@ back from somewhere.
 
 `verified-by: bravebot_core::policy::a_model_proposal_can_be_promoted_for_a_confined_read`
 `verified-by: bravebot_core::policy::private_content_cannot_be_promoted`
+`verified-by: bravebot_core::policy::a_proposal_cannot_be_promoted_once_the_context_has_met_something_untrusted`
 `verified-by: bravebot_core::policy::a_file_cannot_be_promoted_by_reading_it_aloud`
 
 ## Effects

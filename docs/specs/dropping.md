@@ -57,6 +57,7 @@ dropped file is trusted even inside a directory marked untrusted.
 `verified-by: bravebot_agent::attached::a_drop_records_its_rule_in_the_callers_map`
 `verified-by: bravebot_agent::attached::a_drop_before_one_that_could_not_be_read_keeps_its_rule`
 `verified-by: bravebot_agent::manifest::a_dropped_picture_is_still_trusted_when_a_step_of_the_plan_reads_it`
+`verified-by: bravebot_agent::manifest::a_dropped_picture_stays_trusted_when_the_run_is_declined`
 
 <a id="DROP-3"></a>
 ### DROP-3: a drop makes that file reachable, wherever on the disk it is
@@ -140,6 +141,9 @@ a mixed drop. Deleting the marker is the only way to change your mind, and sendi
 what was attached to it. Dispatching a slash command counts as sending it: the line comes off the
 box with what it named, so nothing is left staged behind a box that no longer names it.
 
+A line armed for the shell (`!`) has no markers. A file dropped onto it is written as its path and
+nothing is staged, because the shell is handed the line as it stands.
+
 `verified-by: bravebot_tui::drop::several_files_dropped_together_each_get_a_marker`
 `verified-by: bravebot_tui::drop::a_second_drop_gets_its_own_number`
 `verified-by: bravebot_tui::drop::a_mixed_drop_keeps_each_in_its_place`
@@ -147,6 +151,7 @@ box with what it named, so nothing is left staged behind a box that no longer na
 `verified-by: bravebot_tui::drop::sending_a_line_clears_what_was_attached_to_it`
 `verified-by: bravebot_tui::app::dispatching_a_command_clears_what_was_dropped_on_its_line`
 `verified-by: bravebot_tui::app::a_command_line_whose_dropped_marker_was_deleted_carries_no_file`
+`verified-by: bravebot_tui::app::a_file_dropped_onto_a_shell_line_is_run_as_its_path`
 `verified-by: bravebot_tui::drop::a_drop_leaves_room_after_itself`
 
 <a id="DROP-7"></a>

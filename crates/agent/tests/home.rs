@@ -370,6 +370,7 @@ fn a_delegate_does_not_open_a_wallet_of_its_own() {
                     "look at it".to_string(),
                     bravebot_core::label::Label::untrusted_public(),
                 ),
+                None,
             )
             .expect("a delegate the gate allows");
         let seeded = bravebot_agent::delegate::seed(&policy, spec, None);
@@ -388,6 +389,7 @@ fn a_delegate_does_not_open_a_wallet_of_its_own() {
             bravebot_agent::PermissionMode::Ask,
             false,
             &bravebot_config::Attribution::default(),
+            None,
             None,
             bravebot_agent::exec::Deadlines::BUILT_IN,
             None,

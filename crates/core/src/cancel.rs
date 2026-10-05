@@ -50,6 +50,70 @@ impl Cancel {
     }
 }
 
+/// A one-way flag asking a waited-for command to go on running in the background.
+///
+/// The same shape as [`Cancel`], for the same reason: the person presses the key on the interface
+/// thread and the run reading it is on the turn's. Each run gets a fresh one, so a press meant for
+/// one command can never reach the next.
+#[derive(Debug, Clone, Default)]
+pub struct Handoff {
+    flag: Arc<AtomicBool>,
+}
+
+impl Handoff {
+    /// A token nobody has pressed.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Ask the run to stop waiting and keep the command as a job.
+    pub fn request(&self) {
+        self.flag.store(true, Ordering::Release);
+    }
+
+    /// Whether the move has been asked for.
+    pub fn is_requested(&self) -> bool {
+        self.flag.load(Ordering::Acquire)
+    }
+}
+
+/// A one-way flag asking one background job to stop.
+///
+/// The same shape as [`Handoff`]: the person asks on the interface thread, and the turn holding the
+/// job reads it on its own and stops the job itself. Each job gets a fresh one, so asking about one
+/// job reaches no other.
+///
+/// Equal only to its own clones, because what two handles have to agree on is which job they reach.
+#[derive(Debug, Clone, Default)]
+pub struct JobStop {
+    flag: Arc<AtomicBool>,
+}
+
+impl JobStop {
+    /// A token nobody has asked with.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Ask the turn to stop the job at its next step.
+    pub fn request(&self) {
+        self.flag.store(true, Ordering::Release);
+    }
+
+    /// Whether the stop has been asked for.
+    pub fn is_requested(&self) -> bool {
+        self.flag.load(Ordering::Acquire)
+    }
+}
+
+impl PartialEq for JobStop {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.flag, &other.flag)
+    }
+}
+
+impl Eq for JobStop {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +175,63 @@ mod tests {
         for _ in 0..10 {
             assert!(cancel.is_cancelled());
         }
+    }
+
+    #[test]
+    fn a_fresh_handoff_is_not_requested() {
+        assert!(!Handoff::new().is_requested());
+    }
+
+    /// The interface holds one clone and the run reads another, so the press has to cross. The
+    /// wait is bounded so a press that never arrives fails here instead of spinning forever.
+    #[test]
+    fn a_handoff_requested_on_one_thread_is_seen_on_another() {
+        let handoff = Handoff::new();
+        let run = handoff.clone();
+
+        let handle = thread::spawn(move || {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !run.is_requested() {
+                if std::time::Instant::now() >= until {
+                    return false;
+                }
+                std::hint::spin_loop();
+            }
+            true
+        });
+
+        handoff.request();
+        assert!(
+            handle.join().expect("run finished"),
+            "the press never reached the other thread"
+        );
+    }
+
+    /// The interface holds one clone and the turn reads another, so the request has to cross, and
+    /// it reaches only the job whose token it is.
+    #[test]
+    fn a_job_stop_reaches_the_turn_and_no_other_job() {
+        let asked = JobStop::new();
+        let other = JobStop::new();
+        let turn = asked.clone();
+        let other_in_the_turn = other.clone();
+
+        let handle = thread::spawn(move || {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !turn.is_requested() {
+                if std::time::Instant::now() >= until {
+                    return (false, other_in_the_turn.is_requested());
+                }
+                std::hint::spin_loop();
+            }
+            (true, other_in_the_turn.is_requested())
+        });
+
+        asked.request();
+        let (seen, other_seen) = handle.join().expect("turn finished");
+        assert!(seen, "the request never reached the other thread");
+        assert!(!other_seen, "asking to stop one job asked to stop another");
+        assert_eq!(asked, asked.clone());
+        assert_ne!(asked, other, "two jobs' tokens compare equal");
     }
 }

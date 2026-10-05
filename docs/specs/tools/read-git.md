@@ -89,7 +89,7 @@ The map is asked about `.git` as a subtree, so a rule distrusting one file anywh
 pack somebody fetched or a ref somebody else wrote, keeps the repository closed. Nobody having said
 anything about a repository is not trust in it. The question is asked of the name the planner wrote
 and the rules alone, before any file under `.git` is read, and a repository it fails is refused
-with a sentence pointing at `run`.
+with a sentence pointing at `run`, where the turn is offered one.
 
 The files a read opens are listed before any of them is decoded, and that list is what the rules
 are held against. A file a read opens is on it; a file no read opens is not. That is the
@@ -148,20 +148,28 @@ says something was left out.
 A rule covering `.git` or any file beneath it keeps the repository closed. read_git reads every
 file there or none.
 
+Neither refusal says to read it with git instead, although git would print the bytes. A rule over a
+path does not cover a command line, so the sentence would be the way round the rule that this clause
+closes, and which paths a command line may reach is the permission rules' question rather than this
+reader's.
+
 **Why.** Otherwise `show HEAD:.env` is the way round every rule on `.env`. The repository closes
 whole because a history with the denied file's objects removed is not one this reader can walk:
 which object a file holds is not known until it is read.
 
+`verified-by: bravebot_agent::git::a_refusal_a_deny_rule_caused_points_at_nothing_else`
 `verified-by: bravebot_agent::turn::a_deny_rule_over_a_file_refuses_reading_its_history`
 `verified-by: bravebot_agent::turn::a_repository_holding_a_file_a_deny_rule_covers_is_not_opened`
 `verified-by: bravebot_agent::workspace::a_repository_a_deny_rule_names_is_not_opened`
+`verified-by: bravebot_agent::workspace::a_rule_over_the_file_a_symlinked_repository_lands_on_leaves_it_out_of_a_commit`
+`verified-by: bravebot_agent::workspace::a_rule_over_a_git_file_a_symlinked_repository_lands_on_keeps_it_closed`
 `verified-by: bravebot_agent::git::a_withheld_path_is_left_out_of_every_answer_and_the_answer_says_so`
 `verified-by: bravebot_agent::git::a_withheld_path_is_neither_read_nor_listed`
 
 <a id="GIT-5"></a>
 ### GIT-5: the question is log, show, diff, status, tags or search, and anything else is refused by name
 
-A word off the list is refused and the planner is told to use `run`. A revision form this reader does not implement, `A...B` or `HEAD^@`
+A word off the list is refused and the planner is told to use `run`, where the turn is offered one. A revision form this reader does not implement, `A...B` or `HEAD^@`
 among them, is refused by name, and a query given the other shape of revision, one where it takes
 two or two where it takes one, is told which query takes it. A status given a revision is told to
 use diff. A pattern given to anything but search, a search given none, an empty one or one that is
@@ -172,6 +180,7 @@ forms this reader knows is the range from `A.` to `.B`, and `HEAD^@` is `HEAD^`,
 come back as a confident answer to something else. A pattern or a path dropped without a word is
 the same guess: a log with its pattern dropped is every commit, read as the ones that matched.
 
+`verified-by: bravebot_agent::tools::a_query_off_the_list_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::turn::read_git_answers_status_and_refuses_a_query_off_the_list`
 `verified-by: bravebot_agent::turn::read_git_searches_the_files_at_a_revision_and_pages_the_lines`
 `verified-by: bravebot_agent::turn::read_git_lists_the_tags_a_revision_reaches_newest_version_first`
@@ -208,7 +217,7 @@ skip.
 <a id="GIT-8"></a>
 ### GIT-8: a repository whose files change what a read means is declined, not followed
 
-Declined, with a sentence pointing at `run`:
+Declined, with a sentence pointing at `run` where the turn is offered one:
 
 - a `.git` that is a file, or that holds a symbolic link where a read goes
 - objects borrowed through `objects/info/alternates`, refs and objects shared through `commondir`,
@@ -221,9 +230,8 @@ Declined, with a sentence pointing at `run`:
 Configuration git reads without changing what history means is read, whatever its comments,
 quoting, line endings and continued lines.
 
-[CHECKOUT-12](../checkouts.md#CHECKOUT-12) would open one kind of linked worktree: a delegate's
-checkout, found from the driver's own record of it and never from its `.git` file. That is not
-built, and `read_git` in a checkout declines.
+[CHECKOUT-12](../checkouts.md#CHECKOUT-12) opens one kind of linked worktree: a delegate's
+checkout, found from the driver's own record of it and never from its `.git` file.
 
 **Why.** Each of these sends a read to files the list in [GIT-2](#GIT-2) does not hold, or answers
 with objects other than the ones stored. Past any of them this reader answers a different question
@@ -287,7 +295,7 @@ stands at it, and a withheld ignore file counts only where untracked files are l
 replaced between being looked at and being read is not compared either, and is never followed
 through a link or waited on as a fifo. Renames are not detected. Nothing is written, the index included.
 
-Declined, with a sentence pointing at `run`: a split or sparse index, one holding an extension
+Declined, with a sentence pointing at `run` where the turn is offered one: a split or sparse index, one holding an extension
 this reader does not know that git would need, one whose checksum does not match, one naming a
 path git would not check out, a repository whose configuration sets `core.bare`, and one that
 names an ignore or attributes file outside it through `core.excludesFile`, `core.attributesFile`
@@ -322,7 +330,8 @@ and an index this reader does not parse in full lists entries it cannot see.
 ### GIT-11: status is answered only where the trust map trusts the whole working tree
 
 The map is asked about the repository's directory as a subtree, as [GIT-2](#GIT-2) asks about
-`.git`, and a tree it fails is refused with a sentence pointing at `run`. log, show and diff in the
+`.git`, and a tree it fails is refused with a sentence pointing at `run` where the turn is offered
+one. log, show and diff in the
 same repository are answered as before.
 
 **Why.** Status reads every file in the tree: it hashes their bytes, reads their ignore and

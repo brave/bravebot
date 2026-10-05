@@ -19,6 +19,7 @@ pub mod env_var {
 }
 
 pub mod hooks;
+pub mod keys;
 mod managed;
 pub mod mcp;
 mod obfuscate;
@@ -507,6 +508,27 @@ impl Tier {
     ];
 }
 
+/// Whether a derived credential can be used only by the party it was issued to, or by whoever holds
+/// the value.
+///
+/// CRED-26 asks for the sender-constrained form (mutual TLS, a proof-of-possession scheme such as
+/// DPoP, or a workload identity the issuer checks) wherever the issuer offers one, and asks the
+/// record to say so where none is held. Scope and expiry say what a credential may do and for how
+/// long; this says whether a copy taken from this machine is usable elsewhere. It sits beside the
+/// tier and moves none: a bound and an unbound derivative that pass gate 2 are both Granted.
+///
+/// A bearer secret carries the same two answers a drop of the gate walk does, for the same reason:
+/// an issuer that offers no bound form is a fact about the world, and one that might offer it and
+/// is not asked is a decision made here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Binding {
+    /// The issuer checks who presents the credential, and this program asked for that form.
+    SenderConstrained,
+    /// Whoever holds the value can use it. [`Attempt::Refused`] records that the issuer offers no
+    /// sender-constrained form, and [`Attempt::NotAttempted`] that it may and nothing here asks.
+    Bearer(Attempt),
+}
+
 /// A credential this program holds itself, and so owes an account of what would end it.
 ///
 /// CRED-25 asks three things about every credential at Held or Held briefly: who issued it, the
@@ -798,6 +820,101 @@ impl<'a> Held<'a> {
     pub fn outlives_revocation(self) -> bool {
         matches!(self, Self::AwsAccessKey)
     }
+
+    /// Whether this derived credential is bound to its presenter or a bearer secret, which CRED-26
+    /// asks the record to say.
+    ///
+    /// `None` for a credential that is not derived from another: the signing key, a long-lived
+    /// access key and a gateway's token are each issued once and held as they were issued, so
+    /// there is no derivative for a bound form to be asked of. The two derived credentials are
+    /// both bearer secrets today.
+    ///
+    /// An AWS session is [`Attempt::Refused`]: STS issues session credentials that any holder of
+    /// the three values can sign with, and offers no form checked against the presenter. A
+    /// subscription batch is [`Attempt::NotAttempted`]: a presentation is signed over a resource
+    /// string and is single-use and bound to its issuer, which does not identify the presenter,
+    /// and nothing here has asked Brave's subscription service for a form that would.
+    ///
+    /// A claim about the arrangement, so it moves only when the arrangement does.
+    pub fn binding(self) -> Option<Binding> {
+        match self {
+            Self::AwsSession => Some(Binding::Bearer(Attempt::Refused)),
+            Self::SubscriptionBatch => Some(Binding::Bearer(Attempt::NotAttempted)),
+            Self::SigningKey | Self::AwsAccessKey | Self::GatewayToken { .. } => None,
+        }
+    }
+}
+
+/// What a person does about a credential a scan found.
+///
+/// CRED-20: a disposition moves a tier only by passing the gate it attempts. Only [`Enrol`]
+/// attempts a gate, gate 1, and it passes only where a performer exists for the operation. The
+/// other three attempt none, so none of them can change a tier. [`Disposition::apply`] is the one
+/// place a disposition yields a tier, and the tier it yields for a disposition that attempts no
+/// gate is [`Held::tier`], which is derived from the gate walk and is not an input here.
+///
+/// [`Enrol`]: Disposition::Enrol
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Disposition {
+    /// Delete the value from where it was found. Ends this run's custody and revokes nothing.
+    Remove,
+    /// Refuse the path to the tools that name a file. Keeps the value out of the context and is
+    /// not custody.
+    Deny,
+    /// Hand the credential to the authority, which performs the operation so the agent holds
+    /// nothing. The only disposition that attempts a gate.
+    Enrol,
+    /// Leave the credential where it is. Owes what the tier it stands at owes.
+    Accept,
+}
+
+/// Whether something outside the account exists that can carry out the operation a credential is
+/// used for, deciding each use and able to refuse it.
+///
+/// Gate 1 asks exactly this. It is a fact about the arrangement, supplied by whatever knows the
+/// performers that exist, and is never derived from a disposition or from a finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Performer {
+    /// A performer exists for the operation.
+    Exists,
+    /// None exists, so enrolling leaves a bearer secret in a different place.
+    Absent,
+}
+
+/// Why a disposition did not move a tier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotMoved {
+    /// Enrolling attempted gate 1 and no performer exists for the operation, so the credential
+    /// stays at the tier it stood at.
+    NoPerformer,
+}
+
+impl Disposition {
+    /// Every disposition, so a check over them cannot omit one.
+    pub const ALL: [Self; 4] = [Self::Remove, Self::Deny, Self::Enrol, Self::Accept];
+
+    /// The gate this disposition attempts, or `None` where it attempts none.
+    pub const fn attempts(self) -> Option<Gate> {
+        match self {
+            Self::Enrol => Some(Gate::One),
+            Self::Remove | Self::Deny | Self::Accept => None,
+        }
+    }
+
+    /// The tier `held` stands at once this disposition has been applied.
+    ///
+    /// A disposition that attempts no gate answers with the tier the credential already stands at.
+    /// Enrolling answers [`Tier::Delegated`] where a performer exists and refuses where none does,
+    /// and a refusal leaves the tier as it was.
+    pub fn apply(self, held: Held<'_>, performer: Performer) -> Result<Tier, NotMoved> {
+        match self.attempts() {
+            None => Ok(held.tier()),
+            Some(_) => match performer {
+                Performer::Exists => Ok(Tier::Delegated),
+                Performer::Absent => Err(NotMoved::NoPerformer),
+            },
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -967,11 +1084,24 @@ impl Config {
     /// would lose to it on every binary anybody was given: the key would parse, be reported by
     /// `doctor`, and change nothing outside a source build. It outranks an exported variable too,
     /// for the reason [`resolve_model`] gives.
+    ///
+    /// The keys `bravebot auth login gateway` stored are read here too, from the user's own
+    /// directory. A file of them that cannot be read is read as none, on the footing a half-typed
+    /// settings file is: it must not stop a session, and `doctor` says the file is unreadable.
     pub fn from_env_and_settings(
         settings: &Settings,
         managed: &Managed,
     ) -> Result<Self, ConfigError> {
-        Self::from_sources(settings, managed, |key| env::var(key).ok(), built_in)
+        let stored = settings::home()
+            .and_then(|home| keys::Keys::read(&home).ok())
+            .unwrap_or_default();
+        Self::from_sources(
+            settings,
+            managed,
+            &stored,
+            |key| env::var(key).ok(),
+            built_in,
+        )
     }
 
     /// [`Config::from_env_and_settings`] over sources it is handed, so the ranking of the layers is
@@ -979,6 +1109,7 @@ impl Config {
     fn from_sources(
         settings: &Settings,
         managed: &Managed,
+        stored: &keys::Keys,
         exported: impl Fn(&str) -> Option<String>,
         baked: impl Fn(&str) -> Option<String>,
     ) -> Result<Self, ConfigError> {
@@ -1008,6 +1139,17 @@ impl Config {
                 providers
             }
         };
+        // A gateway the machine-level layer names is given a stored key too: that layer pins where
+        // a token goes and keeps none of its own, so a key its owner stored is the way it has.
+        let providers = providers
+            .into_iter()
+            .map(|mut entry| {
+                if entry.bedrock.is_none() {
+                    entry.stored_key = stored.get(&entry.id).cloned();
+                }
+                entry
+            })
+            .collect();
         let mut config = Self::from_lookup_with_providers(lookup, providers)?;
         // Carried rather than consulted here: the name to check against the lists arrives later, from
         // any of the places that may name a model, and each is checked against the same pair
@@ -1159,29 +1301,23 @@ impl Config {
         !self.budget_was_chosen && !self.budget_was_advertised
     }
 
-    /// Take the window the endpoint advertised for the model in use, where it is worth taking.
+    /// Take the window the endpoint advertised for the model in use, or let the default stand in.
     ///
-    /// Ignored when a budget was set by hand, and when the endpoint advertised nothing or something
-    /// too small to work in: in both cases what is already here stands. Returns whether the budget
-    /// changed, so a caller can say so once rather than every turn.
-    ///
-    /// A window that was not advertised still stops the budget claiming to be one. What stands is
-    /// then a figure taken for a model that is no longer in force, which is a guess in the sense
-    /// [`Config::budget_is_guessed`] means: good enough to compact against, not good enough to
-    /// state a percentage against without saying so.
+    /// Ignored when a budget was set by hand. Where the endpoint advertised nothing, or something
+    /// too small to work in, the default stands in: a figure adopted for an earlier model describes
+    /// a model that is no longer in force, so it is dropped rather than kept. The default sits below
+    /// the smallest useful window, so falling back to it cannot put the budget above a window.
+    /// Returns whether the budget changed, so a caller can say so once rather than every turn.
     pub fn adopt_window(&mut self, advertised: Option<u64>) -> bool {
         if self.budget_was_chosen {
             return false;
         }
         let advertised = budget_for_window(advertised);
         self.budget_was_advertised = advertised.is_some();
-        match advertised {
-            Some(budget) if budget != self.context_budget => {
-                self.context_budget = budget;
-                true
-            }
-            _ => false,
-        }
+        let budget = advertised.unwrap_or(DEFAULT_CONTEXT_BUDGET);
+        let changed = budget != self.context_budget;
+        self.context_budget = budget;
+        changed
     }
 
     /// The gateway serving `model`, and the name to ask it for.
@@ -1500,19 +1636,35 @@ mod tests {
         assert!(!config.budget_is_guessed());
     }
 
-    /// A budget that came from one model's window is not a claim about the next one, and the
-    /// figure on the hint line says so. Reverting to the default instead would raise the budget
-    /// above a cramped window still in force, and a budget above the window does not delay
-    /// compaction, it removes it.
+    /// A window adopted for one model describes that model only. Once a model that advertises
+    /// nothing is in force, the default stands in, as it would for a session that started on it,
+    /// and the figure is marked as a guess.
     #[test]
-    fn a_window_nobody_advertised_leaves_an_adopted_budget_standing_and_marks_it_guessed() {
+    fn a_window_nobody_advertised_puts_the_default_back_in_place_of_an_adopted_budget() {
         let mut config = Config::from_lookup(complete_env).unwrap();
-        assert!(config.adopt_window(Some(6_400)));
+        assert!(config.adopt_window(Some(102_400)));
         assert!(!config.budget_is_guessed());
 
-        assert!(!config.adopt_window(None));
-        assert_eq!(config.context_budget, 6_400);
+        assert!(config.adopt_window(None));
+        assert_eq!(config.context_budget, DEFAULT_CONTEXT_BUDGET);
         assert!(config.budget_is_guessed());
+
+        // The placeholder is the same answer as nothing.
+        assert!(config.adopt_window(Some(6_400)));
+        assert!(config.adopt_window(Some(1)));
+        assert_eq!(config.context_budget, DEFAULT_CONTEXT_BUDGET);
+    }
+
+    /// A budget set by hand outranks the default standing in as well as an advertised window.
+    #[test]
+    fn a_window_nobody_advertised_leaves_a_budget_set_by_hand_alone() {
+        let mut config = Config::from_lookup(|k| match k {
+            env_var::CONTEXT_BUDGET => Some("4096".into()),
+            other => complete_env(other),
+        })
+        .unwrap();
+        assert!(!config.adopt_window(None));
+        assert_eq!(config.context_budget, 4096);
     }
 
     #[test]
@@ -1853,6 +2005,58 @@ mod tests {
         );
     }
 
+    /// CRED-20: removing, denying or accepting attempts no gate, so each leaves every credential
+    /// at the tier its walk stopped at, whether or not a performer exists. A disposition that
+    /// moved a tier without a gate would make the tier something a person's answer sets, which is
+    /// the tier CRED-4 says can be argued.
+    #[test]
+    fn removing_denying_or_accepting_changes_no_tier() {
+        for disposition in [Disposition::Remove, Disposition::Deny, Disposition::Accept] {
+            assert_eq!(disposition.attempts(), None);
+            for held in Held::all("gateway.invalid") {
+                for performer in [Performer::Exists, Performer::Absent] {
+                    assert_eq!(
+                        disposition.apply(held, performer),
+                        Ok(held.tier()),
+                        "{disposition:?} moved {held:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// CRED-20: enrolling attempts gate 1 and reaches Delegated only where a performer exists. With
+    /// none, the credential is refused and stays where it stood, since it would otherwise be a
+    /// Held credential recorded as holding nothing. Both directions, so an implementation that
+    /// always refused or always passed fails.
+    #[test]
+    fn enrolling_reaches_delegated_only_where_a_performer_exists() {
+        assert_eq!(Disposition::Enrol.attempts(), Some(Gate::One));
+        for held in Held::all("gateway.invalid") {
+            assert_eq!(
+                Disposition::Enrol.apply(held, Performer::Exists),
+                Ok(Tier::Delegated),
+                "{held:?} has a performer and was not enrolled"
+            );
+            assert_eq!(
+                Disposition::Enrol.apply(held, Performer::Absent),
+                Err(NotMoved::NoPerformer),
+                "{held:?} was enrolled with nothing to perform its operation"
+            );
+        }
+    }
+
+    /// CRED-20: Enrol is the only disposition that attempts a gate, so it is the only one whose
+    /// answer can differ from the credential's own tier.
+    #[test]
+    fn only_enrolling_attempts_a_gate() {
+        let attempting: Vec<Disposition> = Disposition::ALL
+            .into_iter()
+            .filter(|disposition| disposition.attempts().is_some())
+            .collect();
+        assert_eq!(attempting, [Disposition::Enrol]);
+    }
+
     /// CRED-2: an imported subscription's credential batch is a credential this machine holds and
     /// spends, so it is in the record with a tier of its own. Left out, a batch sitting in a file
     /// under the machine and spent by every premium request has no recorded tier at all, which is
@@ -1927,6 +2131,57 @@ mod tests {
                 "a figure that is not whole minutes is reported as a shorter one: {window:?}"
             );
         }
+    }
+
+    /// CRED-26: a derived credential records whether it is bound to its presenter or a bearer
+    /// secret, and the record keeps a refusal apart from a request nobody made. The AWS session and
+    /// the subscription batch are the two derived credentials and both are bearer secrets, for
+    /// different reasons: STS offers no bound form, and nobody has asked the subscription service.
+    /// A record that answered both alike, or answered neither, would leave a bound and an unbound
+    /// credential at one tier indistinguishable, which is what the clause is for.
+    ///
+    /// The credentials issued once and held as issued have no derivative to bind, so a record that
+    /// called them bearer would state a reason that is not the reason.
+    #[test]
+    fn a_derived_credential_records_whether_it_is_bound_to_its_presenter() {
+        assert_eq!(
+            Held::AwsSession.binding(),
+            Some(Binding::Bearer(Attempt::Refused))
+        );
+        assert_eq!(
+            Held::SubscriptionBatch.binding(),
+            Some(Binding::Bearer(Attempt::NotAttempted))
+        );
+        assert_ne!(
+            Held::AwsSession.binding(),
+            Held::SubscriptionBatch.binding(),
+            "an issuer that offers no bound form and one nobody asked are recorded alike"
+        );
+
+        for held in [
+            Held::SigningKey,
+            Held::AwsAccessKey,
+            Held::GatewayToken {
+                host: "gateway.invalid",
+            },
+        ] {
+            assert_eq!(
+                held.binding(),
+                None,
+                "{held:?} is not derived from another credential and has no bound form to ask for"
+            );
+        }
+    }
+
+    /// CRED-26: recording the binding moves no tier. The subscription batch stays at Granted
+    /// whether or not it is bound, and the session stays at Held, so the walk and the binding are
+    /// two facts about a credential rather than one derived from the other.
+    #[test]
+    fn a_credentials_binding_does_not_move_its_tier() {
+        assert_eq!(Held::SubscriptionBatch.tier(), Tier::Granted);
+        assert_eq!(Held::AwsSession.tier(), Tier::Held);
+        assert_eq!(Held::SubscriptionBatch.walk().len(), 1);
+        assert_eq!(Held::AwsSession.walk().len(), 3);
     }
 
     /// Without Bedrock the aichat credentials are still required. Relaxing them for everyone would
@@ -2332,7 +2587,7 @@ mod tests {
         exported: impl Fn(&str) -> Option<String>,
         baked: impl Fn(&str) -> Option<String>,
     ) -> Result<Config, ConfigError> {
-        Config::from_sources(settings, managed, exported, baked)
+        Config::from_sources(settings, managed, &keys::Keys::default(), exported, baked)
     }
 
     /// The names a settings file may set are the names something reads, and this is all of them. A
@@ -2602,6 +2857,63 @@ mod tests {
         assert_eq!(ids, vec!["approved"]);
     }
 
+    /// The token each gateway resolves to, by id, from the sources named.
+    fn tokens_with_stored(
+        managed: &Managed,
+        settings: &Settings,
+        stored: &keys::Keys,
+    ) -> Vec<(String, Option<String>)> {
+        Config::from_sources(settings, managed, stored, |_| None, complete_env)
+            .expect("configured")
+            .providers
+            .iter()
+            .map(|provider| {
+                let token = match provider.credential(|_| None) {
+                    provider::Credential::Token(token) => Some(token.expose().to_string()),
+                    provider::Credential::Absent | provider::Credential::NotNeeded => None,
+                };
+                (provider.id.clone(), token)
+            })
+            .collect()
+    }
+
+    /// BACKEND-16: a key stored for an id reaches the gateway of that id and no other, including one
+    /// the machine-level layer names, which keeps no token of its own and leaves its owner to give
+    /// it one.
+    #[test]
+    fn a_stored_key_reaches_the_gateway_its_id_names() {
+        let mut stored = keys::Keys::default();
+        stored.insert("mine", Secret::new("placeholder-stored-key"));
+        let settings = Settings::parse(
+            r#"{"provider": {
+                "mine": {"options": {"baseURL": "https://mine.invalid/v1"}},
+                "other": {"env": ["ABSENT_ONE"], "options": {"baseURL": "https://other.invalid/v1"}}
+            }}"#,
+        );
+        assert_eq!(
+            tokens_with_stored(&Managed::default(), &settings, &stored),
+            [
+                (
+                    "mine".to_string(),
+                    Some("placeholder-stored-key".to_string())
+                ),
+                ("other".to_string(), None)
+            ]
+        );
+
+        let managed = managed::scratch(
+            "resolve-gateways-stored-key",
+            r#"{"provider": {"mine": {"options": {"baseURL": "https://approved.example/v1"}}}}"#,
+        );
+        assert_eq!(
+            tokens_with_stored(&managed, &Settings::default(), &stored),
+            [(
+                "mine".to_string(),
+                Some("placeholder-stored-key".to_string())
+            )]
+        );
+    }
+
     /// The only way to say there are to be no gateways at all, which is half of what pinning a
     /// destination means.
     #[test]
@@ -2761,6 +3073,25 @@ mod tests {
         assert_eq!(provider.id, provider::GOOGLE_VERTEX_ID);
         assert_eq!(wire, "google/gemini-2.5-flash");
         assert!(config.provider_for("google/gemini-2.5-flash").is_none());
+    }
+
+    /// BACKEND-50: the environment names no models, so the service is offered the list BACKEND-49
+    /// compiles in. Each is reached named qualified, which is how a pick off a picker is recorded,
+    /// and none by its bare name, since the list is not a roster anything is routed by.
+    #[test]
+    fn a_google_vertex_service_from_the_environment_is_offered_the_compiled_models() {
+        let config = resolved(&Settings::default(), google_env, |_| None).expect("configured");
+        let vertex = vertex_of(&config).expect("a google-vertex service");
+        assert!(vertex.models.is_empty(), "{:?}", vertex.models);
+        let compiled = vertex.compiled_roster().expect("a compiled list");
+        assert!(!compiled.is_empty());
+        for id in compiled {
+            let qualified = format!("google-vertex/{id}");
+            let (provider, wire) = config.provider_for(&qualified).expect("the service");
+            assert_eq!(provider.id, provider::GOOGLE_VERTEX_ID);
+            assert_eq!(wire, *id);
+            assert!(config.provider_for(id).is_none(), "{id} was routed bare");
+        }
     }
 
     #[test]
@@ -2954,6 +3285,69 @@ mod tests {
         )
         .expect("configured");
         assert_eq!(config.endpoint, "https://baked.invalid");
+    }
+
+    /// BACKEND-35 through the composition [`Config::from_env_and_settings`] performs, not a copy of
+    /// it: all three layers name the endpoint and each loses to the one above it. A composition that
+    /// put the file or the build first would answer one of the three steps wrongly, which a test
+    /// that rebuilds the chain from its parts cannot see.
+    #[test]
+    fn an_exported_value_outranks_the_build_which_outranks_the_file() {
+        let settings = Settings::parse(
+            r#"{"env": {"BRAVE_AI_CHAT_ENDPOINT": "https://from-the-file.invalid"}}"#,
+        );
+        let endpoint = |exported: Option<&'static str>, baked: Option<&'static str>| {
+            resolved(
+                &settings,
+                |name| match name {
+                    env_var::ENDPOINT => exported.map(str::to_string),
+                    _ => None,
+                },
+                |name| match name {
+                    env_var::ENDPOINT => baked.map(str::to_string),
+                    other => complete_env(other),
+                },
+            )
+            .expect("configured")
+            .endpoint
+        };
+        assert_eq!(
+            endpoint(
+                Some("https://exported.invalid"),
+                Some("https://baked.invalid")
+            ),
+            "https://exported.invalid"
+        );
+        assert_eq!(
+            endpoint(None, Some("https://baked.invalid")),
+            "https://baked.invalid"
+        );
+        assert_eq!(endpoint(None, None), "https://from-the-file.invalid");
+    }
+
+    /// BACKEND-35: where the build carries nothing, a name exported blank is what the configuration
+    /// holds, so the file under it is hidden and the credential is reported empty rather than
+    /// answered from a file the person did not export. A composition that treated blank as absent
+    /// would quietly sign with the checkout's key; one that let blank beat the build would fail
+    /// the second half.
+    #[test]
+    fn a_blank_export_hides_the_file_but_not_the_build() {
+        let settings = Settings::parse(
+            r#"{"env": {"SERVICES_KEY_AICHAT": "key-from-the-file", "BRAVE_AI_CHAT_ENDPOINT": "https://from-the-file.invalid"}}"#,
+        );
+        let blank = |name: &str| match name {
+            env_var::SIGNING_KEY => Some(String::new()),
+            _ => None,
+        };
+        let err = resolved(&settings, blank, |name| match name {
+            env_var::SIGNING_KEY => None,
+            other => complete_env(other),
+        })
+        .unwrap_err();
+        assert_eq!(err, ConfigError::Empty(env_var::SIGNING_KEY));
+
+        let config = resolved(&settings, blank, complete_env).expect("configured");
+        assert_eq!(config.signing_key.expose(), "test-signing-key");
     }
 
     /// A name nothing reads is kept so that a file written for another tool, or for a later

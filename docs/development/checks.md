@@ -92,8 +92,8 @@ Run `npm --prefix ui run build` afterwards to restore a configured development b
 failures reach the caller, and that scanner failures cannot pass as empty scans. The installer
 half also holds `check-npm` to reaching the installer test before anything installs a dependency
 for it to depend on, and to failing rather than passing when that test is no longer there. It runs
-`check-all-selftest`, `check-reviewdog-selftest`, `check-rebase-selftest`, `check-affected-selftest`
-and `check-peer-advisories-selftest`, which can also run separately. `check-affected-selftest` holds
+`check-all-selftest`, `check-reviewdog-selftest`, `check-rebase-selftest`, `check-affected-selftest`,
+`check-peer-advisories-selftest`, `check-peer-features-selftest` and `check-pr-fix-selftest`, which can also run separately. `check-affected-selftest` holds
 each rule of the classifier, and holds every workflow condition reading it to running its job on
 anything but an explicit `false`.
 To also exercise the installed reviewdog binary, set `REVIEWDOG_TEST_BINARY` to its
@@ -226,6 +226,9 @@ test is invisible from every platform that has `unix`.
 `make check-linux` runs fmt, clippy and the tests on Linux under the stable toolchain its container
 is pinned to, which is a digest rather than whatever `rust:slim` resolves to today, so moving it on
 is an edit somebody makes when `make check-toolchain` says the host has fallen behind.
+The container's home starts empty, so it also fails when the tests leave anything in
+`~/.bravebot/sessions`, as CI's test jobs do: a test that saves a session belongs in
+`in_isolated_profile` (`crates/session/test-support/profile.rs`), not in the person's store.
 Worth doing before pushing platform-specific code, since a macOS host never compiles the Linux
 backend. Its one gap is the Landlock tests: the kernel in play is Docker's, and Docker Desktop's
 implements no Landlock at all, so that target sets the switch that skips them instead of failing and
@@ -249,9 +252,15 @@ exited happily.
 
 **A test that fails on the parent commit is not yours to fix.** Establish that once, cheaply, and
 move on: name the test, say it reproduces without the change, and carry on with the work. Do not
-bisect it, do not build a baseline worktree for it, and do not re-run the suite hoping. Some tests
+bisect it, do not run the suite on the parent, and do not re-run the suite hoping. Some tests
 here spawn real processes against a wall clock, so they fail on a loaded machine and pass on the
 next run; that is a flake, not a signal, and chasing one costs more than the failure does.
+
+A test that fails only when the suite runs under bravebot's `run` tool fails because of the
+sandbox, not because of the change. Seatbelt cannot be applied from inside a seatbelt, so a test that
+starts a confined process cannot, and should skip through `bravebot_sandbox::confinement_works_here()`
+instead of failing. To tell the two apart, run the test from a terminal: if it passes there, the
+sandbox is the cause. A test that fails under `run` and has no such skip is a bug in the test.
 
 **Which tests those are is measured rather than assumed.** The weekly
 [Test determinism](../../.github/workflows/test-determinism.yml) workflow runs the suite a hundred
@@ -268,6 +277,35 @@ the mock server races that `make check-linux` caps threads for want a machine wi
 it. So the workflow reporting nothing means less than the local command reporting nothing on the
 machine that actually failed: every report states the rate it saw, and that bound is what to read
 before concluding a test is deterministic.
+
+To run one failing test on the parent, check the parent out in a detached worktree, run the test
+there, and remove the worktree. The parent is `HEAD` for edits not yet committed, and the merge base
+with `upstream/main`, or `origin/main` without one, for a branch.
+
+```sh
+base=$(mktemp -d)
+git worktree add --lock --detach "$base" <parent>
+(cd "$base" && CARGO_TARGET_DIR="$base/target" cargo test --locked -p <crate> --lib <test>)
+git worktree unlock "$base" && git worktree remove "$base"
+```
+
+`--lib` builds the crate's unit tests alone. For a test in `tests/<file>.rs`, `--test <file>` takes
+its place. The lock keeps a `git worktree prune` or another session's cleanup from removing the
+worktree while the test runs.
+
+The worktree builds into a `target` of its own, so its first build is a cold one. Do not point
+`CARGO_TARGET_DIR` at this checkout's `target` to save that build. The line sets it to the
+worktree's own, so a value already in the environment cannot do so either. Cargo names a workspace
+crate's build by the crate's path inside the workspace, so two trees sharing one `target` write the
+same files, and the next build here takes the parent's binaries as current and runs them in place
+of the change.
+
+Never use `git stash` in a linked worktree, or in any checkout of a repository another session is
+working in. `refs/stash` is one ref in the repository's common directory, so every worktree of the
+repository shares one stack. A `git stash pop` in one applies whatever was stashed last in any of
+them, which can be another worker's changes, and an entry left behind is listed in all of them.
+`git rebase --autostash` and `git pull --autostash` use the same stack, and leave their entry on it
+when putting the changes back conflicts.
 
 If a check cannot pass for a reason outside the change, say so in the commit message rather than
 leaving it to be discovered.

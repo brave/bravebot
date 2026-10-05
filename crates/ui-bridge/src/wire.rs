@@ -23,13 +23,16 @@
 //! typed.
 
 use bravebot_agent::confirm::{
-    Decision, ExposureRequest, FetchRequest, Intent, ManifestRequest, OutputRequest, RunDecision,
-    RunRequest, ServerRequest, VetRequest, VouchRequest, WriteRequest,
+    CallDecision, Decision, ExposureRequest, FetchRequest, Intent, ManifestRequest, McpCallRequest,
+    MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest, ToolListRequest,
+    VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::conversation::{Composed, Said};
 use bravebot_agent::diff::Change;
 use bravebot_agent::report::{Activity, Landing, Phase, Reach, Shown};
+use bravebot_agent::servers::Question;
 use bravebot_aichat::CutOff;
+use bravebot_config::mcp::Declaration;
 use bravebot_core::ask::{Answer, Asking};
 use bravebot_core::todo::{Row, Status};
 use serde_json::{Value, json};
@@ -257,6 +260,12 @@ fn said(said: &Said) -> Value {
             why: Composed::Vetted { reference, media },
             ..
         } => json!({ "kind": "vetted", "reference": reference, "media": media }),
+        // Written for the planner and left out of a projection by `Conversation::recounted`, so
+        // none reaches here. A tag added without a row is drawn as its words, never dropped.
+        Said::Composed {
+            why: Composed::ToolResult | Composed::Resumed | Composed::Summary,
+            text,
+        } => json!({ "kind": "user", "text": text }),
     }
 }
 
@@ -278,6 +287,26 @@ pub fn composed(value: Option<&Value>) -> Result<Option<Composed>, Failure> {
         Some(other) => Err(Failure::bad_request(format!(
             "`composed` may only say `consolidation`, not {other}"
         ))),
+    }
+}
+
+/// The definition a `turn.send` says the session's conversation belongs to, if it says one
+/// ([MEMORY-10](../../../docs/specs/definition-memory.md#MEMORY-10)).
+///
+/// The desktop's main process sets it from the row of the bot a person opened, and strips it from
+/// anything a window sends. It is still checked here: it becomes the name a turn is addressed to,
+/// and it is made into a path when the definition is read, so only a name a definition can be
+/// kept under for a memory is taken. Anything else is refused and not ignored, because a turn that
+/// quietly went out unaddressed would hold the session's whole reach.
+pub fn definition(value: Option<&Value>) -> Result<Option<String>, Failure> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(name)) if bravebot_agent::memory::is_a_slug(name) => {
+            Ok(Some(name.clone()))
+        }
+        Some(_) => Err(Failure::bad_request(
+            "`definition` may only be the name of a bot's definition",
+        )),
     }
 }
 
@@ -309,6 +338,9 @@ pub fn write_request(id: u64, request: &WriteRequest) -> Value {
         // reason `CONTEXT_LINES` is shared: the decision is about these lines, and an
         // approval has to mean the same thing in both front-ends.
         "credentials": request.credentials,
+        // The driver's own record, so a front-end can say the working directory's file was
+        // written after the checkout it is being brought back from was made.
+        "writtenSinceCheckout": request.written_since_checkout,
         "existing": request.existing.is_some(),
         "added": diff.added(),
         "removed": diff.removed(),
@@ -474,6 +506,159 @@ pub fn server_request(id: u64, request: &ServerRequest) -> Value {
         "workspace": request.workspace,
         "runsBuildTooling": request.runs_build_tooling,
         "summary": request.summary(),
+    })
+}
+
+/// Read an answer to whether to use an MCP server (SERVERS-4), which has three answers.
+///
+/// `remember` is answer 2, which also approves every server a checkout in this project requests
+/// from now on. As with a run, it is read from an approval only and from nothing but a literal
+/// `true`, so a malformed reply is the narrower answer.
+pub fn start_answer(
+    decision_value: &Value,
+    remember_value: &Value,
+) -> bravebot_agent::servers::Answer {
+    use bravebot_agent::servers::Answer;
+    match decision(decision_value) {
+        Decision::Approve if remember_value.as_bool() == Some(true) => Answer::Project,
+        Decision::Approve => Answer::Once,
+        Decision::Reject => Answer::No,
+    }
+}
+
+/// Read an answer to a call to an MCP server's tool (SERVERS-7), which has three answers.
+///
+/// `remember` is answer 2, which stops asking about this one tool in this project. It is read as
+/// [`start_answer`] reads it.
+pub fn call_decision(decision_value: &Value, remember_value: &Value) -> CallDecision {
+    match decision(decision_value) {
+        Decision::Approve if remember_value.as_bool() == Some(true) => {
+            CallDecision::approve_and_stand()
+        }
+        Decision::Approve => CallDecision::approve(),
+        Decision::Reject => CallDecision::reject(),
+    }
+}
+
+/// Whether to use an MCP server a project requests, put before it is started (SERVERS-4).
+///
+/// Everything the declaration says, as fields: what it runs or reaches, the names of the
+/// variables it receives with the ones whose value it stores marked, the files it may read, the
+/// directory it runs in, and the digest an approval binds to (SERVERS-5). A stored value is not
+/// sent, only its name. `program` is where a local server's program resolved, sent where it is
+/// not the word the declaration starts with. `fetching` is the agent's own lines about a runner
+/// that fetches what it runs when it starts, empty for any other program (SERVERS-6).
+pub fn mcp_server_request(id: u64, question: &Question<'_>) -> Value {
+    let declaration = question.declaration;
+    let (command, url, directory) = match declaration {
+        Declaration::Stdio {
+            argv, directory, ..
+        } => (Some(argv.clone()), None, directory.clone()),
+        Declaration::Http { url } => (None, Some(url.clone()), None),
+    };
+    let program = match (question.program, declaration) {
+        (Some(program), Declaration::Stdio { argv, .. })
+            if argv.first().map(std::path::Path::new) != Some(program.as_path()) =>
+        {
+            Some(program.display().to_string())
+        }
+        _ => None,
+    };
+    let variables: Vec<Value> = declaration
+        .stored()
+        .map(|name| json!({ "name": name, "stored": true }))
+        .chain(
+            declaration
+                .variables()
+                .iter()
+                .map(|name| json!({ "name": name, "stored": false })),
+        )
+        .collect();
+    json!({
+        "request": id,
+        "alias": question.alias,
+        "transport": declaration.transport(),
+        "command": command,
+        "url": url,
+        "program": program,
+        "variables": variables,
+        "reads": declaration.reads(),
+        "directory": directory,
+        "digest": declaration.digest().short(),
+        "requestedBy": question.file,
+        "changed": question.changed,
+        "fetching": bravebot_agent::servers::fetching(question.alias, declaration)
+            .iter()
+            .map(|line| line.trim().to_string())
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// The tools an MCP server lists, put to the person before any of them is offered to the model
+/// (SERVERS-8).
+///
+/// Each tool as the client drew it: its name under the alias, each argument as one line, and the
+/// server's own sentence about it. That sentence is the server's text, and a front end draws it
+/// as text and nowhere a reader would take it for the application's own words. `refused` counts
+/// the tools the client would not draw, and `changed` says a list was vouched for under this
+/// declaration before and this is not it.
+pub fn mcp_tools_request(id: u64, request: &ToolListRequest) -> Value {
+    let tools: Vec<Value> = request
+        .tools
+        .iter()
+        .map(|tool| {
+            json!({
+                "name": tool.name,
+                "arguments": tool.arguments,
+                "description": tool.description,
+            })
+        })
+        .collect();
+    json!({
+        "request": id,
+        "alias": request.alias,
+        "tools": tools,
+        "refused": request.refused,
+        "changed": request.changed,
+        "vetting": vetting(request.verdict, request.reason.as_deref()),
+    })
+}
+
+/// One call to an MCP server's tool, put to the person before it is made (SERVERS-7).
+///
+/// `name` is `alias:tool`, the name a person reads and a rule matches. Each argument is its name
+/// and its value as JSON, as the planner wrote it. `mayStand` says whether answer 2 can be
+/// recorded; where it cannot, a front end does not offer it.
+pub fn mcp_call_request(id: u64, request: &McpCallRequest) -> Value {
+    let arguments: Vec<Value> = request
+        .arguments
+        .iter()
+        .map(|(name, value)| json!({ "name": name, "value": value }))
+        .collect();
+    json!({
+        "request": id,
+        "alias": request.alias,
+        "tool": request.tool,
+        "name": request.name(),
+        "arguments": arguments,
+        "description": request.description,
+        "mayStand": request.may_stand,
+    })
+}
+
+/// A remote MCP server whose reply pointed somewhere it is not declared (SERVERS-11).
+///
+/// `authority` is the host and port the destination reaches, taken from it by the agent's parser,
+/// for the reason a fetch's host is sent beside its URL. `mayRecord` says whether a yes is written
+/// into the declarations or lasts for this session only.
+pub fn mcp_move_request(id: u64, request: &MoveRequest) -> Value {
+    json!({
+        "request": id,
+        "alias": request.alias,
+        "declared": request.declared,
+        "destination": request.destination,
+        "authority": request.authority,
+        "mayRecord": request.may_record,
     })
 }
 

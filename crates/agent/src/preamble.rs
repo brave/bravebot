@@ -97,10 +97,14 @@ pub fn compose<S: Sink>(
         tick,
         goal,
         attribution,
+        None,
     )
 }
 
 /// `compose` for a turn that works in `workspace` but reads its instructions from `sources`.
+///
+/// `appended` is what `--append-system-prompt` named (INSTR-10). It is the last standing source,
+/// after the project's file, and it is in `text`, which is what a delegate reads.
 #[allow(clippy::too_many_arguments)]
 pub fn compose_in<S: Sink>(
     policy: &mut Policy<'_, S>,
@@ -111,6 +115,7 @@ pub fn compose_in<S: Sink>(
     tick: Option<crate::turn::Tick>,
     goal: Option<&str>,
     attribution: &Attribution,
+    appended: Option<&str>,
 ) -> Preamble {
     let mut preamble = Preamble::default();
 
@@ -141,6 +146,12 @@ pub fn compose_in<S: Sink>(
         }
         Ok(None) => {}
         Err(notice) => preamble.notices.push(notice),
+    }
+    if let Some(appended) = appended {
+        standing.push_str(&format!(
+            "From the command line:\n\n{}\n\n",
+            appended.trim()
+        ));
     }
 
     if !standing.is_empty() {
@@ -178,13 +189,22 @@ pub fn compose_in<S: Sink>(
         preamble.text.push_str(&format!(
             "\n\nThis turn is tick {} of a loop the user started. Every tick sends the same line \
              they typed, so you are being asked this again about a world that may have moved; \
-             what earlier ticks did is above, so read it rather than repeating it. Load the loop \
-             skill before working.\n\n",
-            tick.number
+             what earlier ticks did is above, so read it rather than repeating it.{}\n\n",
+            tick.number,
+            if tick.unpaceable {
+                ""
+            } else {
+                " Load the loop skill before working."
+            }
         ));
-        preamble.text.push_str(if tick.self_paced {
+        preamble.text.push_str(if tick.self_paced && tick.unpaceable {
+            "Nobody gave an interval, and this turn is addressed to a definition, so there is no \
+             tool for setting the pace of the next tick: do this tick's work and answer, and \
+             this loop ends with it.\n"
+        } else if tick.self_paced {
             "Nobody gave an interval, so this loop runs for exactly as long as you keep pacing \
-             it: call schedule_next once, at the end of this turn, or the loop ends.\n"
+             it: call schedule_next once, at the end of this turn, with a wait or with stop true once there \
+             is nothing left to watch.\n"
         } else {
             "The user gave the interval, so the timing is theirs. There is nothing here for you \
              to schedule and no tool for it: do this tick's work and answer.\n"

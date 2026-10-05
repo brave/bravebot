@@ -201,11 +201,17 @@ fn capabilities() -> Capabilities {
 /// left behind names a container that no longer exists, so the residue is unreachable
 /// rather than a standing grant to whatever holds the shared name next.
 ///
+/// A process identifier is reused once its process is gone, and the sequence restarts at zero
+/// in every process, so those two alone give a run the name of an earlier run that ended
+/// without deleting its profile. `nonce` is chosen when the backend is created and differs
+/// between runs, which keeps the name, and so the security identifier derived from it, from
+/// being one an earlier run wrote entries for.
+///
 /// The platform accepts up to 64 characters, and rejects the whole profile rather than
-/// truncating, so the two numbers are the only variable part and both are bounded by their
+/// truncating, so the three numbers are the only variable part and each is bounded by its
 /// own width.
-fn profile_name(process: u32, sequence: u64) -> String {
-    format!("bravebot-{process}-{sequence}")
+fn profile_name(process: u32, sequence: u64, nonce: u64) -> String {
+    format!("bravebot-{process}-{sequence}-{nonce:x}")
 }
 
 /// The longest profile name the platform accepts.
@@ -344,10 +350,28 @@ fn upper(name: &[u16]) -> Vec<u16> {
     upper
 }
 
+/// The access list a file created for a write row ([SANDBOX-11]) is given: one entry,
+/// allowing full control to the owner rights of the file and to nobody else.
+///
+/// Protected, so nothing is inherited from the directory holding it. The trustee is the
+/// owner rights identifier (`OW`): with an entry for it in the list, the platform grants
+/// the owner only what that entry says, and the list names no other account or group,
+/// `SYSTEM` and the administrators included. Spelled here so every platform's test run can
+/// check its shape; the Windows build passes it to the call that creates the file.
+///
+/// [SANDBOX-11]: ../../../../docs/specs/sandboxing.md#SANDBOX-11
+const OWNER_ONLY_FILE_SDDL: &str = "D:P(A;;FA;;;OW)";
+
+/// The access list a directory created for a write row is given: the file's, and inherited
+/// by the files and directories later made under it.
+const OWNER_ONLY_DIRECTORY_SDDL: &str = "D:P(A;OICI;FA;;;OW)";
+
 #[cfg(windows)]
 pub use appcontainer::AppContainerSandbox;
 #[cfg(windows)]
-pub(crate) use appcontainer::CreatedProcess;
+pub(crate) use appcontainer::{
+    CreatedProcess, create_directory_owner_only, create_file_owner_only,
+};
 
 #[cfg(windows)]
 mod appcontainer;
@@ -355,6 +379,29 @@ mod appcontainer;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A row created for a write ([SANDBOX-11](../../../docs/specs/sandboxing.md#SANDBOX-11))
+    /// is reachable by its owner and nobody else. The access lists the Windows build hands
+    /// to the creating call are checked here on every platform: protected so nothing is
+    /// inherited from the directory holding the path, and holding one allowing entry whose
+    /// trustee is the owner rights identifier, so a list that named `WD` (everyone), `BU`,
+    /// `AU`, `SY` or `BA` as well would fail.
+    #[test]
+    fn the_access_list_of_a_created_row_names_only_its_owner() {
+        for (name, sddl, inheritance) in [
+            ("file", OWNER_ONLY_FILE_SDDL, ""),
+            ("directory", OWNER_ONLY_DIRECTORY_SDDL, "OICI"),
+        ] {
+            let list = sddl
+                .strip_prefix("D:P")
+                .unwrap_or_else(|| panic!("the {name} list is not a protected DACL: {sddl}"));
+            assert_eq!(
+                list,
+                format!("(A;{inheritance};FA;;;OW)"),
+                "the {name} list is not one entry allowing the owner"
+            );
+        }
+    }
 
     /// A policy that grants everything this backend can withhold, so a test about one
     /// refusal is not quietly a test about another.
@@ -523,8 +570,17 @@ mod tests {
     /// them left behind is a live grant to whatever the other is running.
     #[test]
     fn each_run_confines_through_a_profile_of_its_own() {
-        assert_ne!(profile_name(4, 1), profile_name(4, 2));
-        assert_ne!(profile_name(4, 1), profile_name(5, 1));
+        assert_ne!(profile_name(4, 1, 9), profile_name(4, 2, 9));
+        assert_ne!(profile_name(4, 1, 9), profile_name(5, 1, 9));
+    }
+
+    /// A crashed run leaves its profile and the entries naming it behind, and a later run
+    /// can be handed the same process identifier and the same first sequence number. The
+    /// name has to differ anyway, or the later run confines through the earlier run's
+    /// security identifier and the leftover entries apply to it.
+    #[test]
+    fn a_reused_process_identifier_and_sequence_still_get_a_profile_of_their_own() {
+        assert_ne!(profile_name(4, 0, 1), profile_name(4, 0, 2));
     }
 
     /// The platform rejects a name longer than this rather than truncating it, so a run
@@ -532,7 +588,7 @@ mod tests {
     /// all.
     #[test]
     fn a_profile_name_fits_what_the_platform_accepts() {
-        let longest = profile_name(u32::MAX, u64::MAX);
+        let longest = profile_name(u32::MAX, u64::MAX, u64::MAX);
         assert!(
             longest.len() <= LONGEST_PROFILE_NAME,
             "{longest} is {} characters",

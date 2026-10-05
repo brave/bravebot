@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 const FLOOR: Duration = Duration::from_secs(5);
 
 /// How long a loop may run before it ends itself.
-const MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+pub(crate) const MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// What the driver waits when a self-paced turn ended without saying when to wake.
 const KEEPALIVE: Duration = Duration::from_secs(1_200);
@@ -415,6 +415,7 @@ impl Running {
         self.running.then_some(Tick {
             number: self.ticks,
             self_paced: self.self_paced(),
+            unpaceable: false,
         })
     }
 
@@ -516,6 +517,9 @@ impl Running {
         }
 
         match wakeup {
+            // A turn that said it is finished is a deliberate ending, not a silence, so the
+            // keepalive is not spent on it.
+            Some(wakeup) if wakeup.stop => false,
             Some(wakeup) => {
                 self.quiet = if wakeup.quiet { self.quiet + 1 } else { 0 };
                 self.due = now.checked_add(wakeup.after);
@@ -903,6 +907,17 @@ mod tests {
         assert!(!running.ended(None, now));
     }
 
+    /// A deliberate stop is not a silence: the loop ends on the turn that said it, with the
+    /// fallback wake still unspent.
+    #[test]
+    fn a_turn_that_says_the_loop_is_finished_ends_it_without_a_keepalive() {
+        let mut running = Running::begin(request("watch"));
+        let now = Instant::now();
+
+        running.dispatching();
+        assert!(!running.ended(Some(Wakeup::finished(true)), now));
+    }
+
     /// The budget is for turns that stopped saying when to wake, not for the one that did.
     #[test]
     fn a_turn_that_says_when_to_wake_restores_the_fallback() {
@@ -944,6 +959,27 @@ mod tests {
         assert!(running.due(due));
         running.dispatching();
         assert!(!running.due(due));
+    }
+
+    /// A turn that outlasts its own interval must not be due the moment it ends: the gap is the
+    /// time between runs, counted from the end of the one before.
+    #[test]
+    fn the_gap_is_measured_from_the_end_of_a_tick_and_not_its_start() {
+        let start = Instant::now();
+        let ended = start + Duration::from_secs(600);
+
+        let mut every = Running::begin(request("5m watch"));
+        every.dispatching();
+        assert!(every.ended(None, ended));
+        assert!(!every.due(ended), "an interval was counted from the start");
+        assert!(!every.due(ended + Duration::from_secs(299)));
+        assert!(every.due(ended + Duration::from_secs(300)));
+
+        let mut paced = Running::begin(request("watch"));
+        paced.dispatching();
+        assert!(paced.ended(Some(Wakeup::asked(900, false)), ended));
+        assert!(!paced.due(ended + Duration::from_secs(899)));
+        assert!(paced.due(ended + Duration::from_secs(900)));
     }
 
     #[test]

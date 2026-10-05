@@ -14,11 +14,12 @@ that is merely carried.
 |---|---|---|---|
 | [`read_file`](#read_file) | `path`, `path_ref`, `offset`, `limit` | none | only to trust a quarantined file |
 | [`list_files`](#list_files) | `directory`, `pattern`, `depth` | none | no |
-| [`search`](#search) | `pattern`, `directory`, `include`, `offset`, `case_sensitive` | none | no |
+| [`search`](#search) | `pattern`, `directory`, `include`, `offset`, `case_sensitive`, `context` | none | no |
 | [`read_git`](#read_git) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | only if what it would show holds a credential |
 | [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
 | [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, every time** |
 | [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text` | **yes, every time** |
+| [`apply_checkout`](#apply_checkout) | `checkout`, `paths` | none | **yes, for every file** |
 | [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds`, `stdin_ref`, `read` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
 | [`read_output`](#read_output) | `ref`, `offset` | none | **yes, unless the planner may already read it** |
 | [`vet_content`](#vet_content) | `ref` | none | **yes, that is what it is for** |
@@ -146,6 +147,7 @@ Finds lines matching a **regular expression** in workspace files.
 | `include` | optional glob limiting which files are searched: `*`, `?`, `**` and brace groups like `**/*.{cc,h,mm}`. One with a `/` may be written from `directory` or from the workspace root |
 | `offset` | which match to resume from, to read past the match cap ([below](#a-capped-search-can-be-asked-past-its-cap)) |
 | `case_sensitive` | defaults to true. `(?i)` in the pattern asks for the same thing |
+| `context` | lines to show before and after each match, as `grep -C` does: none unless given, at most 10 |
 
 Supported: literals, `.`, `*`, `+`, `?`, `|`, `(...)`, `(?:...)`, `[...]` with ranges and negation,
 `\d`, `\w`, `\s` and their negations, `^`, `$`, `\b`, `\B`, and a backslash before a metacharacter to
@@ -194,6 +196,13 @@ and says how many matches there were.
 
 Only the match cap can be asked past. A walk that stopped short of the tree or ran out of time is not
 a page to be continued: narrow the pattern or point at a subdirectory instead.
+
+### Lines around a match
+
+With `context`, each match comes with the lines either side of it, written `path-line- text` where a
+match is `path:line: text`, and a `--` line between groups that are not adjacent. Those lines are not
+matches: they count toward neither the match cap nor the offset. A separate cap bounds how many are
+returned, and a search that reached it says it is incomplete.
 
 ### The caps are configurable
 
@@ -338,7 +347,9 @@ cost of a server, so paying it per request would make each call slower than the 
 
 A `checker` or `worker` delegate asks the same servers, so a language you approved is not put to you
 again and the tree is not indexed twice. A `reader` delegate is not offered `lsp` at all: starting a
-server runs the project's build tooling, and a reader may not run programs.
+server runs the project's build tooling, and a reader may not run programs. A delegate working in a
+[checkout](../customize/agents.md#a-checkout-of-its-own) is not offered it either, since the server
+indexes your working tree.
 
 ### A location is structure; the text at it is content
 
@@ -432,6 +443,26 @@ guesses**.
 An edit requires a **trusted** file, because locating a passage to replace is a decision and a
 decision may be taken only from trusted content. To change a file the agent may not read, the route
 is `spawn_processor` plus `write_file`.
+
+## `apply_checkout`
+
+Brings the files a delegate wrote in a kept [checkout](../customize/agents.md#a-checkout-of-its-own)
+back into your working directory. **You are asked about every file, and shown the difference from
+your own file as it is now,** even where the file's path is one you trust. The question also says so
+when this session has written that path in your working directory since the checkout was made, whether
+the planner or another delegate did it. A write by a program other than through a redirection, or
+through a reference, is not seen, so the absence of that note says nothing about the file.
+
+| Parameter | |
+|---|---|
+| `checkout` | the number the delegate's report gave the checkout, such as `c1` |
+| `paths` | optional: only these files, each one the report named. Without it, every file named |
+
+Only a file the driver recorded a write to, by the name the delegate typed, can come back. A file
+written through a reference or by a program other than through a redirection is not found, a link in
+a file's place is not followed, and a file over 16 MiB or that is not text is left. The file keeps
+the trust label it had in the checkout, so a file written from content nobody vouched for is still
+untrusted in your tree. A delegate is never offered this tool.
 
 ## `run`
 
@@ -527,12 +558,19 @@ Reports what a [background job](run-tool.md#leaving-a-pipeline-running) has prin
 
 Each look reports what is new, counted in bytes, and whether the job has ended. Asking about a job
 that does not exist says so. What is new is counted separately for standard output and standard error,
-so a line arriving on one does not hide what arrived on the other.
+so a line arriving on one does not hide what arrived on the other, and text from standard error is
+marked as such.
+
+A `job` naming a [delegate](#spawn_agent) rather than a job is answered as that: `job_output` neither
+reads nor stops a delegate, and its report reaches the planner on its own when it finishes. Only a
+name that is neither is reported as no job.
 
 **A finished job reaches the turn without being asked about.** Between rounds the turn checks whether
 any of its jobs has ended, and the handle, the exit codes and whatever was printed since anybody last
 looked go into the conversation on their own. So a background job that ends quietly is still reported.
-The account is given once, by whichever route got there first.
+The account is given once, by whichever route got there first. Where the output is quarantined it
+says how to lift that, as a `run` result does: [`read_output`](#read_output) for this output, and
+vouching for every stage of the exact command for the next.
 
 ### A look may wait
 
@@ -648,6 +686,8 @@ of capabilities, and gets back one report.
 | `kind` | `reader`, `checker` or `worker`, or the name of a [definition](../customize/agents.md) |
 | `task` | the whole of what the delegate is told |
 | `each` | optional; starts one delegate per entry, each told `task` followed by its own entry |
+| `mcp_servers` | optional; the [MCP servers](../customize/mcp-servers.md) a `worker` keeps, out of the ones its parent may call. `[]` keeps none |
+| `isolation` | optional; `checkout` gives each delegate [a checkout of its own](../customize/agents.md#a-checkout-of-its-own) to work in |
 
 | Kind | Holds | For |
 |---|---|---|
@@ -675,6 +715,22 @@ its own, takes its own number, and holds its own copy of what you vouched for, s
 several runs rather than one run several times. A call naming more than eight, or naming none, is
 refused and starts nothing. A call that reaches the turn's ceiling of 32 delegates part-way starts
 the ones that fit and says how many did not start, and why.
+
+**`mcp_servers` takes servers away from a worker.** Without it a worker holds every server its
+parent may call, less any its [definition](../customize/agents.md) leaves off. With it the worker
+holds only those of them the list names, so a worker sent to fix a build can be started holding no
+mail server.
+A name is the server's part of its tools' names, as in `mcp__gmail__search`. A name the turn holds
+no grant for is refused and starts nothing, and the refusal lists the servers it holds. The list
+never adds a server.
+
+**`isolation: checkout` keeps delegates out of your working tree.** Each delegate works in a new
+checkout of the last commit, so delegates writing at the same time do not edit or build in one tree.
+Changes you have not committed are not in it, and what it writes stays there until
+[`apply_checkout`](#apply_checkout) brings it back. It is refused for a `reader` and for a delegate
+already in a checkout. A delegate in a checkout is not offered [`lsp`](#lsp). Checkouts share
+remote-tracking refs and tags with your working directory and with each other, so the planner is
+told to run a `git fetch` once rather than have each delegate run one.
 
 The delegate cannot see the conversation the task came from, so a task that leaves something out is a
 delegate that never learns it. It cannot come back for more, since there is no channel to ask
@@ -760,15 +816,16 @@ happen; a call from any other turn is answered the way any unoffered name is.
 
 | Parameter | |
 |---|---|
-| `delay_seconds` | how long to wait; routing, and required |
+| `delay_seconds` | how long to wait; routing, and required unless `stop` is true |
 | `noop` | whether this tick found anything; routing, and required |
+| `stop` | true to end the self-paced loop this tick belongs to, with no further tick; routing, and offered only to a tick of a self-paced loop |
 | `reason` | what the turn is waiting on, in its own words; content |
 
 **There is no argument for what the next run asks.** The prompt is the line you typed, and it is sent
 again unchanged.
 
 The wait is held between a minute and an hour **before** it is reported back, so the number the
-planner is told is the number it is getting. A call missing the delay or the verdict is refused rather
+planner is told is the number it is getting. A call missing the delay (unless it sets `stop`) or the verdict is refused rather
 than filled in, since the count of quiet ticks you are shown is built from the verdict. `reason`
 reaches your screen and stops there.
 

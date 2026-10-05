@@ -468,9 +468,15 @@ fn a_skill_the_trust_map_distrusts_stops_being_offered() {
         from_disk(&catalogue).is_empty(),
         "a distrusted file was offered"
     );
+    let told: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert_eq!(
+        told,
+        ["1 skill in .bravebot/skills was not loaded: the file is not trusted"],
+        "the user was not told, or the directory was named"
+    );
     assert!(
-        notices.iter().any(|n| n.message.contains("not trusted")),
-        "the user was told nothing: {notices:?}"
+        !told[0].contains("poisoned"),
+        "a directory name was repeated back: {told:?}"
     );
 }
 
@@ -769,7 +775,13 @@ fn a_skill_a_deny_rule_covers_is_offered_nowhere_through_a_link_to_it() {
     let told: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
     assert_eq!(
         told,
-        [".bravebot/skills/keys/SKILL.md was not loaded: a deny rule in your settings covers it"]
+        [
+            "1 skill in .bravebot/skills was not loaded: a deny rule in your settings covers the file"
+        ]
+    );
+    assert!(
+        !told[0].contains("keys"),
+        "a directory name was repeated back: {told:?}"
     );
 }
 

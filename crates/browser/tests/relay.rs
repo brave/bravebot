@@ -188,14 +188,27 @@ fn idle(directory: &Path) -> UnixStream {
 }
 
 /// Whether the host has closed `stream`, waiting at most `within` to find out.
+///
+/// A read with a timeout is never restarted after a signal, so it fails with `Interrupted` when
+/// another test thread spawns a process while a child of this one exits: `Command::spawn` blocks
+/// signals around the fork, which queues the exit's SIGCHLD, and the thread it then wakes is the
+/// one reading here. The read is repeated for the time that is left.
 fn closed_within(stream: &mut UnixStream, within: Duration) -> bool {
-    stream.set_read_timeout(Some(within)).unwrap();
+    let deadline = Instant::now() + within;
     let mut byte = [0u8; 1];
-    match stream.read(&mut byte) {
-        Ok(0) => true,
-        Ok(_) => panic!("the host wrote to a connection that sent nothing"),
-        Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => true,
-        Err(_) => false,
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        stream.set_read_timeout(Some(left)).unwrap();
+        match stream.read(&mut byte) {
+            Ok(0) => return true,
+            Ok(_) => panic!("the host wrote to a connection that sent nothing"),
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => return true,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return false,
+        }
     }
 }
 

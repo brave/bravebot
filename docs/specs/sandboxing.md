@@ -20,7 +20,9 @@ Operating-system confinement for processes that run code we did not write, which
 stdio servers in [mcp.md](mcp.md). What this is *not* for is our own code: a processor is a model
 call made by our own code, and confining that would fence in the trusted half and leave the
 untrusted half free. A program the user asked for runs with the access their own shell would give
-it, and what confining one would mean is the last section here.
+it, and what confining one would mean is the last section here. The inhibitor `/caffeinate` starts
+is neither: its program and arguments are fixed in our code
+([commands.md](commands.md#CMD-12)), so it is not confined.
 
 Confinement is an operating-system boundary. Everywhere else in these specs the boundary is the
 capability set and the label on a value, which is a different mechanism answering a different
@@ -60,6 +62,10 @@ the policy names, and egress is a capability the token either carries or does no
 therefore a change to the filesystem rather than to the process, which is the one thing the other
 two backends do not cost, and what follows from it is below.
 
+Where a clause here is not built, or has an unbuilt half, the clause says so, and that sentence is
+what keeps a reader from taking the present tense for a claim about what runs today.
+[SANDBOX-11](#SANDBOX-11) is the one that says it.
+
 ## Clauses
 
 <a id="SANDBOX-1"></a>
@@ -81,12 +87,17 @@ not have, and the audit trail records a sandbox that was never applied.
 ### SANDBOX-2: a policy that would confine nothing is refused
 
 A profile starts denying everything, grants accumulate onto it, and a fully permissive policy is
-rejected rather than applied. Granting everything is not a confinement decision.
+rejected rather than applied. Granting everything is not a confinement decision. A write row
+grants everything when it resolves to the root of a filesystem, whatever its spelling: `/..` is the
+same grant as `/`, and on Windows a drive root such as `C:\` is one too.
 
 `verified-by: bravebot_sandbox::policy::strict_permits_nothing`
 `verified-by: bravebot_sandbox::policy::allowances_accumulate`
 `verified-by: bravebot_sandbox::policy::a_strict_policy_is_meaningful`
 `verified-by: bravebot_sandbox::policy::granting_everything_is_not_meaningful`
+`verified-by: bravebot_sandbox::policy::granting_everything_spelled_another_way_is_not_meaningful`
+`verified-by: bravebot_sandbox::policy::a_grant_below_the_root_remains_meaningful`
+`verified-by: bravebot_sandbox::policy::granting_a_drive_root_is_not_meaningful`
 `verified-by: bravebot_sandbox::policy::network_alone_remains_meaningful`
 `verified-by: bravebot_sandbox::macos::a_fully_permissive_policy_is_refused`
 `verified-by: bravebot_sandbox::linux::a_fully_permissive_policy_is_refused`
@@ -177,6 +188,7 @@ asked for, or names the directory holding it, on the platform where neither was 
 `verified-by: bravebot_sandbox::windows::capabilities_report_what_a_container_enforces`
 `verified-by: bravebot_sandbox::windows::a_policy_requiring_subprocess_denial_is_refused`
 `verified-by: bravebot_sandbox::windows::each_run_confines_through_a_profile_of_its_own`
+`verified-by: bravebot_sandbox::windows::a_reused_process_identifier_and_sequence_still_get_a_profile_of_their_own`
 `verified-by: bravebot_sandbox::windows::a_profile_name_fits_what_the_platform_accepts`
 
 <a id="SANDBOX-6"></a>
@@ -363,6 +375,14 @@ have: the directory this fires on first holds a private key, a umask most accoun
 default would make it listable by everybody, and nothing tightens a directory that already exists
 afterwards.
 
+Half built. A write row says which of the three it is, and every row a run builds says neither. The
+creating is written and tested, and nothing calls it before a policy is resolved, so no run creates
+anything. A call put in today would create nothing either: the session temporary directory, the null
+device, a server's own directory and the directory a declaration named are each there by the time
+the policy is assembled, and none is a row somebody meant a program to create. The rows this fires
+on, a toolchain cache and `known_hosts`, would come from a per-program write list, and that list is
+not built.
+
 `verified-by: bravebot_sandbox::policy::a_row_naming_a_directory_that_is_not_there_is_created_as_a_directory`
 `verified-by: bravebot_sandbox::policy::a_row_naming_a_file_that_is_not_there_is_created_as_a_file`
 `verified-by: bravebot_sandbox::policy::a_file_row_is_created_with_the_directory_holding_it`
@@ -370,6 +390,8 @@ afterwards.
 `verified-by: bravebot_sandbox::policy::a_backend_that_grants_an_absent_path_has_nothing_created_for_it`
 `verified-by: bravebot_sandbox::policy::a_backend_that_confines_nothing_has_nothing_created_for_it`
 `verified-by: bravebot_sandbox::policy::what_is_created_is_reachable_by_its_owner_and_nobody_else`
+`verified-by: bravebot_sandbox::policy::what_is_created_is_reachable_by_its_owner_and_nobody_else_on_windows`
+`verified-by: bravebot_sandbox::windows::the_access_list_of_a_created_row_names_only_its_owner`
 `verified-by: bravebot_sandbox::policy::a_row_that_is_already_there_keeps_what_is_in_it`
 `verified-by: bravebot_sandbox::policy::a_row_created_first_is_in_the_policy_the_backend_is_handed`
 `verified-by: bravebot_sandbox::policy::a_row_that_could_not_be_created_is_left_out_and_named`
@@ -419,7 +441,11 @@ confining a program was for.
 
 On Linux and macOS a look at a path is not bounded by a grant: whether something is there, what
 kind of thing it is, its size, when it changed, and where a link points. Opening a file for what it
-holds and listing a directory's entries are bounded, and outside the grants both are refused.
+holds and listing a directory's entries are bounded, and outside the grants both are refused. The
+one exception is the root directory on macOS: its entries can be listed, because the loader opens
+`/` as the process starts and Seatbelt has no operation that separates opening a directory from
+listing it. The names in `/` are the names of the system's top-level directories, and no file's
+contents are readable through that row.
 
 **Why.** Landlock bounds no look, so on Linux this is the kernel's and not a choice. On macOS a
 profile that refused a look outside the grants refused the walk to them: node resolves its own
@@ -656,7 +682,10 @@ runs holding different scopes over one directory are two sets of entries on one 
 removes the entries it wrote and deletes the profile it created as it is dropped, and a run ending
 without reaching that leaves them.
 
-What bounds that is a container profile per run rather than per installation. The entry left behind
+What bounds that is a container profile per run rather than per installation. The profile name
+carries a value chosen when the backend is created, so a process identifier reused after a crash
+does not give a later run the name of the earlier one, and a profile that already exists is
+refused rather than adopted. The entry left behind
 names a security identifier no other run holds, so the residue is an entry for a container that no
 longer exists rather than a standing grant to something still running, and the next run's grants are
 its own. Removal is not atomic either way, which is why the cost is written here rather than treated

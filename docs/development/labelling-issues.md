@@ -48,7 +48,7 @@ already editing the issue for another reason.
 ## The kind, and the three axes
 
 The kind labels say what an issue **is**: `bug`, `security`, `spec-mismatch`, `spec-coverage`,
-`spec-bug`, `parity`, `enhancement`. The three axes say what to **do** about it, and every open
+`spec-bug`, `parity`, `beyond-parity`, `enhancement`. The three axes say what to **do** about it, and every open
 issue carries one value from each: an `importance`, an `urgency`, and a `size`.
 
 More than one kind can be true at once, and a `spec-mismatch` usually carries a second: `bug` where
@@ -146,3 +146,14 @@ axis: an unread finding does not belong in anybody's queue.
 The [peer-advisories skill](../../agents/skills/peer-advisories/SKILL.md), which files what
 another coding agent's published advisory finds here, applies the same set, except that
 `security`, `needs-security-review` and `severity` go only on a finding about the guarantee.
+
+The [peer-features skill](../../agents/skills/peer-features/SKILL.md), which files what other
+coding agents document that bravebot lacks or could do measurably better, applies a kind, an `area`
+and no axis. A missing capability is `parity`. A change that makes an existing capability about 10%
+better than the best other tool is `enhancement` with `beyond-parity`. The skill refuses to post
+while `beyond-parity` does not exist, because a person creates labels:
+
+```bash
+gh label create beyond-parity --repo brave/bravebot --color 0E8A16 \
+  --description "Better than what comparable tools offer, by a concrete margin"
+```

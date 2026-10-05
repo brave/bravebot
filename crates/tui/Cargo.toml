@@ -33,8 +33,9 @@ unicode-width = { workspace = true }
 # poll(2) on the tty, so an OSC 11 reply can be waited for without hanging when the
 # terminal never sends one. Crossterm drops those replies, and a blocking read would
 # stall startup on a terminal that does not answer. rustix rather than libc so the
-# same syscalls do not need unsafe at this crate.
-rustix = { workspace = true, features = ["event"] }
+# same syscalls do not need unsafe at this crate. open(2) with O_NOFOLLOW and O_NONBLOCK,
+# so /checkouts reads a repository's refs without following a link or waiting on a pipe.
+rustix = { workspace = true, features = ["event", "fs"] }
 
 [dev-dependencies]
 bravebot-ui-bridge = { path = "../ui-bridge" }

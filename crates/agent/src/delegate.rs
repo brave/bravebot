@@ -233,7 +233,12 @@ pub(crate) fn checkout_notice(checkout: &crate::workspace::CheckoutInfo) -> Stri
     let unnamed = checkout.left_out().len() - named.len();
     let mut notice = format!(
         "\n\nYou are working in a checkout of commit {} of the project, at {}. Changes the person \
-         has not committed are not in it. You have no memory and no language servers here.",
+         has not committed are not in it. You have no memory and no language servers here. This \
+         checkout shares remote-tracking refs and tags with the person's working directory and \
+         with every other checkout, so a git fetch here updates them there too, and two fetches \
+         at the same time can fail. It shares one stash with them as well, so a git stash pop \
+         here can take changes another checkout or the person set aside. Do not use git stash \
+         here.",
         checkout.commit(),
         checkout.path().display()
     );
@@ -365,8 +370,6 @@ pub struct Delegated {
     /// Its kind's own name where nothing was defined, so a session with no definition files says
     /// exactly what it always did.
     pub kind: String,
-    /// How many rounds of tool calls it took.
-    pub rounds: usize,
     /// What it cost, so the turn can report the whole of what it spent.
     pub usage: Usage,
 }
@@ -438,6 +441,13 @@ pub struct Ended {
     /// wrote about the person's own hooks file and definitions, rather than anything the delegate
     /// read or its model said (HOOK-7, DELEGATE-22).
     pub notices: Vec<String>,
+    /// How many rounds of tool calls it made, however it ended.
+    ///
+    /// Outside the result, since a run that failed is the one the record of its end has to
+    /// account for (TRACE-8).
+    pub rounds: usize,
+    /// How long it ran, however it ended.
+    pub took: std::time::Duration,
 }
 
 /// Settle everything a delegate needs from the run that spawned it.
@@ -495,6 +505,10 @@ pub fn run(
     // same tree for the same person, so a settings key that decided what the parent's carry and
     // said nothing about a delegate's would be answered by whichever of the two did the writing.
     attribution: &bravebot_config::Attribution,
+    // What `--append-system-prompt` named on the spawning turn, which a delegate reads after the
+    // project's instructions as that turn does (CLI-19). `--system-prompt` is not passed: a
+    // delegate has its own opening.
+    appended: Option<&str>,
     // The spawning turn's as well. A delegate runs programs into a conversation of its own, but the
     // budget is the person's answer about what a command's output is worth spending context on, and
     // it does not stop being their answer because the spending moved.
@@ -522,10 +536,33 @@ pub fn run(
     // (LSP-8).
     mut servers: Option<crate::lsp::LanguageServers>,
 ) -> Ended {
+    let began = std::time::Instant::now();
     let definition_model = seeded
         .spec
         .model()
         .map(|written| (written, config.model_named(written)));
+    // The machine-level layer first, as the addressed route asks it: a model this machine does not
+    // request is refused whatever its credentials are, and nothing is started for it (BACKEND-48).
+    if let Some((written, _)) = &definition_model
+        && let Some((file, why)) = config.model_refused(written)
+    {
+        let said = t!(
+            delegate_model_refused,
+            definition = seeded.spec.definition(),
+            model = *written,
+            reason = crate::backend::refusal_reason(file, why)
+        );
+        reporter.notice(said.clone());
+        return Ended {
+            delegated: Err(TurnError::Precommit(
+                "the delegate's model is refused by this machine's managed layer".to_string(),
+            )),
+            vouched: seeded.vouched.clone(),
+            notices: vec![said],
+            rounds: 0,
+            took: began.elapsed(),
+        };
+    }
     // Refused rather than run on the turn's model, which would spend past a boundary the definition
     // drew, and a worker thread has nowhere to show a sign-in (DELEGATE-22).
     if let Some((written, resolved)) = &definition_model
@@ -543,6 +580,8 @@ pub fn run(
             )),
             vouched: seeded.vouched.clone(),
             notices: vec![said],
+            rounds: 0,
+            took: began.elapsed(),
         };
     }
     let delegate_model = definition_model
@@ -563,6 +602,10 @@ pub fn run(
         .with_permission_mode(permission_mode)
         .with_auto_vetting(auto_vetting)
         .with_attribution(attribution.clone())
+        .with_system_prompts(crate::turn::SystemPrompts {
+            replacing: None,
+            appending: appended.map(str::to_string),
+        })
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
         .with_mcp(mcp.cloned());
@@ -586,6 +629,8 @@ pub fn run(
     // lands is what the calls it made fired.
     let mut notices = Vec::new();
 
+    let mut rounds = 0;
+
     let outcome = match turn::delegated(
         config,
         egress,
@@ -600,6 +645,7 @@ pub fn run(
         cancel,
         &mut vouched,
         &mut notices,
+        &mut rounds,
         wallet,
         servers.as_mut(),
     ) {
@@ -611,6 +657,8 @@ pub fn run(
                 delegated: Err(error),
                 vouched,
                 notices,
+                rounds,
+                took: began.elapsed(),
             };
         }
     };
@@ -637,7 +685,6 @@ pub fn run(
         delegated: Ok(Delegated {
             report: outcome.answer,
             kind: seeded.spec.definition().to_string(),
-            rounds: outcome.steps,
             usage: Usage {
                 // What the rounds cost, split the way the turn counted it: everything it spent,
                 // less what the model wrote, is what the requests carried.
@@ -652,6 +699,8 @@ pub fn run(
         }),
         vouched,
         notices,
+        rounds,
+        took: began.elapsed(),
     }
 }
 

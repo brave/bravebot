@@ -77,6 +77,23 @@ same route as any other path, so [confinement](../security/security.md#confineme
 decide whether it may be read at all, and a pointer naming something outside the workspace is refused
 there.
 
+A file a `deny` [rule](configuration.md#permissions) covers is left out of the turn, whether the
+project's instructions file is that file, points at it, or is a link to it. You are told it was left
+out.
+
+## Words from the command line
+
+[`--append-system-prompt`](../reference/cli.md#--system-prompt-prompt-and---append-system-prompt-prompt)
+adds its words as a seventh source that is not a file. It is read last, after the project's
+`AGENTS.md`, so where the two disagree the words win. It is held by the running process, so it is in
+every turn of the run and in the stored session of none: resuming without the flag runs without it.
+
+`--system-prompt` replaces the opening of the system prompt and nothing after it. The instructions
+for reading a tool's output, the facts about where you are working, the mode and the goal are still
+sent, because other guarantees rest on them. Neither flag is read through the trust gate, since
+there is no file behind them. `--append-system-prompt "$(cat x)"` therefore gives the file's bytes
+your authority.
+
 ## What wins
 
 The project has the last word. Sources are read least specific first: your own directory before the

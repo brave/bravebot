@@ -89,6 +89,7 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/effort` | the effort level chosen with `/effort` |
 | `~/.bravebot/theme` | the theme chosen with `/theme` |
 | `~/.bravebot/editor-mode` | the editing style chosen with `/config` |
+| `~/.bravebot/panel` | whether the [info panel](../using/sessions.md#telling-sessions-apart) was left open |
 | `~/.bravebot/themes/<name>.json` | themes you wrote yourself |
 | `~/.bravebot/settings.json` | long-lived settings (see [below](#settingsjson)) |
 
@@ -143,12 +144,14 @@ rather than obeyed.
 
 opens a picker on the model currently in use, as a panel in the middle of the screen. The list comes
 from the endpoint rather than from a set compiled in, so it is whatever the backend actually offers
-today. The choice is written to `~/.bravebot/model`, so it outlives the session that made it and
-applies in every directory, except one whose own settings name a [`model`](#model): a checkout that
-says which model it wants gets that one in the next session. A one-shot run reads the same record,
-so a script uses the model you picked unless [`--model`](../reference/cli.md#--model-name) names
-another. A model your AWS account named for a tier is written as that tier's word, `opus`, `sonnet`
-or `haiku`, so the record names whatever the tier variable names when the ARN is replaced.
+today. Google Vertex AI is the exception, having no listing to ask (see [Reaching an
+OpenAI-compatible gateway](#reaching-an-openai-compatible-gateway)). The choice is written to
+`~/.bravebot/model`, so it outlives the session that made it and applies in every directory, except
+where the file `--settings` names has a [`model`](#model) key. A checkout's own settings cannot name a
+model. A one-shot run reads the same record, so a script uses the model you picked
+unless [`--model`](../reference/cli.md#--model-name) names another. A model your AWS account named
+for a tier is written as that tier's word, `opus`, `sonnet` or `haiku`, so the record names whatever
+the tier variable names when the ARN is replaced.
 
 **Type to narrow the list rather than arrowing through it.** A search matches the name shown, the name
 a request would carry and the service that answers, ignoring case and anywhere in any of them, and
@@ -401,10 +404,16 @@ one thing leaves everything else in force:
 
 | What | How the files combine |
 |---|---|
-| `env`, `provider`, `attribution`, `keybindings` | per name one level down; the value under a name is replaced whole |
+| `env`, `attribution`, `keybindings` | per name one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
-| `model`, anything else | the closest file that set it wins |
+| `provider`, `model` | your own file and the file `--settings` names. A project or local file naming either is ignored and reported |
+| anything else | the closest file that set it wins |
+
+A file that writes `permissions` or `run` as something other than an object, or `run.scrubEnv` or a
+list under `permissions` as something other than an array, sets nothing there: the broader files'
+block or list stays in force. A `{"permissions": null}` in a checkout therefore cannot clear the
+`deny` and `ask` rules in your own file.
 
 The lists are the exception because an entry in one only ever takes something away: a name under
 `scrubEnv` withholds a variable from a program, and a `deny` or `ask` rule refuses or asks about
@@ -444,6 +453,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `attribution` | what a commit message or a pull request this agent writes may carry ([below](#attribution)) |
 | `keybindings` | keys rebound to your own choice ([below](#keybindings)) |
 | `search` | how large a tree a search may walk ([below](#search)) |
+| `terminalTitle` | whether the terminal's title is set to the session's name ([below](#terminaltitle)) |
 | `vetting` | whether quarantined content is checked without asking you ([below](#vetting)) |
 
 In `env`, only string values: a number or a boolean is skipped rather than coerced, so write `"1"` and
@@ -463,6 +473,9 @@ uses is `BRAVEBOT_USE_BEDROCK`.
 :::caution
 `BRAVEBOT_USE_BEDROCK` was called `CLAUDE_CODE_USE_BEDROCK`. The old name now **reads as unset**, so a
 file or a profile still setting it falls back to the Brave backend without an error. Rename it.
+
+`BRAVEBOT_DEFAULT_MODEL` was called `BRAVE_AI_CHAT_DEFAULT_MODEL`. The old name also reads as unset, so
+a run asks for the model the build was made with (or `automatic-bravebot`) until you rename it.
 :::
 
 **The environment wins over all three files.** A variable exported in your shell overrides the same
@@ -477,13 +490,14 @@ Each of the three files fails on its own. One that is missing, oversized or unpa
 others in force, so a mistake in a checkout cannot decide that your own file no longer applies.
 
 :::caution
-**A `.bravebot/settings.json` arrives with a checkout.** A repository you have just cloned can name
-the host every request goes to and the credential profile that signs it, and nothing on the screen
-says so. Your conversation reaching a host the repository chose is the cost to weigh: read a
-project's settings file before working in it, and `bravebot doctor` names the files in force. What
-it cannot do is grant a capability. The names that would (`permissions.allow`, and
-`permissions.additionalDirectories`) do not take effect on being read: each is a question you answer
-when the session opens, the rules in one box listing them and the directories one box apiece.
+**A `.bravebot/settings.json` arrives with a checkout.** A repository you have just cloned cannot name
+the host every request goes to, the model, or the environment variables read as a gateway's
+credential: a `provider` block or a `model` key in a project or local file is ignored, and `bravebot
+doctor` names each file whose block or key was dropped. It can still set the other keys here, so read
+a project's settings file before working in it; `doctor` names the files in force. It cannot grant a
+capability either. The names that would (`permissions.allow`, and `permissions.additionalDirectories`)
+do not take effect on being read: each is a question you answer when the session opens, the rules in
+one box listing them and the directories one box apiece.
 :::
 
 :::note
@@ -501,8 +515,10 @@ answers a prompt, so a project's entries are rules you are shown and grant rathe
 puts in force, and `additionalDirectories` names directories you are asked about one at a time rather
 than ones a file opens.
 
-[`vetting`](#vetting) decides whether you are asked something at all, which is why it too is read
-from your home file alone and never from a checkout's.
+[`vetting`](#vetting) decides whether you are asked something at all, which is why it is read from
+your home file alone and never from a checkout's. [`provider`](#reaching-an-openai-compatible-gateway)
+and [`model`](#model) are too, since they decide which host receives your conversation and which
+variables are sent to it as a credential.
 :::
 
 ### `model`
@@ -515,10 +531,13 @@ The model to request. This is the one key in the file that **outranks the model 
 binary**, and it outranks an exported `BRAVEBOT_DEFAULT_MODEL` too, since that variable names a
 default.
 
-A choice recorded by `/model` sits **between your own file and a checkout's**: it wins over the key in
-`~/.bravebot/settings.json`, and loses to one in `.bravebot/settings.json`,
-`.bravebot/settings.local.json` or the file `--settings` names. So a project that says which model it
-wants gets that model whatever you last picked elsewhere, and your own default gives way to a pick.
+**The key is read from `~/.bravebot/settings.json` and from the file `--settings` names, and from no
+other.** A `.bravebot/settings.json` or `.bravebot/settings.local.json` that names a model is ignored
+and reported by `bravebot doctor`, so a repository you cloned cannot change which model receives your
+conversation.
+
+A choice recorded by `/model` wins over the key in `~/.bravebot/settings.json`, and loses to one in
+the file `--settings` names.
 A pick that no configured service serves, such as an ARN whose profile was replaced, gives way to
 the model beneath it instead, and each start says which pick it ignored until you pick another.
 [`--model`](../reference/cli.md#--model-name) on a one-shot run, and a model picked in the session
@@ -577,6 +596,18 @@ no choice at all: the box stays the ordinary one and nothing fails to start.
 A choice made with [`/config`](../reference/commands.md#config) outranks this file, which answers for
 somebody who has never made one. The style is a preference about the person rather than a property of
 a checkout, which is why a file in a repository is the weaker claim.
+
+### `terminalTitle`
+
+```json
+{ "terminalTitle": false }
+```
+
+The terminal's title names the session, as `bravebot · dependency audit`
+([naming a session](../using/sessions.md#naming-a-session)). `false` leaves the title alone, for a
+terminal or multiplexer that manages titles itself. Only the boolean `false` turns it off: `"false"`
+in quotes, or any other value, leaves it on. An incognito session leaves the title alone whatever this
+says.
 
 ### `run.scrubEnv`
 
@@ -856,10 +887,11 @@ own.
 { "keybindings": { "stash": "alt-s", "scroller": "alt-o" } }
 ```
 
-Seven actions can be moved and nothing else can. A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
+Nine actions can be moved and nothing else can. A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
 
 | Action | Default | What it does |
 |---|---|---|
+| `background` | `ctrl-b` | move the command a turn is waiting on to the background |
 | `editor` | `ctrl-g` | open the current prompt in your editor |
 | `watch` | `ctrl-l` | watch a background delegate, or inspect what is running |
 | `scroller` | `ctrl-o` | open the [transcript scroller](../using/transcript.md) |
@@ -867,6 +899,7 @@ Seven actions can be moved and nothing else can. A chord is spelled `ctrl-x`, `a
 | `stash` | `ctrl-s` | put the current line aside, or bring it back |
 | `trail` | `ctrl-t` | toggle the [audit trail](../security/audit-trail.md) |
 | `paste` | `ctrl-v` | paste from the clipboard |
+| `panel` | `ctrl-x` | show or hide the [info panel](../using/sessions.md#telling-sessions-apart) |
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is already answered (a character is typed,
 Enter sends, Escape clears, Tab takes what is offered, the arrows move), so handing one to an action
@@ -877,10 +910,12 @@ are not rebindable.
 **Every action keeps a key of its own.** A chord that cannot be read, or that the input box already
 answers, leaves that action on its default. So does one two actions both asked for: both fall back
 rather than one winning, since which won would come down to the order the file was read in. Two
-actions *trading* chords is not a conflict and both get what they asked for.
+actions *trading* chords is not a conflict and both get what they asked for. `panel` is the newest
+of the nine, so a file that already gave `ctrl-x` to another action now asks for the chord the panel
+stands on, and that action is back on its default until the file moves `panel` as well.
 
 The block layers per action the way `env` does, so a project file moving one action says nothing about
-the other six. See [Interactive mode](../using/interactive-mode.md) for what the keys do.
+the other eight. See [Interactive mode](../using/interactive-mode.md) for what the keys do.
 
 ### `search`
 
@@ -911,11 +946,10 @@ it on**, and it is a boolean: `"true"` as a string, a number, or anything else i
 that meant to turn this on and mistyped the value leaves the asking in place.
 
 :::note
-**This is the one block read from `~/.bravebot/settings.json` alone.** A `.bravebot/settings.json` in a
-checkout that names it is reported by `doctor` rather than obeyed. Every other key here configures
-where a request goes or how the interface behaves; this one decides whether you are asked before
-content nobody vouched for reaches the planner, so a line in a repository you just cloned could
-otherwise turn the asking off for whoever opened it.
+**This block is read from `~/.bravebot/settings.json` alone.** A `.bravebot/settings.json` in a
+checkout that names it is reported by `doctor` rather than obeyed. This key decides whether you are
+asked before content nobody vouched for reaches the planner, so a line in a repository you just cloned
+could otherwise turn the asking off for whoever opened it.
 :::
 
 A choice you record for yourself while working outranks this file, and a flag outranks both.
@@ -977,7 +1011,9 @@ service already offers rather than adding one, and the file cannot say which mod
 `/model` lists only what the machine may request. A model you had picked that the lists refuse is
 ignored, your `~/.bravebot/model` is left as it is, and the session opens on the configured model and
 says so; where that model is refused too the start is refused and names the file. An `AGENTS.md`
-definition naming a refused model is refused when it is read.
+definition naming a refused model is refused when it is read, when the planner starts it as a delegate
+and when you address it. A skill naming a refused model leaves the turn on the session's model and
+says which file refused it.
 
 `"permissions": { "readsStayInWorkspace": true, "bypassUnreachable": true }` are read here on the same
 reasoning: each can only take capability away, never add any, so keeping the file tools inside the
@@ -1105,6 +1141,14 @@ A `provider` block in a settings file names a gateway, the models it offers and 
 holds its credential. It is opencode's block, so one copied from `opencode.json` works unedited, and
 a local Ollama needs no key. [Reaching an OpenAI-compatible gateway](providers/openai-compatible.md)
 has the fields, the credential, which models are offered, and how to name one.
+
+Google Vertex AI is reached by a block keyed `google-vertex`, or with no block by exporting
+`GOOGLE_API_KEY` and `GOOGLE_CLOUD_PROJECT`. It has no model listing a key can call, so `/model`
+offers a short list of Gemini models built into bravebot, and a block that lists `models` is offered
+those instead. A Vertex model, on the built-in list or off it, is named with the service's id in
+front, as `--model google-vertex/google/gemini-3-flash-preview` or the same value in the
+[`model`](#model) key.
+[Google Vertex AI](providers/openai-compatible.md#google-vertex-ai) has the fields.
 
 ## Context budget
 

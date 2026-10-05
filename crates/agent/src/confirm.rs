@@ -108,6 +108,12 @@ pub struct WriteRequest {
     /// reason [`RunRequest::record`] carries one: a person cannot endorse a record they were not
     /// shown.
     pub record: Option<std::path::PathBuf>,
+    /// Whether the driver's own record holds a write to this path in the working directory after
+    /// the checkout the body comes from was made (CHECKOUT-14).
+    ///
+    /// The one thing the driver can say about whether the file changed since: it compares no
+    /// bytes, and the person judges from the difference they are shown.
+    pub written_since_checkout: bool,
 }
 
 /// What a processor said about the document it produced, released for the screen an approval is
@@ -1871,6 +1877,7 @@ mod tests {
 
     fn a_write() -> WriteRequest {
         WriteRequest {
+            written_since_checkout: false,
             path: "src/main.rs".to_string(),
             contents: "fn main() {}\n".to_string(),
             existing: None,
@@ -2186,6 +2193,7 @@ mod tests {
 
     fn request() -> WriteRequest {
         WriteRequest {
+            written_since_checkout: false,
             path: "notes.md".into(),
             contents: "one\ntwo\n".into(),
             existing: None,
@@ -2210,6 +2218,7 @@ mod tests {
     #[test]
     fn an_existing_file_is_described_as_an_overwrite() {
         let r = WriteRequest {
+            written_since_checkout: false,
             existing: Some("old".into()),
             diff: Diff::compute("old", "one\ntwo\n"),
             intent: Intent::Overwrite,
@@ -2224,6 +2233,7 @@ mod tests {
     #[test]
     fn an_overwrite_summary_counts_both_sides() {
         let r = WriteRequest {
+            written_since_checkout: false,
             contents: "one\ntwo\n".into(),
             existing: Some("a\nb\nc\n".into()),
             diff: Diff::compute("a\nb\nc\n", "one\ntwo\n"),
@@ -2238,6 +2248,7 @@ mod tests {
     #[test]
     fn an_edit_is_described_as_an_edit() {
         let r = WriteRequest {
+            written_since_checkout: false,
             contents: "one\nTWO\n".into(),
             existing: Some("one\ntwo\n".into()),
             diff: Diff::compute("one\ntwo\n", "one\nTWO\n"),
@@ -2255,6 +2266,7 @@ mod tests {
     #[test]
     fn a_prompt_line_states_the_comparison_it_was_given_and_not_the_bytes() {
         let overwrite = WriteRequest {
+            written_since_checkout: false,
             contents: "one\ntwo\nthree\nfour\n".into(),
             existing: Some("a\n".into()),
             diff: Diff::compute("a\nb\nc\n", "one\ntwo\n"),
@@ -2264,6 +2276,7 @@ mod tests {
         assert_eq!(overwrite.summary(), "overwrite notes.md (+2 -3)");
 
         let create = WriteRequest {
+            written_since_checkout: false,
             contents: "one\ntwo\nthree\nfour\n".into(),
             diff: Diff::compute("", "one\ntwo\n"),
             ..request()

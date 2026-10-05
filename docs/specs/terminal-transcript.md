@@ -88,6 +88,7 @@ user cannot tell was ever in the file.
 
 `verified-by: bravebot_tui::marking::quarantined_content_cannot_paint_its_own_margin`
 `verified-by: bravebot_tui::marking::a_neutralised_escape_is_still_visible`
+`verified-by: bravebot_tui::marking::a_tab_in_the_content_or_the_origin_is_drawn_as_a_glyph`
 `verified-by: bravebot_tui::marking::text_without_control_characters_is_drawn_as_it_is`
 `verified-by: bravebot_tui::render::quarantined_content_is_shown_and_marked_on_every_line`
 `verified-by: bravebot_tui::marking::a_wrapped_preview_line_is_marked_on_every_row_it_reaches`
@@ -110,11 +111,13 @@ because it is trusted, and it still cannot draw its own escapes.
 <a id="VIEW-5"></a>
 ### VIEW-5: a tiny terminal still renders
 
-Every prompt and the session view render at small sizes rather than panicking or truncating the
-question out of view.
+Every prompt and the session view render at small sizes rather than panicking. A prompt keeps its
+question in view where the box has room for it beside the keys. Where the box has not, the prompts
+[PROMPT-4](prompting.md#PROMPT-4) holds to its keys draw the keys and take no yes, so none of them
+approves a question that was never on the screen.
 
 `verified-by: bravebot_tui::trust_prompt::a_tiny_terminal_still_renders`
-`verified-by: bravebot_tui::confirm::a_tiny_terminal_still_renders_the_prompt`
+`verified-by: bravebot_tui::confirm::a_tiny_terminal_draws_the_write_keys_and_takes_no_yes`
 `verified-by: bravebot_tui::render::a_tiny_terminal_renders`
 
 <a id="VIEW-6"></a>
@@ -353,6 +356,7 @@ a gateway has.
 `verified-by: bravebot_tui::model_prompt::a_service_that_appears_twice_in_the_roster_is_still_one_section`
 `verified-by: bravebot_tui::model_prompt::a_heading_stays_above_the_rows_when_the_list_is_scrolled`
 `verified-by: bravebot_tui::model_prompt::a_heading_is_held_where_the_list_has_room_for_two_rows`
+`verified-by: bravebot_tui::model_prompt::a_blank_row_is_given_up_so_the_heading_and_the_cursor_both_fit`
 `verified-by: bravebot_tui::model_prompt::a_service_is_never_given_two_headings_at_once`
 `verified-by: bravebot_tui::model_prompt::the_model_in_use_is_marked`
 `verified-by: bravebot_tui::model_prompt::a_premium_model_says_so`
@@ -438,6 +442,8 @@ that has observed untrusted content those are untrusted bytes and it may not bra
 `verified-by: bravebot_tui::state::a_finished_reply_keeps_the_answer_and_not_the_thought`
 `verified-by: bravebot_tui::state::a_round_that_thought_before_speaking_records_only_what_it_said`
 `verified-by: bravebot_tui::state::a_round_that_only_thought_leaves_no_entry`
+`verified-by: bravebot_tui::state::a_resumed_reply_leaves_off_its_leading_reasoning_block`
+`verified-by: bravebot_tui::state::a_legacy_resumed_reply_leaves_off_its_leading_reasoning_block`
 
 
 <a id="VIEW-19"></a>
@@ -612,6 +618,7 @@ what the planner was about to rely on without opening the file or the command's 
 `verified-by: bravebot_agent::turn::a_result_the_planner_read_is_glimpsed_under_its_call`
 `verified-by: bravebot_agent::turn::a_command_the_planner_read_is_glimpsed_from_its_end`
 `verified-by: bravebot_agent::turn::a_sentence_the_driver_wrote_about_a_call_is_not_glimpsed`
+`verified-by: bravebot_agent::turn::a_search_that_found_nothing_glimpses_no_sentence_of_the_drivers`
 `verified-by: bravebot_tui::render::what_the_planner_read_is_drawn_under_its_call`
 `verified-by: bravebot_tui::render::what_the_planner_read_is_not_drawn_as_quarantined`
 `verified-by: bravebot_tui::render::a_glimpse_from_the_end_says_what_came_before_it`
@@ -633,6 +640,12 @@ while the call runs and once it is over. A reason of several lines is drawn to i
 headline is one row of a transcript and not a paragraph. A call given no reason is headed by the
 call itself.
 
+The call is its verb and what it is about. For `run` that is the command line, so a command that
+needs no prompt is still shown on screen. A command of several lines is drawn as its first line
+and "...", since a call is one row. A command line that carries a credential the planner declared,
+on any of its lines, is drawn as the verb alone, since `run` refuses it before anyone is shown it
+([CRED-11](credential-protection.md#CRED-11)).
+
 The desktop window draws the reason after the call on the call's own row. A resumed session draws
 each recorded call with the reason it was made with, as it draws the calls themselves under
 [VIEW-2](#VIEW-2).
@@ -648,6 +661,10 @@ one place left to say what each of them was for.
 `verified-by: bravebot_cli::progress::a_call_is_printed_with_the_reason_it_was_made`
 `verified-by: bravebot_ui_bridge::wire::a_call_carries_the_reason_it_was_made`
 `verified-by: bravebot_agent::conversation::every_call_in_a_round_is_recounted`
+`verified-by: bravebot_agent::tools::a_stored_call_names_its_command_output_and_file_but_not_a_credential`
+`verified-by: bravebot_agent::turn::a_run_call_is_drawn_with_the_command_it_runs`
+`verified-by: bravebot_agent::turn::a_run_call_of_several_lines_is_drawn_as_its_first`
+`verified-by: bravebot_agent::turn::a_credential_the_line_itself_carries_stops_the_line`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which renders the real transcript row through react-dom, live and replayed, and asserts that the reason reaches the markup while the call runs and once it is over and that a call with none draws nothing for it; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`
 
 <a id="VIEW-26"></a>

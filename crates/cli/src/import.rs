@@ -149,7 +149,7 @@ fn at_the_start(a_service_is_configured: bool) -> Start {
     if offered.imported.is_empty() {
         return Start::Refuse(Looked::default());
     }
-    if let Err(problem) = write(&destination) {
+    if let Err(problem) = write(&destination, unwritable) {
         return Start::Ended(fail(Ending::Failed, problem));
     }
     for source in &offered.imported {
@@ -221,21 +221,46 @@ pub(crate) fn looked(a_service_is_configured: bool) -> Looked {
     };
     let destination = Destination::open(&file);
     let managed = Managed::load();
+    // Why the command would refuse to write, where one source's addition would not fit.
+    let mut too_large = None;
     for found in import::found(&import::Places::from_env(), exported, ask_ollama) {
         let plan = plan(found, destination.as_ref().ok(), &managed, &exported);
-        if plan.adds_anything() {
-            looked.importable.push(plan.source);
-        }
         looked.left.extend(left_lines(plan.source, &plan.left));
+        if plan.adds_anything() {
+            match fits(&file, plan) {
+                Ok(source) => looked.importable.push(source),
+                Err(why) => too_large = Some(why),
+            }
+        }
     }
     // The command would refuse on this same file, so the file is what is named.
-    if let Err(why) = destination
-        && !looked.importable.is_empty()
+    let refused = destination.err().or(too_large);
+    if let Some(why) = refused
+        && (!looked.importable.is_empty() || too_large.is_some())
     {
         looked.importable.clear();
         looked.left.push(unwritable(why, &file));
     }
     looked
+}
+
+/// Whether the file, with this one source's additions in it, is one the command could write, and
+/// the source where it is.
+///
+/// Applied to a copy read again from disk, so the file the start goes on to read is untouched.
+fn fits(file: &Path, plan: Plan) -> Result<Source, import::Unwritable> {
+    let source = plan.source;
+    let mut scratch = Destination::open(file)?;
+    for (name, value) in &plan.env {
+        scratch.add_env(name, value);
+    }
+    if let Some(model) = &plan.model {
+        scratch.add_model(model);
+    }
+    for gateway in plan.gateways {
+        scratch.add_gateway(gateway);
+    }
+    scratch.text().map(|_| source)
 }
 
 /// `bravebot import-providers`: the same questions, at any time.
@@ -278,7 +303,7 @@ pub(crate) fn providers(args: &[String]) -> ExitCode {
     if offered.imported.is_empty() {
         return ExitCode::SUCCESS;
     }
-    if let Err(problem) = write(&destination) {
+    if let Err(problem) = write(&destination, unwritable) {
         return fail(Ending::Failed, problem);
     }
     for source in &offered.imported {
@@ -754,8 +779,11 @@ fn unset_line(provider: &Provider, file: &Path, later: bool) -> String {
 /// Written beside it under a name of its own at STATE-1's mode, then renamed over it, so a failed
 /// write leaves the old file as it was and no copy of a key is readable by another user in between.
 /// Through a link rather than over it, so a settings file kept among somebody's dotfiles stays
-/// where they keep it.
-fn write(destination: &Destination) -> Result<(), String> {
+/// where they keep it. `unwritable` words a refusal of the document for the command writing it.
+pub(crate) fn write(
+    destination: &Destination,
+    unwritable: fn(import::Unwritable, &Path) -> String,
+) -> Result<(), String> {
     let path = destination.path();
     let said = |problem: String| {
         t!(
@@ -863,7 +891,7 @@ mod tests {
             let mut destination = Destination::open(&scratch.settings()).expect("a document");
             let offered = offer(&mut asking, found, &mut destination, managed, environment);
             if !offered.imported.is_empty() {
-                write(&destination).expect("written");
+                write(&destination, unwritable).expect("written");
             }
             offered
         };
@@ -1199,7 +1227,7 @@ mod tests {
 
         let meanwhile = r#"{"theme": "light"}"#;
         scratch.write(".bravebot/settings.json", meanwhile);
-        let problem = write(&destination).expect_err("written over");
+        let problem = write(&destination, unwritable).expect_err("written over");
 
         assert!(
             problem.contains("changed while the import was asking"),

@@ -7,7 +7,7 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 164
+      - crates/agent/src/tools.rs: 175
   - symbol: Produced::refused_with_a_note
     sites:
       - crates/agent/src/tools.rs: 8
@@ -31,13 +31,14 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 |---|---|---|---|
 | [`read_file`](read-file.md) | `path`, `path_ref`, `offset`, `limit` | none | the lines, or a reference |
 | [`list_files`](list-files.md) | `directory`, `pattern`, `depth` | none | the paths, or a reference per entry |
-| [`search`](search.md) | `pattern`, `directory`, `include`, `offset`, `case_sensitive` | none | matching lines, or a reference |
+| [`search`](search.md) | `pattern`, `directory`, `include`, `offset`, `case_sensitive`, `context` | none | matching lines, or a reference |
 | [`read_git`](read-git.md) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | the answer, or a reference |
 | [`lsp`](lsp.md) | `operation`, `path`, `line`, `character`, `query` | none | locations, with their text shown or referenced |
 | [`write_file`](write-file.md) | `path`, `path_ref`, `contents_ref` | `contents` | confirmation |
 | [`edit_file`](edit-file.md) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text` | confirmation |
+| [`apply_checkout`](../checkouts.md#CHECKOUT-14) | `checkout`, `paths` | none | the files brought back, one confirmation each |
 | [`spawn_processor`](spawn-processor.md) | `reads`, `about` | `instruction` | a reference |
-| [`spawn_agent`](spawn-agent.md) | `kind` | `task`, `each` | one report per delegate |
+| [`spawn_agent`](spawn-agent.md) | `kind`, `mcp_servers` | `task`, `each` | one report per delegate |
 | [`run`](run.md) | every stage's program and arguments, `directory`, `background`, `deadline_seconds`, `stdin_ref` | standard input | a reference |
 | [`read_output`](read-output.md) | the reference naming the result | none | the bytes, if a person allows it |
 | [`vet_content`](vet-content.md) | the reference naming the slot | none | the bytes, if a person allows it |
@@ -68,10 +69,9 @@ routing string: a turn whose context has met untrusted content can name no refer
 [routing.md](../routing.md) is where that is settled.
 
 `lsp` is the one tool whose result is split across both footings rather than being one or the other:
-a location is structure and is reported whatever the trust map says, while the text at that location
-is content and is quarantined when it is untrusted. [LSP-3](lsp.md#LSP-3) is where that is settled,
-and it is the only place in these specs where a path reaches the planner without having been
-vouched for.
+the line and character of a location are structure, while the name of the file and the text at the
+location are content, labelled from the files the answer names and quarantined when any is not
+vouched for. [LSP-3](lsp.md#LSP-3) is where that is settled.
 
 `spawn_agent`'s `task` and `each` are the content arguments that may not be untrusted. It decides no
 destination, so it is not routing, but it becomes a second planner's prompt rather than a payload
@@ -131,6 +131,8 @@ and whoever reviews it is asked what footing its text is on.
 `verified-by: bravebot_agent::turn::a_failed_fetch_names_the_url_that_was_asked_for_and_not_where_a_redirect_went`
 `verified-by: bravebot_agent::turn::a_fetch_refused_for_leaving_its_host_names_no_host_the_server_chose`
 `verified-by: bravebot_agent::turn::a_credential_created_as_a_whole_file_is_not_created_and_the_planner_is_told_so`
+`verified-by: bravebot_agent::tools::a_failed_listing_names_the_directory_as_typed_and_not_where_it_landed`
+`verified-by: bravebot_agent::tools::a_failed_search_names_the_directory_as_typed_and_not_where_it_landed`
 
 <a id="TOOL-5"></a>
 ### TOOL-5: every tool asks why it is called, and only a screen reads the answer
@@ -154,3 +156,30 @@ was for, so a session reads as a list of commands.
 
 `verified-by: bravebot_agent::tools::every_tool_offered_asks_why_it_is_being_called`
 `verified-by: bravebot_agent::turn::each_call_is_announced_and_summarised_with_its_own_reason`
+
+<a id="TOOL-6"></a>
+### TOOL-6: what a tool says names only the tools the same turn is offered
+
+A description and a refusal are read in the turn they were written for, and two turns are not offered
+the same list. A delegate that may read files and not run programs is offered `read_git` and no
+`run`; a turn a person addressed to a definition is offered what that definition kept.
+[delegation.md](../delegation.md) and
+[addressing-a-definition.md](../addressing-a-definition.md) are where those two lists are settled. So
+a sentence that sends the planner to another tool is written against this turn's own list, and where
+that tool is not on it the sentence says what can be done without it instead.
+
+**Why.** A turn told to use a tool nobody offered it spends a round calling a name that is not there
+and is refused for a reason it cannot act on, and then has a question to report back on unanswered.
+It was also told in its own prompt what it cannot do, so it holds both answers at once and the one in
+the tool list is the one that is true.
+
+Not every description is written this way yet. The read's and the run's advice to arrange a later
+look, the processor's, the run's and the job's mention of writing a file, and the output's mention of
+checking a reference each name a tool some delegate is not offered.
+
+`verified-by: bravebot_agent::tools::read_git_names_run_only_where_the_delegate_holds_one`
+`verified-by: bravebot_agent::tools::a_declined_repository_names_run_only_where_the_turn_holds_one`
+`verified-by: bravebot_agent::tools::a_query_off_the_list_names_run_only_where_the_turn_holds_one`
+`verified-by: bravebot_agent::tools::ask_user_names_run_only_where_the_turn_holds_one`
+`verified-by: bravebot_agent::turn::an_addressed_reader_reads_a_read_git_that_names_no_run`
+`verified-by: bravebot_agent::turn::an_addressed_turn_without_run_reads_an_ask_user_that_names_no_run`

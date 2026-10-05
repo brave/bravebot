@@ -10,16 +10,16 @@ governs:
 guards:
   - symbol: Labelled::new
     sites:
-      - crates/agent/src/lsp.rs: 4
+      - crates/agent/src/lsp.rs: 6
       - crates/agent/src/manifest.rs: 3
       - crates/agent/src/mcp.rs: 1
-      - crates/agent/src/tools.rs: 24
+      - crates/agent/src/tools.rs: 26
       - crates/agent/src/turn.rs: 1
-      - crates/agent/src/workspace.rs: 8
+      - crates/agent/src/workspace.rs: 11
       - crates/agent/tests/workspace.rs: 35
       - crates/aichat/src/lib.rs: 5
       - crates/bedrock/src/lib.rs: 6
-      - crates/core/src/policy.rs: 106
+      - crates/core/src/policy.rs: 111
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 7
       - crates/mcp/src/http.rs: 2
@@ -33,15 +33,15 @@ guards:
       - crates/agent/src/manifest.rs: 5
       - crates/agent/src/mcp.rs: 3
       - crates/agent/src/processor.rs: 1
-      - crates/agent/src/tools.rs: 33
+      - crates/agent/src/servers.rs: 1
+      - crates/agent/src/tools.rs: 35
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
-      - crates/agent/tests/workspace.rs: 44
+      - crates/agent/tests/workspace.rs: 49
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 2
-      - crates/cli/src/servers.rs: 1
-      - crates/core/src/policy.rs: 61
+      - crates/core/src/policy.rs: 62
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 2
       - crates/mcp/tests/stdio.rs: 4
@@ -53,12 +53,12 @@ guards:
       - crates/agent/src/manifest.rs: 10
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 3
-      - crates/agent/src/tools.rs: 17
+      - crates/agent/src/tools.rs: 19
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4
-      - crates/agent/tests/workspace.rs: 190
-      - crates/core/src/policy.rs: 23
+      - crates/agent/tests/workspace.rs: 221
+      - crates/core/src/policy.rs: 24
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
   - symbol: Labelled::relabel
@@ -68,7 +68,7 @@ guards:
       - crates/core/src/value.rs: 4
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 58
+      - crates/core/src/policy.rs: 59
   - symbol: SlotStore::path_of
     sites:
       - crates/core/src/policy.rs: 5
@@ -105,17 +105,17 @@ guards:
       - crates/agent/src/aside.rs: 1
       - crates/agent/src/attached.rs: 1
       - crates/agent/src/goal.rs: 1
-      - crates/agent/src/lsp.rs: 3
+      - crates/agent/src/lsp.rs: 4
       - crates/agent/src/turn.rs: 10
       - crates/core/src/policy.rs: 8
   - symbol: Policy::render_in_place
     sites:
       - crates/agent/src/manifest.rs: 7
       - crates/agent/src/mcp.rs: 2
+      - crates/agent/src/servers.rs: 1
       - crates/agent/src/skills.rs: 2
-      - crates/agent/src/tools.rs: 25
+      - crates/agent/src/tools.rs: 28
       - crates/agent/src/turn.rs: 1
-      - crates/cli/src/servers.rs: 1
       - crates/core/src/policy.rs: 7
   - symbol: Policy::render_pair_in_place
     sites:
@@ -141,7 +141,7 @@ guards:
   - symbol: Policy::read_planner_argument
     sites:
       - crates/agent/src/mcp.rs: 1
-      - crates/agent/src/tools.rs: 11
+      - crates/agent/src/tools.rs: 12
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 5
   - symbol: Policy::decode_transport
@@ -228,7 +228,7 @@ wearing the driver's attribution, which is the thing this clause exists to stop.
 `verified-by: bravebot_core::reference::a_visible_presentation_shows_the_content`
 `verified-by: bravebot_core::reference::a_description_names_the_shape_and_not_the_content`
 `verified-by: bravebot_core::reference::a_description_says_how_to_refer_to_the_content`
-`verified-by: bravebot_agent::turn::a_fetched_page_names_the_url_that_was_asked_for_and_not_where_a_redirect_went`
+`verified-by: bravebot_agent::turn::a_fetched_page_names_the_host_that_was_asked_for_and_not_where_a_redirect_went`
 `verified-by: bravebot_agent::tools::an_edit_by_reference_that_cannot_be_read_does_not_name_the_file`
 
 <a id="LABEL-4"></a>
@@ -313,6 +313,7 @@ settled.
 `verified-by: bravebot_core::policy::requesting_untrusted_content_is_refused`
 `verified-by: bravebot_core::policy::an_argument_cannot_be_read_once_the_context_has_met_something_untrusted`
 `verified-by: bravebot_core::policy::a_reference_cannot_be_named_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_core::policy::a_proposal_cannot_be_promoted_once_the_context_has_met_something_untrusted`
 `verified-by: bravebot_core::policy::a_private_argument_is_refused_rather_than_read`
 `verified-by: bravebot_agent::tools::an_edit_from_a_trusted_context_replaces_the_passage`
 `verified-by: bravebot_agent::tools::an_edit_is_refused_once_the_context_has_met_something_untrusted`
@@ -322,6 +323,7 @@ settled.
 `verified-by: bravebot_agent::tools::a_url_is_refused_once_the_context_has_met_something_untrusted`
 `verified-by: bravebot_agent::tools::a_job_name_is_read_from_a_trusted_context`
 `verified-by: bravebot_agent::tools::a_job_name_is_refused_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::tools::a_skill_name_is_refused_once_the_context_has_met_something_untrusted`
 
 <a id="LABEL-6"></a>
 ### LABEL-6: minting a witness is not permission to inspect
@@ -411,6 +413,7 @@ and the content has no say in it.
 | what a capability observed | the capability's own, one per capability, and an effect has none to give | `verified-by: bravebot_core::policy::observation_labels_come_from_the_capability` |
 | a file read from the workspace | private, and trusted only where somebody vouched for the path | `verified-by: bravebot_core::policy::a_read_from_a_trusted_path_is_trusted` |
 | a listing or a search across several paths | private, and trusted only where every path it visited is | `verified-by: bravebot_core::policy::a_read_over_several_paths_is_trusted_only_where_every_path_is` |
+| the file names a language server reported | private, and trusted only where every path it names is, so one nobody vouched for quarantines the answer; the same road as a listing, and the capability's `(U,priv)` is where it starts | `verified-by: bravebot_agent::lsp::locations_are_labelled_by_the_files_they_name` |
 | a file the user named in a prompt or dropped on the window | trusted, because naming a file is vouching for it | `verified-by: bravebot_core::policy::a_file_the_user_named_is_read_as_trusted_though_nothing_else_is` |
 | what a program printed | untrusted and private, since what it did is unknown | `verified-by: bravebot_core::policy::an_opaque_program_always_yields_untrusted_private_output` |
 | what a program that can only transform its input printed | its input's label, carried through unchanged | `verified-by: bravebot_core::policy::a_filter_passes_an_untrusted_label_through_unchanged` |
@@ -429,6 +432,7 @@ and the content has no say in it.
 | a picture or a PDF `vet_content` let through | trusted and private on the endorsement that let it through, as promoted text is, and the slot keeps what it had; it goes to the planner in a message of its own rather than joining the user's, so it takes a label where a paste takes none | `verified-by: bravebot_core::policy::a_picture_is_promoted_once_by_any_endorsement_and_attached_as_itself` |
 | a picture pasted at the keyboard | none, because it joins the user's own message, which carries none either, so it is recorded instead | `verified-by: bravebot_core::policy::a_pasted_image_is_recorded_in_the_audit_trail` |
 | a prompt typed while a turn is running | none, for the same reason, and recorded the same way | `verified-by: bravebot_core::policy::an_interjection_is_recorded_in_the_audit_trail` |
+| a system prompt named on the command line | none, for the reason the user's own message gets none: the person who typed the flag is the person the planner works for, and the words are plain text that grants no permission | `verified-by: bravebot_agent::turn::words_that_allow_writes_allow_none` |
 
 Where a path is known, integrity is the trust map's answer about that path rather than the
 capability's, which is what the three rows for reads say and why the first row is the label a read
@@ -514,6 +518,7 @@ arrives at all.
 
 `verified-by: bravebot_ui_bridge::wire::released_content_crosses_the_transport_with_the_label_it_was_released_under`
 `verified-by: bravebot_ui_bridge::wire::quarantined_content_says_how_much_it_left_out`
+`verified-by: bravebot_agent::turn::the_preview_of_a_mixed_listing_states_the_label_of_the_untrusted_entries`
 
 ## Known costs
 

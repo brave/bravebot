@@ -65,15 +65,20 @@ pub enum StoreError {
     Expired { until: String, unspent: usize },
 }
 
+/// What to do about a stored batch that cannot be used.
+const REMEDY: &str =
+    "run `bravebot auth login leo` again to replace it, or `bravebot auth logout leo` to forget it";
+
 impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotFound => f.write_str("no imported Leo subscription found"),
-            Self::Unusable { detail } => {
-                write!(f, "the stored credentials could not be read: {detail}")
-            }
+            Self::Unusable { detail } => write!(
+                f,
+                "the stored credentials could not be read: {detail}; {REMEDY}"
+            ),
             Self::Malformed { detail } => {
-                write!(f, "the stored credentials are unusable: {detail}")
+                write!(f, "the stored credentials are unusable: {detail}; {REMEDY}")
             }
             Self::Exhausted => f.write_str(
                 "every credential valid today has been spent; run `bravebot auth login leo` again",
@@ -272,11 +277,7 @@ impl Claim {
         let path = store.with_file_name(CLAIM);
         let waiting_since = std::time::Instant::now();
         loop {
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
+            match create_claim(&path) {
                 Ok(_) => return Ok(Self { path }),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(e) => {
@@ -299,6 +300,33 @@ impl Claim {
             std::thread::sleep(LOOK_AGAIN_IN);
         }
     }
+}
+
+/// Create the claim file at `path`, failing if it is already there.
+///
+/// Created 0600 as it is made: the file holds no bytes, but it is written into the state directory,
+/// and STATE-1 asks for the mode as the file is created rather than leaving it to the directory
+/// above. It is new whenever this succeeds, so there is no earlier mode to narrow.
+#[cfg(unix)]
+fn create_claim(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+}
+
+/// Create the claim file at `path`, failing if it is already there.
+///
+/// Windows has no mode to ask for, and the claim holds no bytes.
+#[cfg(not(unix))]
+fn create_claim(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
 }
 
 /// Whether the claim at `path` is old enough to have been left behind by a process that died.
@@ -374,8 +402,11 @@ fn prepare_directory(path: &Path) -> Result<(), StoreError> {
 ///
 /// Created 0600 before anything is written to it, rather than written and then chmod'ed: the other
 /// order leaves the secret world-readable for the moment in between.
+///
+/// Public because this is the one crate whose root may name the Win32 calls the Windows version
+/// makes, and the gateway keys `bravebot auth login gateway` stores are a bearer token too.
 #[cfg(unix)]
-fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
+pub fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::fs::PermissionsExt;
 
@@ -398,7 +429,7 @@ fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
 /// for as the file is created rather than set afterwards: the other order leaves the secret readable
 /// by whatever the directory grants for the moment in between. [`dacl_granting_only`] is the list.
 #[cfg(windows)]
-fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
+pub fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
     acl::create_granted_to_this_account_only(path)
 }
 
@@ -429,7 +460,7 @@ fn dacl_granting_only(account: &str) -> String {
 /// Reading stays available: an existing file is no less safe for being read, and a batch imported
 /// elsewhere should still work here.
 #[cfg(not(any(unix, windows)))]
-fn create_private(_path: &Path) -> std::io::Result<std::fs::File> {
+pub fn create_private(_path: &Path) -> std::io::Result<std::fs::File> {
     Err(std::io::Error::other(
         "this platform has no way to restrict the file to your account, and the credentials are a \
          bearer token, so they were not written",
@@ -450,20 +481,44 @@ fn create_private(_path: &Path) -> std::io::Result<std::fs::File> {
 fn write_at(destination: &Path, credentials: &StoredCredentials) -> Result<(), StoreError> {
     use std::io::Write;
 
-    let unusable = |detail: String| StoreError::Unusable { detail };
-    let temporary = destination.with_file_name(format!("{FILE}.{}.tmp", std::process::id()));
+    write_through(destination, |file| {
+        file.write_all(encode(credentials).expose().as_bytes())
+    })
+}
 
-    let mut file = create_private(&temporary)
+/// Fill a temporary beside `destination` with `fill` and rename it over, removing the temporary
+/// when any step fails.
+///
+/// The temporary holds tokens, so one left by a failed write (a full disk, for one) would stay in
+/// the directory, and each failing process would leave another named for its id.
+fn write_through(
+    destination: &Path,
+    fill: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> Result<(), StoreError> {
+    let temporary = destination.with_file_name(format!("{FILE}.{}.tmp", std::process::id()));
+    let placed = stage_and_rename(&temporary, destination, fill);
+    if placed.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    placed
+}
+
+/// The steps of [`write_through`] that can fail, in order: create the temporary, fill it, rename it.
+fn stage_and_rename(
+    temporary: &Path,
+    destination: &Path,
+    fill: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> Result<(), StoreError> {
+    let unusable = |detail: String| StoreError::Unusable { detail };
+
+    let mut file = create_private(temporary)
         .map_err(|e| unusable(format!("{}: {e}", destination.display())))?;
-    file.write_all(encode(credentials).expose().as_bytes())
-        .map_err(|e| unusable(format!("{}: {e}", temporary.display())))?;
+    fill(&mut file).map_err(|e| unusable(format!("{}: {e}", temporary.display())))?;
     // Closed before the rename, which Windows refuses while a handle is still open on either name.
     drop(file);
 
-    std::fs::rename(&temporary, destination).map_err(|e| {
-        let _ = std::fs::remove_file(&temporary);
-        unusable(format!("{}: {e}", destination.display()))
-    })
+    std::fs::rename(temporary, destination)
+        .map_err(|e| unusable(format!("{}: {e}", destination.display())))
 }
 
 /// Write the batch, replacing whatever was there.
@@ -805,13 +860,21 @@ impl Wallet {
     /// memory alone.
     pub fn spend(&mut self, now: &str) -> Result<Spent, StoreError> {
         let Some(destination) = self.destination.clone() else {
-            return self.take(now);
+            return self.take(now).map(|(spent, _)| spent);
         };
 
         let _claim = Claim::take(&destination)?;
         self.reconcile()?;
-        let spent = self.take(now)?;
-        write_at(&destination, &self.batch)?;
+        let unwritten = self.dirty;
+        let (spent, index) = self.take(now)?;
+        if let Err(e) = write_at(&destination, &self.batch) {
+            // The credential never left this wallet, so the spend is taken back rather than left
+            // as a pending write: a later flush would write this batch over a file another import
+            // or wallet has changed since, and a later spend would skip the read that sees it.
+            self.batch.credentials[index].spent = false;
+            self.dirty = unwritten;
+            return Err(e);
+        }
         self.dirty = false;
         Ok(spent)
     }
@@ -823,9 +886,6 @@ impl Wallet {
         // A wallet holding a batch the file has not seen is the newer of the two: `refill` puts a
         // freshly minted one here because the stored batch had nothing left, and reading over it
         // would spend the exhausted batch it replaced.
-        if self.dirty {
-            return Ok(());
-        }
         // A read that fails leaves the batch in hand. The file is gone, or holds something this
         // version cannot read, and there are no markers to learn from either way.
         let Ok(stored) = load() else {
@@ -844,12 +904,17 @@ impl Wallet {
                 ),
             });
         }
-        self.batch = stored;
+        // The environment is checked even when the wallet holds a refilled batch, since writing
+        // that over a file imported for another deployment costs the person the import just the
+        // same. What the file says is only taken up when it is the newer of the two.
+        if !self.dirty {
+            self.batch = stored;
+        }
         Ok(())
     }
 
     /// Mark the next credential usable at `now` spent, in the batch in hand.
-    fn take(&mut self, now: &str) -> Result<Spent, StoreError> {
+    fn take(&mut self, now: &str) -> Result<(Spent, usize), StoreError> {
         let index = match self.batch.next_usable(now) {
             Some(index) => index,
             // Nothing usable is normal rather than exceptional: a batch covers a few daily windows
@@ -867,11 +932,12 @@ impl Wallet {
         self.batch.credentials[index].spent = true;
         self.dirty = true;
 
-        Ok(Spent {
+        let spent = Spent {
             credential: self.batch.credentials[index].clone(),
             issuer: self.batch.issuer.clone(),
             remaining: self.batch.remaining(),
-        })
+        };
+        Ok((spent, index))
     }
 
     /// The order this batch belongs to, so a refill knows what to register against.
@@ -906,6 +972,9 @@ impl Wallet {
             return Ok(());
         };
         let _claim = Claim::take(&destination)?;
+        // Under the claim, so what is read cannot change before the write: a refill minted for one
+        // deployment is not written over a batch another import has since put there for another.
+        self.reconcile()?;
         write_at(&destination, &self.batch)?;
         self.dirty = false;
         Ok(())
@@ -982,9 +1051,7 @@ fn decode(raw: &str) -> Result<StoredCredentials, StoreError> {
     // was paid for is not being spent and nothing else would say so.
     if raw.trim().is_empty() {
         return Err(StoreError::Malformed {
-            detail: "the file holds nothing, which an interrupted write leaves behind; \
-                     run `bravebot auth login leo` again"
-                .to_string(),
+            detail: "the file holds nothing, which an interrupted write leaves behind".to_string(),
         });
     }
 
@@ -997,6 +1064,16 @@ fn decode(raw: &str) -> Result<StoredCredentials, StoreError> {
         }
     })?);
     let value = document.read();
+
+    // A batch another version wrote may mean something different by the same fields, so it is
+    // refused rather than read. A file with no version predates the field being written.
+    if let Some(version) = value.get("version")
+        && version.as_u64() != Some(1)
+    {
+        return Err(StoreError::Malformed {
+            detail: format!("it was written as version {version}, and this build reads version 1"),
+        });
+    }
 
     let field = |name: &str| -> Result<String, StoreError> {
         value
@@ -1446,6 +1523,219 @@ mod tests {
         });
     }
 
+    /// Make the next write at the store fail, by putting a directory where its temporary goes.
+    ///
+    /// Returns what to remove to let writes through again.
+    fn block_writes() -> PathBuf {
+        let blocker = path()
+            .expect("a path")
+            .with_file_name(format!("{FILE}.{}.tmp", std::process::id()));
+        std::fs::create_dir(&blocker).expect("a blocker");
+        blocker
+    }
+
+    /// A spend whose write failed leaves nothing pending, so neither the next spend nor the end of
+    /// the session writes that batch over a file another import has since replaced.
+    ///
+    /// The credential never left the wallet, so the spend is not kept: left as a pending write it
+    /// would skip the read that sees the import, and the flush on drop would write over it.
+    #[test]
+    fn a_failed_spend_write_is_not_written_over_a_later_import() {
+        with_temp_home("failed-spend", || {
+            save(&batch()).expect("a write");
+            let mut wallet = Wallet::open().expect("the batch just written");
+
+            let blocker = block_writes();
+            assert!(wallet.spend("2026-08-22T12:00:00").is_err());
+            std::fs::remove_dir(&blocker).expect("unblocked");
+
+            let mut elsewhere = batch();
+            elsewhere.environment = crate::Environment::Staging;
+            elsewhere.credentials[0].unblinded = crate::Secret::new("token-staging");
+            save(&elsewhere).expect("a second write");
+
+            assert!(matches!(
+                wallet.spend("2026-08-22T12:00:00"),
+                Err(StoreError::Unusable { .. })
+            ));
+            drop(wallet);
+            assert_eq!(
+                load().expect("a read").credentials[0].unblinded.expose(),
+                "token-staging",
+                "the batch that had just been imported was written over"
+            );
+        });
+    }
+
+    /// The end of a session does not write a spend whose write failed over a batch imported since,
+    /// even one for the same environment, which the environment check cannot tell apart.
+    #[test]
+    fn a_failed_spend_write_leaves_nothing_for_the_end_of_the_session_to_write() {
+        with_temp_home("failed-spend-same-environment", || {
+            save(&batch()).expect("a write");
+            let mut wallet = Wallet::open().expect("the batch just written");
+
+            let blocker = block_writes();
+            assert!(wallet.spend("2026-08-22T12:00:00").is_err());
+            std::fs::remove_dir(&blocker).expect("unblocked");
+
+            let mut imported = batch();
+            imported.order_id = "bbbbbbbb-1111-4222-8333-444444444444".to_string();
+            save(&imported).expect("a second write");
+            drop(wallet);
+
+            assert_eq!(
+                load().expect("a read").order_id,
+                imported.order_id,
+                "the batch that had just been imported was written over"
+            );
+        });
+    }
+
+    /// A wallet whose spend write failed is not handed a credential another wallet has presented
+    /// since.
+    ///
+    /// Kept as a pending write, the failed spend makes the next spend trust this wallet's own view
+    /// over the file, and that view calls the other wallet's credentials unspent.
+    #[test]
+    fn a_failed_spend_write_does_not_offer_what_another_wallet_has_spent_since() {
+        with_temp_home("failed-spend-two-wallets", || {
+            let mut batch = batch();
+            let mut third = batch.credentials[0].clone();
+            third.unblinded = crate::Secret::new("token-three");
+            batch.credentials.push(third);
+            // Every window covers the same moment, so only the spent marks separate the three.
+            batch.credentials[1].valid_from = batch.credentials[0].valid_from.clone();
+            batch.credentials[1].valid_to = batch.credentials[0].valid_to.clone();
+            save(&batch).expect("a write");
+
+            let mut first = Wallet::open().expect("the batch just written");
+            let mut second = Wallet::open().expect("the same batch again");
+
+            let blocker = block_writes();
+            assert!(first.spend("2026-08-22T12:00:00").is_err());
+            std::fs::remove_dir(&blocker).expect("unblocked");
+
+            for _ in 0..2 {
+                second
+                    .spend("2026-08-22T12:00:00")
+                    .expect("a spend by the second wallet");
+            }
+
+            let taken = first
+                .spend("2026-08-22T12:00:00")
+                .expect("the one credential neither wallet has spent");
+            assert_eq!(
+                taken.credential.unblinded.expose(),
+                "token-three",
+                "a credential the second wallet had already presented was offered again"
+            );
+            assert_eq!(
+                load().expect("a read").remaining(),
+                0,
+                "a credential that was presented is recorded as unspent and will be offered again"
+            );
+        });
+    }
+
+    /// The end of a session after a failed spend write leaves another wallet's spends on the file.
+    ///
+    /// A spent mark written over is a credential the next wallet to read the file offers again, so
+    /// a flush of this wallet's view is the same failure as offering it twice, one run later.
+    #[test]
+    fn a_failed_spend_write_leaves_another_wallets_spends_on_the_file_when_the_session_ends() {
+        with_temp_home("failed-spend-then-close", || {
+            let mut batch = batch();
+            batch.credentials[1].valid_from = batch.credentials[0].valid_from.clone();
+            batch.credentials[1].valid_to = batch.credentials[0].valid_to.clone();
+            save(&batch).expect("a write");
+
+            let mut first = Wallet::open().expect("the batch just written");
+            let mut second = Wallet::open().expect("the same batch again");
+
+            let blocker = block_writes();
+            assert!(first.spend("2026-08-22T12:00:00").is_err());
+            std::fs::remove_dir(&blocker).expect("unblocked");
+
+            for _ in 0..2 {
+                second
+                    .spend("2026-08-22T12:00:00")
+                    .expect("a spend by the second wallet");
+            }
+            drop(second);
+            // The first wallet spends nothing more, so its drop is the last thing that can write.
+            drop(first);
+
+            assert_eq!(
+                load().expect("a read").remaining(),
+                0,
+                "a credential the second wallet presented is recorded as unspent and will be \
+                 offered again"
+            );
+        });
+    }
+
+    /// A spend from a refilled batch whose write failed takes the spend back and keeps the batch.
+    ///
+    /// The file still holds the exhausted batch the refill replaced, so the refill is the one
+    /// thing here that is still to be written: losing it leaves nothing to spend, and keeping the
+    /// spend skips a credential that was never presented.
+    #[test]
+    fn a_failed_spend_write_after_a_refill_takes_the_spend_back_and_keeps_the_new_batch() {
+        with_temp_home("failed-spend-after-refill", || {
+            let mut nothing_left = batch();
+            for credential in &mut nothing_left.credentials {
+                credential.spent = true;
+            }
+            save(&nothing_left).expect("a write");
+
+            let mut minted = batch();
+            minted.credentials[0].unblinded = crate::Secret::new("token-three");
+            minted.credentials[1] = minted.credentials[0].clone();
+            minted.credentials[1].unblinded = crate::Secret::new("token-four");
+
+            let mut wallet = Wallet::open().expect("the batch just written");
+            wallet.refill(minted);
+
+            let blocker = block_writes();
+            assert!(wallet.spend("2026-08-22T12:00:00").is_err());
+            std::fs::remove_dir(&blocker).expect("unblocked");
+
+            let taken = wallet
+                .spend("2026-08-22T12:00:00")
+                .expect("the batch the refill put here");
+            assert_eq!(
+                taken.credential.unblinded.expose(),
+                "token-three",
+                "a credential that was never presented was recorded as spent"
+            );
+        });
+    }
+
+    /// A refilled batch is not flushed over a file imported for another environment.
+    #[test]
+    fn a_refilled_batch_is_not_written_over_another_environment() {
+        with_temp_home("refill-swapped", || {
+            save(&batch()).expect("a write");
+            let mut wallet = Wallet::open().expect("the batch just written");
+            wallet.refill(batch());
+
+            let mut elsewhere = batch();
+            elsewhere.environment = crate::Environment::Staging;
+            elsewhere.credentials[0].unblinded = crate::Secret::new("token-staging");
+            save(&elsewhere).expect("a second write");
+
+            assert!(wallet.flush().is_err());
+            assert!(wallet.spend("2026-08-22T12:00:00").is_err());
+            drop(wallet);
+            assert_eq!(
+                load().expect("a read").credentials[0].unblinded.expose(),
+                "token-staging",
+                "the batch that had just been imported was written over"
+            );
+        });
+    }
+
     /// The file is replaced rather than opened and truncated, so a write killed partway leaves the
     /// last good batch rather than an empty file.
     ///
@@ -1498,6 +1788,71 @@ mod tests {
             left.sort();
 
             assert_eq!(left, [FILE]);
+        });
+    }
+
+    /// A write that fails partway leaves the last good batch in place and no temporary beside it.
+    ///
+    /// PREM-7 says the temporary is either renamed over the credentials or removed. The partial
+    /// temporary holds some of the tokens, and a failing process leaves one named for its id each
+    /// time it runs, so a full disk would fill the directory with them.
+    #[test]
+    fn a_write_that_fails_partway_removes_its_temporary_and_keeps_the_last_batch() {
+        use std::io::Write;
+
+        with_temp_home("failed-write", || {
+            save(&batch()).expect("a write");
+            let path = path().expect("a path");
+            let before = std::fs::read(&path).expect("the batch just written");
+
+            let failed = write_through(&path, |file| {
+                file.write_all(b"{\"credentials\": [")?;
+                Err(std::io::Error::other("no space left on device"))
+            });
+
+            assert!(failed.is_err(), "a failed write was reported as written");
+            let mut left: Vec<String> = std::fs::read_dir(path.parent().expect("a directory"))
+                .expect("a listing")
+                .map(|entry| {
+                    entry
+                        .expect("an entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect();
+            left.sort();
+            assert_eq!(left, [FILE], "a temporary was left beside the credentials");
+            assert_eq!(
+                std::fs::read(&path).expect("the batch"),
+                before,
+                "the last good batch was changed by a write that failed"
+            );
+        });
+    }
+
+    /// The claim is a file in the state directory, so STATE-1 asks for it at 0600 as it is created.
+    /// The directory above is 0700, which is a second answer and not this one: a claim created at
+    /// the process umask is readable by group and other the moment the directory is ever loosened.
+    #[cfg(unix)]
+    #[test]
+    fn a_claim_is_created_readable_only_by_its_owner() {
+        with_temp_home("claim-mode", || {
+            use std::os::unix::fs::PermissionsExt;
+
+            let store = path().expect("a path");
+            let claim = Claim::take(&store).expect("a claim");
+
+            let mode = std::fs::metadata(&claim.path)
+                .expect("the claim")
+                .permissions()
+                .mode();
+            assert_eq!(
+                mode & 0o077,
+                0,
+                "group or other can reach {}",
+                claim.path.display()
+            );
         });
     }
 
@@ -1998,6 +2353,50 @@ mod tests {
             decode("not json").unwrap_err(),
             StoreError::Malformed { .. }
         ));
+    }
+
+    /// Every refusal of a stored batch tells the person what to do, not only the empty file.
+    #[test]
+    fn every_refusal_of_a_stored_batch_names_the_remedy() {
+        let complete = |version: serde_json::Value| {
+            serde_json::json!({
+                "version": version, "order_id": "o", "item_id": "i", "issuer": "x",
+                "credentials": [{"unblinded": "t"}],
+            })
+            .to_string()
+        };
+        for raw in [
+            "not json".to_string(),
+            r#"{"version": 1}"#.to_string(),
+            r#"{"version": 1, "order_id": "o", "item_id": "i", "issuer": "x", "credentials": [{}]}"#
+                .to_string(),
+            complete(serde_json::json!(2)),
+        ] {
+            let said = decode(&raw).unwrap_err().to_string();
+            assert!(said.contains("bravebot auth login leo"), "{said}");
+            assert!(said.contains("bravebot auth logout leo"), "{said}");
+        }
+        let unreadable = StoreError::Unusable {
+            detail: "denied".to_string(),
+        }
+        .to_string();
+        assert!(
+            unreadable.contains("bravebot auth login leo"),
+            "{unreadable}"
+        );
+        assert!(decode(&complete(serde_json::json!(1))).is_ok());
+    }
+
+    /// A version this build does not write is refused even when every field is present.
+    #[test]
+    fn a_batch_of_another_version_is_refused() {
+        let raw = serde_json::json!({
+            "version": 2, "order_id": "o", "item_id": "i", "issuer": "x",
+            "credentials": [{"unblinded": "t"}],
+        })
+        .to_string();
+        let said = decode(&raw).unwrap_err().to_string();
+        assert!(said.contains("version 2"), "{said}");
     }
 
     /// A credential with no token would fail at presentation time with something obscure, so it

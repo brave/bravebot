@@ -203,12 +203,15 @@ pub enum Declined {
 
 impl Declined {
     /// The sentence the planner reads, for a repository it called `named`.
+    ///
+    /// What to do instead is not in it. git answers nearly everything this reader declines, `run` is
+    /// how git is asked, and a turn is not always offered `run`, so that half is
+    /// [`Declined::instead`] and the caller that knows the turn puts the two together.
     pub fn describe(&self, named: &str) -> String {
-        let fallback = "Use run to read it with git instead.";
         match self {
             Declined::Untrusted => format!(
                 "{named}/.git is not a directory this session trusts in full, so read_git does \
-                 not open it: reading history means following what its files say. {fallback}"
+                 not open it: reading history means following what its files say."
             ),
             Declined::Fenced => format!(
                 "{named}/.git holds a file a deny rule covers, and read_git reads every file \
@@ -216,46 +219,45 @@ impl Declined {
             ),
             Declined::NoRepository => format!(
                 "{named} has no .git directory holding a repository. read_git reads a repository \
-                 whose .git is a directory. {fallback}"
+                 whose .git is a directory."
             ),
             Declined::LinkedGitDir => format!(
                 "{named}/.git is a file pointing elsewhere, as a linked worktree or a submodule \
-                 has, and read_git does not follow it. {fallback}"
+                 has, and read_git does not follow it."
             ),
-            Declined::Linked => format!(
-                "{named}/.git holds a symbolic link, and read_git does not follow one. {fallback}"
-            ),
+            Declined::Linked => {
+                format!("{named}/.git holds a symbolic link, and read_git does not follow one.")
+            }
             Declined::Alternates => format!(
                 "{named}/.git borrows objects from another repository through \
-                 objects/info/alternates, which read_git does not read. {fallback}"
+                 objects/info/alternates, which read_git does not read."
             ),
             Declined::CommonDir => format!(
                 "{named}/.git shares its refs and objects with another repository through \
-                 commondir, which read_git does not follow. {fallback}"
+                 commondir, which read_git does not follow."
             ),
             Declined::Replaced => format!(
                 "{named}/.git replaces objects or grafts parents, through refs/replace or \
-                 info/grafts, and read_git does not apply either. {fallback}"
+                 info/grafts, and read_git does not apply either."
             ),
             Declined::Include => format!(
                 "{named}/.git/config includes configuration from another file, which read_git \
-                 does not read. {fallback}"
+                 does not read."
             ),
-            Declined::Worktree => format!(
-                "{named}/.git/config sets core.worktree, which read_git does not follow. \
-                 {fallback}"
-            ),
+            Declined::Worktree => {
+                format!("{named}/.git/config sets core.worktree, which read_git does not follow.")
+            }
             Declined::Format => format!(
                 "{named}/.git/config names a repository format or extension read_git does not \
-                 read, or is not configuration read_git can parse. {fallback}"
+                 read, or is not configuration read_git can parse."
             ),
             Declined::Unreadable => format!(
                 "{named}/.git could not be read as a repository: something it names is missing \
-                 or damaged. {fallback}"
+                 or damaged."
             ),
             Declined::NoCommits => format!("{named} has no commits yet."),
             Declined::TooSlow => {
-                format!("Reading {named}/.git took longer than read_git allows. {fallback}")
+                format!("Reading {named}/.git took longer than read_git allows.")
             }
             Declined::Unknown(revision) => {
                 format!("{revision} names no commit, tag, branch or object in {named}.")
@@ -263,10 +265,9 @@ impl Declined {
             Declined::Ambiguous(revision) => format!(
                 "{revision} is the start of more than one object id in {named}; give more of it."
             ),
-            Declined::Unsupported(revision, what) => format!(
-                "{revision} uses {what}, which read_git does not support. Use run to ask git for \
-                 it."
-            ),
+            Declined::Unsupported(revision, what) => {
+                format!("{revision} uses {what}, which read_git does not support.")
+            }
             Declined::Kind { revision, wanted } => {
                 format!("{revision} does not name a {wanted} in {named}.")
             }
@@ -292,8 +293,7 @@ impl Declined {
                 query.word()
             ),
             Declined::DiffNeedsTwo => "diff compares two commits, written as A..B or as \"A B\". \
-                 To see what one commit changed, use show; to compare with the working tree, use \
-                 run."
+                 To see what one commit changed, use show."
                 .to_owned(),
             Declined::SearchNeedsPattern => "search needs a pattern: the regular expression to \
                  look for in the files at the revision."
@@ -312,27 +312,80 @@ impl Declined {
             ),
             Declined::UntrustedTree => format!(
                 "{named} is not a working tree this session trusts in full, so read_git does not \
-                 read its status: status compares every file there with the index. {fallback}"
+                 read its status: status compares every file there with the index."
             ),
             Declined::StatusTakesNoRevision => "status compares the index and the working tree \
                  with HEAD and takes no revision; to compare commits, use diff."
                 .to_owned(),
             Declined::SplitIndex => format!(
-                "{named}/.git/index is split into a shared index, which read_git does not read. \
-                 {fallback}"
+                "{named}/.git/index is split into a shared index, which read_git does not read."
             ),
-            Declined::SparseIndex => format!(
-                "{named}/.git/index is a sparse index, which read_git does not read. {fallback}"
-            ),
+            Declined::SparseIndex => {
+                format!("{named}/.git/index is a sparse index, which read_git does not read.")
+            }
             Declined::Bare => format!(
                 "{named}/.git/config sets core.bare, so the repository has no working tree to \
-                 read a status from. {fallback}"
+                 read a status from."
             ),
             Declined::Elsewhere => format!(
                 "{named}/.git/config names an ignore or attributes file outside the repository, \
                  through core.excludesFile, core.attributesFile or attr.tree, which read_git does \
-                 not read. {fallback}"
+                 not read."
             ),
+        }
+    }
+
+    /// What answers the question instead, where `run` is the thing that would and the caller says
+    /// the turn is offered one. Nothing where no other tool answers it.
+    ///
+    /// Written as a match over the whole enum rather than a list of the ones that have an answer, so
+    /// a variant added later says here whether anything else reads what this reader would not.
+    ///
+    /// The two refusals a deny rule causes are the ones that stay silent although git would print
+    /// the bytes: a file under `.git` a rule covers, and a path in the repository a rule covers. A
+    /// `Read` rule does not bar a command line, so the sentence would read as how to get past a rule
+    /// somebody wrote, and whether advice may point there is the permission rules' question rather
+    /// than this reader's.
+    pub fn instead(&self) -> Option<&'static str> {
+        let read = "Use run to read it with git instead.";
+        match self {
+            Declined::Untrusted
+            | Declined::NoRepository
+            | Declined::LinkedGitDir
+            | Declined::Linked
+            | Declined::Alternates
+            | Declined::CommonDir
+            | Declined::Replaced
+            | Declined::Include
+            | Declined::Worktree
+            | Declined::Format
+            | Declined::Unreadable
+            | Declined::TooSlow
+            | Declined::UntrustedTree
+            | Declined::SplitIndex
+            | Declined::SparseIndex
+            | Declined::Bare
+            | Declined::Elsewhere => Some(read),
+            Declined::Unsupported(..) => Some("Use run to ask git for it."),
+            Declined::DiffNeedsTwo => Some("To compare with the working tree, use run."),
+            // A deny rule's two refusals, for the reason above.
+            Declined::Fenced | Declined::Withheld(_) => None,
+            // Questions this reader answers, asked about something that is not there or asked the
+            // wrong way round. The sentence already says what to ask instead, and git would answer
+            // no better.
+            Declined::NoCommits
+            | Declined::Unknown(_)
+            | Declined::Ambiguous(_)
+            | Declined::Kind { .. }
+            | Declined::NoSuchPath(_)
+            | Declined::PathInvalid(_)
+            | Declined::ShowNeedsPath(_)
+            | Declined::TakesOne(..)
+            | Declined::SearchNeedsPattern
+            | Declined::PatternIsForSearch(_)
+            | Declined::TagsTakeNoPath
+            | Declined::PairIsForDiff(_)
+            | Declined::StatusTakesNoRevision => None,
         }
     }
 }
@@ -480,6 +533,46 @@ pub fn survey(git_dir: &Path, query: Query, deadline: Instant) -> Result<Vec<Pat
     for index in pack_indexes(&objects)? {
         files.push(index.with_extension("pack"));
         files.push(index);
+    }
+    Ok(files)
+}
+
+/// What [`survey`] lists for the common directory of a repository, with the `HEAD` and the `index`
+/// of the linked worktree's `worktrees/<id>` entry the driver recorded beside them (CHECKOUT-12).
+/// Nothing else in the entry is read, and the worktree's own `.git` never is.
+pub fn survey_linked(
+    common: &Path,
+    entry: &Path,
+    query: Query,
+    deadline: Instant,
+) -> Result<Vec<PathBuf>, Declined> {
+    let mut files = survey(common, query, deadline)?;
+    match std::fs::symlink_metadata(entry) {
+        Ok(meta) if meta.file_type().is_symlink() => return Err(Declined::Linked),
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => return Err(Declined::NoRepository),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(Declined::NoRepository);
+        }
+        Err(_) => return Err(Declined::Unreadable),
+    }
+    let wanted: &[&str] = if query == Query::Status {
+        &["HEAD", "index"]
+    } else {
+        &["HEAD"]
+    };
+    for name in wanted {
+        let file = entry.join(name);
+        match std::fs::symlink_metadata(&file) {
+            Ok(meta) if meta.file_type().is_symlink() => return Err(Declined::Linked),
+            Ok(meta) if meta.is_file() => files.push(file),
+            Ok(_) => return Err(Declined::NoRepository),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && *name == "index" => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(Declined::NoRepository);
+            }
+            Err(_) => return Err(Declined::Unreadable),
+        }
     }
     Ok(files)
 }
@@ -890,7 +983,7 @@ fn clean(path: &str) -> Result<String, Declined> {
 ///
 /// A name under `worktrees/` or `main-worktree/` is refused as well: the ref store reads those
 /// from another worktree's directory, which [`survey`] never lists.
-fn plausible_ref(name: &str) -> bool {
+pub fn plausible_ref(name: &str) -> bool {
     !name.is_empty()
         && !name.starts_with("worktrees/")
         && !name.starts_with("main-worktree/")
@@ -1034,7 +1127,16 @@ type Side = Option<(EntryKind, ObjectId)>;
 
 /// A repository opened for reading, once [`survey`] has passed it.
 pub struct Repository {
+    /// The common directory: refs, objects, configuration and `info/`.
     git_dir: PathBuf,
+    /// Where `HEAD` and `index` are read from. The same directory, except for a linked worktree,
+    /// where it is the `worktrees/<id>` entry (CHECKOUT-12).
+    admin: PathBuf,
+    /// The working tree, where there is one to name.
+    work_tree: Option<PathBuf>,
+    /// Whether this is a linked worktree, whose `config.worktree` git reads from the entry and this
+    /// reader does not read at all.
+    linked: bool,
     refs: gix_ref::file::Store,
     objects: Objects,
     shallow: HashSet<ObjectId>,
@@ -1044,7 +1146,33 @@ impl Repository {
     /// Open the repository at `git_dir`, declining one whose configuration or refs ask for what
     /// this reader does not do.
     pub fn open(git_dir: &Path) -> Result<Self, Declined> {
-        for name in ["config", "config.worktree"] {
+        Self::open_at(
+            git_dir,
+            git_dir,
+            git_dir.parent().map(Path::to_path_buf),
+            false,
+        )
+    }
+
+    /// Open the repository whose common directory is `common`, as the linked worktree at
+    /// `work_tree` whose entry the driver recorded at `entry` (CHECKOUT-12). `HEAD` and `index` are
+    /// the entry's; everything else is the common directory's. Nothing is read at `work_tree/.git`.
+    pub fn open_linked(common: &Path, entry: &Path, work_tree: &Path) -> Result<Self, Declined> {
+        Self::open_at(common, entry, Some(work_tree.to_path_buf()), true)
+    }
+
+    fn open_at(
+        git_dir: &Path,
+        admin: &Path,
+        work_tree: Option<PathBuf>,
+        linked: bool,
+    ) -> Result<Self, Declined> {
+        let configs: &[&str] = if linked {
+            &["config"]
+        } else {
+            &["config", "config.worktree"]
+        };
+        for name in configs {
             if let Some(bytes) = read_if_present(&git_dir.join(name))? {
                 check_config(&bytes)?;
             }
@@ -1056,7 +1184,15 @@ impl Repository {
         {
             return Err(Declined::Replaced);
         }
-        let refs = gix_ref::file::Store::at(git_dir.to_path_buf(), HashKind::Sha1);
+        let refs = if linked {
+            gix_ref::file::Store::for_linked_worktree(
+                admin.to_path_buf(),
+                git_dir.to_path_buf(),
+                HashKind::Sha1,
+            )
+        } else {
+            gix_ref::file::Store::at(git_dir.to_path_buf(), HashKind::Sha1)
+        };
         let objects = Objects::open(git_dir)?;
         let mut shallow = HashSet::new();
         if let Some(bytes) = read_if_present(&git_dir.join("shallow"))? {
@@ -1067,6 +1203,9 @@ impl Repository {
         }
         Ok(Repository {
             git_dir: git_dir.to_path_buf(),
+            admin: admin.to_path_buf(),
+            work_tree,
+            linked,
             refs,
             objects,
             shallow,
@@ -2468,36 +2607,66 @@ struct Search<'a> {
     page: Page,
 }
 
-/// Orders names as `git tag --sort=v:refname` does: a run of digits by the number it spells,
-/// everything else byte by byte.
+/// Orders names as `git tag --sort=v:refname` does, by the same state machine as git's
+/// `versioncmp`: a run of digits is compared as a number, except that a run starting with `0` is a
+/// fraction and sorts below every number, and everything else is compared byte by byte.
 fn version_order(a: &str, b: &str) -> Ordering {
-    let digits = |s: &[u8]| s.iter().take_while(|c| c.is_ascii_digit()).count();
-    let (mut a, mut b) = (a.as_bytes(), b.as_bytes());
+    // Which of the two steps of the state machine applies to the byte before the first difference.
+    const CMP: i8 = 2;
+    const LEN: i8 = 3;
+    const S_N: usize = 0;
+    const S_I: usize = 3;
+    const S_F: usize = 6;
+    const S_Z: usize = 9;
+    // Indexed by state, then by the class of the next byte: other, digit, zero.
+    const NEXT_STATE: [usize; 12] = [
+        S_N, S_I, S_Z, //
+        S_N, S_I, S_I, //
+        S_N, S_F, S_F, //
+        S_N, S_F, S_Z,
+    ];
+    // Indexed by state, then by the class of the byte in each name at the first difference.
+    const RESULT_TYPE: [i8; 36] = [
+        CMP, CMP, CMP, CMP, LEN, CMP, CMP, CMP, CMP, //
+        CMP, -1, -1, 1, LEN, LEN, 1, LEN, CMP, //
+        CMP, CMP, CMP, CMP, CMP, CMP, CMP, CMP, CMP, //
+        CMP, 1, 1, -1, CMP, CMP, -1, CMP, CMP,
+    ];
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let at = |s: &[u8], i: usize| s.get(i).copied().unwrap_or(0);
+    let class = |c: u8| usize::from(c == b'0') + usize::from(c.is_ascii_digit());
+    let mut i = 0;
+    let mut state = S_N + class(at(a, 0));
     loop {
-        match (a.first(), b.first()) {
-            (None, None) => return Ordering::Equal,
-            (None, Some(_)) => return Ordering::Less,
-            (Some(_), None) => return Ordering::Greater,
-            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
-                let (da, db) = (digits(a), digits(b));
-                let trim = |run: &[u8]| -> usize { run.iter().take_while(|c| **c == b'0').count() };
-                let na = &a[trim(&a[..da])..da];
-                let nb = &b[trim(&b[..db])..db];
-                let order = na.len().cmp(&nb.len()).then_with(|| na.cmp(nb));
-                if order != Ordering::Equal {
-                    return order;
+        let (c1, c2) = (at(a, i), at(b, i));
+        if c1 != c2 {
+            let diff = c1.cmp(&c2);
+            return match RESULT_TYPE[state * 3 + class(c2)] {
+                CMP => diff,
+                LEN => {
+                    let mut j = i + 1;
+                    while at(a, j).is_ascii_digit() {
+                        if !at(b, j).is_ascii_digit() {
+                            return Ordering::Greater;
+                        }
+                        j += 1;
+                    }
+                    if at(b, j).is_ascii_digit() {
+                        Ordering::Less
+                    } else {
+                        diff
+                    }
                 }
-                a = &a[da..];
-                b = &b[db..];
-            }
-            (Some(x), Some(y)) => {
-                if x != y {
-                    return x.cmp(y);
-                }
-                a = &a[1..];
-                b = &b[1..];
-            }
+                negative if negative < 0 => Ordering::Less,
+                _ => Ordering::Greater,
+            };
         }
+        if c1 == 0 {
+            return Ordering::Equal;
+        }
+        state = NEXT_STATE[state];
+        i += 1;
+        state += class(at(a, i));
     }
 }
 
@@ -2858,6 +3027,27 @@ mod tests {
     /// 2023-11-14 22:13:20 UTC.
     const T1: i64 = 1_700_000_000;
     const DAY: i64 = 86_400;
+
+    /// The two refusals a deny rule causes are the only ones git would answer and this says nothing
+    /// about. A `Read` rule does not bar a command line, so a sentence pointing at `run` would read
+    /// as how to get past a rule somebody wrote, and which paths a command line may reach is the
+    /// permission rules' question rather than this reader's.
+    #[test]
+    fn a_refusal_a_deny_rule_caused_points_at_nothing_else() {
+        for declined in [
+            Declined::Fenced,
+            Declined::Withheld("src/key.pem".to_string()),
+        ] {
+            assert!(
+                declined.instead().is_none(),
+                "{declined:?} told the planner how to read past a deny rule"
+            );
+            assert!(
+                !declined.describe("project").contains("run"),
+                "{declined:?} told the planner how to read past a deny rule"
+            );
+        }
+    }
 
     /// A repository built object by object, so no test needs git installed.
     struct Repo {
@@ -4221,6 +4411,52 @@ mod tests {
         assert_eq!((answer.next, answer.cut), (None, false));
         assert!(answer.shown.is_empty(), "{:?}", answer.shown);
         assert_eq!(answer.around, answer.text);
+    }
+
+    /// A digit run that starts with `0` is a fraction in git's version order, so it sorts below every
+    /// number: `v1.05` and `v1.010` come after `v1.0`, not beside `v1.5` and `v1.10`. The expected
+    /// order is what `git tag --sort=-v:refname` printed for these names.
+    #[test]
+    fn version_order_reads_a_digit_run_with_a_leading_zero_as_a_fraction() {
+        let expected = [
+            "x",
+            "v2",
+            "v1.10",
+            "v1.9",
+            "v1.5",
+            "v1.1a",
+            "v1.1.a",
+            "v1.1",
+            "v1.0.0",
+            "v1.0.00",
+            "v1.0",
+            "v1.05",
+            "v1.010",
+            "v1.00",
+            "v1.000",
+            "v1",
+            "v0.10.0-rc1",
+            "v0.10.0",
+            "v0.9.0",
+            "v0.2.0",
+            "v01",
+            "a10b",
+            "a9b",
+            "a1b",
+            "a01b",
+            "2024.10.1",
+            "2024.3.1",
+            "2024.03.1",
+            "1",
+            "0",
+            "01",
+            "00",
+            "001",
+        ];
+        let mut names = expected;
+        names.reverse();
+        names.sort_by(|a, b| version_order(b, a).then_with(|| a.cmp(b)));
+        assert_eq!(names, expected);
     }
 
     /// With a revision, only the tags whose commit it reaches are listed, as `git tag --merged`
@@ -6235,7 +6471,74 @@ mod tests {
                 bytes: 1 << 20,
             };
             let refused = made_with(&repo, &|_| false, bound).expect_err("bounded");
-            assert_eq!(refused, Refused::TooManyFiles);
+            assert_eq!(refused, Refused::TooManyDirectories);
+            nothing_written(&repo, &refused);
+        }
+
+        /// The bounds are applied to the whole tree before an attributes file is read, so a tree
+        /// over a bound is refused for that bound, not for what an attributes file listed ahead
+        /// of the entries that pass it sets.
+        #[test]
+        fn a_tree_past_a_bound_is_refused_for_it_before_an_attributes_file_is_read() {
+            let repo = Repo::new("checkout-bound-before-attributes");
+            let rules = repo.blob("* filter=x\n");
+            let a = repo.blob("hello\n");
+            let empty = repo.tree(&[]);
+            committed(
+                &repo,
+                &[
+                    ("100644", ".gitattributes", rules),
+                    ("100644", "a", a),
+                    ("40000", "d1", empty),
+                    ("40000", "d2", empty),
+                ],
+            );
+            let cases = [
+                (
+                    Bound {
+                        files: 1,
+                        bytes: 1 << 20,
+                    },
+                    Refused::TooManyFiles,
+                ),
+                (
+                    Bound {
+                        files: 10,
+                        bytes: 12,
+                    },
+                    Refused::TooManyBytes,
+                ),
+            ];
+            for (bound, expected) in cases {
+                let refused = made_with(&repo, &|_| false, bound).expect_err("bounded");
+                assert_eq!(refused, expected, "{bound:?}");
+                nothing_written(&repo, &refused);
+            }
+            let within = Bound {
+                files: 10,
+                bytes: 1 << 20,
+            };
+            let refused = made_with(&repo, &|_| false, within).expect_err("read");
+            assert_eq!(refused, Refused::Converts(Conversion::Filter));
+
+            let repo = Repo::new("checkout-bound-dirs-before-attributes");
+            let rules = repo.blob("* filter=x\n");
+            let empty = repo.tree(&[]);
+            committed(
+                &repo,
+                &[
+                    ("100644", ".gitattributes", rules),
+                    ("40000", "d1", empty),
+                    ("40000", "d2", empty),
+                    ("40000", "d3", empty),
+                ],
+            );
+            let bound = Bound {
+                files: 2,
+                bytes: 1 << 20,
+            };
+            let refused = made_with(&repo, &|_| false, bound).expect_err("bounded");
+            assert_eq!(refused, Refused::TooManyDirectories);
             nothing_written(&repo, &refused);
         }
 
@@ -6559,6 +6862,147 @@ mod tests {
             assert_eq!(
                 git_text(&repo.root, &["worktree", "prune", "--dry-run", "--verbose"]),
                 ""
+            );
+        }
+
+        const MEGABYTE: u64 = 1 << 20;
+
+        fn measured(dir: &Path) -> crate::git::checkout::Size {
+            crate::git::checkout::size(dir, later())
+        }
+
+        /// Bytes no file system that compresses what it stores can make smaller.
+        #[cfg(unix)]
+        fn incompressible(len: u64) -> Vec<u8> {
+            let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+            (0..len)
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    (state >> 24) as u8
+                })
+                .collect()
+        }
+
+        /// CHECKOUT-15. A checkout's size counts what is beneath it however deep, counts a file
+        /// with two names once, and does not count what a link names, nor anything where a link
+        /// stands in place of the checkout.
+        #[cfg(unix)]
+        #[test]
+        fn a_checkout_is_measured_with_each_file_once_and_no_link_followed() {
+            let repo = Repo::new("measured");
+            let checkout = target(&repo);
+            let deep = checkout.join("target/debug/deps");
+            std::fs::create_dir_all(&deep).expect("deep");
+            std::fs::write(deep.join("built"), incompressible(MEGABYTE)).expect("built");
+            let once = measured(&checkout);
+            assert!(once.whole, "{once:?}");
+            assert!((MEGABYTE..2 * MEGABYTE).contains(&once.bytes), "{once:?}");
+
+            std::fs::hard_link(deep.join("built"), checkout.join("target/debug/built"))
+                .expect("linked");
+            let outside = repo.root.join("outside");
+            std::fs::create_dir_all(&outside).expect("outside");
+            std::fs::write(outside.join("big"), incompressible(4 * MEGABYTE)).expect("big");
+            std::os::unix::fs::symlink(outside.join("big"), checkout.join("big")).expect("link");
+            std::os::unix::fs::symlink(&outside, checkout.join("dir")).expect("link");
+            let linked = measured(&checkout);
+            assert!(linked.whole, "{linked:?}");
+            assert!(
+                (MEGABYTE..2 * MEGABYTE).contains(&linked.bytes),
+                "{linked:?}"
+            );
+
+            let in_place = repo.root.join("in-place");
+            std::os::unix::fs::symlink(&outside, &in_place).expect("link");
+            assert_eq!(
+                measured(&in_place),
+                crate::git::checkout::Size {
+                    bytes: 0,
+                    whole: false
+                }
+            );
+        }
+
+        /// CHECKOUT-15. Measuring that stops at its deadline, or a directory that cannot be read,
+        /// gives a lower bound and says it is one.
+        #[test]
+        fn a_size_measuring_did_not_finish_is_a_lower_bound() {
+            let repo = Repo::new("measuring-stopped");
+            let checkout = target(&repo);
+            std::fs::create_dir_all(&checkout).expect("checkout");
+            std::fs::write(checkout.join("file"), "x").expect("file");
+            assert!(measured(&checkout).whole);
+            let stopped = crate::git::checkout::size(&checkout, Instant::now());
+            assert!(!stopped.whole, "{stopped:?}");
+            let missing = measured(&repo.root.join("gone"));
+            assert_eq!(
+                missing,
+                crate::git::checkout::Size {
+                    bytes: 0,
+                    whole: false
+                }
+            );
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                let shut = checkout.join("shut");
+                std::fs::create_dir(&shut).expect("shut");
+                let mode = |mode| {
+                    std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(mode))
+                        .expect("mode");
+                };
+                mode(0o000);
+                // A superuser reads it anyway, which leaves nothing to observe.
+                let unreadable = std::fs::read_dir(&shut).is_err();
+                let partial = measured(&checkout);
+                mode(0o755);
+                if unreadable {
+                    assert!(!partial.whole, "{partial:?}");
+                } else {
+                    eprintln!(
+                        "running as a superuser, so a directory that cannot be read is not tried"
+                    );
+                }
+            }
+        }
+
+        /// CHECKOUT-18. A size is spelled in kilobytes, rounded up, under a megabyte, megabytes
+        /// under a gigabyte and gigabytes from there, the unit chosen after rounding, and as a
+        /// lower bound where it is one.
+        #[test]
+        fn a_size_is_spelled_in_kilobytes_megabytes_or_gigabytes() {
+            use crate::git::checkout::Size;
+            let spelled = |bytes, whole| Size { bytes, whole }.spelled();
+            assert_eq!(spelled(0, true), "0 KB");
+            assert_eq!(spelled(4097, true), "5 KB");
+            assert_eq!(spelled(MEGABYTE - 1024, true), "1023 KB");
+            assert_eq!(spelled(MEGABYTE - 1, false), "at least 1.0 MB");
+            assert_eq!(spelled(MEGABYTE, true), "1.0 MB");
+            assert_eq!(spelled(5 * MEGABYTE + 300 * 1024, true), "5.3 MB");
+            assert_eq!(spelled(1023 * MEGABYTE, true), "1023.0 MB");
+            assert_eq!(spelled(1023 * MEGABYTE + 900 * 1024, true), "1023.9 MB");
+            assert_eq!(spelled(1024 * MEGABYTE - 50 * 1024, true), "1.0 GB");
+            assert_eq!(spelled(1024 * MEGABYTE, true), "1.0 GB");
+            assert_eq!(
+                spelled(7 * 1024 * MEGABYTE + 512 * MEGABYTE, false),
+                "at least 7.5 GB"
+            );
+            assert_eq!(spelled(u64::MAX, true), "17179869184.0 GB");
+        }
+
+        /// CHECKOUT-15. Two sizes together are whole only where both are.
+        #[test]
+        fn two_sizes_together_are_whole_only_where_both_are() {
+            use crate::git::checkout::Size;
+            let size = |bytes, whole| Size { bytes, whole };
+            assert_eq!(size(1, true).and(size(2, true)), size(3, true));
+            assert_eq!(size(1, true).and(size(2, false)), size(3, false));
+            assert_eq!(size(1, false).and(size(2, true)), size(3, false));
+            assert_eq!(
+                size(u64::MAX, true).and(size(2, true)),
+                size(u64::MAX, true)
             );
         }
     }

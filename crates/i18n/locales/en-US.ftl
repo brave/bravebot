@@ -33,7 +33,7 @@ cli-usage-doctor = Check configuration and confinement
 cli-usage-import = Import a Leo Premium subscription
 cli-usage-import-providers = Import a model service Claude Code or opencode configured
 cli-usage-auth-login = Sign in to a model service, listing every way when none is named
-cli-usage-auth-logout = Forget an imported Leo Premium subscription
+cli-usage-auth-logout = Forget an imported Leo Premium subscription or a stored gateway key
 cli-usage-mcp = Declare, list and approve MCP servers
 
 cli-keys-heading = Interactive keys:
@@ -77,7 +77,9 @@ cli-plain-trusting-kept =
 #
 # The markers are Claude Code's, and deliberately: somebody who has used one of these knows what
 # ⏵⏵ means at a glance, and inventing our own would make a familiar thing need reading. Asking has
-# no line of its own, being what a session has always done.
+# a line only in a session that was started with the flag that skips permissions: there it is the
+# answer to "did it stop skipping them?", and in any other session it is what has always happened.
+mode-ask = ◇ asking before it acts
 mode-accept-edits = ⏵ accept edits on
 mode-plan = ⏸ plan mode on
 mode-bypass = ⏵⏵ bypass permissions on
@@ -87,6 +89,10 @@ cli-option-file = Include a workspace file as context (repeatable)
 cli-option-add-dir = Reach into a directory outside the working one (repeatable)
 cli-option-settings = Read this settings file for this run, above the ones found on disk
 cli-option-agent = Address every turn to this definition, as /agent does for one
+cli-option-system-prompt =
+    Replace the opening sentence of the planner's system prompt for every turn. The rest of it stays
+cli-option-append-system-prompt =
+    Add this text to the planner's standing instructions for every turn, after AGENTS.md
 cli-option-mode = turn (default) decides step by step; manifest plans the whole run first
 cli-option-model = The model this run asks for, in place of the remembered or configured one
 cli-option-effort = How hard this run asks the model to think, in place of the remembered or configured level
@@ -108,6 +114,7 @@ cli-option-version = Show the version
 cli-unknown-option = unknown option: { $flag }
 cli-file-needs-a-path = --file requires a path
 cli-add-dir-needs-a-path = --add-dir requires an absolute path to a directory
+cli-directory-ends-checkouts = { $directory } holds the working directory, so no delegate is given a checkout while it is open; start again without --add-dir { $directory } to have one
 cli-settings-needs-a-path = --settings requires a path to a settings file
 cli-settings-not-a-file = --settings names no file: { $path }
 cli-agent-needs-a-name = --agent requires the name of a definition
@@ -121,6 +128,14 @@ cli-agent-not-for-a-command =
 cli-agent-not-with-a-manifest =
     --agent does not go with --mode manifest: a manifest run plans every step before any runs,
     and a definition is addressed a turn at a time
+# The flag is --system-prompt or --append-system-prompt, as typed.
+cli-system-prompt-needs-text = { $flag } requires the text to use
+# The flag is --system-prompt or --append-system-prompt, and the command one of this program's own
+# subcommands.
+cli-system-prompt-not-for-a-command =
+    { $flag } gives words to a session or a task, and { $command } starts neither
+cli-system-prompt-not-with-a-manifest =
+    { $flag } does not go with --mode manifest: the planner of a manifest run does not read it
 # Said where a run with -p is given a --agent name it did not resolve, with the names it did.
 cli-agent-no-such-definition = there is no definition called { $name }; this run resolved { $names }
 # The same, where the project holds definitions the run did not read. It gives a count and never a
@@ -243,7 +258,7 @@ doctor-ends-aws-access-key =
 doctor-ends-aws-session =
     a session credential: issued by AWS STS for the profile, and this program asks the AWS CLI for another as it builds each request, so the expiry ends that copy rather than this program's access; ended at its issuer, since `aws sso logout` clears this machine's copy rather than the session behind it, and the next one is minted from whatever the profile chains to, for as long as that lasts
 doctor-ends-gateway-token =
-    a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file or unsetting the variable ends this machine's custody and leaves the token live there
+    a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file, unsetting the variable or running `bravebot auth logout gateway` ends this machine's custody and leaves the token live there
 doctor-ends-subscription-batch =
     an imported subscription's credential batch: minted by Brave's subscription service against the order this install registered as a device on; each credential is spent by one premium request and the batch stops working when its last window closes, and nothing revokes an unspent one, so `bravebot auth logout leo` ends this machine's custody and leaves the batch spendable by whatever copied the file
 # Which tier the gate walk left a credential on, shown under the account of what would end it. One
@@ -271,6 +286,16 @@ doctor-noticed-aws-session =
 doctor-outlives = outlives
 doctor-outlives-aws-access-key =
     a session credential STS already issued under that access key, which runs to its own expiry: deleting the key does not reach it
+# Whether a derived credential is bound to the party that presents it. Shown only for the
+# credentials minted from something else. A bearer secret is usable by whatever holds a copy, and the
+# two bearer sentences keep apart an issuer that offers no bound form from one nobody has asked.
+doctor-binding = binding
+doctor-binding-sender-constrained =
+    sender-constrained: the issuer checks who presents it, so a copy taken from this machine is of no use elsewhere
+doctor-binding-bearer-refused =
+    a bearer secret: whatever holds a copy can use it until it expires, and its issuer offers no form that is bound to the presenter
+doctor-binding-bearer-not-attempted =
+    a bearer secret: whatever holds a copy can use it, and nobody has asked its issuer for a form that is bound to the presenter
 # How each credential reached the tier it stands at: one line per gate its walk failed, naming
 # the gate, whether the counterparty refused or nobody attempted it, and the condition that was
 # not met. A tier on its own says where a credential stands and nothing about whether it could
@@ -304,7 +329,7 @@ doctor-dropped-gateway-token-nothing-decides-each-use =
 doctor-dropped-gateway-token-no-bound-fixed-before-issue =
     gate { $gate }, { $answer }: no bound on what the token may do is fixed before it is issued, since the block names a host and a variable and never an issuer, so there is nothing here to ask for a narrower one
 doctor-dropped-gateway-token-not-minted-for-one-step =
-    gate { $gate }, { $answer }: it is not minted for one step, since the token is whatever the settings file carries or the variable holds, and it is held for the whole run
+    gate { $gate }, { $answer }: it is not minted for one step, since the token is whatever the settings file carries, the variable holds or `bravebot auth login gateway` stored, and it is held for the whole run
 doctor-dropped-subscription-batch-nothing-decides-each-use =
     gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this process presents a credential from the batch itself and nothing is asked to authorise the request
 # Both are reported when both are reachable, so this names one of the two rather than the backend.
@@ -315,10 +340,19 @@ doctor-backend-gateway = { $gateway } (gateway)
 # Whether one was found, never the value: on this path it is a bearer token, and a diagnostic that
 # printed one is a diagnostic people paste into issues.
 doctor-gateway-token = found (never printed)
-doctor-gateway-token-absent = none found (set a variable its `env` names)
+doctor-gateway-token-stored = stored by bravebot auth login gateway (never printed)
+# The id is the provider block's.
+doctor-gateway-token-absent =
+    none found (set a variable its `env` names, or run bravebot auth login gateway { $id })
 doctor-gateway-token-not-needed = none needed (the block names none)
+doctor-gateway-keys = gateway keys
+doctor-gateway-keys-unreadable =
+    { $path } cannot be read, so no key in it is sent (bravebot auth login gateway leaves it as it is)
+# The one line `doctor` leaves on stderr when what it printed on stdout ends the run in a failure,
+# so the identifier is somewhere a log of the failure holds it (CLI-6).
+doctor-ended = the report above holds a problem that ends this run in failure
 doctor-gateway-models-absent = none configured (the gateway is asked what it serves)
-doctor-gateway-models-unlisted = none configured (this service has no listing, so name a model as <id>/<model>)
+doctor-gateway-models-compiled = { $models } (built in, since this service has no listing; name any other the same way)
 doctor-region = region
 doctor-profile = profile
 doctor-profile-absent = default credentials
@@ -498,6 +532,7 @@ leo-set-and-rebuild = set { $variable } and rebuild
 leo-unknown-channel = unknown channel: { $channel }
 leo-expected-channel = expected one of: stable, beta, nightly, development
 leo-forgotten = forgot the imported subscription
+leo-forget-takes-no-channel = --forget takes no channel: one subscription is stored for every channel
 leo-not-while-incognito = an import stores credentials on disk, which an incognito session will not do
 leo-looking = looking for a Leo subscription in Brave { $channel }
 leo-found = found a { $environment } subscription: { $order }
@@ -623,12 +658,16 @@ auth-unexpected-argument = { $command } does not take { $argument }
 auth-needs-a-terminal =
     bravebot auth login asks which way to sign in, so it needs a terminal to ask on, or the name of a way
 auth-logout-needs-a-way = bravebot auth logout needs the name of the way to sign out of
-# The heading over the list. Each line under it starts with a number and a word, leo, bedrock or
-# import, which a script types and which are not translated.
+# The heading over the list. Each line under it starts with a number and a word, leo, bedrock,
+# import or gateway, which a script types and which are not translated.
 auth-ways-heading = Ways to sign in to a model service:
 auth-way-leo = Brave Leo Premium, from a Brave install that subscribes
 auth-way-bedrock = An AWS account, for Amazon Bedrock
 auth-way-import = A model service Claude Code, opencode or Ollama has, imported into settings
+auth-way-gateway = A key for a gateway a provider block in settings names, typed here and kept by bravebot
+# The status of the gateway way where keys are stored. The ids are provider ids.
+auth-gateway-held = a key stored for { $ids }
+auth-gateway-held-unreadable = the file of gateway keys cannot be read
 # A way that is already signed in, with what it holds.
 auth-way-held = { $description } ({ $status })
 auth-signed-in = signed in
@@ -642,9 +681,28 @@ auth-leo-held =
     Brave Leo Premium is signed in: { $status }. bravebot auth logout leo signs out.
 # A second sign-in registers this machine with Brave as one more device.
 auth-sign-in-again = Sign in again, as a new device?
-# The two variables are BRAVEBOT_USE_BEDROCK and AWS_REGION.
+# The region is AWS_REGION, and the tiers are the variables naming a model, such as
+# ANTHROPIC_DEFAULT_OPUS_MODEL.
 auth-no-aws-account =
-    no AWS account is configured for Bedrock: set { $switch }=1 and { $region }, or run bravebot auth login import where Claude Code or opencode uses one
+    no AWS account is configured for Bedrock: set { $region } and a model in one of { $tiers }, or run bravebot auth login import where Claude Code or opencode uses one
+# In every auth-bedrock message the switch is BRAVEBOT_USE_BEDROCK, and the file is the person's
+# own settings file.
+auth-bedrock-off =
+    { $switch } is set to something other than 1, which turns Bedrock off, and no amazon-bedrock provider block names an AWS account
+# The path is the machine-level settings file an administrator writes.
+auth-bedrock-pinned-off =
+    { $path } sets { $switch } for every user of this machine to something other than 1, which turns Bedrock off, and no amazon-bedrock provider block names an AWS account
+auth-bedrock-recorded = { $file } sets { $switch }=1 now, so a session uses Bedrock without it being exported
+auth-bedrock-not-recorded =
+    { $switch }=1 was not recorded, so it still has to be exported for a session to use Bedrock: { $problem }
+auth-bedrock-not-recorded-incognito =
+    an incognito session records nothing, so { $switch }=1 still has to be exported for a session to use Bedrock
+auth-bedrock-overruled =
+    a settings file sets { $switch } to something other than 1, so a session uses Bedrock only where { $switch }=1 is exported
+auth-bedrock-left =
+    { $file } already names { $switch }, so it was left as it is, and a session uses Bedrock only where { $switch }=1 is exported or a project's settings set it
+auth-bedrock-env-not-a-block = env in { $file } is not a block of names, so it was left as it is
+auth-bedrock-settings-changed = { $file } changed as it was being written, so it was left as it is
 auth-aws-profile-signed-in = the AWS profile { $profile } is signed in
 auth-aws-default-signed-in = the default AWS profile is signed in
 # The failure is what the AWS CLI or the check after it said.
@@ -656,6 +714,46 @@ auth-logout-bedrock =
     bravebot keeps no AWS session of its own: the AWS CLI keeps it, and aws sso logout ends it
 auth-logout-import =
     an import keeps no credential of its own: it wrote entries to the settings file, and removing them there undoes it
+# The id is the word typed after gateway. The word after it is not repeated, because it is most
+# likely the key.
+auth-gateway-key-argument =
+    a key is never a command-line argument, where other programs can read it and the shell keeps it: run bravebot auth login gateway { $id } and type the key when asked
+auth-gateway-not-while-incognito =
+    an incognito session writes nothing to disk, and storing a key is a write: run bravebot auth login gateway without --incognito
+auth-gateway-none-configured =
+    no gateway is configured: add a provider block to settings.json, or run bravebot auth login import, then store its key here
+auth-gateway-not-configured = that is not the id of a provider block; the gateways configured are { $ids }
+auth-gateway-needs-a-terminal =
+    a gateway key is typed at a terminal with nothing drawn, so bravebot auth login gateway needs a terminal
+auth-gateway-no-home = there is no home directory to store the key in
+auth-gateway-keys-unreadable =
+    { $path } is not a file of keys bravebot wrote, so it was left as it is and nothing was changed
+auth-gateways-heading = Gateways configured:
+# Beside a gateway in the list under auth-gateways-heading.
+auth-gateway-key-stored = a key stored
+auth-which-gateway = Which one? Type its number or its id, or nothing to stop:
+auth-not-a-listed-gateway = { $answer } is not one of the gateways listed
+auth-gateway-key-held = A key is already stored for { $id }.
+auth-gateway-replace = Replace it?
+# Asked with echo off, so nothing appears as the key is typed or pasted.
+auth-gateway-key-question = Key for { $id }, sent to { $host } (not shown as you type):
+auth-gateway-nothing-stored = nothing was stored
+auth-gateway-not-read = the key could not be read from the terminal: { $error }
+auth-gateway-not-stored = the key was not stored: { $path }: { $error }
+auth-gateway-stored =
+    the key for { $id } is stored in { $path }, and sessions started from now on send it to { $host }
+# The variable is one the provider block's env names.
+auth-gateway-variable-wins =
+    { $variable } is set, and while it is, a session sends its value instead of the stored key
+auth-logout-gateway-none = no gateway key is stored
+auth-logout-gateway-which =
+    keys are stored for { $ids }: name the one to forget, as bravebot auth logout gateway <id>
+auth-logout-gateway-not-stored = no key is stored for { $id }; keys are stored for { $ids }
+auth-logout-gateway-not-written = the key was not forgotten: { $path }: { $error }
+auth-logout-gateway-forgotten =
+    the key for { $id } is forgotten here, and still works at { $host } until it is revoked there
+auth-logout-gateway-forgotten-elsewhere =
+    the key for { $id } is forgotten here, and still works at the service that issued it until it is revoked there
 
 
 ## Declaring an MCP server, and approving one
@@ -1124,6 +1222,13 @@ resume-manifest-run = that was a manifest run, which cannot be continued; start 
 stop-the-turn = stop the turn
 scroll-more = ↑↓ { $count } more
 scroll-back = ↑↓ back
+# Under a question's body in place of the scroll hint while rows that decide the question have not
+# been drawn yet. No key that approves is taken until they have.
+prompt-unseen =
+    { $count ->
+        [one] ↑↓ { $count } more row to read before a yes
+       *[other] ↑↓ { $count } more rows to read before a yes
+    }
 
 
 ## Approving a write
@@ -1142,6 +1247,9 @@ write-credentials =
     this looks like it would put a secret in the tree, going by the name beside the value and how
     the value reads. Nothing recognised it as a particular provider's key, so it is a guess and
     yours to settle
+write-since-checkout =
+    this session wrote to this file in the working directory after the checkout was made, so it
+    may hold changes the checkout's copy does not. Read the difference before approving
 write-unchanged = { $count ->
     [one] … { $count } unchanged line
    *[other] … { $count } unchanged lines
@@ -1170,6 +1278,8 @@ run-stages = { $count ->
     }
 run-in-directory = in { $directory }
 watching-list-command = command
+# The same column on a background job's row. The job's name leads the line beside it.
+watching-list-job = background
 # The row and the view for a question asked beside the work, which is what /btw sends.
 watching-list-aside = aside
 watching-aside-head = a question asked beside the work
@@ -1182,6 +1292,8 @@ watching-lines = { $count ->
    *[other] { $count } lines
     }
 watching-output-head = what this command printed
+# The name is the one the driver gave the job, never anything the job printed.
+watching-output-job-head = what background { $name } printed
 watching-output-read = the model has read this
 watching-output-kept = the model has not read this
 # Short enough to stand in a column beside a command line. The whole sentence is in the header of
@@ -1239,6 +1351,20 @@ run-yes = run it
 run-always = always this session
 run-remember = remember it
 run-no = don't
+# Said above the keys while a row of the plan has not been on the screen. It counts rows, which is
+# what the arrows move by, and the count comes first so a narrow box does not cut it off.
+run-unseen =
+    { $count ->
+        [one] ↑↓ { $count } row not shown: no key runs this yet
+       *[other] ↑↓ { $count } rows not shown: no key runs this yet
+    }
+# Said once the plan has been read while the rows saying what `a` or `r` grant besides have not. The
+# keys still waiting on them are drawn muted.
+run-grant-unseen =
+    { $count ->
+        [one] ↑↓ { $count } row not shown: a muted key waits on it
+       *[other] ↑↓ { $count } rows not shown: a muted key waits on them
+    }
 
 
 ## What a check said, at the head of every prompt whose answer would promote content
@@ -1495,6 +1621,12 @@ status-loop-unpaced = waiting for the turn to say when
 status-goal = Goal
 status-watch = Watch { $number }
 status-watch-armed-by = armed by turn { $turn } · { $left } left
+# One line per background job of the last turn. The name is the driver's.
+status-job = Background { $name }
+status-job-of-delegate = Background { $name } of delegate { $number }
+status-job-note = { $standing } · { $origin }
+status-job-moved = moved from the foreground after { $after }
+status-job-started = started in the background
 status-goal-rounds = { $rounds ->
     [one] sent back { $rounds } time, { $left } left
    *[other] sent back { $rounds } times, { $left } left
@@ -1530,6 +1662,7 @@ status-cache-written = written to it for the next turn
 hint-cache-hit-rate = cache { $rate }%
 status-trust = Trust
 status-nothing-vouched-for = nothing vouched for
+status-held-by-the-turn = held by the running turn, shown once it ends
 status-trusted = trusted
 status-untrusted = untrusted
 status-programs = Programs
@@ -1597,6 +1730,10 @@ indicator-checking = { $lines ->
 # The same, over a picture or a PDF, which has no lines to count.
 indicator-checking-picture = Checking a picture
 indicator-checking-pdf = Checking a PDF
+# Said while a turn is being stopped, from the press that asks for it until the turn ends. The turn
+# ends once its worker and every delegate it started have returned, which can take seconds, and a
+# screen still saying what it said before the press reads as a press nobody heard.
+indicator-stopping = Stopping
 # Abbreviated counts, already rounded to one place.
 tokens-thousands = { $thousands }k
 tokens-millions = { $millions }M
@@ -1618,11 +1755,6 @@ session-build-differs = that session ran on bravebot { $was }; this is { $now }
 session-front-differs = that session was written in { $was }; this is { $now }
 session-front-terminal = the terminal
 session-front-desktop = the desktop app
-# Said when a desktop session opens in a directory whose settings request MCP servers, since the
-# desktop app starts none and a request it passed over in silence would look like one it honoured.
-session-servers-not-started =
-    the settings here request the MCP servers { $servers }, which the desktop app does not start:
-    bravebot mcp list, run here in a terminal, says which of them a session there would start
 
 
 ## Themes
@@ -1712,6 +1844,7 @@ scroller-footer-search = / search
 # The footer of one delegate's own view. The kind and the number are the driver's words for it,
 # never anything the model wrote.
 watching-footer = { $kind } delegate { $number }
+watching-footer-job = background { $name }
 watching-working = working
 watching-answered = answered
 watching-failed = did not finish
@@ -1735,6 +1868,79 @@ watching-calls = { $count ->
 # pressing. Every kind of row is counted together, since one key opens the list holding all of
 # them and naming one kind here would undercount the rest.
 watching-hint = { $chord } { $count } to open
+# Said on the bottom line for as long as a command the turn is waiting on can be moved, and gone
+# the moment it ends or is moved. Short, because it shares the line with everything else there.
+background-hint = { $chord } to background
+# Said on the bottom line while the info panel is closed and the terminal is wide enough for it.
+panel-hint = { $chord } info
+# The info panel's last row.
+panel-hide = { $chord } hide panel
+# Left in the transcript when the info panel's key is pressed on a terminal too narrow for it.
+panel-too-narrow = The info panel needs a terminal at least { $columns } columns wide.
+# Left in the transcript by the first /caffeinate, which turns nothing on.
+caffeinate-explained =
+    /caffeinate keeps the computer from going to sleep while a turn runs or a loop waits for its
+    next tick, and lets it sleep again once nothing is pending. The display can still turn off and
+    the screen can still lock, but the machine keeps running, with your credentials on it, while
+    you are away. Turn it on only where your device policy allows that. Type /caffeinate again to
+    turn it on.
+# Left in the transcript when /caffeinate turns on, and when it turns off.
+caffeinate-on = the computer is kept awake while a turn runs or a loop waits
+caffeinate-off = the computer may sleep again
+# Left in the transcript when the program that holds off sleep would not start, which turns
+# /caffeinate off.
+caffeinate-unavailable = /caffeinate is unavailable: `{ $program }` could not be started ({ $reason })
+# Left in the transcript when that program exited by itself, which turns /caffeinate off.
+caffeinate-ended = /caffeinate is off: `{ $program }` stopped holding the computer awake
+# The info panel's section headings.
+panel-session = Session
+panel-goal = Goal
+panel-context = Context
+panel-language-servers = Language servers
+panel-mcp-servers = MCP servers
+panel-plan = Plan
+panel-links = Links
+# The rows of the info panel's Links section, each followed by the link.
+panel-pull-request = Pull request
+panel-issue = Issue
+# The last turn's cache figures in the info panel, one to a row and never added together.
+panel-cache-read = cache read { $tokens }
+panel-cache-written = cache written { $tokens }
+# Where the info panel has no room for the whole plan.
+panel-more = +{ $count } more
+# Where the info panel's plan starts past its first rows, counting those it left out above.
+panel-earlier = +{ $count } earlier
+# The same, with rows left out below as well.
+panel-earlier-and-more = +{ $earlier } earlier, +{ $later } more
+# Said on the bottom line while a background job runs, and gone once the last one ends.
+jobs-hint = { $count ->
+    [one] 1 in the background
+   *[other] { $count } in the background
+    }
+# Where a background job is, in the view a row opens and in /status. How long is this end's clock,
+# counted from when the line started.
+job-running = running { $ran_for }
+job-ended-with-turn = stopped when the turn ended
+# Where a job is between /jobs stop and the turn's next step, which is when the turn stops it.
+job-stopping = being stopped
+# A background job's name where a delegate started it: each delegate numbers its jobs from one.
+job-of-delegate = { $name } of delegate { $number }
+# One line of /jobs. The name is the one /jobs stop takes, and the standing is a job-* message above
+# or how the job ended.
+jobs-listed = { $name }: { $command }, { $standing }
+# A line of /jobs for a delegate's job, named as /jobs stop takes it: the job's name, then the
+# delegate's number, as in job:1 d2.
+jobs-listed-of-delegate = { $name } { $number }: { $command }, { $standing }, started by delegate { $number }
+jobs-none =
+    there is no background job to list. A turn starts one when it runs a command in the
+    background, and /jobs lists a turn's jobs until the next turn starts
+jobs-no-such = there is no job { $name } to stop. /jobs lists the jobs there are
+jobs-already-ended = { $name } has already ended
+job-stop-asked = { $name } will be stopped at the turn's next step
+job-stop-already-asked = { $name } is already being stopped
+jobs-command-takes =
+    /jobs lists the background jobs of this turn, and /jobs stop <name> stops one. A delegate's
+    job takes the delegate's number too, as in /jobs stop job:1 d2
 
 
 ## The commands a line beginning with a slash may be
@@ -1745,9 +1951,11 @@ command-model = Choose which model to think with
 command-theme = Choose which theme paints the interface
 command-effort = Choose how hard to think before answering
 command-config = Choose how the input box edits text
-command-add-dir = Open another directory, and trust it for this session
+command-add-dir = Open another directory and trust it for this session, or close one
 command-cd = Work in another directory from now on, and trust it for this session
 command-rename = Call this conversation something else
+command-issue = Say which issue this session is for, show it, or clear it
+command-pr = Say which pull request this session is for, show it, or clear it
 command-compact = Summarise the conversation so far, keeping the recent part
 command-btw = Ask something beside the work, without putting it in the conversation
 command-clear = Start a new session here, keeping this one resumable
@@ -1755,9 +1963,14 @@ command-forget-trust = Stop remembering that this directory is trusted, so later
 command-loop = Send a prompt again and again, say what is repeating, or stop it
 command-goal = Keep working until a condition you set is judged met
 command-watch = List the files this session is watching, and stop one by its number
+command-jobs = List this turn's background jobs, and stop one by its name
+command-panel = Show or hide the info panel beside the transcript
+command-caffeinate = Keep the computer awake while a turn or loop is pending
+command-checkouts = List kept checkouts, bring their files back, or remove one
 command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
 command-agent = Run one of your definitions on a task, by its name
 command-export = Export the session transcript to a markdown file
+command-copy = Put the last reply on the clipboard, or the one that many replies back
 command-undo = Rewind one turn and put back the files it wrote
 command-rewind = List the turns a rewind could go back to, or go back that many
 command-exit = Leave
@@ -1776,6 +1989,22 @@ session-resumed = resumed session: { $title }
 session-renamed = renamed to { $title }
 session-rename-needs-a-name = /rename needs a name, as in /rename the parser bug
 session-rename-needs-something = /rename needs a name with something in it
+# What /issue and /pr say back. A refused value is not repeated, since it may hold a control
+# character.
+session-issue-is = this session is for { $url }. /issue clear removes it
+session-pull-request-is = this session's pull request is { $url }. /pr clear removes it
+session-issue-none = no issue is set. /issue <url> sets one
+session-pull-request-none = no pull request is set. /pr <url> sets one
+session-issue-set = this session is for { $url }
+session-pull-request-set = this session's pull request is { $url }
+session-issue-cleared = the issue is cleared
+session-pull-request-cleared = the pull request is cleared
+session-issue-refused =
+    /issue takes one http or https link on one line, in ASCII with no spaces, as in
+    /issue https://github.com/brave/bravebot/issues/1. Nothing was set
+session-pull-request-refused =
+    /pr takes one http or https link on one line, in ASCII with no spaces, as in
+    /pr https://github.com/brave/bravebot/pull/1. Nothing was set
 session-cleared = cleared: a new session, with the previous one still resumable
 session-rewound = rewound the session to before turn { $turn }
 session-rewound-partly =
@@ -1787,6 +2016,7 @@ session-rewind-cause-hook = hooks
 session-rewind-cause-scratch = scratch writes
 session-rewind-cause-server = language servers
 session-rewind-cause-desktop = desktop turns
+session-rewind-cause-checkout = delegate checkouts
 session-rewind-cause-backup = unavailable backups
 session-rewind-cause-unknown = unknown coverage
 session-nothing-to-undo = nothing left to undo in this session
@@ -1805,8 +2035,20 @@ session-rewind-goes-no-further =
     }
 session-exported = exported transcript to { $path }
 session-export-failed = could not export transcript: { $problem }
+session-copy-needs-a-number = /copy takes how many replies back to copy, as in /copy 2
+session-copy-no-reply = there is no reply in this session to copy
+session-copy-goes-no-further =
+    { $replies ->
+        [one] this session has one reply, so /copy goes no further back than it
+       *[other] this session has { $replies } replies, so /copy goes no further back than { $replies }
+    }
+session-copy-failed = could not put the reply on the clipboard
 session-add-dir-needs-a-path = /add-dir needs a directory, as in /add-dir ~/notes
 session-directory-added = added { $directory }, and trusting it for this session
+session-directory-ends-checkouts = { $directory } holds the working directory, so no delegate is given a checkout while it is open; /add-dir close { $directory } ends that
+session-close-dir-needs-a-path = /add-dir close needs a directory, as in /add-dir close ~/notes
+session-directory-withdrawn = closed { $directory }, and no longer trusting it; open it again with /add-dir { $directory }
+session-directory-not-closed = could not close { $directory }: { $problem }
 session-cd-needs-a-path = /cd needs a directory, as in /cd ~/projects/other
 session-directory-changed = now working in { $directory }, and trusting it for this session
 # Said once per directory that was open and is not any more, so nobody discovers it by being
@@ -1979,8 +2221,10 @@ loop-tick-quiet = { $quiet ->
    *[other] loop { $count }, after { $quiet } ticks that found nothing
     }
 loop-stopped = the loop is stopped
+loop-cleared = the loop is stopped, because it belonged to the session that was cleared
 loop-aged-out = the loop has run for a week and stopped itself
 loop-unpaced = that turn did not say when to run again, so the loop has stopped
+loop-finished = that turn said the loop is finished, so the loop has stopped
 loop-busy = /loop starts with a turn of its own, so it waits until this one is done
 loop-replaces-goal =
     the goal that was set has been cleared: a session works towards one thing at a time
@@ -2077,6 +2321,55 @@ watches-cleared = { $count ->
    *[other] { $count } live watches have ended with the conversation they were armed in
     }
 
+## The checkouts a delegate kept
+
+checkouts-listed = { $id }: made for delegate { $delegate } of commit { $commit }, at { $path }
+# The size is a number of kilobytes, megabytes or gigabytes.
+checkouts-size = { $id }: it took { $size } on disk when its delegate ended
+checkouts-size-partial =
+    { $id }: it took at least { $size } on disk when its delegate ended, since not all of it could be measured
+checkouts-size-unmeasured = { $id }: its size is measured when its delegate ends
+# The remote is a remote branch as git names it, such as origin/main.
+checkouts-pushed =
+    { $id }: on branch { $branch }, and { $remote } is at the same commit, so that commit is pushed
+checkouts-detached-pushed =
+    { $id }: on no branch, and { $remote } is at the same commit, so that commit is pushed
+checkouts-unpushed = { $id }: on branch { $branch }, at a commit no remote branch is at
+checkouts-detached-unpushed = { $id }: on no branch, at a commit no remote branch is at
+checkouts-head-unread =
+    { $id }: which commit it is at could not be read, so whether that commit is pushed is not known
+checkouts-nothing-done = { $id }: nothing was recorded done in it
+# Followed by the names of the files written, separated by commas, which are left as they are.
+checkouts-written = { $id }: written in it: { $paths }
+checkouts-more = { $count } more
+checkouts-referenced = { $count ->
+    [one] { $id }: { $count } write through a reference, whose path was not recorded
+   *[other] { $id }: { $count } writes through a reference, whose paths were not recorded
+    }
+checkouts-unread =
+    { $id }: its status was not read, so a file changed other than by a write is not named here
+checkouts-none =
+    this session keeps no checkout. A delegate given one keeps it when something was done in it
+checkouts-no-such = this session keeps no checkout { $id }. /checkouts lists the ones it keeps
+checkouts-command-takes =
+    /checkouts lists the checkouts this session keeps, /checkouts apply <n> brings back the files
+    written in the one with that number, and /checkouts remove <n> removes it
+# Followed by a line for each file, as the write gate worded it.
+checkouts-applied = files from checkout { $id } were brought back:
+checkouts-not-applied = nothing from checkout { $id } was brought back:
+checkouts-removed = checkout { $id } at { $path } is removed
+checkouts-not-removed = checkout { $id } at { $path } could not be removed, and is still kept
+checkouts-worked-from =
+    checkout { $id } at { $path } is kept, since the working directory or a directory added with /add-dir is inside it
+checkouts-kept = checkout { $id } is kept
+remove-checkout-title = remove this checkout?
+remove-checkout-which = checkout { $id }, made for delegate { $delegate }, is at
+remove-checkout-explained =
+    Something was done in it, and nothing brings that work back here. Removing it deletes the
+    directory and whatever is in it.
+remove-checkout-yes = remove it
+remove-checkout-no = keep it
+
 ## Where a line sent while something runs is going, beside the mark under it
 
 # At most 26 characters each: the last row also carries the key that sends everything now, and the
@@ -2112,7 +2405,9 @@ paste-folded = { $lines ->
     [one] [Pasted text #{ $number } +{ $lines } line]
    *[other] [Pasted text #{ $number } +{ $lines } lines]
     }
+kilobytes = { $size } KB
 megabytes = { $size } MB
+gigabytes = { $size } GB
 
 
 ## Running a command the person typed
@@ -2201,6 +2496,7 @@ verb-read-git = History
 verb-lsp = Look up
 verb-write-file = Write
 verb-edit-file = Update
+verb-apply-checkout = Apply
 verb-todo-write = Plan
 # Named for what it is rather than for what it does: every one of these is a model with no
 # tools, no memory and one round, and a person watching a line go by should not have to
@@ -2303,6 +2599,9 @@ skill-asks-an-effort = { $skill } asks the rest of this turn at { $effort } effo
 # The skill loads and the turn goes on as it was, rather than stopping: a skill is not the thing the
 # person asked for, so a model they cannot reach is a line of its file that does nothing.
 skill-model-needs-sign-in = { $skill } asks for { $model }, which needs a sign-in first, so its rounds keep this session's model
+# The layer refuses the model, so the skill loads and the turn goes on as it was, for the reason the
+# sign-in line above does.
+skill-model-refused = { $skill } asks for { $model }, which this machine does not request, so its rounds keep this session's model: { $reason }
 # The turn runs on a model an addressed or delegate definition named, which a skill does not
 # replace. The definition is its name as the person or the planner wrote it.
 skill-model-kept-for-definition = { $skill } asks for { $model }, but this turn stays on the model { $definition } named

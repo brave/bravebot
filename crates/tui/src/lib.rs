@@ -9,8 +9,14 @@
 #[cfg(test)]
 mod testutil;
 
+#[cfg(test)]
+#[path = "../../session/test-support/profile.rs"]
+mod test_profile;
+
 pub mod app;
 pub mod ask;
+pub mod caffeinate;
+pub mod checkouts_command;
 pub mod clipboard;
 pub mod config_prompt;
 pub mod confirm;
@@ -19,15 +25,19 @@ pub mod editor;
 pub mod effort_prompt;
 pub mod entries;
 pub mod goals;
+pub mod hidden;
 pub mod history;
 pub mod history_search;
 pub mod indicator;
 pub mod input;
+pub mod jobs_command;
 pub mod keybindings;
 pub mod logo;
 pub mod loops;
+pub mod manifest_run;
 pub mod markdown;
 pub mod model_prompt;
+pub mod panel;
 pub mod preview;
 pub mod reasoning;
 pub mod remote_confirm;
@@ -40,6 +50,7 @@ pub mod status;
 pub mod table;
 pub mod theme;
 pub mod theme_prompt;
+mod title;
 pub mod trust_prompt;
 pub mod update;
 pub mod verbs;

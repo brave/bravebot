@@ -26,7 +26,7 @@ documented-by: docs/website/docs/customize/configuration.md
 
 `~/.bravebot`, the directory holding what outlives a session, and who on the machine may read what
 is written into it. The prompt history, the model, theme, effort and editing choices, the answer to
-the update question, session records, a language server's index of a workspace, skills, standing
+the update question, the answer to `/caffeinate`'s explanation, session records, a language server's index of a workspace, skills, standing
 instructions, an imported subscription, the command lines somebody asked to be remembered past a
 session, the permission rules somebody granted a checkout and the answers to the startup question
 somebody asked to be kept all live here, and so does the record of the definitions' memories a
@@ -109,6 +109,7 @@ the same mode, because what it holds is what the record holds.
 `verified-by: bravebot_skus::store::the_directory_it_is_kept_in_is_not_reachable_by_anyone_else`
 `verified-by: bravebot_skus::store::a_file_left_readable_by_something_else_is_narrowed`
 `verified-by: bravebot_skus::store::narrowing_does_not_follow_a_linked_state_directory`
+`verified-by: bravebot_skus::store::a_claim_is_created_readable_only_by_its_owner`
 `verified-by: bravebot_lsp::server::the_cache_is_created_reachable_only_by_its_owner`
 `verified-by: bravebot_lsp::server::a_cache_left_open_by_an_earlier_run_is_narrowed`
 `verified-by: bravebot_lsp::server::narrowing_does_not_follow_a_link_out_of_the_cache`

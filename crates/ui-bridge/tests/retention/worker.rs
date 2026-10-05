@@ -45,8 +45,10 @@ fn take_turn(
             output_cap: None,
             deadlines: bravebot_agent::exec::Deadlines::BUILT_IN,
             auto_vetting: false,
+            mcp_requested: Vec::new(),
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             model: None,
+            addressing: None,
             prompt: if first {
                 "copy and run"
             } else {
@@ -77,6 +79,49 @@ fn take_turn(
     }
     worker.join().unwrap();
     seen
+}
+
+/// A leading `~` in a run line sent from the desktop window stands for the home directory, and
+/// not for the state directory inside it (CMDLINE-4).
+#[test]
+fn a_tilde_in_a_desktop_run_line_stands_for_the_home_directory() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
+    let home = bravebot_agent::home::profile().expect("the isolated profile names a home");
+    let state_directory = bravebot_agent::home::directory().expect("a state directory");
+    assert_ne!(home, state_directory);
+    let root = profile::project("bridge-tilde");
+    std::fs::create_dir_all(&root).unwrap();
+    let workspace = Workspace::new(&root).unwrap();
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+    let state = Arc::new(Mutex::new(State::fresh(trust)));
+    let (config, _requests, server) = endpoint::endpoint(
+        vec![
+            endpoint::tool("run", json!({"command":"ls ~/tilde-marker.txt"})),
+            endpoint::answer(),
+        ],
+        None,
+    );
+    let events = take_turn(state, &workspace, &config, Cancel::new(), true);
+    server.join().unwrap();
+    assert_eq!(events.last().unwrap().name, "turn.done", "{events:?}");
+    let asked: Vec<_> = events.iter().filter(|e| e.name == "run.request").collect();
+    assert_eq!(
+        asked.len(),
+        1,
+        "the line was refused instead of asked about"
+    );
+    let args = asked[0].data["stages"][0]["args"].to_string();
+    assert!(
+        args.contains(&home.join("tilde-marker.txt").display().to_string()),
+        "the ~ did not stand for the home directory {home:?}: {args}"
+    );
+    assert!(
+        !args.contains(&state_directory.display().to_string()),
+        "the ~ stood for the state directory {state_directory:?}: {args}"
+    );
 }
 
 /// Desktop workers must save current file and exact command decisions on every ordinary ending.

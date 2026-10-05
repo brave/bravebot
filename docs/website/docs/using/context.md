@@ -82,6 +82,12 @@ through `osascript`; on Linux it needs `wl-paste` or `xclip`.
 - **A prompt recalled from your history carries no picture and names none.** No durable text stands
   for a screenshot. What this turn sends is untouched: the picture still travels with the prompt that
   named it, and the transcript still shows the line as it was on your screen.
+- **A thumbnail of the picture is drawn under the box** where the terminal draws pictures (Kitty,
+  iTerm2 or Sixel), so you can see it is the screenshot you meant. It follows the marker: rubbing the
+  marker out, sending the line or clearing it removes the thumbnail, and a line that comes back into
+  the box after a stopped turn or an unqueue gets its thumbnails drawn again. What is sent is the
+  picture itself, whether or not a thumbnail could be drawn. A picture that will not decode, or a
+  terminal that draws none, leaves the box as it was.
 - A picture is refused in shell mode rather than written into the command.
 - Anything over 10 MB is refused, and says so with its size. It is refused rather than quietly
   swapped for the text sitting beside it in the clipboard.
@@ -112,7 +118,12 @@ What happens depends on the type:
 | a text file | its contents enter the turn as trusted input |
 | anything else | its path is written into the line, as dropping a file always did |
 
-Extensions are recognised whatever their case. Dropping a directory attaches nothing.
+Extensions are recognised whatever their case. Dropping a directory attaches nothing. A dropped PNG
+or JPEG also gets a thumbnail under the box, as a pasted picture does.
+
+**Onto a line armed with `!`, a drop writes each file's path and attaches nothing**, as dropping a
+file into a shell does. The shell is handed the line as it stands, so there is no marker and no
+trust or reach is granted.
 
 **A prompt recalled from your history names the file rather than the marker.** Nothing staged beside
 a line outlives the session that staged it. The name is enough: the planner reads it and goes to the
@@ -139,9 +150,9 @@ on its first run, and every later run sends the marker as the file's name. A com
 interface carries out itself sends nothing to a model, so a marker on its line becomes the file's
 name, or words saying a picture was pasted and cannot be shown, and you are told it did not go.
 
-The same holds for a command that waited behind a running turn. Running a slash command counts as
-sending the line: what it named comes off the box with it, so nothing stays attached to a line that is
-no longer there.
+The same holds for a command typed while a turn runs, whether it waits or is carried out as typed.
+Running a slash command counts as sending the line: what it named comes off the box with it, so
+nothing stays attached to a line that is no longer there.
 
 ## Piping
 

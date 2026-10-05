@@ -51,13 +51,21 @@ that is not going to happen.
 <a id="SCHED-4"></a>
 ### SCHED-4: a call missing a delay or a verdict is refused rather than filled in
 
-`delay_seconds` and `noop` are both required, and nothing is scheduled without them.
+`delay_seconds` and `noop` are both required, and nothing is scheduled without them. A tick of a
+self-paced loop may instead send `stop: true`, which ends that loop and needs no `delay_seconds`;
+`noop` is still required. `stop` is offered to that tick and to no other turn, and where a turn
+that arranges a look sends it, it is not read and the call needs the same fields as any other.
 
 **Why.** Whether a tick found anything is what the count of quiet ticks is built from, so a turn
 that leaves it out is asking for a number to be invented on its behalf and shown to somebody as
-an observation.
+an observation. `stop` is one routing boolean a person could approve alone ("end this loop"). It can
+only end a loop the person started, never start, lengthen or change what runs, and the reason that
+goes with it is content released only for display ([SCHED-5](#SCHED-5)).
 
 `verified-by: bravebot_agent::tools::a_schedule_missing_what_it_needs_is_refused`
+`verified-by: bravebot_agent::tools::a_finished_loop_is_ended_rather_than_given_another_wait`
+`verified-by: bravebot_agent::tools::stop_from_a_turn_arranging_a_look_is_not_read`
+`verified-by: bravebot_agent::tools::stop_is_offered_only_to_a_tick_of_a_self_paced_loop`
 
 <a id="SCHED-5"></a>
 ### SCHED-5: what the turn says it is waiting on reaches a screen and stops there

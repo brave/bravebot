@@ -364,9 +364,9 @@ check-affected-containers:
 		{ [ -z "$$targets" ] || $(MAKE) --no-print-directory -k $$targets; }
 
 .PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
-	check-peer-advisories-selftest
+	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest
 check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
-	check-peer-advisories-selftest
+	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest
 
 check-all-selftest:
 	python3 contrib/check-all-selftest.py
@@ -382,6 +382,12 @@ check-rebase-selftest:
 
 check-peer-advisories-selftest:
 	python3 agents/skills/peer-advisories/selftest.py
+
+check-peer-features-selftest:
+	python3 agents/skills/peer-features/selftest.py
+
+check-pr-fix-selftest:
+	python3 agents/skills/pr-fix/selftest.py
 
 # CI and local runs share the same desktop checks. Linux uses a virtual display;
 # macOS uses the logged-in desktop session.
@@ -405,8 +411,10 @@ check-ui: check-ui-build
 check-extension:
 	ls extension/tests/*.test.mjs >/dev/null && node --test extension/tests/*.test.mjs
 
+# CI sets UI_INSTALL to ui/scripts/ci-install.sh, which reuses a cached build of Leo.
+UI_INSTALL ?= npm --prefix ui ci
 check-ui-build: check-extension
-	npm --prefix ui ci
+	$(UI_INSTALL)
 	npm --prefix ui run typecheck
 	BRAVEBOT_BUILD_UNCONFIGURED=1 npm --prefix ui run build
 	cd ui && ls scripts/*.test.mjs >/dev/null && node --test scripts/*.test.mjs
@@ -459,6 +467,8 @@ check-locales:
 #
 # Keep test parallelism bounded in Docker, as it is for the host checks.
 # Python runs the redirected-process fixture in the turn tests.
+# The container's home starts with no ~/.bravebot, so the last step fails on any record a test
+# saved there, which is the check CI's test jobs make after the suite.
 .PHONY: check-linux
 check-linux:
 	python3 contrib/check-source.py | docker run --rm -i -e BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 -e USER=root \
@@ -470,7 +480,12 @@ check-linux:
 		rustup component add clippy rustfmt >/dev/null 2>&1 && \
 		cargo fmt --all -- --check && \
 		cargo clippy --all-targets --all-features -- -D warnings && \
-		cargo test --all -- --test-threads=4'
+		cargo test --all -- --test-threads=4 && \
+		if [ -n "$$(ls -A "$$HOME/.bravebot/sessions" 2>/dev/null)" ]; then \
+			echo "The tests wrote into $$HOME/.bravebot/sessions:"; \
+			find "$$HOME/.bravebot/sessions" -mindepth 1; \
+			exit 1; \
+		fi'
 
 .PHONY: darwin-arm64
 darwin-arm64:

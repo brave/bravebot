@@ -203,6 +203,37 @@ impl TrustStore {
         self.rules.keys().any(|key| covers(&under, key, folds))
     }
 
+    /// Drop the rule at `path` if it trusts that path, and nothing else (TRUST-9).
+    ///
+    /// Whether a rule was dropped. A distrust or an undecided boundary at `path` stays, and so
+    /// does every rule beneath it: a directory beneath may be open in its own right, and a path
+    /// held out of a trusted rule above it would answer to that rule once its own rule went.
+    ///
+    /// Every spelling [`TrustStore::folding_case`] reads as `path` is one rule, since any of them
+    /// may be the one deciding it. Where a broader rule would still trust `path` once its own
+    /// went, an undecided boundary takes its place: the rule dropped may have been written over
+    /// a distrust, and the broader one never spoke for what is here. Either way `path` answers
+    /// as trusted by no rule afterwards.
+    pub fn withdraw_trust(&mut self, path: &str) -> bool {
+        let key = self.key(path);
+        let folded = self.folds_case.then(|| fold_case(&key));
+        let before = self.rules.len();
+        self.rules.retain(|rule, decision| {
+            let here = match &folded {
+                Some(folded) => fold_case(rule) == *folded,
+                None => *rule == key,
+            };
+            !here || *decision != Some(Integrity::Trusted)
+        });
+        if self.rules.len() == before {
+            return false;
+        }
+        if self.integrity_at_key(&key) == Some(Integrity::Trusted) {
+            self.rules.insert(key, None);
+        }
+        true
+    }
+
     /// The lower effective decision at every path. Explicit distrust survives either map;
     /// an absent decision stays absent unless the other map explicitly distrusts it.
     /// Evaluate inherited rules at every boundary, including nested exceptions.
@@ -253,8 +284,7 @@ impl TrustStore {
 
     fn decision_at_key(&self, path: &str) -> Option<Option<Integrity>> {
         // Probe only whole-segment ancestors, from the most specific to the least.
-        // Each lookup costs O(log rules). Where the volume folds case, a probe with no exact hit
-        // also scans every rule.
+        // Each lookup costs O(log rules). Where the volume folds case, a probe scans every rule.
         let mut prefix = path;
         while !prefix.is_empty() && prefix != "/" {
             if let Some(decision) = self.rule_at(prefix) {
@@ -277,20 +307,19 @@ impl TrustStore {
 
     /// The decision recorded under `key`, reached however the key was spelled.
     ///
-    /// A direct hit by the map's own keying first. Where the volume answers to either spelling of a
-    /// name ([`TrustStore::folding_case`]), a spelling that missed directly is then looked up
-    /// case-insensitively: a rule written about `src/fetched.json` decides the very same bytes read
-    /// as `SRC/fetched.json`, and a probe that could not see it would answer from the trusted rule
-    /// above the file instead, the laundering spelled-past-a-rule closes elsewhere. Folding only
+    /// Where the volume answers to either spelling of a name ([`TrustStore::folding_case`]), the
+    /// rule that sorts first among every key spelling the same name decides, an exact-spelling hit
+    /// included: a rule written about `src/fetched.json` decides the very same bytes read as
+    /// `SRC/fetched.json`, and a probe that could not see it would answer from the trusted rule
+    /// above the file instead, the laundering spelled-past-a-rule closes elsewhere. Two rules that
+    /// differ only in case can coexist, and giving the exact spelling priority would let a
+    /// distrust recorded under one spelling miss a file vouched for under the other. Folding only
     /// reaches a rule already written, and on such a volume the two spellings are one file, so no
     /// rule reaches a file it was not about. Otherwise the map stays byte-exact.
     /// The scan costs one pass over the rules a person's decisions have written.
     fn rule_at(&self, key: &str) -> Option<&Option<Integrity>> {
-        if let Some(decision) = self.rules.get(key) {
-            return Some(decision);
-        }
         if !self.folds_case {
-            return None;
+            return self.rules.get(key);
         }
         let folded = fold_case(key);
         self.rules
@@ -816,6 +845,32 @@ mod tests {
         );
     }
 
+    /// Two rules differing only in case can coexist on a folding volume, and the one that sorts
+    /// first decides both spellings, whichever spelling the probe uses and in either polarity.
+    #[test]
+    fn a_folding_volume_lets_the_sort_first_case_variant_decide_both_spellings() {
+        for (first, second) in [
+            (Integrity::Untrusted, Integrity::Trusted),
+            (Integrity::Trusted, Integrity::Untrusted),
+        ] {
+            let mut store = TrustStore::new("/work").folding_case(true);
+            // "/work/Docs/a.md" sorts before "/work/docs/a.md".
+            for (path, integrity) in [("Docs/a.md", first), ("docs/a.md", second)] {
+                match integrity {
+                    Integrity::Trusted => store.trust(path),
+                    Integrity::Untrusted => store.distrust(path),
+                }
+            }
+            for spelling in ["Docs/a.md", "docs/a.md", "DOCS/A.MD"] {
+                assert_eq!(
+                    store.integrity_of(spelling),
+                    Some(first),
+                    "{spelling} was not decided by the rule that sorts first"
+                );
+            }
+        }
+    }
+
     /// On a volume that holds `Docs` and `docs` apart they are two files, so a rule about one
     /// decides nothing about the other, and trust does not widen to a sibling.
     #[test]
@@ -1224,5 +1279,73 @@ mod tests {
         map.copy_beneath("", "/state/c2");
         assert!(!map.withdraw_beneath("/state/c2"));
         assert_eq!(map.integrity_of("/state/c2/a.rs"), None);
+    }
+
+    /// Closing a directory takes its own trusted rule and leaves every rule that lowers a path.
+    #[test]
+    fn withdrawing_trust_keeps_every_rule_that_lowers_a_path() {
+        let mut map = TrustStore::new("/work");
+        map.trust("/notes");
+        map.undecide("/notes/inbox");
+        map.distrust("/notes/fetched.md");
+        map.trust("/shared");
+        map.distrust("/mail");
+
+        assert!(map.withdraw_trust("/notes"));
+        assert_eq!(
+            map.keyed().collect::<Vec<_>>(),
+            vec![
+                ("/mail", Some(Integrity::Untrusted)),
+                ("/notes/fetched.md", Some(Integrity::Untrusted)),
+                ("/notes/inbox", None),
+                ("/shared", Some(Integrity::Trusted)),
+            ]
+        );
+        assert!(!map.withdraw_trust("/mail"), "a distrust was withdrawn");
+        assert!(!map.withdraw_trust("/notes/inbox"));
+        assert_eq!(map.integrity_of("/mail/a.md"), Some(Integrity::Untrusted));
+    }
+
+    /// A trusted rule above the closed directory does not take over from the rule withdrawn.
+    #[test]
+    fn withdrawing_trust_beneath_a_trusted_rule_leaves_the_path_undecided() {
+        let mut map = TrustStore::new("/work");
+        map.trust("/home");
+        map.trust("/home/downloads");
+        map.trust("/home/notes");
+        map.trust("/home/notes/inbox");
+
+        assert!(map.withdraw_trust("/home/downloads"));
+        assert_eq!(map.integrity_of("/home/downloads/a.md"), None);
+        assert!(map.withdraw_trust("/home/notes"));
+        assert_eq!(map.integrity_of("/home/notes/a.md"), None);
+        assert_eq!(
+            map.integrity_of("/home/notes/inbox/a.md"),
+            Some(Integrity::Trusted)
+        );
+        assert_eq!(map.integrity_of("/home/a.md"), Some(Integrity::Trusted));
+    }
+
+    /// On a volume that folds case, the rule under another spelling of the name is the same rule.
+    #[test]
+    fn withdrawing_trust_reaches_every_spelling_a_folding_volume_reads_as_one() {
+        let mut map = TrustStore::new("/work").folding_case(true);
+        map.trust("/Users/x/Notes");
+        map.distrust("/Users/x/NOTES/fetched.md");
+
+        assert!(map.withdraw_trust("/Users/x/notes"));
+        assert_eq!(map.integrity_of("/Users/x/notes/a.md"), None);
+        assert_eq!(
+            map.integrity_of("/Users/x/notes/fetched.md"),
+            Some(Integrity::Untrusted)
+        );
+
+        let mut exact = TrustStore::new("/work");
+        exact.trust("/Users/x/Notes");
+        assert!(!exact.withdraw_trust("/Users/x/notes"));
+        assert_eq!(
+            exact.integrity_of("/Users/x/Notes/a.md"),
+            Some(Integrity::Trusted)
+        );
     }
 }

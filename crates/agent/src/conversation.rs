@@ -81,6 +81,31 @@ pub enum Composed {
         /// Its media type.
         media: String,
     },
+    /// A tool result sent as prose rather than in the API's own shape, which is the fallback for
+    /// a round whose calls carried no ids or whose own account of itself was quarantined.
+    ///
+    /// House-keeping for the planner: a transcript draws no row for it, and compaction never cuts
+    /// between it and the round above it.
+    ToolResult,
+    /// The note a resume adds to say the references the planner was handed no longer name
+    /// anything.
+    ///
+    /// House-keeping for the planner. Not written to a snapshot, since every resume adds its own.
+    Resumed,
+    /// The summary that stands in for the messages a compaction took out of the request.
+    ///
+    /// House-keeping for the planner: the archive already holds what it stands in for, so a
+    /// transcript drawing it would show the session twice.
+    Summary,
+}
+
+impl Composed {
+    /// Whether this is a message written for the planner that no transcript draws.
+    ///
+    /// Decided from the tag, so a prompt a person typed is never taken for one by what it says.
+    fn is_housekeeping(&self) -> bool {
+        matches!(self, Self::ToolResult | Self::Resumed | Self::Summary)
+    }
 }
 
 /// One message as the record holds it: what was sent, and why the agent wrote it.
@@ -348,8 +373,9 @@ impl Conversation {
     /// cut inside a round and makes [`RECENT_ROUNDS_KEPT`] count results rather than rounds.
     fn by_round(&self) -> Option<usize> {
         self.cut_keeping(
-            &self.boundaries(|message| {
-                message.tool_call_id.is_none() && !is_a_prose_result(message)
+            &self.boundaries(|stored| {
+                stored.message.tool_call_id.is_none()
+                    && !matches!(stored.composed, Some(Composed::ToolResult))
             }),
             RECENT_ROUNDS_KEPT,
         )
@@ -378,23 +404,17 @@ impl Conversation {
 
         let given_up = points[..head]
             .iter()
-            .filter(|&&index| {
-                !self.messages[index]
-                    .message
-                    .content
-                    .as_text()
-                    .is_some_and(|text| text.starts_with(COMPACTED_PREFIX))
-            })
+            .filter(|&&index| !matches!(self.messages[index].composed, Some(Composed::Summary)))
             .count();
         (given_up >= kept).then_some(cut)
     }
 
     /// The indices a cut may fall on, by whatever rule is asking.
-    fn boundaries(&self, is_one: impl Fn(&Message) -> bool) -> Vec<usize> {
+    fn boundaries(&self, is_one: impl Fn(&Stored) -> bool) -> Vec<usize> {
         self.messages
             .iter()
             .enumerate()
-            .filter(|(_, stored)| is_one(&stored.message))
+            .filter(|(_, stored)| is_one(stored))
             .map(|(index, _)| index)
             .collect()
     }
@@ -425,7 +445,13 @@ impl Conversation {
             note.push_str("\n\n");
             note.push_str(&live);
         }
-        self.messages.insert(0, Stored::plain(Message::user(note)));
+        self.messages.insert(
+            0,
+            Stored {
+                message: Message::user(note),
+                composed: Some(Composed::Summary),
+            },
+        );
 
         // The figure described a conversation that no longer exists, and nothing has measured
         // this one. Left alone it would say the context is still full: the gauge would show a
@@ -593,14 +619,7 @@ impl Conversation {
             messages: self
                 .messages
                 .iter()
-                .filter(|stored| {
-                    !(stored.message.role == Role::User
-                        && stored
-                            .message
-                            .content
-                            .as_text()
-                            .is_some_and(|text| text.starts_with(RESUMED_PREFIX)))
-                })
+                .filter(|stored| !matches!(stored.composed, Some(Composed::Resumed)))
                 .cloned()
                 .collect(),
             context: match self.context {
@@ -632,7 +651,10 @@ impl Conversation {
     pub fn restored(snapshot: Snapshot) -> Self {
         let mut messages = snapshot.messages;
         if let Some(note) = dead_references(snapshot.references) {
-            messages.push(Stored::plain(Message::user(note)));
+            messages.push(Stored {
+                message: Message::user(note),
+                composed: Some(Composed::Resumed),
+            });
         }
 
         Self {
@@ -684,6 +706,12 @@ impl Conversation {
         // session, and they are the one reading this.
         for stored in self.archive.iter().chain(self.messages.iter()) {
             if let Some(why) = &stored.composed {
+                // Written for the planner and said by no one: a prose tool result, the resume
+                // note, and the summary standing in for what the archive above already holds.
+                // Drawn as a prompt any of them would look like something the user typed.
+                if why.is_housekeeping() {
+                    continue;
+                }
                 said.push(Said::Composed {
                     why: why.clone(),
                     text: stored.message.content.text(),
@@ -692,25 +720,6 @@ impl Conversation {
             }
             let message = &stored.message;
             match message.role {
-                Role::User
-                    if message
-                        .content
-                        .as_text()
-                        .is_some_and(|text| text.starts_with(TOOL_RESULT_PREFIX)) => {}
-                // Addressed to the planner, not said by anyone. Drawn as a prompt it would look
-                // like something the user typed and never did.
-                Role::User
-                    if message
-                        .content
-                        .as_text()
-                        .is_some_and(|text| text.starts_with(RESUMED_PREFIX)) => {}
-                // Written for the planner, and the archive above already holds what it stands
-                // in for, so drawing it would show the session twice.
-                Role::User
-                    if message
-                        .content
-                        .as_text()
-                        .is_some_and(|text| text.starts_with(COMPACTED_PREFIX)) => {}
                 // `text` rather than the whole content: an attachment is drawn from what the
                 // interface recorded about it, and a data URI in the scrollback is not a transcript.
                 Role::User => said.push(Said::User(message.content.text())),
@@ -769,44 +778,31 @@ const RECENT_ROUNDS_KEPT: usize = 6;
 /// A prompt the user typed, or a summary standing in for the ones before it. A tool result sent
 /// as prose is not one, whatever it looks like: it belongs to the round above it, and cutting
 /// between the two would separate a call from its answer.
-fn opens_an_exchange(message: &Message) -> bool {
-    message.role == Role::User
-        && !is_a_prose_result(message)
-        && !message
-            .content
-            .as_text()
-            .is_some_and(|text| text.starts_with(RESUMED_PREFIX))
-}
-
-/// Whether a message is a tool result sent as prose rather than in the API's own shape.
-///
-/// The fallback for a round the API's own fields cannot carry: one whose calls arrived without
-/// ids, which nothing could then answer by id, or one whose own account of itself was
-/// quarantined and so replays no calls. Either way it looks exactly like a prompt to anything
-/// reading roles and ids, and it is the one thing here recognised by its text: examining it
-/// decides only where a cut may fall, and the text being examined has already been past the
-/// present gate.
-fn is_a_prose_result(message: &Message) -> bool {
-    message.role == Role::User
-        && message
-            .content
-            .as_text()
-            .is_some_and(|text| text.starts_with(TOOL_RESULT_PREFIX))
+fn opens_an_exchange(stored: &Stored) -> bool {
+    stored.message.role == Role::User
+        && !matches!(
+            stored.composed,
+            Some(Composed::ToolResult | Composed::Resumed)
+        )
 }
 
 /// How a tool result is introduced when it is sent as prose rather than in the API's own shape.
 ///
-/// Public because an interface replaying a conversation has to tell one from a prompt, and a
-/// literal repeated in two crates is a literal that will disagree with itself.
+/// Words for the planner to read. Nothing decides from them: the message is recorded with
+/// [`Composed::ToolResult`], and a prompt a person typed that begins the same way is a prompt.
 pub const TOOL_RESULT_PREFIX: &str = "Result of ";
 
-/// How the note about a resume begins, so a transcript can tell it from something a person said.
+/// How the note about a resume begins.
+///
+/// Words for the planner to read. The note is recorded with [`Composed::Resumed`] and nothing
+/// decides from the words.
 pub const RESUMED_PREFIX: &str = "This session was resumed.";
 
 /// How the summary standing in for a compacted exchange begins.
 ///
-/// Public for the same reason as the others: a transcript has to tell it from a prompt, and a
-/// literal repeated in two crates is a literal that will disagree with itself.
+/// Words for the planner to read. The summary is recorded with [`Composed::Summary`] and nothing
+/// decides from the words.
+///
 /// The whole introduction, not an opening fragment of one. A prefix kept separately from the
 /// words it is a prefix of is two literals that have to agree, and they stop agreeing.
 ///
@@ -1141,12 +1137,76 @@ mod tests {
         ));
         conversation.push(Message::tool_result("call-1", "the file's whole contents"));
         // A result sent as prose, which is the fallback in an untrusted context.
-        conversation.push(Message::user(format!(
-            "{TOOL_RESULT_PREFIX}read_file: the file's whole contents"
-        )));
+        conversation.push_composed(
+            Message::user(format!(
+                "{TOOL_RESULT_PREFIX}read_file: the file's whole contents"
+            )),
+            Composed::ToolResult,
+        );
 
         let recounted = conversation.recounted();
         assert_eq!(recounted, vec![said_tool("Read(secrets.txt)", "")]);
+    }
+
+    /// A person may type a prompt that begins with the words the agent opens its own notes with.
+    /// What a message is comes from the record, so each of these is still a prompt: it is drawn,
+    /// numbered, and found again by a fork.
+    #[test]
+    fn a_typed_prompt_that_opens_like_a_note_is_still_a_prompt() {
+        for prefix in [TOOL_RESULT_PREFIX, RESUMED_PREFIX, COMPACTED_PREFIX] {
+            let prompt = format!("{prefix}my experiment: please explain it");
+            let mut conversation = Conversation::new();
+            conversation.push(Message::user(prompt.clone()));
+            conversation.push(Message::assistant("done"));
+
+            assert_eq!(
+                conversation.recounted(),
+                vec![Said::User(prompt.clone()), Said::Assistant("done".into())],
+                "prefix {prefix:?}"
+            );
+            assert_eq!(
+                conversation.snapshot().messages.len(),
+                2,
+                "the saved record dropped a typed prompt that began {prefix:?}"
+            );
+            assert_eq!(
+                conversation.compaction_boundary(),
+                None,
+                "prefix {prefix:?}"
+            );
+        }
+    }
+
+    /// And a typed prompt that opens like a note still counts as an exchange for compaction, so
+    /// the cut may land in front of it.
+    #[test]
+    fn a_typed_prompt_that_opens_like_a_note_is_a_place_to_cut() {
+        let mut conversation = Conversation::new();
+        for (prompt, answer) in [
+            ("first", "a"),
+            ("second", "b"),
+            ("third", "c"),
+            (
+                &format!("{TOOL_RESULT_PREFIX}my experiment: explain it") as &str,
+                "d",
+            ),
+        ] {
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant(answer));
+        }
+
+        // Four exchanges, two kept: the cut is in front of the third.
+        assert_eq!(conversation.compaction_boundary(), Some(4));
+        conversation.compacted(4, "earlier");
+        assert_eq!(
+            conversation
+                .recounted()
+                .iter()
+                .filter(|said| matches!(said, Said::User(_)))
+                .count(),
+            4,
+            "the summary was drawn as a prompt or a typed one was dropped"
+        );
     }
 
     /// A round with several calls is several lines, in the order they were asked for, each with
@@ -1415,9 +1475,10 @@ mod tests {
                 // No `tool_calls` field, which is what the fallback produces.
                 conversation.push(Message::assistant("looking"));
                 for answer in 0..answers {
-                    conversation.push(Message::user(format!(
-                        "{TOOL_RESULT_PREFIX}search:\n\nresult {answer}"
-                    )));
+                    conversation.push_composed(
+                        Message::user(format!("{TOOL_RESULT_PREFIX}search:\n\nresult {answer}")),
+                        Composed::ToolResult,
+                    );
                 }
             }
 

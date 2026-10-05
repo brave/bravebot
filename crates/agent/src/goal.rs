@@ -142,17 +142,6 @@ pub enum Verdict {
     Quarantined,
 }
 
-impl Verdict {
-    /// Whether this verdict sends the work back for another turn.
-    ///
-    /// One of the five does. Every other outcome ends the goal, including the two that mean the
-    /// judge could not be understood: a stopping condition that cannot be read is not a reason to
-    /// keep a session working, and stopping is the direction this fails in.
-    pub fn carries_on(&self) -> bool {
-        matches!(self, Self::NotMet { .. })
-    }
-}
-
 /// Read a verdict out of what the judge wrote.
 ///
 /// The first line is the whole of the decision, matched literally against three words and nothing
@@ -483,32 +472,6 @@ mod tests {
                 reason: String::new()
             }
         );
-    }
-
-    /// One of the five sends the work back. The two that mean the judge could not be understood
-    /// end the goal, because a stopping condition nobody can read is not a reason to keep working.
-    #[test]
-    fn only_a_condition_that_is_not_met_yet_carries_the_work_on() {
-        assert!(
-            Verdict::NotMet {
-                reason: String::new()
-            }
-            .carries_on()
-        );
-        assert!(
-            !Verdict::Met {
-                reason: String::new()
-            }
-            .carries_on()
-        );
-        assert!(
-            !Verdict::Impossible {
-                reason: String::new()
-            }
-            .carries_on()
-        );
-        assert!(!Verdict::Unreadable.carries_on());
-        assert!(!Verdict::Quarantined.carries_on());
     }
 
     /// A bare reason arriving as a user message reads as the person having typed it. The planner

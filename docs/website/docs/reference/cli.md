@@ -19,7 +19,7 @@ Usage:
   bravebot --fork <id>                   Fork a session and start exploring a different path
   bravebot doctor                        Check configuration and confinement
   bravebot auth login [way]              Sign in to a model service, listing every way when none is named
-  bravebot auth logout leo               Forget an imported Leo Premium subscription
+  bravebot auth logout <way>             Forget an imported Leo Premium subscription or a stored gateway key
   bravebot import-leo-creds [channel]    Import a Leo Premium subscription
   bravebot import-providers              Import a model service Claude Code or opencode configured
   bravebot mcp <command>                 Declare, list and approve MCP servers
@@ -39,6 +39,7 @@ Usage:
 | `bravebot doctor` | report configuration and confinement, changing nothing |
 | `bravebot auth login [way]` | sign in to a model service, listing the ways when none is named ([below](#auth)) |
 | `bravebot auth logout leo` | forget an imported Leo Premium subscription |
+| `bravebot auth logout gateway [id]` | forget a gateway key `auth login gateway` stored |
 | `bravebot import-leo-creds [channel]` | import a Leo Premium subscription |
 | `bravebot import-providers` | import a model service Claude Code or opencode configured, asking first |
 | `bravebot mcp <command>` | declare, list, approve and remove MCP servers ([below](#mcp)) |
@@ -60,6 +61,8 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--effort <level>` | how hard this run asks the model to think; outranks every other way one is named ([below](#--effort-level)) |
 | `--settings <path>` | read one more settings file, above every layer found ([below](#--settings-path)) |
 | `--agent <name>` | address every turn to one of your definitions, as `/agent` does for one ([below](#--agent-name)) |
+| `--system-prompt <prompt>` | replace the opening of the system prompt for this run; the rest of it stays ([below](#--system-prompt-prompt-and---append-system-prompt-prompt)) |
+| `--append-system-prompt <prompt>` | add your own words to the system prompt for this run, after the project's `AGENTS.md` ([below](#--system-prompt-prompt-and---append-system-prompt-prompt)) |
 | `--json` | put one result object on stdout in the reply's place ([below](#--json)) |
 | `--trace` | print the audit trail to stderr |
 | `--vet` | let a check answer about a quarantined slot, for this run: it releases what it finds nothing in, and where nobody can be asked it keeps back everything else ([below](#--vet)) |
@@ -75,6 +78,8 @@ each combines with every way of starting, one another included: `--incognito`,
 `--dangerously-skip-permissions`, `--settings` and `--vet`. `--agent` is taken out there too, and
 combines with a session, `--plain` and a one-shot run, but not with `--resume`, `--continue`,
 `--fork` or `--mode manifest`.
+`--system-prompt` and `--append-system-prompt` are taken out there as well, and combine with every
+way of starting except `--mode manifest`.
 
 `--incognito` writes nothing under `~/.bravebot`. See
 [an incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind).
@@ -229,6 +234,37 @@ Under `--agent`, a `/loop` with no interval stops after one tick, because an add
 schedule the next one. Give the loop an interval to keep it running.
 :::
 
+## `--system-prompt <prompt>` and `--append-system-prompt <prompt>`
+
+```sh
+bravebot --append-system-prompt "Answer in French." -p "summarise the last commit"
+bravebot --system-prompt "You are a release-notes editor." -p "draft the notes"
+```
+
+Puts your own words in the system prompt of one run. They apply to every turn of it: typed lines,
+`/loop` ticks and `/goal` rounds.
+
+`--append-system-prompt` adds the words as the last standing source, after the project's
+`AGENTS.md`, so they have the last word ([Instructions](../customize/instructions.md#words-from-the-command-line)).
+`--system-prompt` replaces the opening of the system prompt, the paragraph saying what kind of
+assistant this is. **It does not replace the rest.** What teaches the planner that a tool's output
+is data, the facts about your machine, the mode and the goal are still sent. A delegate is given the
+appended words and never the replaced opening. The aside, the summary, the goal check and the other
+checks are given neither.
+
+The words grant nothing. A write is still put to you where it would have been, and plan mode still
+refuses it. A session record does not store them, so resuming without the flag runs without them.
+
+**The words carry your authority, whatever they came from.** `--append-system-prompt "$(cat x)"`
+gives the file's bytes the same standing as something you typed. Content that should not have that
+standing is better piped in, where it is quarantined.
+
+A flag with no words after it, a blank one, or one whose words open with `-` and hold no space is
+refused with status 2. A sentence opening with `-` is words. If a flag is given twice, the last is
+used. Both are refused with `--mode manifest`, and with `doctor`, `auth`, `mcp`,
+`import-leo-creds` and `import-providers`. There is no settings key for them: words a checkout
+always wants belong in its `AGENTS.md`.
+
 ## `--json`
 
 ```sh
@@ -329,6 +365,11 @@ Answers "what will this actually use", and changes nothing. It reports:
 - for each AWS account, whether it is signed in, and `bravebot auth login bedrock` where signing in
   is what is missing;
 - which settings files are in force, and which of them won a name more than one set;
+- any top-level key in a settings file that this build does not read, by name and file, never its
+  value: the file still applies and the report still passes;
+- any project or local settings file whose `provider` block or `model` key was ignored, since those two
+  are read from your own file and the one `--settings` names;
+- whether a gateway key is stored by `bravebot auth login gateway`, without printing it;
 - any settings file that tries to declare an [MCP server](../customize/mcp-servers.md), which fails
   the report, since only `~/.bravebot/mcp.json` declares one;
 - which names a machine-level file pinned, and where that file is;
@@ -369,8 +410,9 @@ what was already true.
 ## `auth`
 
 ```sh
-bravebot auth login [leo [channel] | bedrock | import]
+bravebot auth login [leo [channel] | bedrock | import | gateway [id]]
 bravebot auth logout leo
+bravebot auth logout gateway [id]
 ```
 
 With no way named, `auth login` lists the ways to sign in, marks the ones already in use, and asks
@@ -379,11 +421,16 @@ which to run. It needs a terminal for that. A script names the way instead:
 | Way | What it runs |
 |---|---|
 | `leo [channel]` | what `import-leo-creds [channel]` runs |
-| `bedrock` | the AWS sign-in a session would make on its first turn, for every account the configuration names |
+| `bedrock` | the AWS sign-in a session would make on its first turn, for every account the configuration names, then sets `BRAVEBOT_USE_BEDROCK` to `1` in `~/.bravebot/settings.json` once the `AWS_PROFILE` account signs in, unless that file names it, something turns Bedrock off, or the session is incognito |
 | `import` | what `import-providers` runs |
+| `gateway [id]` | asks for the key of a gateway a provider block names, with nothing shown as it is typed, and keeps it in `~/.bravebot/gateway-keys.json` |
 
-`auth logout leo` runs `import-leo-creds --forget`. In an incognito session the `leo` and `import`
-ways are refused as their commands are, and `bedrock` and `auth logout leo` are allowed. See
+`gateway` needs a terminal even with the id named, since the key is typed rather than given as an
+argument. With one gateway configured it asks for no id.
+
+`auth logout leo` runs `import-leo-creds --forget`. `auth logout gateway [id]` forgets a stored key,
+and the id can be left off when only one is stored. In an incognito session the `leo`, `import` and
+`gateway` ways are refused, and `bedrock` and both forms of `auth logout` are allowed. See
 [Signing in](../customize/signing-in.md).
 
 ## `import-leo-creds`
@@ -477,7 +524,7 @@ are in [Reading the transcript](../using/transcript.md#the-scroller).
 | `/theme [name]` | Choose which theme paints the interface |
 | `/effort [level]` | Choose how hard to think before answering |
 | `/config` | Choose how the input box edits text |
-| `/add-dir <path>` | Open another directory, and trust it for this session |
+| `/add-dir <path> \| close <path>` | Open another directory and trust it for this session, or close one |
 | `/cd <path>` | Work in another directory from now on, and trust it for this session |
 | `/rename <name>` | Call this conversation something else |
 | `/compact` | Summarise the conversation so far, keeping the recent part |
@@ -486,6 +533,9 @@ are in [Reading the transcript](../using/transcript.md#the-scroller).
 | `/loop [interval] <prompt>` | Send a prompt again and again, on your interval or at a pace each turn sets |
 | `/goal [<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch [stop <n>]` | List the files this session is watching, and stop one by its number |
+| `/panel` | Show or hide the info panel beside the transcript |
+| `/pr [<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
+| `/issue [<url> \| clear]` | Say which issue this session is for, show it, or clear it |
 | `/manifest <task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
 | `/export [path]` | Export the session transcript to a markdown file |
 | `/undo` | Rewind one turn and put back the files it wrote |

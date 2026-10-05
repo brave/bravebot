@@ -13,6 +13,21 @@ and a definition is one more, written down rather than compiled in.
 Put one in `~/.bravebot/agents/<name>.md` and it is available in every project; put it in
 `<workspace>/.bravebot/agents/<name>.md` and it belongs to that project.
 
+Making a bot in the desktop app writes a definition to `~/.bravebot/agents/<name>.md`. It is a
+`worker` with `memory: project` that names no tools, so it keeps the session's reach. The
+description is the first line of the bot's purpose that is not blank, and the body is the whole
+purpose. The name is the bot's slug, or the slug with a number after it where another definition
+already has the name. An existing file is never written over. A model that is not one line, or a
+purpose with no line that is not blank, is refused and no bot is made. Editing the bot's purpose or
+model in the app rewrites the description, the body and the model of that file and leaves every
+other line as it is, so a `tools` line you added stays. Every turn in the bot's conversation,
+including the one the app sends after a compaction and the one a watch you armed fires, is
+addressed to that definition, as if you had typed `/agent <name>` for it. The bot's memory is the
+definition's own, `.bravebot/memory/<name>.md` in the bot's folder. If the file is removed or no
+longer loads, the bot runs nothing and says which definition it could not find. Editing the file by
+hand is how you narrow the bot's tools. Bots made before definitions existed keep working as they
+did until they are given one.
+
 ```markdown
 ---
 name: rule-reviewer
@@ -211,9 +226,28 @@ yourself with `/agent` is yours, so it works in your working tree and says so. A
 checkout keeps no [memory](#memory), so a definition with both keeps its memory only in a `/agent`
 turn, and bravebot says so when it loads the definition.
 
-The commands that bring a checkout's work back into your tree are not built yet. A checkout a
-delegate wrote in stays where it is until you remove it, and
-[`/status`](../reference/commands.md#status) lists each one the session has kept.
+A checkout shares its branches, tags, remote-tracking refs and stash with your working tree and with
+every other checkout, as any git worktree does. A `git fetch` a delegate runs in one moves
+`origin/main` in your working tree too, and several fetching at once can fail. A `git stash pop` in
+one can take an entry you stashed in your working tree. The planner and each delegate are told
+this. Each delegate is told not to use `git stash`, and the planner is told not to ask one to and to
+have the fetch done once rather than by each delegate.
+
+A delegate in a checkout is not offered the `lsp` tool, because the session's language servers are
+rooted at your working directory. The answer to the spawn says so.
+
+A checkout a delegate wrote in is kept, and the agent's reply names it by number with the paths the
+delegate typed for what it wrote. The agent brings those files back with
+[`apply_checkout`](../reference/tools.md#apply_checkout), and you are asked about each one, shown
+the difference from your own file as it is now, whatever your trust settings say about that path.
+Where the session has written that path in your working directory since the checkout was made, the
+question says so. Bringing a file back is an ordinary write, so [`/undo`](../reference/commands.md#undo) puts your file
+back. You can bring them back yourself with
+[`/checkouts apply`](../reference/commands.md#checkouts-apply-n--remove-n), which asks the same
+questions. A file a program wrote other than through a redirection is not found. A checkout stays
+where it is until you remove it with
+[`/checkouts remove`](../reference/commands.md#checkouts-apply-n--remove-n), and
+[`/status`](../reference/commands.md#status) and `/checkouts` list each one the session has kept.
 
 ## Which one wins
 
@@ -250,6 +284,9 @@ for the directory and is left out when you did not:
 Counted and never named, because a file in a project nobody vouched for can be given a name that
 reads like an instruction. A definition that fails the gate is dropped entirely rather than
 quarantined: an instruction is either followed or absent.
+
+A project definition that a `deny` [rule](configuration.md#permissions) covers, under the name it was
+found by or the file it links to, is not selectable, and you are told it was left out.
 
 **A definition's body is the whole of what a second agent is told it is.** A skill's body is
 guidance a turn may follow; this is more than that. Read one before you install it, the way you

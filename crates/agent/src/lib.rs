@@ -42,6 +42,7 @@ pub mod report;
 pub mod rewind;
 pub mod scratch;
 pub mod scrub;
+pub mod servers;
 pub mod shared;
 pub mod shell;
 pub mod skills;

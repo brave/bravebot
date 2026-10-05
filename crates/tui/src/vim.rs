@@ -530,10 +530,14 @@ pub fn counted(so_far: Option<u32>, c: char) -> Option<u32> {
 /// Whether a digit typed now is part of a count rather than the key an instruction is waiting for.
 ///
 /// With nothing waiting, and with an operator waiting for the stretch to act on: `3w` is three words
-/// and `d3w` deletes them. Everywhere else the wait is for one particular character and a digit is
-/// that character, so `f3` jumps to a `3` and `"3` swallows one.
+/// and `d3w` deletes them. An operator vi spells after `g` that this box lacks waits for its stretch
+/// the same way, so the `2` of `g?2iw` is a count. Everywhere else the wait is for one particular
+/// character and a digit is that character, so `f3` jumps to a `3` and `"3` swallows one.
 pub fn takes_a_count(waiting: Option<Pending>) -> bool {
-    matches!(waiting, None | Some(Pending::Operate(_)))
+    matches!(
+        waiting,
+        None | Some(Pending::Operate(_) | Pending::UnclaimedStretch)
+    )
 }
 
 /// The count an instruction carries, from the one in front of the operator and the one in front of
@@ -1689,6 +1693,7 @@ mod tests {
     fn a_digit_is_a_count_only_where_nothing_is_waiting_for_that_key() {
         assert!(takes_a_count(None));
         assert!(takes_a_count(Some(Pending::Operate(Operator::Delete))));
+        assert!(takes_a_count(Some(Pending::UnclaimedStretch)));
         assert!(!takes_a_count(Some(Pending::Find {
             forwards: true,
             short: false

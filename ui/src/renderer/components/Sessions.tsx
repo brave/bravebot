@@ -1,6 +1,7 @@
 import { SidebarRow, SidebarSearch } from './SidebarTools'
 import { shortAgo } from '../time'
 import { createContext, memo, useContext, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import type { SessionSummary } from '../../shared/protocol'
 import type { ContextTarget } from '../../shared/commands'
 import { keyOf } from '../../shared/forks'
@@ -12,7 +13,7 @@ import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
 import { conversationKey } from '../../shared/experience'
 import { useConversationPreferences, useExperienceValue, setConversation } from '../experience'
-import { ButtonMenu, Icon, ProgressRing } from '../nala'
+import { ButtonMenu, Icon, Menu, ProgressRing } from '../nala'
 
 /** What a row says about a session that is open somewhere: only what asks something of the reader. */
 export type SessionStatus = 'working' | 'answer' | 'approval' | 'failed'
@@ -74,6 +75,34 @@ const flagsOf = (conversations: Record<string, { pinned?: boolean; archived?: bo
     .join('\n')
 
 /**
+ * How many rows a list draws before it asks to draw more. Each row mounts Leo elements, and a
+ * store of a thousand sessions drawn at once blocks the window for longer than a frame budget
+ * allows. The search still runs over every session; this only limits what is drawn of the result.
+ */
+const PAGE = 100
+
+interface Page {
+  rows: SessionSummary[]
+  /** Rows of the list left undrawn. */
+  hidden: number
+  /** How many of those the next page draws. */
+  coming: number
+  /** The first row the next page draws, which takes focus when it does. */
+  first?: SessionSummary
+}
+
+/**
+ * The first `shown` rows of a list, and past them, in place, every row `keep` asks for: the
+ * open conversation and any asking something of the reader stay drawn wherever they fall.
+ */
+function page(list: SessionSummary[], shown: number, keep: (session: SessionSummary) => boolean): Page {
+  if (list.length <= shown) return { rows: list, hidden: 0, coming: 0 }
+  const rows = list.filter((session, index) => index < shown || keep(session))
+  const coming = list.slice(shown, shown + PAGE).filter((session) => !keep(session))
+  return { rows, hidden: list.length - rows.length, coming: coming.length, first: coming[0] }
+}
+
+/**
  * The left-hand column: one list across every project, newest first.
  *
  * Flat by default, because this is a chat list and a chat list has one column. The project
@@ -105,8 +134,12 @@ export function Sessions({
   const flags = useExperienceValue((experience) => flagsOf(experience.conversations))
   const [showArchived, setShowArchived] = useState(false)
   const [archiveOpen, setArchiveOpen] = useState(true)
+  const [limit, setLimit] = useState(PAGE)
+  const [archiveLimit, setArchiveLimit] = useState(PAGE)
+  const [groupLimits, setGroupLimits] = useState<Record<string, number>>({})
+  const info = useContext(SessionInfo)
 
-  const { active, archived } = useMemo(() => {
+  const { active: matched, archived: archivedMatched } = useMemo(() => {
     const marks = new Map(flags.split('\n').filter(Boolean).map((line) => {
       const [key, mark] = line.split('\u0000')
       return [key!, mark!] as const
@@ -120,6 +153,12 @@ export function Sessions({
       archived: found.filter((session) => mark(session).includes('a')),
     }
   }, [sessions, query, flags])
+  const keep = useCallback(
+    (session: SessionSummary) => session.id === openId || info[conversationKey(session.directory, session.id)]?.status !== undefined,
+    [openId, info],
+  )
+  const active = useMemo(() => page(matched, limit, keep), [matched, limit, keep])
+  const archived = useMemo(() => page(archivedMatched, archiveLimit, keep), [archivedMatched, archiveLimit, keep])
 
   const toggleGroup = useCallback(
     (directory: string) => {
@@ -130,14 +169,25 @@ export function Sessions({
     [collapsed, onCollapse],
   )
 
-  const groups = useMemo(() => (grouped ? grouping(active) : []), [grouped, active])
+  const groups = useMemo(() => (grouped ? grouping(matched) : []), [grouped, matched])
+  // Each group first draws the rows it has among the list's first page, so grouping mounts no
+  // more than the flat list does. Past that, each group pages on its own.
+  const reach = useMemo(() => {
+    const counts = new Map<string, number>()
+    if (grouped) for (const session of matched.slice(0, limit)) counts.set(session.directory, (counts.get(session.directory) ?? 0) + 1)
+    return counts
+  }, [grouped, matched, limit])
+  const moreInGroup = useCallback(
+    (directory: string, shown: number) => setGroupLimits((limits) => ({ ...limits, [directory]: shown + PAGE })),
+    [],
+  )
 
   // A live query opens every group for as long as it runs. A person who typed something and
   // got a heading with nothing under it has been shown the opposite of what they asked for,
   // and quietly reopening beats making them undo a fold they set days ago — which is why
   // this reads through `collapsed` rather than clearing it.
   const searching = query.trim().length > 0
-  const archivedShown = (showArchived || searching) && archived.length > 0
+  const archivedShown = (showArchived || searching) && archivedMatched.length > 0
 
   return (
     <>
@@ -172,26 +222,33 @@ export function Sessions({
         )}
         {/* Said separately, because the message above is a fact about the machine and would
             be a lie about a list that is merely filtered down to nothing. */}
-        {sessions.length > 0 && active.length === 0 && !archivedShown && (
+        {sessions.length > 0 && matched.length === 0 && !archivedShown && (
           <p className="sidebar-empty">
             {searching ? `No conversation matches “${query}”.` : 'No active conversations. Start a new session, or show archived ones from View options.'}
           </p>
         )}
-        {!grouped &&
-          active.map((session) => (
-            <Session
-              key={`${session.directory}/${session.id}`}
-              session={session}
-              current={session.id === openId}
-              forked={forked.has(keyOf(session.directory, session.id))}
-              onOpen={onOpen}
-            />
-          ))}
+        {!grouped && (
+          <>
+            {active.rows.map((session) => (
+              <Session
+                key={`${session.directory}/${session.id}`}
+                session={session}
+                current={session.id === openId}
+                forked={forked.has(keyOf(session.directory, session.id))}
+                onOpen={onOpen}
+              />
+            ))}
+            <ShowMore page={active} onMore={() => setLimit((shown) => shown + PAGE)} />
+          </>
+        )}
         {grouped &&
           groups.map((group) => (
             <Group
               key={group.directory}
               group={group}
+              shown={Math.max(reach.get(group.directory) ?? 0, groupLimits[group.directory] ?? 0)}
+              keep={keep}
+              onMore={moreInGroup}
               open={searching || !collapsed.has(group.directory)}
               onToggle={toggleGroup}
               openId={openId}
@@ -206,11 +263,11 @@ export function Sessions({
               <button type="button" className="session-group-fold" aria-expanded={archiveOpen || searching} onClick={() => setArchiveOpen(!archiveOpen)}>
                 <Icon className={`chevron ${archiveOpen || searching ? 'open' : ''}`} name="carat-right" />
                 <span className="session-group-name">Archived</span>
-                <span className="count num">{archived.length}</span>
+                <span className="count num">{archivedMatched.length}</span>
               </button>
             </div>
             <Fold open={archiveOpen || searching}>
-              {archived.map((session) => (
+              {archived.rows.map((session) => (
                 <Session
                   key={`${session.directory}/${session.id}`}
                   session={session}
@@ -219,11 +276,34 @@ export function Sessions({
                   onOpen={onOpen}
                 />
               ))}
+              <ShowMore page={archived} onMore={() => setArchiveLimit((shown) => shown + PAGE)} />
             </Fold>
           </section>
         )}
       </div>
     </>
+  )
+}
+
+/**
+ * The row at the foot of a capped list that draws the next page of it.
+ *
+ * Focus moves to the first row it drew, since this button is gone once nothing is left to draw.
+ */
+function ShowMore({ page: { hidden, coming, first }, onMore }: { page: Page; onMore: () => void }): React.JSX.Element | null {
+  if (hidden <= 0) return null
+  const more = (event: React.MouseEvent<HTMLButtonElement>): void => {
+    const list = event.currentTarget.parentElement
+    flushSync(onMore)
+    const key = first && conversationKey(first.directory, first.id)
+    const row = [...(list?.querySelectorAll<HTMLElement>(':scope > .session-row') ?? [])].find((item) => item.dataset.session === key)
+    row?.querySelector<HTMLElement>('button.session')?.focus()
+  }
+  return (
+    <button type="button" className="sidebar-row session-show-more" data-test="show-more-sessions" onClick={more}>
+      <Icon name="carat-down" />
+      <span className="sidebar-row-label num">{coming === hidden ? `Show ${coming} more` : `Show ${coming} more of ${hidden}`}</span>
+    </button>
   )
 }
 
@@ -243,6 +323,9 @@ export function Sessions({
  */
 function Group({
   group,
+  shown,
+  keep,
+  onMore,
   open,
   onToggle,
   openId,
@@ -251,6 +334,9 @@ function Group({
   onNew,
 }: {
   group: Group
+  shown: number
+  keep: (session: SessionSummary) => boolean
+  onMore: (directory: string, shown: number) => void
   open: boolean
   onToggle: (directory: string) => void
   openId: string | undefined
@@ -258,6 +344,7 @@ function Group({
   onOpen: (summary: SessionSummary) => void
   onNew: (directory: string) => void
 }): React.JSX.Element {
+  const drawn = page(group.sessions, shown, keep)
   return (
     <section className="session-group-section">
       {/* The full path in the tooltip, because two checkouts of one project share a basename
@@ -287,7 +374,7 @@ function Group({
         />
       </div>
       <Fold open={open}>
-        {group.sessions.map((session) => (
+        {drawn.rows.map((session) => (
           <Session
             key={`${session.directory}/${session.id}`}
             session={session}
@@ -296,6 +383,7 @@ function Group({
             onOpen={onOpen}
           />
         ))}
+        <ShowMore page={drawn} onMore={() => onMore(group.directory, shown)} />
       </Fold>
     </section>
   )
@@ -327,15 +415,17 @@ const Session = memo(function Session({
   const preferences = useConversationPreferences(key)
   const info = useContext(SessionInfo)[key]
   const [menu, setMenu] = useState(false)
-  const anchor = useRef<HTMLElement>(null)
-  const shutReason = useRef('explicit')
-  const choose = (id: 'pin' | 'archive') => {
-    setMenu(false)
-    anchor.current?.focus()
+  const trigger = useRef<HTMLElement>(null)
+  const choose = (id: 'pin' | 'archive') =>
     setConversation(key, id === 'pin' ? { pinned: !preferences?.pinned } : { archived: !preferences?.archived })
+  const shut = ({ reason }: { reason: string }) => {
+    setMenu(false)
+    // Escape and a chosen item return focus to the button that opened the menu; a click elsewhere
+    // leaves it where the pointer landed.
+    if (reason !== 'blur') trigger.current?.focus()
   }
   const status = info?.status
-  return <div className={`session-row${current ? ' current' : ''}${menu ? ' menu-open' : ''}`}>
+  return <div className={`session-row${current ? ' current' : ''}${menu ? ' menu-open' : ''}`} data-session={key}>
     <button type="button" className={`session${current ? ' current' : ''}`} aria-current={current ? 'true' : undefined}
       onClick={() => onOpen(session)} onContextMenu={contextMenu('session', session.id)}>
       <span className="session-status" data-status={status} data-tooltip={status ? STATUS_WORDS[status] : info?.bot?.name}>
@@ -359,24 +449,21 @@ const Session = memo(function Session({
       {forked && <span className="offscreen">Forked.</span>}
       {status && <span className="offscreen">, {STATUS_WORDS[status]}</span>}
     </button>
-    <ButtonMenu className="session-more-menu" isOpen={menu} placement="bottom-end" positionStrategy="fixed"
-      onClose={(detail) => { shutReason.current = detail.reason }}
-      onChange={({ isOpen }) => {
-        setMenu(isOpen)
-        // Escape returns focus to the button that opened the menu; a click elsewhere leaves it
-        // where the pointer landed.
-        if (!isOpen && shutReason.current !== 'blur') anchor.current?.focus()
-        if (!isOpen) shutReason.current = 'explicit'
-      }}>
-      <IconButton ref={anchor} slot="anchor-content" icon="more-horizontal" size="tiny" className="session-more"
-        label={`Actions for ${session.title}`} tooltip={false} hasPopup="menu" expanded={menu} />
-      <leo-menu-item onClick={() => choose('pin')}>
-        <span className="menu-icon-row"><Icon name="pin" />{preferences?.pinned ? 'Unpin conversation' : 'Pin conversation'}</span>
-      </leo-menu-item>
-      <leo-menu-item onClick={() => choose('archive')}>
-        <span className="menu-icon-row"><Icon name="inbox" />{preferences?.archived ? 'Restore conversation' : 'Archive conversation'}</span>
-      </leo-menu-item>
-    </ButtonMenu>
+    <div className="session-more-menu">
+      <IconButton ref={trigger} icon="more-horizontal" size="tiny" className="session-more"
+        label={`Actions for ${session.title}`} tooltip={false} hasPopup="menu" expanded={menu}
+        onClick={() => setMenu((open) => !open)} />
+      {menu && (
+        <Menu isOpen target={trigger.current ?? undefined} placement="bottom-end" positionStrategy="fixed" onClose={shut}>
+          <leo-menu-item onClick={() => choose('pin')}>
+            <span className="menu-icon-row"><Icon name="pin" />{preferences?.pinned ? 'Unpin conversation' : 'Pin conversation'}</span>
+          </leo-menu-item>
+          <leo-menu-item onClick={() => choose('archive')}>
+            <span className="menu-icon-row"><Icon name="inbox" />{preferences?.archived ? 'Restore conversation' : 'Archive conversation'}</span>
+          </leo-menu-item>
+        </Menu>
+      )}
+    </div>
   </div>
 })
 

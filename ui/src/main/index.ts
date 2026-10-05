@@ -33,7 +33,9 @@ import {
   nudgeDue,
   releaseBotSession,
   retireBot,
-  saveBot,
+  saveBotModel,
+  saveFormBot,
+  migrateBot,
   consolidationPrompt,
   AFTER_COMPACTION,
 } from './bots'
@@ -41,7 +43,7 @@ import { isBotModel, withoutBot, type Bot } from '../shared/bots'
 import { isSessionId, parseForkResult } from '../shared/forks'
 import { rootForSession, forgetRoot, list, noteRoot, open as openInApp, preview, search, chooseAttachments, attachmentPaths } from './files'
 import { isSubpath } from '../shared/files'
-import { chooseDirectory } from './opened'
+import { chooseDirectory, mayOpenSessionIn, offerDirectories } from './opened'
 import {
   parseExportRequest,
   suggestedFilename,
@@ -170,6 +172,14 @@ async function sendBotTurn(
 ): Promise<{ ok?: unknown; error?: BotFailure }> {
   if (!bridge) return { error: { code: 'no_bridge', message: 'the agent is not running' } }
 
+  // A bot made before definitions is given one first, and its old memory is recorded as untrusted
+  // (MEMORY-11). Nothing is sent until that has happened, so a briefing never names the old path
+  // of a bot whose notes are not yet recorded.
+  try {
+    held = await migrateBot(held, (method, params) => bridge!.request(method, params))
+  } catch (error) {
+    return { error: { code: 'no_definition', message: `${held.name} could not be given a definition: ${String(error)}` } }
+  }
   botHandles.set(session, held.slug)
 
   // `recall` is left off entirely in the ordinary case rather than sent as `true`. The agent
@@ -181,7 +191,14 @@ async function sendBotTurn(
   if (composed) params.composed = composed
   const selectedModel = held.model ?? model
   if (selectedModel !== undefined) params.model = selectedModel
-  if (grounded) {
+  if (held.definition !== null) {
+    // Every turn in this bot's conversation is addressed to its definition (MEMORY-10), the ones
+    // this process composes included. The name is the row's, judged a slug when it was stored, and
+    // never anything a window or a reply said. The purpose reaches the run as the definition's body
+    // and the memory's path as the agent puts it, so there is no briefing to attach and nothing
+    // for `grounded` to decide.
+    params.definition = held.definition
+  } else if (grounded) {
     // Made afresh on the way into every send rather than once when the bot was created. A file a
     // turn names and cannot read is not a smaller turn, it is a failed one — so a memory deleted
     // by a `git clean`, or a branch switched to one that never had it, is repaired here instead of
@@ -423,12 +440,21 @@ const ALLOWED = new Set([
   'manifest.read',
   'manifest.reply',
   'exposure.reply',
+  'mcp-server.reply',
+  'mcp-tools.reply',
+  'mcp-call.reply',
+  'mcp-move.reply',
   'ask.reply',
   'trust.reply',
   'permissions.list',
   'permissions.revoke',
   'doctor',
   'hooks.inspect',
+  'connectors.list',
+  'connectors.preview',
+  'connectors.connect',
+  'connectors.disconnect',
+  'connectors.remove',
   'settings.inspect',
   'watches.list',
   'watches.add',
@@ -448,9 +474,8 @@ const FILTERS: Record<ExportFormat, Electron.FileFilter> = {
  * The handle comes off the answer in every case. The directory comes off the answer too where
  * there is one — an opened session carries its record, a forked one its own directory — and off
  * the request for `session.new`, which answers with a handle and a branch and nothing else. That
- * one path is the same value this handler already trusts enough to write to the recents list a few
- * lines up, it arrived from a native picker or a list the main process itself keeps, and it is
- * checked as a project path before it becomes a root.
+ * one path has already passed `mayOpenSessionIn` in the handler, so it is a folder the picker or a
+ * list this process keeps handed over, and is checked as a project path before it becomes a root.
  */
 function noteOpenedRoot(method: string, params: unknown, ok: unknown): void {
   if (method !== 'session.open' && method !== 'session.new' && method !== 'session.fork') return
@@ -496,11 +521,12 @@ function sanitised(method: string, params: unknown): Record<string, unknown> {
     return { session: held.session, task: held.task, model: held.model }
   }
   if (method !== 'turn.send') return held
-  // `recall` joins the two lists for a smaller reason than theirs. It decides whether a prompt is
-  // one a person can find again, and that is a claim about who asked — which this process makes
-  // and a window does not get to. Nothing worse than a lost history entry is at stake; it is here
-  // because the answer to "may the renderer say this?" is the same either way.
-  const { files: _files, dropped: _dropped, recall: _recall, attachments, ...rest } = held
+  // `recall` and `definition` join the two lists for a smaller reason than theirs. `recall`
+  // decides whether a prompt is one a person can find again, and `definition` decides which
+  // definition a turn is addressed to (MEMORY-10). Both are claims about who asked and what the
+  // turn is for, which this process makes from a bot's row and a window does not get to. A window
+  // that could name a definition could address a turn to any definition on the machine.
+  const { files: _files, dropped: _dropped, recall: _recall, definition: _definition, attachments, ...rest } = held
   return { ...rest, files: attachmentPaths(typeof rest.session === 'string' ? rest.session : '', attachments) }
 }
 
@@ -512,11 +538,24 @@ app.whenReady().then(() => {
     if (!bridge) {
       return { error: { code: 'no_bridge', message: 'the agent is not running' } }
     }
+    // A session's directory becomes the root the file helper is pinned to, so the renderer may
+    // open one only in a folder it was given (TRUST-20), whatever shape the string it sends has.
+    if (method === 'session.new' || method === 'session.open') {
+      if (!mayOpenSessionIn((params as { directory?: unknown } | null)?.directory)) {
+        return { error: { code: 'bad_request', message: 'that is not a folder this app offered' } }
+      }
+    }
     try {
       const session = (params as { session?: unknown } | null)?.session
       const ok = method === 'models.list'
         ? await listModels(rootForSession(typeof session === 'string' ? session : ''))
         : await bridge.request(method, sanitised(method, params))
+      // The directories the agent reports are folders somebody opened, and the window draws them
+      // as group headings it can open a new session under.
+      if (method === 'session.list') {
+        const listed = (ok as { sessions?: unknown } | null)?.sessions
+        if (Array.isArray(listed)) offerDirectories(listed.map((row) => (row as { directory?: unknown } | null)?.directory))
+      }
       // Opening a session is the other way a project becomes recent, and this handler is
       // already the choke point that sees it. Reading one field it is forwarding anyway is
       // a smaller thing than a channel that would let the renderer write the list itself.
@@ -656,21 +695,22 @@ app.whenReady().then(() => {
 
   ipcMain.handle('bravebot:bots:read', () => bots())
 
-  ipcMain.handle('bravebot:bots:model', (_event, slug: unknown, model: unknown) => {
+  ipcMain.handle('bravebot:bots:model', async (_event, slug: unknown, model: unknown) => {
     const held = bot(slug)
     if (!held || !isBotModel(model)) return null
-    const next = { ...held, model }
-    saveBot(next)
-    return next
+    return saveBotModel(held, model, bridge ? (method, params) => bridge!.request(method, params) : null)
   })
 
-  ipcMain.handle('bravebot:bots:write', (_event, value: unknown) => {
+  ipcMain.handle('bravebot:bots:write', async (_event, value: unknown) => {
     // Composed in `bots.ts` and not here, because the folder a new bot is pinned to is the one
     // field on this channel that decides where files land, and the check that it is a folder
     // somebody opened belongs beside the code that writes there.
-    const next = botFromForm(value)
-    if (!next) return null
-    saveBot(next)
+    const form = botFromForm(value)
+    if (!form) return null
+    // Making a bot writes its definition to `~/.bravebot/agents` (MEMORY-8), and editing one
+    // rewrites the fields the form shows (MEMORY-9). This process writes nothing there itself; the
+    // agent does, and `saveFormBot` keeps the name it answers with.
+    const next = await saveFormBot(form, bridge ? (method, params) => bridge!.request(method, params) : null)
     if (noteProject(next.directory)) rebuildMenu()
     return next
   })
@@ -807,7 +847,11 @@ app.whenReady().then(() => {
   })
 
   /** The projects opened before, newest first. Read-only on purpose. */
-  ipcMain.handle('bravebot:recents:read', () => recents())
+  ipcMain.handle('bravebot:recents:read', () => {
+    const found = recents()
+    offerDirectories(found)
+    return found
+  })
 
   /** Which session came out of which. Read-only for the same reason the recents list is. */
   ipcMain.handle('bravebot:forks:read', () => forks())

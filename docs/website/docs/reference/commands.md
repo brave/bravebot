@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Slash commands
-description: The twenty-two commands the interface acts on itself, and the rules every one of them shares.
+description: The twenty-nine commands the interface acts on itself, and the rules every one of them shares.
 ---
 
 # Slash commands
@@ -16,19 +16,26 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/theme` | `[name]` | Choose which theme paints the interface |
 | `/effort` | `[level]` | Choose how hard to think before answering |
 | `/config` | | Choose how the input box edits text |
-| `/add-dir` | `<path>` | Open another directory, and trust it for this session |
+| `/add-dir` | `<path> \| close <path>` | Open another directory and trust it for this session, or close one |
 | `/cd` | `<path>` | Work in another directory from now on, and trust it for this session |
 | `/rename` | `<name>` | Call this conversation something else |
-| `/compact` | | Summarise the conversation so far, keeping the recent part |
+| `/compact` | `[focus]` | Summarise the conversation so far, keeping the recent part |
 | `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
 | `/clear` | | Start a new session here, keeping this one resumable |
 | `/forget-trust` | | Stop remembering that this directory is trusted, so later sessions here ask |
 | `/loop` | `[[interval] <prompt> \| stop]` | Send a prompt again and again, say what is repeating, or stop it |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
+| `/jobs` | `[stop <name> [<delegate>]]` | List this turn's background jobs, and stop one by its name |
+| `/panel` | | Show or hide the info panel beside the transcript |
+| `/caffeinate` | | Keep the computer awake while a turn or loop is pending |
+| `/pr` | `[<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
+| `/issue` | `[<url> \| clear]` | Say which issue this session is for, show it, or clear it |
+| `/checkouts` | `[apply <n> \| remove <n>]` | List kept checkouts, bring their files back, or remove one |
 | `/manifest` | `<task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
 | `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
 | `/export` | `[path]` | Export the session transcript to a markdown file |
+| `/copy` | `[n]` | Put the last reply on the clipboard, or the one that many replies back |
 | `/undo` | | Rewind one turn and put back the files it wrote |
 | `/rewind` | `[turns]` | List the turns a rewind could go back to, or go back that many |
 | `/exit` | | Leave |
@@ -59,8 +66,14 @@ Reports everything the session knows about itself:
 - the confinement available here;
 - turns and tokens spent, and **where the time went**: how much was spent waiting on the model,
   running tools, and waiting for you to answer a prompt;
+- each [background job](run-tool.md#leaving-a-pipeline-running) of the last turn: its name, and the
+  delegate's number where a delegate started it, its line cut short, how it ended, and whether it was
+  started in the background or you moved it there. Typed while a turn runs, `/status` answers at
+  once and lists the jobs the turn has started so far;
 - **every trust rule in force**, listed in full, each marked trusted or untrusted;
-- **every command you vouched for**, which now run unasked and whose output is read as trusted;
+- **every command you vouched for**, which now run unasked and whose output is read as trusted.
+  Typed while a turn runs, these two lines say the running turn holds them and show them once it
+  ends, since the turn can add to both as it goes;
 - what a [`/loop`](#loop-interval-prompt) is repeating and when the next tick is due, where one is
   running, or what a [`/goal`](#goal-condition) is working towards and how many rounds it has
   spent.
@@ -76,7 +89,8 @@ is the thing people paste into an issue or a screenshot.
 
 Reports what the session has spent as a total, and under it **one figure per turn with that turn's
 share of the total beside it**. What was spent before the first turn is reported too, without a turn
-number, since no turn did it.
+number, since no turn did it. Typed while a turn runs, it answers at once, and the running turn's row
+holds what it has spent so far.
 
 A total cannot tell twenty even turns from one that ran away, and the share is what makes the second
 one visible without your dividing each row by the total. It is a word of its own rather than more rows
@@ -94,8 +108,9 @@ what it is read for.
 ## `/model`
 
 Opens a picker on the model in use. The list comes from the endpoint rather than a set compiled in, so
-it is whatever the backend offers today. The choice is written to `~/.bravebot`, so it outlives the
-session and applies in every directory, except one whose own settings name a
+it is whatever the backend offers today. Google Vertex AI, which has no listing to ask, is the
+exception: it is offered a short Gemini list built in. The choice is written to `~/.bravebot`, so it
+outlives the session and applies in every directory, except one whose own settings name a
 [`model`](../customize/configuration.md#model): that key outranks the choice, and the one in your own
 `~/.bravebot/settings.json` does not.
 
@@ -108,7 +123,8 @@ every turn uses that model, so `/model` opens no picker and says so.
 ## `/theme [name]`
 
 Opens a picker on the palette in force. With a name, `/theme nord` applies it without opening the
-panel.
+panel, and typed while a turn runs with nothing waiting it is applied at once. The bare `/theme` waits
+for the turn to end.
 
 Up and Down move the cursor, and the theme under it is put in force while it is selected, so you are
 comparing themes against your own transcript rather than against a sample. Enter keeps the one on the
@@ -124,7 +140,9 @@ Themes of your own are JSON files under `~/.bravebot/themes/`, and nothing in a 
 Opens a picker of the five levels (`low`, `medium`, `high`, `xhigh` and `max`) above a row for
 asking for no level at all, so a first pick is not permanent. With a word, `/effort high` takes it
 directly, and a word that names no level changes nothing and says so rather than reaching a request
-field.
+field. Typed while a turn runs with nothing waiting, `/effort high` is taken at once and the next turn
+is the first sent at it, since the running one keeps the level it began with. The bare `/effort` waits
+for the turn to end.
 
 The choice is written to `~/.bravebot`, so it outlives the session and applies in every directory,
 except one whose own settings name an [`effort`](../customize/configuration.md#effort): that key
@@ -156,6 +174,10 @@ somebody who has never used this panel.
 Makes a directory both reachable and trusted, for this session. `--resume` carries both halves and
 `/clear` closes it. A directory already inside the project is refused. See
 [Trusted directories](../security/trust.md#add-dir).
+
+`/add-dir close <path>` closes that one directory and keeps the conversation. A file only it reached
+is refused again, and the directory is no longer trusted. Every other open directory stays open.
+`/status` lists what is open, under the names `close` takes.
 
 An added directory contributes **no** standing instructions and no skills, whatever it contains.
 
@@ -190,7 +212,8 @@ about again.
 Takes back the answer you said to remember at the question a session asks about its directory, with
 `r` here or **Trust and remember** in the desktop app, which keep it in one place. The next session
 started in this directory asks again, in either. This session keeps the answer it already has;
-[`/clear`](#clear) starts one that asks.
+[`/clear`](#clear) starts one that asks. Typed while a turn runs with nothing waiting, it is carried
+out at once, and the turn goes on under the answer it already has.
 
 It removes every answer kept about the path, including one given about a directory that was deleted
 and made again there. In an incognito session it changes nothing, since nothing is written there
@@ -215,8 +238,10 @@ with the word is a line: `/loop stop the deploy` is a loop over `stop the deploy
 `/loop stop the deploy every 20m` is that line every twenty minutes. The bare command with no loop
 running says so, and so does `/loop stop`.
 
-Typed while a turn is running, `/loop stop` waits in the queue the way any line typed then waits, and
-ends the loop when the queue is reached. No tick goes out in the meantime.
+Typed while a turn is running, `/loop stop` and the bare `/loop` are carried out as you type them,
+ahead of anything waiting in the queue. The turn in flight finishes, and no tick goes out after it.
+A new loop typed mid-turn waits for the turn to end, and a `/loop stop` typed after it waits too, so
+it stops that loop after its first tick.
 
 The first tick goes at once, so you can see it happen while you are still watching. The gap is
 measured from the end of a tick rather than its start, so `every 5m` means five minutes between runs.
@@ -259,7 +284,8 @@ A number outside those becomes the nearer bound, and you are told what it became
 believing you are watching something ten times more closely than you are. A turn's number is held far
 more tightly than yours because a turn that wants longer than an hour can say so in its answer, where
 somebody reads it. Where you gave an interval, no turn can change it; a self-paced tick that says
-nothing is woken once more twenty minutes later, and a second silence ends the loop.
+nothing is woken once more twenty minutes later, and a second silence ends the loop. A tick that has
+finished says so with `stop` and is not woken again.
 
 Each tick is announced with its number, and with how many in a row have reported finding nothing.
 That count is the difference between a loop that is working and a loop with nothing to do. Between
@@ -268,13 +294,14 @@ tick scrolls away and a loop spending a turn every five minutes is otherwise inv
 too narrow for everything that row carries, the loop is the last part given up before the permission
 mode. `/loop` and `/status` both answer for it whenever you ask.
 
-Five things end a loop, and each says so:
+Six things end a loop, and each says so:
 
 | What | When |
 |---|---|
 | you ask | `/loop stop`, which ends the loop and leaves the turn in flight running |
 | you interrupt | Ctrl-C, reached after the turn in flight and the half-typed line, and before leaving |
 | a turn is stopped | any turn cancelled while a loop runs, tick or not |
+| the turn says it is finished | a self-paced tick that calls `schedule_next` with `stop`, which ends the loop with no further tick |
 | the session moves on | `/clear`, and leaving |
 | age | seven days after it started |
 
@@ -403,6 +430,84 @@ time), the path ceasing to be readable, `/clear` and leaving, and age.
 
 **A watch is never written down**, so `--resume` restores none and none outlives the process.
 
+## `/jobs [stop <name> [<delegate>]]`
+
+Lists the turn's [background jobs](run-tool.md#leaving-a-pipeline-running), and stops one by its name.
+
+```
+/jobs                 # each job: its name, its command, and how it stands
+/jobs stop job:1      # stop the turn's job:1, leaving the others running
+/jobs stop 1 d2       # stop job:1 of delegate d2
+```
+
+The list is the jobs of the turn running, or of the last turn when none is, so it is empty once the
+next turn starts. Each delegate numbers its own jobs from 1, so a delegate's job takes the delegate's
+number after the name, and a name alone is the turn's own job. The list names a delegate's job the
+same way, as `job:1 d2`, and says which delegate started it.
+
+**The turn does the stopping.** The job is stopped at the turn's next step: when the round the model
+is in ends, or at once if the model is waiting on that job's output. A wait on another job's output
+ends then too, and the job is stopped at the next round. A reply the model is writing, a command run
+in the foreground and a wait on a delegate are not cut short, so the stop comes after them. Its row
+says `being stopped` until then. The model is told you stopped it and after how long, gets what it
+had printed by then, and is told not to start it again unless you ask.
+The rest of the turn goes on. The stop is recorded in the session's trail as yours.
+
+`/jobs` is carried out as you type it while a turn runs, since a job ends with its turn and a stop
+that waited would find nothing left to stop.
+
+## `/panel`
+
+Shows or hides the info panel on the right of the screen, as Ctrl-X does. The panel holds the
+session's name, directory and branch, the goal, how full the context is with the cache figures, and
+the plan. It needs a terminal at least 100 columns wide, and says so on a narrower one. Whether it is
+open is kept for the next session. [Telling sessions apart](../using/sessions.md#telling-sessions-apart)
+has the rest.
+
+## `/caffeinate`
+
+Keeps the computer from going to sleep while a turn runs or a loop waits for its next tick,
+including a wait the model asked for, and lets it sleep again once nothing is pending. Typed again,
+it turns off. It is off when a session starts, and a watch waiting on a file does not count as
+pending.
+
+Only idle sleep is held off. The display can still turn off and the screen can still lock, but the
+machine keeps running with your credentials on it while you are away, so use it only where your
+device policy allows that. The first `/caffeinate` says this and turns nothing on; the second turns
+it on and records your answer in `~/.bravebot/caffeinate`, so later sessions turn it on at once. An
+incognito session asks every time.
+
+It runs `/usr/bin/caffeinate` on macOS, `systemd-inhibit` on Linux and PowerShell on Windows. If the
+program cannot be started, or stops by itself, the transcript says so and `/caffeinate` turns off.
+
+## `/checkouts [apply <n> | remove <n>]`
+
+Lists the checkouts this session keeps for its delegates, brings the files written in one back into your working directory, and removes one by its number.
+
+```
+/checkouts            # each kept checkout, numbered, with what was written in it
+/checkouts apply 2    # bring back the files written in checkout c2, one question each
+/checkouts remove 2   # delete checkout c2, and its entry in your repository's .git
+```
+
+A delegate's [checkout](../customize/agents.md#a-checkout-of-its-own) is kept when it did something
+there. The list names the paths the delegate typed for the files it wrote, twenty at most, and counts
+the writes it made through a reference. Nothing reads a checkout's status, so a file a program
+changed there is not named.
+
+**`/checkouts apply 2` asks about every file the driver recorded a write to in checkout c2**, one at a
+time, whatever your trust map would have said, and shows the difference between your file as it is
+now and the checkout's. It is the same operation as the `apply_checkout` tool and asks the same
+questions. A file a program wrote there, or wrote through a reference, is not among them.
+
+**Removing one something was done in asks first**, since removing it deletes that work. `y` removes it; `n`, Esc and ctrl-c keep it. `2` and `c2` name
+the same checkout. The rules copied for it go with it, except one marking a file there untrusted,
+which stays so that history showing the file keeps its label. A checkout that holds your working
+directory, or a directory added with `/add-dir`, is kept: `/cd` out of it first.
+
+**The list is held in memory.** After `/clear` it starts empty and the earlier checkouts stay on disk,
+and `--resume` brings none back.
+
 ## `/manifest <task>`
 
 Plans one task in full, shows you the plan, then runs it with nothing re-planned.
@@ -489,12 +594,26 @@ line this program wrote is text.
 ## `/rename <name>`
 
 Rewrites the session record immediately, and the chosen name survives the next turn. An empty name is
-refused.
+refused. Typed while a turn runs with nothing waiting, it is carried out at once rather than waiting
+for the turn to end. Renaming leaves `/undo` nothing to go back to, including the turn running when
+you renamed.
 
-## `/compact`
+## `/issue` and `/pr`
+
+`/issue <url>` and `/pr <url>` say which issue and which pull request the session is for, and the
+[info panel](../using/sessions.md#telling-sessions-apart) shows both. Each takes one `http` or `https`
+link with a host: a value with a space, a line break, an escape, a character outside ASCII or
+another scheme sets nothing and is not repeated back. Alone, each says what is set, and `clear` removes that one. The session record is
+rewritten at once, so a resume brings the links back, and nothing a turn reads includes them. Typed
+while a turn runs with nothing waiting, each is carried out at once, as `/rename` is.
+
+## `/compact [focus]`
 
 Summarises the conversation so far and keeps the recent part, on demand, at any size, without
-consulting the budget. The **request** is shortened, never the record: the replaced messages go to an
+consulting the budget. Anything after the word is taken as typed and tells the summariser what the
+summary must keep: `/compact keep the lexer benchmarks and every path touched`. It is added to the
+summariser's closing instruction and goes nowhere else, and the audit trail records that a focus was
+given and its length, not the words. The **request** is shortened, never the record: the replaced messages go to an
 archive that the transcript still reads and the session record still stores. See
 [Sessions](../using/sessions.md#long-conversations).
 
@@ -523,7 +642,9 @@ that the planner could not have held.
 
 Begins a new session in this directory and keeps the current one resumable. Because it is a new
 session it asks the trust question again, restores no standing permissions, and closes any directory
-`/add-dir` had opened.
+`/add-dir` had opened. A running [loop](#loop-interval-prompt) or [goal](#goal-condition) ends with
+the old session, and says so. With neither running it says nothing about them. The session's pull
+request and issue are not carried over.
 
 ## `/export [path]`
 
@@ -538,6 +659,22 @@ tree through a symlink is refused as well. Missing parent directories are create
 
 **Anything already at the path is refused rather than replaced**, a symlink whose target is missing
 included. The file is written readable by you alone, as the record it came from is.
+
+## `/copy [n]`
+
+Puts the latest reply on the clipboard, and `/copy 2` the one before it. What is copied is the
+markdown the model wrote, so it pastes as whole paragraphs, where a sweep with the mouse copies the
+screen: the `⏺` before the first row, the indent before every other row, and a line break wherever
+the terminal wrapped a paragraph. How many characters went is drawn at the right of the hint row
+until your next prompt.
+
+A reply is what the model said to you: the answer a turn or a `/manifest` run ends on and what it
+said on its way to a tool call, a resumed session's included. Your prompts, notes, tool rows and the
+files they showed, a delegate's work and a `/btw` answer are not counted. A control character other
+than a line break or a tab is left out, as the screen leaves it out, so a pasted reply cannot carry
+the sequence that ends a shell's bracketed paste. Its line breaks are kept, so a shell that does not
+use bracketed paste runs each line as it arrives. A number past the oldest reply says how many there
+are and copies nothing.
 
 ## `/undo`
 
@@ -580,8 +717,8 @@ conversation, so `/undo` and `/rewind` after a `--resume` reach the same turns t
 change lands after the most recent point and so before none of them. After that `/undo` says there is nothing left to undo
 rather than rewinding to a point describing a different session.
 
-**Running a command keeps undo available.** Commands, hooks, scratch writes, language servers and
-desktop turns can make changes outside file-tool backups. Undo names the recorded causes in a
+**Running a command keeps undo available.** Commands, hooks, scratch writes, language servers, desktop turns and delegate checkouts can make
+changes outside file-tool backups. Undo names the recorded causes in a
 warning that some changes may remain. It still restores available backups, which can also overwrite
 later command changes to those same paths. Failed restorations are reported separately by path.
 
@@ -655,13 +792,25 @@ beside the line. A command that cannot carry it gets words in place of a picture
 place of a drop. `/btw`, `/manifest` and `/loop` send their argument, so a marker stays in
 it and the picture or file goes with it.
 
-**While a turn runs the word waits.** A command typed mid-turn comes off the box and joins the lines
-waiting for the turn to end, exactly as a prompt does: the box clears, the history remembers it, and it
-is drawn under the box marked as waiting. It is never offered to the turn in flight, so nothing about
-it reaches the planner, and when the queue reaches it, it is carried out rather than sent. The queue
-drains in the order you typed, so a command behind a prompt waits for that prompt's turn. Nothing
-enters the transcript while it waits, and taking back what is waiting gives the command back to the
-box like any other line.
+**While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/copy`,
+`/watch`, `/panel`, `/caffeinate`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+what the session keeps for itself, so they are carried out as you type them, ahead of anything
+waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
+key. The exception is a line of the same command already waiting, which they wait behind, so
+`/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/rename`, `/issue`, `/pr`,
+`/forget-trust`, `/theme <name>` and `/effort <level>` change only what the session keeps, and are carried out as you
+type them when nothing is waiting. Behind a waiting line they wait too, so `/rename` typed after a
+waiting `/clear` names the new session. What they say is drawn under the turn and joins the
+transcript once the turn has ended. `/theme` and `/effort` alone open a picker, so they wait.
+
+Every other command typed mid-turn comes off the box and joins the lines waiting for the turn to end,
+exactly as a prompt does: the box clears, the history remembers it, and it is drawn under the box
+marked as waiting. It is never offered to the turn in flight, so nothing about it reaches the planner,
+and when the queue reaches it, it is carried out rather than sent. The queue drains in the order you
+typed, so a command behind a prompt waits for that prompt's turn. Nothing enters the transcript while
+it waits, and taking back what is waiting gives the command back to the box like any other line.
+
+During a compaction, a `/btw` question, a `/manifest` run or a goal check, every command waits.
 
 **A command name is written in this program, never read from a directory.** There is no way to add one
 by putting a file somewhere.

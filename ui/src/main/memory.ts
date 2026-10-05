@@ -51,7 +51,7 @@ export function editMemory(slug: unknown, text: unknown, expected: unknown): str
   const held = bot(slug)
   if (!held || typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > 64 * 1024 || text.includes('\0')) throw new Error('Memory must be text under 64 KB.')
   if (expected !== null && typeof expected !== 'string') throw new Error('Invalid expected memory')
-  const previous = replaceProjectMemory(held.directory, memoryPath(held.slug), text, expected)
+  const previous = replaceProjectMemory(held.directory, memoryPath(held), text, expected)
   if (previous !== null) recordMemory(held.slug, previous, 'agent')
   recordMemory(held.slug, text, 'user')
   return text

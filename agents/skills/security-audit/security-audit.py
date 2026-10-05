@@ -271,7 +271,12 @@ LANES = (
     "clause-permits-violation",
     "unpinned-guarantee",
     "supply-chain",
+    "shown-before-answered",
 )
+
+# The spec whose `governs` list is the terminal's prompts, and the function each of them asks with.
+PROMPT_SPEC = "PROMPT"
+ASKS = re.compile(r"^\s*pub(?:\([^)]*\))?\s+fn (ask(?:_\w+)?)\s*[<(]")
 
 
 REPRODUCE = "python3 agents/skills/security-audit/security-audit.py --mechanical-only"
@@ -2147,6 +2152,27 @@ def bracket_clauses(specs):
     ]
 
 
+def prompt_files(specs):
+    """The files the prompting spec governs."""
+    return sorted({path for spec in specs if spec.id == PROMPT_SPEC for path in spec.governs})
+
+
+def prompt_spec_files(specs):
+    """The prompting spec itself."""
+    return sorted(spec.rel for spec in specs if spec.id == PROMPT_SPEC)
+
+
+def prompt_sites(sources, specs):
+    """Every function in the prompting spec's files that puts a question to the person."""
+    found = []
+    for path in prompt_files(specs):
+        for number, line in enumerate(sources.get(Path(path), []), start=1):
+            match = ASKS.match(line)
+            if match:
+                found.append({"path": path, "line": number, "function": match.group(1)})
+    return found
+
+
 def surface(sources, specs):
     """Everything the lanes are given, gathered once."""
     construction = []
@@ -2178,6 +2204,8 @@ def surface(sources, specs):
             and "/tests/" not in str(path)
             and any("ureq::" in line for line in sources[path])
         ),
+        "prompt_files": prompt_files(specs),
+        "prompts": prompt_sites(sources, specs),
     }
 
 
@@ -2248,11 +2276,13 @@ def build_lane(name, found, specs, results_file, surface_file=None):
         "workflow_files": as_paths(found["workflows"]),
         "dependency_files": as_paths(found["dependency_files"]),
         "second_client": as_paths(found["second_client"]),
+        "prompt_files": as_paths(found["prompt_files"]),
+        "prompt_sites": as_list(found["prompts"]),
     }
     return read_prompt(name).format(**filling)
 
 
-def changed_lanes(base):
+def changed_lanes(base, specs):
     """The lanes worth running for what a branch touched.
 
     A branch that edits no Rust still wants the two documentation lanes, and one that touches
@@ -2276,6 +2306,8 @@ def changed_lanes(base):
         for one in touched
     ):
         lanes.add("supply-chain")
+    if touched & set(prompt_files(specs) + prompt_spec_files(specs)):
+        lanes.add("shown-before-answered")
     return sorted(lanes) or list(LANES)
 
 
@@ -2332,7 +2364,7 @@ def main():
     if unknown:
         print(f"no such lane: {', '.join(unknown)}", file=sys.stderr)
         return 2
-    chosen = args.lanes or (changed_lanes(args.changed) if args.changed else list(LANES))
+    chosen = args.lanes or (changed_lanes(args.changed, specs) if args.changed else list(LANES))
     if args.mechanical_only:
         chosen = []
 

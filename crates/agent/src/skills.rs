@@ -240,7 +240,7 @@ pub fn declarations(text: &str) -> Option<std::collections::BTreeMap<String, Str
 }
 
 /// How many columns a line is indented by, which is what says whether it continues the one above.
-fn indent_of(line: &str) -> usize {
+pub(crate) fn indent_of(line: &str) -> usize {
     line.len() - line.trim_start().len()
 }
 
@@ -263,7 +263,22 @@ fn value_of(first: &str, wrapped: &[&str]) -> String {
     if !first.is_empty() {
         parts.push(first);
     }
-    parts.extend(wrapped.iter().map(|l| l.trim()).filter(|l| !l.is_empty()));
+    if joiner == "\n" {
+        // A blank line inside a literal block is one of the newlines it asked for. Those before
+        // the first line and after the last belong to the file's layout and are dropped.
+        let lines: Vec<&str> = wrapped.iter().map(|l| l.trim()).collect();
+        let from = lines
+            .iter()
+            .position(|l| !l.is_empty())
+            .unwrap_or(lines.len());
+        let to = lines
+            .iter()
+            .rposition(|l| !l.is_empty())
+            .map_or(from, |at| at + 1);
+        parts.extend(&lines[from..to]);
+    } else {
+        parts.extend(wrapped.iter().map(|l| l.trim()).filter(|l| !l.is_empty()));
+    }
 
     unquoted(&parts.join(joiner))
 }
@@ -505,7 +520,7 @@ it and no tool for it, so do not go looking for one and do not tell the user a t
 the interval is already keeping time. Work the tick and answer.
 
 Where they gave none, you are offered schedule_next, and the loop runs for exactly as long as \
-you keep calling it. Call it once, at the end of the turn, after the work is done:
+you keep calling it with a wait. Call it once, at the end of the turn, after the work is done:
 
 - delay_seconds from what you are actually waiting on rather than from a round number. Something \
   that takes ten minutes to change is not worth looking at in sixty seconds, and something that \
@@ -517,8 +532,12 @@ you keep calling it. Call it once, at the end of the turn, after the work is don
   shown to the user as a single line, so an honest noop is what keeps a long watch readable.
 - reason in a few words, saying what you are waiting on. The user reads it.
 
-Not calling it ends the loop, and that is the right answer once there is nothing left to watch. \
-Say so in your answer rather than scheduling a tick to say it again.
+Once there is nothing left to watch, call it with stop true instead of a delay_seconds, which \
+ends the loop now. Say so in your answer rather than scheduling a tick to say it again. A turn \
+that calls it with neither is woken once more after twenty minutes before the loop ends.
+
+A turn that says no tool sets the pace is not offered schedule_next: work the tick and answer, and \
+the loop ends with it.
 
 Either kind stops when the user stops it. You never need to ask them to.
 ";
@@ -685,11 +704,17 @@ fn discover_workspace<S: Sink>(
         return;
     }
 
+    // Counted rather than named, as the directory above is (SKILL-6). The directory is vouched
+    // for, but a skill file inside it can still be distrusted, and the name of a directory a
+    // turn that acted on untrusted content created is that content's to choose.
+    let mut denied = 0;
+    let mut distrusted = 0;
+
     for name in names {
         let relative = format!("{WORKSPACE_SKILLS}/{name}/{SKILL_FILE}");
 
         if workspace.rule_denies_reading(policy, &relative) {
-            notices.push(Notice::denied_by_rule(&relative));
+            denied += 1;
             continue;
         }
         let Ok(contents) = workspace.read(policy, &Labelled::trusted(relative.clone())) else {
@@ -702,9 +727,7 @@ fn discover_workspace<S: Sink>(
         // every turn in an untrusted directory as one where something was refused and teach the
         // user to ignore the times it means something.
         if !contents.label().is_trusted() {
-            notices.push(Notice::new(format!(
-                "{relative} was not loaded: it is not trusted"
-            )));
+            distrusted += 1;
             continue;
         }
         let Ok(text) = policy.read_trusted_content("skills", &contents) else {
@@ -731,6 +754,18 @@ fn discover_workspace<S: Sink>(
             None => notices.push(Notice::new(format!(
                 "{relative} was skipped: it needs a name and a description in its frontmatter"
             ))),
+        }
+    }
+
+    for (n, why) in [
+        (distrusted, "the file is not trusted"),
+        (denied, "a deny rule in your settings covers the file"),
+    ] {
+        if n > 0 {
+            let (count, verb) = counted(n);
+            notices.push(Notice::new(format!(
+                "{count} in {WORKSPACE_SKILLS} {verb} not loaded: {why}"
+            )));
         }
     }
 }
@@ -944,6 +979,18 @@ mod tests {
         assert_eq!(folded.expect("parses").description, "one two");
         let literal = parse_frontmatter("---\nname: n\ndescription: |\n  one\n  two\n---\n");
         assert_eq!(literal.expect("parses").description, "one\ntwo");
+    }
+
+    /// A blank line inside a literal block is a newline the file asked for, so a paragraph break
+    /// survives. Blank lines around the block are layout and do not add newlines to the value,
+    /// and a folded block has no paragraph break to keep.
+    #[test]
+    fn a_blank_line_inside_a_literal_block_is_kept() {
+        let literal =
+            parse_frontmatter("---\nname: n\ndescription: |\n  one\n\n  two\n\nother: x\n---\n");
+        assert_eq!(literal.expect("parses").description, "one\n\ntwo");
+        let folded = parse_frontmatter("---\nname: n\ndescription: >\n  one\n\n  two\n---\n");
+        assert_eq!(folded.expect("parses").description, "one two");
     }
 
     /// The planner already has the name and the description. Sending them again spends context

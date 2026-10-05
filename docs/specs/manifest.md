@@ -252,6 +252,14 @@ not off the error that came back, since the two keys that stop a run reach it as
 plan prompt and as a cancellation a step later, and a person pressing one of them asked for the same
 thing at both moments.
 
+Completed planning and processor requests retain their measured usage when a later request or
+step fails, including completed replies that cannot be used. Cumulative progress replaces earlier
+progress. A successful outcome replaces retained progress, so neither records nor continuing
+terminal sessions charge both. Failed run records keep measured wall, inference, tool and approval
+time separately. Unknown timing stays absent; the required token total stays zero where nothing
+was measured. A stopped run keeps measured usage in the continuing terminal session while leaving
+no separate manifest record. Manifest runs do not compact, delegate or vet content.
+
 Approval reaches the session prompt rather than the terminal one, since the session is the place a
 plan can be drawn and scrolled. Everything else about the question is MANIFEST-10's, unchanged: it
 is asked once, it has no standing form, and it does not approve the writes.
@@ -261,10 +269,17 @@ meets one. Bypassing approves the plan, as MANIFEST-10 says. Plan mode is the on
 plan with a write in it does not run at all, decided from the frozen plan before the plan is put to
 anybody ([permission-modes.md](permission-modes.md#MODE-3)).
 
+`verified-by: bravebot_session::sessions::failed_manifest_records_distinguish_unknown_timing_from_measured_zero`
+`verified-by: bravebot_cli::running::failed_manifest_usage_survives_json_and_reload`
+`verified-by: bravebot_cli::running::manifest_usage_controls_survive_storage`
+`verified-by: bravebot_tui::sessions::failed_and_stopped_manifest_usage_survives_session_reload`
+`verified-by: bravebot_ui_bridge::manifest::a_declined_run_is_read_back_with_the_plan_and_the_reason`
+`verified-by: bravebot_ui_bridge::manifest::a_finished_run_is_read_back_with_what_it_did`
 `verified-by: bravebot_session::sessions::a_manifest_run_is_recorded_apart_from_the_session`
 `verified-by: bravebot_session::sessions::a_session_that_started_a_run_can_still_be_resumed`
 `verified-by: bravebot_session::sessions::a_cancelled_run_leaves_no_record`
 `verified-by: bravebot_tui::app::a_run_the_person_stopped_is_read_off_the_key_and_not_off_the_error`
+`verified-by: bravebot_tui::confirm::escape_at_the_plan_prompt_stops_the_run_and_n_declines_it`
 `verified-by: bravebot_tui::app::a_manifest_run_is_not_a_prompt`
 
 ## Known costs

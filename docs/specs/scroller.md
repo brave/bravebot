@@ -57,6 +57,9 @@ one.
 `verified-by: bravebot_tui::app::ctrl_c_closes_the_scroller_before_it_reaches_anything_else`
 `verified-by: bravebot_tui::app::the_scroller_answers_the_stop_keys_before_the_turn_does`
 `verified-by: bravebot_tui::app::a_turn_goes_on_running_while_the_scroller_is_open`
+`verified-by: bravebot_tui::app::the_scroller_left_open_under_a_running_command_still_closes`
+`verified-by: bravebot_tui::app::the_press_after_the_scroller_closes_stops_the_command`
+`verified-by: bravebot_tui::app::the_scroller_keeps_scrolling_under_a_running_command`
 `verified-by: bravebot_tui::app::the_chords_that_close_the_scroller_close_it_while_a_search_is_typed`
 `verified-by: bravebot_tui::app::escape_abandons_a_count_before_it_clears_a_search_or_closes_the_scroller`
 
@@ -82,6 +85,7 @@ the person opened with a key and closes with any of four.
 `verified-by: bravebot_tui::app::a_typed_character_does_not_reach_the_box_while_the_scroller_is_open`
 `verified-by: bravebot_tui::app::enter_sends_nothing_from_inside_the_scroller`
 `verified-by: bravebot_tui::app::a_key_the_scroller_does_not_take_does_nothing`
+`verified-by: bravebot_tui::app::a_chord_the_scroller_does_not_name_does_nothing`
 `verified-by: bravebot_tui::app::the_line_comes_back_untouched_when_the_scroller_closes`
 `verified-by: bravebot_tui::app::a_paste_and_a_drop_do_not_reach_the_line_while_the_scroller_is_open`
 
@@ -243,7 +247,8 @@ A footer stands while the scroller is open, saying so and naming a key that clos
 every key in this file, and the list renders on a terminal too short for it rather than pushing the
 way out off the screen: what a short terminal loses is rows from the middle, never the last one.
 A count waiting for its key (SCROLL-3) is drawn on the footer only where the row still holds the
-way out beside it.
+way out beside it. A needle wider than the row is cut from its head, while it is typed and once it
+is standing, to the columns the way out leaves, and the match count goes before any of the needle.
 
 The list is read instead of the transcript rather than alongside it, so any key at all puts it
 away and that press is spent doing so. The list says as much, because a key that quietly did two
@@ -260,6 +265,8 @@ that must never be the line that did not fit.
 `verified-by: bravebot_tui::render::the_help_names_every_key_that_closes_the_scroller`
 `verified-by: bravebot_tui::render::the_help_renders_on_a_tiny_terminal`
 `verified-by: bravebot_tui::render::the_search_footer_names_the_way_out_with_a_turn_running_underneath`
+`verified-by: bravebot_tui::render::a_needle_wider_than_the_row_still_leaves_the_way_out`
+`verified-by: bravebot_tui::render::a_needle_wider_than_the_row_being_typed_still_leaves_the_way_out`
 `verified-by: bravebot_tui::render::a_long_needle_keeps_the_way_out_and_gives_up_what_the_turn_says`
 `verified-by: bravebot_tui::render::a_long_needle_being_typed_keeps_the_way_out_of_the_search`
 `verified-by: bravebot_tui::render::a_count_too_long_for_the_row_leaves_the_way_out_on_it`

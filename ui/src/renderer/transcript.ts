@@ -18,6 +18,11 @@ import type {
   ConfirmRequest,
   CutOff,
   ExposureRequest,
+  McpCallRequest,
+  McpMoveRequest,
+  McpServerRequest,
+  McpStarted,
+  McpToolsRequest,
   FetchRequest,
   Landing,
   ManifestError,
@@ -150,6 +155,23 @@ export type Entry = (
    */
   | { kind: 'exposure'; id: string; request: ExposureRequest; decision: 'approve' | 'reject' | null }
   /**
+   * An MCP server a project requests, awaiting a decision about whether to use it, or the record
+   * of one already made. `remember` is the third answer: yes, and every server this project
+   * requests from now on.
+   */
+  | { kind: 'mcp-server'; id: string; request: McpServerRequest; decision: 'approve' | 'reject' | null; remember: boolean }
+  /** An MCP server's list of tools, awaiting a decision about offering them to the model. */
+  | { kind: 'mcp-tools'; id: string; request: McpToolsRequest; decision: 'approve' | 'reject' | null }
+  /**
+   * A call to an MCP server's tool, awaiting a decision. `remember` is the third answer: yes,
+   * and stop asking about this tool in this project.
+   */
+  | { kind: 'mcp-call'; id: string; request: McpCallRequest; decision: 'approve' | 'reject' | null; remember: boolean }
+  /** A remote MCP server whose reply pointed somewhere else, awaiting a decision about moving it. */
+  | { kind: 'mcp-move'; id: string; request: McpMoveRequest; decision: 'approve' | 'reject' | null }
+  /** What starting the session's MCP servers came to. */
+  | { kind: 'mcp-started'; id: string; started: McpStarted }
+  /**
    * The task a manifest run was asked to plan.
    *
    * Not a `user` entry. A run is not part of the conversation, so its task has no ordinal, cannot
@@ -264,6 +286,11 @@ export const narrowing = (rules: SettingsRules | null | undefined): string[] => 
 export const notInForce = (rules: SettingsRules | null | undefined): boolean =>
   !!rules && (rules.unreadable.length > 0 || rules.proposed.length > 0 || rules.directories.length > 0)
 export const askedExposure = (request: ExposureRequest): Entry => ({ kind: 'exposure', id: nextId(), request, decision: null })
+export const askedMcpServer = (request: McpServerRequest): Entry => ({ kind: 'mcp-server', id: nextId(), request, decision: null, remember: false })
+export const askedMcpTools = (request: McpToolsRequest): Entry => ({ kind: 'mcp-tools', id: nextId(), request, decision: null })
+export const askedMcpCall = (request: McpCallRequest): Entry => ({ kind: 'mcp-call', id: nextId(), request, decision: null, remember: false })
+export const askedMcpMove = (request: McpMoveRequest): Entry => ({ kind: 'mcp-move', id: nextId(), request, decision: null })
+export const mcpStarted = (started: McpStarted): Entry => ({ kind: 'mcp-started', id: nextId(), started })
 export const planAsked = (text: string): Entry => ({ kind: 'plan-task', id: nextId(), text })
 export const planReplied = (text: string, record: string | null): Entry => ({ kind: 'plan-reply', id: nextId(), text, record })
 export const planEnded = (ended: ManifestError): Entry => ({ kind: 'plan-ended', id: nextId(), ended })
@@ -367,6 +394,10 @@ export const REPLY = {
   server: 'server.reply',
   manifest: 'manifest.reply',
   exposure: 'exposure.reply',
+  'mcp-server': 'mcp-server.reply',
+  'mcp-tools': 'mcp-tools.reply',
+  'mcp-call': 'mcp-call.reply',
+  'mcp-move': 'mcp-move.reply',
 } as const
 
 /** Which kinds of question a person can answer with a yes or a no. */
@@ -409,8 +440,8 @@ export function decide(
 ): Entry[] {
   return entries.map((entry) =>
     isAsking(entry) && unanswered(entry) && entry.kind === kind && entry.request.request === request
-      ? entry.kind === 'run'
-        ? { ...entry, decision, remember }
+      ? entry.kind === 'run' || entry.kind === 'mcp-server' || entry.kind === 'mcp-call'
+        ? { ...entry, decision, remember: decision === 'approve' && remember }
         : { ...entry, decision }
       : entry,
   )
@@ -550,6 +581,11 @@ export function searchableText(entry: Entry): string {
     case 'server': return [entry.request.language, entry.request.program, entry.request.workspace].join(' ')
     case 'manifest': return [entry.request.task, ...entry.request.steps].join(' ')
     case 'exposure': return [entry.request.path, ...entry.request.credentials].join(' ')
+    case 'mcp-server': return [entry.request.alias, ...(entry.request.command ?? []), entry.request.url ?? '', entry.request.requestedBy].join(' ')
+    case 'mcp-tools': return [entry.request.alias, ...entry.request.tools.map((tool) => `${tool.name} ${tool.description ?? ''}`)].join(' ')
+    case 'mcp-call': return [entry.request.name, ...entry.request.arguments.map((argument) => `${argument.name} ${argument.value}`)].join(' ')
+    case 'mcp-move': return [entry.request.alias, entry.request.declared, entry.request.destination].join(' ')
+    case 'mcp-started': return [...entry.started.servers, ...entry.started.notes].join(' ')
     case 'plan-ended': return [entry.ended.problem ?? '', entry.ended.attempt?.plan ?? '', ...(entry.ended.attempt?.steps ?? [])].join(' ')
     case 'vouch': return [entry.request.path, entry.request.preview].join(' ')
     case 'ask': return entry.request.prompts.map((prompt) => [prompt.header, prompt.question, ...prompt.rows.map((row) => `${row.label} ${row.detail ?? ''}`)].join(' ')).join(' ')

@@ -43,7 +43,7 @@ cli-usage-doctor = Vérifier la configuration et le confinement
 cli-usage-import = Importer un abonnement Leo Premium
 cli-usage-import-providers = Importer un service de modèle configuré par Claude Code ou opencode
 cli-usage-auth-login = Se connecter à un service de modèle, en listant chaque façon si aucune n'est nommée
-cli-usage-auth-logout = Oublier un abonnement Leo Premium importé
+cli-usage-auth-logout = Oublier un abonnement Leo Premium importé ou une clé de passerelle enregistrée
 cli-usage-mcp = Déclarer, lister et approuver des serveurs MCP
 
 cli-keys-heading = Touches interactives :
@@ -83,6 +83,7 @@ cli-plain-trusting-kept =
     soit reposée, lancez /forget-trust dans bravebot sans --plain, ou supprimez de { $path } les
     lignes qui le nomment)
 
+mode-ask = ◇ demande avant d'agir
 mode-accept-edits = ⏵ modifications acceptées
 mode-plan = ⏸ mode plan
 mode-bypass = ⏵⏵ permissions contournées
@@ -92,6 +93,10 @@ cli-option-file = Inclure un fichier de l'espace de travail comme contexte (rép
 cli-option-add-dir = Accéder à un répertoire hors de celui de travail (répétable)
 cli-option-settings = Lire ce fichier de réglages pour cette exécution, au-dessus de ceux trouvés sur le disque
 cli-option-agent = Adresser chaque tour à cette définition, comme /agent le fait pour un seul
+cli-option-system-prompt =
+    Remplacer la phrase d'ouverture de l'invite système du planificateur à chaque tour. Le reste demeure
+cli-option-append-system-prompt =
+    Ajouter ce texte aux instructions permanentes du planificateur à chaque tour, après AGENTS.md
 cli-option-mode = turn (par défaut) décide étape par étape ; manifest planifie tout le déroulement d'abord
 cli-option-model = Le modèle demandé par cette exécution, à la place de celui mémorisé ou configuré
 cli-option-effort = L'effort de réflexion demandé par cette exécution, à la place de celui mémorisé ou configuré
@@ -114,6 +119,7 @@ cli-option-version = Afficher la version
 cli-unknown-option = option inconnue : { $flag }
 cli-file-needs-a-path = --file demande un chemin
 cli-add-dir-needs-a-path = --add-dir demande le chemin absolu d'un répertoire
+cli-directory-ends-checkouts = { $directory } contient le répertoire de travail, donc aucun délégué n'obtient de copie de travail tant qu'il est ouvert ; relancez sans --add-dir { $directory } pour en avoir une
 cli-settings-needs-a-path = --settings demande le chemin d'un fichier de réglages
 cli-settings-not-a-file = --settings ne nomme aucun fichier : { $path }
 cli-agent-needs-a-name = --agent demande le nom d'une définition
@@ -127,6 +133,12 @@ cli-agent-not-for-a-command =
 cli-agent-not-with-a-manifest =
     --agent ne va pas avec --mode manifest : une exécution planifiée prévoit chaque étape avant
     qu'aucune ne s'exécute, et une définition est désignée un tour à la fois
+# Le drapeau est --system-prompt ou --append-system-prompt, tel qu'il a été tapé.
+cli-system-prompt-needs-text = { $flag } demande le texte à utiliser
+cli-system-prompt-not-for-a-command =
+    { $flag } donne des mots à une session ou à une tâche, et { $command } ne démarre ni l'une ni l'autre
+cli-system-prompt-not-with-a-manifest =
+    { $flag } ne va pas avec --mode manifest : le planificateur d'une exécution planifiée ne le lit pas
 cli-agent-no-such-definition = aucune définition ne s'appelle { $name } ; cette exécution a résolu { $names }
 cli-agent-no-such-definition-unread =
     { $count ->
@@ -219,7 +231,7 @@ doctor-ends-aws-access-key =
 doctor-ends-aws-session =
     une identification de session : émise par AWS STS pour le profil, et ce programme en demande une autre à l'AWS CLI à chaque requête qu'il construit, de sorte que l'expiration met fin à cette copie et non à l'accès de ce programme ; on y met fin auprès de son émetteur, car `aws sso logout` efface la copie de cette machine et non la session elle-même, et la suivante est émise à partir de ce à quoi le profil se rattache, tant que cela dure
 doctor-ends-gateway-token =
-    un jeton porteur de passerelle : émis par { $gateway }, qui est aussi la seule surface qui le révoque ; le supprimer du fichier de réglages ou effacer la variable met fin à la garde de cette machine et laisse le jeton actif là-bas
+    un jeton porteur de passerelle : émis par { $gateway }, qui est aussi la seule surface qui le révoque ; le supprimer du fichier de réglages, effacer la variable ou lancer `bravebot auth logout gateway` met fin à la garde de cette machine et laisse le jeton actif là-bas
 doctor-ends-subscription-batch =
     le lot d'identifiants d'un abonnement importé : émis par le service d'abonnement de Brave pour la commande sur laquelle cette installation s'est enregistrée comme appareil ; chaque identifiant est dépensé par une requête premium et le lot cesse de fonctionner à la fermeture de sa dernière fenêtre, et rien ne révoque un identifiant non dépensé, donc `bravebot auth logout leo` met fin à la garde de cette machine et laisse le lot dépensable par tout ce qui a copié le fichier
 doctor-tier = niveau
@@ -237,6 +249,13 @@ doctor-noticed-aws-session =
 doctor-outlives = survit
 doctor-outlives-aws-access-key =
     une identification de session déjà émise par STS sous cette clé d'accès, qui court jusqu'à sa propre expiration : la suppression de la clé ne l'atteint pas
+doctor-binding = liaison
+doctor-binding-sender-constrained =
+    liée à l'émetteur de la requête : l'émetteur vérifie qui la présente, donc une copie prise sur cette machine ne sert à rien ailleurs
+doctor-binding-bearer-refused =
+    un secret au porteur : tout ce qui en détient une copie peut l'utiliser jusqu'à son expiration, et son émetteur n'offre aucune forme liée à celui qui la présente
+doctor-binding-bearer-not-attempted =
+    un secret au porteur : tout ce qui en détient une copie peut l'utiliser, et personne n'a demandé à son émetteur une forme liée à celui qui la présente
 doctor-dropped = descente
 doctor-dropped-refused = la contrepartie a refusé
 doctor-dropped-not-attempted = personne ne l'a demandé
@@ -263,7 +282,7 @@ doctor-dropped-gateway-token-nothing-decides-each-use =
 doctor-dropped-gateway-token-no-bound-fixed-before-issue =
     porte { $gate }, { $answer } : aucune limite sur ce que le jeton peut faire n'est fixée avant son émission, car le bloc nomme un hôte et une variable et jamais un émetteur, donc rien ici ne peut en demander un plus étroit
 doctor-dropped-gateway-token-not-minted-for-one-step =
-    porte { $gate }, { $answer } : il n'est pas émis pour une seule étape, car le jeton est ce que porte le fichier de réglages ou la variable, et il est gardé pendant toute l'exécution
+    porte { $gate }, { $answer } : il n'est pas émis pour une seule étape, car le jeton est ce que porte le fichier de réglages, la variable ou ce que `bravebot auth login gateway` a enregistré, et il est gardé pendant toute l'exécution
 doctor-dropped-subscription-batch-nothing-decides-each-use =
     porte { $gate }, { $answer } : rien que l'agent ne puisse usurper ne décide de chaque usage, car ce processus présente lui-même un identifiant du lot et rien n'est sollicité pour autoriser la requête
 doctor-backend = service
@@ -271,10 +290,16 @@ doctor-backend-bedrock = AWS Bedrock
 doctor-backend-aichat = Brave Leo
 doctor-backend-gateway = { $gateway } (passerelle)
 doctor-gateway-token = trouvé (jamais affiché)
-doctor-gateway-token-absent = aucun trouvé (définissez une variable nommée dans `env`)
+doctor-gateway-token-stored = enregistré par bravebot auth login gateway (jamais affiché)
+doctor-gateway-token-absent =
+    aucun trouvé (définissez une variable nommée dans `env`, ou lancez bravebot auth login gateway { $id })
 doctor-gateway-token-not-needed = aucun requis (le bloc n'en nomme aucun)
+doctor-gateway-keys = clés de passerelle
+doctor-gateway-keys-unreadable =
+    { $path } ne peut pas être lu, donc aucune clé qu'il contient n'est envoyée (bravebot auth login gateway le laisse tel quel)
+doctor-ended = le rapport ci-dessus contient un problème qui fait échouer cette exécution
 doctor-gateway-models-absent = aucun configuré (la passerelle est interrogée)
-doctor-gateway-models-unlisted = aucun configuré (ce service n'a pas de liste : nommez un modèle sous la forme <id>/<modèle>)
+doctor-gateway-models-compiled = { $models } (intégrés, ce service n'ayant pas de liste ; nommez tout autre modèle de la même façon)
 doctor-region = région
 doctor-profile = profil
 doctor-profile-absent = identifiants par défaut
@@ -411,6 +436,7 @@ leo-set-and-rebuild = définissez { $variable } et recompilez
 leo-unknown-channel = canal inconnu : { $channel }
 leo-expected-channel = attendu parmi : stable, beta, nightly, development
 leo-forgotten = abonnement importé oublié
+leo-forget-takes-no-channel = --forget n'accepte pas de canal : un seul abonnement est enregistré pour tous les canaux
 leo-not-while-incognito = un import enregistre des identifiants sur le disque, ce qu'une session incognito ne fera pas
 leo-looking = recherche d'un abonnement Leo dans Brave { $channel }
 leo-found = abonnement { $environment } trouvé : { $order }
@@ -512,6 +538,9 @@ auth-ways-heading = Façons de se connecter à un service de modèle :
 auth-way-leo = Brave Leo Premium, depuis une installation de Brave abonnée
 auth-way-bedrock = Un compte AWS, pour Amazon Bedrock
 auth-way-import = Un service de modèle de Claude Code, opencode ou Ollama, importé dans les réglages
+auth-way-gateway = Une clé pour une passerelle nommée par un bloc provider des réglages, saisie ici et gardée par bravebot
+auth-gateway-held = une clé enregistrée pour { $ids }
+auth-gateway-held-unreadable = le fichier des clés de passerelle ne peut pas être lu
 auth-way-held = { $description } ({ $status })
 auth-signed-in = connecté
 auth-which-way = Laquelle ? Tapez son numéro ou son nom, ou rien pour arrêter :
@@ -522,7 +551,22 @@ auth-leo-held =
     Brave Leo Premium est connecté : { $status }. bravebot auth logout leo le déconnecte.
 auth-sign-in-again = Se connecter à nouveau, comme un nouvel appareil ?
 auth-no-aws-account =
-    aucun compte AWS n'est configuré pour Bedrock : définissez { $switch }=1 et { $region }, ou lancez bravebot auth login import si Claude Code ou opencode en utilise un
+    aucun compte AWS n'est configuré pour Bedrock : définissez { $region } et un modèle dans l'une des variables { $tiers }, ou lancez bravebot auth login import si Claude Code ou opencode en utilise un
+auth-bedrock-off =
+    { $switch } a une autre valeur que 1, ce qui désactive Bedrock, et aucun bloc provider amazon-bedrock ne nomme de compte AWS
+auth-bedrock-pinned-off =
+    { $path } donne à { $switch } une autre valeur que 1 pour tous les utilisateurs de cette machine, ce qui désactive Bedrock, et aucun bloc provider amazon-bedrock ne nomme de compte AWS
+auth-bedrock-recorded = { $file } définit désormais { $switch }=1 : une session utilise Bedrock sans qu'il soit exporté
+auth-bedrock-not-recorded =
+    { $switch }=1 n'a pas été enregistré, il faut donc toujours l'exporter pour qu'une session utilise Bedrock : { $problem }
+auth-bedrock-not-recorded-incognito =
+    une session incognito n'enregistre rien, il faut donc toujours exporter { $switch }=1 pour qu'une session utilise Bedrock
+auth-bedrock-overruled =
+    un fichier de réglages donne à { $switch } une autre valeur que 1 : une session n'utilise Bedrock que là où { $switch }=1 est exporté
+auth-bedrock-left =
+    { $file } nomme déjà { $switch }, il a donc été laissé tel quel : une session n'utilise Bedrock que là où { $switch }=1 est exporté ou défini par les réglages d'un projet
+auth-bedrock-env-not-a-block = env dans { $file } n'est pas un bloc de noms, il a donc été laissé tel quel
+auth-bedrock-settings-changed = { $file } a changé pendant son écriture, il a donc été laissé tel quel
 auth-aws-profile-signed-in = le profil AWS { $profile } est connecté
 auth-aws-default-signed-in = le profil AWS par défaut est connecté
 auth-aws-profile-failed = le profil AWS { $profile } n'est pas connecté : { $failure }
@@ -533,6 +577,41 @@ auth-logout-bedrock =
     bravebot ne garde aucune session AWS : c'est l'AWS CLI qui la garde, et aws sso logout y met fin
 auth-logout-import =
     un import ne garde aucun identifiant : il a écrit des entrées dans le fichier de réglages, et les y retirer l'annule
+auth-gateway-key-argument =
+    une clé n'est jamais un argument de la ligne de commande, que d'autres programmes peuvent lire et que le shell garde : lancez bravebot auth login gateway { $id } et tapez la clé quand elle est demandée
+auth-gateway-not-while-incognito =
+    une session incognito n'écrit rien sur le disque, et enregistrer une clé est une écriture : lancez bravebot auth login gateway sans --incognito
+auth-gateway-none-configured =
+    aucune passerelle n'est configurée : ajoutez un bloc provider à settings.json, ou lancez bravebot auth login import, puis enregistrez sa clé ici
+auth-gateway-not-configured = ce n'est pas l'id d'un bloc provider ; les passerelles configurées sont { $ids }
+auth-gateway-needs-a-terminal =
+    une clé de passerelle se tape dans un terminal sans rien afficher, donc bravebot auth login gateway a besoin d'un terminal
+auth-gateway-no-home = il n'y a pas de répertoire personnel où enregistrer la clé
+auth-gateway-keys-unreadable =
+    { $path } n'est pas un fichier de clés écrit par bravebot, il a donc été laissé tel quel et rien n'a changé
+auth-gateways-heading = Passerelles configurées :
+auth-gateway-key-stored = une clé enregistrée
+auth-which-gateway = Laquelle ? Tapez son numéro ou son identifiant, ou rien pour arrêter :
+auth-not-a-listed-gateway = { $answer } n'est pas l'une des passerelles listées
+auth-gateway-key-held = Une clé est déjà enregistrée pour { $id }.
+auth-gateway-replace = La remplacer ?
+auth-gateway-key-question = Clé pour { $id }, envoyée à { $host } (non affichée pendant la saisie) :
+auth-gateway-nothing-stored = rien n'a été enregistré
+auth-gateway-not-read = la clé n'a pas pu être lue depuis le terminal : { $error }
+auth-gateway-not-stored = la clé n'a pas été enregistrée : { $path } : { $error }
+auth-gateway-stored =
+    la clé pour { $id } est enregistrée dans { $path }, et les sessions démarrées à partir de maintenant l'envoient à { $host }
+auth-gateway-variable-wins =
+    { $variable } est définie, et tant qu'elle l'est, une session envoie sa valeur au lieu de la clé enregistrée
+auth-logout-gateway-none = aucune clé de passerelle n'est enregistrée
+auth-logout-gateway-which =
+    des clés sont enregistrées pour { $ids } : nommez celle à oublier, comme bravebot auth logout gateway <id>
+auth-logout-gateway-not-stored = aucune clé n'est enregistrée pour { $id } ; des clés sont enregistrées pour { $ids }
+auth-logout-gateway-not-written = la clé n'a pas été oubliée : { $path } : { $error }
+auth-logout-gateway-forgotten =
+    la clé pour { $id } est oubliée ici, et fonctionne encore chez { $host } jusqu'à sa révocation là-bas
+auth-logout-gateway-forgotten-elsewhere =
+    la clé pour { $id } est oubliée ici, et fonctionne encore auprès du service qui l'a émise jusqu'à sa révocation là-bas
 
 
 ## Déclarer un serveur MCP, et l'approuver
@@ -978,6 +1057,11 @@ resume-manifest-run =
 stop-the-turn = arrêter le tour
 scroll-more = ↑↓ { $count } de plus
 scroll-back = ↑↓ retour
+prompt-unseen =
+    { $count ->
+        [one] ↑↓ encore { $count } ligne à lire avant un oui
+       *[other] ↑↓ encore { $count } lignes à lire avant un oui
+    }
 
 
 ## Approuver une écriture
@@ -997,6 +1081,10 @@ write-credentials =
     ceci semble déposer un secret dans l'arbre, d'après le nom à côté de la valeur et l'allure de
     la valeur. Rien ne l'a reconnu comme la clé d'un fournisseur précis : c'est donc une
     supposition, et c'est à vous d'en décider
+write-since-checkout =
+    cette session a écrit dans ce fichier du répertoire de travail après la création de
+    l'extraction : il peut contenir des changements que la copie de l'extraction n'a pas. Lisez la
+    différence avant d'approuver
 write-unchanged = { $count ->
     [one] … { $count } ligne inchangée
    *[other] … { $count } lignes inchangées
@@ -1028,6 +1116,8 @@ run-stages = { $count ->
     }
 run-in-directory = dans { $directory }
 watching-list-command = commande
+# La même colonne sur la ligne d'une tâche en arrière-plan. Le nom de la tâche ouvre la ligne à côté.
+watching-list-job = arrière-plan
 watching-list-aside = aparté
 watching-aside-head = une question posée à côté du travail
 watching-aside-question = vous avez demandé
@@ -1039,6 +1129,8 @@ watching-lines = { $count ->
    *[other] { $count } lignes
     }
 watching-output-head = ce que cette commande a affiché
+# Le nom est celui que le pilote a donné à la tâche, jamais rien de ce qu'elle a affiché.
+watching-output-job-head = ce que la tâche en arrière-plan { $name } a affiché
 watching-output-read = le modèle a lu ceci
 watching-output-kept = le modèle n'a pas lu ceci
 watching-row-read = lu
@@ -1093,6 +1185,16 @@ run-yes = l'exécuter
 run-always = toujours pour cette session
 run-remember = s'en souvenir
 run-no = ne pas l'exécuter
+run-unseen =
+    { $count ->
+        [one] ↑↓ { $count } ligne non affichée : aucune touche ne l'exécute encore
+       *[other] ↑↓ { $count } lignes non affichées : aucune touche ne l'exécute encore
+    }
+run-grant-unseen =
+    { $count ->
+        [one] ↑↓ { $count } ligne non affichée : une touche grisée l'attend
+       *[other] ↑↓ { $count } lignes non affichées : une touche grisée les attend
+    }
 
 
 ## Ce qu'une vérification a dit, en tête de chaque question dont la réponse sortirait un contenu de quarantaine
@@ -1328,6 +1430,12 @@ status-loop-unpaced = en attente que le tour dise quand
 status-goal = Objectif
 status-watch = Veille { $number }
 status-watch-armed-by = posée au tour { $turn } · il reste { $left }
+# Une ligne par tâche en arrière-plan du dernier tour. Le nom est celui du pilote.
+status-job = Tâche en arrière-plan { $name }
+status-job-of-delegate = Tâche en arrière-plan { $name } du délégué { $number }
+status-job-note = { $standing } · { $origin }
+status-job-moved = passée du premier plan à l'arrière-plan après { $after }
+status-job-started = lancée en arrière-plan
 # « fois » est invariable, donc une seule forme là où l'anglais en a deux.
 status-goal-rounds = renvoyé { $rounds } fois, il en reste { $left }
 status-permissions = Permissions
@@ -1348,6 +1456,7 @@ status-cache-written = écrit dans le cache pour le tour suivant
 hint-cache-hit-rate = cache { $rate } %
 status-trust = Confiance
 status-nothing-vouched-for = rien d'approuvé
+status-held-by-the-turn = détenu par le tour en cours, affiché à sa fin
 status-trusted = fiable
 status-untrusted = non fiable
 status-programs = Programmes
@@ -1398,6 +1507,7 @@ indicator-checking = { $lines ->
     }
 indicator-checking-picture = Vérification d'une image
 indicator-checking-pdf = Vérification d'un PDF
+indicator-stopping = Arrêt en cours
 tokens-thousands = { $thousands } k
 tokens-millions = { $millions } M
 turn-done = tour { $turn } terminé
@@ -1418,10 +1528,6 @@ session-build-differs = cette session tournait sous bravebot { $was } ; celle-ci
 session-front-differs = cette session a été écrite dans { $was } ; celle-ci l'est dans { $now }
 session-front-terminal = le terminal
 session-front-desktop = l'application de bureau
-session-servers-not-started =
-    les réglages ici demandent les serveurs MCP { $servers }, que l'application de bureau ne
-    démarre pas : bravebot mcp list, lancé ici dans un terminal, dit lesquels une session y
-    démarrerait
 
 
 ## Thèmes
@@ -1513,9 +1619,11 @@ command-model = Choisir avec quel modèle réfléchir
 command-theme = Choisir quel thème habille l'interface
 command-effort = Choisir l'effort de réflexion avant de répondre
 command-config = Choisir le mode d'édition de la zone de saisie
-command-add-dir = Ouvrir un autre répertoire, et l'approuver pour cette session
+command-add-dir = Ouvrir un autre répertoire et l'approuver pour cette session, ou en fermer un
 command-cd = Travailler désormais dans un autre répertoire, et l'approuver pour cette session
 command-rename = Appeler cette conversation autrement
+command-issue = Dire pour quel ticket est cette session, l'afficher ou l'effacer
+command-pr = Dire pour quelle pull request est cette session, l'afficher ou l'effacer
 command-compact = Résumer la conversation jusqu'ici, en gardant la partie récente
 command-btw = Demander quelque chose à côté du travail, sans le mettre dans la conversation
 command-clear = Démarrer une nouvelle session ici, celle-ci restant reprenable
@@ -1523,9 +1631,13 @@ command-forget-trust = Ne plus retenir que ce répertoire est approuvé, pour qu
 command-loop = Renvoyer une consigne encore et encore, dire ce qui se répète, ou l'arrêter
 command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie
 command-watch = Lister les fichiers que cette session surveille, et en arrêter un par son numéro
+command-jobs = Lister les tâches en arrière-plan de ce tour, et en arrêter une par son nom
+command-panel = Afficher ou masquer le panneau d'informations à côté de la transcription
+command-checkouts = Lister les copies gardées, en rapporter les fichiers, ou en supprimer une
 command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
 command-agent = Exécuter l'une de vos définitions sur une tâche, par son nom
 command-export = Exporter la transcription de la session vers un fichier markdown
+command-copy = Copier la dernière réponse dans le presse-papiers, ou une plus ancienne en reculant d'autant de réponses
 command-undo = Rembobiner d'un tour et restaurer les fichiers qu'il a écrits
 command-rewind = Lister les tours qu'un rembobinage peut atteindre, ou reculer d'autant
 command-exit = Partir
@@ -1540,6 +1652,7 @@ skill-effort-not-a-level = { $skill } demande l'effort { $effort }, qui n'est au
 skill-asks-a-model = { $skill } demande { $model } pour le reste de ce tour
 skill-asks-an-effort = { $skill } demande l'effort { $effort } pour le reste de ce tour
 skill-model-needs-sign-in = { $skill } demande { $model }, qui exige d'abord une connexion, donc ses tours gardent le modèle de cette session
+skill-model-refused = { $skill } demande { $model }, que cette machine ne demande pas, donc ses tours gardent le modèle de cette session : { $reason }
 skill-model-kept-for-definition = { $skill } demande { $model }, mais ce tour reste sur le modèle que { $definition } a désigné
 skill-model-substituted = { $skill } a demandé { $model } et a reçu la réponse d'un autre modèle
 source-denied-by-rule = { $source } n'a pas été chargé : une règle deny de vos réglages le couvre
@@ -1551,6 +1664,22 @@ session-resumed = session reprise : { $title }
 session-renamed = renommée en { $title }
 session-rename-needs-a-name = /rename demande un nom, comme /rename le bug de l'analyseur
 session-rename-needs-something = /rename demande un nom qui contienne quelque chose
+# Ce que répondent /issue et /pr. Une valeur refusée n'est pas répétée, car elle peut contenir un
+# caractère de contrôle.
+session-issue-is = cette session est pour { $url }. /issue clear l'enlève
+session-pull-request-is = la pull request de cette session est { $url }. /pr clear l'enlève
+session-issue-none = aucun ticket n'est fixé. /issue <url> en fixe un
+session-pull-request-none = aucune pull request n'est fixée. /pr <url> en fixe une
+session-issue-set = cette session est pour { $url }
+session-pull-request-set = la pull request de cette session est { $url }
+session-issue-cleared = le ticket est effacé
+session-pull-request-cleared = la pull request est effacée
+session-issue-refused =
+    /issue prend un seul lien http ou https sur une ligne, en ASCII sans espace, comme
+    /issue https://github.com/brave/bravebot/issues/1. Rien n'a été fixé
+session-pull-request-refused =
+    /pr prend un seul lien http ou https sur une ligne, en ASCII sans espace, comme
+    /pr https://github.com/brave/bravebot/pull/1. Rien n'a été fixé
 session-cleared = effacée : une nouvelle session, la précédente restant reprenable
 session-rewound = session rembobinée avant le tour { $turn }
 session-rewound-partly =
@@ -1574,12 +1703,25 @@ session-rewind-cause-hook = hooks
 session-rewind-cause-scratch = écritures temporaires
 session-rewind-cause-server = serveurs de langage
 session-rewind-cause-desktop = tours du bureau
+session-rewind-cause-checkout = copies de travail des délégués
 session-rewind-cause-backup = sauvegardes indisponibles
 session-rewind-cause-unknown = couverture inconnue
 session-exported = transcription exportée vers { $path }
 session-export-failed = impossible d'exporter la transcription : { $problem }
+session-copy-needs-a-number = /copy demande de combien de réponses reculer, comme /copy 2
+session-copy-no-reply = cette session n'a aucune réponse à copier
+session-copy-goes-no-further =
+    { $replies ->
+        [one] cette session a une seule réponse, /copy ne peut donc pas reculer plus loin
+       *[other] cette session a { $replies } réponses, /copy ne peut donc pas reculer de plus de { $replies }
+    }
+session-copy-failed = impossible de copier la réponse dans le presse-papiers
 session-add-dir-needs-a-path = /add-dir demande un répertoire, comme /add-dir ~/notes
 session-directory-added = { $directory } ajouté, et approuvé pour cette session
+session-directory-ends-checkouts = { $directory } contient le répertoire de travail, donc aucun délégué n'obtient de copie de travail tant qu'il est ouvert ; /add-dir close { $directory } y met fin
+session-close-dir-needs-a-path = /add-dir close demande un répertoire, comme /add-dir close ~/notes
+session-directory-withdrawn = { $directory } fermé, et n'est plus approuvé ; rouvrez-le avec /add-dir { $directory }
+session-directory-not-closed = impossible de fermer { $directory } : { $problem }
 session-cd-needs-a-path = /cd demande un répertoire, comme /cd ~/projets/autre
 session-directory-changed = travail désormais dans { $directory }, et approuvé pour cette session
 # Dit une fois par répertoire qui était ouvert et ne l'est plus, pour que personne ne l'apprenne
@@ -1711,8 +1853,10 @@ loop-tick-quiet = { $quiet ->
    *[other] boucle { $count }, après { $quiet } passages sans rien trouver
     }
 loop-stopped = la boucle est arrêtée
+loop-cleared = la boucle est arrêtée, car elle appartenait à la session effacée
 loop-aged-out = la boucle a tourné une semaine et s'est arrêtée d'elle-même
 loop-unpaced = ce tour n'a pas dit quand recommencer, la boucle est donc arrêtée
+loop-finished = ce tour a dit que la boucle est terminée, la boucle est donc arrêtée
 loop-busy = /loop commence par un tour à lui, il attend donc la fin de celui-ci
 loop-replaces-goal =
     l'objectif qui était fixé a été retiré : une session ne travaille qu'à une chose à la fois
@@ -1811,6 +1955,44 @@ watches-cleared = { $count ->
     [one] { $count } veille active a pris fin avec la conversation où elle a été posée
    *[other] { $count } veilles actives ont pris fin avec la conversation où elles ont été posées
     }
+
+## Les copies de travail gardées par un délégué
+
+checkouts-listed = { $id } : faite pour le délégué { $delegate } du commit { $commit }, dans { $path }
+checkouts-nothing-done = { $id } : rien n'y a été fait, d'après ce qui est enregistré
+checkouts-written = { $id } : fichiers écrits : { $paths }
+checkouts-more = { $count } de plus
+checkouts-referenced = { $count ->
+    [one] { $id } : { $count } écriture par une référence, dont le chemin n'a pas été enregistré
+   *[other] { $id } : { $count } écritures par une référence, dont les chemins n'ont pas été enregistrés
+    }
+checkouts-unread =
+    { $id } : son état n'a pas été lu, donc un fichier modifié autrement que par une écriture
+    n'est pas nommé ici
+checkouts-none =
+    cette session ne garde aucune copie de travail. Un délégué qui en reçoit une la garde quand
+    quelque chose y a été fait
+checkouts-no-such =
+    cette session ne garde pas de copie de travail { $id }. /checkouts liste celles qu'elle garde
+checkouts-command-takes =
+    /checkouts liste les copies de travail que cette session garde, /checkouts apply <n> rapporte
+    les fichiers écrits dans celle qui porte ce numéro, et /checkouts remove <n> la supprime
+# Suivi d'une ligne par fichier, telle que la porte d'écriture l'a formulée.
+checkouts-applied = des fichiers de la copie de travail { $id } ont été rapportés :
+checkouts-not-applied = rien de la copie de travail { $id } n'a été rapporté :
+checkouts-removed = la copie de travail { $id } dans { $path } est supprimée
+checkouts-not-removed =
+    la copie de travail { $id } dans { $path } n'a pas pu être supprimée, et reste gardée
+checkouts-worked-from =
+    la copie de travail { $id } dans { $path } est gardée, car le répertoire de travail ou un répertoire ajouté avec /add-dir s'y trouve
+checkouts-kept = la copie de travail { $id } est gardée
+remove-checkout-title = supprimer cette copie de travail ?
+remove-checkout-which = la copie de travail { $id }, faite pour le délégué { $delegate }, se trouve dans
+remove-checkout-explained =
+    Quelque chose y a été fait, et rien ne ramène ce travail ici. La supprimer efface le
+    répertoire et tout ce qu'il contient.
+remove-checkout-yes = la supprimer
+remove-checkout-no = la garder
 
 
 ## Où va une ligne envoyée pendant que quelque chose tourne, à côté de sa marque
@@ -1913,6 +2095,7 @@ verb-read-git = Historique
 verb-lsp = Consulter
 verb-write-file = Écrire
 verb-edit-file = Modifier
+verb-apply-checkout = Appliquer
 verb-todo-write = Planifier
 verb-spawn-processor = Processeur isolé
 verb-load-skill = Compétence
@@ -1977,6 +2160,7 @@ delegate-memory-in-checkout =
 # Le pied de page de la vue d'un delegue. Le genre et le numero sont les mots du pilote, jamais
 # ceux du modele.
 watching-footer = delegue { $kind } { $number }
+watching-footer-job = arrière-plan { $name }
 watching-working = au travail
 watching-answered = a repondu
 watching-failed = n'a pas termine
@@ -1999,6 +2183,58 @@ watching-calls = { $count ->
 # au tour qui l'a dessinee. Le compte y est car une touche sans rien derriere ne vaut pas la
 # peine. Delegues et commandes sont comptes ensemble, une seule touche ouvrant la liste des deux.
 watching-hint = { $chord } { $count } a ouvrir
+# Dit sur la ligne du bas tant qu'une commande attendue par le tour peut passer en arrière-plan,
+# et retiré dès qu'elle se termine ou y passe. Court, car il partage la ligne avec tout le reste.
+background-hint = { $chord } en arrière-plan
+# Dit sur la ligne du bas tant qu'une tâche en arrière-plan tourne, et retiré quand la dernière se
+# termine.
+jobs-hint = { $count ->
+    [one] 1 en arrière-plan
+   *[other] { $count } en arrière-plan
+    }
+# Où en est une tâche en arrière-plan, dans la vue qu'ouvre sa ligne et dans /status. La durée vient
+# de l'horloge de ce côté, comptée depuis le lancement de la ligne.
+job-running = en cours depuis { $ran_for }
+job-ended-with-turn = arrêtée à la fin du tour
+# Où en est une tâche entre /jobs stop et la prochaine étape du tour, qui est le moment où il
+# l'arrête.
+job-stopping = en cours d'arrêt
+# Le nom d'une tâche en arrière-plan lancée par un délégué : chaque délégué numérote ses tâches
+# depuis un.
+job-of-delegate = { $name } du délégué { $number }
+# Une ligne de /jobs. Le nom est celui que prend /jobs stop.
+jobs-listed = { $name } : { $command }, { $standing }
+# Une ligne de /jobs pour une tâche d'un délégué, nommée comme la prend /jobs stop : le nom de la
+# tâche, puis le numéro du délégué, comme dans job:1 d2.
+jobs-listed-of-delegate = { $name } { $number } : { $command }, { $standing }, lancée par le délégué { $number }
+jobs-none =
+    il n'y a aucune tâche en arrière-plan à lister. Un tour en lance une quand il exécute une
+    commande en arrière-plan, et /jobs liste les tâches d'un tour jusqu'au début du suivant
+jobs-no-such = il n'y a pas de tâche { $name } à arrêter. /jobs liste celles qui existent
+jobs-already-ended = { $name } est déjà terminée
+job-stop-asked = { $name } sera arrêtée à la prochaine étape du tour
+job-stop-already-asked = { $name } est déjà en cours d'arrêt
+jobs-command-takes =
+    /jobs liste les tâches en arrière-plan de ce tour, et /jobs stop <nom> en arrête une. Une
+    tâche d'un délégué prend aussi le numéro du délégué, comme dans /jobs stop job:1 d2
+panel-hint = { $chord } infos
+panel-hide = { $chord } masquer le panneau
+panel-too-narrow = Le panneau d'informations demande un terminal d'au moins { $columns } colonnes.
+panel-session = Session
+panel-goal = Objectif
+panel-context = Contexte
+panel-language-servers = Serveurs de langage
+panel-mcp-servers = Serveurs MCP
+panel-plan = Plan
+panel-links = Liens
+# Les lignes de la section Liens du panneau d'informations, chacune suivie du lien.
+panel-pull-request = Pull request
+panel-issue = Ticket
+panel-cache-read = cache lu { $tokens }
+panel-cache-written = cache écrit { $tokens }
+panel-more = +{ $count } de plus
+panel-earlier = +{ $count } avant
+panel-earlier-and-more = +{ $earlier } avant, +{ $later } de plus
 
 # Vérifications indicatives affichées uniquement dans un dépôt de sources de Bravebot.
 doctor-development = environnement de développement { $path }

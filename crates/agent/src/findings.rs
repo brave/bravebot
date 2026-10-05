@@ -35,6 +35,19 @@
 //! a salt that outlives the run, which is a value somebody has to keep somewhere and a decision of
 //! its own. What the record answers today is what was found, where, and what it looked like.
 //!
+//! # An acceptance expires
+//!
+//! A person can accept a finding ([`Store::accept`]). An acceptance is one entry in a second file
+//! beside the record, and it must carry an expiry: the function has no form without one. Once the
+//! expiry has passed the acceptance is ignored, and [`Store::open_at`] reports the finding as open
+//! again ([CRED-21]). An acceptance names the kind, the path and the fingerprint of the finding, so
+//! it stops applying to a finding whose fingerprint differs ([CRED-22]). Because the fingerprint is
+//! salted per run, an acceptance currently applies only to findings made by the run that was
+//! accepted; see the section above.
+//!
+//! Nothing a turn runs calls [`Store::accept`]: it is for a person's command to call, and no tool
+//! exposes it ([CRED-22]).
+//!
 //! # One line per entry, appended
 //!
 //! JSON, one object per line, added rather than the file rewritten, so two sessions open in one
@@ -54,6 +67,7 @@
 //! note about it could not be filed.
 //!
 //! [CRED-19]: ../../../docs/specs/credential-protection.md
+//! [CRED-21]: ../../../docs/specs/credential-protection.md
 //! [CRED-22]: ../../../docs/specs/credential-protection.md
 
 use bravebot_core::credentials::{Finding, Kind};
@@ -63,6 +77,20 @@ use std::path::{Path, PathBuf};
 
 /// The directory the per-workspace records live in, inside the state directory.
 const FINDINGS: &str = "findings";
+
+/// The directory, inside [`FINDINGS`], that holds acceptances. A directory of its own so that no
+/// workspace key can name the same file as a record.
+const ACCEPTED: &str = "accepted";
+
+/// The current time as seconds since the Unix epoch.
+///
+/// A clock that cannot be read answers the latest time there is, so every acceptance has lapsed
+/// rather than none of them.
+pub fn now_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(u64::MAX, |elapsed| elapsed.as_secs())
+}
 
 /// Whether this session may add a line to a record.
 ///
@@ -122,6 +150,8 @@ pub struct Store {
     /// Recording the real path is what decides which entries in a shared file are this
     /// workspace's, exactly as the granted record holds the tree its key was made from.
     workspace: PathBuf,
+    /// Where this workspace's acceptances are.
+    accepted_path: PathBuf,
 }
 
 impl Store {
@@ -131,12 +161,94 @@ impl Store {
     /// crate takes it: a library that reached for `$HOME` behind its callers' backs would make
     /// every test that writes a file depend on whatever the developer happened to have installed.
     pub fn new(home: &Path, workspace: &Path) -> Self {
+        let file = format!("{}.jsonl", crate::home::key_for(workspace));
         Self {
-            path: home
-                .join(FINDINGS)
-                .join(format!("{}.jsonl", crate::home::key_for(workspace))),
+            path: home.join(FINDINGS).join(&file),
             workspace: workspace.to_path_buf(),
+            accepted_path: home.join(FINDINGS).join(ACCEPTED).join(file),
         }
+    }
+
+    /// Accept `finding` until `expires_at`, given as seconds since the Unix epoch.
+    ///
+    /// The expiry is a required argument: there is no acceptance without an end. From `expires_at`
+    /// on, the acceptance is ignored and [`Store::open_at`] reports the finding again. `reason`
+    /// is what the person said it is accepted for.
+    ///
+    /// Appended, as the record is. Unlike [`Store::record`] this reports failure, because a person
+    /// who asked for an acceptance has to be told it was not kept. A session that adds nothing to
+    /// `~/.bravebot` ([`may_be_added_to`]) keeps none.
+    ///
+    /// # Errors
+    ///
+    /// The acceptance was not written: this session may not add to the state directory, or the
+    /// file could not be opened or written.
+    pub fn accept(&self, finding: &Finding, reason: &str, expires_at: u64) -> std::io::Result<()> {
+        if !may_be_added_to() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "this session adds nothing to the state directory",
+            ));
+        }
+        let Some(parent) = self.accepted_path.parent() else {
+            return Err(std::io::Error::other(
+                "the acceptance file has no directory",
+            ));
+        };
+        crate::home::create_directory(parent)?;
+        let mut encoded = serde_json::to_string(&Accepted {
+            workspace: WrittenPath::of(&self.workspace),
+            kind: WrittenKind::of(finding.kind),
+            path: finding.path.clone(),
+            fingerprint: finding.fingerprint.clone(),
+            reason: reason.to_string(),
+            expires_at,
+        })
+        .map_err(std::io::Error::other)?;
+        encoded.push('\n');
+        crate::home::append_to_file(&self.accepted_path)?.write_all(encoded.as_bytes())
+    }
+
+    /// Every finding this record holds that no acceptance covers at `now`, oldest first.
+    ///
+    /// `now` is seconds since the Unix epoch. An acceptance covers a finding until its expiry and
+    /// not at it: at `expires_at` the finding is open again. One covers a finding only when the
+    /// kind, the path and the fingerprint all agree, so a finding whose fingerprint differs is a new
+    /// finding rather than a renewed acceptance.
+    ///
+    /// Nothing comes back accepted for a file that is not there, cannot be read, or holds nothing
+    /// this build understands, so an acceptance that cannot be read leaves its finding open.
+    pub fn open_at(&self, now: u64) -> Vec<Finding> {
+        let accepted = self.accepted_at(now);
+        self.recorded()
+            .into_iter()
+            .filter(|finding| {
+                !accepted.iter().any(|entry| {
+                    entry.kind.kind() == finding.kind
+                        && entry.path == finding.path
+                        && entry.fingerprint == finding.fingerprint
+                })
+            })
+            .collect()
+    }
+
+    /// [`Store::open_at`] at the current time.
+    pub fn open(&self) -> Vec<Finding> {
+        self.open_at(now_seconds())
+    }
+
+    /// The acceptances for this workspace that have not expired at `now`.
+    fn accepted_at(&self, now: u64) -> Vec<Accepted> {
+        let Ok(contents) = std::fs::read_to_string(&self.accepted_path) else {
+            return Vec::new();
+        };
+        contents
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .filter_map(|line| serde_json::from_str::<Accepted>(line).ok())
+            .filter(|entry| entry.workspace.to_path().as_deref() == Some(&*self.workspace))
+            .filter(|entry| now < entry.expires_at)
+            .collect()
     }
 
     /// Where the record is, which is what anything offering to show it has to be able to name.
@@ -240,6 +352,27 @@ struct Written {
     fingerprint: String,
     /// How long the value is and what it is made of. Every character masked.
     preview: String,
+}
+
+/// One acceptance as it is spelled on disk.
+///
+/// Holds the fingerprint and never a value, and refuses an entry with a field this build does not
+/// know, for the reason [`Written`] does.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Accepted {
+    /// The workspace the finding was made in, in full.
+    workspace: WrittenPath,
+    /// Which layer recognised the value, and as what.
+    kind: WrittenKind,
+    /// The file it is in.
+    path: String,
+    /// The fingerprint of the finding accepted.
+    fingerprint: String,
+    /// What the person accepted it for.
+    reason: String,
+    /// Seconds since the Unix epoch at which the acceptance stops applying.
+    expires_at: u64,
 }
 
 /// A [`Kind`] as this record spells it.
@@ -575,6 +708,128 @@ mod tests {
             !store.path().parent().expect("a parent").exists(),
             "a scan that found nothing created the directory a record would live in"
         );
+    }
+
+    /// CRED-21: an acceptance covers a finding until its expiry, and the finding is open again from
+    /// the expiry on. The three times are one second before, at, and after the expiry, so an
+    /// acceptance that never lapses, or one that lapses a step early or late, fails one of them.
+    #[test]
+    fn an_acceptance_lapses_into_a_finding_when_its_expiry_passes() {
+        let scratch = Scratch::new("findings-accept-expires");
+        let store = scratch.store("/work");
+        let finding = found("config.yml", 1);
+        store.record(&[&finding], Some("a-session"));
+        store
+            .accept(&finding, "a development key", 1_000)
+            .expect("the acceptance is kept");
+
+        assert!(
+            store.open_at(999).is_empty(),
+            "an unexpired acceptance left the finding open"
+        );
+        assert_eq!(
+            store.open_at(1_000),
+            vec![finding.clone()],
+            "open at the expiry"
+        );
+        assert_eq!(
+            store.open_at(5_000),
+            vec![finding.clone()],
+            "open after the expiry"
+        );
+        assert_eq!(store.recorded(), [finding], "accepting rewrote the record");
+    }
+
+    /// CRED-21 and CRED-22: an acceptance names one finding. A finding of the same kind at the same
+    /// path with another fingerprint is a new finding, and an acceptance made in another workspace
+    /// covers nothing here.
+    #[test]
+    fn an_acceptance_covers_only_the_finding_it_names() {
+        let scratch = Scratch::new("findings-accept-scope");
+        let store = scratch.store("/work");
+        let accepted = found("config.yml", 1);
+        let text = format!("AWS_ACCESS_KEY_ID={VALUE}");
+        let other_run = bravebot_core::credentials::scan("config.yml", &text, 18)
+            .into_iter()
+            .next()
+            .expect("a finding over the key");
+        assert_ne!(accepted.fingerprint, other_run.fingerprint);
+        store.record(&[&accepted, &other_run], None);
+        store
+            .accept(&accepted, "a development key", 1_000)
+            .expect("the acceptance is kept");
+
+        assert_eq!(store.open_at(10), vec![other_run.clone()]);
+
+        let elsewhere = scratch.store("/other");
+        elsewhere.record(&[&accepted], None);
+        assert_eq!(
+            elsewhere.open_at(10),
+            [accepted],
+            "an acceptance made in /work covered a finding in /other"
+        );
+    }
+
+    /// CRED-21: an acceptance line with a field this build does not know is not read, so the finding
+    /// it would cover stays open. A later build that narrows an acceptance by adding a field must
+    /// not have an older one apply it as the wider acceptance.
+    #[test]
+    fn an_acceptance_this_build_does_not_fully_understand_leaves_its_finding_open() {
+        let scratch = Scratch::new("findings-accept-unknown-field");
+        let store = scratch.store("/work");
+        let finding = found("config.yml", 1);
+        store.record(&[&finding], Some("a-session"));
+        store
+            .accept(&finding, "a development key", 1_000)
+            .expect("the acceptance is kept");
+        assert!(
+            store.open_at(10).is_empty(),
+            "the acceptance did not apply before it was rewritten, so this test proves nothing"
+        );
+
+        let file = store.accepted_path.clone();
+        let written = std::fs::read_to_string(&file).expect("the acceptance");
+        let narrowed = written.replacen(
+            r#"{"workspace""#,
+            r#"{"something-later-builds-key-on":"x","workspace""#,
+            1,
+        );
+        assert_ne!(
+            narrowed, written,
+            "the entry was not rewritten, so this test proves nothing"
+        );
+        std::fs::write(&file, narrowed).expect("rewritten");
+
+        assert_eq!(
+            store.open_at(10),
+            [finding],
+            "an acceptance with a field this build cannot account for was applied"
+        );
+    }
+
+    /// CRED-21: an acceptance holds the fingerprint and a reason and never the value.
+    #[test]
+    fn an_acceptance_repeats_no_part_of_the_value() {
+        let scratch = Scratch::new("findings-accept-no-value");
+        let store = scratch.store("/work");
+        let finding = found("config.yml", 1);
+        store
+            .accept(&finding, "a development key", 1_000)
+            .expect("the acceptance is kept");
+
+        let dir = store.path().parent().expect("a parent").join(ACCEPTED);
+        let file = std::fs::read_dir(&dir)
+            .expect("the acceptance directory")
+            .next()
+            .expect("an acceptance file")
+            .expect("readable")
+            .path();
+        let written = std::fs::read_to_string(file).expect("the acceptance");
+        for run in VALUE.as_bytes().windows(4) {
+            let piece = std::str::from_utf8(run).expect("the value is ASCII");
+            assert!(!written.contains(piece), "the acceptance carried {piece}");
+        }
+        assert!(written.contains(&finding.fingerprint) && written.contains("1000"));
     }
 
     /// A turn with no session to name still records what it found. A one-shot run is exactly the

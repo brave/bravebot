@@ -132,7 +132,8 @@ A reader and a checker hold no MCP server's grant ([SERVERS-9](mcp-servers.md#SE
 server's tool does is the server's to say, so a call to one may write or run anything, and a worker
 is the one kind already let write and run. No kind names a server, since which servers a session
 reached is not known until it starts, so a worker holds a server's grant only where its parent
-does, and its definition may narrow which of those it keeps ([DELEGATE-24](#DELEGATE-24)).
+does. Its definition ([DELEGATE-24](#DELEGATE-24)) and the call that starts it
+([AGENT-6](tools/spawn-agent.md#AGENT-6)) may narrow which of those it keeps.
 
 Every kind additionally reaches the network, because a planner is a model call and the request out
 is egress like any other. No tool of this program's that a delegate is offered reaches it, so what
@@ -146,6 +147,7 @@ tool list is written out a second time as a refusal.
 `verified-by: bravebot_core::policy::a_delegate_holds_no_more_than_the_run_that_spawned_it`
 `verified-by: bravebot_core::delegate::the_kinds_are_ordered_by_what_they_hold`
 `verified-by: bravebot_core::delegate::a_kind_holds_a_language_server_exactly_where_it_may_run_programs`
+`verified-by: bravebot_core::delegate::naming_lsp_without_run_holds_no_language_server`
 `verified-by: bravebot_agent::lsp::a_checker_and_a_worker_are_offered_lsp_and_a_reader_is_not`
 `verified-by: bravebot_core::delegate::every_kind_can_reach_the_endpoint_and_nothing_else_remote`
 `verified-by: bravebot_agent::tools::no_kind_is_offered_a_tool_that_reaches_the_network`
@@ -336,6 +338,9 @@ its own record: where a delegate's checkout is and the commit it holds, or that 
 for a kept one the paths written in it whose names the delegate typed. A write through a reference
 is counted, so the name a reference held stays with the delegate.
 
+The driver's own count of the delegate's rounds and time, and the fixed cause of its end, go to the
+trail and to the person's note and never to the planner ([TRACE-8](trace.md#TRACE-8)).
+
 **Why.** This is the feature rather than a restriction on it. A delegate whose reading reached
 its parent's context would have moved the log rather than absorbed it.
 
@@ -375,8 +380,8 @@ one-use grants nor prompt history cross back, and no command grant is widened.
 
 `verified-by: bravebot_agent::turn::overlapping_delegate_writes_follow_effect_order_in_both_collection_orders`
 
-**Whether or not it finished.** A delegate that stopped on a failed model call has no report and
-no round count for the parent to take, and it hands the record back anyway. A person answered
+**Whether or not it finished.** A delegate that stopped on a failed model call has no report
+for the parent to take, and it hands the record back anyway. A person answered
 inside it, and an answer is a standing decision about their own machine rather than a part of the
 work that failed. A record coming back only from a run that reported would leave the next one
 asking about the build this one was already told it could run. A run that stopped before it
@@ -416,8 +421,9 @@ A delegate's gates report into the same audit trail as the turn that spawned it,
 can be told apart. A nested run recording somewhere else would leave a hole in the record exactly
 over the part of the turn nobody watched.
 
-The name is the delegate's number, minted by the kernel when it approves the delegate. The number
-is its path from the turn: `d1.2` is the second delegate that `d1` started. A record says which
+The name is the delegate's number, minted by the kernel when it approves the delegate. A request
+the kernel refuses takes no number. The number is its path from the turn: `d1.2` is the second
+delegate that `d1` started. A record says which
 run took the decision it holds, and the turn's own records are left unnamed. A nested delegate's
 records reach the trail through every run above it and carry its own number, not the number of
 a run they passed through.
@@ -429,6 +435,7 @@ a run they passed through.
 `verified-by: bravebot_session::audit::the_written_record_names_the_delegate_that_took_the_decision`
 `verified-by: bravebot_core::delegate::a_delegates_number_is_its_path_from_the_turn`
 `verified-by: bravebot_core::policy::a_delegate_numbers_its_own_delegates_beneath_it`
+`verified-by: bravebot_core::policy::a_refusal_between_two_delegates_leaves_their_numbers_adjacent`
 `verified-by: bravebot_agent::shared::a_nested_delegates_records_name_it_rather_than_the_delegate_above_it`
 `verified-by: bravebot_agent::shared::a_handle_relays_only_its_own_descendants_and_only_once`
 `verified-by: bravebot_agent::turn::a_delegate_can_spawn_its_own_delegate_and_the_trail_names_it`

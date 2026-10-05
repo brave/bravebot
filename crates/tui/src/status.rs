@@ -30,6 +30,40 @@ use std::path::Path;
 /// says how much more is in a file the reader has just been pointed at.
 const MAX_REMEMBERED: usize = 6;
 
+/// How much of a background job's line `/status` and `/jobs` give, so a long one does not push
+/// every note in the report across the screen. The whole line is in the job's row, which the view
+/// opens.
+pub(crate) const JOB_LINE: usize = 48;
+
+/// One line at most `most` columns wide, ending in an ellipsis where it was cut.
+///
+/// Only line breaks and tabs are folded, since neither can be drawn in one row of the report. The
+/// spacing inside a line is the command as it was approved.
+pub(crate) fn cut(text: &str, most: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+    let line = text
+        .lines()
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace('\t', " ");
+    if crate::wrap::display_width(&line) <= most {
+        return line;
+    }
+    let mut kept = String::new();
+    let mut width = 0;
+    for c in line.chars() {
+        let wide = c.width().unwrap_or(0);
+        if width + wide + 1 > most {
+            break;
+        }
+        width += wide;
+        kept.push(c);
+    }
+    kept + "…"
+}
+
 /// One line of the report: a label, a value, and an optional aside.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Line {
@@ -105,6 +139,8 @@ pub struct Facts<'a> {
     pub servers: &'a crate::state::Servers,
     /// How much the session is asking before it acts, as the mode key last left it.
     pub permission_mode: bravebot_agent::PermissionMode,
+    /// Whether the session was started with the flag that skips permissions.
+    pub bypass_available: bool,
     /// Whether a check that finds nothing promotes a slot without the person being asked.
     ///
     /// Reported for the reason the permission mode is: it is a standing answer that stops a prompt
@@ -127,6 +163,9 @@ pub struct Facts<'a> {
     pub cached: Option<bravebot_aichat::protocol::Cached>,
     pub trust: &'a TrustStore,
     pub programs: &'a TrustedPrograms,
+    /// Whether the turn in flight holds the two above, which it answers into as it runs. Then
+    /// neither is read and the report says the rules are the turn's until it ends.
+    pub turn_holds_rules: bool,
     /// The loop repeating a prompt, where the person started one.
     ///
     /// Absent from the report entirely when there is none, rather than reported as "no loop": a
@@ -143,6 +182,12 @@ pub struct Facts<'a> {
     /// a line each, because the number is what a person ends it by and the turn that armed it is
     /// what makes a prompt arriving hours later have a cause.
     pub watches: &'a [watch::Watch],
+    /// The background jobs of the turn in flight, or of the last one, in the order they started.
+    ///
+    /// A `/status` typed during a turn is answered at once, so a job here may still be running.
+    ///
+    /// Empty says nothing, for the reason no watch says nothing.
+    pub jobs: Vec<(&'a crate::state::Output, &'a crate::state::JobView)>,
     /// The command lines somebody asked to be remembered past a session, for this directory.
     ///
     /// `None` where this session keeps no such record at all: no state directory, or a mode that
@@ -176,12 +221,19 @@ pub struct Remembered<'a> {
 /// What to call a permission mode, or `None` for the one that needs no name.
 ///
 /// One definition, used by `/status` and by the line under the input box, so the two cannot come to
-/// call the same mode different things. `None` for asking, which is what a session has always done:
-/// the modes worth drawing are the ones that changed something.
-pub fn named_mode(mode: bravebot_agent::PermissionMode) -> Option<&'static str> {
+/// call the same mode different things. `None` for asking in a session that never had bypass, which
+/// is what a session has always done: the modes worth drawing are the ones that changed something.
+///
+/// Asking is named where the session started with the flag that skips permissions. It began in
+/// bypass, so leaving it is a change, and a line that goes blank is indistinguishable from a
+/// session that never skipped anything.
+pub fn named_mode(
+    mode: bravebot_agent::PermissionMode,
+    bypass_available: bool,
+) -> Option<&'static str> {
     use bravebot_agent::PermissionMode;
     match mode {
-        PermissionMode::Ask => None,
+        PermissionMode::Ask => bypass_available.then(|| t!(mode_ask)),
         PermissionMode::AcceptEdits => Some(t!(mode_accept_edits)),
         PermissionMode::Plan => Some(t!(mode_plan)),
         PermissionMode::Bypass => Some(t!(mode_bypass)),
@@ -202,14 +254,14 @@ pub fn report(facts: &Facts<'_>) -> Report {
     ));
     lines.push(Line::new(t!(status_session_id), facts.session_id));
 
-    let trusted = facts.trust.is_trusted(".");
-    lines.push(
-        Line::new(t!(status_directory), abbreviate(facts.directory)).with_note(if trusted {
-            t!(status_directory_trusted)
-        } else {
-            t!(status_directory_untrusted)
-        }),
-    );
+    let directory = Line::new(t!(status_directory), abbreviate(facts.directory));
+    lines.push(if facts.turn_holds_rules {
+        directory
+    } else if facts.trust.is_trusted(".") {
+        directory.with_note(t!(status_directory_trusted))
+    } else {
+        directory.with_note(t!(status_directory_untrusted))
+    });
 
     // Under the directory it is about, since it is the answer the next session here starts from
     // and nothing else on the screen will ever say so: the question it stops is the only place a
@@ -361,7 +413,7 @@ pub fn report(facts: &Facts<'_>) -> Report {
     // Only where the mode is not the ordinary one. A line saying "asking" on every session would
     // teach people to skim past exactly the one that matters. Beside confinement because it is the
     // other half of the same question: what is holding this session back.
-    if let Some(named) = named_mode(facts.permission_mode) {
+    if let Some(named) = named_mode(facts.permission_mode, facts.bypass_available) {
         lines
             .push(Line::new(t!(status_permissions), named).with_note(t!(status_permissions_cycle)));
     }
@@ -421,6 +473,29 @@ pub fn report(facts: &Facts<'_>) -> Report {
                 left = crate::loops::spell(watch.left(now))
             )),
         );
+    }
+
+    // After the watches, being the other thing running that no line on the screen may still be
+    // about: the block that started a job scrolls away while it runs (RUN-26). Every word is the
+    // driver's or this end's clock, and none is anything the job printed.
+    for (row, job) in &facts.jobs {
+        let label = match job.delegate {
+            Some(delegate) => t!(
+                status_job_of_delegate,
+                name = job.name.clone(),
+                number = delegate.to_string()
+            ),
+            None => t!(status_job, name = job.name.clone()),
+        };
+        let origin = match job.moved_after {
+            Some(after) => t!(status_job_moved, after = crate::loops::spell(after)),
+            None => t!(status_job_started).to_string(),
+        };
+        lines.push(Line::new(&label, cut(&row.command, JOB_LINE)).with_note(t!(
+            status_job_note,
+            standing = job.standing(&row.outcome),
+            origin = origin
+        )));
     }
 
     lines.push(Line::new(
@@ -494,65 +569,75 @@ pub fn report(facts: &Facts<'_>) -> Report {
 
     // Last because it is the part that grows. What a write recorded is the thing nothing else
     // reports: a file an earlier turn marked untrusted is invisible until it refuses to be read.
-    let rules: Vec<(&str, Option<Integrity>)> = facts.trust.rules().collect();
-    if rules.is_empty() {
-        lines.push(Line::new(t!(status_trust), t!(status_nothing_vouched_for)));
-    } else {
-        lines.push(Line::new(
-            t!(status_trust),
-            t!(count_rules, count = rules.len()),
-        ));
-        for (path, integrity) in rules.iter() {
-            let shown = if path.is_empty() { "." } else { path };
-            lines.push(match integrity {
-                Some(Integrity::Trusted) => Line::new("", shown).with_note(t!(status_trusted)),
-                Some(Integrity::Untrusted) => Line::new("", shown).with_note(t!(status_untrusted)),
-                None => Line::new("", shown).with_note(t!(status_undecided)),
-            });
-        }
-    }
-
-    // A standing permission the user gave earlier and cannot otherwise see. Every other prompt in
-    // this session announces itself by appearing; this is the one that stops appearing, so without
-    // a line here there is nothing to tell them a command now runs unasked and that what it prints
-    // is being read as trusted.
-    let vouched: Vec<&bravebot_core::programs::Command> = facts.programs.iter().collect();
     let remembered = facts.remembered.filter(|record| !record.lines.is_empty());
-    if vouched.is_empty() {
-        // Two different true things, and the wider one is only true where the record is empty as
-        // well. A session that has vouched for nothing but carries a remembered line does not put
-        // every run to the person, and this is the screen responsible for saying what they are
-        // carrying: a flat "every run is put to you" above a list of lines that run unasked is the
-        // one claim this report must not make.
-        lines.push(Line::new(
-            t!(status_programs),
-            match remembered.is_some() {
-                true => t!(status_nothing_vouched_this_session),
-                false => t!(status_every_run_is_asked),
-            },
-        ));
+    // The turn in flight owns the trust map and the vouched programs and answers into them as it
+    // goes, so a copy taken when it began would be a claim about an earlier moment, and the line
+    // above about every run being asked is the one this report must not get wrong.
+    if facts.turn_holds_rules {
+        lines.push(Line::new(t!(status_trust), t!(status_held_by_the_turn)));
     } else {
-        lines.push(
-            Line::new(
-                t!(status_trusted_commands),
-                t!(count_commands, count = vouched.len()),
-            )
-            .with_note(t!(status_trusted_commands_note)),
-        );
-        // Every one of them, however many there are: a vouched command that the report will not
-        // show is a permission with nothing anywhere to say it is held, since the prompt it
-        // answers is the thing that has stopped appearing.
-        //
-        // With the tree it was given in, because that is part of what the entry covers (RUN-8) and
-        // the entry is what this report exists to read back: two entries for one command in two
-        // directories would otherwise draw as one line twice, and a reader could not tell which
-        // grant they hold. Relative to the workspace where it is inside it, the way every other
-        // path on this screen is written.
-        for command in vouched.iter() {
-            lines.push(Line::new("", command.display()).with_note(t!(
-                status_command_in,
-                directory = within(facts.directory, &command.directory)
-            )));
+        let rules: Vec<(&str, Option<Integrity>)> = facts.trust.rules().collect();
+        if rules.is_empty() {
+            lines.push(Line::new(t!(status_trust), t!(status_nothing_vouched_for)));
+        } else {
+            lines.push(Line::new(
+                t!(status_trust),
+                t!(count_rules, count = rules.len()),
+            ));
+            for (path, integrity) in rules.iter() {
+                let shown = if path.is_empty() { "." } else { path };
+                lines.push(match integrity {
+                    Some(Integrity::Trusted) => Line::new("", shown).with_note(t!(status_trusted)),
+                    Some(Integrity::Untrusted) => {
+                        Line::new("", shown).with_note(t!(status_untrusted))
+                    }
+                    None => Line::new("", shown).with_note(t!(status_undecided)),
+                });
+            }
+        }
+
+        // A standing permission the user gave earlier and cannot otherwise see. Every other prompt in
+        // this session announces itself by appearing; this is the one that stops appearing, so without
+        // a line here there is nothing to tell them a command now runs unasked and that what it prints
+        // is being read as trusted.
+        let vouched: Vec<&bravebot_core::programs::Command> = facts.programs.iter().collect();
+
+        if vouched.is_empty() {
+            // Two different true things, and the wider one is only true where the record is empty as
+            // well. A session that has vouched for nothing but carries a remembered line does not put
+            // every run to the person, and this is the screen responsible for saying what they are
+            // carrying: a flat "every run is put to you" above a list of lines that run unasked is the
+            // one claim this report must not make.
+            lines.push(Line::new(
+                t!(status_programs),
+                match remembered.is_some() {
+                    true => t!(status_nothing_vouched_this_session),
+                    false => t!(status_every_run_is_asked),
+                },
+            ));
+        } else {
+            lines.push(
+                Line::new(
+                    t!(status_trusted_commands),
+                    t!(count_commands, count = vouched.len()),
+                )
+                .with_note(t!(status_trusted_commands_note)),
+            );
+            // Every one of them, however many there are: a vouched command that the report will not
+            // show is a permission with nothing anywhere to say it is held, since the prompt it
+            // answers is the thing that has stopped appearing.
+            //
+            // With the tree it was given in, because that is part of what the entry covers (RUN-8) and
+            // the entry is what this report exists to read back: two entries for one command in two
+            // directories would otherwise draw as one line twice, and a reader could not tell which
+            // grant they hold. Relative to the workspace where it is inside it, the way every other
+            // path on this screen is written.
+            for command in vouched.iter() {
+                lines.push(Line::new("", command.display()).with_note(t!(
+                    status_command_in,
+                    directory = within(facts.directory, &command.directory)
+                )));
+            }
         }
     }
 
@@ -655,7 +740,7 @@ fn within(root: &Path, path: &Path) -> String {
 }
 
 /// A path with the home directory written as `~`, which is shorter and less personal.
-fn abbreviate(path: &Path) -> String {
+pub(crate) fn abbreviate(path: &Path) -> String {
     let shown = path.display().to_string();
     let Some(home) = std::env::var_os("HOME") else {
         return shown;
@@ -762,6 +847,7 @@ mod tests {
             // Asking, which is what every session does unless somebody changed it. The tests about
             // the line set this themselves.
             permission_mode: bravebot_agent::PermissionMode::Ask,
+            bypass_available: false,
             auto_vetting: false,
             turns: 4,
             tokens: 12_400,
@@ -773,6 +859,7 @@ mod tests {
             cached: None,
             trust,
             programs: &NOTHING_VOUCHED,
+            turn_holds_rules: false,
             // Nothing repeating, which is every session that has not been asked to. Tests about
             // the loop line set this themselves.
             looping: None,
@@ -781,6 +868,8 @@ mod tests {
             // Nothing watched, on the same footing. The test about the watch lines builds its
             // own registry and sets it.
             watches: &[],
+            // No job running, on the same footing.
+            jobs: Vec::new(),
             // Nothing remembered past a session, which is what a fresh directory looks like. Tests
             // about that line build their own record and set it.
             remembered: None,
@@ -861,6 +950,131 @@ mod tests {
                 .iter()
                 .any(|line| line.label.trim() == t!(status_watch, number = 1)),
             "a session with no watch reported one"
+        );
+    }
+
+    /// A job runs while nobody watches it and its block scrolls away, so the report names each
+    /// one, how it stands, and how it came to be in the background.
+    #[test]
+    fn the_report_lists_every_job_and_how_it_came_to_run_in_the_background() {
+        use bravebot_agent::report::JobEvent;
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut session = crate::state::Session::new("none");
+        session.job(JobEvent::Started {
+            name: "job:1".to_string(),
+            line: format!("cargo test {}", "--workspace ".repeat(10)),
+            moved_after: Some(std::time::Duration::from_secs(72)),
+            stop: bravebot_core::cancel::JobStop::new(),
+        });
+        session.job(JobEvent::Started {
+            name: "job:2".to_string(),
+            line: "sleep 600".to_string(),
+            moved_after: None,
+            stop: bravebot_core::cancel::JobStop::new(),
+        });
+        session.job(JobEvent::Ended {
+            name: "job:2".to_string(),
+            outcome: bravebot_agent::report::Outcome::Failed("exit 3".to_string()),
+        });
+
+        let mut facts = facts(&config, &trust);
+        facts.jobs = session.jobs().collect();
+        let report = report(&facts);
+        let line = |name: &str| {
+            report
+                .lines
+                .iter()
+                .find(|line| line.label.trim() == t!(status_job, name = name))
+                .unwrap_or_else(|| panic!("{name} is not on the report: {report:?}"))
+                .clone()
+        };
+
+        let moved = line("job:1");
+        assert!(moved.value.starts_with("cargo test --workspace"));
+        assert!(moved.value.ends_with('…'), "{:?}", moved.value);
+        assert_eq!(moved.value.chars().count(), JOB_LINE);
+        // The line started 72 seconds before it was moved, and its clock counts those too.
+        assert!(moved.note.contains("running 1m 12s"), "{:?}", moved.note);
+        assert!(
+            moved
+                .note
+                .contains("moved from the foreground after 1m 12s"),
+            "{:?}",
+            moved.note
+        );
+
+        let ended = line("job:2");
+        assert_eq!(ended.value, "sleep 600");
+        assert!(ended.note.contains("exit 3"), "{:?}", ended.note);
+        assert!(
+            ended.note.contains("started in the background"),
+            "{:?}",
+            ended.note
+        );
+    }
+
+    /// The report gives the line as it was approved: only what cannot sit on one row is folded,
+    /// and a wide character counts as the two columns it takes.
+    #[test]
+    fn a_job_line_keeps_its_spacing_and_is_cut_by_the_columns_it_takes() {
+        assert_eq!(cut("printf \"a    b\"", JOB_LINE), "printf \"a    b\"");
+        assert_eq!(
+            cut("cd src &&\n\tmake\tall", JOB_LINE),
+            "cd src && make all"
+        );
+        let wide = cut(&"漢".repeat(JOB_LINE), JOB_LINE);
+        assert!(wide.ends_with('…'), "{wide:?}");
+        assert!(crate::wrap::display_width(&wide) <= JOB_LINE, "{wide:?}");
+    }
+
+    /// A delegate numbers its jobs from one as the turn does, so a line that did not say whose
+    /// job it was would show two `job:1` lines as the same job.
+    #[test]
+    fn the_report_says_which_delegate_a_job_belongs_to() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut session = crate::state::Session::new("none");
+        let id = bravebot_agent::report::DelegateId::nth(1);
+        session.delegate_started(bravebot_agent::report::Delegation {
+            id,
+            kind: "reader".to_string(),
+            task: "find the parser".to_string(),
+        });
+        session.reporting_for(Some(id));
+        session.job(bravebot_agent::report::JobEvent::Started {
+            name: "job:1".to_string(),
+            line: "sleep 600".to_string(),
+            moved_after: None,
+            stop: bravebot_core::cancel::JobStop::new(),
+        });
+
+        let mut facts = facts(&config, &trust);
+        facts.jobs = session.jobs().collect();
+        let report = report(&facts);
+        let label = t!(
+            status_job_of_delegate,
+            name = "job:1",
+            number = id.to_string()
+        );
+        assert!(
+            report.lines.iter().any(|line| line.label.trim() == label),
+            "{report:?}"
+        );
+    }
+
+    /// For the reason a session watching nothing says nothing about watches.
+    #[test]
+    fn a_session_with_no_job_says_nothing_about_jobs() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let report = report(&facts(&config, &trust));
+        assert!(
+            !report
+                .lines
+                .iter()
+                .any(|line| line.label.trim().starts_with("Background")),
+            "a session with no job reported one: {report:?}"
         );
     }
 
@@ -1330,7 +1544,7 @@ mod tests {
             let mut facts = facts(&config, &trust);
             facts.permission_mode = mode;
             let shown = rendered(&report(&facts));
-            let named = named_mode(mode).expect("every mode but asking has a name");
+            let named = named_mode(mode, false).expect("every mode but asking has a name");
             assert!(shown.contains(named), "{mode:?} was not reported: {shown}");
             // And how to change it, since a mode nobody can find the key for is one they restart to
             // get out of.
@@ -1373,8 +1587,59 @@ mod tests {
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
         let shown = rendered(&report(&facts(&config, &trust)));
-        assert!(named_mode(bravebot_agent::PermissionMode::Ask).is_none());
+        assert!(named_mode(bravebot_agent::PermissionMode::Ask, false).is_none());
         assert!(!shown.contains("shift-tab"), "{shown}");
+    }
+
+    /// While a turn holds the trust map and the vouched programs the report states neither: a copy
+    /// from before the turn began would say every run is asked about after the turn had been given
+    /// a standing yes, and would call a directory untrusted that the turn had since vouched for.
+    #[test]
+    fn a_report_whose_rules_are_the_turns_states_neither_the_trust_nor_the_programs() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut facts = facts(&config, &trust);
+        facts.turn_holds_rules = true;
+
+        let shown = rendered(&report(&facts));
+
+        assert!(shown.contains(t!(status_held_by_the_turn)), "{shown}");
+        for stated in [
+            t!(status_every_run_is_asked),
+            t!(status_nothing_vouched_for),
+            t!(status_directory_trusted),
+            t!(status_directory_untrusted),
+        ] {
+            assert!(!shown.contains(stated), "stated {stated:?}: {shown}");
+        }
+    }
+
+    /// A session started with the flag that skips permissions begins in bypass. When the key moves
+    /// it to asking, a report that goes quiet is the same as one from a session that never skipped
+    /// anything, so asking is named there, and only there.
+    #[test]
+    fn named_mode_names_asking_where_bypass_was_available() {
+        use bravebot_agent::PermissionMode::Ask;
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+
+        let asking = named_mode(Ask, true).expect("asking after the flag has a name");
+        assert_ne!(
+            Some(asking),
+            named_mode(bravebot_agent::PermissionMode::Bypass, true)
+        );
+        assert_eq!(named_mode(Ask, false), None);
+
+        let mut facts = facts(&config, &trust);
+        facts.permission_mode = Ask;
+        facts.bypass_available = true;
+        let shown = rendered(&report(&facts));
+        assert!(shown.contains(asking), "{shown}");
+        assert!(shown.contains("shift-tab"), "{shown}");
+
+        facts.bypass_available = false;
+        let shown = rendered(&report(&facts));
+        assert!(!shown.contains(asking), "{shown}");
     }
 
     fn rendered(report: &Report) -> String {
@@ -1878,14 +2143,22 @@ mod tests {
             SessionCheckout {
                 id: "c1".into(),
                 path: "/state/checkouts/work/c1".into(),
+                repository: "/work/.git".into(),
                 commit: "0123456789abcdef0123456789abcdef01234567".into(),
                 delegate: DelegateId::nth(1),
+                worked_in: true,
+                candidates: Default::default(),
+                size: None,
             },
             SessionCheckout {
                 id: "c3".into(),
                 path: "/state/checkouts/work/c3".into(),
+                repository: "/work/.git".into(),
                 commit: "fedcba9876543210fedcba9876543210fedcba98".into(),
                 delegate: DelegateId::nth(2).child(1).expect("a child"),
+                worked_in: true,
+                candidates: Default::default(),
+                size: None,
             },
         ];
         let added = [std::path::PathBuf::from("/tmp/beside")];

@@ -318,10 +318,11 @@ pub const NULL_DEVICE: &str = "/dev/null";
 
 /// Whether a redirection target is [`NULL_DEVICE`], spelled as such.
 ///
-/// Matched on the spelling, so a link to the device, or `/dev/../dev/null`, is an ordinary path and
-/// is confined as one.
+/// Matched on the exact spelling, so a link to the device, `/dev/../dev/null`, `/dev//null` and
+/// `/dev/./null` are ordinary paths and are confined as such. `Path` equality is not used because it
+/// ignores repeated and interior-dot separators.
 pub fn is_the_null_device(path: &Path) -> bool {
-    path == Path::new(NULL_DEVICE)
+    path.as_os_str() == NULL_DEVICE
 }
 
 /// One program in a plan, resolved.
@@ -457,6 +458,19 @@ impl Steps {
         let mut out = Vec::new();
         self.gather(&mut out);
         out
+    }
+
+    /// The steps, where this is one pipeline and no step of it has a route.
+    ///
+    /// The one shape a background job can be: a join waits on its own parts to decide where to go
+    /// next, and a route is a destination the background has no reader for. Read off the routes
+    /// rather than the plan's write and read sets, because `2>&1` opens no file and so is in
+    /// neither of those.
+    pub fn unrouted_pipeline(&self) -> Option<&[Step]> {
+        match self {
+            Self::Pipeline(steps) if steps.iter().all(|step| step.routes.is_empty()) => Some(steps),
+            _ => None,
+        }
     }
 
     fn gather<'a>(&'a self, out: &mut Vec<&'a Step>) {
@@ -784,6 +798,30 @@ mod tests {
         assert_ne!(sequenced.canonical(), conditional.canonical());
         assert_ne!(sequenced.canonical(), piped.canonical());
         assert_ne!(conditional.canonical(), piped.canonical());
+    }
+
+    /// Only one pipeline with no route on any step is the shape a job can hold. `2>&1` is the case
+    /// that matters most, because it opens no file and so is in neither of the plan's sets: a
+    /// check that read those would hand a job a line whose standard error it never routes.
+    #[test]
+    fn only_a_pipeline_without_a_route_is_one_a_job_can_hold() {
+        let piped = Steps::Pipeline(vec![step("a", &[]), step("b", &[])]);
+        assert_eq!(piped.unrouted_pipeline().map(<[Step]>::len), Some(2));
+
+        let mut joined_stderr = step("b", &[]);
+        joined_stderr.routes = vec![Route::StderrToStdout];
+        let routed = Steps::Pipeline(vec![step("a", &[]), joined_stderr]);
+        assert!(
+            routed.unrouted_pipeline().is_none(),
+            "a `2>&1` was holdable"
+        );
+
+        let joined = Steps::Join {
+            left: Box::new(Steps::Pipeline(vec![step("a", &[])])),
+            joiner: Joiner::And,
+            right: Box::new(Steps::Pipeline(vec![step("b", &[])])),
+        };
+        assert!(joined.unrouted_pipeline().is_none(), "a join was holdable");
     }
 
     /// A step boundary is part of what is endorsed, so splitting one command into two must not

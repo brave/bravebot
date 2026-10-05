@@ -181,14 +181,16 @@ impl std::fmt::Display for Kind {
 ///
 /// Named rather than derived, because each is left out for a reason of its own rather than for
 /// want of a capability: `fetch_url` because every kind holds the capability for reaching the
-/// network so the driver can make its model call, and the rest because their audience is the
-/// person watching the turn. The list is here rather than beside the tool table so that a
+/// network so the driver can make its model call, `apply_checkout` because bringing a delegate's
+/// work into the person's tree is the turn's to ask for and not that delegate's, and the rest
+/// because their audience is the person watching the turn. The list is here rather than beside the tool table so that a
 /// definition naming one of them is answered by the same set the tool list is built from.
 ///
 /// `spawn_agent` is not here. Whether a delegate may delegate is a question about where it sits,
 /// not about what it is, so it is answered by [`MAX_DEPTH`] rather than by name.
-pub const NEVER_DELEGATED: [&str; 5] = [
+pub const NEVER_DELEGATED: [&str; 6] = [
     "ask_user",
+    "apply_checkout",
     "todo_write",
     "schedule_next",
     "fetch_url",
@@ -498,14 +500,26 @@ impl Definition {
         let Some(tools) = self.tools.as_deref() else {
             return held;
         };
-        held.iter()
+        let named: CapabilitySet = held
+            .iter()
             .filter(|capability| {
                 HELD_WHATEVER_IT_NAMED.contains(capability)
                     || tools
                         .iter()
                         .any(|tool| reachable_by(tool).as_ref() == Some(capability))
             })
-            .collect()
+            .collect();
+        // A language server goes with running programs and never without (DELEGATE-4, LSP-5):
+        // `lsp` and `run` are selected independently by a `tools:` line, so a definition naming
+        // the first alone is cut down to neither.
+        if named.contains(&Capability::ShellExec) {
+            named
+        } else {
+            named
+                .iter()
+                .filter(|capability| *capability != Capability::LanguageServer)
+                .collect()
+        }
     }
 
     /// The servers this definition selects, or `None` for every one its parent holds.
@@ -917,6 +931,24 @@ impl Tree {
     }
 }
 
+impl Tree {
+    /// Give back a place [`Tree::claim`] took, for a delegate that was approved and then did not
+    /// start. Never below none.
+    pub(crate) fn release(&self) {
+        use std::sync::atomic::Ordering;
+        let mut held = self.0.load(Ordering::SeqCst);
+        while held > 0 {
+            match self
+                .0
+                .compare_exchange_weak(held, held - 1, Ordering::SeqCst, Ordering::SeqCst)
+            {
+                Ok(_) => return,
+                Err(now) => held = now,
+            }
+        }
+    }
+}
+
 /// The same tree, not the same count: two turns that each spawned one hold different trees.
 impl PartialEq for Tree {
     fn eq(&self, other: &Self) -> bool {
@@ -1139,6 +1171,34 @@ impl DelegateSpec {
     }
 }
 
+/// How a delegate's run ended, as the run that collected it knows it.
+///
+/// Every part is something the driver holds: which way the result came back, the run's own
+/// round count and clock, and a fixed name for a failure. Nothing a service or a tool said is
+/// one of them, which is what lets the record it becomes hold no content (TRACE-2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Finish {
+    /// It answered, having made `rounds` rounds of tool calls in `took`.
+    Answered {
+        took: std::time::Duration,
+        rounds: usize,
+    },
+    /// Somebody stopped it before it answered.
+    Stopped {
+        took: std::time::Duration,
+        rounds: usize,
+    },
+    /// It failed before it answered. `why` is the driver's fixed name for the failure.
+    Failed {
+        took: std::time::Duration,
+        rounds: usize,
+        why: &'static str,
+    },
+    /// Its thread ended without handing anything back, so neither its time nor its rounds are
+    /// known.
+    Lost,
+}
+
 /// The routing field a person's line names a definition under, where the line addressed one.
 ///
 /// A routing field because routing is fixed before a turn observes anything, from what the
@@ -1157,6 +1217,7 @@ pub struct Addressed {
     kind: Kind,
     model: Option<String>,
     prompt: String,
+    skills: Option<Vec<String>>,
     memory: bool,
     checkout: bool,
     held: CapabilitySet,
@@ -1170,6 +1231,7 @@ impl Addressed {
             kind: definition.kind(),
             model: definition.model().map(str::to_string),
             prompt: definition.prompt().to_string(),
+            skills: definition.skills().map(<[String]>::to_vec),
             memory: definition.keeps_memory(),
             checkout: definition.asks_for_checkout(),
             held,
@@ -1199,6 +1261,12 @@ impl Addressed {
     /// The definition's standing instruction, empty where its file had no body.
     pub fn prompt(&self) -> &str {
         &self.prompt
+    }
+
+    /// The skills the definition named, where it named any (DELEGATE-23), and `None` where every
+    /// skill the turn found is offered.
+    pub fn skills(&self) -> Option<&[String]> {
+        self.skills.as_deref()
     }
 
     /// Whether the definition keeps a memory, which the file of [`Self::name`]'s name is.
@@ -1749,6 +1817,45 @@ mod tests {
             !held.contains(&Capability::ShellExec),
             "a definition that names no program still held shell_exec"
         );
+    }
+
+    /// A language server goes with running programs: starting one runs the project's build
+    /// tooling, so a definition naming `lsp` without `run` holds and is offered neither.
+    #[test]
+    fn naming_lsp_without_run_holds_no_language_server() {
+        for kind in [Kind::Checker, Kind::Worker] {
+            let lsp_only = Definition::from_file(
+                "lsp-only",
+                "asks a server",
+                kind,
+                Some(["read_file", "lsp"].map(str::to_string).to_vec()),
+                "",
+                "test",
+            );
+            let held = lsp_only.capabilities();
+            assert!(
+                !held.contains(&Capability::LanguageServer),
+                "a definition of kind {} naming lsp without run held a language server",
+                kind.as_str()
+            );
+            assert!(!held.contains(&Capability::ShellExec));
+            assert!(
+                !lsp_only
+                    .held_out_of(&kind.capabilities())
+                    .contains(&Capability::LanguageServer),
+                "the parent's set re-granted the language server"
+            );
+
+            let both = Definition::from_file(
+                "lsp-and-run",
+                "asks a server",
+                kind,
+                Some(["read_file", "lsp", "run"].map(str::to_string).to_vec()),
+                "",
+                "test",
+            );
+            assert!(both.capabilities().contains(&Capability::LanguageServer));
+        }
     }
 
     /// A planner is a model call, so a definition narrowed to one read tool still has to be able

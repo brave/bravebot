@@ -1,7 +1,7 @@
 import { memo, useState } from 'react'
 import { FileTree } from './FileTree'
 import { type PanelName } from '../../shared/state'
-import { isConfined, type Activity, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
+import { isConfined, type Activity, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
 import type { Entry } from '../transcript'
 import { Collapse, Icon, Label, ProgressRing, TabItem, Tabs, type IconName } from '../nala'
 import { FileGlyph } from './FileGlyph'
@@ -15,7 +15,7 @@ interface Live {
   entries: Entry[]
   todos: TodoRow[]
   quarantine: Shown[]
-  phase: Phase | null
+  phase: Waiting | null
   tokens: number
   running: boolean
 }

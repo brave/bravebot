@@ -62,6 +62,7 @@ reaches it:
 {
   "provider": {
     "google-vertex": {
+      "env": ["GOOGLE_API_KEY"],
       "options": { "project": "<your project id>", "location": "global" }
     }
   },
@@ -73,9 +74,9 @@ The host is built from `project` and `location`, which is `global` where you sta
 `project` is required. One holding a character a project id cannot hold, such as `/` or `@`, configures
 nothing rather than sending your key somewhere else. A stated `baseURL` still wins.
 
-The key is read from `GOOGLE_API_KEY` and sent in the `x-goog-api-key` header, which is the only
-place Google reads it from. Export it as `GOOGLE_API_KEY=<your key>`, or name another variable in
-`env`.
+The key is read from the variable `env` names and sent in the `x-goog-api-key` header, which is the
+only place Google reads it from. Export it as `GOOGLE_API_KEY=<your key>`, or name another variable in
+`env`. A block naming no `env` and no `options.apiKey` sends no key, and Vertex AI refuses it.
 
 With no block, exporting `GOOGLE_API_KEY` and `GOOGLE_CLOUD_PROJECT` is enough, and `VERTEX_LOCATION`
 sets a location other than `global`. Both of the first two are needed, and a block replaces this. The
@@ -83,28 +84,44 @@ service is only asked once a model named `google-vertex/...` is chosen. `GOOGLE_
 other Google tools read as well, so the key you exported for one of them is what is sent here once
 you choose such a model.
 
-Vertex AI has no model listing a key can call, so `/model` offers only the models the block lists.
-Name any other with the id in front, as above. Signing in with Google Cloud credentials instead of a
+Vertex AI has no model listing a key can call, so `/model` offers a short list of Gemini models
+built into bravebot, which `bravebot doctor` names. A block that lists `models` is offered those
+instead. No preview model is on the built-in list, because Google withdraws previews without notice.
+The list is what the `global` location serves, and another location may not serve all of it. A model
+on the built-in list is named with the id in front, as `google-vertex/google/gemini-2.5-pro`, in
+`--model` or the `model` key, and one off it is named the same way, as
+`google-vertex/google/gemini-3-flash-preview`. Signing in with Google Cloud credentials instead of a
 key is not supported.
 
 ### The credential
 
-Name a variable in `env` and keep the token wherever you already keep secrets. `options.apiKey` is
-read too, because it is opencode's field, but a variable wins where both are present. A long-lived
-token in a settings file is a token in a file people paste into issues.
+Name a variable in `env` and keep the token wherever you already keep secrets. Or store it with
+bravebot:
 
-It is read at the point a request needs it rather than once at startup, so exporting a new one takes
-effect in a session already open. A block that names somewhere for a credential to live and finds
-nothing there is a stale or missing token, and its requests are refused with the remedy named rather
-than sent. `bravebot doctor` says whether a credential was found, and never what it was. It
-prints an `ends` line for the block too, naming the host the token is presented to: that host
-is the only surface that revokes it, and deleting the value from this file, or unsetting the
-variable, ends this machine's custody and leaves the token live there.
+```sh
+bravebot auth login gateway openrouter
+```
 
-**A block naming no credential at all is a different statement, and a supported one.** No `env` and no
-`options.apiKey` is you saying this gateway wants none: its requests carry no `authorization` header
-and its roster is asked for without one. `doctor` reports it as needing none rather than as missing
-one. Deciding this by endpoint instead would refuse the same local service reached across a LAN or
+asks for the key with nothing shown as you type it, and keeps it in `~/.bravebot/gateway-keys.json`,
+readable only by your account, under the block's id. [Signing in](../signing-in.md#gateway) has
+the details. `options.apiKey` is read too, because it is opencode's field. Where more than one is
+present a variable wins, then the stored key, then `options.apiKey`. A long-lived token in a
+settings file is a token in a file people paste into issues.
+
+A variable is read at the point a request needs it rather than once at startup, so exporting a new
+one takes effect in a session already open. A stored key is read when a session starts, so one
+stored while a session is open reaches the next one. A block that names somewhere for a credential
+to live and finds nothing there is a stale or missing token, and its requests are refused with the
+remedy named rather than sent. `bravebot doctor` says whether a credential was found, and whether it
+was a stored one, and never what it was. It prints an `ends` line for the block too, naming the host
+the token is presented to: that host is the only surface that revokes it, and deleting the value
+from this file, unsetting the variable or running `bravebot auth logout gateway` ends this machine's
+custody and leaves the token live there.
+
+**A block naming no credential at all is a different statement, and a supported one.** No `env`, no
+`options.apiKey` and no stored key is you saying this gateway wants none: its requests carry no
+`authorization` header and its roster is asked for without one. `doctor` reports it as needing none
+rather than as missing one. Deciding this by endpoint instead would refuse the same local service reached across a LAN or
 through a reverse proxy, and a dummy `apiKey` would just teach people to write fake credentials into a
 file they paste into issues.
 
@@ -136,11 +153,12 @@ Ollama](../configuration.md#importing-from-claude-code-opencode-or-ollama)).
 trip. That is what keeps a configured gateway working with no network, and is the way to pin a short
 list out of a service offering hundreds.
 
-**A block that lists none has the gateway asked.** That is the ordinary case rather than a mistake:
-opencode resolves its roster from a registry it fetches, so the commonest block copied out of it names
-a credential and nothing else. What your credential may reach is asked for first, and the service's
-full catalogue answers only where a gateway does not offer the narrower question. Models that cannot
-call tools are left out.
+**A block that lists none has the gateway asked**, except on [Google Vertex AI](#google-vertex-ai),
+which has no listing to ask. That is the ordinary case rather than a mistake: opencode resolves its
+roster from a registry it fetches, so the commonest block copied out of it names a credential and
+nothing else. What your credential may reach is asked for first, and the service's full catalogue
+answers only where a gateway does not offer the narrower question. Models that cannot call tools are
+left out.
 
 Nothing is capped. Ordering does that work instead: the model a session would use comes first and the
 rest are sorted by name. A listing that cannot be fetched contributes nothing and takes nothing away

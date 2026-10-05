@@ -10,7 +10,7 @@ Set these variables to reach models through your own AWS account:
 
 | Variable | What it sets |
 |---|---|
-| `BRAVEBOT_USE_BEDROCK` | turns the backend on |
+| `BRAVEBOT_USE_BEDROCK` | turns the backend on; `bravebot auth login bedrock` sets it in your settings file |
 | `AWS_REGION` | which region to reach Bedrock in (**required** once it is on) |
 | `AWS_PROFILE` | which profile names the credentials to sign with (optional) |
 | `ANTHROPIC_DEFAULT_OPUS_MODEL` | the model the Opus tier names |

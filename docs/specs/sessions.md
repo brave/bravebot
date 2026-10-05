@@ -79,7 +79,10 @@ design exists to close.
 The conversation, the plan each turn worked to, what the session has spent, the branch it ran on,
 the questions asked beside the work, and the standing permissions a resume restores. A session can
 be named, renaming rewrites the record immediately, a chosen name survives the next turn, and an
-empty name is refused.
+empty name is refused. The issue and the pull request the person said the session is for
+([PANEL-12](info-panel.md#PANEL-12)) are in it too, written as soon as either changes. A resume
+restores both, `bravebot --fork` copies both, `/clear` begins a session with neither, and a record
+written before they were kept reads as having neither.
 
 What the record says about each individual turn is SESSION-23.
 
@@ -91,6 +94,8 @@ delegate given it, and the paths the driver recorded a file effect on in it.
 `verified-by: bravebot_tui::sessions::a_chosen_name_survives_the_next_turn`
 `verified-by: bravebot_tui::sessions::a_session_can_be_named_before_it_has_a_record`
 `verified-by: bravebot_tui::sessions::an_empty_name_is_refused`
+`verified-by: bravebot_session::sessions::a_link_is_written_at_once_and_a_resume_and_a_fork_keep_it`
+`verified-by: bravebot_session::sessions::a_record_from_before_the_links_reads_as_having_none`
 
 <a id="SESSION-4"></a>
 ### SESSION-4: a title comes from the prompt, and is cut rather than mangled
@@ -286,6 +291,7 @@ than the one in force at the time.
 `verified-by: bravebot_tui::app::the_cancellation_path_charges_progress_before_restoring_or_quitting`
 `verified-by: bravebot_tui::app::successful_outcomes_replace_progress_and_empty_following_turns_cost_nothing`
 `verified-by: bravebot_tui::remote_confirm::cumulative_usage_reaches_the_main_thread_unchanged`
+`verified-by: bravebot_tui::state::a_resumed_session_keeps_the_recorded_model_until_a_turn_replaces_it`
 
 <a id="SESSION-12"></a>
 ### SESSION-12: the record says where each turn's time went, not only how long it took
@@ -497,7 +503,7 @@ leaving one with nothing in it. A rewind with incomplete coverage, failed restor
 it: the name was not the turn's to give, so it is not the rewind's to take. The directory the
 session was given of its own is not in the project: what a turn wrote there is neither put back nor
 counted against the budget below, for the reasons [trust-map.md](trust-map.md) gives.
-[CHECKOUT-17](checkouts.md#CHECKOUT-17), which nothing yet builds, leaves a delegate's checkout out
+[CHECKOUT-17](checkouts.md#CHECKOUT-17) leaves a delegate's checkout out
 of a rewind on the same terms.
 
 Program approvals return to the selected snapshot. File decisions use the lower effective trust
@@ -560,7 +566,9 @@ Anything that changes the session outside a turn gives up every point at once: `
 `/compact`, `/btw`, `/rename`, `/add-dir`, and `/cd`. Shell-mode commands retain the points and
 record incomplete command coverage. For changes that give up points, `/undo` then says there is
 nothing left to undo rather than reaching a different session. Every point goes rather than the most recent alone,
-since such a change lands after the most recent point and so before none of them.
+since such a change lands after the most recent point and so before none of them. `/rename` typed
+while a turn runs is carried out then ([CMD-8](commands.md#CMD-8)), and the point that turn opened
+goes with the rest: it holds the old name too.
 
 **Why.** A turn that went wrong is the case with no clean recovery: `git checkout` takes the
 user's own uncommitted work with it, and `/clear` throws away the context that was worth keeping.
@@ -597,6 +605,7 @@ whether or not it is ever read.
 `verified-by: bravebot_tui::state::a_session_keeps_no_more_points_than_it_may`
 `verified-by: bravebot_tui::state::one_turns_writes_can_cost_the_session_the_turns_behind_it`
 `verified-by: bravebot_tui::state::backups_with_no_point_to_hang_them_on_are_dropped`
+`verified-by: bravebot_tui::app::a_session_renamed_mid_turn_gives_up_the_running_turns_rewind_point`
 
 `verified-by: bravebot_tui::undo_tests::oversized_original_preserves_unrelated_grants_after_live_and_resumed_successful_undo`
 `verified-by: bravebot_tui::undo_tests::oversized_original_preserves_unrelated_grants_after_failed_undo`
@@ -787,6 +796,9 @@ closes.
 `verified-by: bravebot_tui::sessions::processor_cancellation_preserves_its_plan_and_measurements_on_resume`
 `verified-by: bravebot_tui::sessions::reopening_does_not_restore_an_unsent_prompt`
 `verified-by: bravebot_tui::sessions::a_request_after_resume_excludes_the_display_failure`
+`verified-by: bravebot_ui_bridge::history::a_turn_after_a_resume_extends_the_history_the_record_held`
+`verified-by: bravebot_ui_bridge::history::a_failed_turn_is_recorded_with_the_reason_the_interface_composed`
+`verified-by: bravebot_ui_bridge::history::a_stopped_turn_is_recorded_as_cancelled_under_its_own_number`
 
 <a id="SESSION-24"></a>
 ### SESSION-24: a resumed transcript puts the prompt back where it was sent
@@ -851,7 +863,8 @@ A word asks what the session has cost and is answered with the total, and under 
 turn with that turn's share of the total beside it. What was spent before the first turn is
 reported too and is not given a turn's number, since no turn did it. A record that holds a total
 and no breakdown says the breakdown is missing, which is not the answer a session that has spent
-nothing gives.
+nothing gives. A turn is charged when it ends, so asked while one runs
+([commands.md](commands.md#CMD-8)), the answer adds what that turn has spent so far under its number.
 
 The figures are tokens. Nothing here states a price: no model listing carries one, and a prompt a
 service answered out of its own cache is billed at a fraction of a fresh one while the breakdown
@@ -868,6 +881,7 @@ what makes the second one visible without the reader dividing each row by the to
 `verified-by: bravebot_tui::state::a_total_with_no_breakdown_does_not_read_as_a_session_that_spent_nothing`
 `verified-by: bravebot_tui::state::a_session_that_has_spent_nothing_says_so`
 `verified-by: bravebot_tui::app::typing_the_cost_command_reports_rather_than_prompting`
+`verified-by: bravebot_tui::app::cost_asked_mid_turn_counts_what_the_running_turn_has_spent`
 
 <a id="SESSION-28"></a>
 ### SESSION-28: a second front end reads and writes the same store, and adds only the question of which projects exist
@@ -903,6 +917,7 @@ place it genuinely is.
 `verified-by: bravebot_ui_bridge::interop::resuming_a_session_writes_back_to_it_rather_than_forking`
 `verified-by: bravebot_ui_bridge::interop::every_project_is_listed_in_one_order_rather_than_project_by_project`
 `verified-by: bravebot_ui_bridge::dispatch::listing_sessions_never_fails_however_little_is_on_disk`
+`verified-by: bravebot_ui_bridge::no_state_directory::a_desktop_session_with_no_state_directory_runs_its_turn_and_writes_nothing`
 
 <a id="SESSION-29"></a>
 ### SESSION-29: a record says which surface wrote it, and resuming in the other says so

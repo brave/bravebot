@@ -28,6 +28,9 @@ governs:
   - ui/src/main/memory.ts
   - ui/src/main/index.ts
   - ui/scripts/bot-directory.test.mjs
+  - ui/scripts/session-directory.test.mjs
+  - ui/src/renderer/components/Permissions.tsx
+  - ui/scripts/remembered-trust-list.test.mjs
 guards:
   - symbol: TrustStore::trust
   - symbol: TrustStore::distrust
@@ -120,6 +123,7 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_agent::workspace::a_second_spelling_of_a_distrusted_file_is_read_as_untrusted`
 `verified-by: bravebot_core::trust::a_rule_covers_a_case_variant_spelling_of_the_same_file`
 `verified-by: bravebot_core::trust::a_folding_volume_applies_a_rule_in_both_polarities_to_the_other_spelling`
+`verified-by: bravebot_core::trust::a_folding_volume_lets_the_sort_first_case_variant_decide_both_spellings`
 `verified-by: bravebot_core::trust::a_folding_volume_reads_a_long_s_as_the_letter_it_opens_as`
 `verified-by: bravebot_core::trust::a_case_sensitive_volume_keeps_spellings_apart`
 `verified-by: bravebot_core::trust::a_map_moved_takes_the_new_volumes_answer`
@@ -422,19 +426,46 @@ map says, and it is recorded as trusted. It lasts the session, `--resume` carrie
 A directory already inside the project is refused. A directory a resume cannot open again, because
 it has moved or gone, is said so rather than passed over.
 
+`/add-dir close ~/notes` closes that one directory and takes both halves back together: a file that
+only it reached is refused again, and the trusted rule at its own path is removed, under every
+spelling the volume reads as that path. Where a broader rule would then trust the directory, an
+undecided boundary takes the rule's place, since the rule removed may have been written over a
+distrust. A distrusted or undecided rule there stays, and so does every rule beneath it, so closing
+never raises what a path answers as. Another directory stays open, a directory opened beneath it
+included, and a name that is not open is refused. The name is matched as it is spelled and then as
+it resolves now, through what still exists of it, so a link put there since cannot redirect the
+close and a directory that has gone closes under any name that reached it. The session record is
+written again at once wherever one is on disk, so a resume does not reopen it.
+
 A directory that *holds* the project is not refused, and the rule it records covers the project's
 files as it covers everything else in that tree. Vouching for a directory is a standing statement
 about the place (TRUST-2) and the project is in it, so there is nothing to except. The project's own
 rules are the more specific ones and still decide wherever they exist, which is what keeps a no
 given inside the project from being undone by a yes given above it.
 
+Opening such a directory ends checkouts ([CHECKOUT-7](checkouts.md#CHECKOUT-7)), so `/add-dir` and
+`--add-dir` both say so when it opens, naming `/add-dir close` as the way back, rather than leaving a
+person to find out from a spawn refused after the turn is spent.
+
 **Why.** Either half alone is no use, one leaving a rule about files nothing can open and the other
 leaving a directory that prompts on every edit. It closes with the session for the reason every
 other answer here does (TRUST-6): leaving a tree reachable once nothing vouches for it would
-outlive the answer that allowed it.
+outlive the answer that allowed it. Closing one takes both halves for the same reason, and without it
+`/clear` was the only way to close a directory, which discards the conversation too.
 
 `verified-by: bravebot_agent::workspace::a_file_in_an_added_directory_is_readable_by_its_absolute_path`
 `verified-by: bravebot_agent::workspace::closing_added_directories_makes_them_unreachable_again`
+`verified-by: bravebot_agent::workspace::closing_one_added_directory_refuses_what_only_it_reached`
+`verified-by: bravebot_agent::workspace::closing_a_directory_leaves_one_opened_beneath_it_and_refuses_one_never_opened`
+`verified-by: bravebot_agent::workspace::a_directory_deleted_since_it_was_opened_still_closes`
+`verified-by: bravebot_agent::workspace::a_deleted_directory_closes_under_a_name_through_a_linked_ancestor`
+`verified-by: bravebot_agent::workspace::a_link_put_where_an_opened_directory_was_closes_that_directory`
+`verified-by: bravebot_core::trust::withdrawing_trust_keeps_every_rule_that_lowers_a_path`
+`verified-by: bravebot_core::trust::withdrawing_trust_beneath_a_trusted_rule_leaves_the_path_undecided`
+`verified-by: bravebot_core::trust::withdrawing_trust_reaches_every_spelling_a_folding_volume_reads_as_one`
+`verified-by: bravebot_tui::app::add_dir_close_withdraws_the_reach_and_the_rule_together`
+`verified-by: bravebot_tui::app::add_dir_of_a_directory_holding_the_project_says_it_ends_checkouts`
+`verified-by: bravebot_cli::main::a_directory_holding_the_working_directory_is_said_to_end_checkouts`
 `verified-by: bravebot_agent::workspace::a_new_file_can_be_created_in_an_added_directory`
 `verified-by: bravebot_agent::turn::a_turn_can_read_a_file_in_an_added_directory`
 `verified-by: bravebot_tui::sessions::a_resumed_session_can_still_open_the_directory_it_added`
@@ -449,14 +480,30 @@ Reading, writing, editing, listing and searching are confined to the working dir
 whatever has been opened beside it, the directory the session was given among them (TRUST-16). `..`
 and an absolute path outside those are refused rather than resolved, in an added directory exactly as
 in the project, and a symlink leaving one is refused.
-A relative path always means the project, so no file has two spellings. Naming a directory
-includes nothing, since a directory is somewhere to type through rather than a file to read.
+A relative path always means the project, so no file has two spellings. A path whose first segment
+is exactly `~` is read as the person's home directory, the one a command line's `~` stands for
+([CMDLINE-4](tools/command-line.md#CMDLINE-4)), and is expanded before any check, so it is then an
+absolute path like any other, reachable only inside an opened directory, and the trust key and the
+trail see the expanded spelling. `~notes/x` is a relative path. Where there is no home the `~` is
+refused and named, never read as a directory called `~`. A missing relative path says what it was
+joined to. Naming a directory includes nothing, since a directory is somewhere to type through rather than a file to read.
 [CHECKOUT-7](checkouts.md#CHECKOUT-7) gives a delegate a checkout of its
 own as its working directory, from which the session's working directory is not reachable.
 
 Confinement is decided by where an operation lands and not by how its path is spelled, so it holds
 for a file that does not exist yet: a write creates what it names, and a symlink out of the tree is
 refused whether or not there is anything at the other end of it.
+
+An absolute path refused for landing outside the root and every opened directory is refused with
+what the person can do about it: open the directory it is in with `/add-dir` or `--add-dir`, after
+which the same path reaches the file. A call that reads the file is also told it can be dropped on
+the window ([DROP-3](dropping.md#DROP-3)), which a call that writes, edits, lists or searches is not,
+since a drop only ever reads. Naming the file with `@` is not offered, since a name cannot leave the
+workspace either ([NAME-5](naming-files.md#NAME-5)). The planner can do none of these itself, so a
+refusal that names nothing it can pass on leaves it looking for another route to the file, such as
+`run`. Every other refusal for leaving the workspace offers nothing, since opening a directory would
+not make that path work: one that climbs with `..`, one a link carries out, and an absolute path
+that lands inside the root, where no directory can be opened.
 
 Putting a file back is a write, and where it lands is decided when it is put back rather than when
 it was written. That holds for a rewind and for a file a command line wrote being put back as it was.
@@ -472,6 +519,17 @@ prompt showed that path, so the bytes go there. A path kept to put back later me
 tree makes of it then, and a pull in between can turn a directory on it into a link out.
 
 `verified-by: bravebot_agent::workspace::an_absolute_path_outside_every_added_directory_is_still_refused`
+`verified-by: bravebot_agent::workspace::a_leading_tilde_reaches_a_file_in_an_opened_home`
+`verified-by: bravebot_agent::workspace::a_leading_tilde_is_refused_when_the_home_is_not_opened`
+`verified-by: bravebot_agent::workspace::a_tilde_destination_that_does_not_exist_yet_is_not_put_under_a_directory_named_tilde`
+`verified-by: bravebot_agent::workspace::a_name_that_only_starts_with_a_tilde_stays_relative`
+`verified-by: bravebot_agent::workspace::a_tilde_with_no_home_is_refused_and_not_read_as_a_directory`
+`verified-by: bravebot_agent::workspace::a_leading_tilde_and_the_home_it_stands_for_give_the_same_trust_key`
+`verified-by: bravebot_agent::workspace::a_missing_relative_file_says_where_it_was_looked_for`
+`verified-by: bravebot_agent::workspace::a_refusal_outside_the_workspace_says_what_the_person_can_do`
+`verified-by: bravebot_agent::workspace::a_refusal_that_opening_a_directory_would_not_cure_offers_nothing`
+`verified-by: bravebot_agent::workspace::a_refused_write_outside_the_workspace_does_not_offer_a_drop`
+`verified-by: bravebot_agent::turn::a_read_outside_the_workspace_tells_the_planner_what_the_person_can_do`
 `verified-by: bravebot_agent::workspace::a_parent_component_cannot_climb_out_of_an_added_directory`
 `verified-by: bravebot_agent::workspace::a_symlink_out_of_an_added_directory_is_refused`
 `verified-by: bravebot_agent::workspace::creating_a_file_through_a_symlinked_directory_out_of_the_workspace_is_refused`
@@ -635,6 +693,7 @@ is not opened beside the working directory, and its name says it was made for a 
 `verified-by: bravebot_agent::scratch::nobody_else_may_read_what_a_session_writes_there`
 `verified-by: bravebot_tui::status::the_sessions_scratch_directory_is_reported_for_what_it_is`
 `verified-by: bravebot_tui::status::a_session_with_no_scratch_directory_reports_none`
+`verified-by: bravebot_ui_bridge::dispatch::a_desktop_session_is_given_a_directory_of_its_own`
 
 <a id="TRUST-15"></a>
 ### TRUST-15: nothing in the session's directory outlives the session
@@ -951,7 +1010,7 @@ whose directory it is rather than from anything here. That is the same footing t
 system reads it on, and it is why pinning to it is not an exception to the paragraph above but an
 instance of it: it is the person's own directory.
 
-`verified-by: none`
+`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so the bot-folder road onto a pinned directory is pinned instead by ui/scripts/bot-directory.test.mjs, which loads the real bots and opened modules against a picker it supplies the answer for and asserts that a bot takes a folder only once the picker handed that folder over and not the folder beside it, that a cancelled picker leaves nothing a window may name, and that editing a bot keeps the folder it already has whatever folder the payload states; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing. The session.new and session.open roads are pinned by ui/scripts/session-directory.test.mjs, which asserts that the main process admits a directory only once the picker handed it over or a list the main process itself keeps (the recents list, the directories the agent reported on session.list) did, and not a third absolute path beside them, and that the request handler refuses one before forwarding it. session.fork takes no directory: the root files.ts records for it is the child directory off the agent's answer.)`
 
 <a id="TRUST-21"></a>
 ### TRUST-21: a directory the helper cannot pin itself to is refused rather than resolved
@@ -1130,6 +1189,7 @@ the file would still say they had vouched for it.
 `verified-by: bravebot_agent::trusted::forgetting_removes_this_directorys_answers_and_keeps_the_rest`
 `verified-by: bravebot_agent::trusted::forgetting_the_last_answer_removes_the_file`
 `verified-by: bravebot_agent::trusted::a_line_cut_inside_a_character_is_skipped_like_any_half_written_line`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so the permissions list is pinned instead by ui/scripts/remembered-trust-list.test.mjs, which renders the real list row through react-dom and asserts that it gives when the answer was kept, from the time the bridge sends, the file it is kept in and a Forget button; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`
 
 ## What a killed session leaves
 

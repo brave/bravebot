@@ -124,6 +124,13 @@ const EDITING_FILE: &str = "editor-mode";
 /// looking at the file and at `vetting.auto` in a settings file sees one name.
 const VETTING_FILE: &str = "vetting";
 
+/// Whether the info panel was last left open, one word, inside the global state directory.
+const PANEL_FILE: &str = "panel";
+
+/// Whether the person has read what `/caffeinate` does and turned it on, one word, inside the
+/// global state directory.
+const CAFFEINATE_FILE: &str = "caffeinate";
+
 /// The longest model name worth reading back.
 ///
 /// A name goes into a request field, and one this long is not a name the endpoint listed. Bounded
@@ -576,6 +583,83 @@ pub fn save_vetting(auto: bool) {
     }
 }
 
+/// Whether the person last left the info panel open, or `None` where they never pressed its key.
+///
+/// Global rather than per-directory, as the theme is: whether somebody wants the panel beside the
+/// transcript is about their screen and not about a checkout.
+pub fn load_panel() -> Option<bool> {
+    let path = directory()?.join(PANEL_FILE);
+    parse_panel(&std::fs::read_to_string(path).ok()?)
+}
+
+/// Read the choice out of the file's contents.
+///
+/// Exactly the two words, after trimming. Anything else is no choice, and the caller then leaves
+/// the panel closed, which is what a person who never pressed the key sees.
+pub fn parse_panel(contents: &str) -> Option<bool> {
+    match contents.lines().next()?.trim() {
+        "open" => Some(true),
+        "closed" => Some(false),
+        _ => None,
+    }
+}
+
+/// Record whether the person left the info panel open.
+///
+/// Written to a temporary file and renamed, so an interrupted write leaves the previous choice.
+/// Best-effort like everything else here.
+pub fn save_panel(open: bool) {
+    let Some(dir) = writable() else {
+        return;
+    };
+    if bravebot_agent::home::create_directory(&dir).is_err() {
+        return;
+    }
+
+    let word = match open {
+        true => "open",
+        false => "closed",
+    };
+    let temporary = dir.join("panel.tmp");
+    if bravebot_agent::home::write_file(&temporary, format!("{word}\n").as_bytes()).is_ok() {
+        let _ = std::fs::rename(&temporary, dir.join(PANEL_FILE));
+    }
+}
+
+/// Whether the person has agreed to `/caffeinate` before, so it turns on without the explanation.
+///
+/// Read through [`writable`], as [`load_vetting`] is: the answer is to a warning about leaving a
+/// machine running unlocked, and a private session is the wrong place to inherit one.
+pub fn load_caffeinate_confirmed() -> bool {
+    writable()
+        .and_then(|dir| std::fs::read_to_string(dir.join(CAFFEINATE_FILE)).ok())
+        .is_some_and(|contents| parse_caffeinate(&contents))
+}
+
+/// Read the answer out of the file's contents: the one word, after trimming, and nothing else.
+pub fn parse_caffeinate(contents: &str) -> bool {
+    contents
+        .lines()
+        .next()
+        .is_some_and(|line| line.trim() == "confirmed")
+}
+
+/// Record that the person read what `/caffeinate` does and turned it on.
+///
+/// Written to a temporary file and renamed, as the panel's choice is.
+pub fn save_caffeinate_confirmed() {
+    let Some(dir) = writable() else {
+        return;
+    };
+    if bravebot_agent::home::create_directory(&dir).is_err() {
+        return;
+    }
+    let temporary = dir.join("caffeinate.tmp");
+    if bravebot_agent::home::write_file(&temporary, b"confirmed\n").is_ok() {
+        let _ = std::fs::rename(&temporary, dir.join(CAFFEINATE_FILE));
+    }
+}
+
 /// Encode a prompt as one line.
 ///
 /// A prompt may contain newlines, which would otherwise become several entries on the way back
@@ -946,6 +1030,38 @@ and this?
                 parse_vetting(contents),
                 None,
                 "{contents:?} became a choice"
+            );
+        }
+    }
+
+    /// An empty or corrupt file has to leave the panel closed, which is the state of somebody
+    /// who never pressed the key, rather than opening it on a word nobody wrote.
+    #[test]
+    fn only_the_two_panel_words_are_a_choice() {
+        assert_eq!(parse_panel("open\n"), Some(true));
+        assert_eq!(parse_panel("closed\n"), Some(false));
+        for contents in ["", "\n", "   \n", "on\n", "true\n", "opened\n"] {
+            assert_eq!(parse_panel(contents), None, "{contents:?} became a choice");
+        }
+    }
+
+    /// Only the word the interface writes is an agreement, so a stray or half-written file does not
+    /// turn `/caffeinate` on without the warning being read.
+    #[test]
+    fn only_the_confirmed_word_is_an_agreement_to_caffeinate() {
+        assert!(parse_caffeinate("confirmed\n"));
+        assert!(parse_caffeinate("  confirmed  \n"));
+        for contents in [
+            "",
+            "\n",
+            "yes\n",
+            "confirmed-not\n",
+            "true\n",
+            "\nconfirmed\n",
+        ] {
+            assert!(
+                !parse_caffeinate(contents),
+                "{contents:?} became an agreement"
             );
         }
     }

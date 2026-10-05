@@ -12,7 +12,7 @@ governs:
   - crates/config/src/settings.rs
   - crates/config/src/import.rs
   - crates/cli/src/mcp.rs
-  - crates/cli/src/servers.rs
+  - crates/agent/src/servers.rs
   - crates/core/src/capability.rs
   - crates/core/src/permissions.rs
   - crates/core/src/policy.rs
@@ -22,6 +22,8 @@ governs:
   - crates/cli/src/plain.rs
   - crates/tui/src/confirm.rs
   - crates/tui/src/status.rs
+  - crates/ui-bridge/src/connectors.rs
+  - crates/ui-bridge/src/turn.rs
 documented-by:
   - docs/website/docs/customize/mcp-servers.md
   - docs/website/docs/customize/mcp/gmail.md
@@ -60,8 +62,10 @@ declaration is put to the person rather than followed ([SERVERS-10](#SERVERS-10)
 [SERVERS-11](#SERVERS-11)). Each server started completes its
 handshake and is held, with a grant naming it, for as long as the session runs
 ([SERVERS-9](#SERVERS-9)). The session's display names what it started, and how
-each one's tools stand ([SERVERS-14](#SERVERS-14)). `bravebot-cli` starts a server and
-`bravebot-agent` offers its tools and calls them, and both depend on `crates/mcp/`.
+each one's tools stand ([SERVERS-14](#SERVERS-14)). `bravebot-agent` starts a server, offers its
+tools and calls them, on `crates/mcp/`. The two questions put while servers start, whether to use
+one and whether one moved, go to an asker the front end supplies; `bravebot-cli` supplies the
+terminal.
 
 At the first turn a person asks for, each started server's list of tools is put to them as the
 client drew it, every description whole and behind the margin, and nothing of the list reaches the
@@ -71,9 +75,12 @@ one is asked about again. Each call is then put to them with three answers, afte
 rule naming the server or the tool ([SERVERS-7](#SERVERS-7)). Bypassing answers both questions and
 records neither ([SERVERS-13](#SERVERS-13)).
 
-The desktop application starts no server, and says so as a session opens where one is requested
-([SERVERS-2](#SERVERS-2)). That is a cost it pays on purpose, and the known costs at the end give the
-reason.
+The desktop application starts a session's servers on its first turn, after the person has said
+whether the directory is trusted, on the same road as the terminal. It puts the server question, the
+tool list, each call and a moved server to the window as cards, each with the answers the terminal
+offers ([SERVERS-4](#SERVERS-4), [SERVERS-8](#SERVERS-8), [SERVERS-7](#SERVERS-7),
+[SERVERS-11](#SERVERS-11)), and holds what it started until the session closes
+([SERVERS-9](#SERVERS-9)).
 
 Issue #83 is where the unwired client was written down, and it names the four things wiring needs
 decided first: where a server is declared, what a name and an argv is trusted for, how the untrusted
@@ -298,10 +305,10 @@ saying that `bravebot mcp add` declares one. The file is named relative to the c
 inside it, a checkout reached through a link included. A declared alias no checkout requested is
 not started, approved or not.
 
-The desktop application starts none of what is requested (see the known costs). A session it
-starts, reopens or forks where the settings request servers names them, and says the desktop app
-does not start them and that `bravebot mcp list`, run there in a terminal, says which a session
-there would, so a request it passed over does not read as one it honoured. A requested name that is not an alias is shown quoted, with its escapes.
+The desktop application reads the same requests, and resolves them on a session's first turn rather
+than as the session opens. What that turn starts, and a line for each request it did not, such as one
+nobody declared, is said in the window as it starts them. A requested name that is not an alias is
+shown quoted, with its escapes.
 
 `bravebot mcp enable <alias>` writes the request into the file its scope names, the one the reader
 takes that layer from: `.bravebot/settings.local.json` in the current directory where `-s` is absent
@@ -326,10 +333,9 @@ as an import writes it, whichever scope named it. The links are looked at again 
 write, so one made while the question waited is refused too.
 
 `verified-by: bravebot_config::settings::every_layers_request_is_read_and_each_alias_is_kept_once`
-`verified-by: bravebot_cli::servers::a_request_nobody_declared_is_reported_and_nothing_is_started_for_it`
-`verified-by: bravebot_cli::servers::a_checkout_reached_through_a_link_names_its_settings_file_inside_it`
-`verified-by: bravebot_session::sessions::a_desktop_session_names_the_servers_it_does_not_start`
-`verified-by: bravebot_ui_bridge::servers::every_way_a_desktop_session_opens_names_the_servers_its_project_requests`
+`verified-by: bravebot_agent::servers::a_request_nobody_declared_is_reported_and_nothing_is_started_for_it`
+`verified-by: bravebot_agent::servers::a_checkout_reached_through_a_link_names_its_settings_file_inside_it`
+`verified-by: bravebot_ui_bridge::servers::a_request_nobody_declared_is_said_when_the_first_turn_starts_servers`
 `verified-by: bravebot_cli::mcp::enable_requests_the_server_in_the_file_its_scope_names`
 `verified-by: bravebot_cli::mcp::enable_adds_the_alias_once_and_keeps_the_rest_of_the_file`
 `verified-by: bravebot_cli::mcp::enable_leaves_a_settings_file_it_cannot_add_to_as_it_is`
@@ -374,9 +380,32 @@ before anything is written. So is a settings file [SERVERS-2](#SERVERS-2) refuse
 the request would take past the size a settings file may be, which `add` reads before the
 declaration, so a refused request leaves no declaration behind it.
 
+The desktop application's Connectors dialog is the same split in a window. Filling in a form
+writes nothing: the form is sent to the agent, which builds the declaration from it as `add` would,
+granting a read for each file a stored value or an argument names and giving `PATH` to a program
+found through it, and returns it drawn, with its digest, for the person to read. Only their
+"Connect" on that review writes anything, and it carries the digest back: the agent builds the
+declaration again and declares, approves and requests it, in the home settings file so every
+session starts it, only where the two digests agree. A form that resolves to something else by then,
+because a file or the form changed, connects nothing. Connecting cannot write over another
+declaration of the same name unless the page that sent it is that connector's own, and a stored
+value is never sent back to the window, so a settings page that leaves a secret blank keeps the
+stored one rather than resending it. Disconnecting takes the request out of the home settings file
+and keeps the declaration and its approval, as `disable -s user` does; removing deletes both, as
+`remove` does. Removing refuses, and changes nothing, when the approvals file is there and cannot be
+read, since writing it back would lose every approval it holds. In an incognito session each of
+these is refused.
+
 `verified-by: bravebot_cli::mcp::a_yes_at_the_question_records_the_digest_and_nothing_else_does`
+`verified-by: bravebot_ui_bridge::connectors::a_connector_is_declared_approved_and_requested_only_as_it_was_shown`
+`verified-by: bravebot_ui_bridge::connectors::a_connector_of_the_same_name_is_replaced_only_when_asked`
+`verified-by: bravebot_ui_bridge::connectors::a_stored_value_is_kept_and_never_shown`
+`verified-by: bravebot_ui_bridge::connectors::a_form_the_declarations_cannot_hold_is_refused`
+`verified-by: bravebot_ui_bridge::connectors::a_connector_turned_on_again_from_its_listing_is_the_same_declaration`
+`verified-by: bravebot_ui_bridge::connectors::removing_a_connector_leaves_an_approvals_file_it_cannot_read`
 `verified-by: bravebot_cli::mcp::approve_records_only_on_a_yes_and_a_no_ends_refused`
 `verified-by: bravebot_cli::mcp::the_question_shows_every_argument_as_the_word_it_is`
+`verified-by: bravebot_cli::mcp::the_question_shows_the_path_a_bare_name_resolved_to`
 `verified-by: bravebot_cli::mcp::a_bare_double_dash_declares_the_program_after_it`
 `verified-by: bravebot_cli::running::an_added_server_nobody_was_asked_about_is_declared_and_listed_unapproved`
 `verified-by: bravebot_cli::running::a_flag_of_bravebots_after_the_bare_dashes_is_the_servers_argument`
@@ -469,17 +498,22 @@ starts the server for that session and records nothing.
 A yes whose record cannot be written still starts the server, since the person said yes and a file
 that would not take the answer does not unsay it, and a line says which record was not kept.
 
-`verified-by: bravebot_cli::servers::answer_one_approves_the_digest_answer_two_the_project_and_three_nothing`
-`verified-by: bravebot_cli::servers::the_question_names_the_checkout_that_requested_it_and_where_the_program_resolved`
-`verified-by: bravebot_cli::servers::nobody_to_ask_leaves_the_server_absent_says_why_and_records_nothing`
-`verified-by: bravebot_cli::servers::an_approved_digest_starts_unasked_and_a_recorded_project_answers_only_an_unchanged_one`
-`verified-by: bravebot_cli::servers::an_incognito_yes_is_for_this_session_and_writes_nothing`
+`verified-by: bravebot_agent::servers::answer_one_approves_the_digest_answer_two_the_project_and_three_nothing`
+`verified-by: bravebot_agent::servers::the_question_names_the_checkout_that_requested_it_and_where_the_program_resolved`
+`verified-by: bravebot_agent::servers::nobody_to_ask_leaves_the_server_absent_says_why_and_records_nothing`
+`verified-by: bravebot_agent::servers::an_approved_digest_starts_unasked_and_a_recorded_project_answers_only_an_unchanged_one`
+`verified-by: bravebot_agent::servers::an_incognito_yes_is_for_this_session_and_writes_nothing`
 `verified-by: bravebot_config::mcp::a_project_reads_back_as_the_path_it_was_recorded_as`
 `verified-by: bravebot_config::mcp::forgetting_a_project_drops_it_and_no_other`
 `verified-by: bravebot_cli::mcp::forget_drops_a_projects_standing_answers_and_nobody_elses`
 `verified-by: bravebot_agent::turn::a_turn_holds_a_grant_per_server_it_was_handed_and_only_its_worker_holds_them_too`
 `verified-by: bravebot_cli::mcp::a_stored_value_is_shown_by_its_name_and_never_as_itself`
 `verified-by: bravebot_cli::running::a_servers_own_install_line_naming_a_key_file_declares_a_read_of_that_file`
+`verified-by: bravebot_ui_bridge::servers::a_server_the_window_approves_is_started_offered_and_called`
+`verified-by: bravebot_ui_bridge::servers::a_server_the_window_refuses_is_not_started_and_the_turn_says_so`
+`verified-by: bravebot_ui_bridge::refusal::a_server_question_gets_the_answer_that_was_sent`
+`verified-by: bravebot_ui_bridge::refusal::an_unanswerable_mcp_question_refuses`
+`verified-by: bravebot_ui_bridge::wire::a_standing_mcp_answer_takes_an_approval_and_a_literal_true`
 
 <a id="SERVERS-5"></a>
 ### SERVERS-5: an approval binds to a digest of the declaration
@@ -534,7 +568,7 @@ digest is kept of what was approved, and a digest names no field.
 `verified-by: bravebot_config::mcp::a_declaration_changed_since_its_approval_is_recorded_as_changed_and_approves_nothing`
 `verified-by: bravebot_config::mcp::a_digest_alone_on_its_line_takes_its_alias_when_rewritten`
 `verified-by: bravebot_cli::mcp::replacing_a_declaration_approved_under_no_alias_still_says_it_changed`
-`verified-by: bravebot_cli::servers::an_approved_digest_starts_unasked_and_a_recorded_project_answers_only_an_unchanged_one`
+`verified-by: bravebot_agent::servers::an_approved_digest_starts_unasked_and_a_recorded_project_answers_only_an_unchanged_one`
 
 <a id="SERVERS-6"></a>
 ### SERVERS-6: a command that fetches its own code is named as one at the prompt
@@ -570,10 +604,11 @@ asks. What is read is the words the person declared and nothing else, so this sa
 for and cannot say what the runner will find. A runner the list does not name, or a script that
 calls one, is drawn as a plain program.
 
-`verified-by: bravebot_cli::servers::a_runner_is_named_as_one_and_an_unpinned_package_as_unpinned`
-`verified-by: bravebot_cli::servers::a_runner_and_its_unpinned_package_are_drawn_at_the_question`
-`verified-by: bravebot_cli::servers::a_package_behind_a_flag_nobody_knows_is_drawn_as_not_known`
+`verified-by: bravebot_agent::servers::a_runner_is_named_as_one_and_an_unpinned_package_as_unpinned`
+`verified-by: bravebot_agent::servers::a_runner_and_its_unpinned_package_are_drawn_at_the_question`
+`verified-by: bravebot_agent::servers::a_package_behind_a_flag_nobody_knows_is_drawn_as_not_known`
 `verified-by: bravebot_cli::mcp::the_question_names_a_runner_and_the_package_it_leaves_unpinned`
+`verified-by: bravebot_ui_bridge::wire::a_server_question_carries_the_declaration_and_no_stored_value`
 
 <a id="SERVERS-7"></a>
 ### SERVERS-7: every call to a server's tool is put to the person, with three answers
@@ -700,6 +735,9 @@ the content out ends it. A workspace file the planner reads does not reach it.
 `verified-by: bravebot_tui::confirm::a_call_prompt_answers_by_its_rows_and_never_by_enter`
 `verified-by: bravebot_tui::confirm::a_call_answer_says_what_the_turn_is_told`
 `verified-by: bravebot_tui::remote_confirm::a_call_answer_travels_back_with_its_stand`
+`verified-by: bravebot_ui_bridge::servers::a_server_the_window_approves_is_started_offered_and_called`
+`verified-by: bravebot_ui_bridge::refusal::a_call_answer_that_cannot_stand_is_a_yes_to_the_one_call`
+`verified-by: bravebot_ui_bridge::refusal::an_mcp_question_takes_no_answer_of_another_kind`
 
 <a id="SERVERS-8"></a>
 ### SERVERS-8: a server's own words are never an identifier
@@ -796,6 +834,8 @@ servers it holds a grant for, and another server's list waits for a turn that ho
 `verified-by: bravebot_tui::confirm::a_tool_list_draws_every_description_row_behind_the_margin`
 `verified-by: bravebot_tui::confirm::a_tool_list_answers_by_its_rows`
 `verified-by: bravebot_tui::remote_confirm::a_yes_to_a_list_and_a_yes_to_a_call_do_not_stand_in_for_each_other`
+`verified-by: bravebot_ui_bridge::servers::a_server_the_window_approves_is_started_offered_and_called`
+`verified-by: bravebot_ui_bridge::wire::the_mcp_questions_carry_what_a_card_draws`
 
 <a id="SERVERS-9"></a>
 ### SERVERS-9: the capability is granted per server, not per protocol
@@ -818,8 +858,8 @@ definition selects where the delegate is a worker, which is every one where the 
 neither its tools nor its servers, and none where it is a reader or a checker
 ([DELEGATE-4](delegation.md#DELEGATE-4), [DELEGATE-24](delegation.md#DELEGATE-24)): each is a
 grant for a server a person already said the session may use, and a server's tool may do what only
-a worker may. No delegate holds a grant its
-parent does not. A turn addressed to a definition holds the session's grants on the same terms
+a worker may. The call starting a worker may keep fewer of them
+([AGENT-6](tools/spawn-agent.md#AGENT-6)). No delegate holds a grant its parent does not. A turn addressed to a definition holds the session's grants on the same terms
 ([ADDRESS-7](addressing-a-definition.md#ADDRESS-7)). A call to a server's tool is refused where the
 run holds no grant naming that server, and a remote server's handshake runs under a policy holding
 the grant naming that server and no other.
@@ -988,26 +1028,26 @@ not started either, and the line says why.
 `verified-by: bravebot_cli::mcp::a_value_where_an_alias_a_scope_or_a_directory_goes_is_refused_and_never_repeated`
 `verified-by: bravebot_cli::mcp::a_stored_value_is_shown_by_its_name_and_never_as_itself`
 `verified-by: bravebot_cli::mcp::a_file_a_value_or_an_argument_names_is_declared_as_a_read_and_nothing_broader_is`
-`verified-by: bravebot_cli::servers::a_stored_value_is_handed_to_the_server_and_the_environment_is_not_read_for_it`
-`verified-by: bravebot_cli::servers::a_declared_read_grants_the_one_file_and_nothing_beside_it`
-`verified-by: bravebot_cli::servers::a_started_server_reads_the_files_it_was_declared_to_and_nothing_beside_them`
+`verified-by: bravebot_agent::servers::a_stored_value_is_handed_to_the_server_and_the_environment_is_not_read_for_it`
+`verified-by: bravebot_agent::servers::a_declared_read_grants_the_one_file_and_nothing_beside_it`
+`verified-by: bravebot_agent::servers::a_started_server_reads_the_files_it_was_declared_to_and_nothing_beside_them`
 `verified-by: bravebot_cli::mcp::a_program_named_by_a_bare_name_is_declared_with_path`
 `verified-by: bravebot_cli::mcp::the_question_shows_the_path_a_bare_name_was_given`
-`verified-by: bravebot_cli::servers::a_program_is_found_in_the_path_it_names_and_nowhere_else`
-`verified-by: bravebot_cli::servers::a_path_the_declaration_does_not_name_resolves_nothing`
-`verified-by: bravebot_cli::servers::a_local_server_is_not_asked_about_where_nothing_can_confine_it`
-`verified-by: bravebot_cli::servers::a_servers_confinement_reaches_its_installation_and_nothing_of_the_home_directory`
-`verified-by: bravebot_cli::servers::the_home_kept_out_of_a_launched_server_is_the_persons_and_not_the_state_directory`
-`verified-by: bravebot_cli::servers::a_home_reached_through_a_link_is_kept_out_of_a_servers_confinement`
-`verified-by: bravebot_cli::servers::a_programs_own_installation_deep_in_the_home_directory_is_read`
-`verified-by: bravebot_cli::servers::a_server_is_handed_its_own_home_unless_the_declaration_names_one`
-`verified-by: bravebot_cli::servers::a_server_keeps_a_home_of_its_own_under_the_state_directory`
-`verified-by: bravebot_cli::servers::a_started_server_writes_its_own_files_in_the_home_kept_for_it`
-`verified-by: bravebot_cli::servers::a_server_in_a_session_that_keeps_nothing_is_given_a_home_that_goes_with_it`
-`verified-by: bravebot_cli::servers::a_started_server_in_a_session_that_keeps_nothing_has_a_home_that_goes_with_it`
+`verified-by: bravebot_agent::servers::a_program_is_found_in_the_path_it_names_and_nowhere_else`
+`verified-by: bravebot_agent::servers::a_path_the_declaration_does_not_name_resolves_nothing`
+`verified-by: bravebot_agent::servers::a_local_server_is_not_asked_about_where_nothing_can_confine_it`
+`verified-by: bravebot_agent::servers::a_servers_confinement_reaches_its_installation_and_nothing_of_the_home_directory`
+`verified-by: bravebot_agent::servers::the_home_kept_out_of_a_launched_server_is_the_persons_and_not_the_state_directory`
+`verified-by: bravebot_agent::servers::a_home_reached_through_a_link_is_kept_out_of_a_servers_confinement`
+`verified-by: bravebot_agent::servers::a_programs_own_installation_deep_in_the_home_directory_is_read`
+`verified-by: bravebot_agent::servers::a_server_is_handed_its_own_home_unless_the_declaration_names_one`
+`verified-by: bravebot_agent::servers::a_server_keeps_a_home_of_its_own_under_the_state_directory`
+`verified-by: bravebot_agent::servers::a_started_server_writes_its_own_files_in_the_home_kept_for_it`
+`verified-by: bravebot_agent::servers::a_server_in_a_session_that_keeps_nothing_is_given_a_home_that_goes_with_it`
+`verified-by: bravebot_agent::servers::a_started_server_in_a_session_that_keeps_nothing_has_a_home_that_goes_with_it`
 `verified-by: bravebot_agent::mcp::a_servers_throwaway_home_lasts_as_long_as_the_session_holding_it`
 `verified-by: bravebot_mcp::stdio::a_server_receives_the_variables_it_was_handed_and_no_others`
-`verified-by: bravebot_cli::servers::a_declared_directory_holding_a_repository_is_refused`
+`verified-by: bravebot_agent::servers::a_declared_directory_holding_a_repository_is_refused`
 `verified-by: bravebot_cli::mcp::add_declares_no_directory_inside_a_repository`
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_a_git_directory_beneath_it`
 
@@ -1103,15 +1143,17 @@ session with nobody at the terminal and the mode that skips prompts refuse it un
 `verified-by: bravebot_agent::mcp::a_move_the_managed_layer_denies_is_refused_whatever_is_answered`
 `verified-by: bravebot_agent::mcp::a_move_in_a_session_that_writes_nothing_lasts_for_the_session`
 `verified-by: bravebot_agent::mcp::a_move_is_recorded_over_the_declaration_asked_about_and_nothing_else`
-`verified-by: bravebot_cli::servers::a_handshake_redirected_off_its_declaration_is_moved_on_a_yes`
-`verified-by: bravebot_cli::servers::a_handshake_redirected_off_its_declaration_starts_nothing_on_a_no`
-`verified-by: bravebot_cli::servers::a_move_in_a_session_that_writes_nothing_is_for_the_session`
-`verified-by: bravebot_cli::servers::a_project_that_answers_for_its_servers_does_not_answer_a_move`
+`verified-by: bravebot_agent::servers::a_handshake_redirected_off_its_declaration_is_moved_on_a_yes`
+`verified-by: bravebot_agent::servers::a_handshake_redirected_off_its_declaration_starts_nothing_on_a_no`
+`verified-by: bravebot_agent::servers::a_move_in_a_session_that_writes_nothing_is_for_the_session`
+`verified-by: bravebot_agent::servers::a_project_that_answers_for_its_servers_does_not_answer_a_move`
 `verified-by: bravebot_cli::plain::a_move_is_asked_in_lines_and_only_a_yes_moves_the_server`
 `verified-by: bravebot_tui::confirm::a_move_prompt_shows_the_declaration_the_destination_and_what_it_reaches`
 `verified-by: bravebot_tui::confirm::a_destination_longer_than_the_move_box_leaves_the_host_and_what_a_yes_does_on_screen`
 `verified-by: bravebot_tui::confirm::the_end_of_a_long_destination_can_be_scrolled_to_with_the_host_still_shown`
 `verified-by: bravebot_tui::confirm::a_move_question_takes_a_yes_only_from_a_draw_showing_the_host_and_the_keys`
+`verified-by: bravebot_ui_bridge::wire::the_mcp_questions_carry_what_a_card_draws`
+`verified-by: bravebot_ui_bridge::refusal::refusing_an_mcp_question_is_a_no_in_its_own_shape`
 
 <a id="SERVERS-12"></a>
 ### SERVERS-12: the managed layer may keep a server from starting and never add one
@@ -1197,9 +1239,9 @@ not to request it.
 `verified-by: bravebot_config::managed::an_entry_in_neither_form_is_skipped`
 `verified-by: bravebot_config::managed::a_server_declared_or_requested_here_is_read_as_nothing`
 `verified-by: bravebot_config::settings::a_request_or_a_server_list_in_the_mcp_block_is_not_a_declaration`
-`verified-by: bravebot_cli::servers::a_server_the_managed_layer_refuses_is_started_in_no_mode_and_nothing_is_asked_or_recorded`
-`verified-by: bravebot_cli::servers::a_server_the_managed_layer_does_not_refuse_is_settled_as_before`
-`verified-by: bravebot_cli::servers::a_remote_server_is_refused_by_its_host`
+`verified-by: bravebot_agent::servers::a_server_the_managed_layer_refuses_is_started_in_no_mode_and_nothing_is_asked_or_recorded`
+`verified-by: bravebot_agent::servers::a_server_the_managed_layer_does_not_refuse_is_settled_as_before`
+`verified-by: bravebot_agent::servers::a_remote_server_is_refused_by_its_host`
 `verified-by: bravebot_cli::mcp::list_and_get_say_why_the_managed_layer_refuses_a_server_and_no_other`
 `verified-by: bravebot_cli::mcp::enabling_a_server_the_managed_layer_refuses_says_it_is_not_started`
 
@@ -1275,12 +1317,12 @@ rewritten. A `deny` rule still refuses a call
 same code in either mode. The display names the mode and the servers the session started. It does
 not say beside each one whether it started unasked because of the mode.
 
-`verified-by: bravebot_cli::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
+`verified-by: bravebot_agent::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
 `verified-by: bravebot_agent::mcp::bypassing_answers_both_prompts_and_records_nothing`
 `verified-by: bravebot_agent::mcp::a_list_offered_in_bypass_stays_offered_and_each_later_call_asks`
 `verified-by: bravebot_agent::mcp::bypassing_refuses_a_hop_and_asks_nobody`
 `verified-by: bravebot_agent::permission_mode::bypassing_refuses_to_move_a_server`
-`verified-by: bravebot_cli::servers::a_redirected_handshake_nobody_is_asked_about_starts_nothing`
+`verified-by: bravebot_agent::servers::a_redirected_handshake_nobody_is_asked_about_starts_nothing`
 
 <a id="SERVERS-14"></a>
 ### SERVERS-14: what is reachable is visible without running anything
@@ -1570,10 +1612,10 @@ This spec cannot land without these. Each is named by what the clause says rathe
   a name, so a link, a copy or another name for the same machine is not denied, and a command match
   leaves out the variables a server starts with. The allow list is the form that holds
   ([SERVERS-12](#SERVERS-12)).
-- **The desktop application starts no server.** It has none of the three questions a server is put
-  through: the server question ([SERVERS-4](#SERVERS-4)), the tool list
-  ([SERVERS-8](#SERVERS-8)) and the call ([SERVERS-7](#SERVERS-7)). It answers each of them no, so
-  a server it started would be one nobody was asked about. A desktop session reads the same
-  settings file as the terminal's three sessions, starts nothing for a request, and names what was
-  requested as it opens ([SERVERS-2](#SERVERS-2)), so a person who needs the servers knows to start
-  the session in a terminal.
+- **The desktop application starts its servers on a session's first turn.** That turn waits for
+  the server question and for every handshake, up to the 60 seconds above, before the model is
+  asked anything, and the window says it is starting servers while it does. A turn stopped while
+  they start starts none of them, and the next turn asks again. A reopened or forked session starts
+  its own, since what a session started is not written to its record. A server's stderr is
+  discarded, as the full-screen interface discards it, and a plan-first run is offered no server's
+  tools.

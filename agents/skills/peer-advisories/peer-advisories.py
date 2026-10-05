@@ -29,6 +29,7 @@ ROOT = HERE.parents[2]
 LEDGER = "docs/peer-advisories-vetted"
 REPO = "brave/bravebot"
 MAX = 8
+MAX_POSTS = 100
 
 REPOSITORIES = (
     ("anthropics/claude-code", "Claude Code"),
@@ -663,7 +664,8 @@ def post(args, poster=None):
             left.append(d)
             continue
         try:
-            duplicate = cited_by(poster, args.repo, d["id"]) or poster.already_filed(args.repo, d)
+            cited = (cited_by(poster, args.repo, gid) for gid in [d["id"], *d.get("merged", [])])
+            duplicate = next(filter(None, cited), None) or poster.already_filed(args.repo, d)
         except (RuntimeError, ValueError) as problem:
             print(f"could not search {args.repo}: {problem}", file=sys.stderr)
             return 2
@@ -764,7 +766,7 @@ def main(argv=None):
     one.add_argument("--repo", default=REPO)
     one.add_argument("--dry-run", action="store_true")
     one.add_argument("--assignee")
-    one.add_argument("--max", type=int, default=12)
+    one.add_argument("--max", type=int, default=MAX_POSTS)
     one.add_argument("--pace", type=float, default=10.0)
 
     one = commands.add_parser("record", help="write the decided verdicts into the ledger")

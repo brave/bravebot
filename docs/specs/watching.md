@@ -304,6 +304,7 @@ foot, reads as two things to press. The line that is always drawn is the one to 
 `verified-by: bravebot_tui::render::the_row_that_says_what_the_turn_is_doing_leaves_the_key_to_the_hint_line`
 `verified-by: bravebot_tui::render::the_hint_line_names_the_delegate_key_once_one_has_run`
 `verified-by: bravebot_tui::render::the_hint_line_counts_the_commands_as_well_as_the_delegates`
+`verified-by: bravebot_tui::render::the_shell_hint_line_names_the_view_key_once_something_can_be_opened`
 `verified-by: bravebot_tui::render::the_shortcut_list_names_the_key_that_watches`
 
 <a id="WATCH-12"></a>
@@ -532,6 +533,56 @@ words. Nothing sends that prefix again.
 prompt is for. What is given up is a write and no read.
 
 `verified-by: bravebot_agent::turn::a_question_asked_beside_the_work_asks_for_no_cache_of_the_exchange`
+
+<a id="WATCH-22"></a>
+### WATCH-22: a background job is one row, made when it starts
+
+A job gets its row when the driver says it started, whether the planner started it or the person
+moved it ([RUN-26](tools/run.md#RUN-26)), with nothing printed yet. Every later look at it and
+its finish add their lines to that row and change its standing; none adds a row. The row keeps as
+many lines as one look does, and stops adding them at the first look that left some out, so it
+never joins two runs of lines with a gap between them; its count says how many it did not keep. A
+job is known by the name the driver minted and by whose it is, the turn's or a delegate's, so a
+delegate's `job:1` and the turn's `job:1` are two rows, and the delegate's says it is the
+delegate's.
+
+What a job printed is drawn in its row and nowhere else. No row, mark, count or name is made or
+changed from it.
+
+**Why.** Before this, a job had a row only once something looked at it, so a job nobody had looked
+at yet was missing from the list, and each look was a row of its own. A job that is running and has
+printed nothing is still the thing a person needs to know about. A row per look also left the
+earlier rows saying the job was running after it had ended.
+
+`verified-by: bravebot_tui::state::a_job_has_its_row_from_the_moment_it_starts`
+`verified-by: bravebot_tui::state::a_look_and_the_finish_update_the_jobs_row_and_add_none`
+`verified-by: bravebot_tui::state::a_delegates_job_and_the_turns_of_the_same_name_are_two_rows`
+`verified-by: bravebot_tui::state::a_jobs_row_stops_adding_lines_at_a_gap_and_at_what_one_look_keeps`
+`verified-by: bravebot_tui::render::a_delegates_job_says_whose_it_is_and_the_turns_does_not`
+`verified-by: bravebot_tui::state::a_job_printing_status_shaped_lines_changes_no_row_mark_or_count`
+`verified-by: bravebot_agent::turn::a_background_job_is_announced_when_it_starts_and_its_finish_carries_its_name`
+`verified-by: bravebot_agent::turn::a_look_that_stops_a_job_is_its_finish_under_its_name`
+
+<a id="WATCH-23"></a>
+### WATCH-23: a job's row and its view say it is a job, and whether it still runs
+
+The row names the kind as `background` and leads its line with the job's name. The view's header
+names the job, and says whether it is running, and for how long by this end's clock, or how it
+ended. A job the turn stopped when it ended reads as that, not as running and not as a failure.
+Until a look has printed something, neither the row nor the view says whether the model read it.
+
+**Why.** A job and a stopped foreground run carry the same mark ([WATCH-17](#WATCH-17)), since both
+are work that did not end on its own, so the mark alone cannot say whether the job is still going.
+The job's state can, and it comes from the driver's events, not from the job's output. The
+name is what the planner reads the job by, and it is the only thing that tells two runs of the same
+line apart. A job with nothing printed has nothing the model could have read or been kept from, so
+either word would be untrue.
+
+`verified-by: bravebot_tui::render::the_list_names_a_job_row_as_a_background_job`
+`verified-by: bravebot_tui::render::a_job_says_nothing_about_a_reading_until_it_has_printed`
+`verified-by: bravebot_tui::render::a_jobs_view_names_the_job_and_whether_it_still_runs`
+`verified-by: bravebot_tui::state::a_job_the_turn_stopped_reads_as_stopped_with_the_turn`
+`verified-by: bravebot_tui::state::a_turn_ending_ends_its_jobs_and_the_next_counts_only_its_own`
 
 ## Known costs
 

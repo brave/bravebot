@@ -2,7 +2,7 @@
 
 use std::fmt;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// The confinement a process should run under.
 ///
@@ -173,6 +173,11 @@ impl SandboxPolicy {
     /// not a row and is not among them, and one made for a file that then could not be
     /// created is left where it is, since removing a directory this did not find empty
     /// is a worse thing to get wrong than leaving an empty one behind.
+    ///
+    /// Nothing calls this on a run, and every row a run builds says neither, so a call
+    /// put in before [`SandboxPolicy::nameable_under`] today would create nothing. The
+    /// rows that would say which of the two they are come from a per-program write list,
+    /// which is not built, so wiring this needs that list first. SANDBOX-11 says the same.
     pub fn create_missing_write_rows(&self, capabilities: &Capabilities) -> Vec<PathBuf> {
         if capabilities.grants_paths_that_do_not_exist
             || capabilities.level == ConfinementLevel::None
@@ -199,17 +204,40 @@ impl SandboxPolicy {
 
     /// Whether this policy would confine anything at all.
     ///
-    /// A policy granting network, subprocesses, and write access to `/` is not
-    /// confinement; treating it as such would be the sort of accident that makes a
-    /// sandbox decorative.
+    /// A policy granting network, subprocesses, and write access to the root of a
+    /// filesystem is not confinement; treating it as such would be the sort of accident
+    /// that makes a sandbox decorative. A row counts as the root by where it resolves,
+    /// so `/..` and `/tmp/..` are the root as much as `/` is.
     pub fn is_meaningful(&self) -> bool {
         !self.allow_network
             || !self.allow_subprocesses
             || !self
                 .writable
                 .iter()
-                .any(|row| row.path.as_path() == Path::new("/"))
+                .any(|row| names_a_filesystem_root(&row.path))
     }
+}
+
+/// Whether a path resolves to the root of a filesystem: `/`, or on Windows a drive root
+/// such as `C:\`.
+///
+/// An existing path is resolved through the filesystem, so a link that leads to the root
+/// counts. A path that is not there is folded by its text, where `.` is dropped and `..`
+/// removes the component before it.
+fn names_a_filesystem_root(path: &Path) -> bool {
+    let resolved = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut rooted = false;
+    let mut below_root = 0usize;
+    for component in resolved.components() {
+        match component {
+            Component::Prefix(_) => {}
+            Component::RootDir => rooted = true,
+            Component::CurDir => {}
+            Component::ParentDir => below_root = below_root.saturating_sub(1),
+            Component::Normal(_) => below_root += 1,
+        }
+    }
+    rooted && below_root == 0
 }
 
 /// A path a confined process may write, and what the row says is there.
@@ -273,14 +301,21 @@ fn make_a_file(path: &Path) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         make_a_directory(parent)?;
     }
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
+    #[cfg(windows)]
     {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(OWNER_ONLY_FILE);
+        crate::windows::create_file_owner_only(path)
     }
-    options.open(path).map(|_| ())
+    #[cfg(not(windows))]
+    {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(OWNER_ONLY_FILE);
+        }
+        options.open(path).map(|_| ())
+    }
 }
 
 /// An empty directory at `path`, and every directory above it that is absent.
@@ -291,15 +326,26 @@ fn make_a_file(path: &Path) -> std::io::Result<()> {
 /// decides this, since the keys a fresh account is about to put in it are not for the rest
 /// of the machine to list. Nothing is lost by it, because the confined process runs as the
 /// same user.
+///
+/// On Windows the owner-only access list is passed to the call that creates each
+/// directory, since the standard library's builder would leave each with the list its
+/// parent hands down.
 fn make_a_directory(path: &Path) -> std::io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
+    #[cfg(windows)]
     {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(OWNER_ONLY_DIRECTORY);
+        crate::windows::create_directory_owner_only(path)
     }
-    builder.create(path)
+    #[cfg(not(windows))]
+    {
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(OWNER_ONLY_DIRECTORY);
+        }
+        builder.create(path)
+    }
 }
 
 /// Read and written by the owner, and reached by nobody else.
@@ -412,6 +458,58 @@ mod tests {
             .allow_subprocesses()
             .allow_write("/");
         assert!(!policy.is_meaningful());
+    }
+
+    /// A grant of everything spelled another way is still a grant of everything: `..` at
+    /// the root stays at the root, and a component folded away by `..` leaves the root.
+    #[test]
+    fn granting_everything_spelled_another_way_is_not_meaningful() {
+        for spelling in [
+            "/..",
+            "/../..",
+            "/./",
+            "//",
+            "/no-such-entry-in-root/..",
+            "/no-such-a/no-such-b/../..",
+        ] {
+            let policy = SandboxPolicy::strict()
+                .allow_network_egress()
+                .allow_subprocesses()
+                .allow_write(spelling);
+            assert!(
+                !policy.is_meaningful(),
+                "{spelling} grants the whole filesystem"
+            );
+        }
+    }
+
+    /// A path that only looks like the root stays a confinement decision.
+    #[test]
+    fn a_grant_below_the_root_remains_meaningful() {
+        for spelling in [
+            "/no-such-entry-in-root",
+            "/no-such-a/../no-such-b",
+            "/no-such-a/no-such-b/..",
+        ] {
+            let policy = SandboxPolicy::strict()
+                .allow_network_egress()
+                .allow_subprocesses()
+                .allow_write(spelling);
+            assert!(policy.is_meaningful(), "{spelling} is not the root");
+        }
+    }
+
+    /// A drive root is the whole of that drive.
+    #[cfg(windows)]
+    #[test]
+    fn granting_a_drive_root_is_not_meaningful() {
+        for spelling in ["C:\\", "C:\\..", "C:/"] {
+            let policy = SandboxPolicy::strict()
+                .allow_network_egress()
+                .allow_subprocesses()
+                .allow_write(spelling);
+            assert!(!policy.is_meaningful(), "{spelling} grants the whole drive");
+        }
     }
 
     /// Network alone is still confinement if the filesystem stays restricted.
@@ -712,6 +810,50 @@ mod tests {
             "the directory created to hold it"
         );
         assert_eq!(mode(&cache), 0o700, "the created directory");
+    }
+
+    /// The same guarantee on Windows, where there is no mode. The access list of each path
+    /// is read back with `icacls`: it has to carry the owner rights entry and name none of
+    /// the groups a default list inherited from a profile directory names.
+    #[cfg(windows)]
+    #[test]
+    fn what_is_created_is_reachable_by_its_owner_and_nobody_else_on_windows() {
+        let dir = a_directory_of_this_tests_own("sandbox-policy-owner-only-windows");
+        let known_hosts = dir.join("ssh").join("known_hosts");
+        let cache = dir.join("registry");
+
+        SandboxPolicy::strict()
+            .allow_write_file(&known_hosts)
+            .allow_write_directory(&cache)
+            .create_missing_write_rows(&capabilities(false));
+
+        for (what, path) in [
+            ("the created file", known_hosts.clone()),
+            ("the directory created to hold it", dir.join("ssh")),
+            ("the created directory", cache.clone()),
+        ] {
+            let output = std::process::Command::new("icacls")
+                .arg(&path)
+                .output()
+                .expect("icacls runs");
+            let listing = String::from_utf8_lossy(&output.stdout).to_string();
+            assert!(
+                listing.contains("OWNER RIGHTS"),
+                "{what} has no entry for its owner: {listing}"
+            );
+            for other in [
+                "Everyone",
+                "BUILTIN\\Users",
+                "BUILTIN\\Administrators",
+                "NT AUTHORITY\\Authenticated Users",
+                "NT AUTHORITY\\SYSTEM",
+            ] {
+                assert!(
+                    !listing.contains(other),
+                    "{what} is reachable by {other}: {listing}"
+                );
+            }
+        }
     }
 
     /// A row names a path this process has no business rewriting: `known_hosts` on an

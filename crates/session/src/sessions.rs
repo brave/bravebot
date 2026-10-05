@@ -199,6 +199,14 @@ pub struct Record {
     /// The branch checked out at the time, where there was one.
     #[serde(default)]
     pub branch: Option<String>,
+    /// The issue the person said the session is for, with `/issue`.
+    ///
+    /// `None` for a record written before this was kept, or a session nobody gave one.
+    #[serde(default)]
+    pub issue: Option<String>,
+    /// The pull request the person said the session is for, with `/pr`.
+    #[serde(default)]
+    pub pull_request: Option<String>,
     /// What to call it in a list: the first thing the user asked.
     pub title: String,
     /// When it began and when it was last written, in seconds since the epoch.
@@ -380,6 +388,86 @@ pub enum StoredOutcome {
     Completed,
     Failed { reason: String },
     Cancelled { reason: String },
+}
+
+impl StoredOutcome {
+    /// How turn `turn` ended, in the words the interface uses for it.
+    pub fn ended(
+        turn: usize,
+        ending: bravebot_agent::Ending,
+        cut_off: Option<&bravebot_aichat::CutOff>,
+    ) -> Self {
+        match ending {
+            bravebot_agent::Ending::Done => Self::Completed,
+            bravebot_agent::Ending::Failed(diagnosis) => Self::Failed {
+                reason: failure_reason(diagnosis, cut_off),
+            },
+            bravebot_agent::Ending::Stopped { .. } => Self::Cancelled {
+                reason: t!(turn_cancelled, turn = turn),
+            },
+        }
+    }
+}
+
+/// Compose a localized failure reason from safe fields, without raw backend error text.
+///
+/// `cut_off` is what a reply the output ceiling stopped was doing, whose one name is a tool the
+/// request offered, spelt as it offered it.
+pub fn failure_reason(
+    diagnosis: bravebot_agent::Diagnosis,
+    cut_off: Option<&bravebot_aichat::CutOff>,
+) -> String {
+    use bravebot_agent::Category;
+    use bravebot_aichat::OpenCall;
+    let what: std::borrow::Cow<'_, str> = match diagnosis.category {
+        Category::Unauthorized => t!(failure_unauthorized).into(),
+        Category::RateLimited => t!(failure_rate_limited).into(),
+        Category::Unavailable => t!(failure_unavailable).into(),
+        Category::Refused => t!(failure_refused).into(),
+        Category::Transport => t!(failure_transport).into(),
+        Category::Incomplete => t!(failure_incomplete).into(),
+        Category::Undecodable => t!(failure_undecodable).into(),
+        // The one category that says a number. It is this program's own configured ceiling, not
+        // anything the service reported, and without it the sentence names no remedy.
+        // What the reply was writing is said as well, since a reply that spent the ceiling on one
+        // file's worth of argument is asked for in parts, and one that spent it thinking is not.
+        Category::TooLong => match (diagnosis.ceiling, cut_off) {
+            (None, _) => t!(failure_too_long).into(),
+            (Some(tokens), None) => t!(failure_too_long_at, tokens = tokens).into(),
+            (Some(tokens), Some(cut_off)) => match (&cut_off.call, cut_off.thought) {
+                (
+                    Some(OpenCall {
+                        tool: Some(tool), ..
+                    }),
+                    _,
+                ) => t!(
+                    failure_too_long_in_call,
+                    tokens = tokens,
+                    tool = tool.as_str()
+                )
+                .into(),
+                (Some(OpenCall { tool: None, .. }), _) => {
+                    t!(failure_too_long_in_a_call, tokens = tokens).into()
+                }
+                (None, true) => t!(failure_too_long_thinking, tokens = tokens).into(),
+                (None, false) => t!(failure_too_long_at, tokens = tokens).into(),
+            },
+        },
+        Category::Unconfigured => t!(failure_unconfigured).into(),
+        Category::Blocked => t!(failure_blocked).into(),
+        Category::Workspace => t!(failure_workspace).into(),
+        Category::Internal => t!(failure_internal).into(),
+    };
+    let mut said = what.to_string();
+    if let Some(status) = diagnosis.status {
+        said = t!(failure_with_status, what = said, status = status);
+    }
+    // Said only where there was more than one, since "after 1 attempts" is a worse sentence than
+    // the silence it replaces, and one attempt is what an unremarkable failure took.
+    if let Some(attempts) = diagnosis.attempts.filter(|count| *count > 1) {
+        said = t!(failure_with_attempts, what = said, attempts = attempts);
+    }
+    t!(session_error, problem = said)
 }
 
 /// One point a rewind can go back to, as it is written down.
@@ -887,6 +975,24 @@ impl StoredManifest {
     }
 }
 
+/// A finished outcome replaces cumulative progress; an interrupted run keeps the last report.
+pub fn manifest_usage(
+    outcome: &Result<bravebot_agent::Outcome, bravebot_agent::TurnError>,
+    retained: Option<bravebot_agent::Spent>,
+) -> Option<bravebot_agent::Spent> {
+    outcome
+        .as_ref()
+        .ok()
+        .map(|done| bravebot_agent::Spent {
+            tokens: done.tokens,
+            output_tokens: done.output_tokens,
+            context_tokens: done.context_tokens,
+            cached: done.cached,
+            timing: done.timing,
+        })
+        .or(retained)
+}
+
 /// Write a manifest run into the session store, finished or not, and say what it is called.
 ///
 /// One function for both callers, because a run started from a session and a run started from the
@@ -904,6 +1010,7 @@ pub fn record_manifest_run(
     project: &Path,
     prompt: &str,
     outcome: &Result<bravebot_agent::Outcome, bravebot_agent::TurnError>,
+    retained: Option<bravebot_agent::Spent>,
     front: Front,
     build: &str,
 ) -> Option<String> {
@@ -932,14 +1039,18 @@ pub fn record_manifest_run(
     let snapshot = conversation.snapshot();
     let todos = BTreeMap::new();
     let programs = TrustedPrograms::new();
-    let tokens = outcome.as_ref().map(|o| o.tokens).unwrap_or(0);
+    let usage = manifest_usage(outcome, retained);
+    let tokens = usage.map_or(0, |s| s.tokens);
     // One turn, so the breakdown and the total say the same thing. Written anyway, because a
     // reader comparing runs should not have to special-case where the figure came from.
     let spend = BTreeMap::from([(1, tokens)]);
     // Where that one turn's time went, on the same footing. A manifest run is the case where this
     // matters most: a run nobody is watching that spent its afternoon blocked on an approval
     // nobody was there to give leaves this as the only trace of it.
-    let timing = BTreeMap::from([(1, outcome.as_ref().map(|o| o.timing).unwrap_or_default())]);
+    let measured = usage.map(|s| s.timing);
+    let timing = measured
+        .map(|timing| BTreeMap::from([(1, timing)]))
+        .unwrap_or_default();
     let mut handle = Handle::begin(project, front, build);
     handle.save(
         prompt,
@@ -1240,6 +1351,34 @@ pub struct Resumable {
     pub directory: PathBuf,
 }
 
+/// Which of the two links a session keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Link {
+    Issue,
+    PullRequest,
+}
+
+/// A link the person wrote, once it has been read as one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Url(String);
+
+impl Url {
+    /// `text` as a link, or `None` where it is not one `http` or `https` URL with a host. The link
+    /// is drawn in the info panel on every frame, so anything but printable ASCII refuses it: a
+    /// newline or an escape could act on the terminal there, and a direction override or a
+    /// zero-width character could make the row read as another link.
+    pub fn read(text: &str) -> Option<Self> {
+        let text = text.trim();
+        if !text.chars().all(|c| c.is_ascii_graphic()) {
+            return None;
+        }
+        let (scheme, rest) = text.split_once("://")?;
+        let known = scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https");
+        let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+        (known && !host.is_empty()).then(|| Self(text.to_string()))
+    }
+}
+
 /// A live session, holding where to write and what has been written.
 #[derive(Debug, Clone)]
 pub struct Handle {
@@ -1248,6 +1387,8 @@ pub struct Handle {
     started: u64,
     branch: Option<String>,
     title: String,
+    issue: Option<String>,
+    pull_request: Option<String>,
     /// Whether a record for this id is on disk yet.
     ///
     /// An id exists from the first moment, but a session that was opened and abandoned leaves
@@ -1283,6 +1424,8 @@ impl Handle {
             started: now(),
             branch: branch_of(project),
             title: String::new(),
+            issue: None,
+            pull_request: None,
             wrote: false,
             server_children_may_run: false,
             build: build.to_string(),
@@ -1302,6 +1445,8 @@ impl Handle {
             started: record.started,
             branch: branch_of(project),
             title: record.title.clone(),
+            issue: record.issue.clone(),
+            pull_request: record.pull_request.clone(),
             // The record it came from is the one being written back to.
             wrote: true,
             server_children_may_run: record.server_children_may_run(),
@@ -1368,6 +1513,11 @@ impl Handle {
         &self.title
     }
 
+    /// The branch checked out where the session runs, as the resume list shows it.
+    pub fn branch(&self) -> Option<&str> {
+        self.branch.as_deref()
+    }
+
     /// Call the session something the user chose.
     ///
     /// Takes effect at once rather than at the next turn, by rewriting the record where there is
@@ -1384,21 +1534,49 @@ impl Handle {
             return false;
         }
         self.title = title_from(name);
-        self.rewrite_title();
+        // The rewind points are given up with the old name (SESSION-19), so a record being
+        // retitled holds points the session itself no longer has, each describing a session that
+        // still had the old name. Carried over, a resume would hand them back to `/undo`, which
+        // would rewind to a turn the session it resumed had already given up and rename the
+        // session back on the way.
+        let title = self.title.clone();
+        self.rewrite(|record| {
+            record.title = title;
+            record.rewind.clear();
+        });
         true
     }
 
-    /// Put the current title into the record on disk, if the session has one yet.
+    /// The link of this kind the person gave the session, if they gave one.
+    pub fn link(&self, kind: Link) -> Option<&str> {
+        match kind {
+            Link::Issue => self.issue.as_deref(),
+            Link::PullRequest => self.pull_request.as_deref(),
+        }
+    }
+
+    /// Say which issue or pull request the session is for, or with `None` that it is for none.
+    ///
+    /// Takes effect at once, as [`Handle::rename`] does and for its reason. The rewind points stay:
+    /// none of them holds a link, so a rewind leaves the links as they are.
+    pub fn set_link(&mut self, kind: Link, url: Option<Url>) {
+        let url = url.map(|url| url.0);
+        match kind {
+            Link::Issue => self.issue = url,
+            Link::PullRequest => self.pull_request = url,
+        }
+        let (issue, pull_request) = (self.issue.clone(), self.pull_request.clone());
+        self.rewrite(|record| {
+            record.issue = issue;
+            record.pull_request = pull_request;
+        });
+    }
+
+    /// Amend the record on disk, if the session has one yet.
     ///
     /// Read, amended and written rather than rebuilt, because everything else in the record belongs
     /// to the turns that produced it and this knows none of it.
-    ///
-    /// The rewind points are the exception: renaming a session gives up every one of them
-    /// (SESSION-19), so a record being retitled holds points the session itself no longer has, each
-    /// describing a session that still had the old name. Carried over, a resume would hand them
-    /// back to `/undo`, which would rewind to a turn the session it resumed had already given up
-    /// and rename the session back on the way.
-    fn rewrite_title(&self) {
+    fn rewrite(&self, amend: impl FnOnce(&mut Record)) {
         let Some(directory) = self.directory() else {
             return;
         };
@@ -1406,10 +1584,9 @@ impl Handle {
         let Some(mut record) = read(&path) else {
             return;
         };
-        record.title = self.title.clone();
+        amend(&mut record);
         record.updated = now();
         record.server_children_may_run = record.server_children_may_run();
-        record.rewind.clear();
 
         let Ok(body) = serde_json::to_vec_pretty(&record) else {
             return;
@@ -1455,6 +1632,8 @@ impl Handle {
             id: self.id.clone(),
             directory: self.project.display().to_string(),
             branch: self.branch.clone(),
+            issue: self.issue.clone(),
+            pull_request: self.pull_request.clone(),
             title: self.title.clone(),
             started: self.started,
             updated: now(),
@@ -1806,22 +1985,6 @@ pub fn front_note(was: Option<&str>, now: Front) -> Option<String> {
     })
 }
 
-/// What a desktop session says where the settings it opened under request MCP servers: the desktop
-/// app starts none, and a request it passed over in silence would read as one it honoured.
-///
-/// Silent where nothing is requested. A requested name is a checkout's own words, so one that is not
-/// an alias is quoted with its escapes rather than drawn as the list's own punctuation.
-pub fn servers_note<'a>(requested: impl IntoIterator<Item = &'a str>) -> Option<String> {
-    let servers: Vec<String> = requested
-        .into_iter()
-        .map(|alias| match bravebot_config::mcp::is_alias(alias) {
-            true => alias.to_string(),
-            false => format!("{alias:?}"),
-        })
-        .collect();
-    (!servers.is_empty()).then(|| t!(session_servers_not_started, servers = servers.join(", ")))
-}
-
 pub fn branch_of(directory: &Path) -> Option<String> {
     let git = find_git(directory)?;
     let head = std::fs::read_to_string(git.join("HEAD")).ok()?;
@@ -2079,6 +2242,109 @@ pub fn fork(project: &Path, source_id: &str) -> Option<Record> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_profile::in_isolated_profile;
+
+    /// "the model reached its output limit" leaves somebody guessing a budget nothing shows them.
+    /// The figure is what names the setting to raise, and it is this program's own configured
+    /// number rather than anything the service said, so repeating it gives nothing away.
+    #[test]
+    fn a_reply_stopped_at_a_ceiling_says_which_ceiling() {
+        use bravebot_agent::{Category, Diagnosis};
+
+        let vague = failure_reason(Diagnosis::of(Category::TooLong), None);
+        assert!(
+            !vague.contains("8192") && !vague.contains("8,192"),
+            "a ceiling nobody measured was named anyway: {vague}"
+        );
+
+        // Two different ceilings, because a sentence that hard-coded one would pass with either.
+        for ceiling in [8_192_u64, 64_000] {
+            let said = failure_reason(Diagnosis::of(Category::TooLong).at_ceiling(ceiling), None);
+            assert!(
+                said.contains(&ceiling.to_string()),
+                "the ceiling that stopped the reply is not in {said}"
+            );
+            assert!(
+                said.contains(bravebot_config::env_var::OUTPUT_BUDGET),
+                "the setting that raises it is not in {said}"
+            );
+        }
+    }
+
+    /// A reply stopped part way through a call and one stopped while it was thinking want
+    /// different remedies, and the failure line is the only thing left on screen that can tell
+    /// them apart. The tool is named where the request offered it, and only then.
+    #[test]
+    fn a_reply_stopped_at_the_ceiling_says_what_it_was_writing() {
+        use bravebot_agent::{Category, Diagnosis};
+        use bravebot_aichat::{CutOff, OpenCall};
+
+        let diagnosis = Diagnosis::of(Category::TooLong).at_ceiling(64_000);
+        let stopped = |call: Option<Option<&str>>, thought: bool| {
+            failure_reason(
+                diagnosis,
+                Some(&CutOff {
+                    ceiling: 64_000,
+                    call: call.map(|tool| OpenCall {
+                        tool: tool.map(str::to_owned),
+                        arguments: 0,
+                    }),
+                    thought,
+                }),
+            )
+        };
+
+        let in_a_call = stopped(Some(Some("write_file")), false);
+        assert!(in_a_call.contains("write_file"), "{in_a_call}");
+        assert!(in_a_call.contains("64000"), "{in_a_call}");
+        assert!(in_a_call.contains("not made"), "{in_a_call}");
+
+        let unnamed = stopped(Some(None), false);
+        assert!(unnamed.contains("a tool call"), "{unnamed}");
+
+        let thinking = stopped(None, true);
+        assert!(thinking.contains("thinking"), "{thinking}");
+
+        assert_eq!(
+            stopped(None, false),
+            failure_reason(diagnosis, None),
+            "a reply that wrote nothing at all is reported as it always was"
+        );
+    }
+
+    /// A turn's ending is recorded in the words the interface uses for it: a stop names its own
+    /// turn, and a failure is the composed reason, including what a reply cut off at the ceiling
+    /// was writing.
+    #[test]
+    fn an_ending_is_recorded_in_the_interfaces_words() {
+        use bravebot_agent::{Category, Diagnosis, Ending};
+        use bravebot_aichat::{CutOff, OpenCall};
+
+        assert!(matches!(
+            StoredOutcome::ended(1, Ending::Done, None),
+            StoredOutcome::Completed
+        ));
+        match StoredOutcome::ended(3, Ending::Stopped { attempts: None }, None) {
+            StoredOutcome::Cancelled { reason } => assert_eq!(reason, t!(turn_cancelled, turn = 3)),
+            other => panic!("a stop was recorded as {other:?}"),
+        }
+        let diagnosis = Diagnosis::of(Category::TooLong).at_ceiling(64_000);
+        let cut_off = CutOff {
+            ceiling: 64_000,
+            call: Some(OpenCall {
+                tool: Some("write_file".to_owned()),
+                arguments: 0,
+            }),
+            thought: false,
+        };
+        match StoredOutcome::ended(2, Ending::Failed(diagnosis), Some(&cut_off)) {
+            StoredOutcome::Failed { reason } => {
+                assert_eq!(reason, failure_reason(diagnosis, Some(&cut_off)));
+                assert!(reason.contains("write_file"), "{reason}");
+            }
+            other => panic!("a failure was recorded as {other:?}"),
+        }
+    }
 
     /// The name is printed on the way out and pasted into a command, so it has to be the shape a
     /// person recognises as an id and nothing else. It used to be the time and the process id.
@@ -2856,6 +3122,9 @@ mod tests {
     fn a_record_says_which_build_wrote_it() {
         const LATER: &str = "0.0.0-test+1111111";
 
+        if !in_isolated_profile() {
+            return;
+        }
         let root = an_empty_project("bravebot-session-build-stamp");
 
         let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
@@ -2876,8 +3145,101 @@ mod tests {
             Some(LATER),
             "the record names the build that wrote the turns before the resume"
         );
+    }
 
-        forget_the_project(&root);
+    /// A link is set between turns as often as during one, and a session left alone after it
+    /// should resume with it, so it is written at once rather than at the next turn.
+    #[test]
+    fn a_link_is_written_at_once_and_a_resume_and_a_fork_keep_it() {
+        const ISSUE: &str = "https://github.com/brave/bravebot/issues/1267";
+        const PULL: &str = "https://github.com/brave/bravebot/pull/1270";
+
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-links");
+
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut handle);
+        handle.set_link(Link::Issue, Url::read(ISSUE));
+        handle.set_link(Link::PullRequest, Url::read(PULL));
+
+        let record = load(&root, handle.id()).expect("the record was not written");
+        assert_eq!(record.issue.as_deref(), Some(ISSUE));
+        assert_eq!(record.pull_request.as_deref(), Some(PULL));
+
+        let resumed = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        assert_eq!(resumed.link(Link::Issue), Some(ISSUE));
+        assert_eq!(resumed.link(Link::PullRequest), Some(PULL));
+
+        let forked = fork(&root, handle.id()).expect("the session forks");
+        assert_eq!(forked.issue.as_deref(), Some(ISSUE));
+        assert_eq!(forked.pull_request.as_deref(), Some(PULL));
+
+        save_a_turn_session(&mut handle);
+        let saved = load(&root, handle.id()).expect("the record is still there");
+        assert_eq!(
+            saved.issue.as_deref(),
+            Some(ISSUE),
+            "the next turn's save dropped the issue"
+        );
+        assert_eq!(saved.pull_request.as_deref(), Some(PULL));
+
+        handle.set_link(Link::Issue, None);
+        let cleared = load(&root, handle.id()).expect("the record is still there");
+        assert_eq!(cleared.issue, None, "clearing the issue left it on disk");
+        assert_eq!(cleared.pull_request.as_deref(), Some(PULL));
+    }
+
+    /// Every record written before the links were kept has neither field, and it must still
+    /// resume, with no link rather than with an error.
+    #[test]
+    fn a_record_from_before_the_links_reads_as_having_none() {
+        let mut written = serde_json::to_value(a_record()).expect("serialises");
+        let fields = written.as_object_mut().expect("an object");
+        fields.remove("issue").expect("the issue is written");
+        fields
+            .remove("pull_request")
+            .expect("the pull request is written");
+
+        let record: Record = serde_json::from_value(written).expect("an older record reads");
+        assert_eq!(record.issue, None);
+        assert_eq!(record.pull_request, None);
+    }
+
+    /// The panel draws a link on every frame, so a value that could end its row, start an escape
+    /// sequence or reverse what follows is refused rather than drawn, and so is anything a browser
+    /// would not open.
+    #[test]
+    fn only_one_web_address_on_one_line_is_a_link() {
+        for link in [
+            "https://github.com/brave/bravebot/issues/1267",
+            "http://localhost:8080/pr/1",
+            "HTTPS://example.com/a",
+            "  https://example.com/padded  ",
+        ] {
+            assert!(Url::read(link).is_some(), "{link:?} was refused");
+        }
+        for refused in [
+            "",
+            "https://",
+            "github.com/brave/bravebot/issues/1267",
+            "ftp://example.com/issue",
+            "javascript://alert(1)",
+            "file:///etc/passwd",
+            "https://example.com/a\nhttps://example.com/b",
+            "https://example.com/\u{1b}[2J",
+            "https://example.com/\u{7}",
+            "https://example.com/two words",
+            "https://example.com/\u{202e}1/seussi",
+            "https://example.com/\u{200b}",
+            "\u{feff}https://example.com/",
+            "https:///issues/1",
+            "http://?q",
+            "https://#a",
+        ] {
+            assert_eq!(Url::read(refused), None, "{refused:?} was taken as a link");
+        }
     }
 
     /// Resuming on different code is a caveat on the transcript above it, exactly as resuming on
@@ -2902,6 +3264,9 @@ mod tests {
     /// reason the build stamp is taken from the program resuming.
     #[test]
     fn a_record_says_which_front_end_wrote_it() {
+        if !in_isolated_profile() {
+            return;
+        }
         let root = an_empty_project("bravebot-session-front-stamp");
 
         let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
@@ -2922,8 +3287,6 @@ mod tests {
             Some("desktop"),
             "the record names the front end that wrote the turns before the resume"
         );
-
-        forget_the_project(&root);
     }
 
     /// Resuming in the other surface is a caveat on the transcript above it, exactly as resuming
@@ -2949,23 +3312,6 @@ mod tests {
         let unknown = front_note(Some("hologram"), Front::Terminal)
             .expect("a front end this build has never heard of is worth saying");
         assert!(unknown.contains("hologram"), "{unknown}");
-    }
-
-    /// The desktop app starts no MCP server, so a session opened where some are requested names
-    /// them, and one opened where none are says nothing. A name that is not an alias is quoted, so
-    /// a checkout cannot write words the note would draw as its own.
-    #[test]
-    fn a_desktop_session_names_the_servers_it_does_not_start() {
-        assert_eq!(servers_note([]), None);
-
-        let note = servers_note(["weather", "docs", "x, and y"]).expect("requested servers");
-        assert_eq!(
-            note,
-            t!(
-                session_servers_not_started,
-                servers = r#"weather, docs, "x, and y""#
-            )
-        );
     }
 
     /// A point whose contents a rewind cannot produce must not read as a file that was never
@@ -3216,6 +3562,8 @@ mod tests {
             id: "1-2".to_string(),
             directory: "/tmp/x".to_string(),
             branch: None,
+            issue: None,
+            pull_request: None,
             title: "a session".to_string(),
             started: 1,
             updated: 1,
@@ -3388,29 +3736,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// An empty project, and an empty store for it.
-    ///
-    /// The store is under `~/.bravebot` rather than under the project, so removing the project
-    /// leaves the records behind and the next run of the test counts them too. Cleared at both
-    /// ends: at the start so a run that was killed does not fail the next one, and at the end so
-    /// a checkout is not left with test records in the picker.
+    /// An empty project in the profile [`in_isolated_profile`] made, which is removed with the
+    /// records written about it whether or not the test passes.
     fn an_empty_project(name: &str) -> PathBuf {
-        let root = crate::testutil::scratch_dir(name);
-        forget_the_project(&root);
+        let root = crate::test_profile::project(name);
         std::fs::create_dir_all(&root).expect("create");
         root
     }
 
     /// A stamp shaped like the one a front end passes in: a version and the commit behind it.
     const A_BUILD: &str = "0.0.0-test+0000000";
-
-    /// Remove a test project and every record written about it.
-    fn forget_the_project(root: &Path) {
-        let _ = std::fs::remove_dir_all(root);
-        if let Some(store) = project_directory(root) {
-            let _ = std::fs::remove_dir_all(store);
-        }
-    }
 
     /// Write a plain turn session down, so a run recorded beside it has something to be beside.
     ///
@@ -3462,6 +3797,9 @@ mod tests {
     /// picker would have to ask which half of it Enter was about.
     #[test]
     fn a_manifest_run_is_recorded_apart_from_the_session() {
+        if !in_isolated_profile() {
+            return;
+        }
         let root = an_empty_project("bravebot-session-manifest-run");
 
         let mut session = Handle::begin(&root, Front::Terminal, A_BUILD);
@@ -3471,6 +3809,7 @@ mod tests {
             &root,
             "summarise the specs",
             &a_failed_run(),
+            None,
             Front::Terminal,
             A_BUILD,
         )
@@ -3495,14 +3834,15 @@ mod tests {
             "the plan is not in the record: {}",
             stored.describe()
         );
-
-        forget_the_project(&root);
     }
 
     /// The other half of the same clause, and the reason for splitting the records at all: a
     /// conversation with a manifest run in it must not become unresumable.
     #[test]
     fn a_session_that_started_a_run_can_still_be_resumed() {
+        if !in_isolated_profile() {
+            return;
+        }
         let root = an_empty_project("bravebot-session-manifest-resumable");
 
         let mut session = Handle::begin(&root, Front::Terminal, A_BUILD);
@@ -3511,6 +3851,7 @@ mod tests {
             &root,
             "summarise the specs",
             &a_failed_run(),
+            None,
             Front::Terminal,
             A_BUILD,
         )
@@ -3529,8 +3870,6 @@ mod tests {
             !row.manifest,
             "the picker would refuse Enter on the session"
         );
-
-        forget_the_project(&root);
     }
 
     /// A run the person stopped has nothing in it to read, so it leaves nothing, exactly as it
@@ -3538,6 +3877,9 @@ mod tests {
     /// rows whose whole content is that somebody changed their mind.
     #[test]
     fn a_cancelled_run_leaves_no_record() {
+        if !in_isolated_profile() {
+            return;
+        }
         let root = an_empty_project("bravebot-session-manifest-cancelled");
 
         let cancelled = Err(bravebot_agent::TurnError::Cancelled { attempts: None });
@@ -3546,21 +3888,59 @@ mod tests {
                 &root,
                 "summarise the specs",
                 &cancelled,
+                None,
                 Front::Terminal,
                 A_BUILD
             )
             .is_none()
         );
         assert!(list(&root).is_empty(), "a stopped run was written down");
+    }
 
-        forget_the_project(&root);
+    /// Missing timing remains absent; measured zero and measured failed spend survive reload.
+    #[test]
+    fn failed_manifest_records_distinguish_unknown_timing_from_measured_zero() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("manifest-measured-zero");
+        for retained in [
+            None,
+            Some(bravebot_agent::Spent::default()),
+            Some(bravebot_agent::Spent {
+                tokens: 46,
+                timing: bravebot_agent::timing::Timing {
+                    wall_ms: 101,
+                    inference_ms: 37,
+                    tools_ms: 19,
+                    stalled_ms: 11,
+                },
+                ..Default::default()
+            }),
+        ] {
+            let id = record_manifest_run(
+                &root,
+                "summarise",
+                &a_failed_run(),
+                retained,
+                Front::Terminal,
+                A_BUILD,
+            )
+            .unwrap();
+            let record = load(&root, &id).unwrap();
+            assert_eq!(record.tokens, retained.map_or(0, |s| s.tokens));
+            assert_eq!(record.spend[&1], record.tokens);
+            assert_eq!(record.timing.get(&1).copied(), retained.map(|s| s.timing));
+            assert!(record.model.is_none());
+        }
     }
 
     #[test]
     fn forking_a_manifest_session_is_refused() {
-        let root = crate::testutil::scratch_dir("bravebot-fork-manifest");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("create");
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-fork-manifest");
 
         let record = Record {
             id: "manifest-sess".to_string(),
@@ -3584,15 +3964,14 @@ mod tests {
         std::fs::write(&path, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
 
         assert!(fork(&root, "manifest-sess").is_none());
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn truncating_an_audit_log_removes_events_from_undone_turns() {
-        let root = crate::testutil::scratch_dir("bravebot-audit-truncate");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("create");
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-audit-truncate");
 
         let handle = Handle::begin(&root, Front::Terminal, A_BUILD);
         let stamped = crate::audit::Stamped {
@@ -3616,17 +3995,16 @@ mod tests {
         assert_eq!(audit_after.len(), 1);
         assert!(audit_after.contains_key(&1));
         assert!(!audit_after.contains_key(&2));
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A rewind past a session's only turn leaves a conversation nobody can resume into anything,
     /// so the record goes rather than standing in the list as a row with nothing behind it.
     #[test]
     fn discarding_a_record_leaves_nothing_to_resume() {
-        let root = crate::testutil::scratch_dir("bravebot-discard-unwritten");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("create");
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-discard-unwritten");
 
         let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
         let empty = bravebot_agent::Conversation::new().snapshot();
@@ -3671,17 +4049,16 @@ mod tests {
             handle.title().is_empty(),
             "the undone turn still names the session"
         );
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A name somebody chose outlives the turn that was rewound: it was not the turn's to give, so
     /// dropping it would make the next prompt rename a session that had already been named.
     #[test]
     fn discarding_keeps_a_name_chosen_before_the_turn() {
-        let root = crate::testutil::scratch_dir("bravebot-discard-renamed");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("create");
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-discard-renamed");
 
         let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
         assert!(handle.rename("release audit"), "the name was refused");
@@ -3689,8 +4066,6 @@ mod tests {
         handle.discard_unwritten("release audit");
 
         assert_eq!(handle.title(), "release audit");
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// The lexical check on `..` says nothing about where a directory inside the tree actually

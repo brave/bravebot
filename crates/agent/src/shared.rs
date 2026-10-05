@@ -221,6 +221,8 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         fn landed(&mut self, landing: Landing);
         fn tool_started(&mut self, activity: Activity);
         fn tool_finished(&mut self, activity: Activity);
+        fn movable(&mut self, handoff: bravebot_core::cancel::Handoff);
+        fn job(&mut self, event: crate::report::JobEvent);
         fn check_started(&mut self, checking: bravebot_core::vetting::Checking);
         fn check_finished(&mut self);
         fn interjected(&mut self, said: String);
@@ -567,7 +569,40 @@ mod tests {
             self.requests += 1;
         }
 
+        fn job(&mut self, event: crate::report::JobEvent) {
+            let crate::report::JobEvent::Started { name, .. } = event else {
+                return;
+            };
+            self.lines
+                .push((self.attributed_to.map(|id| id.to_string()), name));
+        }
+
         fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+    }
+
+    /// A delegate numbers its jobs from one as the turn does, so the screen tells its `job:1` from
+    /// the turn's only by the number it is told the event comes from.
+    #[test]
+    fn a_delegates_job_is_reported_as_its_own() {
+        let started = || crate::report::JobEvent::Started {
+            name: "job:1".to_string(),
+            line: "sleep 600".to_string(),
+            moved_after: None,
+            stop: bravebot_core::cancel::JobStop::new(),
+        };
+        let mut screen = Lines::default();
+        {
+            let lent = Lent::new(&mut screen);
+            lent.turn().job(started());
+            lent.delegate(d(&[1])).job(started());
+        }
+        assert_eq!(
+            screen.lines,
+            [
+                (None, "job:1".to_string()),
+                (Some("d1".to_string()), "job:1".to_string()),
+            ]
+        );
     }
 
     /// A screen puts a line under the block of the run whose it is, by the number it was told,

@@ -210,14 +210,20 @@ impl Rule {
     /// so `doctor` can name it. Guessing would be worse than ignoring: a misread deny rule reads
     /// as protection that is not there.
     pub fn parse(text: &str, anchors: &Anchors) -> Result<Self, Rejected> {
-        let rule = text.trim();
-        if rule.is_empty() {
-            // The spelling the file used, not the nothing that is left of it. A line of three
-            // spaces and a line of none are two entries somebody has to find in their file, and a
-            // report calling both of them `''` names neither.
+        // A rejection names the entry in the spelling the file used, not the trimmed text that was
+        // read. Two lines that differ only in surrounding space are two entries somebody has to
+        // find in their file, and a report that trimmed them names neither.
+        Self::parse_trimmed(text.trim(), anchors).map_err(|rejected| Rejected {
+            text: text.to_string(),
+            ..rejected
+        })
+    }
+
+    /// [`Rule::parse`] on text with its surrounding space already removed.
+    fn parse_trimmed(text: &str, anchors: &Anchors) -> Result<Self, Rejected> {
+        if text.is_empty() {
             return Err(Rejected::new(text, Unreadable::Empty));
         }
-        let text = rule;
 
         let (name, specifier) = match text.split_once('(') {
             None => (text, None),
@@ -329,6 +335,35 @@ impl Rule {
         };
         if !self.landed.contains(&respelled) {
             self.landed.push(respelled);
+        }
+    }
+
+    /// Add the same pattern under `to` for each absolute pattern this rule holds under `from`
+    /// (CHECKOUT-9).
+    ///
+    /// Both are keyed segments. A pattern is under `from` where its first segments are `from`'s,
+    /// written out: a wildcard in that stretch is a pattern about more than the one directory and
+    /// is left to cover what it covers. The copy is part of this rule, as a spelling reached
+    /// through a link is, and never floats.
+    fn copy_beneath(&mut self, from: &[String], to: &[String]) {
+        let copies: Vec<Pattern> = std::iter::once(&self.pattern)
+            .chain(&self.landed)
+            .filter_map(|pattern| match pattern {
+                Pattern::Absolute(pattern) if pattern.segments.starts_with(from) => {
+                    let mut segments = to.to_vec();
+                    segments.extend_from_slice(&pattern.segments[from.len()..]);
+                    Some(Pattern::Absolute(PathPattern {
+                        segments,
+                        floats_when_restricting: false,
+                    }))
+                }
+                _ => None,
+            })
+            .collect();
+        for copy in copies {
+            if copy != self.pattern && !self.landed.contains(&copy) {
+                self.landed.push(copy);
+            }
         }
     }
 
@@ -568,6 +603,27 @@ impl Permissions {
         }
     }
 
+    /// Have every path rule written about a place under `from` cover the same place under `to`
+    /// as well (CHECKOUT-9), as [`crate::trust::TrustMap::copy_beneath`] does for the trust map.
+    ///
+    /// Both are full paths, spelled as a gate holds one. A relative pattern needs no copy, since it
+    /// is held against the root of whichever workspace asks. A rule is copied with the list it is
+    /// in, an allow rule included, since the checkout is the same tree. The rules are the delegate's
+    /// own copy, so the copies go when the delegate does.
+    pub fn copy_beneath(&mut self, from: &str, to: &str) {
+        let (backslash_separates, folds_case) = (self.backslash_separates, self.folds_case);
+        let from = split(&key_of(from, backslash_separates, folds_case));
+        let to = split(&key_of(to, backslash_separates, folds_case));
+        for rule in self
+            .deny
+            .iter_mut()
+            .chain(self.ask.iter_mut())
+            .chain(self.allow.iter_mut())
+        {
+            rule.copy_beneath(&from, &to);
+        }
+    }
+
     /// What the rules say about reading or editing `path`.
     ///
     /// Spelled from `/` before anything is matched against it, which is how the patterns were read,
@@ -733,11 +789,14 @@ fn path_pattern(specifier: &str, anchors: &Anchors) -> Option<Pattern> {
     if is_absolute_key(&keyed) {
         return rooted(&keyed);
     }
-    let rest = specifier.strip_prefix("./").unwrap_or(specifier);
-    Some(Pattern::Relative(PathPattern::relative(&fold(
-        rest,
-        anchors.folds_case,
-    ))))
+    // Decided on the specifier as written: `./x` says where it starts, and only a specifier with
+    // no slash in it is a name that matches at any depth.
+    let dotted = specifier.strip_prefix("./");
+    let rest = dotted.unwrap_or(specifier);
+    Some(Pattern::Relative(PathPattern::relative(
+        &fold(rest, anchors.folds_case),
+        dotted.is_some(),
+    )))
 }
 
 /// `path` spelled as the rules match one: `/`-separated, its drive letter in upper case, and folded
@@ -794,14 +853,20 @@ impl PathPattern {
     /// matches at any depth, in every list, so `Read(.env)` and `Read(**/.env)` are one rule. A
     /// pattern whose first segment is a plain name and which has more after it is the case Claude
     /// Code treats asymmetrically, and `floats_when_restricting` carries that.
-    fn relative(pattern: &str) -> Self {
+    ///
+    /// `dotted` is whether the specifier was written `./x`, which starts at the workspace even with
+    /// one segment: it is not a name, so it neither floats to any depth nor restricts at one.
+    fn relative(pattern: &str, dotted: bool) -> Self {
         let segments = split(pattern);
-        let is_a_bare_name = segments.len() == 1;
+        let is_a_bare_name = segments.len() == 1 && !dotted;
+        let anchored_segment = segments.len() == 1 && dotted;
         let starts_at_a_named_segment = segments
             .first()
             .is_some_and(|first| first != "**" && !first.contains('*'));
         Self {
-            floats_when_restricting: !is_a_bare_name && starts_at_a_named_segment,
+            floats_when_restricting: !is_a_bare_name
+                && !anchored_segment
+                && starts_at_a_named_segment,
             segments: if is_a_bare_name {
                 // A name matches at any depth, which is a leading `**` and nothing else.
                 let mut floated = vec!["**".to_string()];
@@ -1461,6 +1526,37 @@ mod tests {
         );
     }
 
+    /// PERM-3: `./x` starts at the workspace, and only a specifier with no slash in it is a name
+    /// that matches at any depth, so a one-segment `./x` is the top-level `x` in every list.
+    #[test]
+    fn a_dotted_single_segment_starts_at_the_workspace_in_every_list() {
+        for list in 0..3 {
+            let rule = "Edit(./notes.md)";
+            let permissions = match list {
+                0 => rules(&[rule], &[], &[]),
+                1 => rules(&[], &[rule], &[]),
+                _ => rules(&[], &[], &[rule]),
+            };
+            assert!(
+                matches!(
+                    permissions.for_path(Subject::Edit, "notes.md"),
+                    Decision::Ruled(_)
+                ),
+                "list {list}: ./notes.md missed the workspace's own notes.md"
+            );
+            assert_eq!(
+                permissions.for_path(Subject::Edit, "vendor/pkg/notes.md"),
+                Decision::Unmatched,
+                "list {list}: ./notes.md floated to a nested copy"
+            );
+        }
+        // The undotted spelling is a name and still matches at any depth.
+        assert_eq!(
+            rules(&[], &[], &["Edit(notes.md)"]).for_path(Subject::Edit, "vendor/pkg/notes.md"),
+            Decision::Ruled(Ruling::Allow)
+        );
+    }
+
     /// An anchored pattern means the place it names, in every list, which is how somebody pins a
     /// rule to one directory when the floating kind would have caught more.
     #[test]
@@ -1578,6 +1674,75 @@ mod tests {
         );
     }
 
+    /// CHECKOUT-9. A rule about a full path under the working directory also covers the same
+    /// place under the checkout, in every list. A rule about a place outside it, a pattern whose
+    /// written-out stretch stops short of it, and a relative rule gain nothing, so the copy is not
+    /// a widening of what the rule says.
+    #[test]
+    fn a_rule_under_the_working_directory_is_copied_to_the_checkout() {
+        let mut permissions = rules(
+            &["Read(//work/repo/secrets/key.pem)", "Edit(//work/repo/**)"],
+            &["Read(//work/repo/ask/**)"],
+            &["Read(//work/repo/granted/**)"],
+        );
+        permissions.copy_beneath("/work/repo", "/state/c1");
+        for (subject, path, decision) in [
+            (Subject::Read, "/state/c1/secrets/key.pem", Ruling::Deny),
+            (Subject::Edit, "/state/c1/src/lib.rs", Ruling::Deny),
+            (Subject::Read, "/state/c1/ask/notes", Ruling::Ask),
+            (Subject::Read, "/state/c1/granted/a", Ruling::Allow),
+            (Subject::Read, "/work/repo/secrets/key.pem", Ruling::Deny),
+        ] {
+            assert_eq!(
+                permissions.for_path(subject, path),
+                Decision::Ruled(decision),
+                "{path} was not ruled as the working directory's copy is"
+            );
+        }
+        assert_eq!(
+            permissions.for_path(Subject::Read, "/state/c1/secrets/other.pem"),
+            Decision::Unmatched,
+            "the copy covers more than the file the rule names"
+        );
+        assert_eq!(
+            permissions.len(),
+            4,
+            "a copy was counted as a rule of its own"
+        );
+    }
+
+    /// CHECKOUT-9. Only a rule written under the working directory is copied, and only to the
+    /// checkout it was asked for.
+    #[test]
+    fn a_rule_outside_the_working_directory_is_not_copied_to_the_checkout() {
+        let mut permissions = rules(
+            &[
+                "Read(//work/other/key.pem)",
+                "Read(//work/repo-two/key.pem)",
+                "Read(//work/*/key.pem)",
+                "Read(key.pem)",
+            ],
+            &[],
+            &[],
+        );
+        permissions.copy_beneath("/work/repo", "/state/c1");
+        assert_eq!(
+            permissions.for_path(Subject::Read, "/state/c1/key.pem"),
+            Decision::Unmatched,
+            "a rule about another directory reached the checkout"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "/state/c1/other/key.pem"),
+            Decision::Unmatched,
+            "a rule about a sibling was copied under the checkout"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "/state/c2/key.pem"),
+            Decision::Unmatched,
+            "a copy was made for a checkout nobody asked for"
+        );
+    }
+
     /// The name a prefix lands on is spelled the way the path it is matched against is, so a
     /// canonical name with backslashes and a drive prefix, or in the case a folding volume stores,
     /// reaches the same file as the spelling a gate asks about.
@@ -1690,6 +1855,37 @@ mod tests {
         let (permissions, rejected) = Permissions::parse(&texts, &[], &[], &anchors());
         assert!(permissions.is_empty(), "an unreadable rule was kept");
         assert_eq!(rejected.len(), texts.len());
+    }
+
+    /// PERM-11: a dropped rule is named in the spelling the file used, for every reason and not
+    /// only an empty one. Two lines that differ only in surrounding space are two entries to find
+    /// in the file, and a report that trimmed them would name both the same.
+    #[test]
+    fn a_dropped_rule_is_named_in_the_spelling_the_file_used() {
+        let texts: Vec<String> = [
+            "Bash(git diff",
+            " Bash(git diff",
+            "Bash(git diff \t",
+            "  Fetchh(domain:denied.test)",
+            "\tWebFetch(https://example.com/docs) ",
+            " Bash() ",
+            // A home-anchored path rule with no home to resolve it against.
+            " Read(~/.env) ",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let no_anchors = Anchors::none();
+        for text in &texts {
+            let rejected = Rule::parse(text, &no_anchors).expect_err(text);
+            assert_eq!(&rejected.text, text);
+        }
+        let (permissions, rejected) = Permissions::parse(&texts, &[], &[], &no_anchors);
+        assert!(permissions.is_empty());
+        assert_eq!(
+            rejected.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(),
+            texts.iter().map(String::as_str).collect::<Vec<_>>()
+        );
     }
 
     /// A rule names a server, or one tool of it, and matches the two names whole: `weather` is not

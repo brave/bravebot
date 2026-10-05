@@ -9,9 +9,7 @@ pub(super) mod endpoint;
 
 const SENTINEL: &str = "UNTRUSTED_UNDO_REPLACEMENT_92817";
 
-#[path = "../../session/test-support/profile.rs"]
-mod profile;
-use profile::{in_isolated_profile, project as scratch_dir};
+use crate::test_profile::{in_isolated_profile, project as scratch_dir};
 
 fn save(
     stored: &mut sessions::Handle,
@@ -129,8 +127,8 @@ fn oversized_undo(ending: &str, resumed: bool) {
         &workspace,
         Line {
             text: "copy",
-            wrote: Wrote::ThePerson,
             addressed: None,
+            offered_a_later_look: false,
         },
         FinishedTurn {
             decisions: Some(completed.decisions),
@@ -1369,8 +1367,8 @@ fn ordinary_tui_endings_keep_exact_approvals_advice_and_exposure() {
                 &workspace,
                 Line {
                     text: "read and run",
-                    wrote: Wrote::ThePerson,
                     addressed: None,
+                    offered_a_later_look: false,
                 },
                 finished,
                 RetainedTurn {

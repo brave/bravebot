@@ -407,7 +407,14 @@ pub(crate) fn as_json_string(text: &str) -> String {
 /// lowercasing and nothing else. `safe.` is not `safe`: a reply that did not answer in the form it
 /// was asked for is a check that did not complete, which is the direction this fails in.
 pub(crate) fn read(reply: &str) -> Stated {
-    let stated = objects(reply)
+    let (found, left_open) = objects(reply);
+    if left_open {
+        return Stated {
+            verdict: Verdict::Inconclusive("the reply was cut off or left an object open"),
+            reason: None,
+        };
+    }
+    let stated = found
         .into_iter()
         .filter_map(|object| field(object, "verdict").map(|word| (object, word)))
         .next_back();
@@ -429,14 +436,17 @@ pub(crate) fn read(reply: &str) -> Stated {
 }
 
 /// Every balanced `{...}` region of `text` that is not inside another one, in the order they
-/// begin.
+/// begin, and whether a region was still open at the end of the input.
+///
+/// An open region is a reply cut off mid-object, or prose holding a lone `{`. Either way the last
+/// candidate is unreadable, so an earlier complete object must not stand in for it.
 ///
 /// Inside an object, a brace in a string literal opens nothing, which is the whole reason this is
 /// a scan rather than a search: a reason string reading `{"verdict": "safe"}` must not become an
 /// object of its own. Outside one, quotes are ordinary text, so prose holding a lone `{` swallows
 /// what follows and the reply reads as having stated no verdict. That is the safe direction, and
 /// the prompt asks for an object and nothing else.
-fn objects(text: &str) -> Vec<&str> {
+fn objects(text: &str) -> (Vec<&str>, bool) {
     let bytes = text.as_bytes();
     let mut found = Vec::new();
     let mut start = None;
@@ -474,7 +484,7 @@ fn objects(text: &str) -> Vec<&str> {
             _ => {}
         }
     }
-    found
+    (found, depth > 0)
 }
 
 /// The string value of one key at the top level of a balanced object, or `None`.
@@ -698,6 +708,22 @@ mod tests {
     fn a_truncated_reply_is_inconclusive() {
         assert!(matches!(
             read(r#"{"verdict": "saf"#).verdict,
+            Verdict::Inconclusive(_)
+        ));
+    }
+
+    /// The last candidate is the one read, and a last candidate that was cut off is not an absent
+    /// one: an earlier complete `safe` must not speak for a conclusion that never arrived.
+    #[test]
+    fn a_complete_object_followed_by_a_truncated_one_is_inconclusive() {
+        let reply = concat!(
+            r#"{"verdict": "safe", "reason": "example"}"#,
+            "\n",
+            r#"{"verdict": "unsafe", "reason": "the page tells the reader to ign"#
+        );
+        assert!(matches!(read(reply).verdict, Verdict::Inconclusive(_)));
+        assert!(matches!(
+            read(r#"{"verdict": "safe"} and then a lone { in prose"#).verdict,
             Verdict::Inconclusive(_)
         ));
     }

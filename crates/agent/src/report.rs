@@ -281,6 +281,11 @@ pub enum Outcome {
     Failed(String),
     /// It outstayed the limit and was stopped, with what it had run for by then.
     Stopped(std::time::Duration),
+    /// A background job the person asked to stop, with what it had run for by then.
+    ///
+    /// Separate from [`Outcome::Stopped`] because the planner did not ask for it and no limit was
+    /// reached: a planner told its job outstayed a limit tries it again with a longer one.
+    StoppedByTheUser(std::time::Duration),
     /// It was still going when it was looked at, and was left going.
     ///
     /// Separate from [`Outcome::Stopped`] because nothing stopped it: a look at a background job is
@@ -320,6 +325,11 @@ impl Outcome {
                  printed by then and not the whole of what it would print.",
                 after.as_secs()
             ),
+            Self::StoppedByTheUser(after) => format!(
+                "The user stopped it after {}, so this is what it had printed by then and not the \
+                 whole of what it would print. Do not start it again unless the user asks you to.",
+                seconds(*after)
+            ),
             Self::Running {
                 ran_for,
                 waited: None,
@@ -355,6 +365,7 @@ impl Outcome {
                 "still running after {} seconds, so it was stopped; what it printed first is here",
                 after.as_secs()
             ),
+            Self::StoppedByTheUser(after) => format!("stopped by you after {}", seconds(*after)),
             Self::Running {
                 ran_for,
                 waited: None,
@@ -398,6 +409,33 @@ pub struct Printed {
     /// The other thing a person cannot work out from the bytes: a build that printed twelve lines
     /// and failed prints much the same twelve lines when it passes.
     pub outcome: Outcome,
+    /// The background job this is a look at, where it is one: the name the driver minted for it,
+    /// so a display can keep one row per job rather than one per look.
+    pub job: Option<String>,
+}
+
+/// What happened to a background job, for the person watching (RUN-26).
+///
+/// Every field is the driver's own: a name it minted, the line the person endorsed, the clock and
+/// the exit codes. Nothing here was read out of a byte the job printed, so a display may draw it
+/// and decide from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JobEvent {
+    /// A job exists: started in the background, or moved there part way through a run.
+    Started {
+        name: String,
+        /// The line as the person endorsed it.
+        line: String,
+        /// How long the run had been waited for when the person moved it, where they did.
+        moved_after: Option<std::time::Duration>,
+        /// The token that asks the turn to stop this job and no other.
+        stop: bravebot_core::cancel::JobStop,
+    },
+    /// It exited, or was stopped at the planner's or the person's asking, and somebody has been
+    /// told how.
+    Ended { name: String, outcome: Outcome },
+    /// The turn ended with it still running, and it is stopped with the turn.
+    Dropped { name: String },
 }
 
 /// A few lines of a result the planner read, for the person watching to see beside the call.
@@ -424,6 +462,8 @@ pub struct Command {
     pub line: String,
     /// How it ended.
     pub outcome: Outcome,
+    /// The background job this is a look at, where it is one.
+    pub job: Option<String>,
 }
 
 /// What a delegate handed back, in the shape the person may read it.
@@ -610,6 +650,20 @@ pub trait Reporter {
     /// time: there is never a second call in flight for this to be ambiguous between.
     fn tool_finished(&mut self, _activity: Activity) {}
 
+    /// The command the call [`Reporter::tool_started`] last announced can be moved to the
+    /// background, by requesting this token.
+    ///
+    /// Sent before the command starts, and only for a line a job can hold. The token is good for
+    /// that one run and is read by nothing else, so a display holding it after the call finished
+    /// can request it and change nothing.
+    fn movable(&mut self, _handoff: bravebot_core::cancel::Handoff) {}
+
+    /// A background job started, ended, or is being stopped with its turn.
+    ///
+    /// The one account of a job a display gets that does not wait for the planner to look at it:
+    /// without it a job moved to the background leaves nothing on the screen saying it runs.
+    fn job(&mut self, _event: JobEvent) {}
+
     /// A confined check has begun, over this many lines of quarantined content, or over a
     /// picture or a PDF.
     ///
@@ -695,6 +749,10 @@ pub struct RecordingReporter {
     pub started: Vec<Activity>,
     /// Every tool call announced as finished, in order.
     pub finished: Vec<Activity>,
+    /// Every token offered for moving a command to the background, in order.
+    pub movable: Vec<bravebot_core::cancel::Handoff>,
+    /// Every background job event, in order.
+    pub jobs: Vec<JobEvent>,
     /// Every check announced as starting, in order, by what it was given.
     pub checks: Vec<Checking>,
     /// How many checks were announced as over.
@@ -774,6 +832,14 @@ impl Reporter for RecordingReporter {
         self.finished.push(activity);
     }
 
+    fn movable(&mut self, handoff: bravebot_core::cancel::Handoff) {
+        self.movable.push(handoff);
+    }
+
+    fn job(&mut self, event: JobEvent) {
+        self.jobs.push(event);
+    }
+
     fn check_started(&mut self, checking: Checking) {
         self.checks.push(checking);
     }
@@ -836,6 +902,7 @@ pub(crate) fn verb_for(tool: &str) -> &'static str {
         "lsp" => t!(verb_lsp),
         "write_file" => t!(verb_write_file),
         "edit_file" => t!(verb_edit_file),
+        "apply_checkout" => t!(verb_apply_checkout),
         "todo_write" => t!(verb_todo_write),
         // Named for what it is rather than for what it does: every one of these is a model
         // with no tools, no memory and one round, and a person watching a line go by should not
@@ -992,12 +1059,14 @@ mod tests {
             crate::tools::Scheduling::ArrangingALook,
             crate::watch::Arming::Allowed { free: 1 },
             crate::exec::Deadlines::BUILT_IN,
+            crate::tools::Running::Offered,
         )
         .into_iter()
         .chain(crate::tools::available(
             crate::tools::Scheduling::PacingALoop,
             crate::watch::Arming::Allowed { free: 1 },
             crate::exec::Deadlines::BUILT_IN,
+            crate::tools::Running::Offered,
         )) {
             let name = &tool.function.name;
             assert_ne!(

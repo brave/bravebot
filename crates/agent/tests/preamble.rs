@@ -891,3 +891,58 @@ fn an_attribution_that_holds_a_fence_stays_inside_one() {
         preamble.text
     );
 }
+
+/// INSTR-10. The words a command line gave are the last standing source, after the project's
+/// `AGENTS.md`, and they are in `text`, which is what a delegate reads. The same composition
+/// without them states no such source, so a heading that was always there would show nothing.
+#[test]
+fn words_from_the_command_line_follow_the_projects_file_in_what_a_delegate_reads() {
+    let scratch = Scratch::new("command-line-words");
+    let project = scratch.directory("project");
+    std::fs::write(project.join("AGENTS.md"), "PROJECT-CONVENTIONS-TEXT").unwrap();
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let compose = |appended: Option<&str>| {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose_in(
+            &mut policy,
+            &workspace,
+            &workspace,
+            None,
+            &Catalogue::default(),
+            None,
+            None,
+            &Attribution::default(),
+            appended,
+        )
+    };
+
+    let without = compose(None);
+    assert!(
+        without.text.contains("PROJECT-CONVENTIONS-TEXT")
+            && !without.text.contains("From the command line"),
+        "the control states a source nobody gave: {}",
+        without.text
+    );
+
+    let with = compose(Some("\n  APPENDED-WORDS-TEXT \n"));
+    let project_at = with
+        .text
+        .find("PROJECT-CONVENTIONS-TEXT")
+        .expect("the project's file");
+    let words_at = with
+        .text
+        .find("From the command line:\n\nAPPENDED-WORDS-TEXT\n")
+        .expect("the words are not under their heading, trimmed");
+    assert!(
+        project_at < words_at,
+        "the words precede the project's file: {}",
+        with.text
+    );
+    assert!(
+        !with.for_a_person.contains("APPENDED-WORDS-TEXT"),
+        "the words were said twice, once in the block only a person reads: {}",
+        with.for_a_person
+    );
+}

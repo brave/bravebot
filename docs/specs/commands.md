@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/tui/src/app.rs
   - crates/tui/src/skills.rs
+  - crates/tui/src/caffeinate.rs
 guards:
   - symbol: commands
 documented-by: docs/website/docs/reference/commands.md
@@ -21,7 +22,8 @@ trust map's, in [trust-map.md](trust-map.md); `/compact` is [compaction.md](comp
 `/clear` begins a session, which is [sessions.md](sessions.md)'s; `/btw` asks something the
 conversation never sees, and where its answer is drawn is [watching.md](watching.md)'s;
 `/manifest` starts the other kind of run, which is [manifest.md](manifest.md)'s. The `!` prompt is
-a different surface entirely and is [shell-mode.md](shell-mode.md).
+a different surface entirely and is [shell-mode.md](shell-mode.md). `/copy` has no other spec to
+belong to, so what it copies is CMD-11, and neither has `/caffeinate`, so what it holds is CMD-12.
 
 **Skills are offered here, and are never commands.** A slash word is offered the skills a turn
 starting now would advertise to the planner, beneath the commands at the start of a line and alone
@@ -50,7 +52,7 @@ prompt is still a person's own line, so a recalled `/status` is a command again.
 still this rule: what waited is the line the box held when somebody pressed Enter on it, and nothing
 but that press puts anything in the queue.
 
-`verified-by: by-construction (both dispatch sites read a line that came off the input box: the box's own key handler, and the queue that handler put the line in for when the turn ends. No path carries model output, file content or processor output into either)`
+`verified-by: by-construction (every dispatch site reads a line that came off the input box: the box's own key handler at rest, the same box's handler mid-turn for a word that does not wait, and the queue that handler put the line in for when the turn ends. No path carries model output, file content or processor output into any of them)`
 
 
 <a id="CMD-2"></a>
@@ -72,6 +74,7 @@ stay a question. Prefix matching would have made `/add-dirs are useful` open a d
 `verified-by: bravebot_tui::app::a_prompt_containing_the_add_dir_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_status_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_cost_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_copy_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_clear_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_compact_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_model_command_is_still_a_prompt`
@@ -93,6 +96,8 @@ stay a question. Prefix matching would have made `/add-dirs are useful` open a d
 `verified-by: bravebot_tui::app::a_prompt_containing_the_btw_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_longer_word_starting_with_btw_is_a_prompt`
 `verified-by: bravebot_tui::app::the_bare_btw_command_is_still_the_command`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_caffeinate_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::a_longer_word_starting_with_caffeinate_is_a_prompt`
 
 
 <a id="CMD-3"></a>
@@ -141,6 +146,7 @@ the conversation with a question on the end of it, which [watching.md](watching.
 
 `verified-by: bravebot_tui::app::typing_the_status_command_reports_rather_than_prompting`
 `verified-by: bravebot_tui::app::typing_the_cost_command_reports_rather_than_prompting`
+`verified-by: bravebot_tui::app::typing_the_copy_command_copies_the_latest_reply_rather_than_prompting`
 `verified-by: bravebot_tui::app::typing_the_clear_command_starts_a_new_session`
 `verified-by: bravebot_tui::app::the_compact_command_asks_for_a_summary_rather_than_being_sent`
 `verified-by: bravebot_tui::app::the_add_dir_command_carries_its_directory`
@@ -154,6 +160,7 @@ the conversation with a question on the end of it, which [watching.md](watching.
 `verified-by: bravebot_tui::app::the_loop_command_sends_what_is_left_after_the_interval`
 `verified-by: bravebot_tui::app::the_cd_command_carries_its_directory`
 `verified-by: bravebot_tui::app::the_btw_command_carries_its_question`
+`verified-by: bravebot_tui::app::the_checkouts_command_lists_and_removes_by_number`
 `verified-by: bravebot_tui::app::a_command_typed_while_a_turn_runs_is_not_sent_as_a_prompt`
 
 
@@ -178,6 +185,7 @@ exactly those characters have to arrive.
 
 `verified-by: bravebot_tui::app::the_rename_command_carries_the_whole_name`
 `verified-by: bravebot_tui::app::the_add_dir_command_carries_its_directory`
+`verified-by: bravebot_tui::app::the_add_dir_close_command_carries_the_directory_to_close`
 `verified-by: bravebot_tui::app::the_cd_command_carries_its_directory`
 `verified-by: bravebot_tui::app::the_btw_command_carries_its_question`
 `verified-by: bravebot_tui::app::a_session_can_ask_for_a_manifest_run`
@@ -191,11 +199,11 @@ exactly those characters have to arrive.
 <a id="CMD-6"></a>
 ### CMD-6: the set is written down once
 
-One table names every command, its argument and its one-line description, and each name is a
-single constant the one place that dispatches matches on. The completion list's command rows, Tab
-and the arrows all read the table, and so does the arm that queues a command typed mid-turn
-(CMD-8), so typing `/` lists every command with what it does and narrowing, queueing and
-dispatching all work on one set. The skill rows beneath them read the set a turn would advertise
+One table names every command, its argument, its one-line description and whether it waits for a
+turn in flight, and each name is a single constant the one place that dispatches matches on. The
+completion list's command rows, Tab and the arrows all read the table, and so do the arms that
+carry out or queue a command typed mid-turn (CMD-8), so typing `/` lists every command with what it
+does and narrowing, queueing and dispatching all work on one set. The skill rows beneath them read the set a turn would advertise
 (CMD-9), and no key on one dispatches anything.
 
 **Why.** A word written down in more than one place is a word that is renamed in one of them,
@@ -245,31 +253,117 @@ session resolved and never added here, however many definitions a machine holds
 
 
 <a id="CMD-8"></a>
-### CMD-8: while a turn runs the word waits, and is carried out when the queue reaches it
+### CMD-8: while a turn runs the word waits, unless it touches nothing the turn holds
 
-A command typed while a turn is in flight is taken off the box and joins the lines waiting for the
-turn to end, exactly as a prompt does: the box clears, the history remembers it, and it is drawn
-under the box marked as waiting. What it waits for is different. It is never offered to the turn in
-flight, so nothing about it reaches the planner, and when the queue reaches it, it is carried out
-rather than sent. The queue is drained in the order the lines were typed, so a command behind a
-prompt waits for that prompt's turn. Which lines are commands there is CMD-2's rule and nothing
+A command typed while a turn is in flight is one of two kinds, and a column of the table says which.
+
+| Kind | Commands | Enter mid-turn |
+|---|---|---|
+| touches only what the session keeps | `/cost`; `/status`; `/copy`; `/rename`, `/issue` and `/pr`; `/forget-trust`; `/theme <name>` and `/effort <level>`; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| everything else | every other command, `/theme` and `/effort` alone, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
+
+A command that reads or ends something goes ahead of every line already waiting, and a line behind
+it stays where it was. The exception is a line of the same command already waiting, which it waits
+behind: `/loop stop` typed after a waiting `/loop 5m check the deploy` would find no loop to stop
+and the loop would start after it, so two lines of one command are carried out in the order they
+were typed. A command that changes something, `/rename`, `/issue`, `/pr`, `/forget-trust`,
+`/theme <name>` or `/effort <level>`, is carried out as it is typed only when nothing is waiting, and otherwise waits
+behind what is, so it lands where it was typed: `/rename` ahead of a waiting `/clear` would name the
+session `/clear` leaves, and `/forget-trust` ahead of a waiting `/cd` would forget the directory
+`/cd` leaves. A command carried out as it is typed comes off the box and is not remembered, as at
+rest. What it says is drawn under the turn as notes are, and joins the transcript after the turn's
+own entries once the turn has ended. Ctrl-Enter on one stops nothing: the command is already done,
+and stopping the turn would send the prompts waiting behind it, which nobody asked to hurry.
+
+A command that waits is taken off the box and joins the lines waiting for the turn to end, exactly
+as a prompt does: the box clears, the history remembers it, and it is drawn under the box marked as
+waiting. What it waits for is different. It is never offered to the turn in flight, so nothing about
+it reaches the planner, and when the queue reaches it, it is carried out rather than sent. The queue
+is drained in the order the lines were typed, so a command behind a prompt waits for that prompt's
+turn.
+
+Neither kind is offered to the turn in flight. Which lines are commands is CMD-2's rule and nothing
 narrower, so a sentence mentioning a command is a prompt mid-turn as it is at rest, and a word the
-table gives no argument is a prompt with anything after it.
+table gives no argument is a prompt with anything after it. A compaction, an aside and the other
+loops that share the working status are not a turn, and every command typed during one waits.
 
-**Why.** Enter mid-turn already means the line waits, and that is what a person pressing it expects
-of every line they type. What the queue must not do is send a command: a line waiting there used to
-be a prompt like any other, and the running turn takes those at its next round boundary, so a queued
-`/clear` asked the planner what to clear. Carrying it out as it is typed is no better, because every
-command acts on the conversation, the terminal or the network and the turn holds all three, so it
-would change what the turn is running under. Waiting costs a person nothing and asks nothing of
-them: they typed the command once, and it happens.
+**Why the second kind waits.** Enter mid-turn already means the line waits, and that is what a
+person pressing it expects of a line they type. What the queue must not do is send a command: a line
+waiting there used to be a prompt like any other, and the running turn takes those at its next round
+boundary, so a queued `/clear` asked the planner what to clear. Carrying one of these out as it is
+typed is no better. Each acts on the conversation, the workspace, the terminal or the network, and
+the turn holds all four, so it would change what the turn is running under. Starting a loop or
+setting a goal is in this kind for the same reason: `/loop 5m check the deploy` sends its first tick
+at once, and a second turn may not begin while one is in flight, while a goal set mid-turn would
+have the turn in flight judged against a condition it was never sent with. `/theme` and `/effort`
+alone open a picker, which takes the terminal the turn draws its own questions on.
 
-**Nothing enters the transcript while it waits**, and taking back what is waiting gives the command
-back to the box like any other line. What a keystroke wrote into the transcript would count as the
-turn having done something, which is what decides whether a stopped prompt comes back to be edited,
-so a command recorded there would cost a person the prompt they stopped.
+**Why the first kind does not.** A loop, a goal, a watch and the spend so far are the session's own,
+and the turn holds none of them, so reading or ending one changes nothing the turn is using. The
+moment these are wanted is mid-turn: a person who has seen enough of a loop types `/loop stop` while
+its tick runs, and an ending carried out after that tick would cost them the next one too if the
+queue held a prompt. What a tick asks for once its loop is gone is
+[loop.md](loop.md#LOOP-11)'s. The rest of the kind changes what the session keeps and the turn
+does not read:
+
+- **`/rename`.** The turn is handed the record's id, and the record is written after the turn
+  under whatever name the session has by then. The rename gives up every rewind point
+  ([SESSION-19](sessions.md#SESSION-19)), the one the running turn opened among them. `/rename`
+  with no name renames nothing and gives up none.
+- **`/issue` and `/pr`.** The record is written after the turn with whatever links the session has
+  by then, and no turn reads them ([PANEL-12](info-panel.md#PANEL-12)).
+- **`/forget-trust`.** What it takes back is the answer kept for the next session in the directory
+  ([TRUST-24](trust-map.md#TRUST-24)). The turn runs under the map this session opened with, which
+  the command leaves alone.
+- **`/theme <name>` and `/effort <level>`.** A theme changes only how the screen is drawn. A turn is
+  sent with the level in force when it begins and does not read it again, so a level set mid-turn
+  is the next turn's.
+
+- **`/copy`.** It reads the transcript and writes to the clipboard, which a sweep with the mouse
+  may do at any time. Mid-turn the latest reply may be what the running turn said on its way to a
+  tool call, since that is in the transcript once it is drawn.
+
+- **`/status`.** It reads what the session keeps, the workspace and the configuration the turn was
+  started with, none of which it changes. The trust map and the vouched programs are the turn's: it
+  answers into both as it runs, so a copy taken when it began would state "every run is asked" about
+  an earlier moment. The report says they are held by the running turn and states neither, and shows
+  them once the turn has ended.
+
+**Why `/jobs stop` is in the first kind.** A job is the turn's, and stopping one changes what the
+turn is running. The command does it only by setting a token the driver made for that job, which the
+turn reads at its own next step ([RUN-27](tools/run.md#RUN-27)), as the turn reads the stop key. A
+job lives only as long as its turn, so a stop that waited for the turn to end would find nothing to
+stop.
+
+**Nothing enters the transcript while the turn runs.** What a keystroke wrote into the transcript
+would count as the turn having done something, which is what decides whether a stopped prompt comes
+back to be edited, so a command recorded there would cost a person the prompt they stopped. A
+waiting command is held in the queue, and taking back what is waiting gives it back to the box like
+any other line. What a command carried out mid-turn says is held under the turn until the turn has
+been folded in.
 
 `verified-by: bravebot_tui::app::a_command_typed_while_a_turn_runs_is_not_sent_as_a_prompt`
+`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::a_command_that_reads_or_ends_what_the_session_keeps_answers_mid_turn`
+`verified-by: bravebot_tui::app::a_command_that_would_start_a_loop_or_a_goal_waits_for_the_turn`
+`verified-by: bravebot_tui::app::a_command_typed_behind_a_waiting_one_of_its_own_waits_with_it`
+`verified-by: bravebot_tui::app::status_asked_mid_turn_answers_now_and_leaves_the_turns_rules_unstated`
+`verified-by: bravebot_tui::status::a_report_whose_rules_are_the_turns_states_neither_the_trust_nor_the_programs`
+`verified-by: bravebot_tui::app::a_command_typed_during_a_compaction_waits`
+`verified-by: bravebot_tui::app::a_stopped_prompt_comes_back_after_a_command_answered_mid_turn`
+`verified-by: bravebot_tui::app::ctrl_enter_on_a_command_answered_mid_turn_hurries_nothing`
+`verified-by: bravebot_tui::app::a_session_renamed_mid_turn_is_renamed_as_it_is_typed`
+`verified-by: bravebot_tui::app::a_session_renamed_mid_turn_gives_up_the_running_turns_rewind_point`
+`verified-by: bravebot_tui::app::a_rename_with_no_name_mid_turn_keeps_the_running_turns_rewind_point`
+`verified-by: bravebot_tui::app::a_link_set_mid_turn_is_set_as_it_is_typed`
+`verified-by: bravebot_tui::app::a_command_that_changes_something_waits_behind_what_was_typed_first`
+`verified-by: bravebot_tui::app::every_command_carried_out_mid_turn_answers_under_the_turn`
+`verified-by: bravebot_tui::app::ctrl_enter_on_a_rename_mid_turn_hurries_nothing`
+`verified-by: bravebot_tui::app::trust_forgotten_mid_turn_is_forgotten_as_it_is_typed`
+`verified-by: bravebot_tui::app::an_effort_named_mid_turn_is_set_as_it_is_typed`
+`verified-by: bravebot_tui::app::a_theme_or_an_effort_nobody_has_is_refused_mid_turn`
+`verified-by: bravebot_tui::app::the_bare_theme_and_effort_commands_wait_for_the_turn`
+`verified-by: bravebot_tui::render::what_a_command_answered_mid_turn_is_drawn_under_the_turn`
 `verified-by: bravebot_tui::app::no_command_is_sent_as_a_prompt_while_a_turn_runs`
 `verified-by: bravebot_tui::app::a_command_with_an_argument_is_not_sent_as_a_prompt_while_a_turn_runs`
 `verified-by: bravebot_tui::app::a_command_that_takes_no_argument_is_only_the_bare_word_mid_turn`
@@ -278,6 +372,7 @@ so a command recorded there would cost a person the prompt they stopped.
 `verified-by: bravebot_tui::app::a_prompt_queued_behind_a_command_is_sent_once_the_command_has_run`
 `verified-by: bravebot_tui::app::a_queued_command_is_not_what_the_turn_took`
 `verified-by: bravebot_tui::app::a_queued_command_comes_back_to_the_box`
+`verified-by: bravebot_tui::app::copy_typed_mid_turn_takes_the_reply_without_waiting`
 
 ## What a slash word is offered
 
@@ -354,8 +449,114 @@ is not drawn as recognised then, while a command is.
 `verified-by: bravebot_tui::render::nothing_is_drawn_as_recognised_in_shell_mode`
 `verified-by: bravebot_tui::render::a_command_shows_what_it_takes_once_it_is_typed`
 `verified-by: bravebot_tui::render::a_skill_shows_the_hint_its_file_gave`
+`verified-by: bravebot_tui::render::a_turn_running_draws_no_skill_as_recognised`
 `verified-by: bravebot_tui::render::a_hint_is_cut_to_the_row_and_holds_no_escape`
 `verified-by: bravebot_tui::app::the_skills_are_resolved_once_a_line_and_let_go_after_it`
+
+## Copying a reply
+
+<a id="CMD-11"></a>
+### CMD-11: `/copy` puts a reply on the clipboard as the transcript holds it
+
+`/copy` puts the latest reply on the clipboard, and `/copy <n>` the reply `n` back, so `/copy 1` is
+the latest. A reply is what the planner said to the person: the answer a turn or a manifest run ends
+on, and what it said on its way to a tool call, in this session or in the one it resumed. A prompt,
+a note, a tool's row, a delegate's work, an aside's answer and a reply still arriving are not
+replies, and a blank reply is not counted. What is copied is the markdown the planner wrote, with
+none of the marker, indent or wrapping the screen draws it with. Every control character but a line
+break and a tab is left out, as the screen leaves it out of a reply, so a Windows line ending is
+copied as one break. How many characters went is drawn at the right of the hint row, where a
+sweep's copy is reported, until the next prompt is sent. A sweep's highlight is taken down.
+
+Anything but digits after the word, zero, a session with no reply, and a number past the oldest
+reply are each refused with a note, and nothing reaches the clipboard. The note for a number past
+the oldest says how many replies there are. A copy that no clipboard tool took and that could not be
+written to the terminal says so. A terminal that ignores the request gives no answer, so that case
+is reported as a copy, as it is after a sweep.
+
+**Why.** A sweep with the mouse copies what was drawn: the marker before a reply's first row, the
+indent before every other row, and a line break wherever the terminal wrapped a paragraph. Pasted
+into an editor or a message, all of that has to be removed by hand. The transcript holds the reply
+before any of it was drawn. A control character is left out because the screen showed none, and
+because what is pasted into a shell is read as typed: a reply holding the sequence that ends a
+bracketed paste would run what followed it. The count goes with the next prompt because no key
+takes it down, and while it is drawn the hint that a picture is on the clipboard is not. A
+highlight left up would say the swept text is what the clipboard holds.
+
+Nothing labelled is copied. A tool's quarantined content is drawn in a margin of its own
+([terminal-transcript.md](terminal-transcript.md#VIEW-3)) and is never part of a reply, since the
+planner never read it. A reply is planner output released for display
+([terminal-transcript.md](terminal-transcript.md#VIEW-6)), which a sweep could already copy off the
+screen and `/export` already writes to a file.
+
+`verified-by: bravebot_tui::app::typing_the_copy_command_copies_the_latest_reply_rather_than_prompting`
+`verified-by: bravebot_tui::app::copy_takes_how_many_replies_back`
+`verified-by: bravebot_tui::app::copy_counts_only_the_replies`
+`verified-by: bravebot_tui::app::a_blank_reply_is_not_one_to_copy`
+`verified-by: bravebot_tui::app::copy_refuses_what_it_cannot_take_and_copies_nothing`
+`verified-by: bravebot_tui::app::a_copied_reply_carries_no_control_character_but_its_breaks_and_tabs`
+`verified-by: bravebot_tui::app::a_copy_says_how_much_it_took_and_a_failed_one_says_so`
+`verified-by: bravebot_tui::app::a_copy_takes_down_what_an_earlier_sweep_left_up`
+`verified-by: bravebot_tui::app::a_copys_count_is_taken_down_by_the_next_prompt`
+`verified-by: bravebot_tui::app::copy_reaches_the_replies_a_resumed_session_brought_back`
+`verified-by: bravebot_tui::app::copy_typed_mid_turn_takes_the_reply_without_waiting`
+
+## Keeping the machine awake
+
+<a id="CMD-12"></a>
+### CMD-12: `/caffeinate` holds off idle sleep while work is pending, and only then
+
+`/caffeinate` turns keeping the computer awake on, and typed again turns it off. It is off when a
+session starts. While it is on, the platform's inhibitor runs whenever the session has work pending,
+and is ended once it has none. Work is pending while a turn is in flight and while a loop has a tick
+to come, which includes the wait a turn asked for with `schedule_next`
+([tools/schedule-next.md](tools/schedule-next.md#SCHED-1)). A background job is covered by its turn,
+since none outlives it ([tools/run.md](tools/run.md#RUN-15)). A watch waiting on a file holds
+nothing, and neither does an idle session.
+
+The first `/caffeinate` in a person's state directory turns nothing on. It says what the command
+does, that the display can still turn off and the screen can still lock, and that the machine keeps
+running with their credentials on it while they are away, and it asks for `/caffeinate` again. That
+second one turns it on and writes `confirmed` to `~/.bravebot/caffeinate`, after which it turns on at
+once. An incognito session neither reads nor writes that file, so it explains every time.
+
+The inhibitor is a fixed argument vector, and only idle sleep is held off:
+
+| Platform | Program and arguments |
+|---|---|
+| macOS | `/usr/bin/caffeinate -i -w <this process's id>` |
+| Windows | `powershell -NoProfile -NonInteractive -EncodedCommand <script>`, the script calling `SetThreadExecutionState(ES_CONTINUOUS \| ES_SYSTEM_REQUIRED)` and then reading its standard input to the end |
+| every other platform | `systemd-inhibit --what=idle --who=bravebot --why=/caffeinate --mode=block cat` |
+
+Each one's standard input is a pipe this process holds, and each ends the hold when this process
+ends, so a crash leaves no machine held awake. An inhibitor that will not start, and one that exits
+by itself, is said in the transcript with the program's name, and `/caffeinate` is then off.
+
+**Why.** A laptop that sleeps during a long turn, a loop or a `schedule_next` wait stops the request
+in flight and the programs the turn runs, and the person comes back to a stalled session or a failed
+request. Holding the machine only while work is pending keeps it from sleeping through that and lets
+it sleep as usual otherwise; a watch is left out because it can wait for as long as the session is
+open. The screen still locks, but the machine stays up with whatever credentials it holds, so the
+command is off until a person has read that and asked for it a second time, which is where a person
+working under a device policy finds out whether it is allowed. A hold that could not be kept turns
+the command off, so nobody walks away from a machine they believe is held. Nothing from a model, a
+file or a setting reaches the argument vector, so the inhibitor is not a process running code we did
+not write ([sandboxing.md](sandboxing.md)).
+
+`verified-by: bravebot_tui::state::a_loop_waiting_for_its_next_tick_holds_the_machine_awake`
+`verified-by: bravebot_tui::state::a_turn_holds_the_machine_awake_until_it_ends`
+`verified-by: bravebot_tui::state::a_missing_inhibitor_is_said_and_turns_caffeinate_off`
+`verified-by: bravebot_tui::state::the_first_caffeinate_says_what_it_does_and_holds_nothing`
+`verified-by: bravebot_tui::app::the_caffeinate_command_explains_before_it_turns_on`
+`verified-by: bravebot_tui::caffeinate::an_idle_session_holds_nothing_while_caffeinate_is_on`
+`verified-by: bravebot_tui::caffeinate::pending_work_is_held_and_released_once_it_is_done`
+`verified-by: bravebot_tui::caffeinate::caffeinate_off_holds_nothing_and_turning_it_off_releases`
+`verified-by: bravebot_tui::caffeinate::a_missing_inhibitor_is_reported_and_turns_caffeinate_off`
+`verified-by: bravebot_tui::caffeinate::the_first_caffeinate_explains_and_the_second_turns_it_on`
+`verified-by: bravebot_tui::caffeinate::starting_a_program_that_does_not_exist_fails`
+`verified-by: bravebot_tui::caffeinate::an_inhibitor_that_ended_by_itself_is_reported`
+`verified-by: bravebot_tui::caffeinate::the_macos_inhibitor_holds_idle_sleep_for_this_process_alone`
+`verified-by: bravebot_session::store::only_the_confirmed_word_is_an_agreement_to_caffeinate`
 
 ## Known costs
 

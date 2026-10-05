@@ -145,6 +145,28 @@ fn memory_leaf(path: &str) -> io::Result<&str> {
     }
 }
 
+/// The directory the agent keeps a definition's memory in, inside a checkout (MEMORY-2).
+const DEFINITION_MEMORY: [&str; 2] = [".bravebot", "memory"];
+
+/// The leaf of the path a bot's memory is saved to from the panel: the file this app made for a
+/// bot that has no definition, or `.bravebot/memory/<name>.md`, which is where a definition keeps
+/// its memory and so where a bot with one keeps its own (MEMORY-10).
+///
+/// Only `replace` takes the second shape. `memory.seed` writes beside `HOME` and has nothing to
+/// make in `.bravebot`, because a bot with a definition is told where its memory is and makes the
+/// file itself. The match is exact for the same reason it is in [`memory_leaf`].
+fn saved_memory_leaf(path: &str) -> io::Result<&str> {
+    let parts = components(Path::new(path), false)?;
+    match parts.as_slice() {
+        [first, second, leaf]
+            if [*first, *second] == DEFINITION_MEMORY && leaf.ends_with(".md") =>
+        {
+            Ok(leaf)
+        }
+        _ => memory_leaf(path),
+    }
+}
+
 fn replace_at(
     parent: &File,
     leaf: &str,
@@ -248,7 +270,7 @@ fn handle(request: Request) -> io::Result<Value> {
         }
         "replace" => {
             // This channel writes only bot memory, never an arbitrary project file.
-            memory_leaf(&request.path)?;
+            saved_memory_leaf(&request.path)?;
             let text = request.text.ok_or_else(|| invalid("Missing memory"))?;
             if text.len() > TEXT_MAX || text.contains('\0') {
                 return Err(invalid("Memory must be text under 64 KB"));
@@ -690,6 +712,39 @@ mod tests {
             assert!(seed(f.root(), path).is_err(), "a seed must refuse {path}");
         }
         assert_eq!(fs::read_dir(&f.path).unwrap().count(), 0);
+    }
+
+    /// MEMORY-10: a bot with a definition keeps its memory where the agent keeps that definition's,
+    /// so the panel's save reaches `.bravebot/memory/<name>.md` and no other file under `.bravebot`.
+    /// A seed does not, because that walk makes the front end's own directory and nothing else.
+    #[test]
+    fn a_save_reaches_a_definitions_memory_and_nothing_else_beside_it() {
+        let f = Fixture::new();
+        call(f.root(), "replace", ".bravebot/memory/harbour.md").expect("a definition's memory");
+        assert_eq!(
+            fs::read_to_string(f.path.join(".bravebot/memory/harbour.md")).unwrap(),
+            "written"
+        );
+        for path in [
+            ".bravebot/memory/harbour.txt",
+            ".bravebot/agents/harbour.md",
+            ".bravebot/memory/nested/harbour.md",
+            ".bravebot/harbour.md",
+            ".bravebot/Memory/harbour.md",
+            ".BRAVEBOT/memory/harbour.md",
+            "other/memory/harbour.md",
+            "../.bravebot/memory/harbour.md",
+        ] {
+            assert!(
+                call(f.root(), "replace", path).is_err(),
+                "a save must refuse {path}"
+            );
+        }
+        assert!(
+            seed(f.root(), ".bravebot/memory/harbour.md").is_err(),
+            "a seed must not make a definition's memory"
+        );
+        assert!(!f.path.join(".bravebot/agents").exists());
     }
 
     #[test]

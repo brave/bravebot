@@ -117,6 +117,8 @@ guarantee holding inside a process and failing between them.
 `verified-by: bravebot_skus::store::two_wallets_over_one_file_are_never_offered_the_same_credential`
 `verified-by: bravebot_skus::store::wallets_spending_at_the_same_moment_hand_out_different_credentials`
 `verified-by: bravebot_skus::store::neither_of_two_wallets_erases_the_others_spend_markers`
+`verified-by: bravebot_skus::store::a_failed_spend_write_does_not_offer_what_another_wallet_has_spent_since`
+`verified-by: bravebot_skus::store::a_failed_spend_write_leaves_another_wallets_spends_on_the_file_when_the_session_ends`
 `verified-by: bravebot_skus::store::a_claim_left_by_a_dead_process_is_broken_rather_than_waited_on`
 `verified-by: bravebot_skus::store::a_claim_taken_a_moment_ago_is_not_treated_as_abandoned`
 `verified-by: bravebot_agent::shared::two_runs_holding_one_wallet_are_never_offered_the_same_credential`
@@ -155,6 +157,10 @@ renamed for less than this.
 `verified-by: bravebot_skus::store::a_refilled_batch_is_written_back`
 `verified-by: bravebot_skus::store::a_spend_after_a_refill_comes_out_of_the_new_batch`
 `verified-by: bravebot_skus::store::a_batch_imported_for_another_environment_mid_session_is_not_spent`
+`verified-by: bravebot_skus::store::a_failed_spend_write_is_not_written_over_a_later_import`
+`verified-by: bravebot_skus::store::a_failed_spend_write_leaves_nothing_for_the_end_of_the_session_to_write`
+`verified-by: bravebot_skus::store::a_failed_spend_write_after_a_refill_takes_the_spend_back_and_keeps_the_new_batch`
+`verified-by: bravebot_skus::store::a_refilled_batch_is_not_written_over_another_environment`
 `verified-by: bravebot_skus::store::a_write_replaces_the_file_rather_than_truncating_it`
 `verified-by: bravebot_skus::store::a_write_leaves_neither_a_temporary_nor_a_claim_behind`
 `verified-by: bravebot_skus::store::a_detached_batch_has_nowhere_to_write`
@@ -207,6 +213,8 @@ no desktop session had no store to open and every such user was silently spendin
 `verified-by: bravebot_skus::store::a_credential_without_a_token_is_rejected_on_load`
 `verified-by: bravebot_skus::store::an_entry_missing_its_order_is_reported_as_malformed`
 `verified-by: bravebot_skus::store::a_batch_survives_a_round_trip_through_the_stored_form`
+`verified-by: bravebot_skus::store::a_write_that_fails_partway_removes_its_temporary_and_keeps_the_last_batch`
+`verified-by: bravebot_cli::running::forgetting_takes_no_channel`
 
 <a id="PREM-8"></a>
 ### PREM-8: a stored subscription that cannot be used is reported rather than skipped
@@ -241,6 +249,14 @@ answer. That is the same reasoning [BACKEND-9](backends.md#BACKEND-9) applies to
 turn served entirely by one backend has no business acting on, or reporting on, the credentials of
 another it will never call.
 
+A batch that cannot be spent is never reported without the remedy: re-import with
+`bravebot auth login leo`, or forget it with `bravebot auth logout leo`. The store puts it in the
+text of every refusal, so the turn notice and the onboarding block both carry it. A batch that
+records a version other than the one this build writes is refused, since the same fields may mean
+something else.
+
+`verified-by: bravebot_skus::store::every_refusal_of_a_stored_batch_names_the_remedy`
+`verified-by: bravebot_skus::store::a_batch_of_another_version_is_refused`
 `verified-by: bravebot_agent::subscription::an_unreadable_batch_is_reported_and_an_absent_one_is_not`
 `verified-by: bravebot_agent::subscription::an_endpoint_in_no_environment_is_not_a_complaint`
 `verified-by: bravebot_cli::running::a_machine_with_no_profile_directory_has_nothing_imported`
@@ -285,6 +301,8 @@ is most likely to notice first.
 `verified-by: bravebot_tui::app::a_model_the_configuration_named_is_reported_as_substituted_too`
 `verified-by: bravebot_tui::app::a_substitution_that_carries_on_is_said_once`
 `verified-by: bravebot_tui::app::the_configured_automatic_entry_resolving_to_a_model_says_nothing`
+`verified-by: bravebot_tui::app::a_turn_on_a_definitions_model_records_its_tier_and_model`
+`verified-by: bravebot_tui::app::a_turn_on_a_skills_model_replaces_an_earlier_turns_tier`
 
 ## Requirements and limits
 

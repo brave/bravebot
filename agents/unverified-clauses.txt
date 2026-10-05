@@ -7,26 +7,12 @@
 # where the lists themselves merge cleanly, and a count nothing reads is wrong quietly. Count the
 # lines, or read the warnings check-spec prints.
 
-docs/specs/checkouts.md:CHECKOUT-10: a command vouched for in the working directory is asked about again in a checkout
-docs/specs/checkouts.md:CHECKOUT-11: a write in a checkout asks what the same write in the working directory asks
-docs/specs/checkouts.md:CHECKOUT-14: a file comes back as a write through the gate, one path at a time
-docs/specs/checkouts.md:CHECKOUT-16: a resume brings kept checkouts back, a fork does not, and an opening session removes what no session lists
-docs/specs/checkouts.md:CHECKOUT-17: a rewind leaves a checkout as it is, and says so
-docs/specs/checkouts.md:CHECKOUT-19: the trail records each checkout made, applied from and removed
 docs/specs/credential-protection.md:CRED-4: nothing climbs a tier without the arrangement changing
 docs/specs/credential-protection.md:CRED-6: a handle the agent can redeem alone is not a handle
 docs/specs/credential-protection.md:CRED-7: a bound is decided before issue and enforced beyond the agent's reach
 docs/specs/credential-protection.md:CRED-8: a bound with no end does not pass gate 2
 docs/specs/credential-protection.md:CRED-17: no gate passes because the scan ran
 docs/specs/credential-protection.md:CRED-18: no part of the scan discloses the tree off this machine
-docs/specs/credential-protection.md:CRED-20: a disposition moves a tier only by passing the gate it attempts
-docs/specs/credential-protection.md:CRED-21: accepting a finding expires
 docs/specs/credential-protection.md:CRED-22: the baseline is not writable by a turn
 docs/specs/credential-protection.md:CRED-24: a credential never travels as a command-line argument
-docs/specs/credential-protection.md:CRED-26: where a credential can be bound to its presenter, that is the form asked for
 docs/specs/definition-memory.md:MEMORY-1: the definition file holds what a bot is for, and the desktop's store holds what happened to it
-docs/specs/definition-memory.md:MEMORY-8: making a desktop bot writes a definition in the person's own directory
-docs/specs/definition-memory.md:MEMORY-9: editing a bot rewrites only the fields the form shows
-docs/specs/definition-memory.md:MEMORY-10: every turn in a bot's conversation addresses the bot's definition
-docs/specs/definition-memory.md:MEMORY-11: a bot made before this keeps its notes where they are, untrusted until a person reads them
-docs/specs/trust-map.md:TRUST-20: a directory such a helper is pinned to is one a person opened

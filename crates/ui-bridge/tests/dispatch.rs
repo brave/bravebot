@@ -768,3 +768,49 @@ fn settings_override_is_validated_and_diagnostics_use_the_linked_agent() {
     let cleared = call(&mut bridge, "settings.select", json!({"path": null})).unwrap();
     assert!(cleared["selected"].is_null());
 }
+
+/// TRUST-14: a desktop session is given a directory of its own outside the project, says where it
+/// is, and the directory goes when the session is closed.
+#[test]
+fn a_desktop_session_is_given_a_directory_of_its_own() {
+    let (mut bridge, _) = harness();
+    let project = tempfile::Builder::new()
+        .prefix("bravebot-ui-scratch-test-")
+        .tempdir()
+        .expect("a project directory");
+
+    let opened = call(
+        &mut bridge,
+        "session.new",
+        json!({ "directory": project.path().display().to_string() }),
+    )
+    .expect("a real directory");
+
+    let reported = opened["scratch"]["directory"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the session reported no directory of its own: {opened}"));
+    let directory = std::path::Path::new(reported);
+    assert!(directory.is_dir(), "{reported} was not made");
+    assert!(
+        !directory.starts_with(project.path().canonicalize().expect("the project")),
+        "{reported} is inside the project"
+    );
+    assert!(opened["scratch"]["unavailable"].is_null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(directory)
+            .expect("its metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700, "mode was {:o}", mode & 0o777);
+    }
+
+    let handle = opened["session"].as_str().expect("a handle").to_string();
+    call(&mut bridge, "session.close", json!({ "session": &handle })).expect("closes");
+    drop(bridge);
+    assert!(
+        !directory.exists(),
+        "{reported} outlived the session that was given it"
+    );
+}

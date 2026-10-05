@@ -71,11 +71,13 @@ to ask about a file it may not read.
 ## A picture or a PDF
 
 A PNG, JPEG, GIF, WebP or PDF file the planner read goes the same way as text, with two differences. The
-check is given the file itself and told it is a file, so it reads words drawn in the picture. And since
-neither the terminal nor the desktop window draws a picture, the prompt shows you a path to a copy of it
-instead of the bytes, with its media type, its size and what the check said.
+check is given the file itself and told it is a file, so it reads words drawn in the picture. And the
+prompt shows you the picture rather than bytes: a path to a copy of it, with its media type, its size
+and what the check said. A terminal that draws Kitty, iTerm2 or Sixel pictures also draws the picture
+in the prompt. That is left out for a PDF, for a format that is not decoded, and in a terminal that
+can only draw with half-block characters, which cannot show small writing.
 
-Open it in your own viewer, zoom in if you need to, and press `y` to let the planner see it. The copy is
+Open the copy in your own viewer, zoom in if you need to, and press `y` to let the planner see it. The copy is
 the bytes that were read, not the file as it is now, is readable only by your account, and is removed
 when the prompt closes. With auto-vetting on, a check that found nothing lets the picture through
 unasked; bypassing permissions with no screening lets it through with no check made.
@@ -118,8 +120,8 @@ notice carries nothing of the content and nothing of the verdict.
 
 ## What comes back
 
-A reply states `safe` or `unsafe`. Any other word, a reply stating no verdict, a truncated reply, a
-timeout and a backend error are all **inconclusive**, which says nothing about the content. It fails
+A reply states `safe` or `unsafe`. Any other word, a reply stating no verdict, a truncated reply or one
+that leaves an object open, a timeout and a backend error are all **inconclusive**, which says nothing about the content. It fails
 closed on every path: a check that half worked lands where a check that did not run lands.
 
 The three outcomes are told apart on your screen. "This looks like an attempt to give instructions" and
@@ -222,7 +224,10 @@ it on.
 What the mode never decides is anything but who answers: the slot is the planner's choice either way, the
 content comes back private either way, the endorsement is single-use either way, and no trust rule is
 written either way. Which of the two released the bytes is recorded, because a trail crediting a person
-who was never shown them would be the one record a reader cannot check.
+who was never shown them would be the one record a reader cannot check. The row left in the
+transcript says it too: a release you answered reads as before, a safe verdict reads "read without
+asking: a check found nothing", and a run bypassing permissions with no screening reads "read without
+asking or checking".
 
 ## Known costs
 

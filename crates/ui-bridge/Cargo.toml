@@ -15,6 +15,9 @@ bravebot-agent = { path = "../agent" }
 bravebot-aichat = { path = "../aichat" }
 bravebot-config = { path = "../config" }
 bravebot-net = { path = "../net" }
+# For `Stream`: where a confined MCP server's stderr goes when a session starts one, which is
+# nowhere, since this process has no screen of its own for it.
+bravebot-sandbox = { path = "../sandbox" }
 bravebot-core = { path = "../core" }
 # Session records, state storage, and audit trails are shared with the terminal UI.
 bravebot-session = { path = "../session" }

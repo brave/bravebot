@@ -49,6 +49,7 @@ interface Props {
   onRetireBot: (slug: string, retired: boolean) => void
   onRemoveBot: (slug: string) => void
   onSettings: () => void
+  onConnectors: () => void
   build: string | null
 }
 
@@ -68,6 +69,7 @@ export const Sidebar = memo(function Sidebar({
   onRemoveBot,
   build,
   onSettings,
+  onConnectors,
 }: Props): React.JSX.Element {
   const [tab, setTab] = useState<Tab>('sessions')
   const [grouped, setGrouped] = useState(false)
@@ -151,6 +153,7 @@ export const Sidebar = memo(function Sidebar({
       {/* The build the sessions are stamped with is in About; it rides here only as data, for
           the drivers that check a packaged app is the one they built. */}
       <footer className="sidebar-foot">
+        <SidebarRow icon="plug" label="Connectors" className="connectors-open" onClick={onConnectors} data-test="connectors" />
         <SidebarRow icon="settings" label="Agent settings" className="agent-settings-open" onClick={onSettings} data-test="agent-settings" />
       </footer>
     </aside>

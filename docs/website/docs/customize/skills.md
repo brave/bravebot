@@ -120,6 +120,9 @@ is counted rather than named. See [Instructions](instructions.md#trust).
 
 A project skill replaces a global one of the same name.
 
+A project skill that a `deny` [rule](configuration.md#permissions) covers, under the name it was
+found by or the file it links to, is not offered, and you are told it was left out.
+
 A few skills are written into bravebot itself rather than found on disk. They pass no trust gate and
 are offered in every session, including one in a directory nobody trusts, because there is no file and
 no directory behind them. They are the least specific source, so a skill of your own with the same

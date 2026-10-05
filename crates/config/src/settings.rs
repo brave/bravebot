@@ -138,6 +138,7 @@ const READ_KEYS: &[&str] = &[
     PROVIDER_BLOCK,
     "run",
     "search",
+    "terminalTitle",
     VETTING_BLOCK,
 ];
 
@@ -220,6 +221,8 @@ pub struct Settings {
     /// not recognise has to reach the interface to be reported there rather than be dropped here as
     /// though the file had said nothing.
     editor_mode: Option<String>,
+    /// What the top-level `terminalTitle` key said, if it said a boolean.
+    terminal_title: Option<bool>,
     /// What `vetting.auto` said, where the layer that said it was entitled to.
     ///
     /// Read from the **home** layer and no other, which is why [`Settings::layered`] settles this
@@ -491,10 +494,19 @@ impl Settings {
         started: Option<&Path>,
     ) -> Self {
         let home_layer = home.map(|home| user_settings_file(&home));
-        let paths = [
+        // A found layer the command line also named is left out here and read at the end, since
+        // reading it at its own position would let a later found layer beat it (BACKEND-24).
+        let found_layers = [
             home_layer.clone(),
             cwd.map(project_settings_file),
             cwd.map(local_settings_file),
+        ]
+        .map(|layer| layer.filter(|layer| Some(layer.as_path()) != named));
+        let [home_path, project_path, local_path] = found_layers;
+        let paths = [
+            home_path,
+            project_path,
+            local_path,
             named.map(Path::to_path_buf),
         ];
 
@@ -597,13 +609,14 @@ impl Settings {
                 }
             }
             let granting = grants(&path, home_layer.as_deref(), named, cwd, started);
+            let directory = settings_directory(&path);
             for rule in permission_lists(&root).allow {
                 // A blank entry goes through whatever layer wrote it. It grants nothing whoever
                 // wrote it, since the rule language calls an empty rule empty and refuses it, and
                 // reporting it here would say a rule was withheld where PERM-11 is already about
                 // to say there was no rule.
                 match granting || rule.trim().is_empty() {
-                    true => allow.push(rule),
+                    true => allow.push(anchor_slash_rule(&rule, &directory)),
                     false => allow_ignored.push((path.clone(), rule)),
                 }
             }
@@ -624,6 +637,7 @@ impl Settings {
                 unread.push((path.clone(), key));
             }
             found.push(path);
+            root.anchor_slash_rules(&directory);
             merge(&mut merged, root.take());
         }
 
@@ -711,6 +725,10 @@ impl Settings {
             model_outranks_a_pick: false,
             effort_outranks_a_pick: false,
             editor_mode: word(root, "editorMode"),
+            terminal_title: match root.get("terminalTitle") {
+                Some(serde_json::Value::Bool(on)) => Some(*on),
+                _ => None,
+            },
             // Read here so one file's worth can be parsed on its own, and overwritten by
             // [`Settings::layered`], which is the only caller that knows which layer this came
             // from and so the only one entitled to answer.
@@ -756,6 +774,14 @@ impl Settings {
         self.env.get(name).map(String::as_str)
     }
 
+    /// These settings with `name` set to `value` where no layer sets it.
+    pub fn with_env_default(mut self, name: &str, value: &str) -> Self {
+        self.env
+            .entry(name.to_string())
+            .or_insert_with(|| value.to_string());
+        self
+    }
+
     /// The model the settings in force asked for, if they asked for one.
     ///
     /// Not always the model: a choice `/model` saved ranks as the person's own file does, so it
@@ -794,6 +820,15 @@ impl Settings {
     /// wins. This is what answers for somebody who has never made one.
     pub fn editor_mode(&self) -> Option<&str> {
         self.editor_mode.as_deref()
+    }
+
+    /// Whether the settings in force let the interface set the terminal's title, if they said.
+    ///
+    /// A boolean and nothing else, so a quoted `"false"` is absence and the title is still set:
+    /// the key only exists to turn something off, and a value read loosely could turn it off for
+    /// somebody who wrote something else.
+    pub fn terminal_title(&self) -> Option<bool> {
+        self.terminal_title
     }
 
     /// What `vetting.auto` said in the home layer, if it said anything.
@@ -952,6 +987,7 @@ impl Settings {
             && self.model.is_none()
             && self.effort.is_none()
             && self.editor_mode.is_none()
+            && self.terminal_title.is_none()
             && self.vetting.is_none()
             && self.narrowing.is_empty()
             // A key named as something other than a boolean said something too, and `doctor` names
@@ -1050,6 +1086,7 @@ impl Settings {
             .into_iter()
             .chain(self.effort.is_some().then_some("effort"))
             .chain(self.editor_mode.is_some().then_some("editorMode"))
+            .chain(self.terminal_title.is_some().then_some("terminalTitle"))
             .chain(self.vetting.is_some().then_some("vetting.auto"))
             .chain(self.narrowing.named())
             .chain((!self.keybindings.is_empty()).then_some("keybindings"))
@@ -1203,6 +1240,28 @@ impl Document {
     /// destination is a document too.
     fn take(&mut self) -> serde_json::Map<String, serde_json::Value> {
         std::mem::take(&mut self.root)
+    }
+
+    /// Respell every `/x` path rule in `deny` and `ask` as the `//` path it names, which is where
+    /// the file this document was read from puts it (PERM-3).
+    ///
+    /// The merge unions the lists of every layer into one and keeps no record of which file wrote
+    /// an entry, so the one place that still knows is the layer's own read. Rules that are not a
+    /// `Read` or `Edit` path are left as written.
+    fn anchor_slash_rules(&mut self, directory: &str) {
+        let Some(serde_json::Value::Object(block)) = self.root.get_mut(PERMISSIONS_BLOCK) else {
+            return;
+        };
+        for list in ["deny", "ask"] {
+            let Some(serde_json::Value::Array(entries)) = block.get_mut(list) else {
+                continue;
+            };
+            for entry in entries {
+                if let serde_json::Value::String(text) = entry {
+                    *text = anchor_slash_rule(text, directory);
+                }
+            }
+        }
     }
 
     /// One name out of this document, or whether it named one.
@@ -1775,6 +1834,45 @@ fn run_deadlines(root: &serde_json::Map<String, serde_json::Value>) -> RunDeadli
     }
 }
 
+/// The directory a settings file sits in, spelled for a rule that is anchored there.
+///
+/// Absolute, since a rule is matched against a path a gate holds in full and a named file may have
+/// been spelled relative to the working directory.
+fn settings_directory(file: &Path) -> String {
+    let file = std::path::absolute(file).unwrap_or_else(|_| file.to_path_buf());
+    file.parent()
+        .map(|directory| directory.display().to_string())
+        .unwrap_or_default()
+}
+
+/// `rule` with a single-slash path specifier respelled as the `//` path it names under `directory`.
+///
+/// A `Read` or `Edit` rule written `/x` starts at the directory of the file that wrote it
+/// ([PERM-3](../../../docs/specs/permissions.md#PERM-3)), and the rule language anchors that at one
+/// directory it is handed for every rule it reads, so a rule from any other file is told where it
+/// starts before the layers merge. Any other rule, and any other specifier, comes back as it was.
+fn anchor_slash_rule(rule: &str, directory: &str) -> String {
+    let separates = |character: char| {
+        character == '/' || (std::path::MAIN_SEPARATOR == '\\' && character == '\\')
+    };
+    let Some((name, rest)) = rule.trim().split_once('(') else {
+        return rule.to_string();
+    };
+    let Some(specifier) = rest.strip_suffix(')') else {
+        return rule.to_string();
+    };
+    let specifier = specifier.trim();
+    let name = name.trim_end();
+    let mut characters = specifier.chars();
+    let single_slash =
+        characters.next().is_some_and(separates) && !characters.next().is_some_and(separates);
+    if !(name == "Read" || name == "Edit") || !single_slash {
+        return rule.to_string();
+    }
+    let below = specifier.trim_start_matches(separates);
+    format!("{name}(//{}/{below})", directory.trim_matches(separates))
+}
+
 /// The `permissions` block: three lists of rule text, and the directories to open.
 ///
 /// A malformed entry is dropped rather than refused, on the same footing as everything else here:
@@ -1888,7 +1986,7 @@ pub(crate) const PROFILE_VARIABLES: &[&str] = &["HOME"];
 /// than by a home directory going missing. Resolving the weakest layer to the strongest one's
 /// location would silently read a checkout's file as though a person had put it in their own
 /// directory.
-fn home() -> Option<PathBuf> {
+pub(crate) fn home() -> Option<PathBuf> {
     home_named(PROFILE_VARIABLES.iter().map(std::env::var_os))
 }
 
@@ -2171,6 +2269,17 @@ mod tests {
     fn a_name_this_crate_does_not_know_is_still_read() {
         let settings = Settings::parse(r#"{"env": {"SOMETHING_ELSE": "value"}}"#);
         assert_eq!(settings.get("SOMETHING_ELSE"), Some("value"));
+    }
+
+    /// A value the person's own file would add is the lowest layer's, so every layer that already
+    /// names it still answers.
+    #[test]
+    fn a_default_answers_only_where_no_layer_names_it() {
+        let settings = Settings::parse(r#"{"env": {"BRAVEBOT_USE_BEDROCK": "0"}}"#)
+            .with_env_default("BRAVEBOT_USE_BEDROCK", "1")
+            .with_env_default("AWS_REGION", "us-east-1");
+        assert_eq!(settings.get("BRAVEBOT_USE_BEDROCK"), Some("0"));
+        assert_eq!(settings.get("AWS_REGION"), Some("us-east-1"));
     }
 
     /// Settings files carry other blocks. One this crate does not read must not stop it finding
@@ -2850,6 +2959,43 @@ mod tests {
         }
     }
 
+    /// PERM-3: a `/x` rule starts at the directory of the file that wrote it, so the same text in
+    /// two files names two places, and neither is the global state directory.
+    #[test]
+    fn a_slash_rule_starts_at_the_directory_of_the_file_that_wrote_it() {
+        let layers = Layers::new("slash-rule-per-layer")
+            .global(r#"{"permissions": {"deny": ["Read(/secrets/**)"]}}"#)
+            .project(r#"{"permissions": {"deny": ["Read(/secrets/**)", "Bash(/usr/bin/ls *)"]}}"#)
+            .named(r#"{"permissions": {"ask": ["Edit(/notes.md)"], "allow": ["Read(/open/**)"]}}"#);
+        let settings = layers.read();
+        let spelled = |directory: &Path, rest: &str| {
+            format!(
+                "//{}/{rest}",
+                directory.display().to_string().trim_start_matches('/')
+            )
+        };
+        let project = layers.cwd.join(PROJECT_DIR);
+        let named = layers
+            .named
+            .as_ref()
+            .and_then(|file| file.parent())
+            .unwrap();
+        let rules = settings.permissions();
+        assert_eq!(
+            rules.deny,
+            [
+                format!("Read({})", spelled(&layers.home, "secrets/**")),
+                format!("Read({})", spelled(&project, "secrets/**")),
+                "Bash(/usr/bin/ls *)".to_string(),
+            ]
+        );
+        assert_eq!(rules.ask, [format!("Edit({})", spelled(named, "notes.md"))]);
+        assert_eq!(
+            rules.allow,
+            [format!("Read({})", spelled(named, "open/**"))]
+        );
+    }
+
     /// The point of a project layer: a checkout says which gateway or profile the work in it uses,
     /// and that beats what the person set for everything else they do.
     #[test]
@@ -2983,6 +3129,32 @@ mod tests {
         assert_eq!(settings.scrubbed().collect::<Vec<_>>(), ["A_TOKEN"]);
         assert_eq!(settings.get("AWS_PROFILE"), Some("shared"));
         assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
+    }
+
+    /// A named file that is also a found layer is read after all three, not at its own position,
+    /// so the layers found after that position cannot beat it (BACKEND-24).
+    #[test]
+    fn a_named_file_that_is_a_found_layer_still_beats_the_layers_after_it() {
+        let settings = Layers::new("named-project-wins")
+            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
+            .project(r#"{"env": {"AWS_PROFILE": "shared"}}"#)
+            .local(r#"{"env": {"AWS_PROFILE": "just-this-machine"}}"#)
+            .naming_the_project_layer()
+            .read();
+        assert_eq!(settings.get("AWS_PROFILE"), Some("shared"));
+        assert_eq!(settings.layers().count(), 3);
+    }
+
+    /// The same for the home file, which was the weakest position of all.
+    #[test]
+    fn a_named_home_file_beats_the_project_and_local_layers() {
+        let settings = Layers::new("named-home-wins")
+            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
+            .project(r#"{"env": {"AWS_PROFILE": "shared"}}"#)
+            .local(r#"{"env": {"AWS_PROFILE": "just-this-machine"}}"#)
+            .naming_the_home_layer()
+            .read();
+        assert_eq!(settings.get("AWS_PROFILE"), Some("personal"));
     }
 
     /// Naming a variable here only ever takes it away from a subprocess, so the layers add up. An
@@ -3147,6 +3319,20 @@ mod tests {
             assert_eq!(settings.get("AWS_PROFILE"), None, "{spelling}");
             assert_eq!(settings.get("AWS_REGION"), None, "{spelling}");
             assert_eq!(settings.model(), None, "{spelling}");
+        }
+    }
+
+    /// BACKEND-34: an `env` that is not a block costs that block and nothing else in the file. The
+    /// `model` key beside it is still read, so one mistyped block does not discard a file that still
+    /// describes a working backend.
+    #[test]
+    fn a_block_that_is_not_a_block_leaves_the_rest_of_its_file_read() {
+        for spelling in ["null", "5", "\"AWS_PROFILE=personal\"", "[]"] {
+            let settings = Layers::new(&format!("rest-of-file-{}", spelling.len()))
+                .global(&format!(r#"{{"env": {spelling}, "model": "kept-model"}}"#))
+                .read();
+            assert_eq!(settings.get("AWS_PROFILE"), None, "{spelling}");
+            assert_eq!(settings.model(), Some("kept-model"), "{spelling}");
         }
     }
 
@@ -4037,6 +4223,48 @@ mod tests {
         let reported: Vec<&str> = settings.names().collect();
         assert_eq!(reported, ["vetting.auto"]);
         assert!(!settings.is_empty());
+    }
+
+    /// The key exists to turn the title off, so only a real `false` may do it. A quoted `"false"`
+    /// read as false would make the rule depend on spelling, and one read as true would be a
+    /// coercion nobody chose; both are absence, which leaves the title on.
+    #[test]
+    fn only_a_boolean_turns_the_terminal_title_off() {
+        assert_eq!(
+            Settings::parse(r#"{"terminalTitle": false}"#).terminal_title(),
+            Some(false)
+        );
+        assert_eq!(
+            Settings::parse(r#"{"terminalTitle": true}"#).terminal_title(),
+            Some(true)
+        );
+        assert_eq!(
+            Settings::parse(r#"{"terminalTitle": "false"}"#).terminal_title(),
+            None
+        );
+        assert_eq!(Settings::parse(r#"{"model": "m"}"#).terminal_title(), None);
+
+        let settings = Layers::new("title-override")
+            .global(r#"{"terminalTitle": true}"#)
+            .project(r#"{"terminalTitle": false}"#)
+            .read();
+        assert_eq!(settings.terminal_title(), Some(false));
+    }
+
+    /// A file that sets only this is not a file that set nothing, and it is a key this build reads:
+    /// reported among the names, and never as one nothing reads, which would tell somebody who wrote
+    /// it that the title they turned off is still being set.
+    #[test]
+    fn the_terminal_title_switch_is_among_the_names_reported() {
+        let settings = Settings::parse(r#"{"terminalTitle": false}"#);
+        let reported: Vec<&str> = settings.names().collect();
+        assert_eq!(reported, ["terminalTitle"]);
+        assert!(!settings.is_empty());
+
+        let settings = Layers::new("title-read")
+            .global(r#"{"terminalTitle": false}"#)
+            .read();
+        assert_eq!(settings.unread_keys().count(), 0);
     }
 
     /// A file that sets only this is not a file that set nothing: `doctor` reports which names a layer

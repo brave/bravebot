@@ -26,7 +26,10 @@ A prompt shows the thing itself, not a summary of it:
 | [one quarantined slot](vetting.md) | the bytes, where they came from, and what the check said about them |
 | [the plan a manifest run will walk](#approving-a-whole-run-in-advance) | your task in your own words, then every step in order |
 
-You cannot endorse a destination you were not shown.
+You cannot endorse a destination you were not shown. A key that approves is refused until every row
+that decides the question has been drawn whole at the width of the box, and the line under the body
+says how many are left. That covers writes, output, vetting, vouching, exposure, server, tool list,
+call and plan prompts. A refusal and ctrl-c work at every draw.
 
 A prompt also says what approving **does**, and what it does not. The run prompt says the command is
 not sandboxed, asks for the side effects and the output together, and names the exact command it would
@@ -279,6 +282,10 @@ to the first again, so no mode is one you cannot press your way out of, and it w
 runs: the turn in flight keeps the mode it began with, so a diff already on your screen does not have
 the question withdrawn from under you.
 
+**A session started with `--dangerously-skip-permissions` says so when it stops bypassing.** The line
+under the input box and `/status` name asking there, where a session started without the flag draws
+nothing for it. Nothing is printed in the transcript when you press the key.
+
 **Accepting edits stops at writes on purpose.** A write lands in a tree you can read afterwards and
 `git diff` shows you all of it; a program runs with everything your own shell has, leaves no diff,
 and what it prints is what the next round reads. A mode named for edits that also stopped asking
@@ -409,6 +416,36 @@ path it covers. A file whose contents are off limits is not protected if it can 
 Naming the path through a reference reaches the same refusal, including on the one route allowed to
 read what nobody vouched for: a processor is handed no denied file either. The planner is told the
 rule refused and that retrying is not the answer.
+
+**A rule covers the file, not only the spelling used to ask for it.** A call is checked under the name
+it gave and again under the name it reaches once every link on the way is followed, so a link to a
+denied file is refused, and an `ask` rule still asks for a write that comes through one. The second
+name can add a refusal or a question and never removes one. A `deny` or `ask` rule written through a
+link covers the place the link reaches: with `linked` a link to `real`, `Read(linked/**)` refuses
+`real/secret.txt`. An `allow` rule is matched as written, so a grant reaches no further than the
+spelling you approved.
+
+- **Case.** On a volume that treats `.env` and `.ENV` as one file, a rule written one way covers the
+  other, in every list. On a volume that keeps them apart, or where it cannot be told, a rule about
+  `Docs` says nothing about `docs`.
+- **Windows names.** A name that reads as something other than the file it spells, such as a stream, a
+  device, a trailing dot or space, or an 8.3 short name, is refused outright, since no rule can be
+  matched against it. A path on a drive is a full path: `Read(//D:/added/**)` covers `d:\added\secret`.
+- **Hosts.** A host written with a trailing dot, `https://evil.example./`, is the host without it, so
+  a `WebFetch(domain:evil.example)` rule covers both.
+- **Commands.** A command rule is matched against the program and each argument as the line was split,
+  not against the line run together. A space in an `allow` rule covers only the gap between two words,
+  so `Bash(ls *)` does not cover `"ls /x"`, a script named `ls /x`. In `deny` and `ask` a space also
+  covers a space inside a word, and a `*` covers any text in every list.
+- **Redirections.** A `deny` rule on a file refuses a redirection to it or from it, as it refuses a
+  write.
+- **Files read on your behalf.** A denied `AGENTS.md`, a file it points at, a skill or an agent
+  definition is left out of the turn, and you are told. A checkout cannot put a denied file into the
+  system prompt by committing a link to it.
+
+Two settings go further than any list of rules: `readsStayInWorkspace` refuses every path outside the
+working directory, and `bypassUnreachable` takes the mode that asks about nothing out of reach. See
+[Configuration](../customize/configuration.md#permissions).
 
 A deny rule also holds against **a workspace you trusted**, which is what makes one worth writing:
 saying yes at startup trusts the whole tree, and a rule is how one file is kept out of that answer

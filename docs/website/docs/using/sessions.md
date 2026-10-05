@@ -97,7 +97,10 @@ on, and the **standing permissions its user granted**:
 - every question you asked with [`/btw`](../reference/commands.md#btw-question), and the answers the
   record could keep, which come back into the view Ctrl-L opens and into no conversation;
 - the [turns a rewind can still reach](#a-rewind-survives-a-resume), so `/undo` after a resume reaches
-  the same turns it reached before.
+  the same turns it reached before;
+- the model the record names, which stays in force for the first save outside a turn as well, and the
+  pull request and issue you gave with `/pr` and `/issue`. `bravebot --fork` copies both, and
+  `/clear` begins a session with neither.
 
 Each turn also keeps its number, the prompt as it was shown, what came of it, and its task list,
 spend and timing, a turn that failed or was cancelled included. A recorded failure carries the reason
@@ -114,6 +117,11 @@ session's own user gave. A record from before maps were kept has none, and is as
 session recorded by a different build says so, beside the note about a changed branch, and so does
 resuming one the other front end wrote: the terminal and the desktop app keep their sessions in the
 same place, and the transcript you are looking at was drawn by whichever of them recorded it.
+
+The record holds the directory as a path and nothing that identifies the checkout standing there. If
+you remove a checkout, put a different one at the same path and resume an old session in it, the
+trust map and the commands you said to stop asking about come back for the new checkout, and it is
+not asked the startup trust question. Start a fresh session there instead, which asks both.
 
 ## What the record accounts for
 
@@ -198,6 +206,46 @@ prompt with nothing in it still has a title.
 
 Renaming rewrites the record immediately, and a chosen name survives the next turn. An empty name is
 refused.
+
+The terminal's title follows the name, as `bravebot · dependency audit`, so a row of tabs running
+several sessions can be told apart. It is set once the session has a name and changes when the name
+does, and your shell's own title comes back when you leave. A terminal that cannot save a title is
+left with an empty one rather than this session's name. An incognito session leaves the title alone,
+and so does setting [`terminalTitle`](../customize/configuration.md#terminaltitle) to `false`.
+
+## Telling sessions apart
+
+The title says which session a terminal holds. The info panel says the rest: press Ctrl-X, or type
+`/panel`, and a column 36 wide opens on the right of the screen with
+
+- the session's name, its directory and its branch,
+- the goal, while one stands,
+- the pull request and the issue the session is for, once you give them with `/pr` and `/issue`,
+  each cut from the left where it is long so the number at the end stays in view,
+- how full the context is, the cache hit rate, and what the last turn read from the cache and wrote
+  into it, as two figures,
+- the language servers the session has started, by program name, and the MCP servers, by alias,
+- the plan, which stays after the turn ends. Where it runs past the bottom it keeps the task in
+  progress in view and counts the rows left out above and below it, as `+12 earlier` or
+  `+3 more`.
+
+Its last row names the key that hides it. While it is drawn, the context and cache figures leave the
+hint line under the box, unless the terminal is too short for the panel to show them; the mode, a
+running loop and the job count stay there. It needs a terminal at least 100 columns wide: a press
+to open it on a narrower one leaves a note, and narrowing the terminal while the panel is open hides
+it until the terminal is wide again. A press to close it works at any width. Whether it was left open is kept in
+`~/.bravebot/panel` for the next session. The panel draws only what you typed, the plan, the
+session's own counters, the servers you approved and where the session runs, and never a reply or anything a tool returned.
+
+```
+/issue https://github.com/brave/bravebot/issues/1267
+/pr https://github.com/brave/bravebot/pull/1
+```
+
+Each takes one `http` or `https` link with a host and refuses anything else, a link with a space, a
+line break, an escape or a character outside ASCII in it included. Alone, each says what is set, and `/issue clear` or `/pr clear` removes
+one. Both are written to the session record at once, a resume brings them back, and `/clear` starts
+a session with neither.
 
 ## Starting over
 
@@ -321,12 +369,15 @@ messages go to an archive that both still read.
 /compact
 ```
 
-asks for that work on demand, at any size, without consulting the budget.
+asks for that work on demand, at any size, without consulting the budget. `/compact keep the lexer
+benchmarks` says what the summary must keep.
 
 The budget is the window the endpoint advertises for **whichever model is in force**, where it
 advertises one, so a one-shot run and a session both get the window of the model they are asking for.
 The built-in default only stands in, for a model resolved per request and for an entry that advertises
-nothing. See [Configuration](../customize/configuration.md#context-budget) for setting it by hand.
+nothing, including when you switch to such a model from one that advertised a window: the default
+replaces the earlier figure rather than leaving it standing. See
+[Configuration](../customize/configuration.md#context-budget) for setting it by hand.
 
 A cut has to free more than it keeps, so a conversation with nothing worth giving up is left long
 rather than summarised once per round.

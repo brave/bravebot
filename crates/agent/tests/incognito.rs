@@ -235,6 +235,28 @@ fn no_credential_finding_is_written_down() {
     assert!(scratch.findings().recorded().is_empty());
 }
 
+/// INCOG-5, CRED-21: a person who asks a private session to accept a finding is told it was not
+/// kept, and no acceptance file or directory is made. Keeping it would leave behind a list of
+/// where this tree's credentials are.
+#[test]
+fn no_acceptance_is_written_down() {
+    let scratch = Scratch::new("accepts-nothing");
+
+    let result = scratch
+        .findings()
+        .accept(&a_finding(), "a development key", u64::MAX);
+
+    assert_eq!(
+        result.expect_err("the acceptance was kept").kind(),
+        std::io::ErrorKind::PermissionDenied,
+        "an incognito session did not refuse the acceptance"
+    );
+    assert!(
+        !scratch.home.join("findings").exists(),
+        "an incognito session wrote an acceptance"
+    );
+}
+
 /// INCOG-5: reading is unchanged here too. A finding an earlier ordinary session recorded in this
 /// workspace is still there to read, for the reason the chosen model and theme are: the promise is
 /// about what survives a session rather than about what the session may know.

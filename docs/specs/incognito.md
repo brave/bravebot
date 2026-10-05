@@ -155,7 +155,9 @@ cleared and by what, and one missed ordering writes the thing the mode exists no
 ### INCOG-7: importing a subscription is refused rather than silently skipped
 
 `import-leo-creds` in an incognito session reports that it will not run and exits without
-registering a device. Forgetting an existing import is still allowed.
+registering a device. Forgetting an existing import is still allowed. Storing a gateway key with
+`bravebot auth login gateway` is refused the same way, before the key is asked for, and forgetting
+one with `bravebot auth logout gateway` is allowed.
 
 **Why.** An import is a write by definition: a credential that did not outlive the session would not
 be an import. Doing it and discarding the result would mint a batch on Brave's service that nothing
@@ -165,6 +167,8 @@ mode points.
 
 `verified-by: bravebot_cli::running::an_import_is_refused_in_an_incognito_session`
 `verified-by: bravebot_cli::running::forgetting_an_import_is_allowed_in_an_incognito_session`
+`verified-by: bravebot_cli::running::auth_login_gateway_is_refused_before_a_key_is_asked_for`
+`verified-by: bravebot_cli::running::auth_logout_gateway_forgets_the_key_named_in_an_incognito_session`
 
 <a id="INCOG-8"></a>
 ### INCOG-8: what the mode does not cover, and says so
@@ -230,4 +234,4 @@ own tool.
 `verified-by: bravebot_lsp::server::an_index_a_session_keeps_nothing_of_goes_with_the_session`
 `verified-by: bravebot_agent::incognito_credentials::a_spent_credential_is_written_back_in_a_private_session`
 `verified-by: bravebot_agent::incognito::a_memory_left_untrusted_is_still_recorded`
-`verified-by: bravebot_cli::servers::a_started_server_in_a_session_that_keeps_nothing_has_a_home_that_goes_with_it`
+`verified-by: bravebot_agent::servers::a_started_server_in_a_session_that_keeps_nothing_has_a_home_that_goes_with_it`

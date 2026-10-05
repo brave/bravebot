@@ -19,6 +19,8 @@
 #![forbid(unsafe_code)]
 
 pub mod bridge;
+pub mod connectors;
+pub mod definitions;
 pub mod emit;
 pub mod fork;
 pub mod hooks;

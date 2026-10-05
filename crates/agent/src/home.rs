@@ -248,6 +248,18 @@ pub fn write_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     file.write_all(contents)
 }
 
+/// Write `contents` to a file that is not there yet, readable only by this user.
+///
+/// Refuses, with `AlreadyExists`, a name that is taken, a link included, so a writer that must
+/// never replace a file asks for this and not for [`write_file`].
+pub fn create_new_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let mut file = open_private(
+        std::fs::OpenOptions::new().write(true).create_new(true),
+        path,
+    )?;
+    file.write_all(contents)
+}
+
 /// Open `path` to add to the end of it, readable only by this user.
 ///
 /// Appending rather than rewriting is worth a second opening for: the history file is added to

@@ -119,6 +119,7 @@ instant it drew breath, and a loop over slow work would become a continuous one.
 how often somebody wants to be told something, and telling them takes time too.
 
 `verified-by: bravebot_tui::loops::a_tick_in_flight_is_not_due_again`
+`verified-by: bravebot_tui::loops::the_gap_is_measured_from_the_end_of_a_tick_and_not_its_start`
 `verified-by: bravebot_tui::state::a_tick_that_says_when_to_wake_arms_the_next_one`
 
 <a id="LOOP-6"></a>
@@ -132,6 +133,7 @@ it: it is not asked when the next tick is due, and its ending does not reset the
 still the one using this session.
 
 `verified-by: bravebot_tui::state::a_tick_waits_for_the_turn_in_flight_and_for_what_is_queued`
+`verified-by: bravebot_tui::state::a_due_tick_is_held_for_a_running_turn_and_a_queued_prompt_and_then_goes`
 `verified-by: bravebot_tui::state::a_prompt_typed_during_a_loop_is_not_a_tick_of_it`
 
 <a id="LOOP-7"></a>
@@ -185,9 +187,12 @@ loop.
 **Why.** The first silence is a turn that forgot. The second is a loop nobody is running, and
 waking it every twenty minutes for the rest of the session helps nobody. A tick that does say
 when to run again restores the fallback, because the budget is for turns that stopped answering.
+A tick that sends `stop` to `schedule_next` ([SCHED-4](tools/schedule-next.md#SCHED-4)) is not a
+silence: it ends the loop at once, with the fallback wake unspent ([LOOP-11](#LOOP-11)).
 
 `verified-by: bravebot_tui::loops::a_self_paced_turn_that_says_nothing_is_woken_once_more_and_then_the_loop_ends`
 `verified-by: bravebot_tui::loops::a_turn_that_says_when_to_wake_restores_the_fallback`
+`verified-by: bravebot_tui::loops::a_turn_that_says_the_loop_is_finished_ends_it_without_a_keepalive`
 
 <a id="LOOP-10"></a>
 ### LOOP-10: a tick is told that it is one, and which kind of loop it is in
@@ -203,17 +208,19 @@ exists to avoid, and one that half-knows goes looking for the scheduling tool an
 never has and tells the user it is missing. Both were observed before this clause existed.
 
 `verified-by: bravebot_agent::turn::a_tick_is_told_that_it_is_one_and_which_kind_of_loop_it_is_in`
+`verified-by: bravebot_agent::turn::a_tick_is_told_what_its_kind_of_loop_lasts_on`
 
 ## What ends one
 
 <a id="LOOP-11"></a>
-### LOOP-11: five things end a loop, and each of them says so
+### LOOP-11: six things end a loop, and each of them says so
 
 | What | When |
 |---|---|
-| the person asks | `/loop stop`, which leaves the turn in flight running; typed during one it ends the loop when the queue reaches it |
+| the person asks | `/loop stop`, which leaves the turn in flight running; typed during one it ends the loop as it is typed, unless a `/loop` is waiting for that turn, which it waits behind ([commands.md](commands.md#CMD-8)) |
 | the person interrupts | Ctrl-C, read against the loop after the turn in flight and the line in the box, and before leaving |
 | a turn is stopped | any turn cancelled while a loop runs, whether or not it was a tick |
+| the turn says it is finished | a tick of a self-paced loop that calls `schedule_next` with `stop`, which ends the loop with no further tick |
 | the session moves on | `/clear`, and leaving |
 | age | seven days after it started |
 
@@ -228,20 +235,26 @@ seen enough of a loop but not of the turn it is in the middle of. It is also the
 that can be typed, so it is the ending a person reaches for after the sentence announcing the loop
 has scrolled away: the others are a key nobody named, a session ending, and a week.
 
-**Why it may arrive a turn later.** A line typed during a turn waits in the queue, the way every
-line typed during a turn waits, so an ending asked for mid-tick happens when the queue is reached
-rather than on the press. Nothing is lost in the wait: a tick waits on an empty queue as well as on
-an idle session, so the loop cannot send one more turn out ahead of its own ending.
+**Why it ends the loop on the press.** It reads and ends the loop alone, and the turn in flight
+holds nothing of the loop, so the line does not wait in the queue with the rest
+([commands.md](commands.md#CMD-8)). The tick in flight finishes, and the wait it asks for starts
+nothing: a tick is offered no later look of its own, its loop being what asks again, so a wait
+arriving after its loop has gone would otherwise start a new loop on the line just stopped.
 
 `verified-by: bravebot_tui::app::the_loop_command_ends_the_loop_when_asked_to_stop`
-`verified-by: bravebot_tui::app::asking_to_stop_a_loop_during_a_turn_ends_it_when_the_queue_is_reached`
-`verified-by: bravebot_tui::state::a_tick_waits_for_the_turn_in_flight_and_for_what_is_queued`
+`verified-by: bravebot_tui::app::asking_to_stop_a_loop_during_a_turn_ends_it_as_it_is_typed`
+`verified-by: bravebot_tui::app::a_tick_whose_loop_was_stopped_mid_turn_starts_no_loop`
 `verified-by: bravebot_tui::app::asking_to_stop_a_loop_that_is_not_running_says_so`
 `verified-by: bravebot_tui::app::interrupting_stops_the_loop_before_it_leaves`
 `verified-by: bravebot_tui::app::interrupting_clears_the_line_before_it_stops_the_loop`
 `verified-by: bravebot_tui::state::clearing_the_session_ends_the_loop`
 `verified-by: bravebot_tui::state::stopping_a_loop_says_so_and_says_nothing_when_there_was_none`
+`verified-by: bravebot_tui::state::clearing_a_session_with_no_loop_says_nothing_of_one`
+`verified-by: bravebot_tui::state::a_loop_past_its_age_ends_and_says_so_instead_of_ticking`
+`verified-by: bravebot_tui::app::stopping_a_turn_ends_the_loop_and_says_so`
 `verified-by: bravebot_tui::loops::a_loop_older_than_a_week_has_aged_out`
+`verified-by: bravebot_tui::loops::a_turn_that_says_the_loop_is_finished_ends_it_without_a_keepalive`
+`verified-by: bravebot_tui::state::a_turn_that_says_the_loop_is_finished_ends_it_and_says_so`
 
 <a id="LOOP-12"></a>
 ### LOOP-12: a loop is never written down
@@ -302,6 +315,7 @@ that has nothing to do, and without it a long watch is twenty identical answers 
 `verified-by: bravebot_tui::status::the_report_says_what_is_repeating_and_when_it_is_next_due`
 `verified-by: bravebot_tui::status::a_session_with_no_loop_does_not_mention_one`
 `verified-by: bravebot_tui::loops::quiet_ticks_are_counted_until_one_reports_something`
+`verified-by: bravebot_tui::state::each_tick_is_announced_with_its_number_and_its_quiet_count`
 
 <a id="LOOP-14"></a>
 ### LOOP-14: a turn may start a loop over the person's line, and over no other

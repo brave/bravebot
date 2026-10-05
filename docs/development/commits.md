@@ -24,6 +24,25 @@ resolves the issue, use GitHub's closing syntax (`Closes #123`, `Fixes #123`) so
 it. Where the change is only part of what the issue asks for, name it without the keyword (`Part of
 #123`): an issue closed while the rest of it is outstanding is worse than one left open.
 
+## Opening the pull request
+
+The pull request belongs on `brave/bravebot`. A bare `gh pr create` targets whatever repository
+`gh` resolves from the clone, so in a clone of a fork it opens the pull request on the fork. Check
+which case applies before running it:
+
+```sh
+git remote get-url origin
+```
+
+- `origin` is `brave/bravebot` (a direct clone): push the branch, then run
+  `gh pr create --base main` from it.
+- `origin` is a fork: push the branch to the fork, then run
+  `gh pr create --repo brave/bravebot --head <fork-owner>:<branch> --base main`, where
+  `<fork-owner>` is the account in the `origin` URL.
+
+A worker that was handed a branch to push does not open the pull request unless its brief says to.
+It reports the branch, and whoever owns the pull request opens it with the command above.
+
 **No co-attribution markers for Claude Code or other tools**, in a commit message or a pull request
 body.
 

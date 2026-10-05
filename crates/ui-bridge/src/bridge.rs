@@ -14,7 +14,7 @@
 
 use crate::emit::{Emitter, Listener};
 use crate::protocol::{ErrorCode, Event, Failure, Request};
-use crate::running::{Running, State};
+use crate::running::{Mcp, Running, State};
 use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink, Reply};
 use crate::{store, wire};
 use bravebot_agent::Workspace;
@@ -56,6 +56,13 @@ struct Open {
     /// Settled once, when the session opened, as the terminal does: a session that opened with
     /// the mode on said so at the top, and a later change to the file would make that untrue.
     auto_vetting: bool,
+    /// The definition this session's conversation belongs to, once a turn has said so
+    /// ([MEMORY-10](../../../docs/specs/definition-memory.md#MEMORY-10)).
+    ///
+    /// Set by a `turn.send` from the desktop's main process, which takes it from the bot's row.
+    /// It is read for a turn the bridge starts on its own, the fire of a watch a person armed,
+    /// which has no request to carry one.
+    definition: Option<String>,
 }
 
 /// Drives the agent for a front-end.
@@ -142,6 +149,22 @@ impl Bridge {
             "manifest.read" => crate::manifest::read(request),
             "manifest.reply" => self.reply_decision(request, Reply::Manifest),
             "exposure.reply" => self.reply_decision(request, Reply::Exposure),
+            "mcp-server.reply" => self.deliver(
+                request,
+                Reply::McpServer(wire::start_answer(
+                    request.param("decision"),
+                    request.param("remember"),
+                )),
+            ),
+            "mcp-tools.reply" => self.reply_decision(request, Reply::McpTools),
+            "mcp-call.reply" => self.deliver(
+                request,
+                Reply::McpCall(wire::call_decision(
+                    request.param("decision"),
+                    request.param("remember"),
+                )),
+            ),
+            "mcp-move.reply" => self.reply_decision(request, Reply::McpMove),
             "ask.reply" => self.reply_ask(request),
             "trust.reply" => self.reply_trust(request),
             "permissions.list" => self.permissions(request, false),
@@ -161,7 +184,15 @@ impl Bridge {
                 self.settings = path;
                 Ok(crate::settings::report(None, self.settings.as_deref()))
             }
+            "connectors.list" => crate::connectors::list(),
+            "connectors.preview" => crate::connectors::preview(request),
+            "connectors.connect" => crate::connectors::connect(request),
+            "connectors.disconnect" => crate::connectors::disconnect(request),
+            "connectors.remove" => crate::connectors::remove(request),
             "hooks.inspect" => crate::hooks::inspect(),
+            "bot.define" => crate::definitions::make(request),
+            "bot.migrate" => crate::definitions::migrate(request),
+            "bot.redefine" => crate::definitions::remake(request),
             "doctor" => Ok(
                 json!({"found": true, "structured": true, "text": serde_json::to_string_pretty(&crate::settings::report(None, self.settings.as_deref())).unwrap_or_default()}),
             ),
@@ -256,12 +287,14 @@ impl Bridge {
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             model: None,
             auto_vetting,
+            definition: None,
         });
         self.ask_about_trust(&handle);
         let rules = self.open_under_rules(&handle, None);
 
         let mut opened = self.recount(&handle, &directory, &record, auto_vetting);
         opened["settingsRules"] = rules;
+        opened["scratch"] = self.scratch_report(&handle);
         if let Some(settled) = settled {
             opened["trust"] = settled;
         }
@@ -311,6 +344,15 @@ impl Bridge {
                 "keeping": open.keeping.as_ref().map(|(store, _)| store.path().display().to_string()),
             }),
         ));
+    }
+
+    /// What the session opened as `handle` reports about its own directory outside the project
+    /// (TRUST-14): the path, or that it has none and why.
+    fn scratch_report(&self, handle: &str) -> Value {
+        self.open
+            .get(handle)
+            .and_then(|open| open.state.lock().ok().map(|state| state.scratch.report()))
+            .unwrap_or(Value::Null)
     }
 
     fn auto_vetting(&self, project: &std::path::Path) -> bool {
@@ -382,15 +424,7 @@ impl Bridge {
                 crate::FRONT,
             ),
             "autoVetting": auto_vetting,
-            "serversNote": self.servers_note(directory),
         })
-    }
-
-    /// The MCP servers the settings a session in `directory` opens under request, none of which
-    /// this front end starts (SERVERS-2).
-    fn servers_note(&self, directory: &Path) -> Option<String> {
-        let settings = crate::settings::layers(Some(directory), self.settings.as_deref());
-        bravebot_session::sessions::servers_note(settings.mcp_requested().map(|(_, alias)| alias))
     }
 
     fn new_session(&mut self, request: &Request) -> Result<Value, Failure> {
@@ -400,12 +434,6 @@ impl Bridge {
             return Err(Failure::new(
                 ErrorCode::NotADirectory,
                 format!("{} is not a directory", directory.display()),
-            ));
-        }
-        if bravebot_session::store::directory().is_none() {
-            return Err(Failure::new(
-                ErrorCode::NoHome,
-                "no home directory to store sessions in",
             ));
         }
 
@@ -425,6 +453,7 @@ impl Bridge {
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             model: None,
             auto_vetting,
+            definition: None,
         });
 
         // Nothing is written until the first turn. An opened-and-abandoned window should
@@ -439,7 +468,7 @@ impl Bridge {
             "directory": directory.display().to_string(),
             "branch": branch,
             "autoVetting": auto_vetting,
-            "serversNote": self.servers_note(&directory),
+            "scratch": self.scratch_report(&handle),
         });
         merge(&mut made, reported);
         Ok(made)
@@ -572,6 +601,7 @@ impl Bridge {
             // The parent's, not read again: the child's transcript is the parent's up to the cut,
             // and the notice at its top says what the parent opened under.
             auto_vetting,
+            definition: None,
         });
         self.ask_about_trust(&child);
         // The parent's, not read again, for the reason auto-vetting is: a fork carries on the
@@ -598,7 +628,7 @@ impl Bridge {
             "trust": { "known": known, "rules": if known { Value::from(rules) } else { Value::Null } },
             "autoVetting": auto_vetting,
             "settingsRules": settings_rules,
-            "serversNote": self.servers_note(&project),
+            "scratch": self.scratch_report(&child),
             "parent": {
                 "id": parent_id,
                 "directory": project.display().to_string(),
@@ -671,6 +701,13 @@ impl Bridge {
             })
             .unwrap_or_default();
         let dropped = dropped_paths(request)?;
+        // The definition a bot's conversation is addressed to (MEMORY-10). Named by the desktop's
+        // main process from the bot's row, never by a window, and checked to be a name a
+        // definition can carry. Once a session has one, every later turn in it is addressed to it
+        // whether or not the request repeats the name: a turn with none would hold the session's
+        // whole reach, wider than the bot's own, and the fire of a watch has no request to carry
+        // one at all.
+        let named = crate::wire::definition(request.params.get("definition"))?;
         // Whether this prompt is one a person will want back when they press up.
         //
         // `~/.bravebot/history` is recall, shared with the terminal front-end, and what belongs in
@@ -704,6 +741,9 @@ impl Bridge {
                 "a turn is already running in this session",
             ));
         }
+        // The name the session was given, kept so a turn with no request behind it is addressed
+        // too.
+        let addressing = named.or_else(|| open.definition.clone());
 
         let model = requested_model.or_else(|| open.model.clone());
         let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
@@ -722,6 +762,12 @@ impl Bridge {
         let output_cap = settings.run_output_cap();
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
         let auto_vetting = open.auto_vetting;
+        // Each MCP server the settings request, with the file that requested it (SERVERS-2). Read
+        // on every turn and used by the first, which is the one that starts them.
+        let mcp_requested: Vec<(PathBuf, String)> = settings
+            .mcp_requested()
+            .map(|(file, alias)| (file.to_path_buf(), alias.to_string()))
+            .collect();
         let mut workspace = turn_workspace(
             open.project.clone(),
             &settings,
@@ -732,7 +778,7 @@ impl Bridge {
         let project = open.project.clone();
         let state = Arc::clone(&open.state);
         let watches = Arc::clone(&open.watches);
-        let (turn_number, directories) = state
+        let (turn_number, directories, scratch) = state
             .lock()
             .map(|mut s| {
                 for point in &mut s.rewind {
@@ -740,9 +786,16 @@ impl Bridge {
                         .coverage
                         .record([bravebot_agent::rewind::CoverageGap::Desktop]);
                 }
-                (s.turns + 1, s.directories.clone())
+                (
+                    s.turns + 1,
+                    s.directories.clone(),
+                    s.scratch.path().map(Path::to_path_buf),
+                )
             })
-            .unwrap_or((1, Vec::new()));
+            .unwrap_or((1, Vec::new(), None));
+        // The session's own directory outside the project, made as the session opened. Set by the
+        // code that holds it, so a turn cannot widen its own reach (TRUST-14).
+        workspace.open_scratch(scratch);
 
         // A workspace is built per turn and opens the project only, so the directories a
         // resumed session had open have to be opened again here. The rules about them came back
@@ -784,10 +837,12 @@ impl Bridge {
         if let Some(open) = self.open.get_mut(&handle) {
             open.running = Some(running);
             open.model = model;
+            open.definition = addressing.clone();
         }
         thread::spawn(move || {
             work(Work {
                 model: worker_model,
+                addressing,
                 watches,
                 emitter,
                 session,
@@ -798,6 +853,7 @@ impl Bridge {
                 output_cap,
                 deadlines,
                 auto_vetting,
+                mcp_requested,
                 workspace,
                 prompt,
                 composed,
@@ -885,7 +941,7 @@ impl Bridge {
 
         let project = open.project.clone();
         let state = Arc::clone(&open.state);
-        let (run, turns, directories) = state
+        let (run, turns, directories, scratch) = state
             .lock()
             .map(|mut s| {
                 // A run writes files as a turn does, so the same coverage gap applies.
@@ -895,9 +951,15 @@ impl Bridge {
                         .record([bravebot_agent::rewind::CoverageGap::Desktop]);
                 }
                 s.runs += 1;
-                (s.runs, s.turns, s.directories.clone())
+                (
+                    s.runs,
+                    s.turns,
+                    s.directories.clone(),
+                    s.scratch.path().map(Path::to_path_buf),
+                )
             })
-            .unwrap_or((1, 0, Vec::new()));
+            .unwrap_or((1, 0, Vec::new(), None));
+        workspace.open_scratch(scratch);
         for directory in &directories {
             let _ = workspace.add_directory(&directory.display().to_string());
         }
@@ -1493,8 +1555,13 @@ struct Work {
     deadlines: bravebot_agent::exec::Deadlines,
     /// The session's, settled when it opened.
     auto_vetting: bool,
+    /// Each MCP server the settings request, with the file that requested it.
+    mcp_requested: Vec<(PathBuf, String)>,
     watches: Arc<Mutex<bravebot_agent::watch::Watches>>,
     model: Option<String>,
+    /// The definition this turn is addressed to, where it is a turn in a bot's conversation
+    /// (MEMORY-10).
+    addressing: Option<String>,
     workspace: Workspace,
     prompt: String,
     /// What this prompt was composed for, where nobody typed it.
@@ -1541,8 +1608,10 @@ fn work(work: Work) {
         output_cap,
         deadlines,
         auto_vetting,
+        mcp_requested,
         watches,
         model,
+        addressing,
         workspace,
         prompt,
         composed,
@@ -1565,10 +1634,35 @@ fn work(work: Work) {
 
     let history =
         bravebot_session::store::Entry::sent(&prompt, Some(project.display().to_string()));
+    let mut confirmer =
+        BridgeConfirmer::new(emitter.clone(), &session, pending, answers, cancel.clone());
+
+    // The session's MCP servers (SERVERS-9), started by its first turn and held until it closes.
+    // Here rather than when the session opened, so that the questions about them come after the
+    // person has said whether the directory is trusted, and reach the window through this turn.
+    if matches!(state.mcp, Mcp::Unstarted)
+        && let Some(started) = start_mcp(
+            &emitter,
+            &session,
+            &project,
+            &mcp_requested,
+            &mut confirmer,
+            &cancel,
+        )
+    {
+        state.mcp = Mcp::Started(started);
+    }
+    let mcp = match &state.mcp {
+        Mcp::Started(started) => started.clone(),
+        Mcp::Unstarted => None,
+    };
     let mut task = Task::new(&prompt)
         .already_asked_about(state.asked_about.clone())
         .already_exposed(state.exposed.clone())
         .with_home(bravebot_agent::home::directory())
+        // What a leading `~` in a run line stands for, which is the home directory and not the
+        // state directory above (CMDLINE-4). Without it the line is refused as having no home.
+        .with_profile(bravebot_agent::home::profile())
         .with_cache(bravebot_agent::home::cache())
         // No bound on the rounds, as the terminal passes: there is a person in front of this
         // window, they see what the turn is doing, and `turn.cancel` reaches it mid-round. A
@@ -1580,7 +1674,12 @@ fn work(work: Work) {
         .with_deadlines(deadlines)
         .with_auto_vetting(auto_vetting)
         // The rules the session opened under, and not the files as they are now (PERM-12).
-        .with_permissions(state.rules.permissions.clone());
+        .with_permissions(state.rules.permissions.clone())
+        .with_mcp(mcp)
+        // A turn in a bot's conversation is addressed to the bot's definition whatever composed
+        // it (MEMORY-10). The name is the session's, set from the bot's row, so nothing the turn
+        // produced chooses it; the kernel compares it against the set this session resolved.
+        .addressing(addressing);
     if let Some(composed) = composed {
         task = task.composed_rather_than_typed(composed);
     }
@@ -1601,8 +1700,6 @@ fn work(work: Work) {
         bravebot_agent::watch::Arming::Allowed { free }
     });
     let mut reporter = BridgeReporter::new(emitter.clone(), &session);
-    let mut confirmer =
-        BridgeConfirmer::new(emitter.clone(), &session, pending, answers, cancel.clone());
     let mut sink = BridgeSink::new(emitter.clone(), &session, turn);
     let egress = Egress::new();
 
@@ -1619,6 +1716,8 @@ fn work(work: Work) {
         // Use the task's home so the index is cached with the rest of the session's state.
         bravebot_agent::lsp::LanguageServers::new(workspace.root().to_path_buf(), task.home.clone())
     });
+    // Where this turn begins, in the recounted conversation the record's boundaries are offsets into.
+    let begins = state.conversation.recounted().len();
     let completed = agent_turn::resume(
         &config,
         &egress,
@@ -1663,6 +1762,20 @@ fn work(work: Work) {
     }
 
     state.turns = turn;
+    let ended = match &outcome {
+        Ok(_) => bravebot_session::sessions::StoredOutcome::Completed,
+        Err(error) => {
+            bravebot_session::sessions::StoredOutcome::ended(turn, error.ending(), error.cut_off())
+        }
+    };
+    record_turn(
+        &mut state,
+        turn,
+        &prompt,
+        begins,
+        reporter.prompt_at(),
+        ended,
+    );
     if state.first_prompt.is_none() && recall {
         state.first_prompt = Some(prompt.clone());
     }
@@ -1767,6 +1880,66 @@ fn work(work: Work) {
     emitter.send(event);
 }
 
+/// Start the MCP servers `requested` names, putting the questions about them to the window.
+///
+/// The terminal's own road (SERVERS-4, SERVERS-10, SERVERS-11, SERVERS-12): each request resolves
+/// against the person's declarations, one the managed layer refuses goes no further, the rest are
+/// asked about where no answer of theirs covers them, and each is started confined or reached
+/// through the egress gate. A server's stderr is discarded, as the full-screen terminal discards
+/// it, because this process has no screen of its own to put it on.
+///
+/// `mcp.starting` goes out first, since a server has up to a minute to answer its handshake and
+/// the turn says nothing else while it waits, and `mcp.started` after, naming what started and
+/// saying why each other request did not. `None` where the turn was stopped part way, which
+/// starts nothing and leaves the servers to the next turn, so a stop is not read as a no.
+fn start_mcp(
+    emitter: &Emitter,
+    session: &str,
+    project: &Path,
+    requested: &[(PathBuf, String)],
+    confirmer: &mut BridgeConfirmer,
+    cancel: &Cancel,
+) -> Option<Option<bravebot_agent::mcp::Session>> {
+    if requested.is_empty() {
+        return Some(None);
+    }
+    let aliases: Vec<&str> = requested.iter().map(|(_, alias)| alias.as_str()).collect();
+    emitter.send(Event::new(
+        "mcp.starting",
+        session,
+        json!({ "servers": aliases }),
+    ));
+    let home = bravebot_agent::servers::Home {
+        directory: bravebot_agent::home::directory(),
+        writable: bravebot_agent::home::writable().is_some(),
+    };
+    let project = project
+        .canonicalize()
+        .unwrap_or_else(|_| project.to_path_buf());
+    let reached = bravebot_agent::servers::reach(
+        requested,
+        &project,
+        &home,
+        &bravebot_config::Managed::load(),
+        bravebot_agent::servers::Asking::Person,
+        confirmer,
+        bravebot_sandbox::Stream::Null,
+    );
+    if cancel.is_cancelled() {
+        return None;
+    }
+    emitter.send(Event::new(
+        "mcp.started",
+        session,
+        json!({
+            "servers": reached.aliases(),
+            "confined": reached.confined(),
+            "notes": reached.notes,
+        }),
+    ));
+    Some(reached.session())
+}
+
 /// How a failure is reported to a front end: `kind`, `message`, `category`, `attempts`, `status`.
 ///
 /// The category and the counts come from the agent's diagnosis. Raw backend text is not sent.
@@ -1804,6 +1977,37 @@ pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -
         "attempts": attempts, "status": diagnosis.and_then(|d| d.status) })
 }
 
+/// Add the turn that just ran to the session's history, if it keeps one (SESSION-23).
+///
+/// `begins` is the length of the recounted conversation before the turn, and `prompt_at` where the
+/// submitted prompt entered it. A turn that lost the conversation ends before it began, and then
+/// its range restarts at nothing, as the terminal records it.
+fn record_turn(
+    state: &mut State,
+    number: usize,
+    prompt: &str,
+    begins: usize,
+    prompt_at: Option<usize>,
+    outcome: bravebot_session::sessions::StoredOutcome,
+) {
+    let end = state.conversation.recounted().len();
+    let Some(history) = state.history.as_mut() else {
+        return;
+    };
+    let reset_context = end < begins;
+    history.push(bravebot_session::sessions::StoredTurn {
+        number,
+        prompt: Some(prompt.to_string()),
+        start: if reset_context { 0 } else { begins },
+        end,
+        reset_context,
+        prompt_offset: prompt_at
+            .filter(|at| !reset_context && *at >= begins && *at < end)
+            .map(|at| at - begins),
+        outcome: Some(outcome),
+    });
+}
+
 /// Write the session down, in the agent's own format.
 ///
 /// The same `Handle` the terminal uses, so a session written here is one `bravebot --resume`
@@ -1828,8 +2032,7 @@ fn save(
     handle.save(
         &first,
         Standing {
-            // The UI derives its transcript from the conversation, including newly run turns.
-            history: None,
+            history: state.history.as_deref(),
             conversation: &snapshot,
             turns: state.turns,
             tokens: state.tokens,
@@ -2043,6 +2246,7 @@ mod coverage_tests {
             model: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             auto_vetting: false,
+            definition: None,
         });
         let request = Request::parse(
             &json!({"id": 1, "method": "session.fork", "params": {
@@ -2124,6 +2328,7 @@ mod permissions_tests {
             model: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             auto_vetting: false,
+            definition: None,
         });
         let revoke = Request::parse(
             &json!({"id": 1, "method": "permissions.revoke", "params": {
@@ -2163,6 +2368,7 @@ mod permissions_tests {
             model: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             auto_vetting: false,
+            definition: None,
         });
         let list = Request::parse(
             &json!({"id": 1, "method": "permissions.list", "params": {"session": handle}})
@@ -2236,6 +2442,7 @@ mod watch_tests {
             model: None,
             watches: Arc::clone(&watches),
             auto_vetting: false,
+            definition: None,
         });
         std::fs::write(
             root.join("watched"),
@@ -2307,6 +2514,7 @@ mod watch_tests {
             model: None,
             watches: Arc::clone(&watches),
             auto_vetting: false,
+            definition: None,
         });
         let request = Request::parse(
             &json!({"id": 1, "method": "turn.cancel", "params": {"session": handle}}).to_string(),
@@ -2356,6 +2564,7 @@ mod watch_tests {
             model: None,
             watches: Arc::clone(&watches),
             auto_vetting: false,
+            definition: None,
         });
         bridge.poll_watches_at(now + Duration::from_secs(7 * 24 * 60 * 60));
         assert!(watches.lock().unwrap().is_empty());

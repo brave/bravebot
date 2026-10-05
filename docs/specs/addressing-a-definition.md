@@ -53,9 +53,9 @@ a call to any other by name, and the interface draws the reply under the name th
 a session in lines or a one-shot run ([CLI-17](cli.md#CLI-17)). The name is matched against the same
 set before the first turn, and each turn then carries it as a `/agent` line's turn does.
 
-The desktop front end addresses nothing. [MEMORY-10](definition-memory.md#MEMORY-10) specifies
-that every turn in a desktop bot's conversation addresses the bot's definition, and nothing yet
-builds it.
+The desktop front end addresses a definition only in a bot's conversation.
+[MEMORY-10](definition-memory.md#MEMORY-10) specifies that every turn in a desktop bot's
+conversation addresses the bot's definition, and the desktop does so for a bot that has one.
 
 ## The comparison, and what it is worth
 
@@ -99,6 +99,7 @@ relaxing them would leave the reasons behind and keep the words, and the next th
 planner would inherit the relaxation.
 
 `verified-by: bravebot_agent::turn::an_addressed_turn_runs_under_its_definitions_prompt_model_and_kind`
+`verified-by: bravebot_agent::turn::an_addressed_turn_is_offered_only_the_skills_its_definition_names`
 
 ## The line
 
@@ -149,7 +150,7 @@ The command line that started a session or a run is the other source. `--agent <
 it is read before any turn exists, so no turn's output can set it. It names the definition for every
 turn of the session, while a `/agent` line names one for a single turn.
 
-[MEMORY-10](definition-memory.md#MEMORY-10), which nothing yet builds, adds a second source: a
+[MEMORY-10](definition-memory.md#MEMORY-10) adds a second source: a
 turn in a desktop bot's conversation addresses that bot's definition. The name comes from the
 conversation a person opened rather than from a line, and nothing a turn produced chooses it, so
 what stands in for the keystroke is making the bot and opening its conversation.
@@ -297,7 +298,7 @@ the narrowing, and would make a turn the run chose an addressed one, which
 ([CLI-17](cli.md#CLI-17)) every turn is addressed, so the later turn would keep the narrowing. The
 two are still withheld there, because the run would still choose when that turn happens, and a
 definition is offered the same tools whether `/agent` or `--agent` selected it.
-[MEMORY-10](definition-memory.md#MEMORY-10), which nothing yet builds, would address two kinds of
+[MEMORY-10](definition-memory.md#MEMORY-10) addresses two kinds of
 turn nobody typed in a bot's conversation, the desktop's own turn and the fire of a watch a person
 armed there, and neither is this kind: the run chooses a later look, and chooses neither of those.
 
@@ -309,6 +310,7 @@ does not apply to them.
 `verified-by: bravebot_core::policy::the_tools_no_delegate_is_offered_are_offered_to_an_addressed_turn`
 `verified-by: bravebot_agent::turn::an_addressed_turn_runs_under_its_definitions_prompt_model_and_kind`
 `verified-by: bravebot_agent::turn::an_addressed_turn_arranges_no_later_look_and_arms_no_watch`
+`verified-by: bravebot_agent::turn::an_addressed_self_paced_tick_is_not_told_to_schedule_the_next`
 
 ## How long it lasts
 
@@ -394,7 +396,7 @@ definition did not get the model it asked for.
 A reply produced by an addressed run is drawn under the definition's name, and the name is the one
 the driver resolved rather than anything the reply says about itself.
 
-[MEMORY-10](definition-memory.md#MEMORY-10), which nothing yet builds, draws a desktop bot's reply
+[MEMORY-10](definition-memory.md#MEMORY-10) draws a desktop bot's reply
 under the name the bot is shown under instead. That name comes from the row the person opened, as
 the definition's name does, so no reply chooses it there either.
 

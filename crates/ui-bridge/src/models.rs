@@ -12,20 +12,15 @@ pub fn list(config: &Config) -> Value {
     let mut rows = Vec::new();
     let mut warnings = Vec::new();
     if let Some(bedrock) = &config.bedrock {
-        for entry in bedrock.models() {
-            rows.push(Model {
-                key: entry.id.clone(),
-                display_name: entry.display_name().to_string(),
-                premium: false,
-                reads_effort: true,
-                provider: Some("AWS Bedrock".into()),
-                conversation_tokens: Some(entry.window()),
-                // Bedrock has no listing, so nothing has described these models.
-                advertised: Advertised::default(),
-            });
-        }
+        rows.extend(bedrock_rows(bedrock));
     }
     for provider in &config.providers {
+        // An entry naming AWS is served by the Bedrock backend under the bare id it is keyed by,
+        // and there is no listing to ask, so a block that named no models offers none.
+        if let Some(bedrock) = &provider.bedrock {
+            rows.extend(bedrock_rows(bedrock));
+            continue;
+        }
         if !provider.models.is_empty() {
             rows.extend(provider.models.iter().map(|model| Model {
                 key: format!("{}/{}", provider.id, model.id),
@@ -40,7 +35,9 @@ pub fn list(config: &Config) -> Value {
             continue;
         }
         let credential = provider.credential(|name| std::env::var(name).ok());
-        if matches!(credential, Credential::Absent) {
+        // A compiled list asks nothing, so a missing key is said when a turn is sent, as it is for
+        // a model a block names.
+        if matches!(credential, Credential::Absent) && provider.compiled_roster().is_none() {
             warnings.push(format!(
                 "No credential configured for {}.",
                 provider.display_name()
@@ -94,12 +91,30 @@ pub fn list(config: &Config) -> Value {
     catalogue(config, rows, warnings)
 }
 
+/// The rows an AWS account offers, keyed by the bare id the Bedrock backend is reached by.
+fn bedrock_rows(bedrock: &bravebot_config::bedrock::Bedrock) -> Vec<Model> {
+    bedrock
+        .models()
+        .iter()
+        .map(|entry| Model {
+            key: entry.id.clone(),
+            display_name: entry.display_name().to_string(),
+            premium: false,
+            reads_effort: true,
+            provider: Some("AWS Bedrock".into()),
+            conversation_tokens: Some(entry.window()),
+            // Bedrock has no listing, so nothing has described these models.
+            advertised: Advertised::default(),
+        })
+        .collect()
+}
+
 /// The token a roster request is made with, where the block named one.
 ///
 /// `None` is not an error here: a gateway configured without a credential is asked without one,
 /// which is what a local Ollama wants. The shared listing reads `None` as a reason not to ask the
-/// account-scoped route at all, since there is no account to scope an answer to. `Absent` never
-/// reaches this, being the one state that is a warning rather than a request.
+/// account-scoped route at all, since there is no account to scope an answer to. `Absent` reaches
+/// this only for a service with a compiled list, which is offered without a request.
 fn bearer(credential: &Credential) -> Option<&str> {
     match credential {
         Credential::Token(token) => Some(token.expose()),
@@ -367,6 +382,131 @@ mod tests {
             );
         }
         assert_eq!(refused(&config, Some("an-allowed-model")), None);
+    }
+
+    /// A configuration that reaches Google Vertex through a block naming `models` where given. The
+    /// Brave credentials are blank so no Brave roster is asked for. With a key, the key is in the
+    /// block, so that it is found whatever this process has exported. Without one, the block names a
+    /// variable nothing sets.
+    fn a_config_with_google_vertex(key: Option<&str>, models: Option<&str>) -> Config {
+        use bravebot_config::env_var;
+
+        let credential = match key {
+            Some(key) => {
+                format!(r#""options": {{"project": "example-project-1", "apiKey": "{key}"}}"#)
+            }
+            None => r#""options": {"project": "example-project-1"},
+                "env": ["BRAVEBOT_TEST_UNSET_VERTEX_KEY"]"#
+                .to_string(),
+        };
+        let models = models
+            .map(|models| format!(r#", "models": {models}"#))
+            .unwrap_or_default();
+        let mut config = Config::from_lookup(|key| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+            _ => None,
+        })
+        .expect("an account named on its own is a working configuration");
+        config.providers = bravebot_config::Settings::parse(&format!(
+            r#"{{"provider": {{"google-vertex": {{{credential}{models}}}}}}}"#
+        ))
+        .providers()
+        .to_vec();
+        assert_eq!(config.providers.len(), 1, "the block configured no service");
+        config
+    }
+
+    /// The ids the window offers for the Google Vertex service.
+    fn google_vertex_rows(config: &Config) -> Vec<String> {
+        list(config)["models"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .filter_map(|row| row["id"].as_str())
+            .filter(|id| id.starts_with("google-vertex/"))
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// BACKEND-49 in the window: Vertex has no listing a key can call, so a service naming no models
+    /// is offered the list compiled in. Offering it asks nothing, so a key that is not found keeps no
+    /// row out, as it keeps out none of the models a block names.
+    #[test]
+    fn the_window_offers_the_compiled_models_for_a_google_vertex_service_naming_none() {
+        for key in [Some("placeholder-key"), None] {
+            let config = a_config_with_google_vertex(key, None);
+            let compiled = config.providers[0]
+                .compiled_roster()
+                .expect("a compiled list");
+            let mut expected: Vec<String> = compiled
+                .iter()
+                .map(|id| format!("google-vertex/{id}"))
+                .collect();
+            expected.sort();
+            assert!(!expected.is_empty());
+            assert_eq!(google_vertex_rows(&config), expected, "key {key:?}");
+        }
+    }
+
+    /// BACKEND-49 in the window: a block naming models is offered those and no others. The one named
+    /// is on no compiled list, so a window adding the two together would offer more than this row.
+    #[test]
+    fn the_window_offers_a_google_vertex_block_its_own_models_alone() {
+        let config = a_config_with_google_vertex(
+            Some("placeholder-key"),
+            Some(r#"{"google/gemini-3-flash-preview": {}}"#),
+        );
+        assert_eq!(
+            google_vertex_rows(&config),
+            ["google-vertex/google/gemini-3-flash-preview"]
+        );
+    }
+
+    /// BACKEND-29 in the window: an entry naming AWS is offered under the bare id the Bedrock backend
+    /// routes, and is never asked as a gateway, so a block naming no models adds no row and no warning.
+    #[test]
+    fn the_window_offers_an_aws_provider_entry_under_its_bare_id() {
+        use bravebot_config::env_var;
+
+        let with = |models: &str| {
+            let mut config = Config::from_lookup(|key| match key {
+                env_var::USE_BEDROCK => Some("1".into()),
+                env_var::AWS_REGION => Some("us-west-2".into()),
+                env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+                _ => None,
+            })
+            .expect("an account named on its own is a working configuration");
+            config.providers = bravebot_config::Settings::parse(&format!(
+                r#"{{"provider": {{"amazon-bedrock": {{"options": {{"region": "us-east-1"}}{models}}}}}}}"#
+            ))
+            .providers()
+            .to_vec();
+            assert!(config.providers[0].bedrock.is_some());
+            config
+        };
+        let ids = |config: &Config| -> Vec<String> {
+            list(config)["models"]
+                .as_array()
+                .expect("rows")
+                .iter()
+                .filter_map(|row| row["id"].as_str().map(str::to_string))
+                .collect()
+        };
+        let named = with(r#", "models": {"openai.gpt-5.6-sol": {}}"#);
+        let listed = ids(&named);
+        assert!(
+            listed.contains(&"openai.gpt-5.6-sol".to_string()),
+            "{listed:?}"
+        );
+        assert!(
+            listed.iter().all(|id| !id.starts_with("amazon-bedrock/")),
+            "{listed:?}"
+        );
+        let empty = with("");
+        assert!(ids(&empty).iter().all(|id| id != "amazon-bedrock/"));
+        assert_eq!(list(&empty)["warnings"], json!([]));
     }
 
     #[test]

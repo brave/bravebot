@@ -185,6 +185,11 @@ than the ones to reject. A list to reject fails open: `-S` makes BSD `grep` foll
 meets while walking, and `grep -A 1 -r TODO` walks the working directory while appearing to name a
 path. An option the entry does not list leaves the step unproven, so the line is asked about as usual.
 
+BSD and GNU versions of `head`, `tail`, `wc`, `cut` and `grep` read a word after the first operand
+differently: BSD opens it as a file, GNU takes it as an option. A word spelled like an option after an
+operand therefore leaves the step unproven, so `grep -r TODO src -n` is asked about, and
+`grep -r -n TODO src` is not.
+
 Five other things leave a step unproven. Naming the program by path rather than by name, since a file
 called `wc` in the directory the line runs in would otherwise answer as the audited one. A name that
 resolves to a file inside the workspace, for the same reason: a `PATH` entry in the project can put
@@ -410,10 +415,42 @@ reason to ask for less.
 
 `deadline_seconds` does nothing here, since nothing is waited for.
 
+Anything a job wrote to standard error is marked as such wherever it is reported, so an error message
+is not read as though the program had printed it as output. [`/jobs`](commands.md#jobs-stop-name-delegate)
+lists the jobs a turn has started and stops one.
+
 **One pipeline, and no redirection.** A line with `&&` or `||` decides where to go next by waiting on
 the part before it, and nothing waits here; a redirection names a destination nothing is reading.
 Both are refused rather than half-honoured.
 
 **A job cannot outlive the turn that started it.** The turn owns the pipeline and ending the turn
 kills it. A background program still running afterwards would be an effect nobody is watching,
-nobody is being asked about, and nobody can stop.
+nobody is being asked about, and nobody can stop. The terminal shows each job while it runs and says
+when the turn stopped one ([Moving a command to the
+background](../using/interactive-mode.md#moving-a-command-to-the-background)).
+
+## Moving a running command to the background
+
+A line the turn is waiting on can be moved to the background by the person at the terminal, with the
+key the hint line names (`ctrl-b` unless you [moved it](../using/interactive-mode.md#moving-a-key)).
+Only the interactive terminal client has the key: one-shot mode and the desktop app wait as before.
+The command is not stopped or started again. It becomes a job exactly as if it had been started with
+`background: true`, and the agent's result for the call says the user moved it, after how many
+seconds, and under which job name. Nothing it printed is in that result, including what it printed
+before the move: [`job_output`](tools.md#job_output) reads all of it, under the label the line was
+always going to carry.
+
+**Only a line a job can hold is offered.** That is one pipeline with no redirection, the same lines
+`background: true` accepts. A line that reads its input from an earlier result and one a delegate is
+running are waited for to the end, and the hint does not name the key while they run. A line that
+asked for its output with `read: true` can be moved: the result for the call is then the move, and
+[`job_output`](tools.md#job_output) returns the output.
+
+**The deadline goes with the wait.** A moved line is not killed when its `deadline_seconds` would
+have run out, because a deadline is how long the turn will wait and the turn is no longer waiting.
+
+**The turn still owns it.** Ending the turn kills it, as it kills every job. Stopping the turn with
+Ctrl-C at the moment of the press stops the command: a stop always wins over a move.
+
+The audit trail records the move as a `handoff` entry naming the job and when it happened, so a
+command that went on without a deadline is shown to be your choice and not the agent's.

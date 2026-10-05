@@ -60,6 +60,13 @@ pub struct State {
     /// it already has a record, and the point of resuming is to write back to it.
     pub handle: Option<Handle>,
     pub turns: usize,
+    /// Where each turn began and ended, and what came of it (SESSION-23).
+    ///
+    /// `None` for a session whose record has none: a record from before turn boundaries were kept
+    /// is read as the legacy shape, and a history started halfway through it would claim
+    /// boundaries for turns nobody recorded. `Some` is carried forward from the record on resume
+    /// and extended by every turn taken here, so a save writes back the history it was given.
+    pub history: Option<Vec<bravebot_session::sessions::StoredTurn>>,
     pub tokens: u64,
     /// What each turn cost, by turn number.
     ///
@@ -102,6 +109,68 @@ pub struct State {
     /// asks before starting a server. Dropping this state stops the servers, which happens when
     /// the session closes or the process ends.
     pub servers: Option<bravebot_agent::lsp::LanguageServers>,
+    /// The MCP servers this session started, once its first turn has started them (SERVERS-9).
+    pub mcp: Mcp,
+    /// The directory of its own outside the project, made as the session opened (TRUST-14).
+    ///
+    /// Held here so it lasts as long as the session's state does: the directory is removed when
+    /// this is dropped, which happens once the session is closed and no turn still holds the state.
+    pub scratch: Scratch,
+}
+
+/// The session's own directory outside the project, or why it has none.
+pub enum Scratch {
+    /// Made, and removed when this is dropped.
+    Held(bravebot_agent::SessionScratch),
+    /// Could not be made. The session runs without one and says so, with the reason the system
+    /// gave.
+    Unavailable(String),
+}
+
+impl Scratch {
+    /// Make one, as the terminal does as a session opens.
+    pub fn open() -> Self {
+        match bravebot_agent::SessionScratch::create() {
+            Ok(held) => Self::Held(held),
+            Err(problem) => Self::Unavailable(problem.to_string()),
+        }
+    }
+
+    /// Where it is, where the session has one.
+    pub fn path(&self) -> Option<&Path> {
+        match self {
+            Self::Held(held) => Some(held.path()),
+            Self::Unavailable(_) => None,
+        }
+    }
+
+    /// What the session tells the window about it: the path, or that there is none and why.
+    pub fn report(&self) -> serde_json::Value {
+        match self {
+            Self::Held(held) => serde_json::json!({
+                "directory": held.path().display().to_string(),
+                "unavailable": null,
+            }),
+            Self::Unavailable(problem) => serde_json::json!({
+                "directory": null,
+                "unavailable": problem,
+            }),
+        }
+    }
+}
+
+/// Where a session stands with the MCP servers its project requests.
+///
+/// Started once, by the first turn that runs to the end of starting them, and held until the
+/// session closes, since dropping one stops its server. Not saved to the record, so a reopened or
+/// forked session starts its own.
+#[derive(Default)]
+pub enum Mcp {
+    /// No turn has started them yet.
+    #[default]
+    Unstarted,
+    /// Started, where any was, with the lines saying why each other request was not.
+    Started(Option<bravebot_agent::mcp::Session>),
 }
 
 impl State {
@@ -115,6 +184,7 @@ impl State {
             directories: Vec::new(),
             handle: None,
             turns: 0,
+            history: Some(Vec::new()),
             tokens: 0,
             spend: BTreeMap::new(),
             timing: BTreeMap::new(),
@@ -126,6 +196,8 @@ impl State {
             rules: Default::default(),
             runs: 0,
             servers: None,
+            mcp: Mcp::Unstarted,
+            scratch: Scratch::open(),
         }
     }
 
@@ -157,6 +229,7 @@ impl State {
                 crate::agent_build(),
             )),
             turns: record.turns,
+            history: record.history.clone(),
             tokens: record.tokens,
             spend: record.spend.clone(),
             timing: record.timing.clone(),
@@ -168,6 +241,8 @@ impl State {
             rules: Default::default(),
             runs: 0,
             servers: None,
+            mcp: Mcp::Unstarted,
+            scratch: Scratch::open(),
         }
     }
 
@@ -216,6 +291,9 @@ impl State {
             directories,
             handle: Some(handle),
             turns,
+            // The parent's boundaries are offsets into a conversation this one has cut, so none
+            // are carried: the fork reads as the legacy shape, as it did before.
+            history: None,
             tokens: 0,
             spend: BTreeMap::new(),
             timing: BTreeMap::new(),
@@ -227,6 +305,8 @@ impl State {
             rules: Default::default(),
             runs: 0,
             servers: None,
+            mcp: Mcp::Unstarted,
+            scratch: Scratch::open(),
         }
     }
 }

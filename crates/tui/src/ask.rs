@@ -652,7 +652,7 @@ impl<'a> Picker<'a> {
 /// A fresh answer that never arrived leaves a decline rather than pulling the next one forward.
 /// Shifting answers up would report the person as having said, about one question, what they
 /// said about another.
-pub(crate) fn in_order(known: Vec<Option<Answer>>, fresh: Vec<Answer>) -> Vec<Answer> {
+pub fn in_order(known: Vec<Option<Answer>>, fresh: Vec<Answer>) -> Vec<Answer> {
     let mut fresh = fresh.into_iter();
     known
         .into_iter()

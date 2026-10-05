@@ -272,6 +272,52 @@ fn a_chosen_theme_is_read_back_next_session() {
     });
 }
 
+/// Whether the panel was left open outlives the session, so somebody who keeps it open is not
+/// pressing its key at every start, and closing it is a choice that stays made.
+#[test]
+fn whether_the_panel_was_left_open_is_read_back_next_session() {
+    with_temp_home("panel", || {
+        assert_eq!(store::load_panel(), None, "started with a choice");
+        store::save_panel(true);
+        assert_eq!(store::load_panel(), Some(true));
+        store::save_panel(false);
+        assert_eq!(store::load_panel(), Some(false));
+    });
+}
+
+/// The press is what writes the choice, and a file that says neither word is no choice: a panel
+/// opened by a file somebody edited by hand would take 36 columns nobody asked to give up.
+#[test]
+fn a_press_opens_the_next_session_too_and_a_corrupt_choice_leaves_it_closed() {
+    with_temp_home("panel-press", || {
+        let wide = bravebot_tui::state::Laid {
+            columns: 120,
+            ..bravebot_tui::state::Laid::default()
+        };
+        let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+        session.adopt_panel();
+        assert!(
+            !session.panel_open(),
+            "the panel was open with nothing chosen"
+        );
+        session.note_layout(wide);
+        session.toggle_panel();
+
+        let mut next = bravebot_tui::state::Session::new("test").with_stored_history();
+        next.adopt_panel();
+        assert!(
+            next.panel_open(),
+            "the press was not read back next session"
+        );
+
+        let file = store::directory().expect("a home").join("panel");
+        std::fs::write(&file, "opened\n").expect("write the choice");
+        let mut corrupt = bravebot_tui::state::Session::new("test").with_stored_history();
+        corrupt.adopt_panel();
+        assert!(!corrupt.panel_open(), "a corrupt choice opened the panel");
+    });
+}
+
 /// The editing choice outlives the session that made it, and the word it is stored as is resolved by
 /// the same rule as the word in a settings file. The choice outranks the file, because somebody who
 /// picked a box during a session picked it knowing what their settings said. A record somebody edited

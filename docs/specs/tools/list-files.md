@@ -22,12 +22,10 @@ see them.
 A listing is trusted only if every file it touched is. A file can be named to read like an
 instruction, so the names are treated as content and not shown to the planner.
 
-**The same bytes reach the planner from a language server, and that is not this clause being
-contradicted.** [LSP-3](lsp.md#LSP-3) agrees that a filename is content and admits a bounded
-disclosure of one anyway, because a location is a name *and* a position and the remedy
-[LIST-2](#LIST-2) uses here, a reference the planner passes where it would have typed a path,
-carries no position and opens nothing outside the workspace. What that clause owes this one is the
-bound written down and its cost enumerated, which is where to read what a name can still carry.
+**The same bytes come back from a language server, and [LSP-3](lsp.md#LSP-3) treats them the same
+way.** An answer naming a file nobody vouched for is quarantined whole, because a location is a name
+*and* a position and the remedy [LIST-2](#LIST-2) uses here, a reference the planner passes where it
+would have typed a path, carries no position.
 
 `verified-by: bravebot_agent::workspace::list_enumerates_files_recursively`
 `verified-by: bravebot_agent::turn::untrusted_listings_never_reach_the_model`
@@ -52,6 +50,8 @@ use. What came of that in practice was a planner guessing globs to see which cam
 `verified-by: bravebot_agent::workspace::a_failure_is_worded_about_the_name_the_caller_may_say`
 `verified-by: bravebot_agent::tools::a_deferred_read_that_fails_does_not_name_the_file`
 `verified-by: bravebot_agent::tools::a_deferred_read_a_rule_denies_does_not_name_the_file`
+`verified-by: bravebot_agent::workspace::a_listing_leaves_out_a_directory_it_cannot_open_and_says_so`
+`verified-by: bravebot_agent::tools::a_listing_that_cannot_open_a_directory_does_not_name_it`
 
 <a id="LIST-3"></a>
 ### LIST-3: the glob is literal and the matcher does not backtrack

@@ -139,8 +139,8 @@ A description says *when* to use a skill, so it runs to a sentence or two and fi
 lines indented under a key continue that key's value however the file spells the wrap: folded or
 literal with `>` or `|`, quoted and carried over, or plain text simply continued. A folded value
 is joined with spaces, because the line breaks were the file's and not the sentence's, and a
-literal one keeps the newlines it asked for. Quotes around a value are the file's syntax and are
-not part of it.
+literal one keeps the newlines it asked for, including a blank line between two of its lines.
+Quotes around a value are the file's syntax and are not part of it.
 
 **Why.** A continuation line is not a declaration. Reading one as a key ends the value where the
 line ended, which puts half a sentence in the prompt or, where the wrap began immediately after
@@ -149,6 +149,7 @@ the colon, an empty value and a skill dropped for being half-declared.
 `verified-by: bravebot_agent::skills::a_value_wrapped_over_several_lines_is_one_value`
 `verified-by: bravebot_agent::skills::a_continuation_line_holding_a_colon_does_not_start_a_new_key`
 `verified-by: bravebot_agent::skills::a_folded_block_becomes_one_line_and_a_literal_block_keeps_its_own`
+`verified-by: bravebot_agent::skills::a_blank_line_inside_a_literal_block_is_kept`
 `verified-by: bravebot_agent::skills::the_quotes_around_a_scalar_are_not_part_of_it`
 
 <a id="SKILL-11"></a>

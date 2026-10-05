@@ -192,6 +192,8 @@ export function botFromForm(value: unknown): Bot | null {
     // omit it; either way it is stored and survives a rename.
     avatar: typeof avatar === 'string' ? avatar : newAvatarSeed(randomUUID()),
     directory,
+    // Named once the agent has written the definition, in the handler that calls this.
+    definition: null,
     session: null,
     conversations: [],
     archived: 0,
@@ -204,6 +206,90 @@ export function botFromForm(value: unknown): Bot | null {
     created: Date.now(),
     updated: Date.now(),
   }
+}
+
+/** The agent request that writes or rewrites a bot's definition (MEMORY-8, MEMORY-9). */
+export type DefineRequest = (method: 'bot.define' | 'bot.redefine', params: Record<string, unknown>) => Promise<unknown>
+
+/**
+ * Save the bot a form described. A new bot is first defined by the agent (MEMORY-8), which names
+ * what it wrote; that name is kept as `definition`. An existing bot with a definition has the
+ * description, the body and the model of that file rewritten (MEMORY-9), and nothing else in it.
+ * A refusal, an absent agent or an answer that is not a slug throws and saves nothing, so the row
+ * and the file never disagree about what the bot is for.
+ */
+export async function saveFormBot(next: Bot, define: DefineRequest | null): Promise<Bot> {
+  let kept = next
+  const stored = bot(next.slug)
+  if (!stored) {
+    if (!define) throw new Error('The agent is not running, so a bot cannot be made.')
+    const made = (await define('bot.define', {
+      slug: next.slug,
+      purpose: next.purpose,
+      ...(next.model === null ? {} : { model: next.model }),
+    })) as { name?: unknown } | null
+    if (!isSlug(made?.name)) throw new Error('The agent did not name the bot’s definition.')
+    kept = { ...next, definition: made.name }
+  } else if (stored.definition !== null) {
+    if (!define) throw new Error('The agent is not running, so a bot cannot be edited.')
+    await redefine(stored.definition, next, define)
+    kept = { ...next, definition: stored.definition }
+  }
+  saveBot(kept)
+  return kept
+}
+
+/**
+ * Give a bot made before definitions one, the first time it is opened (MEMORY-11).
+ *
+ * The agent writes the definition and records the bot's old memory, `.bravebot-ui/bots/<slug>.md`
+ * in its folder, as untrusted in every later session. Nothing here reads that file: this process
+ * sends the slug, the purpose, the model and the folder it holds for the bot, and keeps only the
+ * name the agent answers with. A refusal, an absent agent or an answer that is not a slug throws
+ * and the bot stays as it was, so it is tried again on the next open. A bot that has a definition
+ * is returned as it is and the agent is not asked.
+ */
+export async function migrateBot(
+  held: Bot,
+  migrate: ((method: 'bot.migrate', params: Record<string, unknown>) => Promise<unknown>) | null,
+): Promise<Bot> {
+  if (held.definition !== null) return held
+  if (!migrate) throw new Error('The agent is not running, so this bot cannot be opened.')
+  const made = (await migrate('bot.migrate', {
+    slug: held.slug,
+    purpose: held.purpose,
+    directory: held.directory,
+    ...(held.model === null ? {} : { model: held.model }),
+  })) as { name?: unknown } | null
+  if (!isSlug(made?.name)) throw new Error('The agent did not name the bot’s definition.')
+  const next = { ...held, definition: made.name }
+  saveBot(next)
+  return next
+}
+
+/**
+ * Change a bot's model, in its definition as well where it has one.
+ *
+ * The same rule as an edit from the form: the file is written first and the row only if that
+ * worked, so a bot's turns, which run under the file, never run on a model the row no longer names.
+ */
+export async function saveBotModel(held: Bot, model: string | null, define: DefineRequest | null): Promise<Bot> {
+  const next = { ...held, model }
+  if (held.definition !== null) {
+    if (!define) throw new Error('The agent is not running, so a bot cannot be edited.')
+    await redefine(held.definition, next, define)
+  }
+  saveBot(next)
+  return next
+}
+
+async function redefine(name: string, bot: Bot, define: DefineRequest): Promise<void> {
+  const answer = (await define('bot.redefine', {
+    name,
+    purpose: bot.purpose,
+    ...(bot.model === null ? {} : { model: bot.model }),
+  })) as { name?: unknown } | null
+  if (answer?.name !== name) throw new Error('The agent did not rewrite the bot’s definition.')
 }
 
 /** Write a bot down, replacing whatever shared its slug, and stamp when that happened. */
@@ -272,14 +358,32 @@ function ownDirectory(slug: string): string {
   return join(app.getPath('userData'), 'bots', slug)
 }
 
-/** Where a bot's memory sits inside its checkout, as the agent would name it. */
-export function memoryPath(slug: string): string {
-  return `${HOME}/bots/${slug}.md`
+/**
+ * Where a bot's memory sits inside its checkout, as the agent would name it.
+ *
+ * A bot with a definition keeps its memory where the agent keeps every definition's, which the run
+ * is told about and reads itself (MEMORY-4). A bot made before definitions existed has none until
+ * `migrateBot` gives it one (MEMORY-11), and is named at the file this app made for it.
+ */
+export function memoryPath(bot: Pick<Bot, 'slug' | 'definition'>): string {
+  return bot.definition === null ? `${HOME}/bots/${bot.slug}.md` : definitionMemoryPath(bot.definition)
+}
+
+/**
+ * Where the memory of a bot's definition is, relative to its checkout (MEMORY-2).
+ *
+ * Made from the definition's name, which the agent chose and this process judged to be a slug. Once
+ * a bot has a definition this is the only memory path a briefing or a composed turn names. The old
+ * path is never named then, since the agent records it as untrusted and a run told to read it would
+ * ask a person about notes they were already going to be asked about (MEMORY-11).
+ */
+export function definitionMemoryPath(definition: string): string {
+  return `.bravebot/memory/${definition}.md`
 }
 
 /** The same, absolutely, for this process to read and seed. */
-function memoryFile(directory: string, slug: string): string {
-  return join(directory, HOME, 'bots', `${slug}.md`)
+function memoryFile(bot: Pick<Bot, 'slug' | 'definition' | 'directory'>): string {
+  return join(bot.directory, memoryPath(bot))
 }
 
 /**
@@ -296,7 +400,7 @@ function memoryStamp(bot: Bot): number {
     // `lstat`, so a link at the memory path reports on itself rather than on whatever it aims at.
     // Nothing here would act on the answer, but a figure about a file outside the checkout has no
     // business being read at all, and the difference is one letter.
-    return lstatSync(memoryFile(bot.directory, bot.slug)).mtimeMs
+    return lstatSync(memoryFile(bot)).mtimeMs
   } catch {
     return 0
   }
@@ -316,7 +420,9 @@ function memoryStamp(bot: Bot): number {
  */
 export function noteBotMemory(slug: string): void {
   const held = bot(slug)
-  if (!held) return
+  // A bot with a definition is told where its memory is by the agent on every turn (MEMORY-4), so
+  // there is no briefing for a quiet spell to bring back and nothing to count (MEMORY-10).
+  if (!held || held.definition !== null) return
   const stamp = memoryStamp(held)
   if (stamp !== held.remembered) saveBot({ ...held, remembered: stamp, quiet: 0 })
   else saveBot({ ...held, quiet: held.quiet + 1 })
@@ -325,10 +431,11 @@ export function noteBotMemory(slug: string): void {
 /**
  * Whether this bot has gone long enough without writing to be handed its briefing again.
  *
- * Asked on the way into a send, of a turn the window did not think needed grounding.
+ * Asked on the way into a send, of a turn the window did not think needed grounding. Never true
+ * for a bot with a definition, whose turns are addressed to it and carry no briefing (MEMORY-10).
  */
 export function nudgeDue(bot: Bot): boolean {
-  return bot.quiet >= QUIET_MAX
+  return bot.definition === null && bot.quiet >= QUIET_MAX
 }
 
 /**
@@ -363,7 +470,7 @@ export function consolidationPrompt(bot: Bot, why: string): string {
   return [
     why,
     '',
-    `Look back over this conversation and bring \`${memoryPath(bot.slug)}\` up to date: add what`,
+    `Look back over this conversation and bring \`${memoryPath(bot)}\` up to date: add what`,
     'has turned out to be durable — a decision and why, a constraint, how something here is',
     'arranged — and prune whatever has stopped being true. If nothing in it needs changing, say so',
     'in one line and change nothing; an honest "no" is a better answer than an invented entry.',
@@ -421,7 +528,7 @@ function groundText(bot: Bot, nudge: boolean, fresh: boolean): string {
     '',
     '## Memory',
     '',
-    `Your memory is the file \`${memoryPath(bot.slug)}\` in this checkout. It is the only thing`,
+    `Your memory is the file \`${memoryPath(bot)}\` in this checkout. It is the only thing`,
     'about you that survives a compaction, so when you learn something durable — a decision and',
     'why, a constraint, how something here is arranged — edit that file to say so as you go, in',
     'the same turn you learnt it, rather than waiting to be asked. Keep it short enough to stay',
@@ -442,7 +549,7 @@ function groundText(bot: Bot, nudge: boolean, fresh: boolean): string {
           'Read that file now, before anything else. It is not quoted here: what is in it is your',
           'own writing rather than anything this window wrote, so you read it on the same terms as',
           'any other file in this checkout. If it comes back withheld, say so and carry on without',
-          'it rather than guessing at what it used to say.',
+          'it rather than guessing at what it used to say. If nothing is there yet, nothing is kept.',
         ]),
     '',
     // Said plainly because it is true, where the sentence this replaced — that every edit would be
@@ -519,7 +626,10 @@ export function ground(bot: Bot, nudge = false): Grounding | null {
     // written through; the helper opens each component relative to a pinned directory and follows
     // nothing. It answers only whether it wrote, because what the memory *says* has no business
     // in a file this process composes.
-    const fresh = seedProjectMemory(bot.directory, memoryPath(bot.slug), emptyMemory(bot), GITIGNORE)
+    const fresh =
+      bot.definition === null
+        ? seedProjectMemory(bot.directory, memoryPath(bot), emptyMemory(bot), GITIGNORE)
+        : false
 
     const ground = join(ownDirectory(bot.slug), 'ground.md')
     mkdirSync(ownDirectory(bot.slug), { recursive: true })
@@ -551,5 +661,5 @@ export function ground(bot: Bot, nudge = false): Grounding | null {
 export function memory(slug: unknown): string | null {
   const held = bot(slug)
   if (!held) return null
-  return readProjectText(held.directory, memoryPath(held.slug), MEMORY_MAX)?.text ?? null
+  return readProjectText(held.directory, memoryPath(held), MEMORY_MAX)?.text ?? null
 }

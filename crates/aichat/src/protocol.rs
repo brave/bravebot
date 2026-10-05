@@ -491,6 +491,9 @@ impl<'a> From<&'a Part> for MarkedPart<'a> {
 /// the end. So the rounds within one turn read the whole conversation back and pay only for what
 /// they appended, and the next turn extends the cached prefix rather than starting one.
 ///
+/// The last user turn is marked wherever it sits, so a round that ends in a call and its result
+/// still carries the mark that the first round of the turn wrote.
+///
 /// A result or a call is not marked. Marking one would mean sending a `tool` message's content as
 /// a list of blocks, which not every service that reads this wire format accepts, and a service
 /// that rejects it costs the system prompt's breakpoint too.
@@ -503,10 +506,9 @@ fn breakpoints(messages: &[Message], conversation_is_sent_again: bool) -> Vec<us
         .iter()
         .rposition(|message| matches!(message.role, Role::System));
     let last = messages
-        .len()
-        .checked_sub(1)
-        .filter(|_| conversation_is_sent_again)
-        .filter(|&at| matches!(messages[at].role, Role::User));
+        .iter()
+        .rposition(|message| matches!(message.role, Role::User))
+        .filter(|_| conversation_is_sent_again);
     system
         .into_iter()
         .chain(last)
@@ -1925,8 +1927,8 @@ mod tests {
         /// A round in the middle of a turn ends in a result rather than in what the person said.
         /// Marking one would mean sending a `tool` message as a list of blocks, which not every
         /// service reading this wire format accepts, and a service that rejects the shape costs
-        /// the system prompt's breakpoint too. The prefix through the last user turn is cached
-        /// from the first round of the turn regardless, which is the part worth having.
+        /// the system prompt's breakpoint too. The last user turn keeps its mark on those rounds,
+        /// which is the part worth having.
         #[test]
         fn a_result_the_assistant_asked_for_is_not_marked() {
             let request = ChatRequest::new(
@@ -1945,7 +1947,43 @@ mod tests {
                 messages[0]["content"][0]["cache_control"],
                 json!({"type": "ephemeral"})
             );
+            assert_eq!(messages[2]["content"], json!(""));
             assert_eq!(messages[3]["content"], json!("the file"));
+            // The prefix through the last user turn is what the rounds after the first read back,
+            // so it carries the mark although the request ends in a result.
+            assert_eq!(
+                messages[1]["content"],
+                json!([{"type": "text", "text": "read it", "cache_control": {"type": "ephemeral"}}])
+            );
+        }
+
+        /// Several results in a row, from a turn that made more than one round of calls, still mark
+        /// the one user turn they all follow and nothing after it.
+        #[test]
+        fn the_last_user_turn_is_marked_through_several_rounds_of_results() {
+            let request = ChatRequest::new(
+                DEFAULT_MODEL,
+                vec![
+                    Message::system("be brief"),
+                    Message::user("first question"),
+                    Message::assistant("first answer"),
+                    Message::user("read it"),
+                    Message::assistant_calling("", vec![]),
+                    Message::tool_result("call-1", "the file"),
+                    Message::assistant_calling("", vec![]),
+                    Message::tool_result("call-2", "the other file"),
+                ],
+            );
+
+            let messages = &request.marked_body().unwrap()["messages"];
+
+            assert_eq!(messages[1]["content"], json!("first question"));
+            assert_eq!(
+                messages[3]["content"],
+                json!([{"type": "text", "text": "read it", "cache_control": {"type": "ephemeral"}}])
+            );
+            assert_eq!(messages[5]["content"], json!("the file"));
+            assert_eq!(messages[7]["content"], json!("the other file"));
         }
 
         /// A breakpoint has to sit on a block, and what a service makes of one on a picture is not

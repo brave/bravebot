@@ -218,7 +218,7 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_tui::trust_prompt::bypassing_trusts_the_workspace_instead_of_asking`
 `verified-by: bravebot_tui::trust_prompt::every_other_mode_leaves_the_question_to_the_person`
 `verified-by: bravebot_tui::app::bypassing_opens_the_directories_a_file_named_without_asking`
-`verified-by: bravebot_cli::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
+`verified-by: bravebot_agent::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
 `verified-by: bravebot_agent::mcp::bypassing_answers_both_prompts_and_records_nothing`
 `verified-by: bravebot_agent::permission_mode::bypassing_refuses_to_move_a_server`
 `verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_credential_write_to_the_person_and_bypassing_answers_it`
@@ -250,6 +250,11 @@ because a run told to stop asking and carried on with a notice is a run whose au
 unattended. The mode is then unreachable rather than merely unselected: the fourth rung exists only
 where the flag got through, so the key cannot reach it either.
 
+Where the flag was given, moving the key off bypass does not leave the screen blank. The line under
+the input box and `/status` name asking, which they do for no session started without the flag: there
+asking is what has always happened, and here it is the answer to whether the session stopped skipping
+permissions. Leaving the mode prints nothing in the transcript.
+
 **Why.** A mode that answers every question has to be asked for where the asking is recorded, which
 is the command line somebody typed. Honouring only the second half would leave the flag doing
 nothing a person could see, and disagreeing with what the same flag does to a one-shot run.
@@ -265,6 +270,9 @@ keeps the two halves from disagreeing.
 `verified-by: bravebot_cli::running::the_skip_permissions_flag_is_refused_where_a_layer_made_bypass_unreachable`
 `verified-by: bravebot_tui::app::the_key_cannot_reach_bypass_without_the_flag`
 `verified-by: bravebot_tui::app::the_flag_opens_the_session_in_bypass_and_can_be_cycled_out_of`
+`verified-by: bravebot_tui::status::named_mode_names_asking_where_bypass_was_available`
+`verified-by: bravebot_tui::render::the_hint_line_names_asking_after_a_session_leaves_bypass`
+`verified-by: bravebot_tui::render::the_hint_line_says_nothing_about_the_ordinary_mode`
 `verified-by: bravebot_cli::main::permissions_are_enforced_unless_the_flag_is_given`
 `verified-by: bravebot_cli::main::the_skip_permissions_flag_is_taken_out_wherever_it_appears`
 `verified-by: bravebot_cli::main::the_flag_leaves_every_other_way_of_starting_intact`

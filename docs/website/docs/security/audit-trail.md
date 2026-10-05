@@ -14,7 +14,7 @@ would not answer "why did it not do the thing I asked", which is most of what an
 | Where | How |
 |---|---|
 | in a session, live | **Ctrl-T** toggles the trail |
-| a one-shot run | `--trace`, which puts it on stderr |
+| a one-shot run | `--trace`, which puts it on stderr, after the error too when the run ends in one |
 | after the fact | `~/.bravebot/sessions/<directory>/<id>.audit.jsonl` |
 
 An [incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind) shows its gate
@@ -31,7 +31,7 @@ Reading a file in a trusted directory, where the content reaches the model:
 
 ```
 ok      precommit: routing fields ["task"] fixed before any observation
-ok      promote: read_file.path proposed by the model, confined and non-destructive
+ok      promote: read_file.path proposed by the model, public and non-destructive
 ok      file_read.path [routing] (T,pub)
 observe file_read produced (T,priv)
 ok      trust: notes.md read as trusted, from a trusted path
@@ -47,6 +47,15 @@ ok      trust: notes.md read as untrusted
 slot    ref:0 at (U,priv)
 ok      present: tool_result: notes.md is (U,priv), quarantined as ref:0; the planner
         sees a reference only
+```
+
+A read of a file outside the workspace, refused when the path resolves, with what you can do about
+it:
+
+```
+ok      promote: read_file.path proposed by the model, public and non-destructive
+BLOCK   confine: read_file.path: '/etc/hosts' resolves outside the workspace; remedy offered:
+        open its directory, or drop the file
 ```
 
 Three pieces of notation appear throughout:
@@ -67,7 +76,8 @@ through one.
 
 Every compaction gets a line: how many messages were summarised, how many were kept word for word,
 what the summary cost, and which tool-calling round it landed on. A `/compact` you asked for between
-rounds reports round zero, having interrupted nothing.
+rounds reports round zero, having interrupted nothing. One given a focus (`/compact [focus]`) says
+so by the focus's length in characters, and never repeats it.
 
 It is recorded *after* the conversation is shortened, so a summary refused on the way back in leaves
 no line claiming one was made. Counts and nothing else, so this carries no more content than the
@@ -85,6 +95,26 @@ is named as bravebot offered it. Nothing the reply wrote is in the line.
 A planning call is a gate like any other and gets its own line, refusals included. A run planned in
 advance makes two of them, one for reading the goal in plain words and one for fitting that goal to the
 tool set, and both appear.
+
+## The mode and what answered are recorded
+
+Each turn begins with a `permission_mode` line naming the mode it ran in: `ask`, `accept-edits`, `plan`
+or `bypass`. A command or write that was put to you gets an `approval` line after it that says either
+`no mode answered, left to the confirmer` or `answered by <mode> mode, nobody was asked`, so an entry
+ending in "asking" is never the only thing the trail says about who answered. A fetch or a server
+start that a mode answers carries no such line.
+
+## Delegates and checkouts are recorded
+
+A [delegate](../how-it-works.md#delegates) gets a line when it starts and another when it ends. The
+ending line says how long it ran, how many rounds it made out of the most it may, and one cause: it
+answered, it reached its round limit and answered with what it had, it was stopped, it did not finish
+(with the kind of failure), or its thread died and returned nothing. A delegate that ran for
+twenty minutes and produced nothing can be told apart this way from one that ran out of rounds. The
+same cause is in the note you are shown. The planner is told only that the delegate did not finish.
+
+Each [checkout](../customize/agents.md#a-checkout-of-its-own) made for a delegate, and each one
+removed, is recorded as well.
 
 ## The trail holds no content
 
@@ -123,4 +153,14 @@ is the turn's own:
 
 ```sh
 jq -r 'select(.delegate == "d1")' ~/.bravebot/sessions/*/….audit.jsonl
+```
+
+How each delegate ended is the turn's own entry under `delegate`, with the delegate's name first. It
+gives how long the delegate ran, how many of its rounds it made out of the most it was allowed, and a
+cause from a fixed list: it answered, it reached its round limit, it was stopped, or it did not finish
+with the name of the failure, such as `unavailable` or `refused`. The cause never quotes what a
+service or a tool said:
+
+```sh
+jq -r 'select(.event.gate == "delegate" and (.event.detail | contains(": ended "))) | .event.detail' ~/.bravebot/sessions/*/….audit.jsonl
 ```

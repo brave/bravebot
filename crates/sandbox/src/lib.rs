@@ -143,6 +143,46 @@ pub fn for_current_platform() -> Result<Box<dyn Sandbox>, SandboxError> {
     }
 }
 
+/// Whether a process can be confined from here, which [`for_current_platform`] returning a
+/// backend does not say.
+///
+/// Seatbelt cannot be applied from inside a seatbelt, so a suite run by a command that
+/// bravebot's own `run` tool started on macOS has a backend and cannot start a confined
+/// process. Answering by behaviour needs nothing from the caller: this starts a trivial
+/// program under the narrowest policy it can run in and reports whether it ran and
+/// exited successfully. A test that needs a confined process skips on `false`; code that
+/// starts one for a person does not call this and still fails closed.
+pub fn confinement_works_here() -> bool {
+    let Ok(sandbox) = for_current_platform() else {
+        return false;
+    };
+    // Only the directories this machine has: naming one it does not is a policy some
+    // backends refuse.
+    let policy = ["/usr", "/lib", "/lib64", "/bin"]
+        .into_iter()
+        .filter(|path| std::path::Path::new(path).exists())
+        .fold(
+            SandboxPolicy::strict()
+                .allow_network_egress()
+                .allow_subprocesses(),
+            SandboxPolicy::allow_read,
+        );
+    let program = if cfg!(target_os = "macos") {
+        "/usr/bin/true"
+    } else {
+        "/bin/true"
+    };
+    let nothing = Streams {
+        stdin: Stream::Null,
+        stdout: Stream::Null,
+        stderr: Stream::Null,
+    };
+    sandbox
+        .spawn(program, &[], &policy, nothing, Environment::Inherited)
+        .and_then(|mut child| child.wait().map_err(SandboxError::SpawnFailed))
+        .is_ok_and(|status| status.success())
+}
+
 /// A backend that always refuses.
 ///
 /// Not a fallback: it exists so tests can assert that callers propagate a refusal
@@ -233,6 +273,36 @@ mod tests {
             Err(SandboxError::Unavailable { .. }) => {}
             Err(other) => panic!("unexpected error: {other}"),
         }
+    }
+
+    /// The probe answers by starting a process, so it is true exactly where one starts, and
+    /// never where the lookup refuses. A probe that only repeated the lookup would be true on
+    /// a macOS host inside a seatbelt, which is the case it exists for.
+    #[cfg(unix)]
+    #[test]
+    fn the_confinement_probe_is_true_only_where_a_confined_process_starts() {
+        let started = for_current_platform().is_ok_and(|sandbox| {
+            let policy = SandboxPolicy::strict()
+                .allow_network_egress()
+                .allow_subprocesses()
+                .allow_read("/usr")
+                .allow_read("/bin");
+            let program = if cfg!(target_os = "macos") {
+                "/usr/bin/true"
+            } else {
+                "/bin/true"
+            };
+            sandbox
+                .spawn(
+                    program,
+                    &[],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .is_ok_and(|mut child| child.wait().is_ok_and(|status| status.success()))
+        });
+        assert_eq!(confinement_works_here(), started);
     }
 
     #[test]

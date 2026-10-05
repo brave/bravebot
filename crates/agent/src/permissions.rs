@@ -569,6 +569,24 @@ mod tests {
         );
     }
 
+    /// PERM-11: two unreadable lines that differ only in surrounding space are reported as two
+    /// different sentences, each quoting its line as the file spelled it.
+    #[test]
+    fn a_padded_unreadable_rule_is_reported_in_the_spelling_the_file_used() {
+        let settings = Settings::parse(r#"{"permissions": {"deny": ["Read(.env", " Read(.env"]}}"#);
+        let (permissions, rejected) = from_settings(
+            &settings,
+            Some(&PathBuf::from("/home/x")),
+            Path::new("/nonexistent"),
+        );
+        assert!(permissions.is_empty());
+        let said = rejected.iter().map(describe).collect::<Vec<_>>();
+        assert_eq!(said.len(), 2);
+        assert_ne!(said[0], said[1]);
+        assert!(said[0].starts_with("'Read(.env' "), "{}", said[0]);
+        assert!(said[1].starts_with("' Read(.env' "), "{}", said[1]);
+    }
+
     /// Every reason a rule can be dropped for has words of its own. An arm is easy to copy and
     /// leave pointing at the message above it, and a report that gave a mistyped bracket the
     /// wording for a misspelled family would send somebody looking at the wrong part of their
@@ -802,6 +820,36 @@ mod tests {
         );
         assert_eq!(
             permissions.for_path(Subject::Read, "/secrets/key"),
+            Decision::Unmatched
+        );
+    }
+
+    /// PERM-3 end to end: a `/x` rule in a checkout's own settings file covers the directory beside
+    /// that file, and not the one beside the global file.
+    #[test]
+    fn a_checkouts_slash_rule_is_anchored_beside_the_checkouts_file() {
+        let name = "slash-rule-in-a-checkout";
+        let block = r#"{"permissions": {"deny": ["Read(/secrets/**)"]}}"#;
+        let settings = layered_settings(name, Some(block), None);
+        let root = crate::testutil::scratch_dir(&format!("bravebot-permission-layers-{name}"));
+        let beside_the_file = root
+            .join("cwd")
+            .join(".bravebot")
+            .join("secrets")
+            .join("key");
+        let (permissions, _) =
+            from_settings(&settings, Some(&root.join("profile")), &root.join("cwd"));
+        assert_eq!(
+            permissions.for_path(Subject::Read, &beside_the_file.display().to_string()),
+            Decision::Ruled(Ruling::Deny)
+        );
+        let beside_the_global = root
+            .join("profile")
+            .join(".bravebot")
+            .join("secrets")
+            .join("key");
+        assert_eq!(
+            permissions.for_path(Subject::Read, &beside_the_global.display().to_string()),
             Decision::Unmatched
         );
     }

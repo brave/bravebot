@@ -238,10 +238,12 @@ entry, the index row and nothing else, with no co-attribution trailer and no em 
    repository's commits and pull requests come from, `gh api user --jq .login` must print that
    account. Stop and tell the user if it does not, because a pull request's author cannot be
    changed afterwards.
-3. Push the branch and open the pull request against `brave/bravebot`, from the fork remote:
+3. Push the branch and open the pull request against `brave/bravebot`, using the command
+   [commits.md](../../../docs/development/commits.md#opening-the-pull-request) gives for the kind
+   of clone this is (`--head <fork-owner>:<branch>` is needed when `origin` is a fork):
    ```sh
    git push -u origin HEAD
-   gh pr create --repo brave/bravebot --base main --title "best practices: <the rule>" --body "$(cat <<'EOF'
+   gh pr create --repo brave/bravebot --head <fork-owner>:<branch> --base main --title "best practices: <the rule>" --body "$(cat <<'EOF'
    ## Summary
    - Adds `<ID>` to `docs/best-practices/<document>.md`: <the rule>.
    - <Why it is not a check and not a spec clause.>

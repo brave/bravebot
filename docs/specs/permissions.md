@@ -338,6 +338,8 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_core::policy::a_denied_step_refuses_the_whole_line`
 `verified-by: bravebot_agent::cmdline::a_rule_refuses_a_line_before_its_program_is_looked_for`
 `verified-by: bravebot_agent::turn::a_denied_program_is_refused_by_the_rule_and_not_for_being_absent`
+`verified-by: bravebot_agent::turn::a_project_relative_deny_rule_refuses_a_redirection_to_the_file`
+`verified-by: bravebot_agent::turn::a_project_relative_deny_rule_refuses_a_redirection_that_reads_the_file`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_and_its_contents_do_not_reach_the_planner`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_written_even_where_writes_are_approved`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_by_a_processor_either`
@@ -492,6 +494,9 @@ allow rule quietly removed a deny rule's protection.
 `verified-by: bravebot_agent::permissions::an_entry_that_is_not_a_line_is_reported_to_a_run_nobody_is_watching`
 `verified-by: bravebot_agent::permissions::a_rule_list_that_is_not_a_list_is_reported_with_its_file`
 `verified-by: bravebot_agent::permissions::a_blank_rule_is_reported_as_empty`
+`verified-by: bravebot_core::permissions::a_dropped_rule_is_named_in_the_spelling_the_file_used`
+`verified-by: bravebot_agent::permissions::a_padded_unreadable_rule_is_reported_in_the_spelling_the_file_used`
+`verified-by: bravebot_ui_bridge::rules::a_padded_unreadable_rule_is_not_listed_as_in_force`
 `verified-by: bravebot_agent::permissions::every_reason_a_rule_is_dropped_for_says_something_of_its_own`
 `verified-by: bravebot_cli::running::doctor_names_a_permission_entry_that_is_not_a_rule`
 `verified-by: bravebot_agent::permissions::a_checkouts_unreadable_allow_entry_is_named_to_a_run_nobody_is_watching`
@@ -743,7 +748,9 @@ read from a settings file by whoever assembled the session, on the footing the s
 here is decided from a byte of content.
 
 A refusal says which key made it. Nothing a session did explains one, so a refusal that named neither
-the key nor a file would send somebody looking for a fault in the program.
+the key nor a file would send somebody looking for a fault in the program. An absolute path refused
+for leaving the workspace names the key too, and offers a call that reads the drop and not `/add-dir`,
+which the same key refuses. A call that writes, edits, lists or searches is offered neither.
 
 **What it does not refuse.** The directory the session was given for itself stays reachable: nobody
 was asked for it, no rule opened it, and a session whose own directory went unreachable would fail
@@ -764,6 +771,7 @@ which is [PERM-13](#PERM-13)'s reasoning about a question that changes nothing.
 
 `verified-by: bravebot_agent::workspace::a_directory_by_name_is_refused_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::a_directory_already_open_is_unreachable_where_reads_stay_in_the_workspace`
+`verified-by: bravebot_agent::workspace::a_refusal_where_reads_stay_in_the_workspace_names_the_key_and_not_add_dir`
 `verified-by: bravebot_agent::workspace::the_sessions_own_directory_stays_reachable_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::a_move_outward_is_refused_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::a_move_inward_is_allowed_where_reads_stay_in_the_workspace`

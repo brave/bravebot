@@ -142,8 +142,8 @@ impl Ending {
 
 /// Cumulative usage from completed requests, retained even if the turn later fails.
 ///
-/// Reports replace the previous total rather than adding to it. Requests that return an error
-/// contribute no usage.
+/// Reports replace the previous total rather than adding to it. Failed requests contribute only
+/// usage measured by completed replies, including replies that could not be used.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Spent {
     /// Every round added together, as the service counted them.

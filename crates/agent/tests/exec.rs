@@ -5,7 +5,7 @@
 //! wrong comes back with what it produced instead of nothing.
 
 use bravebot_agent::exec::{self, ExecError};
-use bravebot_core::cancel::Cancel;
+use bravebot_core::cancel::{Cancel, Handoff, JobStop};
 use bravebot_core::{Pipeline, Stage};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -309,6 +309,40 @@ fn a_background_run_labels_standard_error_as_a_waited_for_one_does() {
     }
 
     assert_eq!(job.printed(), "listing\nstandard error:\nboom\n");
+}
+
+/// The incremental read is the one production takes, for `job_output` and for the wake-up between
+/// rounds, so the label has to be on what `since` hands over, and on each delivery that carries
+/// standard error: a later one does not repeat the earlier, so a reader of it has no label to look
+/// back to.
+#[test]
+fn what_a_background_run_hands_over_incrementally_labels_each_delivery_of_standard_error() {
+    let scratch = Scratch::new("background-since-stderr");
+    let looked = scratch.path.join("looked");
+    let resolved = script(
+        &scratch.path,
+        "both",
+        &format!(
+            "#!/bin/sh\necho out1\necho err1 >&2\nwhile [ ! -e {} ]; do sleep 0.05; done\n\
+             echo err2 >&2\n",
+            looked.display()
+        ),
+    );
+
+    let pipeline = Pipeline::new(vec![Stage::new("both", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+    let mut seen = exec::Seen::default();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !(job.printed().contains("out1") && job.printed().contains("err1"))
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(job.since(&mut seen), "out1\nstandard error:\nerr1\n");
+
+    std::fs::write(&looked, "").expect("release the second line");
+    until_ended(&mut job);
+    assert_eq!(job.since(&mut seen), "standard error:\nerr2\n");
 }
 
 /// A shell reports only the last stage, which hides the case that matters: an early stage failing
@@ -1329,6 +1363,135 @@ fn background_stages_are_chained_so_one_feeds_the_next() {
     assert_eq!(job.printed().trim(), "3");
 }
 
+/// Compile a line for `at` and wait for it the way the tool waits for one a person may move.
+fn movable(
+    text: &str,
+    at: &std::path::Path,
+    cancel: &Cancel,
+    handoff: &Handoff,
+) -> Result<exec::Waited, ExecError> {
+    let plan = bravebot_agent::cmdline::compile(text, at, None, &mut |_, _| Ok(()))
+        .unwrap_or_else(|e| panic!("`{text}` should compile: {e}"));
+    past_text_file_busy(|| exec::run_plan_movable(&plan, cancel, handoff, exec::LIMIT, None))
+}
+
+/// Waits for a moved job to end, so a test can read the whole of what it printed.
+fn until_ended(job: &mut exec::Background) {
+    let until = std::time::Instant::now() + Duration::from_secs(20);
+    while !job.ended() {
+        assert!(
+            std::time::Instant::now() < until,
+            "the moved job never ended"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The press arrives while the wait is under way, from another thread, as it does from the
+/// interface. The token is read on every pass of the wait, so the line comes back as moved long
+/// before the program ends, and the same process goes on to print the rest and exit with its own
+/// code: what it printed before the move is not lost to the handover.
+#[test]
+fn a_line_moved_part_way_keeps_running_and_keeps_all_it_printed() {
+    let scratch = Scratch::new("moved-part-way");
+    script(
+        &scratch.path,
+        "build",
+        "#!/bin/sh\necho before\nsleep 10\necho after\nexit 3\n",
+    );
+    let handoff = Handoff::new();
+    let pressed = handoff.clone();
+    let press = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        pressed.request();
+    });
+
+    let waited = movable("./build", &scratch.path, &Cancel::new(), &handoff).expect("it runs");
+    press.join().unwrap();
+
+    let exec::Waited::Moved(mut moved) = waited else {
+        panic!("a line asked to move was waited for to its end: {waited:?}");
+    };
+    assert!(
+        moved.after < Duration::from_secs(8),
+        "the move waited {:?}, so the press was not read while the line ran",
+        moved.after
+    );
+    assert!(
+        !moved.running.ended(),
+        "a program ten seconds from its end was reported ended at the move"
+    );
+    until_ended(&mut moved.running);
+    let printed = moved.running.printed();
+    assert!(
+        printed.contains("before") && printed.contains("after"),
+        "the job lost part of what it printed: {printed:?}"
+    );
+    assert_eq!(moved.running.codes(), [Some(3)]);
+}
+
+/// A person who asked the turn to stop asked for everything in it to stop, including a command
+/// they had also asked to keep. A pass that finds both tokens set kills the line.
+#[test]
+fn a_cancellation_wins_over_a_move_asked_for_at_the_same_time() {
+    let scratch = Scratch::new("moved-and-cancelled");
+    script(&scratch.path, "slow", "#!/bin/sh\nsleep 30\n");
+    let cancel = Cancel::new();
+    let handoff = Handoff::new();
+    cancel.cancel();
+    handoff.request();
+
+    let waited = movable("./slow", &scratch.path, &cancel, &handoff);
+
+    assert!(
+        matches!(waited, Err(ExecError::Cancelled)),
+        "a cancelled line was not killed: {waited:?}"
+    );
+}
+
+/// A job is one pipeline whose output a reader drains. A join decides its next part by waiting
+/// on the one before, and a redirection sends a stream where no job reads it, so neither shape
+/// is moved however the token is set: each is waited for to its end with its output intact.
+#[test]
+fn a_line_with_a_join_or_a_route_is_waited_for_even_when_asked_to_move() {
+    let scratch = Scratch::new("not-movable");
+    script(&scratch.path, "slow", "#!/bin/sh\nsleep 1\necho slow\n");
+    for (text, printed) in [
+        ("./slow && echo joined", "joined"),
+        ("./slow 2>&1", "slow"),
+        ("./slow 2>/dev/null", "slow"),
+    ] {
+        let handoff = Handoff::new();
+        handoff.request();
+
+        let waited = movable(text, &scratch.path, &Cancel::new(), &handoff)
+            .unwrap_or_else(|e| panic!("`{text}` should run: {e}"));
+
+        let exec::Waited::Ran(ran) = waited else {
+            panic!("`{text}` was moved: {waited:?}");
+        };
+        assert!(ran.succeeded(), "`{text}`: {ran:?}");
+        assert!(ran.stdout.contains(printed), "`{text}`: {ran:?}");
+    }
+}
+
+/// Offering the key changes nothing until it is pressed. A line nobody moved is waited for to its
+/// end and handed back exactly as a line that was never offered the key.
+#[test]
+fn a_token_nobody_pressed_leaves_the_line_waited_for() {
+    let scratch = Scratch::new("not-moved");
+    script(&scratch.path, "slow", "#!/bin/sh\nsleep 1\necho done\n");
+
+    let waited =
+        movable("./slow", &scratch.path, &Cancel::new(), &Handoff::new()).expect("it runs");
+
+    let exec::Waited::Ran(ran) = waited else {
+        panic!("a line nobody moved was moved: {waited:?}");
+    };
+    assert!(ran.succeeded(), "{ran:?}");
+    assert_eq!(ran.stdout.trim(), "done");
+}
+
 /// The credentials rule is not relaxed by moving to the background. A long-lived program is a
 /// better place to read one from than a short one, so this must hold here too.
 #[test]
@@ -1500,8 +1663,19 @@ fn waiting_for_more_returns_when_the_job_prints_rather_than_at_the_bound() {
          of the wait"
     );
 
+    let mut seen = exec::Seen::default();
+    assert!(
+        job.since(&mut seen).contains("first"),
+        "the first look was not handed the first line, so nothing below is a test of the wait"
+    );
+
     let began = std::time::Instant::now();
-    job.wait_for_more(std::time::Duration::from_secs(30), &Cancel::new());
+    job.wait_for_more(
+        &seen,
+        std::time::Duration::from_secs(30),
+        &Cancel::new(),
+        &[],
+    );
     let waited = began.elapsed();
 
     assert!(
@@ -1512,6 +1686,67 @@ fn waiting_for_more_returns_when_the_job_prints_rather_than_at_the_bound() {
     assert!(
         printed.contains("second"),
         "the wait returned without the output it was waiting for: {printed:?}"
+    );
+}
+
+/// Output that lands after the caller's last look and before the wait starts is unseen, so the wait
+/// returns on it. A wait that counted what had arrived when it was entered as already seen would
+/// sit out the whole bound on a job that has nothing further to print.
+#[test]
+fn waiting_for_more_returns_at_once_on_output_that_landed_since_the_last_look() {
+    let scratch = Scratch::new(&format!("wait-landed-since-look-{}", std::process::id()));
+    let looked = scratch.path.join("looked");
+    let resolved = script(
+        &scratch.path,
+        "late",
+        &format!(
+            "#!/bin/sh\necho first\nwhile [ ! -f '{}' ]; do sleep 0.05; done\necho second\n\
+             sleep 60\n",
+            looked.display()
+        ),
+    );
+
+    let pipeline = Pipeline::new(vec![Stage::new("late", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !job.printed().contains("first") && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let mut seen = exec::Seen::default();
+    assert!(
+        job.since(&mut seen).contains("first"),
+        "the first look was not handed the first line, so nothing below is a test of the wait"
+    );
+
+    // The second line is released after the look and waited for before the wait is entered, so it
+    // has arrived and has not been handed over.
+    std::fs::write(&looked, "").expect("release the second line");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !job.printed().contains("second") && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        job.printed().contains("second"),
+        "the second line never arrived, so nothing below is a test of the wait"
+    );
+
+    let began = std::time::Instant::now();
+    job.wait_for_more(
+        &seen,
+        std::time::Duration::from_secs(20),
+        &Cancel::new(),
+        &[],
+    );
+    let waited = began.elapsed();
+
+    assert!(
+        waited < std::time::Duration::from_secs(10),
+        "a wait sat out its bound though output the caller had not been handed was already there: \
+         {waited:?}"
+    );
+    assert!(
+        job.since(&mut seen).contains("second"),
+        "the output that landed since the last look was not handed over"
     );
 }
 
@@ -1542,9 +1777,15 @@ fn waiting_for_more_lasts_its_bound_where_a_job_that_has_printed_says_nothing_fu
         "the job had not printed within five seconds, so nothing below is a test of the wait"
     );
 
+    let mut seen = exec::Seen::default();
+    assert!(
+        job.since(&mut seen).contains("listening"),
+        "the first look was not handed the line, so nothing below is a test of the wait"
+    );
+
     let bound = std::time::Duration::from_secs(2);
     let began = std::time::Instant::now();
-    job.wait_for_more(bound, &Cancel::new());
+    job.wait_for_more(&seen, bound, &Cancel::new(), &[]);
     let waited = began.elapsed();
 
     assert!(
@@ -1568,7 +1809,12 @@ fn waiting_for_more_returns_when_the_job_ends_without_printing() {
     let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
 
     let began = std::time::Instant::now();
-    job.wait_for_more(std::time::Duration::from_secs(60), &Cancel::new());
+    job.wait_for_more(
+        &exec::Seen::default(),
+        std::time::Duration::from_secs(60),
+        &Cancel::new(),
+        &[],
+    );
     let waited = began.elapsed();
 
     assert!(
@@ -1632,10 +1878,8 @@ fn what_arrived_on_one_pipe_is_not_reported_as_what_arrived_on_the_other() {
     );
 
     std::fs::write(&looked, "").expect("release the second line");
-    // Polled rather than waited for. A wait counts what has arrived when it is entered as already
-    // seen, so one descheduled between the write above and the wait would find the line already
-    // there and sit out the whole bound on nothing further coming. What is being waited for here
-    // is the line itself, and `has_more` is that question whenever it is asked.
+    // Polled rather than waited for, so the line is known to be there before the look below.
+    // `has_more` is that question whenever it is asked.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while !job.has_more(&seen) && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1685,7 +1929,12 @@ fn a_character_split_across_two_pipe_reads_is_handed_over_whole() {
         "half a character was handed over as a replacement character: {held:?}"
     );
 
-    job.wait_for_more(std::time::Duration::from_secs(30), &Cancel::new());
+    job.wait_for_more(
+        &seen,
+        std::time::Duration::from_secs(30),
+        &Cancel::new(),
+        &[],
+    );
     let whole = job.since(&mut seen);
     assert!(
         whole.contains("\u{e9} done"),
@@ -1711,12 +1960,51 @@ fn a_cancelled_wait_for_more_comes_back_without_waiting_out_its_bound() {
     let cancel = Cancel::new();
     cancel.cancel();
     let began = std::time::Instant::now();
-    job.wait_for_more(std::time::Duration::from_secs(600), &cancel);
+    job.wait_for_more(
+        &exec::Seen::default(),
+        std::time::Duration::from_secs(600),
+        &cancel,
+        &[],
+    );
     let waited = began.elapsed();
 
     assert!(
         waited < std::time::Duration::from_secs(5),
         "a cancelled wait went on waiting: {waited:?}"
+    );
+}
+
+/// A person who asks to stop a job the turn holds is answered by the look ending, not by the rest
+/// of a wait the planner asked for, whichever job the look is waiting on: the stop is carried out
+/// at the turn's next step, which the wait holds back. The stop arrives part way through, from
+/// another thread, the way it does from the interface.
+#[test]
+fn a_wait_for_more_comes_back_when_the_person_asks_to_stop_any_job_of_the_turn() {
+    let scratch = Scratch::new("wait-job-stopped");
+    let resolved = script(&scratch.path, "quiet", "#!/bin/sh\nsleep 30\n");
+
+    let pipeline = Pipeline::new(vec![Stage::new("quiet", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+
+    let stop = JobStop::new();
+    let asking = stop.clone();
+    let asker = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        asking.request();
+    });
+    let began = std::time::Instant::now();
+    job.wait_for_more(
+        &exec::Seen::default(),
+        std::time::Duration::from_secs(600),
+        &Cancel::new(),
+        &[JobStop::new(), stop],
+    );
+    let waited = began.elapsed();
+    asker.join().expect("the request was made");
+
+    assert!(
+        waited < std::time::Duration::from_secs(5),
+        "a wait went on waiting after the person asked to stop a job: {waited:?}"
     );
 }
 

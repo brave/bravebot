@@ -683,6 +683,17 @@ pub struct Attachment {
     pub media: String,
 }
 
+/// What `--system-prompt` and `--append-system-prompt` named (CLI-19).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SystemPrompts {
+    /// Stands in for [`OPENING`] alone. Everything after it in the prompt stays, so the planner
+    /// still has the guidance its refusals and its quarantine rest on.
+    pub replacing: Option<String>,
+    /// Added to the standing instructions as the last source, after the project's `AGENTS.md`
+    /// (INSTR-10). A delegate is given this one and not the other.
+    pub appending: Option<String>,
+}
+
 /// What a turn is asked to do.
 #[derive(Debug, Clone)]
 pub struct Task {
@@ -826,6 +837,13 @@ pub struct Task {
     /// Nothing here writes a commit message. What this decides is what the planner is told
     /// (BACKEND-30), which is where the answer has to be for it to survive a long turn.
     pub attribution: bravebot_config::Attribution,
+    /// The words the command line put in the planner's system prompt, where it did (CLI-19).
+    ///
+    /// Plain strings, without a label, because a person typed them as an argument of the command
+    /// they ran, which is the footing their own message has (LABEL-8).
+    /// They grant nothing: the mode, the permission prompts and every refusal are enforced below
+    /// the prompt, whatever it says. Empty by default, which is every caller that read no flag.
+    pub system_prompts: SystemPrompts,
     /// How much this turn asks before it acts.
     ///
     /// Carried by the task because the planner has to be told about one of them: plan mode refuses
@@ -929,6 +947,9 @@ pub struct Tick {
     pub number: usize,
     /// Whether nobody gave an interval, so this turn says when the next tick is due.
     pub self_paced: bool,
+    /// Whether this turn is not offered the tool that sets the pace, though nobody gave an
+    /// interval: it is addressed to a definition (ADDRESS-8), so the loop ends after it.
+    pub unpaceable: bool,
 }
 
 /// An image on its way into a prompt, before it has been encoded for the wire.
@@ -1018,6 +1039,7 @@ impl Task {
             // Nothing said about either destination, which is a caller that read no settings
             // file. Empty is a value the block can carry and this is not it.
             attribution: bravebot_config::Attribution::default(),
+            system_prompts: SystemPrompts::default(),
             delegate: None,
             addressing: None,
             model_outranks_a_definition: false,
@@ -1214,6 +1236,12 @@ impl Task {
         self
     }
 
+    /// State the words the command line put in the system prompt (CLI-19).
+    pub fn with_system_prompts(mut self, system_prompts: SystemPrompts) -> Self {
+        self.system_prompts = system_prompts;
+        self
+    }
+
     /// Say which tick of a loop this turn is.
     pub fn ticking(mut self, tick: Option<Tick>) -> Self {
         self.tick = tick;
@@ -1317,6 +1345,11 @@ pub struct Wakeup {
     pub after: std::time::Duration,
     /// Whether the turn found nothing to do, as it reported.
     pub quiet: bool,
+    /// Whether the turn said the loop is finished, so no further tick is wanted.
+    ///
+    /// One routing boolean that can only end the loop the person started: it cannot start,
+    /// lengthen or change what runs.
+    pub stop: bool,
 }
 
 impl Wakeup {
@@ -1343,6 +1376,18 @@ impl Wakeup {
         Self {
             after: std::time::Duration::from_secs(seconds).clamp(Self::FLOOR, Self::CEILING),
             quiet,
+            stop: false,
+        }
+    }
+
+    /// A turn saying the loop is finished.
+    ///
+    /// The wait is the floor and is never used: the loop that reads this ends instead of arming a
+    /// tick.
+    pub fn finished(quiet: bool) -> Self {
+        Self {
+            stop: true,
+            ..Self::asked(0, quiet)
         }
     }
 }
@@ -1577,6 +1622,8 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
         Some(&mut decisions),
         // A turn a person asked for reads what its hooks said off the [`Outcome`].
         None,
+        // And how many rounds it made, off the same [`Outcome`].
+        None,
         // And it opens the run's wallet rather than being lent one: it is the run.
         None,
     );
@@ -1622,6 +1669,8 @@ pub fn run_cancellable<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
         None,
         // A turn a person asked for reads what its hooks said off the [`Outcome`].
         None,
+        // And how many rounds it made, off the same [`Outcome`].
+        None,
         // And it opens the run's wallet rather than being lent one: it is the run.
         None,
     )
@@ -1653,6 +1702,9 @@ pub(crate) fn delegated(
     // delegate's outcome dies at the boundary, so this is the only copy the parent can fold into
     // the account of itself a run with nowhere to draw reads (HOOK-7).
     notices: &mut Vec<String>,
+    // How many rounds of tool calls it made, written however the turn ended, for the same reason
+    // (TRACE-8).
+    rounds: &mut usize,
     // The wallet the turn that started this one is spending from, where it found one. A delegate
     // opens none of its own (PREM-5).
     wallet: Option<&dyn crate::shared::Spends>,
@@ -1680,6 +1732,7 @@ pub(crate) fn delegated(
         cancel,
         Some(&mut decisions),
         Some(notices),
+        Some(rounds),
         wallet,
     );
     *vouched = Vouched {
@@ -1720,6 +1773,8 @@ pub fn run_with_trust<S: Sink + Send, C: Confirmer + Send>(
         None,
         // A turn a person asked for reads what its hooks said off the [`Outcome`].
         None,
+        // And how many rounds it made, off the same [`Outcome`].
+        None,
         // And it opens the run's wallet rather than being lent one: it is the run.
         None,
     )
@@ -1740,6 +1795,7 @@ pub fn run_with_trust<S: Sink + Send, C: Confirmer + Send>(
 /// anybody anything: the whole of it is one model call over an exchange the planner has already
 /// seen. So [`Capability::WebFetch`] is granted, because reaching the model is egress and the
 /// gate asks, and nothing else is, because there is nothing else to do.
+#[allow(clippy::too_many_arguments)]
 pub fn compact<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
@@ -1748,6 +1804,7 @@ pub fn compact<S: Sink, R: Reporter>(
     reporter: &mut R,
     sink: &mut S,
     trust: TrustStore,
+    focus: Option<&str>,
 ) -> Result<Option<crate::compact::Compacted>, crate::compact::CompactError> {
     let mut routing = Routing::new();
     routing.insert_trusted("task", "summarise the conversation so far");
@@ -1778,9 +1835,101 @@ pub fn compact<S: Sink, R: Reporter>(
 
     // Zero: `/compact` is asked for between rounds rather than during one, so there is no round
     // for it to have landed in the middle of.
-    let done = crate::compact::compact(&mut policy, &mut chat, conversation, 0);
+    let done = crate::compact::compact(&mut policy, &mut chat, conversation, 0, focus);
     policy.finish();
     done
+}
+
+/// What `/checkouts apply` did.
+pub struct CheckoutApplied {
+    /// The driver's account of each file, one line a file after a summary line.
+    pub text: String,
+    /// Whether any file was written.
+    pub applied: bool,
+    /// The trust map afterwards: a file written untrusted into a trusted path distrusts it.
+    pub trust: TrustStore,
+}
+
+/// Bring back what the session's kept checkout `id` holds, outside any turn (CHECKOUT-14).
+///
+/// What `/checkouts apply` runs. Its routing is the number the person typed, their own words in
+/// the sense a prompt is, so there is no planner here and no conversation: the policy is a fresh
+/// one whose only context is that request. The bytes brought back keep the label the checkout's
+/// path gives them, which is carried with them and not read, so a file a program in the checkout
+/// wrote untrusted is untrusted once it is in the working directory. Each file is put to the
+/// person through `confirmer` whatever the trust map would have said.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
+    config: &Config,
+    egress: &Egress,
+    workspace: &Workspace,
+    task: &Task,
+    id: &str,
+    confirmer: &mut C,
+    sink: &mut S,
+    trust: TrustStore,
+) -> Result<CheckoutApplied, String> {
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", format!("bring back checkout {id}"));
+    let capabilities = CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]);
+    let mut policy = Policy::begin(routing, ReleasePlan::new(), capabilities, sink)
+        .map_err(|d| d.to_string())?
+        .with_trust(trust.clone())
+        .with_root(workspace.root())
+        .with_scratch(workspace.scratch())
+        .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES)
+        .with_permissions(task.permissions.clone())
+        .with_file_authority(bravebot_core::file_authority::FileAuthority::new(trust));
+
+    let skills = crate::skills::Catalogue::default();
+    let mut slots = bravebot_core::SlotStore::new();
+    let cancel = Cancel::new();
+    let mut armed = 0usize;
+    let mut jobs = tools::Jobs::default();
+    let mut run_directory = workspace.root().to_path_buf();
+    let done = tools::apply_kept_checkout(
+        &mut policy,
+        &mut tools::Tools {
+            workspace,
+            output_cap: tools::OUTPUT_CAP,
+            deadlines: task.deadlines,
+            skills: &skills,
+            slots: &mut slots,
+            chat: crate::processor::Chat {
+                config,
+                egress,
+                subscription: None,
+                model: None,
+                cancel: None,
+            },
+            cancel: &cancel,
+            scheduling: tools::Scheduling::NoLaterLook,
+            arming: crate::watch::Arming::Unavailable,
+            running: tools::Running::Offered,
+            armed: &mut armed,
+            home: task.home.as_deref(),
+            profile: task.profile.as_deref(),
+            cache: task.cache.as_deref(),
+            remembering: task.remembering.as_deref(),
+            delegated: false,
+            confined_to: None,
+            servers: None,
+            mcp: None,
+            jobs: &mut jobs,
+            permission_mode: task.permission_mode,
+            auto_vetting: task.auto_vetting,
+            run_directory: &mut run_directory,
+        },
+        confirmer,
+        id,
+    );
+    let trust = policy.trust();
+    policy.finish();
+    done.map(|brought| CheckoutApplied {
+        text: brought.text,
+        applied: brought.applied,
+        trust,
+    })
 }
 
 /// Answer one question asked beside the work, outside any turn.
@@ -1958,6 +2107,18 @@ fn adopt(
                     .to_string(),
                 );
             }
+        } else if let Some((file, why)) = config.model_refused(written) {
+            // Before the sign-in question, which would send somebody to fix the wrong thing
+            // (BACKEND-48).
+            said.push(
+                t!(
+                    skill_model_refused,
+                    skill = skill,
+                    model = written,
+                    reason = crate::backend::refusal_reason(file, why)
+                )
+                .to_string(),
+            );
         } else if crate::backend::Backend::needs_sign_in(config, &resolved) {
             said.push(t!(skill_model_needs_sign_in, skill = skill, model = written).to_string());
         } else if turn_model.as_deref().unwrap_or(&config.default_model) != resolved {
@@ -2044,6 +2205,9 @@ struct Working<'scope> {
     seeded: Vouched,
     /// The checkout it works in, where it was given one (CHECKOUT-15).
     checkout: Option<std::sync::Arc<crate::workspace::CheckoutInfo>>,
+    /// The most rounds of tool calls its spec allows, which the record of how it ended counts
+    /// against (TRACE-8).
+    rounds: usize,
     handle: std::thread::ScopedJoinHandle<
         'scope,
         (
@@ -2214,7 +2378,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
             // A closed receiver means the test observer has already exited.
             let _ = started.send(());
         }
-        let (delegated, partial, requests) = match working.handle.join() {
+        let (delegated, ran, partial, requests) = match working.handle.join() {
             Ok((ended, partial, requests)) => {
                 // Before anything else, and on both of the ways a run can end. A person who
                 // vouched for the build inside this delegate is not asked again by a delegate
@@ -2226,7 +2390,8 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 // the person whose formatter would not start is owed the sentence whether or not
                 // the delegate that fired it went on to report.
                 notices.extend(ended.notices);
-                (ended.delegated, partial, requests)
+                let ran = Some((ended.took, ended.rounds));
+                (ended.delegated, ran, partial, requests)
             }
             // A thread that panicked is a delegate that stopped, which is all anybody can be
             // told about it: what it was doing died with it, and the turn is still running.
@@ -2237,6 +2402,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 Err(TurnError::Precommit(
                     "the delegate stopped without finishing".to_string(),
                 )),
+                None,
                 Default::default(),
                 Vec::new(),
             ),
@@ -2244,12 +2410,41 @@ fn collect_delegates<S: Sink, R: Reporter>(
 
         spent.inference += waits.collected(crate::timing::Interval::since(joined_at), requests);
 
+        // Built from which way the result came back, the run's own counts and the fixed name of a
+        // failure, so the record says why it stopped without holding what any service or tool said
+        // (TRACE-8). The planner is still told only that it did not finish (BACKEND-37).
+        let finish = {
+            use bravebot_core::delegate::Finish;
+            match (&delegated, ran) {
+                (_, None) => Finish::Lost,
+                (Ok(_), Some((took, rounds))) => Finish::Answered { took, rounds },
+                (Err(error), Some((took, rounds))) => match error.ending() {
+                    crate::outcome::Ending::Stopped { .. } => Finish::Stopped { took, rounds },
+                    ending => Finish::Failed {
+                        took,
+                        rounds,
+                        why: ending
+                            .diagnosis()
+                            .map_or("internal", |diagnosis| diagnosis.category.name()),
+                    },
+                },
+            }
+        };
+        policy.record_delegate_end(id, working.rounds, finish);
+
         // After the decisions it made are taken back, so a rule that distrusts a path survives the
         // withdrawal of the rest (CHECKOUT-12).
         let retired = working
             .checkout
             .as_ref()
             .map(|checkout| (checkout.retire(&policy.file_authority()), checkout.clone()));
+        if let Some((crate::workspace::Retired::Removed, checkout)) = &retired {
+            crate::workspace::record_checkout(
+                policy.sink(),
+                crate::workspace::Happened::Removed,
+                checkout.path(),
+            );
+        }
 
         let (mut note, mut body, failed, reported) = match delegated {
             Ok(delegated) => {
@@ -2258,10 +2453,15 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 cached.add(delegated.usage.cached);
 
                 let kind = delegated.kind;
-                let note = format!(
-                    "a {kind} delegate answered after {}",
-                    tools::tally(delegated.rounds, "round", "rounds")
-                );
+                let rounds = ran.map_or(0, |(_, rounds)| rounds);
+                let tally = tools::tally(rounds, "round", "rounds");
+                let note = match rounds >= working.rounds {
+                    true => format!(
+                        "a {kind} delegate reached its limit of {tally} and answered with what it \
+                         had"
+                    ),
+                    false => format!("a {kind} delegate answered after {tally}"),
+                };
                 let slot = conversation.next_reference();
                 let presented = policy
                     .present(
@@ -2308,12 +2508,16 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 };
                 (note, body, false, Some(reported))
             }
-            Err(error) => {
+            Err(_) => {
                 *tokens += partial.tokens;
                 *output_tokens += partial.output_tokens;
                 cached.add(partial.cached);
-                let note = match error.ending() {
-                    crate::outcome::Ending::Stopped { .. } => {
+                // The same fixed name the trail records, and never the error's own text.
+                let note = match finish {
+                    bravebot_core::delegate::Finish::Failed { why, .. } => {
+                        format!("the delegate could not finish ({why})")
+                    }
+                    bravebot_core::delegate::Finish::Stopped { .. } => {
                         "the delegate was stopped".to_string()
                     }
                     _ => "the delegate could not finish".to_string(),
@@ -2331,18 +2535,29 @@ fn collect_delegates<S: Sink, R: Reporter>(
                         "Its checkout {} was removed, since nothing was done in it.",
                         checkout.id()
                     ),
-                    "its checkout was removed",
+                    "its checkout was removed".to_string(),
                 ),
+                // The size is the person's alone. It is a measure of files programs wrote, and the
+                // planner decides nothing by it.
                 Retired::Kept => (
                     format!(
                         "Its checkout {} of commit {} was kept at {}, since something was done in \
-                         it. {}",
+                         it. {} apply_checkout with checkout \"{}\" brings the files it names \
+                         back into the working directory, asking the person about each.",
                         checkout.id(),
                         checkout.commit(),
                         checkout.path().display(),
-                        crate::delegate::checkout_candidates(&checkout.candidates())
+                        crate::delegate::checkout_candidates(&checkout.candidates()),
+                        checkout.id()
                     ),
-                    "its checkout was kept",
+                    match checkout.size() {
+                        Some(size) => format!(
+                            "its checkout {} was kept, taking {} on disk",
+                            checkout.id(),
+                            size.spelled()
+                        ),
+                        None => format!("its checkout {} was kept", checkout.id()),
+                    },
                 ),
                 Retired::Stuck => (
                     format!(
@@ -2351,7 +2566,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
                         checkout.commit(),
                         checkout.path().display()
                     ),
-                    "its checkout could not be removed",
+                    "its checkout could not be removed".to_string(),
                 ),
             };
             body.push_str("\n\n");
@@ -2388,7 +2603,19 @@ fn collect_jobs<S: Sink, R: Reporter>(
     conversation: &mut Conversation,
     reporter: &mut R,
 ) -> Result<(), TurnError> {
-    for ended in jobs.ended(output_cap) {
+    let finished = jobs.ended(output_cap);
+    // Every finish is told before any is presented. A presentation that fails ends the turn, and a
+    // job it never reached is marked reported already, so it would read as stopped with the turn.
+    for ended in &finished {
+        if let crate::report::Outcome::StoppedByTheUser(after) = ended.outcome {
+            policy.record_job_stop(&ended.name, after);
+        }
+        reporter.job(crate::report::JobEvent::Ended {
+            name: ended.name.clone(),
+            outcome: ended.outcome.clone(),
+        });
+    }
+    for ended in finished {
         let origin = format!("what `{}` printed", ended.line);
         // Whichever way the label went: it is their directory, and a person who let a program run
         // in it is entitled to read what it printed and to be told how it ended. "12 lines,
@@ -2441,6 +2668,7 @@ fn collect_jobs<S: Sink, R: Reporter>(
             total,
             read_by_the_planner: !matches!(presented, Some(Presentation::Quarantined(_))),
             outcome: ended.outcome.clone(),
+            job: Some(ended.name.clone()),
         });
 
         // In front of what it printed, so a long log does not bury the verdict, and said from the
@@ -2492,16 +2720,23 @@ fn collect_jobs<S: Sink, R: Reporter>(
             Some(Presentation::Quarantined(reference)) => {
                 policy.came_from_command(&reference.slot, &ended.line, conversation.quarantine());
                 // Where nobody is asked, nobody is shown it either, and the mode goes unnamed for
-                // the reason a run's result leaves it out.
+                // the reason a run's result leaves it out. Where somebody is asked, the account
+                // says how to stop being asked, as a run's result does (RUN-14), unless a record
+                // already stops the asking for this exact line: no prompt will return there for a
+                // person to answer, and read_output is then the whole of what is said.
                 let then = if reads_unasked {
-                    " and it comes back as text you can read"
+                    " and it comes back as text you can read."
+                } else if ended.covered_by_record {
+                    ": the user is shown it and decides."
                 } else {
-                    ": the user is shown it and decides"
+                    ": the user is shown it and decides. To stop being asked, a person vouching \
+                     for every stage of the exact command makes what it prints visible from \
+                     then on."
                 };
                 format!(
                     "{told} What it printed could not be shown to you: {}\n\nThis is about who \
                      answered for the command rather than about what it printed. To see it, call \
-                     read_output with the reference{then}.",
+                     read_output with the reference{then} To read a file, use read_file.",
                     reference.describe()
                 )
             }
@@ -2599,6 +2834,9 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // asked for hands these back on its [`Outcome`], and a delegate's outcome dies at the
     // boundary while the hooks it fired are still the person's own to hear about (HOOK-7).
     said_about_hooks: Option<&mut Vec<String>>,
+    // How many rounds of tool calls the turn made, written however it ended. Only a delegate's
+    // caller passes one, for the record of how the delegate ended (TRACE-8).
+    rounds_taken: Option<&mut usize>,
     // The credential store the run that started this one is spending from. Only a delegate's
     // caller passes one, and a delegate spends nothing else: there is one subscription per
     // process and a credential is single-use, so a second wallet opened here would re-read a
@@ -2630,6 +2868,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // a turn which failed part way through still has them: the outcome that would have carried
     // them is the thing that did not arrive.
     let mut fired: Vec<String> = Vec::new();
+    let mut taken = 0;
 
     let mut outcome = one_turn(
         config,
@@ -2647,6 +2886,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         &hooks,
         retained,
         &mut fired,
+        &mut taken,
         lent_wallet,
     );
 
@@ -2665,6 +2905,9 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // for a delegate, so a call it made is the whole of what one has to hand back.
     if let Some(collected) = said_about_hooks {
         collected.clone_from(&fired);
+    }
+    if let Some(rounds) = rounds_taken {
+        *rounds = taken;
     }
 
     // In the order the moments came, which is not the order the turn produced them: what it found
@@ -2700,6 +2943,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // Written as the rounds go rather than gathered from the outcome, so that a turn which ends
     // in an error has still said what it found (HOOK-7).
     hook_notices: &mut Vec<String>,
+    // How many rounds of tool calls the turn made, written before a stop or a failed request
+    // returns as well as on an answer.
+    rounds_taken: &mut usize,
     // The wallet the run that started this one is spending from, where this is a delegate's turn.
     // See [`run_inner`].
     lent_wallet: Option<&dyn crate::shared::Spends>,
@@ -2770,6 +3016,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         policy = policy.within(spec);
     }
 
+    policy.record_permission_mode(task.permission_mode.name());
+
     // Before every turn rather than as a session opens, since a session's map is made at a start,
     // a clear and a resume and moved by `/cd` (MEMORY-5).
     // A checkout reads what it is told from the working directory it was made from, by the names
@@ -2836,10 +3084,83 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         notices.extend(crate::agents::servers_not_found(&delegates, &reached));
         policy.install_delegates(delegates.clone());
 
-        // A delegate whose definition named skills is offered those of them this turn found, and is
-        // listed and can load no others. Taken after discovery rather than instead of it, so a name
-        // can only choose among skills that passed the same gates they pass for the turn.
-        let catalogue = match task.delegate.as_ref().and_then(|spec| spec.skills()) {
+        // The tool that says when this turn is asked again is offered to every turn except a tick the
+        // person timed, and describes a different job on either side of that. Nothing else changes.
+        //
+        // A delegate is offered what its capabilities reach, minus the five no delegate ever gets, and
+        // a way to delegate while it sits above the bottom of the tree. Derived from the set rather
+        // than named per kind, so a tool cannot be offered to a run whose gates would refuse it on
+        // every call.
+        //
+        // A turn the person addressed to a definition is offered the planner's list less what the
+        // kernel narrowed away. Decided here, before the prompt is composed and before anything is
+        // sent, so a name matching nothing ends the turn having spent nothing (ADDRESS-5).
+        //
+        // A delegate in a checkout is offered no `lsp`, whatever its kind holds: the session's
+        // servers are rooted at the working directory, and a path in the checkout is outside it
+        // (CHECKOUT-20).
+        let resolved = 'resolved: {
+            match &task.delegate {
+                Some(spec) => {
+                    let mut offered = tools::for_delegate(
+                        spec.capabilities(),
+                        spec.tools(),
+                        spec.may_delegate().then_some(&delegates),
+                        task.deadlines,
+                    );
+                    if workspace.checkout().is_some() {
+                        offered.retain(|tool| tool.function.name != "lsp");
+                    }
+                    Ok((None, offered))
+                }
+                None => {
+                    let mut offered = tools::for_planner(
+                        scheduling,
+                        arming,
+                        &delegates,
+                        task.deadlines,
+                        tools::Running::Offered,
+                    );
+                    let names: Vec<&str> = offered
+                        .iter()
+                        .map(|tool| tool.function.name.as_str())
+                        .collect();
+                    let addressed = match policy.address(&names) {
+                        Ok(addressed) => addressed,
+                        Err(denial) => break 'resolved Err(denial),
+                    };
+                    if let Some(addressed) = &addressed {
+                        // Which names a definition keeps is read after the table is written, so a
+                        // definition narrowed past `run` leaves descriptions naming a tool that is no
+                        // longer beside them. Written again against what is left, which costs a second
+                        // table only in that case.
+                        if !addressed.tools().iter().any(|tool| tool == "run") {
+                            offered = tools::for_planner(
+                                scheduling,
+                                arming,
+                                &delegates,
+                                task.deadlines,
+                                tools::Running::Withheld,
+                            );
+                        }
+                        offered.retain(|tool| addressed.tools().contains(&tool.function.name));
+                    }
+                    Ok((addressed, offered))
+                }
+            }
+        };
+
+        // A run whose definition named skills is offered those of them this turn found, and is listed
+        // and can load no others. Taken after discovery rather than instead of it, so a name can only
+        // choose among skills that passed the same gates they pass for the turn. A delegate's come
+        // from its spec and a person's addressed turn's from the definition they addressed
+        // (ADDRESS-1), which is why that is resolved first.
+        let named = match (&task.delegate, &resolved) {
+            (Some(spec), _) => spec.skills(),
+            (None, Ok((Some(addressed), _))) => addressed.skills(),
+            (None, _) => None,
+        };
+        let catalogue = match named {
             Some(named) => catalogue.only(named),
             None => catalogue,
         };
@@ -2867,9 +3188,13 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             workspace,
             task.home.as_deref(),
             &catalogue,
-            task.tick,
+            task.tick.map(|tick| Tick {
+                unpaceable: tick.self_paced && task.addressing.is_some(),
+                ..tick
+            }),
             task.working_towards.as_deref(),
             &task.attribution,
+            task.system_prompts.appending.as_deref(),
         );
         if let Some(rooted) = rooted {
             policy.exchange_file_authority(rooted);
@@ -2889,49 +3214,15 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             }
         }
 
-        // The tool that says when this turn is asked again is offered to every turn except a tick the
-        // person timed, and describes a different job on either side of that. Nothing else changes.
-        //
-        // A delegate is offered what its capabilities reach, minus the five no delegate ever gets, and
-        // a way to delegate while it sits above the bottom of the tree. Derived from the set rather
-        // than named per kind, so a tool cannot be offered to a run whose gates would refuse it on
-        // every call.
-        //
-        // A turn the person addressed to a definition is offered the planner's list less what the
-        // kernel narrowed away. Decided here, before the prompt is composed and before anything is
-        // sent, so a name matching nothing ends the turn having spent nothing (ADDRESS-5).
-        let (addressed, mut offered) = match &task.delegate {
-            Some(spec) => (
-                None,
-                tools::for_delegate(
-                    spec.capabilities(),
-                    spec.tools(),
-                    spec.may_delegate().then_some(&delegates),
-                    task.deadlines,
-                ),
-            ),
-            None => {
-                let mut offered =
-                    tools::for_planner(scheduling, arming, &delegates, task.deadlines);
-                let names: Vec<&str> = offered
-                    .iter()
-                    .map(|tool| tool.function.name.as_str())
-                    .collect();
-                let addressed = match policy.address(&names) {
-                    Ok(addressed) => addressed,
-                    Err(denial) => {
-                        reporter.notice(t!(
-                            agent_no_such_definition,
-                            name = task.addressing.as_deref().unwrap_or_default(),
-                            names = delegates.names().join(", ")
-                        ));
-                        return Err(TurnError::Precommit(denial.to_string()));
-                    }
-                };
-                if let Some(addressed) = &addressed {
-                    offered.retain(|tool| addressed.tools().contains(&tool.function.name));
-                }
-                (addressed, offered)
+        let (addressed, mut offered) = match resolved {
+            Ok(resolved) => resolved,
+            Err(denial) => {
+                reporter.notice(t!(
+                    agent_no_such_definition,
+                    name = task.addressing.as_deref().unwrap_or_default(),
+                    names = delegates.names().join(", ")
+                ));
+                return Err(TurnError::Precommit(denial.to_string()));
             }
         };
 
@@ -2975,6 +3266,22 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         let definition_model = named
             .filter(|_| !task.model_outranks_a_definition)
             .map(|(_, written)| (written.to_string(), config.model_named(written)));
+        // The machine-level layer first, for the reason the sign-in check below is second
+        // (BACKEND-48).
+        if let (Some(addressed), Some((written, _))) = (&addressed, &definition_model)
+            && let Some((file, why)) = config.model_refused(written)
+        {
+            reporter.notice(t!(
+                delegate_model_refused,
+                definition = addressed.name(),
+                model = written,
+                reason = crate::backend::refusal_reason(file, why)
+            ));
+            return Err(TurnError::Precommit(
+                "the addressed definition's model is refused by this machine's managed layer"
+                    .to_string(),
+            ));
+        }
         if let (Some(addressed), Some((written, resolved))) = (&addressed, &definition_model)
             && crate::backend::Backend::needs_sign_in(config, resolved)
         {
@@ -3045,8 +3352,15 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             // An addressed definition's words go after this program's and ahead of the user's own, for
             // the same reason: its file says what this turn is for, and their instructions still have
             // the last word.
+            //
+            // `--system-prompt` stands in for the opening alone (CLI-19): what follows it is what
+            // the quarantine, the goal and the modes rest on.
             None => format!(
-                "{OPENING}{PLANNING}{FOR_A_PERSON}{}{}{}{mode}",
+                "{}{PLANNING}{FOR_A_PERSON}{}{}{}{mode}",
+                task.system_prompts
+                    .replacing
+                    .as_deref()
+                    .map_or(OPENING, str::trim),
                 preamble.for_a_person,
                 addressed
                     .as_ref()
@@ -3302,6 +3616,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // nudged into. Read once: the offer does not change while the turn runs.
         let may_write = tools::offer_writes(&offered);
         let may_run = tools::offer_runs(&offered);
+        // The same question in the form the refusals read it in: a tool that will not answer may say
+        // to use `run` only where this turn has one to use.
+        let running = tools::Running::on(&offered);
         // Whether the planner may ask for another round of tools. Cleared once, when the budget
         // runs out, so the last request goes out with none offered and the turn ends with an answer
         // rather than with the driver's apology.
@@ -3424,8 +3741,13 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         // A summary is a model call, so it belongs in the inference figure for the same reason
                         // its tokens belong in the total: the turn was waiting on the endpoint for it.
                         let summarising = Instant::now();
-                        let summary =
-                            crate::compact::compact(&mut policy, &mut chat, conversation, steps);
+                        let summary = crate::compact::compact(
+                            &mut policy,
+                            &mut chat,
+                            conversation,
+                            steps,
+                            None,
+                        );
                         let interval = crate::timing::Interval::since(summarising);
                         spent.inference += interval.duration();
                         reporter.inference_interval(interval);
@@ -3898,6 +4220,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 cancel,
                                 scheduling,
                                 arming,
+                                running,
                                 armed: &mut armed,
                                 home: task.home.as_deref(),
                                 profile: task.profile.as_deref(),
@@ -3927,7 +4250,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             changed_at.get_or_insert(steps);
                         }
                         ran_a_program = ran_a_program || output.ran_a_program;
-                        if (output.changed_a_file || output.ran_a_program)
+                        if (output.changed_a_file || output.started_a_program)
                             && let Some(checkout) = workspace.checkout()
                         {
                             checkout.mark_worked_in();
@@ -3971,6 +4294,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 None => servers.as_deref().map(crate::lsp::LanguageServers::share),
                             };
                             let spawning_model = spawning_model.clone();
+                            let rounds = seeded.spec.rounds();
                             let handle = scope.spawn(move || {
                                 let mut confirmer = confirming.delegate(id);
                                 let mut reporter = reporting.delegate(id);
@@ -3986,6 +4310,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     task.permission_mode,
                                     task.auto_vetting,
                                     &task.attribution,
+                                    task.system_prompts.appending.as_deref(),
                                     task.output_cap,
                                     task.deadlines,
                                     task.mcp.as_ref(),
@@ -4004,6 +4329,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 id,
                                 seeded: vouched,
                                 checkout,
+                                rounds,
                                 handle,
                             });
                         }
@@ -4150,10 +4476,16 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             reporter.quarantined(crate::report::Shown {
                                 origin: entries.origin.clone(),
                                 reach: crate::report::Reach::NotThePlanner,
-                                label: references
-                                    .first()
-                                    .map(|r| r.label.to_string())
-                                    .unwrap_or_default(),
+                                // Entries in one listing carry different labels, so the preview
+                                // states what all of them and the listing itself degrade to
+                                // (LABEL-10). With no entries that is the listing's own label.
+                                label: bravebot_core::label::taint_all(
+                                    references
+                                        .iter()
+                                        .map(|r| r.label)
+                                        .chain(std::iter::once(entries.paths.label())),
+                                )
+                                .to_string(),
                                 lines: preview.len(),
                                 preview,
                             });
@@ -4353,6 +4685,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                         Presentation::Visible(_)
                                     ),
                                     outcome: command.outcome.clone(),
+                                    job: command.job.clone(),
                                 });
                             }
 
@@ -4628,12 +4961,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         // A result answers the call it belongs to by id where the round replayed calls at
                         // all. Where it did not, the result is a plain message, as everything here was
                         // before: a conversation may hold both shapes, so long as no call goes unanswered.
-                        conversation.push(
-                            match call.id.as_deref().filter(|_| replayed.is_some()) {
-                                Some(id) => Message::tool_result(id, body),
-                                None => Message::user(body),
-                            },
-                        );
+                        // The prose one is tagged, so nothing has to recognise it by the words it opens with.
+                        match call.id.as_deref().filter(|_| replayed.is_some()) {
+                            Some(id) => conversation.push(Message::tool_result(id, body)),
+                            None => conversation
+                                .push_composed(Message::user(body), Composed::ToolResult),
+                        }
                         if let Some(cancelled) = cancellation {
                             attach_vetted_pictures(&mut policy, conversation, &mut attached);
                             return Err(TurnError::Cancelled {
@@ -4744,6 +5077,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             }
             result
         });
+        // Whatever way the rounds ended, a stop and a failed request included: each leaves the jobs
+        // to die with the turn, and the person is told which ones before they do.
+        jobs.stop_all(&mut policy, &mut reporter);
+        *rounds_taken = steps;
         spent.wall = began.elapsed();
         reporter.spent(crate::outcome::Spent {
             tokens,
@@ -4763,7 +5100,11 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // files on disk as an answer does, and being stopped with none of it compiled is the state a
         // person is least able to spot for themselves. Both flags are the round loop's own locals,
         // settled by whatever it did before it ended.
-        if changed_at.is_some() && !ran_a_program {
+        //
+        // Only where a run was possible, the state the planner's question is asked in. A definition
+        // or a delegate whose tools leave out `run` could not have built what it wrote, so the line
+        // would report something it had no way to do.
+        if may_run && changed_at.is_some() && !ran_a_program {
             reporter.narration(
                 "files changed this turn and no command was run, so none of it has been \
              built or tested"
@@ -4966,6 +5307,8 @@ mod tests {
                         delegated: Err(TurnError::Cancelled { attempts: None }),
                         vouched: seeded_for_worker,
                         notices: Vec::new(),
+                        rounds: 0,
+                        took: Duration::ZERO,
                     },
                     crate::outcome::Spent {
                         tokens: 17,
@@ -4989,6 +5332,7 @@ mod tests {
                 id: DelegateId::nth(1),
                 seeded,
                 checkout: None,
+                rounds: 60,
                 handle: worker,
             }];
             let mut tokens = 0;
@@ -5021,6 +5365,99 @@ mod tests {
         );
     }
 
+    /// TRACE-8 for the two endings no reply from a model produces: a delegate somebody stopped,
+    /// and one whose thread died and handed nothing back.
+    #[test]
+    fn a_stopped_delegate_and_a_lost_one_are_each_recorded_as_what_they_were() {
+        type Joined = (
+            crate::delegate::Ended,
+            crate::outcome::Spent,
+            Vec<crate::timing::Interval>,
+        );
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "collect two delegates");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::default(),
+            &mut sink,
+        )
+        .unwrap();
+        let seeded = policy.vouched();
+        let mut reporter = crate::report::RecordingReporter::default();
+        std::thread::scope(|scope| {
+            let handed = seeded.clone();
+            let stopped = scope.spawn(move || -> Joined {
+                (
+                    crate::delegate::Ended {
+                        delegated: Err(TurnError::Cancelled { attempts: None }),
+                        vouched: handed,
+                        notices: Vec::new(),
+                        rounds: 12,
+                        took: Duration::from_millis(4_200),
+                    },
+                    Default::default(),
+                    Vec::new(),
+                )
+            });
+            let lost = scope.spawn(|| -> Joined { panic!("the delegate's thread died") });
+            let mut delegates = vec![
+                Working {
+                    join_started: None,
+                    id: DelegateId::nth(1),
+                    seeded: seeded.clone(),
+                    checkout: None,
+                    rounds: 120,
+                    handle: stopped,
+                },
+                Working {
+                    join_started: None,
+                    id: DelegateId::nth(2),
+                    seeded: seeded.clone(),
+                    checkout: None,
+                    rounds: 60,
+                    handle: lost,
+                },
+            ];
+            collect_delegates(
+                &mut delegates,
+                &mut policy,
+                &mut Conversation::new(),
+                &mut reporter,
+                &mut 0,
+                &mut 0,
+                &mut Cached::default(),
+                true,
+                &mut crate::timing::DelegateWait::default(),
+                &mut Elapsed::default(),
+                &mut Vec::new(),
+            )
+            .unwrap();
+        });
+        drop(policy);
+
+        let ends: Vec<&str> = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                bravebot_core::event::Event::GatePassed {
+                    gate: "delegate",
+                    detail,
+                } if detail.contains(": ended ") => Some(detail.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            ends,
+            [
+                "d1: ended after 4.2s and 12 of 120 rounds: it was stopped before it answered",
+                "d2: ended without handing anything back, so how long it ran and how many of its \
+                 60 rounds it made are not known",
+            ]
+        );
+    }
+
     /// A turn holds a grant for each server the session reached and for no other. A worker it
     /// spawns holds the same ones, and a reader and a checker hold none, whatever servers the
     /// delegate's own task names: its grants are its spec's.
@@ -5048,6 +5485,7 @@ mod tests {
                 .before_delegate(
                     &Labelled::trusted(kind.to_string()),
                     &Labelled::trusted("look it up".to_string()),
+                    None,
                 )
                 .expect("a trusted run may delegate");
             let delegated = super::held(

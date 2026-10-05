@@ -557,7 +557,9 @@ fn a_picture_dropped_onto_the_task_reaches_the_planner() {
 /// The map starts with a rule against that exact path, which is what a turn writing fetched bytes
 /// there leaves behind, because a file inside the session's own directory is read as trusted
 /// otherwise and the drop would not be what decided it. Its bytes are text so a step can read them
-/// back; nothing here looks at a picture's bytes, and the drop is what this is about.
+/// back; nothing here looks at a picture's bytes, and the drop is what this is about. A step that
+/// reads a picture holds it as the data URI the driver encodes, so the answer is checked for the
+/// base64 of those bytes.
 #[test]
 fn a_dropped_picture_is_still_trusted_when_a_step_of_the_plan_reads_it() {
     let scratch = Scratch::new("dropped-task-trusted");
@@ -596,8 +598,11 @@ fn a_dropped_picture_is_still_trusted_when_a_step_of_the_plan_reads_it() {
         "the plan's own read of the dropped file was quarantined: {:?}",
         outcome.answer
     );
+    // "three stripes", as the data URI a picture is held as.
     assert!(
-        outcome.reply_for_display().contains("three stripes"),
+        outcome
+            .reply_for_display()
+            .contains("data:image/png;base64,dGhyZWUgc3RyaXBlcw=="),
         "the file's own bytes are not what came back: {}",
         outcome.reply_for_display()
     );
@@ -605,6 +610,51 @@ fn a_dropped_picture_is_still_trusted_when_a_step_of_the_plan_reads_it() {
         outcome.trust.is_trusted("shot.png"),
         "the rule the drop recorded did not reach the run: {:?}",
         outcome.trust.rules().collect::<Vec<_>>()
+    );
+}
+
+/// The rule a drop recorded is the person's and holds for the rest of the session (DROP-2), so a
+/// run that stops after reading the drop keeps it. Here the plan is declined, which is a failure
+/// that carries no trust map; the map lent to the run is the only place the rule can be. Asserted
+/// against a file the map distrusts, so the rule can only have come from the drop.
+#[test]
+fn a_dropped_picture_stays_trusted_when_the_run_is_declined() {
+    let scratch = Scratch::new("dropped-task-declined");
+    std::fs::write(scratch.path.join("shot.png"), "three stripes").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "shot.png", "out_slot": "doc"}},
+            {"capability": "ANSWER", "args": {"from_slot": "doc"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let task = Task::new("what is in [Image #1]?").with_attachment("shot.png", "image/png");
+
+    let mut trust = TrustStore::new(&scratch.path);
+    trust.distrust("shot.png");
+    let mut nobody = bravebot_agent::confirm::Unattended;
+
+    manifest::run_recording(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &task,
+        &mut nobody,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        &mut trust,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("a plan nobody approved must not run");
+
+    assert!(
+        trust.is_trusted("shot.png"),
+        "the rule the drop recorded went with the failed run: {:?}",
+        trust.rules().collect::<Vec<_>>()
     );
 }
 
@@ -1066,8 +1116,8 @@ fn a_manifest_write_reads_the_file_it_replaces_through_a_gate_that_records_it() 
     assert!(
         sink.events().iter().any(|event| matches!(
             event,
-            Event::GatePassed { gate: "credential-scan", detail }
-                if detail.contains("notes.md") && detail.contains("read as it stands")
+            Event::GatePassed { gate: "trusted-read", detail }
+                if detail.contains("write_file") && detail.contains("(T,priv)")
         )),
         "the scan read the file the step replaces without the read being recorded: {:?}",
         sink.events()

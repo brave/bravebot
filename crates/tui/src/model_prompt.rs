@@ -298,14 +298,18 @@ fn draw(frame: &mut Frame, picker: &Picker) {
     let inside = block.inner(area);
     frame.render_widget(block, area);
 
+    // The blank rows are given up where keeping them would leave the list one row: that row cannot
+    // hold a heading and the row under the cursor, and VIEW-15 wants no row on screen without the
+    // name of its service. The blank above the key line goes first.
+    let blanks = inside.height.saturating_sub(4).min(2);
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // search
-            Constraint::Length(1), // blank
-            Constraint::Min(1),    // list
-            Constraint::Length(1), // blank
-            Constraint::Length(1), // keys
+            Constraint::Length(1),                        // search
+            Constraint::Length(blanks.min(1)),            // blank
+            Constraint::Min(1),                           // list
+            Constraint::Length(blanks.saturating_sub(1)), // blank
+            Constraint::Length(1),                        // keys
         ])
         .split(inside);
 
@@ -974,6 +978,31 @@ mod tests {
         );
     }
 
+    /// Nine rows would leave the list one with the two blank rows kept. The panel gives up a blank
+    /// row instead, so the list has the two rows that a heading and the cursor's row need.
+    #[test]
+    fn a_blank_row_is_given_up_so_the_heading_and_the_cursor_both_fit() {
+        let mut picker = Picker::new(a_roster_longer_than_the_panel(), None);
+        for _ in 0..30 {
+            handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
+        }
+
+        let output = rendered_at(&picker, 60, 9);
+        let under_the_cursor = picker.chosen().expect("a model").display_name.clone();
+        assert!(
+            output.contains("OpenRouter"),
+            "a row is on screen without its service heading: {output}"
+        );
+        assert!(
+            output.contains(&under_the_cursor),
+            "the cursor is off screen: {output}"
+        );
+        assert!(
+            !output.contains("model-28"),
+            "the list is taller than two rows: {output}"
+        );
+    }
+
     /// One row cannot carry both, and the model is the half a person opened the picker for: a panel
     /// saying only whose models these are and never which answers nothing.
     #[test]
@@ -983,8 +1012,8 @@ mod tests {
             handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
         }
 
-        // Nine rows leave the list one.
-        let output = rendered_at(&picker, 60, 9);
+        // Seven rows leave the list one, with no blank row left to give up.
+        let output = rendered_at(&picker, 60, 7);
         let under_the_cursor = picker.chosen().expect("a model").display_name.clone();
         assert!(
             output.contains(&under_the_cursor),

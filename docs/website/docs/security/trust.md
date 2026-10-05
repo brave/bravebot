@@ -83,6 +83,11 @@ from `/`, so `/add-dir` and `/cd` both refuse a path that is not, rather than re
 a name that would be read as a path inside the project, where your answer at startup covers it. On
 Windows that is every path there is, so opening a directory by name is unavailable there for now.
 
+**Case is folded only on a volume that folds it.** Where `Docs` and `docs` open the same file, a rule
+about one decides the other, in both directions, and where two rules differ only in case the one that
+sorts first decides. Where the volume keeps the spellings apart, or cannot be asked, a rule about
+`Docs` decides nothing about `docs`.
+
 ## What a write does
 
 Every row here is exact. A write matching a row does what that row says and nothing else.
@@ -203,6 +208,15 @@ It lasts the session, `--resume` carries both halves, and `/clear` closes it. A 
 inside the project is refused. A directory a resume cannot open again, because it has moved or gone,
 says so rather than being passed over.
 
+```
+/add-dir close ~/notes
+```
+
+closes that one directory and takes both halves back, without ending the conversation. A file only
+it reached is refused again, and its trusted rule goes. Where a directory above it is trusted, the
+closed one is left undecided rather than trusted through that one. A rule there that distrusts a
+file stays, so closing never makes anything more trusted. A later resume does not reopen it.
+
 A directory that *holds* the project is **not** refused, and its rule covers the project's files as
 it covers everything else in that tree. Vouching for a directory is a standing statement about the
 place, and the project is in it, so there is nothing to except.
@@ -227,6 +241,10 @@ always named, because every key is a full path. What changes is only which rules
 reaches and how each is spelled back to you. So a yes given for one project does not become a yes for
 another, and a no given inside the old one is not forgotten. That grants nothing and withdraws
 nothing, which is what makes it something bravebot can do without asking you.
+
+With `readsStayInWorkspace` set, `/cd` may move further into the tree and not back out: a parent or a
+sibling is refused, as is a name inside the tree that reaches outside it. See
+[Configuration](../customize/configuration.md#permissions).
 
 Anything overlapping the new working directory closes: the directory you left, and any `/add-dir`
 directory holding it or sitting inside it, each said out loud as it happens. A directory reachable

@@ -201,6 +201,33 @@ const CARDS = {
     // docs/specs/credential-protection.md CRED-19: a finding is a kind, a location and a mask.
     why: 'the path the planner named, and the agent’s own line about each finding, which holds no text of the file',
   },
+  'mcp-server': {
+    entry: () => t.askedMcpServer({ request: 1, alias: 'weather', transport: 'stdio', command: [FORGED_CHROME], url: null, program: FORGED_CHROME, variables: [{ name: 'PATH', stored: false }], reads: [FORGED_CHROME], directory: FORGED_CHROME, digest: 'abc123', requestedBy: FORGED_CHROME, changed: true, fetching: [FORGED_CHROME] }),
+    marks: null,
+    // docs/specs/mcp-servers.md SERVERS-1: a declaration is the person's own, in their own directory,
+    // and the question is put before the server is started, so nothing a server wrote is on it.
+    why: 'the declaration the person wrote, the settings file that requested it and the agent’s own lines about it, asked about before the server has said anything',
+  },
+  // SERVERS-8: a tool's description is the server's own text, released for a person to read.
+  'mcp-tools': {
+    entry: () => t.askedMcpTools({ request: 1, alias: 'weather', tools: [{ name: 'weather:get_forecast', arguments: [FORGED_CHROME], description: FORGED_CHROME }], refused: 0, changed: false, vetting: { verdict: 'safe' } }),
+    marks: 'class="mcp-tool-description"',
+  },
+  'mcp-call': {
+    entry: () => t.askedMcpCall({ request: 1, alias: 'weather', tool: 'get_forecast', name: 'weather:get_forecast', arguments: [{ name: 'city', value: FORGED_CHROME }], description: FORGED_CHROME, mayStand: true }),
+    marks: 'class="mcp-tool-description"',
+  },
+  // SERVERS-11: where a redirect pointed is the server's own bytes.
+  'mcp-move': {
+    entry: () => t.askedMcpMove({ request: 1, alias: 'weather', declared: 'https://weather.example/mcp', destination: FORGED_CHROME, authority: 'elsewhere.example:443', mayRecord: true }),
+    marks: 'class="mcp-destination"',
+  },
+  'mcp-started': {
+    entry: () => t.mcpStarted({ servers: [FORGED_CHROME], confined: false, notes: [FORGED_CHROME] }),
+    marks: null,
+    // docs/specs/mcp.md MCP-8: a failure's text is this process's own words and never a server's.
+    why: 'the aliases the person declared and the agent’s own lines about each request, which hold nothing a server wrote',
+  },
   'plan-task': { entry: () => t.planAsked(FORGED_CHROME), marks: null, why: 'what the person typed themselves, as the task of a run' },
   // What a run releases can be a file's text, so it is held to the container released content gets.
   'plan-reply': { entry: () => t.planReplied(FORGED_CHROME, 'a-record'), marks: '<pre class="preview">' },

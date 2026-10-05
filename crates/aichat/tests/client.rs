@@ -2177,11 +2177,15 @@ fn vertex_at(endpoint: &str) -> bravebot_config::provider::Provider {
 }
 
 /// The endpoint has no listing a key can call, so asking would carry the key to be answered 404.
-/// No request is made at all, with a credential or without one.
+/// The compiled list is offered instead, and no request is made at all, with a credential or
+/// without one. The server answers with a roster of its own, so rows built from a request would
+/// not be these.
 #[test]
-fn a_google_vertex_entry_is_not_asked_for_a_roster() {
+fn a_google_vertex_entry_offers_the_compiled_models_without_asking() {
     let (endpoint, received) = serve(GATEWAY_ROSTER);
     let provider = vertex_at(&endpoint);
+    let compiled = provider.compiled_roster().expect("a compiled list");
+    assert!(!compiled.is_empty());
     let egress = Egress::new();
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -2196,7 +2200,18 @@ fn a_google_vertex_entry_is_not_asked_for_a_roster() {
         let models =
             bravebot_aichat::models::list_from_gateway(&mut policy, &provider, token, &egress)
                 .expect("nothing to fetch is not a failure");
-        assert!(models.is_empty(), "{models:?}");
+        let keys: Vec<&str> = models.iter().map(|model| model.key.as_str()).collect();
+        let expected: Vec<String> = compiled
+            .iter()
+            .map(|id| format!("google-vertex/{id}"))
+            .collect();
+        assert_eq!(keys, expected);
+        assert!(
+            models
+                .iter()
+                .all(|model| model.provider.as_deref() == Some("google-vertex")),
+            "{models:?}"
+        );
     }
     assert!(
         received.recv_timeout(Duration::from_millis(300)).is_err(),

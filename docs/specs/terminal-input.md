@@ -160,6 +160,15 @@ press that appeared to do nothing and said nothing reads as an interface that ha
 responding. Any key that is not itself one of the two that leave withdraws the offer, so a press now
 and a byte written later are not the two halves of one gesture.
 
+**A turn asked to stop says so until it ends.** From the press that asks for the stop, the working
+indicator names the stop ahead of every other word it would use, and keeps naming it until the turn
+ends. A further press while the turn is stopping finds the same word, since it asks for the stop
+already underway. The ladder is unchanged: the mark is what the screen says, not a rung.
+
+**Why.** A turn ends once its worker and every delegate it started have returned, which can take
+seconds. An indicator still naming the work through that wait reads as a press nobody heard, and
+the person presses again, toward the presses at an empty box that end the session.
+
 **Stopping shows a cancelled status, and the prompt comes back when the box can take it.**
 The reply stops arriving. When no work followed the prompt, no prompts are queued, and the box is
 empty, the prompt returns for editing. The status identifies a deliberate cancellation rather than
@@ -168,6 +177,11 @@ Dropped files and pasted pictures return with their markers, keeping their ident
 within each attachment store. Resubmitting includes each once in the new submission, in the
 request order described by [dropping.md](dropping.md). Editor attachment stores remain in memory
 only.
+
+**A stop withdraws the questions a turn asks after it.** Delegates share one confirmer and take
+turns at it, so when a stop answers one delegate's prompt, the next delegate's question is already on
+its way. It is declined as that stop declined the first, and is never drawn, so one press stops the
+turn however many delegates were waiting.
 
 The prompt stays sent, marked stopped, where any of three things is true: the turn had already
 done something that is on the screen, there are prompts waiting behind it, or the box is not empty.
@@ -244,6 +258,11 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_tui::app::a_key_that_would_stop_a_turn_is_answered_during_a_summary`
 `verified-by: bravebot_tui::app::escape_stops_the_turn_without_ending_the_session`
 `verified-by: bravebot_tui::app::ctrl_g_asks_for_the_editor`
+`verified-by: bravebot_tui::app::a_question_queued_behind_a_stop_is_declined_and_never_drawn`
+`verified-by: bravebot_tui::app::a_question_is_drawn_while_nothing_has_been_stopped`
+`verified-by: bravebot_tui::app::a_withdrawn_question_is_declined_in_the_shape_of_its_own_kind`
+`verified-by: bravebot_tui::render::a_turn_asked_to_stop_says_so_until_it_ends`
+`verified-by: bravebot_tui::state::the_stopping_mark_ends_with_the_turn`
 
 
 <a id="INPUT-5"></a>
@@ -326,7 +345,7 @@ named here and nowhere else:
 
 | Key | Why it may differ |
 |---|---|
-| Enter | sends, which is the whole of what is refused (INPUT-10), and a line that is one of the words a slash may begin waits to be carried out rather than to be sent ([commands.md](commands.md)) |
+| Enter | sends, which is the whole of what is refused (INPUT-10), and a line that is one of the words a slash may begin is carried out as it is typed or waits to be, never sent ([commands.md](commands.md#CMD-8)) |
 | Escape, Ctrl-C | stop the turn in flight (INPUT-4), Escape in vi's style only from NORMAL mode with nothing waiting, and Ctrl-`[` with it ([INPUT-24](#INPUT-24)) |
 | Ctrl-Enter | queues the line as Enter does, then stops the turn in flight so what is waiting goes now (INPUT-36) |
 | Ctrl-D | leaves, which is not something the box does |
@@ -375,11 +394,13 @@ attached to no press.
 Enter mid-turn takes the line out of the box and holds it. It is drawn under the box, marked, so
 the person can see that what they sent went somewhere.
 
-**A line that is a command is taken the same way, and waits to be carried out rather than to be
-sent.** It comes off the box and is drawn under it like anything else waiting, but it is not offered
-to the turn in flight, so nothing about it reaches the planner. What carries it out is the queue
-being reached once the turn has ended, and a prompt behind it goes when it has, as any waiting prompt
-does. Which lines are commands is [commands.md](commands.md)'s.
+**A line that is a command is never sent.** Most are taken the same way and wait to be carried
+out: such a line comes off the box and is drawn under it like anything else waiting, but it is not
+offered to the turn in flight, so nothing about it reaches the planner. What carries it out is the
+queue being reached once the turn has ended, and a prompt behind it goes when it has, as any waiting
+prompt does. A command that reads or changes only what the session keeps is carried out as it is
+typed instead. Which lines are commands, and which of them wait, is
+[commands.md](commands.md#CMD-8)'s.
 
 **The turn in flight takes it.** A turn asks between rounds, after the round's tool calls have run
 and before the next request goes out, and everything waiting goes into the conversation there, in
@@ -571,24 +592,36 @@ and push the hint line off the screen.
 
 The hint line carries what the session is doing (the mode in force where it is not asking, the
 trail, how full the context is and on what footing it knows that, INPUT-22, a loop that is running
-and when its next tick is due, [loop.md](loop.md), the key that opens the delegates where the
-session has spawned any) and then `? for shortcuts`. It lists no other binding of its own, and it does not report the
-confinement. The trail key is named only **once a turn has left a trail to look at**: a trail is
+and when its next tick is due, [loop.md](loop.md), how many background jobs the turn has running,
+[RUN-26](tools/run.md#RUN-26), the key that opens the delegates where the
+session has spawned any, the key that moves the command the turn is waiting on to the background
+while it can be moved, [RUN-25](tools/run.md#RUN-25)), then `? for shortcuts`, and then the key
+that opens the info panel while the panel is closed and the terminal is wide enough for it
+([PANEL-7](info-panel.md#PANEL-7)). It lists no other binding of its own, and it does not report the
+confinement. While the info panel is drawn, how full the context is and the cache figure are in the
+panel and not on the line ([PANEL-8](info-panel.md#PANEL-8)). The trail key is named only **once a turn has left a trail to look at**: a trail is
 recorded when the turn it belongs to ends, so before then the line would be offering a press that
-changes nothing on screen.
+changes nothing on screen. The move key is named for the same reason **only while there is a
+command it would move**, and is gone once it has been pressed or the command has ended.
 
 The mode leads the line and is the only part of it drawn in a colour, and asking takes no room at
 all: what is drawn is a mode somebody chose, named in [permission-modes.md](permission-modes.md). A
 marker standing there on every session is one people stop reading, and being read is the whole of
 what this one is for.
 
-**What does not fit is dropped whole, at a separator.** The parts are given up in order (a reading
-with no figure in it, then the way to the bindings, then the trail key, then the figures, and a
-running loop after all of them), and the mode is the last to go. The loop is kept that late because
+**What does not fit is dropped whole, at a separator.** The parts are given up in order (the key that
+opens the info panel, then a reading with no figure in it, then the way to the bindings, then the trail key, then the figures, then the
+move key, then the count of jobs, and a running loop after all of them), and the mode is the last to
+go. The move key is
+kept that late because it is up only while somebody is waiting on a command, which is when they read
+this line for a way out of the wait. The loop is kept that late because
 it is the only part of the line spending something while nobody is watching, and it is given up at
 all because a part nothing may give up would have a narrow terminal clear the whole row and take the
-mode with it. In shell mode the line is the shell's own, and the loop is said there too, since a loop
-spends a turn whichever mode the box is in. A note about what a press just did, drawn at the right of
+mode with it. The count of jobs goes just before the loop for the loop's reason: a job runs while nobody
+watches it, and once the block that started it has scrolled away nothing else on the screen says it
+runs. It is counted from the driver's events and never from anything a job printed. In shell mode
+the line is the shell's own, and the loop and the count of jobs are said there too, since a loop
+spends a turn and a job runs whichever mode the box is in. A note about what a press just did, drawn at the right of
 the same row,
 takes its room ahead of all of them: the parts are fitted against the width it leaves, since a part
 fitted against the whole width is one the note writes over the middle of. Left to the
@@ -618,6 +651,9 @@ prevent, and a mode read off `/status` after the write is a mode read too late.
 `verified-by: bravebot_tui::app::typing_takes_the_list_down`
 `verified-by: bravebot_tui::app::escape_takes_the_list_down`
 `verified-by: bravebot_tui::state::a_line_that_arrives_under_the_list_takes_the_list_down`
+`verified-by: bravebot_tui::app::escape_takes_the_list_down_in_vis_editing_style`
+`verified-by: bravebot_tui::app::a_paste_or_a_newline_takes_the_list_down`
+`verified-by: bravebot_tui::render::the_shell_hint_line_drops_whole_parts_rather_than_cutting_one`
 `verified-by: bravebot_tui::render::a_question_mark_lists_every_shortcut`
 `verified-by: bravebot_tui::render::the_list_names_the_chord_that_opens_the_scroller`
 `verified-by: bravebot_tui::render::the_shortcuts_are_not_something_to_complete`
@@ -627,6 +663,7 @@ prevent, and a mode read off `/status` after the write is a mode read too late.
 `verified-by: bravebot_tui::render::the_hint_line_does_not_report_the_confinement`
 `verified-by: bravebot_tui::render::the_hint_line_names_the_delegate_key_once_one_has_run`
 `verified-by: bravebot_tui::render::the_hint_names_the_trail_key_only_once_there_is_a_trail`
+`verified-by: bravebot_tui::render::the_hint_line_offers_the_move_only_while_a_command_can_be_moved`
 `verified-by: bravebot_tui::render::the_hint_line_fits_a_narrow_terminal_whole`
 `verified-by: bravebot_tui::render::the_hint_and_the_list_name_the_same_key`
 `verified-by: bravebot_tui::render::the_hint_line_names_a_mode_that_is_not_asking`
@@ -636,6 +673,9 @@ prevent, and a mode read off `/status` after the write is a mode read too late.
 `verified-by: bravebot_tui::render::the_hint_line_says_nothing_about_a_loop_in_a_session_with_none`
 `verified-by: bravebot_tui::render::a_narrow_terminal_gives_up_the_bindings_rather_than_the_mode`
 `verified-by: bravebot_tui::render::a_narrow_terminal_gives_up_a_reading_before_the_loop_and_the_loop_before_the_mode`
+`verified-by: bravebot_tui::render::the_hint_line_counts_the_jobs_running`
+`verified-by: bravebot_tui::render::the_hint_line_counts_the_jobs_running_in_shell_mode_too`
+`verified-by: bravebot_tui::render::a_narrow_terminal_gives_up_a_reading_before_the_jobs_and_the_jobs_before_the_loop`
 `verified-by: bravebot_tui::render::what_does_not_fit_is_dropped_whole_rather_than_cut_mid_word`
 `verified-by: bravebot_tui::render::a_reading_with_no_figure_in_it_is_given_up_before_a_binding`
 `verified-by: bravebot_tui::render::a_note_at_the_right_takes_its_room_from_the_parts_rather_than_over_them`
@@ -809,6 +849,39 @@ flight, which is aimed at something else entirely and costs the answer being wri
 `verified-by: bravebot_tui::state::what_a_waiting_prompt_named_is_named_again_when_it_comes_back`
 `verified-by: bravebot_tui::state::there_is_nothing_to_take_back_when_nothing_is_waiting`
 `verified-by: bravebot_tui::render::the_waiting_rows_go_when_the_queue_is_taken_back`
+
+<a id="INPUT-38"></a>
+### INPUT-38: Ctrl-Y puts back what the last Ctrl-U, Ctrl-K, Ctrl-W or Alt-D took
+
+Ctrl-U, Ctrl-K, Ctrl-W and Alt-D (the word after the caret and the blanks before it) keep what they
+delete, and Ctrl-Y inserts it at the caret, leaving the caret after it. Kills that go the same way and
+follow each other join, as in readline: backward kills (Ctrl-U, Ctrl-W) put the later text first,
+forward kills (Ctrl-K, Alt-D) put it last. A kill the other way, or one after any edit or caret move,
+starts a new buffer. Ctrl-Y with nothing kept does nothing. Alt-Y does not cycle through earlier kills.
+
+The buffer is vi's register ([INPUT-28](#INPUT-28)), so Ctrl-Y puts back what `d` or `y` took, and `p`
+puts back what a kill took, as characters. A kill never changes what `p` does with text `d` or `y`
+took. Ctrl-Y inserts a register that holds whole lines as its characters, without the newline. A
+marker that was killed comes back as the marker, and names its attachment again for as long as that is
+still staged; once it is not, it is text like any other ([INPUT-3](#INPUT-3)). A chord moved onto
+`ctrl-y` ([INPUT-32](#INPUT-32)) is read first, and `yank` is not one of the nine movable actions.
+While `R` is typing over the line ([INPUT-37](#INPUT-37)), Ctrl-U and Ctrl-W are Backspace and keep
+nothing, and Alt-D does nothing.
+
+**Why.** The three delete keys threw their text away, so moving a clause with the readline keys was not
+possible; Claude Code and Codex keep it and paste it with Ctrl-Y. One buffer for removed text keeps vi
+and readline from disagreeing about what was last taken.
+
+`verified-by: bravebot_tui::app::ctrl_y_puts_back_what_ctrl_k_took_somewhere_else`
+`verified-by: bravebot_tui::app::every_delete_key_keeps_what_it_took`
+`verified-by: bravebot_tui::app::consecutive_kills_join_in_the_direction_they_went`
+`verified-by: bravebot_tui::app::ctrl_y_with_nothing_killed_does_nothing`
+`verified-by: bravebot_tui::app::alt_d_at_the_end_of_the_line_keeps_nothing`
+`verified-by: bravebot_tui::app::a_chord_on_ctrl_y_takes_precedence_over_the_yank`
+`verified-by: bravebot_tui::state::a_killed_marker_yanked_back_names_its_picture_again`
+`verified-by: bravebot_tui::state::vi_put_reads_what_a_kill_took`
+`verified-by: bravebot_tui::state::yank_reads_what_vi_deleted`
+`verified-by: bravebot_tui::state::a_kill_does_not_join_a_vi_yank`
 
 ## Known costs
 
@@ -1062,7 +1135,7 @@ answer is to set the budget rather than to compact.
 `verified-by: bravebot_config::lib::a_default_budget_is_marked_as_guessed`
 `verified-by: bravebot_config::lib::an_advertised_budget_is_not_marked_as_guessed`
 `verified-by: bravebot_config::lib::a_budget_set_by_hand_is_not_marked_as_guessed`
-`verified-by: bravebot_config::lib::a_window_nobody_advertised_leaves_an_adopted_budget_standing_and_marks_it_guessed`
+`verified-by: bravebot_config::lib::a_window_nobody_advertised_puts_the_default_back_in_place_of_an_adopted_budget`
 
 <a id="INPUT-23"></a>
 ### INPUT-23: the box edits the ordinary way or vi's, and only a person chooses which
@@ -1204,6 +1277,7 @@ alone.
 `verified-by: bravebot_tui::app::a_press_that_is_not_a_character_abandons_an_instruction_still_waiting_for_a_key`
 `verified-by: bravebot_tui::app::sending_the_line_abandons_an_instruction_still_waiting_for_a_key`
 `verified-by: bravebot_tui::app::a_press_while_a_turn_runs_abandons_an_instruction_still_waiting_for_a_key`
+`verified-by: bravebot_tui::app::stopping_a_goal_check_abandons_an_instruction_still_waiting_for_a_key`
 `verified-by: bravebot_tui::render::the_hint_line_draws_an_instruction_still_waiting_beside_the_mode`
 `verified-by: bravebot_tui::app::the_chord_that_enters_normal_mode_does_nothing_to_the_ordinary_box`
 `verified-by: bravebot_tui::app::escape_from_insert_mode_mid_turn_enters_normal_mode_and_the_turn_keeps_running`
@@ -1815,13 +1889,15 @@ rendering fault rather than as a border with no room for all of it.
 `verified-by: bravebot_tui::render::a_border_gives_up_the_ways_in_one_at_a_time`
 
 <a id="INPUT-32"></a>
-### INPUT-32: a settings file can move seven chords, and nothing else
+### INPUT-32: a settings file can move nine chords, and nothing else
 
 A `keybindings` block in `settings.json` names an action and the chord it is to answer, spelled
 `ctrl-x`, `alt-o` or `ctrl+x`. It layers per action the way `env` does: a project file moving one
-action's key says nothing about the other six. There is no second file and no other spelling of the
-block, so one place answers what a key does. Seven actions can be moved, and nothing else can:
+action's key says nothing about the other eight. There is no second file and no other spelling of the
+block, so one place answers what a key does. Nine actions can be moved, and nothing else can:
 
+- `background` (default: `ctrl-b`): move the command the turn is waiting on to the background
+  ([RUN-25](tools/run.md#RUN-25)).
 - `editor` (default: `ctrl-g`): open external editor for the current prompt.
 - `watch` (default: `ctrl-l`): watch background delegate or inspect running actions.
 - `scroller` (default: `ctrl-o`): open the transcript scroller.
@@ -1829,6 +1905,7 @@ block, so one place answers what a key does. Seven actions can be moved, and not
 - `stash` (default: `ctrl-s`): stash the current input line or bring it back.
 - `trail` (default: `ctrl-t`): toggle turn execution trail visibility.
 - `paste` (default: `ctrl-v`): paste from clipboard.
+- `panel` (default: `ctrl-x`): show or hide the info panel ([PANEL-5](info-panel.md#PANEL-5)).
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is
 typed into the line, Enter sends, Escape clears it, Tab takes what is offered, and the arrows walk
@@ -1860,6 +1937,8 @@ view of what a delegate is doing, the chord that opened the view leaves it. Ctrl
 meaning in both, and the chord an action was moved off of does nothing. In the view so does every
 other key held with a modifier but Shift, the chord an action was moved onto among them, save the
 scroller's Ctrl-U, Ctrl-D and Ctrl-B ([SCROLL-3](scroller.md#SCROLL-3)), which the view borrows.
+The move key at its default is therefore a page back in the view and in the scroller, and moves a
+command only from the box.
 
 **Why.** Every character narrows the prompt search and bare letters walk the delegate list, so a
 chord these modes did not ask the bindings about is not merely unanswered: it is read as the letter
@@ -1871,14 +1950,14 @@ readline editing keys (such as `ctrl-u` or `alt-b`), the action answers rather t
 editing arm. In vi's normal mode, `/` translates to the chord configured for history search.
 
 **The screen names the chord that answers.** `?` lists the keys from the one place they are written
-down (INPUT-13), and the seven rows above are asked of the chord in force rather than spelled out
+down (INPUT-13), and the nine rows above are asked of the chord in force rather than spelled out
 there. So is every other line that names one: the row saying what brings a stashed line back
 (INPUT-17), the border while an older prompt is being walked back to (INPUT-31), the keys under the
 search (INPUT-19), the hint saying there is something to watch, the note left where a picture on the
 clipboard needs a key of its own, and the scroller's way out
 ([SCROLL-7](scroller.md#SCROLL-7)). A translated line names the chord by taking it as an argument, so
 no catalog has to be revisited when a default moves. Where a clause of this spec or another names one
-of the seven, it names the default.
+of the nine, it names the default.
 
 **Why.** A list is worth having only where it is right, and a person reads it at the moment a key
 they pressed did nothing. Keeping a second copy for the defaults is the same list twice: the copy
@@ -1898,6 +1977,7 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::keybindings::two_actions_can_trade_chords`
 `verified-by: bravebot_tui::keybindings::unknown_actions_in_map_are_ignored`
 `verified-by: bravebot_tui::keybindings::custom_chords_override_defaults`
+`verified-by: bravebot_tui::keybindings::the_background_chord_is_ctrl_b_and_can_be_moved`
 `verified-by: bravebot_config::settings::a_keybindings_block_is_read_from_settings`
 `verified-by: bravebot_config::settings::a_keybindings_entry_that_is_not_a_chord_is_dropped`
 `verified-by: bravebot_config::settings::a_project_layer_overrides_keybindings_per_name`
@@ -1920,6 +2000,7 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::app::custom_keybindings_work_while_a_turn_runs`
 `verified-by: bravebot_tui::app::vi_mode_search_prompts_uses_configured_history_chord`
 `verified-by: bravebot_tui::app::configured_keybinding_overrides_readline_editing`
+`verified-by: bravebot_tui::app::ctrl_alt_c_and_ctrl_alt_d_are_not_the_chords_that_stop_and_leave`
 
 <a id="INPUT-33"></a>
 ### INPUT-33: a session takes the terminal for its length, and gives every part of it back

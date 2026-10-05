@@ -3,7 +3,7 @@
 mod repository;
 
 use bravebot_agent::SessionScratch;
-use bravebot_agent::workspace::{Paging, Workspace, WorkspaceError};
+use bravebot_agent::workspace::{Paging, Remedy, Workspace, WorkspaceError};
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::{Event, Principle, RecordingSink};
 use bravebot_core::label::{Integrity, Label};
@@ -1269,6 +1269,43 @@ fn a_stale_write_does_not_consume_the_endorsement() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "edited\n");
 }
 
+/// LIST-2: a nested directory that cannot be opened is left out and reported as a fact. Failing
+/// the listing would word an error about its name, which is a filename out of the tree.
+#[cfg(unix)]
+#[test]
+fn a_listing_leaves_out_a_directory_it_cannot_open_and_says_so() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new("list-unreadable");
+    let locked = scratch.path.join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::write(scratch.path.join("kept.txt"), "x").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // A superuser opens it anyway, which leaves nothing to observe.
+    if std::fs::read_dir(&locked).is_ok() {
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let listing = workspace.list(&mut policy, &Labelled::trusted(".".to_string()), None, None);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let listing = listing.expect("an unreadable nested directory failed the listing");
+    let proof = policy.authorise_content_release("test", "paths");
+    let listing = listing.declassify(&proof);
+
+    assert_eq!(listing.files, vec!["kept.txt".to_string()]);
+    assert!(listing.unreadable, "the missing directory was not reported");
+}
+
 /// Silent truncation is the bug: a model shown exactly the cap with no notice concludes it
 /// has seen the whole tree, and decides a file does not exist.
 #[test]
@@ -2025,6 +2062,31 @@ fn a_failure_is_worded_about_the_name_the_caller_may_say() {
         }),
         WorkspaceError::Escapes {
             path: carried.to_string(),
+            remedy: Remedy::Nothing,
+        },
+        WorkspaceError::Escapes {
+            path: carried.to_string(),
+            remedy: Remedy::Open,
+        },
+        WorkspaceError::Escapes {
+            path: carried.to_string(),
+            remedy: Remedy::OpenOrDrop,
+        },
+        WorkspaceError::Escapes {
+            path: carried.to_string(),
+            remedy: Remedy::OpenEndsCheckouts,
+        },
+        WorkspaceError::Escapes {
+            path: carried.to_string(),
+            remedy: Remedy::DropOrOpenEndsCheckouts,
+        },
+        WorkspaceError::Escapes {
+            path: carried.to_string(),
+            remedy: Remedy::Kept,
+        },
+        WorkspaceError::Escapes {
+            path: carried.to_string(),
+            remedy: Remedy::Drop,
         },
         WorkspaceError::Invalid {
             path: carried.to_string(),
@@ -2596,6 +2658,81 @@ fn an_absolute_path_outside_every_added_directory_is_still_refused() {
     assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
 }
 
+/// A refusal the planner cannot act on sends it looking for another way to the same file, which it
+/// found in `run`. So the refusal names what the person can do, and the first of those, once done,
+/// reaches the file by the path that was refused.
+#[test]
+fn a_refusal_outside_the_workspace_says_what_the_person_can_do() {
+    let scratch = Scratch::new("refusal-remedy");
+    let other = outside("refusal-remedy");
+    std::fs::write(other.path.join("todo.txt"), "a list").unwrap();
+
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let typed = other.path.join("todo.txt").display().to_string();
+    let error = workspace
+        .read(&mut policy, &Labelled::trusted(typed.clone()))
+        .expect_err("a path outside the workspace must be refused");
+    let told = error.describe(&typed);
+    for remedy in [
+        "/add-dir in the terminal",
+        "--add-dir",
+        "drop the file on the window",
+    ] {
+        assert!(told.contains(remedy), "{remedy} was not named: {told}");
+    }
+    assert!(
+        !told.contains("readsStayInWorkspace"),
+        "a key that is not set was named: {told}"
+    );
+
+    workspace
+        .add_directory(other.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    workspace
+        .read(&mut policy, &Labelled::trusted(typed))
+        .expect("the refused path reaches the file once its directory is open");
+}
+
+/// Opening a directory does nothing for a path that climbs with `..`, and a directory inside the
+/// root cannot be opened at all, so a refusal of either offers neither.
+#[test]
+fn a_refusal_that_opening_a_directory_would_not_cure_offers_nothing() {
+    let scratch = Scratch::new("refusal-no-remedy");
+    std::fs::write(scratch.path.join("main.rs"), "fn main() {}").unwrap();
+
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let inside_named_absolutely = workspace.root().join("main.rs").display().to_string();
+    for typed in [inside_named_absolutely.as_str(), "../todo.txt"] {
+        let error = workspace
+            .read(&mut policy, &Labelled::trusted(typed.to_string()))
+            .expect_err("the path is refused");
+        assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
+        let told = error.describe(typed);
+        assert!(
+            !told.contains("add-dir") && !told.contains("drop"),
+            "{typed}: a remedy that does not reach the file was offered: {told}"
+        );
+    }
+}
+
 /// With nothing added, an absolute path is refused as it always was.
 #[test]
 fn an_absolute_path_is_refused_when_nothing_was_added() {
@@ -2856,6 +2993,209 @@ fn closing_added_directories_makes_them_unreachable_again() {
     assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
 }
 
+/// TRUST-9: closing one directory by name refuses a file that only it reached, and leaves every
+/// other directory open. The name typed is resolved, so a spelling with `..` in it closes the
+/// directory it names, and what comes back is the name the directory was opened under.
+///
+/// The failures this rejects are a close that closes everything, which would refuse the other
+/// directory's file, and one that matches the spelling alone, which would find nothing to close.
+#[test]
+fn closing_one_added_directory_refuses_what_only_it_reached() {
+    let scratch = Scratch::new("closed-one");
+    let notes = outside("closed-one-notes");
+    let shared = outside("closed-one-shared");
+    std::fs::create_dir_all(notes.path.join("inner")).unwrap();
+    std::fs::write(notes.path.join("notes.md"), "a note").unwrap();
+    std::fs::write(shared.path.join("shared.md"), "shared").unwrap();
+
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let opened = workspace
+        .add_directory(notes.path.to_str().expect("utf-8 path"))
+        .expect("notes opens");
+    let other = workspace
+        .add_directory(shared.path.to_str().expect("utf-8 path"))
+        .expect("shared opens");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    let note = Labelled::trusted(opened.join("notes.md").display().to_string());
+    let kept = Labelled::trusted(other.join("shared.md").display().to_string());
+    workspace
+        .read(&mut policy, &note)
+        .expect("readable while open");
+
+    let spelled = notes.path.join("inner").join("..");
+    let closed = workspace
+        .close_added_directory(spelled.to_str().expect("utf-8 path"))
+        .expect("an open directory closes");
+
+    assert_eq!(closed, opened);
+    assert_eq!(workspace.added_directories(), [other]);
+    let error = workspace
+        .read(&mut policy, &note)
+        .expect_err("a file only the closed directory reached is refused again");
+    assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
+    workspace
+        .read(&mut policy, &kept)
+        .expect("the directory left open is still reachable");
+}
+
+/// TRUST-9: a directory beneath the one closed stays reachable where it was opened in its own
+/// right, and a name that is not open is refused rather than reported as closed.
+///
+/// The failures this rejects are a close that takes every overlapping directory with it, as moving
+/// the working directory does, and one that answers success for a name it did not find, which would
+/// tell the person a directory was closed while another spelling of it stayed open.
+#[test]
+fn closing_a_directory_leaves_one_opened_beneath_it_and_refuses_one_never_opened() {
+    let scratch = Scratch::new("closed-nested");
+    let notes = outside("closed-nested");
+    std::fs::create_dir_all(notes.path.join("inbox")).unwrap();
+    std::fs::write(notes.path.join("notes.md"), "a note").unwrap();
+    std::fs::write(notes.path.join("inbox/today.md"), "today").unwrap();
+
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let outer = workspace
+        .add_directory(notes.path.to_str().expect("utf-8 path"))
+        .expect("notes opens");
+    let inner = workspace
+        .add_directory(notes.path.join("inbox").to_str().expect("utf-8 path"))
+        .expect("the inbox opens");
+
+    let error = workspace
+        .close_added_directory(scratch.path.to_str().expect("utf-8 path"))
+        .expect_err("the working directory is not an added one");
+    assert!(
+        error.to_string().contains("is not a directory opened"),
+        "{error}"
+    );
+    let error = workspace
+        .close_added_directory("inbox")
+        .expect_err("a relative name names no added directory");
+    assert!(error.to_string().contains("absolute"), "{error}");
+    assert_eq!(
+        workspace.added_directories(),
+        [outer.clone(), inner.clone()]
+    );
+
+    workspace
+        .close_added_directory(&outer.to_string_lossy())
+        .expect("notes closes");
+    assert_eq!(workspace.added_directories(), std::slice::from_ref(&inner));
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    workspace
+        .read(
+            &mut policy,
+            &Labelled::trusted(inner.join("today.md").display().to_string()),
+        )
+        .expect("the inbox was opened in its own right");
+    workspace
+        .read(
+            &mut policy,
+            &Labelled::trusted(outer.join("notes.md").display().to_string()),
+        )
+        .expect_err("notes was closed");
+}
+
+/// TRUST-9: a directory deleted since it was opened still closes, by the name it was opened under.
+/// Otherwise it could not be closed at all, and a directory made again at that name would be
+/// reachable, and trusted, without anybody opening it.
+///
+/// The failure this rejects is matching only a name that canonicalises, which a deleted directory
+/// no longer does.
+#[test]
+fn a_directory_deleted_since_it_was_opened_still_closes() {
+    let scratch = Scratch::new("closed-gone");
+    let notes = outside("closed-gone");
+
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let opened = workspace
+        .add_directory(notes.path.to_str().expect("utf-8 path"))
+        .expect("notes opens");
+    std::fs::remove_dir_all(&opened).unwrap();
+
+    let closed = workspace
+        .close_added_directory(&opened.to_string_lossy())
+        .expect("the name it was opened under closes it");
+    assert_eq!(closed, opened);
+    assert!(workspace.added_directories().is_empty());
+}
+
+/// TRUST-9: a deleted directory also closes under a name that reached it through a link, the way
+/// `/tmp/notes` reaches `/private/tmp/notes` on macOS, since that is the name the person typed.
+///
+/// The failure this rejects is falling back to the spelling alone once the name no longer
+/// canonicalises, which the stored name never matches.
+#[cfg(unix)]
+#[test]
+fn a_deleted_directory_closes_under_a_name_through_a_linked_ancestor() {
+    let scratch = Scratch::new("closed-gone-linked");
+    let base = scratch.path.canonicalize().expect("canonical scratch");
+    let holder = base.join("holder");
+    std::fs::create_dir_all(holder.join("project")).unwrap();
+    std::fs::create_dir_all(holder.join("notes")).unwrap();
+    std::os::unix::fs::symlink(&holder, base.join("link")).unwrap();
+    let typed = base.join("link").join("notes");
+
+    let mut workspace = Workspace::new(holder.join("project")).expect("workspace");
+    let opened = workspace
+        .add_directory(typed.to_str().expect("utf-8 path"))
+        .expect("notes opens through the link");
+    assert_eq!(opened, holder.join("notes"));
+    std::fs::remove_dir_all(&opened).unwrap();
+
+    let closed = workspace
+        .close_added_directory(typed.to_str().expect("utf-8 path"))
+        .expect("the name typed through the link closes it");
+    assert_eq!(closed, opened);
+    assert!(workspace.added_directories().is_empty());
+}
+
+/// TRUST-9: a link put where an opened directory was closes that directory, not the one the link
+/// points at, since the name typed is the one `/status` lists it under.
+///
+/// The failure this rejects is resolving the name before matching its spelling, which closes the
+/// other directory and leaves the named one open.
+#[cfg(unix)]
+#[test]
+fn a_link_put_where_an_opened_directory_was_closes_that_directory() {
+    let scratch = Scratch::new("closed-replaced");
+    let base = scratch.path.canonicalize().expect("canonical scratch");
+    std::fs::create_dir_all(base.join("project")).unwrap();
+    std::fs::create_dir_all(base.join("a")).unwrap();
+    std::fs::create_dir_all(base.join("b")).unwrap();
+
+    let mut workspace = Workspace::new(base.join("project")).expect("workspace");
+    let a = workspace
+        .add_directory(base.join("a").to_str().expect("utf-8 path"))
+        .expect("a opens");
+    let b = workspace
+        .add_directory(base.join("b").to_str().expect("utf-8 path"))
+        .expect("b opens");
+    std::fs::remove_dir_all(&a).unwrap();
+    std::os::unix::fs::symlink(&b, &a).unwrap();
+
+    let closed = workspace
+        .close_added_directory(a.to_str().expect("utf-8 path"))
+        .expect("a closes");
+    assert_eq!(closed, a);
+    assert_eq!(workspace.added_directories(), [b]);
+}
+
 /// PERM-16: a settings layer asking for the file tools to stay inside the workspace refuses every
 /// directory by name, and it refuses it here rather than at the command that typed it, so
 /// `/add-dir`, `--add-dir` and a name a settings file asked about are all refused by one rule. The
@@ -2977,6 +3317,87 @@ fn a_directory_already_open_is_unreachable_where_reads_stay_in_the_workspace() {
         workspace.confines(&added.join("fresh.md")).is_err(),
         "a destination a command line would open was still admitted"
     );
+}
+
+/// PERM-16: a path refused for leaving the workspace names the key that refused it, and does not
+/// send the person to `/add-dir`, which the same key refuses. A drop keeps its reach under the key,
+/// so it is still named.
+#[test]
+fn a_refusal_where_reads_stay_in_the_workspace_names_the_key_and_not_add_dir() {
+    let scratch = Scratch::new("inside-refusal-remedy");
+    let other = outside("inside-refusal-remedy");
+    std::fs::write(other.path.join("todo.txt"), "a list").unwrap();
+
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_reads_kept_inside(true);
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let typed = other.path.join("todo.txt").display().to_string();
+    let error = workspace
+        .read(&mut policy, &Labelled::trusted(typed.clone()))
+        .expect_err("a path outside the workspace must be refused");
+    let told = error.describe(&typed);
+    assert!(
+        told.contains("permissions.readsStayInWorkspace"),
+        "the key was not named: {told}"
+    );
+    assert!(
+        told.contains("drop the file on the window"),
+        "the drop was not named: {told}"
+    );
+    assert!(
+        !told.contains("add-dir"),
+        "a door the key refuses was named: {told}"
+    );
+}
+
+/// A drop only ever reads (DROP-3), so a refusal of a write that names it would send the person to
+/// something that cannot work. Opening the directory still can, unless the key forbids it.
+#[test]
+fn a_refused_write_outside_the_workspace_does_not_offer_a_drop() {
+    for kept_inside in [false, true] {
+        let scratch = Scratch::new("write-refusal-remedy");
+        let other = outside("write-refusal-remedy");
+        let workspace = Workspace::new(&scratch.path)
+            .expect("workspace")
+            .with_reads_kept_inside(kept_inside);
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy");
+
+        let typed = other.path.join("new.txt").display().to_string();
+        let error = workspace
+            .write(
+                &mut policy,
+                &Labelled::trusted(typed.clone()),
+                &Labelled::trusted("text".to_string()),
+            )
+            .expect_err("a path outside the workspace must be refused");
+        assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
+        let told = error.describe(&typed);
+        assert!(
+            !told.contains("drop"),
+            "kept_inside={kept_inside}: a drop was offered for a write: {told}"
+        );
+        assert_eq!(
+            told.contains("--add-dir"),
+            !kept_inside,
+            "kept_inside={kept_inside}: {told}"
+        );
+    }
 }
 
 /// PERM-16 stops at the session's own directory, which is not something a rule, a mode or an answer
@@ -3929,6 +4350,163 @@ fn search_in(
     found.declassify(&proof)
 }
 
+/// [`search_in`] asking for lines around each match.
+fn search_around(
+    root: &std::path::Path,
+    pattern: &str,
+    offset: usize,
+    context: usize,
+) -> bravebot_agent::workspace::Matches {
+    let workspace = Workspace::new(root).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    let found = workspace
+        .grep_around(
+            &mut policy,
+            &[Labelled::trusted(pattern.to_string())],
+            &Labelled::trusted(".".to_string()),
+            None,
+            true,
+            offset,
+            context,
+        )
+        .expect("grep succeeds");
+    let proof = policy.authorise_content_release("test", "matches");
+    found.declassify(&proof)
+}
+
+fn context_lines(found: &bravebot_agent::workspace::Matches) -> Vec<(String, usize, String)> {
+    found
+        .context
+        .iter()
+        .map(|c| (c.path.clone(), c.line, c.text.clone()))
+        .collect()
+}
+
+/// The point of the argument: the lines a hit sits among come back with it, so reading one is not
+/// a second call. A match that is itself near another is shown once, as a match.
+#[test]
+fn a_search_with_context_returns_the_lines_around_a_hit() {
+    let scratch = Scratch::new("grep-context");
+    std::fs::write(
+        scratch.path.join("a.txt"),
+        "one\ntwo\nneedle\nfour\nfive\nsix\nneedle\nneedle\nten\n",
+    )
+    .unwrap();
+
+    let found = search_around(&scratch.path, "needle", 1, 1);
+
+    assert_eq!(
+        found.matches.iter().map(|m| m.line).collect::<Vec<_>>(),
+        vec![3, 7, 8]
+    );
+    let lines: Vec<(usize, &str)> = found
+        .context
+        .iter()
+        .map(|c| (c.line, c.text.as_str()))
+        .collect();
+    assert_eq!(
+        lines,
+        vec![(2, "two"), (4, "four"), (6, "six"), (9, "ten")],
+        "context is the neighbours that did not match, each once"
+    );
+    assert!(!found.context_truncated);
+
+    // And without it nothing changes for a caller that never asked.
+    assert!(
+        search_around(&scratch.path, "needle", 1, 0)
+            .context
+            .is_empty()
+    );
+}
+
+/// Context lines are not matches. If they counted toward the cap or the offset, a search with
+/// context would page differently from one without and a continuation would skip or repeat hits.
+#[test]
+fn context_does_not_count_toward_the_match_cap_or_the_offset() {
+    let scratch = Scratch::new("grep-context-offset");
+    let body: String = (0..201)
+        .map(|n| format!("needle {n}\nfiller {n}\n"))
+        .collect();
+    std::fs::write(scratch.path.join("a.txt"), body).unwrap();
+
+    let found = search_around(&scratch.path, "needle", 1, 1);
+    assert_eq!(
+        found.matches.len(),
+        200,
+        "context took a place among the matches"
+    );
+    assert_eq!(found.paging(), Some(Paging::Continue(201)));
+    assert_eq!(found.matched, 200);
+    assert!(
+        found.context.iter().all(|c| c.line < 401),
+        "the match collected only to detect the cap brought its neighbours along"
+    );
+
+    // Offset 2 starts at the second match, whatever lies between the first and it.
+    let later = search_around(&scratch.path, "needle", 2, 1);
+    assert_eq!(later.matches[0].line, 3);
+    assert_eq!(later.first_match, 2);
+    assert!(
+        context_lines(&later).iter().all(|(_, line, _)| *line >= 2),
+        "the skipped first match was given context"
+    );
+}
+
+/// The match cap does not bound context, so a cap of its own does, and the result has to say when
+/// it bit: matches after it come back with nothing near them, which reads as nothing being there.
+#[test]
+fn a_search_with_more_context_than_the_cap_allows_says_it_is_incomplete() {
+    let scratch = Scratch::new("grep-context-cap");
+    // Matches far enough apart that no two share a neighbour: 200 matches, 20 lines around each.
+    let mut body = String::new();
+    for n in 0..200 {
+        body.push_str(&format!("needle {n}\n"));
+        for filler in 0..20 {
+            body.push_str(&format!("filler {n} {filler}\n"));
+        }
+    }
+    std::fs::write(scratch.path.join("a.txt"), body).unwrap();
+
+    let found = search_around(&scratch.path, "needle", 1, 10);
+    assert_eq!(found.matches.len(), 200);
+    assert!(!found.truncated, "the matches themselves were complete");
+    assert!(found.context_truncated);
+    assert_eq!(found.context.len(), 1_000);
+
+    let small = search_around(&scratch.path, "needle 1$", 1, 2);
+    assert!(
+        !small.context_truncated,
+        "a result under the cap made the claim"
+    );
+}
+
+/// A planner asking for the moon gets the largest context there is, on each side.
+#[test]
+fn a_context_past_the_maximum_is_held_to_it() {
+    let scratch = Scratch::new("grep-context-max");
+    let body: String = (1..=100)
+        .map(|n| {
+            if n == 50 {
+                "needle\n".to_string()
+            } else {
+                format!("l{n}\n")
+            }
+        })
+        .collect();
+    std::fs::write(scratch.path.join("a.txt"), body).unwrap();
+
+    let found = search_around(&scratch.path, "needle", 1, 1_000);
+    let lines: Vec<usize> = found.context.iter().map(|c| c.line).collect();
+    assert_eq!(lines, (40..50).chain(51..=60).collect::<Vec<_>>());
+}
+
 /// The distinction the whole `considered` field exists for. A search whose include glob
 /// selected nothing read no files, so it has learned nothing about the tree, and reported as
 /// "no matches" it reads as proof the pattern is absent. A real turn took that reading and
@@ -4056,6 +4634,30 @@ fn a_search_skips_vendored_dependencies() {
         found.matches
     );
     assert_eq!(found.matches[0].path, "mine.rs");
+}
+
+/// A linked worktree under `.claude/worktrees` is a full copy of the tree, so a walk that entered
+/// it would report every match twice. Naming a directory inside it still reaches it.
+#[test]
+fn a_search_skips_a_linked_worktree_under_claude_worktrees() {
+    let scratch = Scratch::new("grep-linked-worktree");
+    std::fs::write(scratch.path.join("mine.rs"), "needle\n").unwrap();
+    let copy = scratch.path.join(".claude/worktrees/pr-fix");
+    std::fs::create_dir_all(&copy).unwrap();
+    std::fs::write(copy.join("mine.rs"), "needle\n").unwrap();
+
+    let found = search_in(&scratch.path, &["needle"], None, true, 1);
+    let paths: Vec<&str> = found.matches.iter().map(|m| m.path.as_str()).collect();
+    assert_eq!(paths, ["mine.rs"], "a linked worktree was walked");
+
+    let named = search_in(
+        &scratch.path.join(".claude/worktrees/pr-fix"),
+        &["needle"],
+        None,
+        true,
+        1,
+    );
+    assert_eq!(named.matches.len(), 1, "naming the worktree found nothing");
 }
 
 /// A cap the caller cannot ask past is a cap that loses whatever is behind it. Saying the answer
@@ -4358,6 +4960,63 @@ fn a_search_a_rule_emptied_is_not_reported_as_an_empty_glob() {
     assert!(
         !found.withheld,
         "an empty glob was blamed on a rule nobody wrote"
+    );
+}
+
+/// SEARCH-5: the rule is the reason a search came back empty only when it covers something the
+/// include selected. A rule over `.env` or `secrets/` says nothing about a glob that selects
+/// neither, and blaming it tells the planner not to fix the glob that is the actual problem.
+#[test]
+fn a_rule_covering_nothing_the_include_selected_is_not_blamed_for_an_empty_search() {
+    let scratch = Scratch::new("grep-unrelated-rule");
+    std::fs::create_dir_all(scratch.path.join("secrets/deep")).unwrap();
+    std::fs::create_dir_all(scratch.path.join("src")).unwrap();
+    std::fs::write(scratch.path.join(".env"), "needle\n").unwrap();
+    std::fs::write(scratch.path.join("secrets/deep/key.pem"), "needle\n").unwrap();
+    std::fs::write(scratch.path.join("src/a.rs"), "needle\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let withheld = |rule: &str, include: &str| {
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_permissions(denying(&[rule]));
+        let found = workspace
+            .grep(
+                &mut policy,
+                std::slice::from_ref(&Labelled::trusted("needle".to_string())),
+                &Labelled::trusted(".".to_string()),
+                Some(&Labelled::trusted(include.to_string())),
+                true,
+                1,
+            )
+            .expect("grep succeeds");
+        let proof = policy.authorise_content_release("test", "matches");
+        let found = found.declassify(&proof);
+        assert_eq!(found.considered, 0, "{rule} with {include} read a file");
+        found.withheld
+    };
+
+    assert!(
+        !withheld("Read(./.env)", "*.py"),
+        "a denied file the include did not select was blamed"
+    );
+    assert!(
+        !withheld("Read(secrets/**)", "*.py"),
+        "a denied directory holding nothing the include selects was blamed"
+    );
+    assert!(
+        withheld("Read(./.env)", ".env"),
+        "a denied file the include selected was not reported"
+    );
+    assert!(
+        withheld("Read(secrets/**)", "**/*.pem"),
+        "a denied directory holding a file the include selects was not reported"
     );
 }
 
@@ -5689,6 +6348,84 @@ fn a_repository_a_deny_rule_names_is_not_opened() {
     );
 }
 
+/// A repository `link` reaching `real`, where `real` has committed a `.env`, and a policy denying
+/// `rule` and trusting the whole of the workspace.
+#[cfg(unix)]
+fn aliased_repository_asked(
+    name: &str,
+    rule: &str,
+    query: bravebot_agent::git::Query,
+) -> Result<(bool, String), WorkspaceError> {
+    let scratch = Scratch::new(name);
+    let real = scratch.path.join("real");
+    std::fs::create_dir(&real).unwrap();
+    repository::commit_files(
+        &real,
+        &[(".env", "TOKEN=hunter2\n"), ("README", "hi\n")],
+        "first",
+    );
+    std::os::unix::fs::symlink(&real, scratch.path.join("link")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust)
+    .with_permissions(denying(&[rule]));
+    let repository = Labelled::trusted("link".to_string());
+    let revision = Labelled::trusted("HEAD".to_string());
+    let mut question = log_of(&repository);
+    question.query = query;
+    question.revision = Some(&revision);
+    let answer = workspace.read_git(&mut policy, &question)?;
+    let proof = policy.authorise_content_release("test", "answer");
+    let answer = answer.declassify(&proof);
+    Ok((answer.withheld, answer.text))
+}
+
+/// GIT-4 with PERM-7. A rule written over the file a symlinked repository name lands on leaves
+/// that file out of what the commit shows, whichever name the planner typed.
+#[cfg(unix)]
+#[test]
+fn a_rule_over_the_file_a_symlinked_repository_lands_on_leaves_it_out_of_a_commit() {
+    let (withheld, text) = aliased_repository_asked(
+        "git-link-withheld",
+        "Read(real/.env)",
+        bravebot_agent::git::Query::Show,
+    )
+    .expect("the repository is open");
+    assert!(withheld, "the answer did not say a file was left out");
+    assert!(!text.contains("hunter2"), "{text}");
+}
+
+/// GIT-4 with PERM-7. A rule over a file beneath the `.git` a symlinked name lands on keeps the
+/// repository closed.
+#[cfg(unix)]
+#[test]
+fn a_rule_over_a_git_file_a_symlinked_repository_lands_on_keeps_it_closed() {
+    let refused = aliased_repository_asked(
+        "git-link-fenced",
+        "Read(real/.git/config)",
+        bravebot_agent::git::Query::Log,
+    );
+    assert!(
+        matches!(
+            refused,
+            Err(WorkspaceError::Git {
+                declined: bravebot_agent::git::Declined::Fenced,
+                ..
+            })
+        ),
+        "{refused:?}"
+    );
+}
+
 /// The policy a checkout is asked under: `trusted` given to the map, `denied` as deny rules.
 fn checkout_policy<'a>(
     workspace: &Workspace,
@@ -6379,11 +7116,228 @@ fn a_checkout_is_refused_where_it_would_overlap_a_tree_the_session_opened() {
         .checkout_for(&policy, &state.path, d1())
         .expect_err("inside an opened directory");
     assert!(
-        refused.contains("holds the working directory or the checkout"),
+        refused.contains("holds the directory checkouts are made in"),
         "{refused}"
     );
     assert!(!state.path.join("checkouts").exists());
     assert!(!scratch.path.join(".git/worktrees").exists());
+}
+
+/// CHECKOUT-7. A refusal because of an opened directory names that directory and a way to close
+/// it, whichever of the two it holds, so the planner can say what to change instead of reporting a
+/// refusal with no cause.
+///
+/// The failure this rejects is the old sentence, which named no directory and no way out, so the
+/// person was told a checkout was refused and not that closing the directory or a restart would
+/// allow one.
+#[test]
+fn a_checkout_refusal_names_the_added_directory_that_holds_the_working_directory() {
+    let holder = Scratch::new("checkout-refusal-holder");
+    let project = holder.path.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let state = Scratch::new("checkout-refusal-holder-state");
+    repository::commit_files(&project, &[("README", "hello\n")], "first");
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+
+    let opened = workspace
+        .add_directory(&holder.path.to_string_lossy())
+        .expect("the parent opens");
+    let refused = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect_err("an opened directory holds the working directory");
+    assert!(
+        refused.contains(&opened.display().to_string()),
+        "the directory was not named: {refused}"
+    );
+    assert!(refused.contains("holds the working directory"), "{refused}");
+    assert!(
+        refused.contains(&format!("/add-dir close {}", opened.display())),
+        "no way out: {refused}"
+    );
+    assert!(
+        !state.path.join("checkouts").exists(),
+        "a directory was made before the refusal"
+    );
+}
+
+/// CHECKOUT-7. The other arm: an opened directory that holds the checkouts directory but not the
+/// working directory is named for what it holds, so the person is not told the working directory
+/// is the problem.
+#[test]
+fn a_checkout_refusal_names_the_added_directory_that_holds_the_checkouts() {
+    let (_scratch, state, mut workspace) =
+        repository_with_a_state_directory("checkout-refusal-checkouts", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+
+    let opened = workspace
+        .add_directory(&state.path.to_string_lossy())
+        .expect("the state directory opens");
+    let refused = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect_err("an opened directory holds the checkouts");
+    assert!(
+        refused.contains(&opened.display().to_string()),
+        "the directory was not named: {refused}"
+    );
+    assert!(
+        refused.contains("holds the directory checkouts are made in"),
+        "{refused}"
+    );
+    assert!(
+        !refused.contains("holds the working directory"),
+        "the wrong cause was named: {refused}"
+    );
+    assert!(
+        refused.contains(&format!("/add-dir close {}", opened.display())),
+        "no way out: {refused}"
+    );
+}
+
+/// CHECKOUT-7. `ends_checkouts` is what `/add-dir` and `--add-dir` ask after opening a directory,
+/// and the planner's refusals for it, the read and the checkout, say the same thing about it.
+///
+/// The failures this rejects are a test that asks only whether the working directory is inside the
+/// directory (a sibling would warn too), one that asks whether the directory is inside the working
+/// directory (the home directory would never warn, which is the issue), and the three sentences
+/// drifting into different wordings.
+#[test]
+fn a_directory_that_holds_the_working_directory_is_the_one_that_ends_checkouts() {
+    let holder = Scratch::new("ends-checkouts-holder");
+    let project = holder.path.join("project");
+    let sibling = holder.path.join("sibling");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&sibling).unwrap();
+    std::fs::write(holder.path.join("todo.txt"), "a list").unwrap();
+    std::fs::write(sibling.join("todo.txt"), "a list").unwrap();
+    let state = Scratch::new("ends-checkouts-state");
+    repository::commit_files(&project, &[("README", "hello\n")], "first");
+
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    let beside = workspace
+        .add_directory(&sibling.to_string_lossy())
+        .expect("a sibling opens");
+    assert!(
+        !workspace.ends_checkouts(&beside),
+        "a sibling holds nothing of the kind"
+    );
+    let holding = workspace
+        .add_directory(&holder.path.to_string_lossy())
+        .expect("the parent opens");
+    assert!(workspace.ends_checkouts(&holding));
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    let checkout = workspace
+        .checkout_for(
+            &checkout_policy(&workspace, &mut RecordingSink::new(), &["."], &[]),
+            &state.path,
+            d1(),
+        )
+        .expect_err("the parent is open");
+    let wording = "while one is open no delegate is given a checkout";
+    assert!(checkout.contains(wording), "{checkout}");
+
+    let fresh = Workspace::new(&project).expect("workspace");
+    let held = holder.path.join("todo.txt").display().to_string();
+    let read = fresh
+        .read(&mut policy, &Labelled::trusted(held.clone()))
+        .expect_err("outside")
+        .describe(&held);
+    let write = fresh
+        .write(
+            &mut policy,
+            &Labelled::trusted(held.clone()),
+            &Labelled::trusted("text".to_string()),
+        )
+        .expect_err("outside")
+        .describe(&held);
+    assert!(read.contains(wording), "{read}");
+    assert!(write.contains(wording), "{write}");
+}
+
+/// CHECKOUT-7. A read refused for being outside the workspace warns, where opening its directory
+/// would open one that holds the working directory, that doing so leaves no delegate a checkout.
+/// The drop comes first for a read, since it reaches the file and costs nothing.
+///
+/// The failure this rejects is the plain "open its directory" advice, which sends a person to
+/// `/add-dir` on a directory that silently ends checkouts, and the same warning given for every
+/// directory, which would frighten a person off opening one that costs nothing.
+#[test]
+fn a_read_refusal_for_a_directory_holding_the_workspace_says_what_opening_it_costs() {
+    let holder = Scratch::new("read-refusal-holder");
+    let project = holder.path.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(holder.path.join("todo.txt"), "a list").unwrap();
+    let elsewhere = outside("read-refusal-holder");
+    std::fs::write(elsewhere.path.join("todo.txt"), "a list").unwrap();
+
+    let workspace = Workspace::new(&project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let held = holder.path.join("todo.txt").display().to_string();
+    let error = workspace
+        .read(&mut policy, &Labelled::trusted(held.clone()))
+        .expect_err("a file beside the working directory is outside it");
+    let told = error.describe(&held);
+    assert!(told.contains("no delegate is given a checkout"), "{told}");
+    assert!(
+        told.find("drop the file").expect("the drop is named")
+            < told.find("/add-dir").expect("opening is named"),
+        "the free way was not named first: {told}"
+    );
+
+    let error = workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted(held.clone()),
+            &Labelled::trusted("text".to_string()),
+        )
+        .expect_err("a write there is refused too");
+    let told = error.describe(&held);
+    assert!(told.contains("no delegate is given a checkout"), "{told}");
+    assert!(
+        !told.contains("drop"),
+        "a drop was offered for a write: {told}"
+    );
+
+    let unrelated = elsewhere.path.join("todo.txt").display().to_string();
+    let told = workspace
+        .read(&mut policy, &Labelled::trusted(unrelated.clone()))
+        .expect_err("a file elsewhere is outside the working directory")
+        .describe(&unrelated);
+    assert!(told.contains("--add-dir"), "{told}");
+    assert!(
+        !told.contains("checkout"),
+        "a directory that costs nothing was warned about: {told}"
+    );
+
+    let kept = Workspace::new(&project)
+        .expect("workspace")
+        .with_reads_kept_inside(true);
+    let told = kept
+        .read(&mut policy, &Labelled::trusted(held.clone()))
+        .expect_err("confined reads refuse it")
+        .describe(&held);
+    assert!(
+        told.contains("permissions.readsStayInWorkspace") && !told.contains("checkout"),
+        "{told}"
+    );
 }
 
 /// CHECKOUT-3. A workspace that is a checkout makes no checkout of its own.
@@ -6453,6 +7407,44 @@ fn a_checkout_is_labelled_as_the_working_directory_is() {
     assert!(authority.is_trusted(&format!("{}/README", workspace.root().display())));
 }
 
+/// CHECKOUT-6. A checkout is at `checkouts/<workspace key>/<id>` under the state directory, and
+/// every directory from `checkouts` down is owner-only, as is every file the tree holds.
+#[cfg(unix)]
+#[test]
+fn a_checkout_is_keyed_by_the_workspace_and_readable_by_its_owner_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_scratch, state, workspace) = repository_with_a_state_directory(
+        "checkout-for-modes",
+        &[("README", "hello\n"), ("deep/er/file.txt", "inside\n")],
+    );
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+
+    let state_directory = state.path.canonicalize().unwrap();
+    let keyed = state_directory
+        .join("checkouts")
+        .join(bravebot_agent::home::key_for(workspace.root()));
+    assert_eq!(made.root(), keyed.join("c1"));
+    let mode =
+        |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    for directory in [
+        state_directory.join("checkouts"),
+        keyed.clone(),
+        made.root().to_path_buf(),
+        made.root().join("deep"),
+        made.root().join("deep/er"),
+    ] {
+        assert_eq!(mode(&directory), 0o700, "{}", directory.display());
+    }
+    for file in ["README", "deep/er/file.txt"] {
+        assert_eq!(mode(&made.root().join(file)), 0o600, "{file}");
+    }
+}
+
 /// CHECKOUT-15. A checkout nothing was done in is removed with its `worktrees` entry and its
 /// rules, and one something was done in is kept.
 #[test]
@@ -6493,11 +7485,12 @@ fn a_checkout_is_removed_unless_something_was_done_in_it() {
 }
 
 /// CHECKOUT-21. Every clone of the workspace lists each checkout the session made, with its
-/// number, its path, its commit and the delegate it was made for. One that is removed leaves the
-/// list, by its delegate or by hand, and one that is kept or could not be removed stays on it.
+/// number, its path, its commit, the delegate it was made for and what the record shows done in it.
+/// One that is removed leaves the list, by its delegate or by hand, and one that is kept or could
+/// not be removed stays on it, measured as its delegate ended (CHECKOUT-15).
 #[test]
 fn the_session_lists_each_checkout_it_has_until_one_is_removed() {
-    use bravebot_agent::workspace::{Retired, SessionCheckout};
+    use bravebot_agent::workspace::{Candidates, Retired, SessionCheckout};
     use bravebot_core::delegate::DelegateId;
     let (scratch, state, workspace) =
         repository_with_a_state_directory("checkout-listed", &[("README", "hello\n")]);
@@ -6535,6 +7528,16 @@ fn the_session_lists_each_checkout_it_has_until_one_is_removed() {
         assert_eq!(one.path, made.root());
         assert!(one.path.starts_with(&under), "{:?}", one.path);
         assert_eq!(one.commit, head.trim());
+        assert!(!one.worked_in);
+        assert_eq!(one.candidates, Default::default());
+        assert_eq!(one.size, None, "measured while its delegate runs");
+        assert_eq!(
+            std::fs::read_to_string(one.repository.join("worktrees").join(&one.id).join("HEAD"))
+                .unwrap()
+                .trim(),
+            head.trim(),
+            "the repository is not the one the checkout was made from"
+        );
     }
     assert_eq!(
         made[0].session_checkouts(),
@@ -6545,7 +7548,27 @@ fn the_session_lists_each_checkout_it_has_until_one_is_removed() {
     let [kept, idle, stuck] = &made[..] else {
         unreachable!()
     };
-    kept.checkout().unwrap().mark_worked_in();
+    kept.checkout().unwrap().record_typed("src/new.rs");
+    // What git keeps for a checkout in the repository goes when the checkout does.
+    const MEGABYTE: u64 = 1 << 20;
+    let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+    let incompressible: Vec<u8> = (0..MEGABYTE)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 24) as u8
+        })
+        .collect();
+    std::fs::write(
+        listed[0]
+            .repository
+            .join("worktrees")
+            .join(&listed[0].id)
+            .join("kept-by-git"),
+        incompressible,
+    )
+    .unwrap();
     assert_eq!(kept.checkout().unwrap().retire(&authority), Retired::Kept);
     assert_eq!(
         idle.checkout().unwrap().retire(&authority),
@@ -6560,14 +7583,42 @@ fn the_session_lists_each_checkout_it_has_until_one_is_removed() {
         std::os::unix::fs::symlink("entries", &worktrees).unwrap();
         assert_eq!(stuck.checkout().unwrap().retire(&authority), Retired::Stuck);
     }
-    let left: Vec<SessionCheckout> = vec![listed[0].clone(), listed[2].clone()];
+    let sizes: Vec<_> = workspace
+        .session_checkouts()
+        .iter()
+        .map(|one| one.size)
+        .collect();
+    assert!(
+        sizes[0].is_some_and(|size| size.whole && size.bytes >= MEGABYTE),
+        "a kept checkout was not measured with its entry in the repository: {sizes:?}"
+    );
+    // Its entry is reached through a link now, which is not followed.
+    #[cfg(unix)]
+    assert!(
+        sizes[1].is_some_and(|size| !size.whole),
+        "one that could not be removed was not measured, or its entry was: {sizes:?}"
+    );
+    let worked_in = SessionCheckout {
+        worked_in: true,
+        candidates: Candidates {
+            named: ["src/new.rs".to_string()].into(),
+            referenced: 0,
+        },
+        size: sizes[0],
+        ..listed[0].clone()
+    };
+    let still = SessionCheckout {
+        size: sizes[1],
+        ..listed[2].clone()
+    };
+    let left: Vec<SessionCheckout> = vec![worked_in, still.clone()];
     assert_eq!(workspace.session_checkouts(), left);
     assert_eq!(stuck.session_checkouts(), left);
 
     std::fs::remove_dir_all(kept.root()).unwrap();
     assert_eq!(
         workspace.session_checkouts(),
-        [listed[2].clone()],
+        [still],
         "a checkout removed by hand is still listed"
     );
 }
@@ -6664,6 +7715,96 @@ fn a_checkout_records_the_paths_written_in_it() {
     assert_eq!(idle.candidates(), Candidates::default());
 }
 
+/// CHECKOUT-14. A file a checkout's record names is read with the label its path has in the map,
+/// and only that: a number or a path the record does not hold, a link in the file's place or on
+/// the way to it, a file a rule covers, and one gone from the checkout are each refused by name.
+#[test]
+fn a_checkouts_candidate_is_read_with_its_paths_label_and_nothing_else_is_read() {
+    use bravebot_agent::workspace::CheckoutRead;
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-read", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let authority = policy.file_authority();
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("made");
+    let info = made.checkout().unwrap();
+    std::fs::create_dir_all(made.root().join("src")).unwrap();
+    std::fs::write(made.root().join("src/new.rs"), "fn new() {}\n").unwrap();
+    info.record_typed("src/new.rs");
+
+    let read = |id: &str, path: &str| workspace.read_checkout_file(&policy, id, path);
+    assert_eq!(
+        read("c1", "src/new.rs").expect("a candidate").label(),
+        Label::trusted_private(),
+        "a file the map trusts came back with another label"
+    );
+    assert_eq!(
+        read("c9", "src/new.rs").unwrap_err(),
+        CheckoutRead::NoSuchCheckout
+    );
+    assert_eq!(
+        read("c1", "README").unwrap_err(),
+        CheckoutRead::NotACandidate,
+        "a file the driver recorded no write to was read"
+    );
+    assert_eq!(
+        read("c1", "../README").unwrap_err(),
+        CheckoutRead::NotACandidate
+    );
+
+    assert!(authority.publish(&format!("{}/src/new.rs", info.key()), Integrity::Untrusted));
+    assert_eq!(
+        read("c1", "src/new.rs").expect("still a candidate").label(),
+        Label::untrusted_private(),
+        "a file distrusted in the checkout came back trusted"
+    );
+
+    std::fs::remove_file(made.root().join("src/new.rs")).unwrap();
+    assert_eq!(
+        read("c1", "src/new.rs").unwrap_err(),
+        CheckoutRead::NotAFile
+    );
+
+    let mut other_sink = RecordingSink::new();
+    let denying_it = checkout_policy(
+        &workspace,
+        &mut other_sink,
+        &["."],
+        &[&format!("Read(/{}/docs/denied.md)", made.root().display())],
+    );
+    std::fs::create_dir_all(made.root().join("docs")).unwrap();
+    std::fs::write(made.root().join("docs/denied.md"), "secret\n").unwrap();
+    info.record_typed("docs/denied.md");
+    assert_eq!(
+        workspace
+            .read_checkout_file(&denying_it, "c1", "docs/denied.md")
+            .unwrap_err(),
+        CheckoutRead::Denied
+    );
+
+    #[cfg(unix)]
+    {
+        let outside = made.root().join("../outside.txt");
+        std::fs::write(&outside, "not the checkout's\n").unwrap();
+        std::os::unix::fs::symlink("../../outside.txt", made.root().join("docs/link")).unwrap();
+        info.record_typed("docs/link");
+        assert_eq!(
+            read("c1", "docs/link").unwrap_err(),
+            CheckoutRead::Linked,
+            "a link in the file's place was followed"
+        );
+        std::os::unix::fs::symlink("..", made.root().join("up")).unwrap();
+        info.record_typed("up/README");
+        assert_eq!(
+            read("c1", "up/README").unwrap_err(),
+            CheckoutRead::Linked,
+            "a link on the way to the file was followed"
+        );
+    }
+}
+
 /// CHECKOUT-12. A rule that distrusts a path in a checkout outlives the checkout, and a history
 /// answer that shows the path is labelled by it, kept or removed.
 #[test]
@@ -6701,23 +7842,353 @@ fn a_distrusted_path_in_a_checkout_labels_history_that_shows_it() {
     assert!(!made.root().exists());
 }
 
-/// GIT-8. A repository is not opened through a linked worktree, so read_git in a checkout
-/// declines.
+/// CHECKOUT-16. `/cd` is refused while the session keeps a checkout, and the refusal names it, since
+/// the record listing it would move with the session and leave the checkout keyed under the
+/// directory it left. Nothing moves, and a session keeping none moves as before.
 #[test]
-fn read_git_declines_in_a_checkout() {
-    let (_scratch, state, workspace) =
+fn a_move_is_refused_while_the_session_keeps_a_checkout_and_names_it() {
+    use bravebot_agent::workspace::Retired;
+    let (scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-cd", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let authority = policy.file_authority();
+    let elsewhere = state.path.display().to_string();
+
+    let mut before = workspace.clone();
+    before
+        .change_root(&elsewhere)
+        .expect("moved with none kept");
+
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    let mut session = workspace.clone();
+    let refusal = session
+        .change_root(&elsewhere)
+        .expect_err("a move was allowed while a checkout was kept");
+    assert!(
+        matches!(&refusal, WorkspaceError::KeepsCheckouts { ids } if ids == &["c1"]),
+        "{refusal:?}"
+    );
+    let said = refusal.to_string();
+    assert!(
+        said.contains("keeps checkout c1;") && said.contains("remove it with /checkouts remove"),
+        "the refusal does not name it and say how to remove it: {said}"
+    );
+    assert_eq!(session.root(), scratch.path.canonicalize().unwrap());
+
+    made.checkout().unwrap().record_typed("README");
+    assert_eq!(made.checkout().unwrap().retire(&authority), Retired::Kept);
+    assert!(matches!(
+        session.change_root(&elsewhere),
+        Err(WorkspaceError::KeepsCheckouts { .. })
+    ));
+    let mut trust = authority.snapshot();
+    session
+        .remove_session_checkout("c1", &mut trust)
+        .expect("removed");
+    session
+        .change_root(&elsewhere)
+        .expect("moved once none is kept");
+}
+
+/// CHECKOUT-15. A kept checkout is removed by its number, with its `worktrees` entry and its rules,
+/// from any clone of the workspace, wherever it has moved since. A rule that distrusts a path in it stays, and history showing
+/// that path is still labelled by it. A number the session does not keep removes nothing.
+#[test]
+fn a_kept_checkout_is_removed_by_its_number() {
+    use bravebot_agent::workspace::{Retired, Unremoved};
+    let (scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-remove", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let authority = policy.file_authority();
+    // A clone the session moved out of the repository with `/cd` before any checkout was kept;
+    // clones share the session's checkout list, so it reaches them all from there (CHECKOUT-16).
+    let mut elsewhere = workspace.clone();
+    elsewhere
+        .change_root(&state.path.display().to_string())
+        .expect("moved");
+    let made: Vec<Workspace> = (0..2)
+        .map(|_| {
+            let made = workspace
+                .checkout_for(&policy, &state.path, d1())
+                .expect("a checkout");
+            let info = made.checkout().unwrap();
+            info.record_typed("README");
+            assert_eq!(info.retire(&authority), Retired::Kept);
+            made
+        })
+        .collect();
+    let [distrusting, plain] = &made[..] else {
+        unreachable!()
+    };
+    let distrusted = format!("{}/README", distrusting.checkout().unwrap().key());
+    let trusted = format!("{}/README", plain.checkout().unwrap().key());
+    assert!(authority.publish(&distrusted, Integrity::Untrusted));
+    let mut trust = authority.snapshot();
+    assert!(trust.is_trusted(&trusted));
+    drop(policy);
+
+    // A clone the session has moved into c1 with `/cd` cannot exist (CHECKOUT-16), and one that
+    // opened c1 with `/add-dir` keeps it.
+    let c1 = distrusting.root().display().to_string();
+    let mut moved_in = workspace.clone();
+    assert!(matches!(
+        moved_in.change_root(&c1),
+        Err(WorkspaceError::KeepsCheckouts { .. })
+    ));
+    let mut added = workspace.clone();
+    added.add_directory(&c1).expect("added");
+    assert_eq!(
+        added.remove_session_checkout("c1", &mut trust),
+        Err(Unremoved::WorkedFrom)
+    );
+    assert!(
+        distrusting.root().exists(),
+        "a checkout worked from was removed"
+    );
+
+    assert_eq!(
+        elsewhere.remove_session_checkout("c3", &mut trust),
+        Err(Unremoved::NoSuch)
+    );
+    elsewhere
+        .remove_session_checkout("c2", &mut trust)
+        .expect("removed");
+    assert!(!plain.root().exists(), "the directory was left");
+    assert!(
+        !scratch.path.join(".git/worktrees/c2").exists(),
+        "the entry was left"
+    );
+    assert!(!trust.is_trusted(&trusted), "the rules were left");
+    assert!(distrusting.root().exists(), "another checkout was removed");
+    assert_eq!(
+        workspace
+            .session_checkouts()
+            .iter()
+            .map(|one| one.id.as_str())
+            .collect::<Vec<_>>(),
+        ["c1"]
+    );
+    assert_eq!(
+        workspace.remove_session_checkout("c2", &mut trust),
+        Err(Unremoved::NoSuch),
+        "a removed checkout was removed again"
+    );
+
+    workspace
+        .remove_session_checkout("c1", &mut trust)
+        .expect("removed");
+    assert!(!distrusting.root().exists());
+    assert_eq!(workspace.session_checkouts(), []);
+    assert_eq!(
+        trust.integrity_of(&distrusted),
+        Some(Integrity::Untrusted),
+        "a rule that distrusts a path went with the checkout"
+    );
+
+    let mut sink = RecordingSink::new();
+    let mut later = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+    let repository = Labelled::trusted(".".to_string());
+    let show = bravebot_agent::workspace::GitQuestion {
+        query: bravebot_agent::git::Query::Show,
+        ..log_of(&repository)
+    };
+    let shown = workspace.read_git(&mut later, &show).expect("shown");
+    assert_eq!(
+        shown.label(),
+        Label::untrusted_private(),
+        "history showing a path distrusted in a removed checkout lost its label"
+    );
+}
+
+/// The answer to `query` about the repository of the workspace `workspace`, asked as a delegate
+/// working there asks it.
+fn asked_in(
+    workspace: &Workspace,
+    policy: &mut Policy<'_, RecordingSink>,
+    query: bravebot_agent::git::Query,
+) -> Result<String, WorkspaceError> {
+    let repository = Labelled::trusted(".".to_string());
+    let question = bravebot_agent::workspace::GitQuestion {
+        query,
+        ..log_of(&repository)
+    };
+    let answer = workspace.read_git(policy, &question)?;
+    let proof = policy.authorise_content_release("test", "read_git");
+    Ok(answer.declassify(&proof).text)
+}
+
+/// CHECKOUT-12. A status and a log in a checkout are answered from the common directory and the
+/// entry the driver recorded, and the checkout's own `.git` is never read: it names no repository
+/// at all here, and the working directory holds a change the checkout does not.
+#[test]
+fn read_git_in_a_checkout_is_answered_without_reading_its_dot_git() {
+    use bravebot_agent::git::Query;
+    let (scratch, state, workspace) =
         repository_with_a_state_directory("checkout-read-git", &[("README", "hello\n")]);
+    repository::check_out(&scratch.path, &[("README", "hello\n")]);
+    std::fs::write(scratch.path.join("working-directory-only"), "x\n").unwrap();
     let mut sink = RecordingSink::new();
     let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
     let made = workspace
         .checkout_for(&policy, &state.path, d1())
         .expect("a checkout");
-    let repository = Labelled::trusted(".".to_string());
+    std::fs::write(made.root().join(".git"), "gitdir: /nowhere/at/all\n").unwrap();
 
-    let refused = made.read_git(&mut policy, &log_of(&repository));
     assert!(
-        matches!(refused, Err(WorkspaceError::Git { .. })),
-        "read_git opened a repository through a checkout: {:?}",
-        refused.map(|answer| answer.label())
+        asked_in(&made, &mut policy, Query::Status)
+            .unwrap()
+            .starts_with("Nothing to commit"),
+        "a fresh checkout was not clean"
     );
+    std::fs::write(made.root().join("README"), "changed\n").unwrap();
+    std::fs::write(made.root().join("new.txt"), "x\n").unwrap();
+    assert_eq!(
+        asked_in(&made, &mut policy, Query::Status).unwrap(),
+        " M README\n?? new.txt\n",
+        "the status was not of the checkout's tree"
+    );
+    let log = asked_in(&made, &mut policy, Query::Log).unwrap();
+    assert!(log.contains("first"), "{log}");
+}
+
+/// CHECKOUT-12. The checkout's `HEAD` and index are the entry's, not the common directory's: a
+/// commit made in the working directory after the checkout is not in the checkout's history or its
+/// status.
+#[test]
+fn a_checkout_reads_the_entrys_head_and_index_not_the_common_directorys() {
+    use bravebot_agent::git::Query;
+    let (scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-entry-head", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    repository::commit_files(
+        &scratch.path,
+        &[("README", "hello\n"), ("later.txt", "y\n")],
+        "second",
+    );
+
+    let log = asked_in(&made, &mut policy, Query::Log).unwrap();
+    assert!(log.contains("first") && !log.contains("second"), "{log}");
+    let status = asked_in(&made, &mut policy, Query::Status).unwrap();
+    assert!(
+        status.starts_with("Nothing to commit"),
+        "the checkout was compared with the working directory's HEAD: {status}"
+    );
+    let there = asked_in(&workspace, &mut policy, Query::Log).unwrap();
+    assert!(there.contains("second"), "{there}");
+}
+
+/// CHECKOUT-12. The files a read in a checkout opens are held against the permission rules, the
+/// entry's among them: a rule over the entry's `HEAD` or index declines the question, and one over
+/// a file in the checkout declines nothing but that file.
+#[test]
+fn a_rule_over_a_file_the_entry_holds_declines_a_read_in_a_checkout() {
+    use bravebot_agent::git::{Declined, Query};
+    for (file, query) in [
+        ("HEAD", Query::Log),
+        ("index", Query::Status),
+        ("config", Query::Log),
+    ] {
+        let (_scratch, state, workspace) =
+            repository_with_a_state_directory(&format!("checkout-fenced-{file}"), &[("R", "h\n")]);
+        let rule = match file {
+            "config" => "Read(./.git/config)".to_string(),
+            _ => format!("Read(./.git/worktrees/c1/{file})"),
+        };
+        let mut sink = RecordingSink::new();
+        let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+        let made = workspace
+            .checkout_for(&policy, &state.path, d1())
+            .expect("a checkout");
+        drop(policy);
+        let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[&rule]);
+        match asked_in(&made, &mut policy, query) {
+            Err(WorkspaceError::Git { declined, .. }) => {
+                assert_eq!(declined, Declined::Fenced, "{file}")
+            }
+            other => panic!("{file}: a fenced file was read: {other:?}"),
+        }
+    }
+}
+
+/// CHECKOUT-17. A write in a checkout records a checkout gap in the coverage the session's
+/// rewind points hold, since a rewind puts back nothing there. Making a checkout, and a write in
+/// the working directory, record none, so the gap names only what a rewind leaves alone.
+#[test]
+fn a_write_in_a_checkout_is_a_gap_in_the_sessions_rewind_coverage() {
+    use bravebot_agent::rewind::CoverageGap;
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-rewind-gap", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let coverage = workspace.rewind_coverage();
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    assert!(
+        coverage.is_complete(),
+        "making a checkout left a gap: {:?}",
+        coverage.gaps()
+    );
+
+    workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted("in-the-working-directory.txt".to_string()),
+            &Labelled::trusted("x".to_string()),
+        )
+        .expect("a write in the working directory");
+    assert!(
+        coverage.is_complete(),
+        "a write in the working directory left a gap: {:?}",
+        coverage.gaps()
+    );
+
+    made.write(
+        &mut policy,
+        &Labelled::trusted("out.txt".to_string()),
+        &Labelled::trusted("from the delegate".to_string()),
+    )
+    .expect("a write in the checkout");
+    assert_eq!(coverage.gaps(), [CoverageGap::Checkout].into());
+    assert!(
+        made.take_backups().len() == 1 && workspace.take_backups().len() == 1,
+        "each workspace kept only its own backups"
+    );
+    assert!(
+        workspace.rewind_coverage().is_complete(),
+        "a point taken afterwards inherited the gap"
+    );
+}
+
+/// CHECKOUT-17. A program a delegate runs in a checkout is a gap in the session's coverage as
+/// well as the command gap.
+#[test]
+fn a_command_gap_in_a_checkout_is_also_a_checkout_gap_in_the_sessions_coverage() {
+    use bravebot_agent::rewind::CoverageGap;
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-rewind-command-gap", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let coverage = workspace.rewind_coverage();
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+
+    made.mark_rewind_gap(CoverageGap::Command);
+    assert_eq!(coverage.gaps(), [CoverageGap::Checkout].into());
 }

@@ -20,7 +20,7 @@ use bravebot_i18n::t;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 use ratatui::crossterm::event::{self, Event as TermEvent, KeyCode, KeyEvent, KeyModifiers};
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Rect, Size};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
@@ -184,14 +184,15 @@ impl WriteAnswer {
 /// worker thread cannot hold the terminal: the main thread calls this on its behalf.
 pub fn ask<B: Backend>(terminal: &mut Terminal<B>, request: &WriteRequest) -> WriteAnswer {
     let mut scroll = 0u16;
+    let mut seen = Seen::default();
     loop {
         // A terminal that cannot be drawn to cannot carry a question, so refuse rather
         // than proceed unseen.
-        // How far the body can scroll is only knowable once it has been laid out at the width
-        // it will be drawn at, so it comes back out of the closure.
-        let mut most = 0u16;
+        // How far the body can scroll, and whether a yes is taken, are only knowable once it has
+        // been laid out at the width it will be drawn at, so they come back out of the closure.
+        let mut drawn = Drawn::default();
         if terminal
-            .draw(|frame| most = draw(frame, request, scroll))
+            .draw(|frame| drawn = draw(frame, request, scroll, &mut seen))
             .is_err()
         {
             return WriteAnswer::Reject;
@@ -203,11 +204,9 @@ pub fn ask<B: Backend>(terminal: &mut Terminal<B>, request: &WriteRequest) -> Wr
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
-            Ok(TermEvent::Key(key)) => match write_answer_for(key, request) {
+            Ok(TermEvent::Key(key)) => match write_answer_for(key, request, &drawn) {
                 Some(WriteResponse::Answer(answer)) => return answer,
-                Some(WriteResponse::Scroll(by)) => {
-                    scroll = scroll.saturating_add_signed(by).min(most);
-                }
+                Some(WriteResponse::Scroll(by)) => scroll = drawn.moved(scroll, by),
                 None => continue,
             },
             Ok(_) => continue,
@@ -228,9 +227,10 @@ enum WriteResponse {
 ///
 /// Takes the request for the reason [`run_answer_for`] does: `a` is bound only where the driver
 /// offered it and `r` only where it said where the answer would be written, so a key the screen
-/// does not draw is unbound rather than granting what the screen never offered.
-fn write_answer_for(key: KeyEvent, request: &WriteRequest) -> Option<WriteResponse> {
-    match key.code {
+/// does not draw is unbound rather than granting what the screen never offered. Takes the draw
+/// because none of `y`, `a` and `r` approves from one that did not show what it decides.
+fn write_answer_for(key: KeyEvent, request: &WriteRequest, drawn: &Drawn) -> Option<WriteResponse> {
+    drawn.take(match key.code {
         KeyCode::Char('a' | 'A')
             if request.may_always && !key.modifiers.contains(KeyModifiers::CONTROL) =>
         {
@@ -241,12 +241,26 @@ fn write_answer_for(key: KeyEvent, request: &WriteRequest) -> Option<WriteRespon
         {
             Some(WriteResponse::Answer(WriteAnswer::ApproveAndRecord))
         }
-        _ => answer_for(key).map(|response| match response {
+        _ => pressed(key, drawn.page()).map(|response| match response {
             Response::Answer(Answer::Approve) => WriteResponse::Answer(WriteAnswer::Approve),
             Response::Answer(Answer::Reject) => WriteResponse::Answer(WriteAnswer::Reject),
             Response::Answer(Answer::Interrupt) => WriteResponse::Answer(WriteAnswer::Interrupt),
             Response::Scroll(by) => WriteResponse::Scroll(by),
         }),
+    })
+}
+
+impl pinned::Approving for WriteResponse {
+    fn approves(&self) -> bool {
+        match self {
+            WriteResponse::Answer(answer) => match answer {
+                WriteAnswer::Approve
+                | WriteAnswer::ApproveAlways
+                | WriteAnswer::ApproveAndRecord => true,
+                WriteAnswer::Reject | WriteAnswer::Interrupt => false,
+            },
+            WriteResponse::Scroll(_) => false,
+        }
     }
 }
 
@@ -258,10 +272,44 @@ enum Response {
     Scroll(i16),
 }
 
-/// Interpret one key press, or `None` for a key that answers nothing.
+impl pinned::Approving for Response {
+    fn approves(&self) -> bool {
+        match self {
+            Response::Answer(answer) => match answer {
+                Answer::Approve => true,
+                Answer::Reject | Answer::Interrupt => false,
+            },
+            Response::Scroll(_) => false,
+        }
+    }
+}
+
+/// Interpret one key press at the question `drawn` put on the screen, or `None` for a key that
+/// answers nothing there.
 ///
 /// Separated from the loop so it can be tested without a terminal.
-fn answer_for(key: KeyEvent) -> Option<Response> {
+fn answer_for(key: KeyEvent, drawn: &Drawn) -> Option<Response> {
+    drawn.take(pressed(key, drawn.page()))
+}
+
+/// Interpret one key press at the plan prompt, or `None` for a key that answers nothing there.
+///
+/// Escape stops the run here, as Ctrl-C does, instead of declining the plan. A run has no other
+/// moment at which Escape means "leave this one effect": a step later the same key cancels the run,
+/// and a person pressing it at the plan asked for the same thing (MANIFEST-11). Every other key is
+/// read as at any other prompt.
+fn manifest_answer_for(key: KeyEvent, drawn: &Drawn) -> Option<Response> {
+    match key.code {
+        KeyCode::Esc if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            drawn.take(Some(Response::Answer(Answer::Interrupt)))
+        }
+        _ => answer_for(key, drawn),
+    }
+}
+
+/// What one key press means, before the draw it was pressed at has had its say, with a page being
+/// `page` rows.
+fn pressed(key: KeyEvent, page: i16) -> Option<Response> {
     // The prompt blocks the whole interface, so without this Ctrl-C would do nothing at the one
     // moment a user is most likely to press it. It stops the turn as well as refusing, because
     // someone reaching for the interrupt wants the work to stop, not just this write.
@@ -278,8 +326,8 @@ fn answer_for(key: KeyEvent) -> Option<Response> {
         // A diff longer than the box is the one most worth reading before answering.
         KeyCode::Up => Some(Response::Scroll(-1)),
         KeyCode::Down => Some(Response::Scroll(1)),
-        KeyCode::PageUp => Some(Response::Scroll(-10)),
-        KeyCode::PageDown => Some(Response::Scroll(10)),
+        KeyCode::PageUp => Some(Response::Scroll(-page)),
+        KeyCode::PageDown => Some(Response::Scroll(page)),
         KeyCode::Home => Some(Response::Scroll(i16::MIN)),
         KeyCode::End => Some(Response::Scroll(i16::MAX)),
         // Enter is deliberately not an approval: it is the key most likely to
@@ -288,13 +336,17 @@ fn answer_for(key: KeyEvent) -> Option<Response> {
     }
 }
 
-/// Draw the confirmation over the session, returning how far its body can be scrolled.
+/// Draw the confirmation over the session, returning what the draw decided for its keys.
 ///
 /// The keys are drawn as a row of their own rather than as the last line of the body. They used
 /// to be the last line, kept on screen by capping the diff, and the cap counted lines while the
 /// paragraph drew wrapped rows: a diff with long lines pushed the question off the bottom, so the
 /// prompt asked nothing and the answer went to a screen that never showed what it was for.
-fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16) -> u16 {
+///
+/// Everything above the diff decides the question, the findings and what `a` and `r` settle most
+/// of all, so no key that approves is taken until all of it and the diff's first row have been
+/// drawn.
+fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16, seen: &mut Seen) -> Drawn {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::brand_primary(), t!(write_title));
 
@@ -424,6 +476,21 @@ fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16) -> u16 
         lines.push(Line::raw(""));
     }
 
+    // The driver's record that the working directory's file was written after the checkout this
+    // body comes from was made. A record of names, so it says nothing of whether the bytes differ:
+    // that is read from the diff below (CHECKOUT-14).
+    if request.written_since_checkout {
+        lines.extend(marked_rows(
+            &margin,
+            &[Span::styled(
+                t!(write_since_checkout),
+                Style::default().fg(theme::fail()),
+            )],
+            inside.width as usize,
+        ));
+        lines.push(Line::raw(""));
+    }
+
     // What `a` and `r` would settle, where they are offered, under the findings they settle and
     // above a diff that may push anything below it out of sight: which file, how long, and that
     // the rest of the write's question is untouched. Where `r` is written down is part of what it
@@ -469,6 +536,7 @@ fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16) -> u16 
     //
     // Broken to the width here rather than by the paragraph, so a hunk wider than the box
     // continues on another marked row instead of at column 0 outside the margin.
+    let deciding = lines.len();
     let changes = diff.condensed(CONTEXT_LINES);
     for change in changes.iter() {
         let body = match change {
@@ -489,101 +557,54 @@ fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16) -> u16 
         lines.extend(marked_rows(&margin, &[body], inside.width as usize));
     }
 
-    let mut key_spans = vec![
-        Span::styled(
-            "  y",
-            Style::default()
-                .fg(theme::ok())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(" {}    ", t!(write_yes))),
-    ];
-    if request.may_always {
-        key_spans.push(Span::styled(
-            "a",
-            Style::default()
-                .fg(theme::running())
-                .add_modifier(Modifier::BOLD),
-        ));
-        key_spans.push(Span::raw(format!(" {}    ", t!(write_always))));
-    }
-    if request.record.is_some() {
-        key_spans.push(Span::styled(
-            "r",
-            Style::default()
-                .fg(theme::running())
-                .add_modifier(Modifier::BOLD),
-        ));
-        key_spans.push(Span::raw(format!(" {}    ", t!(write_remember))));
-    }
-    key_spans.extend([
-        Span::styled(
-            "n",
-            Style::default()
-                .fg(theme::fail())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(" {}    ", t!(write_no))),
-    ]);
-    let answers = Line::from(key_spans);
-    let stop = Line::from(vec![
-        Span::styled(
-            "ctrl-c",
-            Style::default()
-                .fg(theme::muted())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" {}", t!(stop_the_turn)),
-            Style::default().fg(theme::muted()),
-        ),
-    ]);
-    // Both standing answers make the row wider than the box on a 100-column terminal, and the
-    // clip would take the key that stops the turn, so that key gets a row of its own instead. A
-    // prompt offering neither keeps its one row, and with it every row it had for the body.
-    let stop_below = request.may_always && answers.width() + stop.width() > inside.width as usize;
-
-    // The keys' rows, and the rest for the diff. Split before the body is laid out, so the
-    // question keeps its rows whatever the body turns out to be.
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),
-            Constraint::Length(if stop_below { 2 } else { 1 }),
-        ])
-        .split(inside);
-
-    let body = Paragraph::new(lines).wrap(Wrap { trim: false });
-    // Rows, not lines: the paragraph wraps, and the difference between the two is what used to
-    // push the question off the screen.
-    let drawn = body.line_count(rows[0].width) as u16;
-    let furthest = drawn.saturating_sub(rows[0].height);
-    let offset = scroll.min(furthest);
-    frame.render_widget(body.scroll((offset, 0)), rows[0]);
-
-    let mut keys = if stop_below {
-        let mut row = stop;
-        row.spans.insert(0, Span::raw("  "));
-        vec![answers, row]
-    } else {
-        let mut row = answers;
-        row.spans.extend(stop.spans);
-        vec![row]
+    let answers = |answerable: bool, gap: &str| {
+        let mut key_spans = vec![
+            Span::styled("  y", approving(theme::ok(), answerable)),
+            Span::raw(format!(" {}{gap}", t!(write_yes))),
+        ];
+        if request.may_always {
+            key_spans.push(Span::styled("a", approving(theme::running(), answerable)));
+            key_spans.push(Span::raw(format!(" {}{gap}", t!(write_always))));
+        }
+        if request.record.is_some() {
+            key_spans.push(Span::styled("r", approving(theme::running(), answerable)));
+            key_spans.push(Span::raw(format!(" {}{gap}", t!(write_remember))));
+        }
+        key_spans.extend([
+            Span::styled("n", refusing()),
+            Span::raw(format!(" {}{gap}", t!(write_no))),
+        ]);
+        Line::from(key_spans)
     };
-    if furthest > 0 {
-        let below = furthest - offset;
-        keys.last_mut()
-            .expect("a row of keys")
-            .push_span(Span::styled(
-                // Short, because the row is as wide as the box and the keys come first: a hint
-                // that gets clipped in half tells the reviewer less than no hint at all.
-                scroll_hint(below),
-                Style::default().fg(theme::brand_primary()),
-            ));
-    }
-    frame.render_widget(Paragraph::new(keys), rows[1]);
+    let stop = Line::from(Vec::from(stopping()));
+    let wide = answers(true, "    ").width() + stop.width() > inside.width as usize;
+    // Both standing answers make the row wider than the box on a 100-column terminal, so the key
+    // that stops the turn gets a row of its own rather than being broken across two. A prompt
+    // offering neither keeps its one row, closing its gaps where it is still too wide, and with it
+    // every row it had for the body.
+    let stop_below = request.may_always && wide;
+    let gap = if wide && !stop_below { "  " } else { "    " };
+    let keys = |answerable: bool| {
+        let answers = answers(answerable, gap);
+        let stop = stop.clone();
+        if stop_below {
+            let mut row = stop;
+            row.spans.insert(0, Span::raw("  "));
+            vec![answers, row]
+        } else {
+            let mut row = answers;
+            row.spans.extend(stop.spans);
+            vec![row]
+        }
+    };
 
-    furthest
+    pinned::draw(
+        frame,
+        inside,
+        Question::scrolled(lines, deciding, 1, &keys),
+        scroll,
+        seen,
+    )
 }
 
 /// What the user did with a run question.
@@ -650,6 +671,8 @@ impl RunAnswer {
 /// `r` is the same rule over the wider of the two lifetimes: it is bound only where the request
 /// says where the answer would be written, which is the driver having decided the key would stop a
 /// later prompt at all.
+///
+/// Whether the plan has been on the screen is not asked here: [`RunDrawn::response_to`] asks it.
 fn run_answer_for(key: KeyEvent, request: &RunRequest) -> Option<RunResponse> {
     // The prompt blocks the whole interface, so without this Ctrl-C would do nothing at the one
     // moment a user is most likely to press it.
@@ -674,8 +697,8 @@ fn run_answer_for(key: KeyEvent, request: &RunRequest) -> Option<RunResponse> {
         KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(RunResponse::Answer(RunAnswer::Reject)),
         KeyCode::Up => Some(RunResponse::Scroll(-1)),
         KeyCode::Down => Some(RunResponse::Scroll(1)),
-        KeyCode::PageUp => Some(RunResponse::Scroll(-10)),
-        KeyCode::PageDown => Some(RunResponse::Scroll(10)),
+        KeyCode::PageUp => Some(RunResponse::Page(-1)),
+        KeyCode::PageDown => Some(RunResponse::Page(1)),
         KeyCode::Home => Some(RunResponse::Scroll(i16::MIN)),
         KeyCode::End => Some(RunResponse::Scroll(i16::MAX)),
         // Enter is deliberately not an approval: it is the key most likely to be pressed out of
@@ -689,6 +712,96 @@ fn run_answer_for(key: KeyEvent, request: &RunRequest) -> Option<RunResponse> {
 enum RunResponse {
     Answer(RunAnswer),
     Scroll(i16),
+    /// Move by this many of the last draw's pages.
+    Page(i16),
+}
+
+/// What one draw of the run question decided for the keys that answer it.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct RunDrawn {
+    /// How far the plan can be scrolled.
+    furthest: u16,
+    /// The rows a page moves: one fewer than the body's rows on the screen, so paging from the top
+    /// puts every row on the screen. A page longer than the box would pass over rows that a key
+    /// then waits on.
+    page: u16,
+    /// Whether the question, the keys and a row of the body are on the screen.
+    whole: bool,
+    /// Rows of the plan not on the screen yet during this question. Every key that runs the line
+    /// waits on them.
+    unread: usize,
+    /// Rows saying what `a` grants besides running the line, not on the screen yet.
+    always_unread: usize,
+    /// Rows saying what `r` grants besides running the line, not on the screen yet.
+    record_unread: usize,
+}
+
+impl RunDrawn {
+    /// Whether this draw takes `answer`. A key that runs the line waits on the plan, and `a` and
+    /// `r` each wait on what they grant besides as well. Refusing waits on nothing.
+    fn takes(&self, answer: RunAnswer) -> bool {
+        let grant_unread = match answer {
+            RunAnswer::Reject | RunAnswer::Interrupt => return true,
+            RunAnswer::Approve => 0,
+            RunAnswer::ApproveAlways => self.always_unread,
+            RunAnswer::ApproveAndRecord => self.record_unread,
+        };
+        self.whole && self.unread == 0 && grant_unread == 0
+    }
+
+    /// One key pressed at the question this draw put on the screen.
+    fn response_to(&self, key: KeyEvent, request: &RunRequest) -> Option<RunResponse> {
+        match run_answer_for(key, request) {
+            Some(RunResponse::Answer(answer)) if !self.takes(answer) => None,
+            response => response,
+        }
+    }
+
+    /// Where the plan starts once moved `by` rows from `scroll`.
+    ///
+    /// Moved from where this draw put it rather than from `scroll`, which a terminal made taller
+    /// since can leave past the bottom, where a press of Up would move nothing.
+    fn moved(&self, scroll: u16, by: i32) -> u16 {
+        let from = i32::from(scroll.min(self.furthest));
+        let to = from.saturating_add(by).clamp(0, i32::from(self.furthest));
+        u16::try_from(to).unwrap_or(self.furthest)
+    }
+}
+
+/// Which rows of a run question's body have been on the screen during one question.
+///
+/// Kept across draws rather than read off the last one, because a plan longer than the box is read
+/// a part at a time: what a key that runs it needs is that each row was on the screen, not all at
+/// once. Counted at the width they were wrapped to, since another width wraps the body into other
+/// rows and a row read at the old one is not a row of the new.
+#[derive(Debug, Default)]
+struct RowsShown {
+    width: u16,
+    rows: Vec<bool>,
+}
+
+impl RowsShown {
+    /// Marks the rows `laid` puts on the screen, of a body wrapped into `total` rows at `width`.
+    fn mark(&mut self, width: u16, total: usize, laid: &Pinned) {
+        if self.width != width || self.rows.len() != total {
+            *self = RowsShown {
+                width,
+                rows: vec![false; total],
+            };
+        }
+        // A draw that cuts off the question or its keys leaves the body no rows, so a row marked
+        // here was on the screen under both.
+        let from = usize::from(laid.offset).min(total);
+        let to = (usize::from(laid.offset) + usize::from(laid.body.height)).min(total);
+        self.rows[from..to].fill(true);
+    }
+
+    /// How many of these rows have not been on the screen.
+    fn unseen(&self, rows: std::ops::Range<usize>) -> usize {
+        self.rows
+            .get(rows)
+            .map_or(0, |rows| rows.iter().filter(|shown| !**shown).count())
+    }
 }
 
 /// Draw the prompt for a run and wait for an answer.
@@ -698,12 +811,13 @@ enum RunResponse {
 /// its behalf.
 pub fn ask_run<B: Backend>(terminal: &mut Terminal<B>, request: &RunRequest) -> RunAnswer {
     let mut scroll = 0u16;
+    let mut shown = RowsShown::default();
     loop {
-        let mut most = 0u16;
+        let mut drawn = RunDrawn::default();
         // A terminal that cannot be drawn to cannot carry a question, so refuse rather than run
         // something unseen.
         if terminal
-            .draw(|frame| most = draw_run(frame, request, scroll))
+            .draw(|frame| drawn = draw_run(frame, request, scroll, &mut shown))
             .is_err()
         {
             return RunAnswer::Reject;
@@ -715,10 +829,11 @@ pub fn ask_run<B: Backend>(terminal: &mut Terminal<B>, request: &RunRequest) -> 
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
-            Ok(TermEvent::Key(key)) => match run_answer_for(key, request) {
+            Ok(TermEvent::Key(key)) => match drawn.response_to(key, request) {
                 Some(RunResponse::Answer(answer)) => return answer,
-                Some(RunResponse::Scroll(by)) => {
-                    scroll = scroll.saturating_add_signed(by).min(most);
+                Some(RunResponse::Scroll(by)) => scroll = drawn.moved(scroll, i32::from(by)),
+                Some(RunResponse::Page(by)) => {
+                    scroll = drawn.moved(scroll, i32::from(by) * i32::from(drawn.page));
                 }
                 None => continue,
             },
@@ -753,12 +868,22 @@ fn authority(spent: &bravebot_core::ambient::Spent) -> String {
     .to_string()
 }
 
-/// Draw the run confirmation, returning how far its body can be scrolled.
+/// Draw the run confirmation, marking in `shown` the rows of the body this draw put on the screen.
 ///
 /// One line per stage, rendered by [`bravebot_core::Stage::display`], which quotes unambiguously: two
 /// different argument vectors cannot come out looking alike, so what the reviewer reads names
 /// exactly the argv the endorsement will be bound to.
-fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u16 {
+///
+/// Drawn is not enough where the plan is longer than the box, since an argument below the bottom
+/// edge runs as surely as the first. So the keys and the row saying how much is unread are pinned
+/// where the body cannot push them off, and a key is taken only once every row it waits on has
+/// been on the screen.
+fn draw_run(
+    frame: &mut ratatui::Frame,
+    request: &RunRequest,
+    scroll: u16,
+    shown: &mut RowsShown,
+) -> RunDrawn {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::accent(), t!(run_title));
 
@@ -768,7 +893,7 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
     let offers_always = request.can_be_remembered();
 
     let steps = request.plan.steps();
-    let mut lines = vec![
+    let header = vec![
         Line::from(vec![
             Span::styled(
                 format!("{} ", t!(run_verb)),
@@ -790,6 +915,7 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         ]),
         Line::raw(""),
     ];
+    let mut lines = Vec::new();
 
     // The line the planner wrote, above the plan and marked as context. It is not what the answer
     // binds to: two spellings that compile alike are one thing to agree to, and the plan below is
@@ -907,12 +1033,23 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         )));
     }
 
+    let wrapped = |lines: Vec<Line<'static>>| Paragraph::new(lines).wrap(Wrap { trim: false });
+    // Each line wraps on its own, so the rows of a run of lines are where measuring before and
+    // after it puts them.
+    let measure = |lines: &[Line<'static>]| wrapped(lines.to_vec()).line_count(inside.width);
+    // Everything above is what running the line does, so it is what every key that runs it waits
+    // on. What `a` and `r` grant on top of that is below, and each of them waits on its own part.
+    let plan = 0..measure(&lines);
+    let mut always = 0..0;
+    let mut record = 0..0;
+
     // What `a` would actually grant, in as many words. It is two things, not one, and the second
     // is the one nothing else in the interface would tell them: what the command prints stops
     // being quarantined and the model reads it. Nothing checks that assertion, so the person
     // making it has to be asked for it in those terms.
     if offers_always {
         lines.push(Line::raw(""));
+        always.start = measure(&lines);
         lines.push(Line::from(Span::styled(
             format!("  {}", t!(run_always_explained)),
             Style::default().fg(theme::muted()),
@@ -963,6 +1100,7 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
             format!("     {}", t!(run_always_this_directory)),
             Style::default().fg(theme::muted()),
         )));
+        always.end = measure(&lines);
     } else {
         // Each of these asks every time whatever is remembered, so offering to stop asking would be
         // offering something that will not happen. Every reason that holds is given, not the first
@@ -994,6 +1132,7 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
     // shown, and deleting the line from that file is the way back.
     if let Some(path) = &request.record {
         lines.push(Line::raw(""));
+        record.start = measure(&lines);
         lines.push(Line::from(Span::styled(
             format!("  {}", t!(run_remember_explained)),
             Style::default().fg(theme::muted()),
@@ -1016,6 +1155,7 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
             format!("       {}", path.display()),
             Style::default().add_modifier(Modifier::BOLD),
         )));
+        record.end = measure(&lines);
     }
 
     // What answers a line whose arguments differ from one run to the next, since no key on this
@@ -1051,11 +1191,82 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         )));
     }
 
+    let total = measure(&lines);
+    let header = wrapped(header);
+    let body = wrapped(lines);
+    // Measured with the keys live, which is the same text: whether they are taken changes how they
+    // are coloured and not how many rows they take, so it can be decided after the layout.
+    let laid = Pinned::new(
+        inside,
+        (
+            rows_in(&header, inside.width),
+            u16::try_from(total).unwrap_or(u16::MAX),
+            0,
+            rows_in(
+                &wrapped(vec![run_keys(request, offers_always, |_| true)]),
+                inside.width,
+            ),
+        ),
+        scroll,
+    );
+    // Rows past the most the layout scrolls to are never marked, so a body that long is never
+    // taken rather than taken unread.
+    shown.mark(inside.width, total, &laid);
+    let drawn = RunDrawn {
+        furthest: laid.furthest,
+        page: laid.body.height.saturating_sub(1).max(1),
+        whole: laid.whole && laid.body.height > 0,
+        unread: shown.unseen(plan),
+        always_unread: shown.unseen(always),
+        record_unread: shown.unseen(record),
+    };
+
+    // Said in place of how far there is to scroll while a key waits on it, since what the person
+    // needs to know then is why the key does nothing.
+    let waiting = drawn.always_unread + drawn.record_unread;
+    let hint = if drawn.unread > 0 {
+        Line::styled(
+            format!("   {}", t!(run_unseen, count = drawn.unread)),
+            Style::default().fg(theme::running()),
+        )
+    } else if waiting > 0 {
+        Line::styled(
+            format!("   {}", t!(run_grant_unseen, count = waiting)),
+            Style::default().fg(theme::running()),
+        )
+    } else {
+        Line::styled(
+            scroll_hint(laid.furthest - laid.offset),
+            Style::default().fg(theme::brand_primary()),
+        )
+    };
+    laid.render(
+        frame,
+        header,
+        body,
+        hint,
+        wrapped(Vec::new()),
+        wrapped(vec![run_keys(request, offers_always, |answer| {
+            drawn.takes(answer)
+        })]),
+    );
+
+    drawn
+}
+
+/// The run question's keys, with each that `live` says is not taken drawn muted. A key not taken
+/// yet is muted rather than dropped, so the row keeps its shape and the row above it says why.
+fn run_keys(
+    request: &RunRequest,
+    offers_always: bool,
+    live: impl Fn(RunAnswer) -> bool,
+) -> Line<'static> {
+    let colour = |answer, colour| if live(answer) { colour } else { theme::muted() };
     let mut key_spans = vec![
         Span::styled(
             "  y",
             Style::default()
-                .fg(theme::ok())
+                .fg(colour(RunAnswer::Approve, theme::ok()))
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(format!(" {}    ", t!(run_yes))),
@@ -1066,7 +1277,7 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         key_spans.push(Span::styled(
             "a",
             Style::default()
-                .fg(theme::running())
+                .fg(colour(RunAnswer::ApproveAlways, theme::running()))
                 .add_modifier(Modifier::BOLD),
         ));
         key_spans.push(Span::raw(format!(" {}    ", t!(run_always))));
@@ -1078,7 +1289,7 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         key_spans.push(Span::styled(
             "r",
             Style::default()
-                .fg(theme::running())
+                .fg(colour(RunAnswer::ApproveAndRecord, theme::running()))
                 .add_modifier(Modifier::BOLD),
         ));
         key_spans.push(Span::raw(format!(" {}    ", t!(run_remember))));
@@ -1102,32 +1313,7 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
             Style::default().fg(theme::muted()),
         ),
     ]);
-    let keys = Line::from(key_spans);
-
-    // One row for the keys, the rest for the stages, split before the body is laid out so the
-    // question keeps its row whatever the body turns out to be.
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(inside);
-
-    let body = Paragraph::new(lines).wrap(Wrap { trim: false });
-    let drawn = body.line_count(rows[0].width) as u16;
-    let furthest = drawn.saturating_sub(rows[0].height);
-    let offset = scroll.min(furthest);
-    frame.render_widget(body.scroll((offset, 0)), rows[0]);
-
-    let mut keys = keys;
-    if furthest > 0 {
-        let below = furthest - offset;
-        keys.push_span(Span::styled(
-            scroll_hint(below),
-            Style::default().fg(theme::accent()),
-        ));
-    }
-    frame.render_widget(Paragraph::new(keys), rows[1]);
-
-    furthest
+    Line::from(key_spans)
 }
 
 /// Prose the panels indent by two columns, wrapped so every row keeps the indent.
@@ -1205,13 +1391,14 @@ pub(crate) fn scroll_hint(below: u16) -> String {
 /// stop.
 pub fn ask_output<B: Backend>(terminal: &mut Terminal<B>, request: &OutputRequest) -> VetAnswer {
     let mut scroll = 0u16;
+    let mut seen = Seen::default();
     loop {
-        let mut most = 0u16;
+        let mut drawn = Drawn::default();
         // A terminal that cannot be drawn to cannot show the output, and approving output nobody
         // was shown is the one thing this question cannot mean. The verdict does not rescue it: a
         // word from a model is not a person having read something.
         if terminal
-            .draw(|frame| most = draw_output(frame, request, scroll))
+            .draw(|frame| drawn = draw_output(frame, request, scroll, &mut seen))
             .is_err()
         {
             return VetAnswer::Reject;
@@ -1223,11 +1410,9 @@ pub fn ask_output<B: Backend>(terminal: &mut Terminal<B>, request: &OutputReques
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
-            Ok(TermEvent::Key(key)) => match output_answer_for(key, request) {
+            Ok(TermEvent::Key(key)) => match output_answer_for(key, request, &drawn) {
                 Some(VetResponse::Answer(answer)) => return answer,
-                Some(VetResponse::Scroll(by)) => {
-                    scroll = scroll.saturating_add_signed(by).min(most);
-                }
+                Some(VetResponse::Scroll(by)) => scroll = drawn.moved(scroll, by),
                 None => continue,
             },
             Ok(_) => continue,
@@ -1236,7 +1421,7 @@ pub fn ask_output<B: Backend>(terminal: &mut Terminal<B>, request: &OutputReques
     }
 }
 
-/// Draw the output for reading, returning how far it can be scrolled.
+/// Draw the output for reading, returning what the draw decided for its keys.
 ///
 /// Every drawn row of the output carries the margin bar the transcript draws down anything the
 /// model was not allowed to read, and the content never gets to draw its own. A block claiming
@@ -1248,7 +1433,15 @@ pub fn ask_output<B: Backend>(terminal: &mut Terminal<B>, request: &OutputReques
 /// so the three answers to the question are live whatever the verdict was. The fourth key does not
 /// answer the question: it turns off the asking, and it is offered only where the check completed
 /// and found nothing, exactly as at the `vet_content` prompt.
-fn draw_output(frame: &mut ratatui::Frame, request: &OutputRequest, scroll: u16) -> u16 {
+///
+/// What the check said and what each key does decide the question, and the output's first row is
+/// what it is about, so no key that approves is taken until those have been drawn.
+fn draw_output(
+    frame: &mut ratatui::Frame,
+    request: &OutputRequest,
+    scroll: u16,
+    seen: &mut Seen,
+) -> Drawn {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::brand_primary(), t!(output_title));
 
@@ -1298,6 +1491,7 @@ fn draw_output(frame: &mut ratatui::Frame, request: &OutputRequest, scroll: u16)
 
     // An empty result is a fact worth stating. Drawing nothing would read as a prompt that failed
     // to render, and the reviewer would be deciding about a blank box.
+    let deciding = lines.len();
     if request.output.is_empty() {
         lines.extend(marked_rows(
             &margin,
@@ -1316,72 +1510,35 @@ fn draw_output(frame: &mut ratatui::Frame, request: &OutputRequest, scroll: u16)
         ));
     }
 
-    let mut key_spans = vec![
-        Span::styled(
-            "  y",
-            Style::default()
-                .fg(theme::ok())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(" {}    ", t!(output_yes))),
-    ];
-    // Offered only where the check completed and found nothing. It is not an answer to the
-    // question on the screen: it turns off the asking, so the moment the check reported an
-    // injection attempt, or could not be made at all, is the worst moment to draw it.
-    // [`vetting_answer_for`] asks the same question again rather than being told the answer,
-    // because a grant must not rest on a drawing.
-    if request.verdict.is_safe() {
-        key_spans.push(Span::styled(
-            "a",
-            Style::default()
-                .fg(theme::running())
-                .add_modifier(Modifier::BOLD),
-        ));
-        key_spans.push(Span::raw(format!(" {}    ", t!(vet_always))));
-    }
-    key_spans.extend([
-        Span::styled(
-            "n",
-            Style::default()
-                .fg(theme::fail())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(" {}    ", t!(output_no))),
-        Span::styled(
-            "ctrl-c",
-            Style::default()
-                .fg(theme::muted())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" {}", t!(stop_the_turn)),
-            Style::default().fg(theme::muted()),
-        ),
-    ]);
-    let keys = Line::from(key_spans);
+    let keys = |answerable: bool| {
+        let mut key_spans = vec![
+            Span::styled("  y", approving(theme::ok(), answerable)),
+            Span::raw(format!(" {}    ", t!(output_yes))),
+        ];
+        // Offered only where the check completed and found nothing. It is not an answer to the
+        // question on the screen: it turns off the asking, so the moment the check reported an
+        // injection attempt, or could not be made at all, is the worst moment to draw it.
+        // [`vetting_answer_for`] asks the same question again rather than being told the answer,
+        // because a grant must not rest on a drawing.
+        if request.verdict.is_safe() {
+            key_spans.push(Span::styled("a", approving(theme::running(), answerable)));
+            key_spans.push(Span::raw(format!(" {}    ", t!(vet_always))));
+        }
+        key_spans.extend([
+            Span::styled("n", refusing()),
+            Span::raw(format!(" {}    ", t!(output_no))),
+        ]);
+        key_spans.extend(stopping());
+        vec![Line::from(key_spans)]
+    };
 
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(inside);
-
-    let body = Paragraph::new(lines).wrap(Wrap { trim: false });
-    let drawn = body.line_count(rows[0].width) as u16;
-    let furthest = drawn.saturating_sub(rows[0].height);
-    let offset = scroll.min(furthest);
-    frame.render_widget(body.scroll((offset, 0)), rows[0]);
-
-    let mut keys = keys;
-    if furthest > 0 {
-        let below = furthest - offset;
-        keys.push_span(Span::styled(
-            scroll_hint(below),
-            Style::default().fg(theme::brand_primary()),
-        ));
-    }
-    frame.render_widget(Paragraph::new(keys), rows[1]);
-
-    furthest
+    pinned::draw(
+        frame,
+        inside,
+        Question::scrolled(lines, deciding, 1, &keys),
+        scroll,
+        seen,
+    )
 }
 
 /// What the user decided about being shown one quarantined slot.
@@ -1435,14 +1592,26 @@ enum VetResponse {
     Scroll(i16),
 }
 
+impl pinned::Approving for VetResponse {
+    fn approves(&self) -> bool {
+        match self {
+            VetResponse::Answer(answer) => match answer {
+                VetAnswer::Approve | VetAnswer::ApproveAlways => true,
+                VetAnswer::Reject | VetAnswer::Interrupt => false,
+            },
+            VetResponse::Scroll(_) => false,
+        }
+    }
+}
+
 /// Interpret one key press at the `vet_content` prompt, or `None` for a key that answers nothing.
-fn vet_answer_for(key: KeyEvent, request: &VetRequest) -> Option<VetResponse> {
-    vetting_answer_for(key, request.verdict)
+fn vet_answer_for(key: KeyEvent, request: &VetRequest, drawn: &Drawn) -> Option<VetResponse> {
+    vetting_answer_for(key, request.verdict, drawn)
 }
 
 /// Interpret one key press at the `read_output` prompt, or `None` for a key that answers nothing.
-fn output_answer_for(key: KeyEvent, request: &OutputRequest) -> Option<VetResponse> {
-    vetting_answer_for(key, request.verdict)
+fn output_answer_for(key: KeyEvent, request: &OutputRequest, drawn: &Drawn) -> Option<VetResponse> {
+    vetting_answer_for(key, request.verdict, drawn)
 }
 
 /// Interpret one key press at either prompt a check runs for and a promotion follows, or `None`
@@ -1459,7 +1628,7 @@ fn output_answer_for(key: KeyEvent, request: &OutputRequest) -> Option<VetRespon
 /// One function for both prompts because they ask the same question of the same person about the
 /// same kind of grant, and the standing answer is the same answer. Two copies of this would be two
 /// places for the set of bound keys to drift apart.
-fn vetting_answer_for(key: KeyEvent, verdict: Verdict) -> Option<VetResponse> {
+fn vetting_answer_for(key: KeyEvent, verdict: Verdict, drawn: &Drawn) -> Option<VetResponse> {
     // The prompt blocks the whole interface, so without this Ctrl-C would do nothing at the one
     // moment a user is most likely to press it.
     if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -1469,7 +1638,8 @@ fn vetting_answer_for(key: KeyEvent, verdict: Verdict) -> Option<VetResponse> {
         };
     }
 
-    match key.code {
+    let page = drawn.page();
+    drawn.take(match key.code {
         KeyCode::Char('y' | 'Y') => Some(VetResponse::Answer(VetAnswer::Approve)),
         KeyCode::Char('a' | 'A') if verdict.is_safe() => {
             Some(VetResponse::Answer(VetAnswer::ApproveAlways))
@@ -1477,14 +1647,14 @@ fn vetting_answer_for(key: KeyEvent, verdict: Verdict) -> Option<VetResponse> {
         KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(VetResponse::Answer(VetAnswer::Reject)),
         KeyCode::Up => Some(VetResponse::Scroll(-1)),
         KeyCode::Down => Some(VetResponse::Scroll(1)),
-        KeyCode::PageUp => Some(VetResponse::Scroll(-10)),
-        KeyCode::PageDown => Some(VetResponse::Scroll(10)),
+        KeyCode::PageUp => Some(VetResponse::Scroll(-page)),
+        KeyCode::PageDown => Some(VetResponse::Scroll(page)),
         KeyCode::Home => Some(VetResponse::Scroll(i16::MIN)),
         KeyCode::End => Some(VetResponse::Scroll(i16::MAX)),
         // Enter is deliberately not an approval: it is the key most likely to be pressed out of
         // habit, and this prompt puts bytes nobody vouched for into the planner's context.
         _ => None,
-    }
+    })
 }
 
 /// Draw the prompt for a slot a check has looked at, and wait for an answer.
@@ -1496,15 +1666,16 @@ fn vetting_answer_for(key: KeyEvent, verdict: Verdict) -> Option<VetResponse> {
 /// is offered only where the check completed and found nothing.
 pub fn ask_vet<B: Backend>(terminal: &mut Terminal<B>, request: &VetRequest) -> VetAnswer {
     let mut scroll = 0u16;
+    let mut seen = Seen::default();
     let mut picture = vetting_preview(terminal, request);
     loop {
         picture.settle();
-        let mut most = 0u16;
+        let mut drawn = Drawn::default();
         // A terminal that cannot be drawn to cannot show the content, and approving content
         // nobody was shown is the one thing this question cannot mean. The verdict does not
         // rescue it: a word from a model is not a person having read something.
         if terminal
-            .draw(|frame| most = draw_vet(frame, request, scroll, picture.thumb()))
+            .draw(|frame| drawn = draw_vet(frame, request, scroll, picture.thumb(), &mut seen))
             .is_err()
         {
             return VetAnswer::Reject;
@@ -1526,11 +1697,9 @@ pub fn ask_vet<B: Backend>(terminal: &mut Terminal<B>, request: &VetRequest) -> 
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
-            Ok(TermEvent::Key(key)) => match vet_answer_for(key, request) {
+            Ok(TermEvent::Key(key)) => match vet_answer_for(key, request, &drawn) {
                 Some(VetResponse::Answer(answer)) => return answer,
-                Some(VetResponse::Scroll(by)) => {
-                    scroll = scroll.saturating_add_signed(by).min(most);
-                }
+                Some(VetResponse::Scroll(by)) => scroll = drawn.moved(scroll, by),
                 None => continue,
             },
             Ok(_) => continue,
@@ -1594,7 +1763,7 @@ fn vetting_source(
     ))
 }
 
-/// Draw the vetted read for review, returning how far it can be scrolled.
+/// Draw the vetted read for review, returning what the draw decided for its keys.
 ///
 /// Two things on this screen came from somewhere nobody vouched for: the content, and the
 /// sentence the check wrote about it. Both are drawn inside the margin the transcript draws down
@@ -1602,12 +1771,17 @@ fn vetting_source(
 /// verdict it was is the driver's own words and is outside the margin, which is the distinction
 /// the bar exists to make: a reader can tell which line the program wrote and which line came out
 /// of the page.
+///
+/// Everything above the content decides the question, and so does the content's first row, or
+/// with a picture everything said about it, so no key that approves is taken until those have
+/// been drawn.
 fn draw_vet(
     frame: &mut ratatui::Frame,
     request: &VetRequest,
     scroll: u16,
     picture: Option<&crate::preview::Thumb>,
-) -> u16 {
+    seen: &mut Seen,
+) -> Drawn {
     let area = centred(frame.area());
     let title = match &request.picture {
         Some(_) => t!(vet_picture_title),
@@ -1688,6 +1862,10 @@ fn draw_vet(
     }
 
     let mut picture_at = None;
+    let deciding = match &request.picture {
+        Some(_) => usize::MAX,
+        None => lines.len(),
+    };
     match &request.picture {
         // The person is given a copy to open, and where the terminal draws real pictures the
         // picture as well. The path is the driver's own, a random name under a directory only they
@@ -1754,108 +1932,64 @@ fn draw_vet(
         }
     }
 
-    let mut key_spans = vec![
-        Span::styled(
-            "  y",
-            Style::default()
-                .fg(theme::ok())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(
-            " {}    ",
-            match &request.picture {
-                Some(_) => t!(vet_picture_yes),
-                None => t!(vet_yes),
-            }
-        )),
-    ];
-    // Offered only where the check completed and found nothing. It is not an answer to the
-    // question on the screen: it turns off the asking, so the moment the check reported an
-    // injection attempt, or could not be made at all, is the worst moment to draw it.
-    // [`vet_answer_for`] asks the same question again rather than being told the answer, because
-    // a grant must not rest on a drawing.
-    if request.verdict.is_safe() {
-        key_spans.push(Span::styled(
-            "a",
-            Style::default()
-                .fg(theme::running())
-                .add_modifier(Modifier::BOLD),
-        ));
-        key_spans.push(Span::raw(format!(" {}    ", t!(vet_always))));
-    }
-    key_spans.extend([
-        Span::styled(
-            "n",
-            Style::default()
-                .fg(theme::fail())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(" {}    ", t!(vet_no))),
-        Span::styled(
-            "ctrl-c",
-            Style::default()
-                .fg(theme::muted())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" {}", t!(stop_the_turn)),
-            Style::default().fg(theme::muted()),
-        ),
-    ]);
-    let keys = Line::from(key_spans);
-
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(inside);
+    let keys = |answerable: bool| {
+        let mut key_spans = vec![
+            Span::styled("  y", approving(theme::ok(), answerable)),
+            Span::raw(format!(
+                " {}    ",
+                match &request.picture {
+                    Some(_) => t!(vet_picture_yes),
+                    None => t!(vet_yes),
+                }
+            )),
+        ];
+        // Offered only where the check completed and found nothing. It is not an answer to the
+        // question on the screen: it turns off the asking, so the moment the check reported an
+        // injection attempt, or could not be made at all, is the worst moment to draw it.
+        // [`vet_answer_for`] asks the same question again rather than being told the answer,
+        // because a grant must not rest on a drawing.
+        if request.verdict.is_safe() {
+            key_spans.push(Span::styled("a", approving(theme::running(), answerable)));
+            key_spans.push(Span::raw(format!(" {}    ", t!(vet_always))));
+        }
+        key_spans.extend([
+            Span::styled("n", refusing()),
+            Span::raw(format!(" {}    ", t!(vet_no))),
+        ]);
+        key_spans.extend(stopping());
+        vec![Line::from(key_spans)]
+    };
 
     // Where the picture's rows begin once the rows above it are wrapped, which is not the line
     // they were pushed at.
     let picture_row = picture_at.map(|at| {
         Paragraph::new(lines[..at].to_vec())
             .wrap(Wrap { trim: false })
-            .line_count(rows[0].width) as u16
+            .line_count(inside.width) as u16
     });
-    let body = Paragraph::new(lines).wrap(Wrap { trim: false });
-    let drawn = body.line_count(rows[0].width) as u16;
-    let furthest = drawn.saturating_sub(rows[0].height);
-    let offset = scroll.min(furthest);
-    frame.render_widget(body.scroll((offset, 0)), rows[0]);
+    let question = Question {
+        picture: picture_row
+            .zip(picture)
+            .map(|(row, thumb)| (row, Size::new(thumb.width(), thumb.height()))),
+        ..Question::scrolled(lines, deciding, 1, &keys)
+    };
+    let drawn = pinned::draw(frame, inside, question, scroll, seen);
     // Whole or not at all: half of a graphics protocol is worse than none, and the path is above.
-    if let (Some(row), Some(thumb)) = (picture_row, picture)
-        && row >= offset
-        && row - offset + thumb.height() <= rows[0].height
-        && thumb.width() + 2 <= rows[0].width
-    {
-        let at = Rect::new(
-            rows[0].x + 2,
-            rows[0].y + row - offset,
-            thumb.width(),
-            thumb.height(),
-        );
+    if let (Some(at), Some(thumb)) = (drawn.picture(), picture) {
         thumb.draw(frame, at);
     }
 
-    let mut keys = keys;
-    if furthest > 0 {
-        let below = furthest - offset;
-        keys.push_span(Span::styled(
-            scroll_hint(below),
-            Style::default().fg(theme::brand_primary()),
-        ));
-    }
-    frame.render_widget(Paragraph::new(keys), rows[1]);
-
-    furthest
+    drawn
 }
 
 /// Ask whether to fetch a URL, blocking until answered.
 pub fn ask_fetch<B: Backend>(terminal: &mut Terminal<B>, request: &FetchRequest) -> Answer {
     let mut scroll = 0u16;
+    let mut seen = Seen::default();
     loop {
-        let mut drawn = PinnedDrawn::default();
+        let mut drawn = Drawn::default();
         if terminal
-            .draw(|frame| drawn = draw_fetch(frame, request, scroll))
+            .draw(|frame| drawn = draw_fetch(frame, request, scroll, &mut seen))
             .is_err()
         {
             return Answer::Reject;
@@ -1865,7 +1999,7 @@ pub fn ask_fetch<B: Backend>(terminal: &mut Terminal<B>, request: &FetchRequest)
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
-            Ok(TermEvent::Key(key)) => match drawn.response_to(key) {
+            Ok(TermEvent::Key(key)) => match answer_for(key, &drawn) {
                 Some(Response::Answer(answer)) => return answer,
                 Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
                 None => continue,
@@ -1881,8 +2015,14 @@ pub fn ask_fetch<B: Backend>(terminal: &mut Terminal<B>, request: &FetchRequest)
 /// Its own prompt rather than a run's, because what a yes grants has a different shape: a process
 /// that lives for the session rather than one argv that exits. LSP-5 is where that is settled.
 pub fn ask_server<B: Backend>(terminal: &mut Terminal<B>, request: &ServerRequest) -> Answer {
+    let mut scroll = 0u16;
+    let mut seen = Seen::default();
     loop {
-        if terminal.draw(|frame| draw_server(frame, request)).is_err() {
+        let mut drawn = Drawn::default();
+        if terminal
+            .draw(|frame| drawn = draw_server(frame, request, scroll, &mut seen))
+            .is_err()
+        {
             return Answer::Reject;
         }
 
@@ -1890,11 +2030,11 @@ pub fn ask_server<B: Backend>(terminal: &mut Terminal<B>, request: &ServerReques
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
-            Ok(TermEvent::Key(key)) => match answer_for(key) {
+            Ok(TermEvent::Key(key)) => match answer_for(key, &drawn) {
                 Some(Response::Answer(answer)) => return answer,
-                // Nothing here scrolls: the whole question is a binary, a directory and two
-                // sentences, and there is no body because nothing has been read yet.
-                Some(Response::Scroll(_)) => continue,
+                // The question is a binary, a directory and two sentences, but the binary and the
+                // directory can each be longer than the box.
+                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
                 None => continue,
             },
             Ok(_) => continue,
@@ -1909,7 +2049,14 @@ pub fn ask_server<B: Backend>(terminal: &mut Terminal<B>, request: &ServerReques
 /// sentence is drawn where it cannot be missed rather than left inside "with your own access". A
 /// server that only reads says that instead, because the two are genuinely different propositions
 /// and a prompt that warned about both would teach the reader to skim.
-fn draw_server(frame: &mut ratatui::Frame, request: &ServerRequest) {
+///
+/// All of it decides the question, so no yes is taken until all of it has been drawn.
+fn draw_server(
+    frame: &mut ratatui::Frame,
+    request: &ServerRequest,
+    scroll: u16,
+    seen: &mut Seen,
+) -> Drawn {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::ok(), t!(server_title));
 
@@ -1951,21 +2098,292 @@ fn draw_server(frame: &mut ratatui::Frame, request: &ServerRequest) {
         inside.width as usize,
     ));
 
-    let keys = Line::from(vec![
-        Span::styled(
-            "  y",
-            Style::default()
-                .fg(theme::ok())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(" {}    ", t!(server_yes))),
-        Span::styled(
-            "n",
-            Style::default()
-                .fg(theme::fail())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(" {}    ", t!(server_no))),
+    let keys = |answerable| vec![answer_keys(t!(server_yes), t!(server_no), answerable)];
+    pinned::draw(
+        frame,
+        inside,
+        Question::scrolled(lines, usize::MAX, 0, &keys),
+        scroll,
+        seen,
+    )
+}
+
+/// The one layout a question here is drawn through, and the one place a yes is decided.
+///
+/// A module of its own so that nothing outside it can make a [`Drawn`] that takes a yes. Every key
+/// that approves is passed through [`Drawn::take`], and only [`draw`] says whether the rows that
+/// decide the question have been on the screen.
+mod pinned {
+    use std::ops::Range;
+
+    use bravebot_i18n::t;
+    use ratatui::layout::{Rect, Size};
+    use ratatui::style::Style;
+    use ratatui::text::Line;
+    use ratatui::widgets::{Paragraph, Wrap};
+
+    use super::{Pinned, rows_in, scroll_hint, theme};
+
+    /// A question to lay out.
+    pub(super) struct Question<'k> {
+        /// Pinned above the part that scrolls.
+        pub(super) above: Vec<Line<'static>>,
+        /// The part that scrolls.
+        pub(super) body: Vec<Line<'static>>,
+        /// How many lines at the head of `body` decide the question. Every row they wrap to has to
+        /// have been drawn at this width, in some draw, before a yes is taken.
+        pub(super) deciding: usize,
+        /// Rows after those that decide it as well: the start of what the question is about.
+        pub(super) opening: u16,
+        /// Rows of the body one draw has to show for a yes, or all of it where it is shorter.
+        pub(super) needed: u16,
+        /// Pinned below the part that scrolls.
+        pub(super) below: Vec<Line<'static>>,
+        /// The keys, given whether this draw takes a yes so the keys that approve can say so.
+        pub(super) keys: &'k dyn Fn(bool) -> Vec<Line<'static>>,
+        /// A picture over the body's blank rows from this row, painted whole or not at all, so its
+        /// rows count as drawn only in a draw with room to paint it.
+        pub(super) picture: Option<(u16, Size)>,
+    }
+
+    impl<'k> Question<'k> {
+        /// A question that is all body over its keys.
+        pub(super) fn scrolled(
+            body: Vec<Line<'static>>,
+            deciding: usize,
+            opening: u16,
+            keys: &'k dyn Fn(bool) -> Vec<Line<'static>>,
+        ) -> Self {
+            Question {
+                above: Vec::new(),
+                body,
+                deciding,
+                opening,
+                needed: 1,
+                below: Vec::new(),
+                keys,
+                picture: None,
+            }
+        }
+    }
+
+    /// Which of a question's deciding rows have been drawn so far.
+    ///
+    /// Kept across draws by the prompt that asks, because the rows are seen one screen at a time.
+    /// A draw at another width, or with another number of deciding rows, starts it again: the rows
+    /// it counted are not the rows on the screen any more.
+    #[derive(Debug, Default)]
+    pub(super) struct Seen {
+        width: u16,
+        rows: Vec<bool>,
+    }
+
+    impl Seen {
+        /// Count `shown` as drawn, and return how many deciding rows still have not been.
+        fn mark(&mut self, width: u16, deciding: u16, shown: impl Iterator<Item = u16>) -> u16 {
+            if self.width != width || self.rows.len() != usize::from(deciding) {
+                *self = Seen {
+                    width,
+                    rows: vec![false; usize::from(deciding)],
+                };
+            }
+            for row in shown {
+                if let Some(seen) = self.rows.get_mut(usize::from(row)) {
+                    *seen = true;
+                }
+            }
+            u16::try_from(self.rows.iter().filter(|seen| !**seen).count()).unwrap_or(u16::MAX)
+        }
+    }
+
+    /// What one draw of a question decided for the keys that answer it.
+    ///
+    /// The fields are private, and [`Default`] takes no yes, so a value that does take one comes
+    /// out of [`draw`] or out of nowhere.
+    #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+    pub(super) struct Drawn {
+        furthest: u16,
+        rows: u16,
+        answerable: bool,
+        picture: Option<Rect>,
+    }
+
+    /// A key's response, as far as whether it approves anything.
+    pub(super) trait Approving {
+        fn approves(&self) -> bool;
+    }
+
+    impl Drawn {
+        /// How far the part that scrolls can be scrolled.
+        #[cfg(test)]
+        pub(super) fn furthest(&self) -> u16 {
+            self.furthest
+        }
+
+        /// Whether a yes is taken from this draw.
+        #[cfg(test)]
+        pub(super) fn answerable(&self) -> bool {
+            self.answerable
+        }
+
+        /// How many rows a page moves: one fewer than the body shows, so no row is paged past
+        /// without having been drawn.
+        pub(super) fn page(&self) -> i16 {
+            i16::try_from(self.rows.saturating_sub(1).max(1)).unwrap_or(i16::MAX)
+        }
+
+        /// How many rows of the body this draw showed.
+        #[cfg(test)]
+        pub(super) fn rows(&self) -> u16 {
+            self.rows
+        }
+
+        /// Where to paint the question's picture, where this draw has room for all of it.
+        pub(super) fn picture(&self) -> Option<Rect> {
+            self.picture
+        }
+
+        /// Where the part that scrolls starts once moved `by` rows from `scroll`.
+        ///
+        /// Moved from where this draw put it rather than from `scroll`, which a terminal made taller
+        /// since can leave past the bottom, where a press of Up would move nothing.
+        pub(super) fn moved(&self, scroll: u16, by: i16) -> u16 {
+            scroll
+                .min(self.furthest)
+                .saturating_add_signed(by)
+                .min(self.furthest)
+        }
+
+        /// A key's response, unless it approves and this draw takes no yes.
+        pub(super) fn take<R: Approving>(&self, response: Option<R>) -> Option<R> {
+            response.filter(|response| self.answerable || !response.approves())
+        }
+
+        /// A draw that takes a yes, for a test of what a key means once it is taken.
+        #[cfg(test)]
+        pub(super) fn taking_yes() -> Self {
+            Drawn {
+                furthest: u16::MAX,
+                rows: 11,
+                answerable: true,
+                ..Drawn::default()
+            }
+        }
+    }
+
+    /// Draw a question whose middle can be longer than the box.
+    ///
+    /// What is pinned claims its rows first and the keys next, and the body takes the rows left
+    /// between them. A body longer than that scrolls, with a row under it saying how much of it is
+    /// below, or how many of the rows that decide the question have not been drawn yet.
+    ///
+    /// A yes is taken where everything pinned and the keys are whole, the body has a row, and every
+    /// deciding row has been drawn whole in this draw or an earlier one at the same width.
+    pub(super) fn draw(
+        frame: &mut ratatui::Frame,
+        inside: Rect,
+        question: Question,
+        scroll: u16,
+        seen: &mut Seen,
+    ) -> Drawn {
+        let wrapped = |lines: Vec<Line<'static>>| Paragraph::new(lines).wrap(Wrap { trim: false });
+        let deciding = question.deciding.min(question.body.len());
+        let decided_by = rows_in(&wrapped(question.body[..deciding].to_vec()), inside.width)
+            .saturating_add(question.opening);
+        let header = wrapped(question.above);
+        let body = wrapped(question.body);
+        let footer = wrapped(question.below);
+        let rest = rows_in(&body, inside.width);
+        let decided_by = decided_by.min(rest);
+        let laid = Pinned::new(
+            inside,
+            (
+                rows_in(&header, inside.width),
+                rest,
+                rows_in(&footer, inside.width),
+                rows_in(&wrapped((question.keys)(true)), inside.width),
+            ),
+            scroll,
+        );
+        let (offset, body_rows) = (laid.offset, laid.body.height);
+        // Inside the margin bar and the space after it.
+        let painted = question.picture.and_then(|(at, size)| {
+            (at >= offset
+                && at - offset + size.height <= body_rows
+                && size.width + 2 <= inside.width)
+                .then(|| {
+                    Rect::new(
+                        inside.x + 2,
+                        laid.body.y + at - offset,
+                        size.width,
+                        size.height,
+                    )
+                })
+        });
+        let unpainted = question
+            .picture
+            .filter(|_| painted.is_none())
+            .map_or(0..0, |(at, size)| at..at.saturating_add(size.height));
+        let shown: Range<u16> = if laid.whole {
+            offset..offset + body_rows
+        } else {
+            0..0
+        };
+        let unseen = seen.mark(
+            inside.width,
+            decided_by,
+            shown.filter(|row| !unpainted.contains(row)),
+        );
+        let answerable =
+            laid.whole && body_rows > 0 && body_rows >= question.needed.min(rest) && unseen == 0;
+
+        let hint = match unseen {
+            0 => Line::styled(
+                scroll_hint(laid.furthest - offset),
+                Style::default().fg(theme::brand_primary()),
+            ),
+            _ => Line::styled(
+                format!("   {}", t!(prompt_unseen, count = usize::from(unseen))),
+                Style::default().fg(theme::running()),
+            ),
+        };
+        laid.render(
+            frame,
+            header,
+            body,
+            hint,
+            footer,
+            wrapped((question.keys)(answerable)),
+        );
+
+        Drawn {
+            furthest: laid.furthest,
+            rows: body_rows,
+            answerable,
+            picture: painted,
+        }
+    }
+}
+
+use pinned::{Drawn, Question, Seen};
+
+/// The style of a key that approves, muted where this draw takes no yes.
+fn approving(colour: Color, answerable: bool) -> Style {
+    Style::default()
+        .fg(if answerable { colour } else { theme::muted() })
+        .add_modifier(Modifier::BOLD)
+}
+
+/// The style of a key that refuses, which every draw takes.
+fn refusing() -> Style {
+    Style::default()
+        .fg(theme::fail())
+        .add_modifier(Modifier::BOLD)
+}
+
+/// The key that stops the turn, which every draw takes.
+fn stopping() -> [Span<'static>; 2] {
+    [
         Span::styled(
             "ctrl-c",
             Style::default()
@@ -1976,153 +2394,107 @@ fn draw_server(frame: &mut ratatui::Frame, request: &ServerRequest) {
             format!(" {}", t!(stop_the_turn)),
             Style::default().fg(theme::muted()),
         ),
-    ]);
-
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(inside);
-
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), rows[0]);
-    frame.render_widget(Paragraph::new(keys), rows[1]);
+    ]
 }
 
-/// What one draw of a question laid out by [`draw_pinned`] decided for the keys that answer it.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct PinnedDrawn {
-    /// How far the part that scrolls can be scrolled.
+/// The rows a paragraph takes when wrapped to `width`.
+fn rows_in(paragraph: &Paragraph, width: u16) -> u16 {
+    u16::try_from(paragraph.line_count(width)).unwrap_or(u16::MAX)
+}
+
+/// Where a question whose middle can be longer than the box puts each of its parts.
+///
+/// The rows above and below the middle claim their rows first and the keys next, so keys drawn
+/// whole have everything pinned drawn whole with them, and the middle takes the rows left between.
+struct Pinned {
+    header: Rect,
+    body: Rect,
+    /// The row saying how much of the middle is below, where it does not all fit.
+    hint: Rect,
+    footer: Rect,
+    keys: Rect,
+    /// The first row of the middle that is on the screen.
+    offset: u16,
+    /// How far the middle can be scrolled.
     furthest: u16,
-    /// Whether a yes may be taken. It may where the rows above and below the part that scrolls
-    /// and the keys are all whole on the screen, with the first rows of the part that scrolls.
-    answerable: bool,
+    /// Whether the keys, and with them everything pinned, are whole in a box with a column to draw
+    /// in. A box with no column takes no rows for any of it, so the keys count as whole there.
+    whole: bool,
 }
 
-impl PinnedDrawn {
-    /// One key pressed at the question this draw put on the screen.
-    fn response_to(&self, key: KeyEvent) -> Option<Response> {
-        match answer_for(key) {
-            Some(Response::Answer(Answer::Approve)) if !self.answerable => None,
-            response => response,
+impl Pinned {
+    /// Laid out for parts this many rows tall: above the middle, the middle, below it, and the keys.
+    fn new(
+        inside: Rect,
+        (heading, rest, footing, answering): (u16, u16, u16, u16),
+        scroll: u16,
+    ) -> Self {
+        let header_rows = heading.min(inside.height);
+        let footer_rows = footing.min(inside.height - header_rows);
+        let keys_rows = answering.min(inside.height - header_rows - footer_rows);
+        let between = inside.height - header_rows - footer_rows - keys_rows;
+        // A row saying how much of the middle is below, where that leaves the middle a row of its
+        // own. The keys wrap and this does not share their row, so neither cuts off the other.
+        let hint_rows = u16::from(rest > between && between > 1);
+        // Only the rows the middle fills, so what is pinned below it is drawn right under it.
+        let body_rows = rest.min(between - hint_rows);
+        let furthest = rest - body_rows;
+
+        let row = |y: u16, height: u16| Rect {
+            y,
+            height,
+            ..inside
+        };
+        let header = row(inside.y, header_rows);
+        let body = row(header.bottom(), body_rows);
+        let hint = row(body.bottom(), hint_rows);
+        let footer = row(hint.bottom(), footer_rows);
+        let keys = row(inside.bottom() - keys_rows, keys_rows);
+        Pinned {
+            header,
+            body,
+            hint,
+            footer,
+            keys,
+            offset: scroll.min(furthest),
+            furthest,
+            whole: inside.width > 0 && keys_rows == answering,
         }
     }
 
-    /// Where the part that scrolls starts once moved `by` rows from `scroll`.
-    ///
-    /// Moved from where this draw put it rather than from `scroll`, which a terminal made taller
-    /// since can leave past the bottom, where a press of Up would move nothing.
-    fn moved(&self, scroll: u16, by: i16) -> u16 {
-        scroll
-            .min(self.furthest)
-            .saturating_add_signed(by)
-            .min(self.furthest)
-    }
-}
-
-/// Draw a question whose middle, which came from somewhere else, can be longer than the box.
-///
-/// What the person is answering about is in `above` and `below`, so those claim their rows first
-/// and the keys next, and `scrolled` takes the rows left between them. A middle longer than that
-/// scrolls, and a row under it says how much of it is below. A yes needs the first `needed` rows
-/// of the middle drawn, or all of it where it is shorter.
-fn draw_pinned(
-    frame: &mut ratatui::Frame,
-    inside: Rect,
-    above: Vec<Line<'static>>,
-    (scrolled, needed): (Vec<Line<'static>>, u16),
-    below: Vec<Line<'static>>,
-    (yes, no): (&str, &str),
-    scroll: u16,
-) -> PinnedDrawn {
-    let wrapped = |lines: Vec<Line<'static>>| Paragraph::new(lines).wrap(Wrap { trim: false });
-    let rows_of = |paragraph: &Paragraph| {
-        u16::try_from(paragraph.line_count(inside.width)).unwrap_or(u16::MAX)
-    };
-    let header = wrapped(above);
-    let body = wrapped(scrolled);
-    let footer = wrapped(below);
-    let heading = rows_of(&header);
-    let rest = rows_of(&body);
-    let footing = rows_of(&footer);
-    let answering = rows_of(&wrapped(vec![answer_keys(yes, no, true)]));
-
-    // Claimed in this order, so keys drawn whole have everything pinned drawn whole with them.
-    let header_rows = heading.min(inside.height);
-    let footer_rows = footing.min(inside.height - header_rows);
-    let keys_rows = answering.min(inside.height - header_rows - footer_rows);
-    let between = inside.height - header_rows - footer_rows - keys_rows;
-    // A row saying how much of the middle is below, where that leaves the middle a row of its own.
-    // The keys wrap and this does not share their row, so neither cuts off the other.
-    let hint_rows = u16::from(rest > between && between > 1);
-    // Only the rows the middle fills, so what is pinned below it is drawn right under it.
-    let body_rows = rest.min(between - hint_rows);
-    let furthest = rest - body_rows;
-    let offset = scroll.min(furthest);
-    // A box with no column to draw in takes no rows for any of it, so the keys count as whole there.
-    let answerable = inside.width > 0
-        && keys_rows == answering
-        && body_rows > 0
-        && body_rows >= needed.min(rest);
-
-    let row = |y: u16, height: u16| Rect {
-        y,
-        height,
-        ..inside
-    };
-    let header_area = row(inside.y, header_rows);
-    let body_area = row(header_area.bottom(), body_rows);
-    let hint_area = row(body_area.bottom(), hint_rows);
-    let footer_area = row(hint_area.bottom(), footer_rows);
-    let keys_area = row(inside.bottom() - keys_rows, keys_rows);
-    frame.render_widget(header, header_area);
-    frame.render_widget(body.scroll((offset, 0)), body_area);
-    frame.render_widget(
-        Paragraph::new(Line::styled(
-            scroll_hint(furthest - offset),
-            Style::default().fg(theme::brand_primary()),
-        )),
-        hint_area,
-    );
-    frame.render_widget(footer, footer_area);
-    frame.render_widget(wrapped(vec![answer_keys(yes, no, answerable)]), keys_area);
-
-    PinnedDrawn {
-        furthest,
-        answerable,
+    fn render(
+        &self,
+        frame: &mut ratatui::Frame,
+        header: Paragraph,
+        body: Paragraph,
+        hint: Line,
+        footer: Paragraph,
+        keys: Paragraph,
+    ) {
+        frame.render_widget(header, self.header);
+        frame.render_widget(body.scroll((self.offset, 0)), self.body);
+        frame.render_widget(Paragraph::new(hint), self.hint);
+        frame.render_widget(footer, self.footer);
+        frame.render_widget(keys, self.keys);
     }
 }
 
 /// A question's keys, with `y` muted where a yes is not taken from this draw.
 fn answer_keys(yes: &str, no: &str, answerable: bool) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            "  y",
-            Style::default()
-                .fg(if answerable {
-                    theme::ok()
-                } else {
-                    theme::muted()
-                })
-                .add_modifier(Modifier::BOLD),
-        ),
+    let mut spans = yes_and_no(yes, no, answerable);
+    spans.push(Span::raw("    "));
+    spans.extend(stopping());
+    Line::from(spans)
+}
+
+/// The `y` and `n` of a question's keys, `y` muted where a yes is not taken from this draw.
+fn yes_and_no(yes: &str, no: &str, answerable: bool) -> Vec<Span<'static>> {
+    vec![
+        Span::styled("  y", approving(theme::ok(), answerable)),
         Span::raw(format!(" {yes}    ")),
-        Span::styled(
-            "n",
-            Style::default()
-                .fg(theme::fail())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(" {no}    ")),
-        Span::styled(
-            "ctrl-c",
-            Style::default()
-                .fg(theme::muted())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" {}", t!(stop_the_turn)),
-            Style::default().fg(theme::muted()),
-        ),
-    ])
+        Span::styled("n", refusing()),
+        Span::raw(format!(" {no}")),
+    ]
 }
 
 /// Draw the fetch question.
@@ -2133,7 +2505,12 @@ fn answer_keys(yes: &str, no: &str, answerable: bool) -> Line<'static> {
 ///
 /// It is drawn above the URL, in rows the URL cannot take. A userinfo segment can be longer than
 /// the box, and a host drawn below it would be pushed off the screen while the keys stayed on it.
-fn draw_fetch(frame: &mut ratatui::Frame, request: &FetchRequest, scroll: u16) -> PinnedDrawn {
+fn draw_fetch(
+    frame: &mut ratatui::Frame,
+    request: &FetchRequest,
+    scroll: u16,
+    seen: &mut Seen,
+) -> Drawn {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::ok(), t!(fetch_title));
     let width = inside.width as usize;
@@ -2177,24 +2554,28 @@ fn draw_fetch(frame: &mut ratatui::Frame, request: &FetchRequest, scroll: u16) -
         width,
     ));
 
-    draw_pinned(
-        frame,
-        inside,
-        header,
-        (lines, 1),
-        Vec::new(),
-        (t!(fetch_yes), t!(fetch_no)),
-        scroll,
-    )
+    let keys = |answerable| vec![answer_keys(t!(fetch_yes), t!(fetch_no), answerable)];
+    let question = Question {
+        above: header,
+        body: lines,
+        deciding: 0,
+        opening: 0,
+        needed: 1,
+        below: Vec::new(),
+        keys: &keys,
+        picture: None,
+    };
+    pinned::draw(frame, inside, question, scroll, seen)
 }
 
 /// Ask whether a remote MCP server is now where its reply pointed, blocking until answered.
 pub fn ask_move<B: Backend>(terminal: &mut Terminal<B>, request: &MoveRequest) -> Answer {
     let mut scroll = 0u16;
+    let mut seen = Seen::default();
     loop {
-        let mut drawn = PinnedDrawn::default();
+        let mut drawn = Drawn::default();
         if terminal
-            .draw(|frame| drawn = draw_move(frame, request, scroll))
+            .draw(|frame| drawn = draw_move(frame, request, scroll, &mut seen))
             .is_err()
         {
             return Answer::Reject;
@@ -2204,7 +2585,7 @@ pub fn ask_move<B: Backend>(terminal: &mut Terminal<B>, request: &MoveRequest) -
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
-            Ok(TermEvent::Key(key)) => match drawn.response_to(key) {
+            Ok(TermEvent::Key(key)) => match answer_for(key, &drawn) {
                 Some(Response::Answer(answer)) => return answer,
                 Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
                 None => continue,
@@ -2224,7 +2605,12 @@ pub fn ask_move<B: Backend>(terminal: &mut Terminal<B>, request: &MoveRequest) -
 /// That host and what a yes does are drawn under the destination in rows it cannot take. The
 /// server chose the destination's length, and one longer than the box would otherwise push them
 /// off the screen while the keys stayed on it.
-fn draw_move(frame: &mut ratatui::Frame, request: &MoveRequest, scroll: u16) -> PinnedDrawn {
+fn draw_move(
+    frame: &mut ratatui::Frame,
+    request: &MoveRequest,
+    scroll: u16,
+    seen: &mut Seen,
+) -> Drawn {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::note(), t!(mcp_move_title));
     let width = inside.width as usize;
@@ -2262,24 +2648,129 @@ fn draw_move(frame: &mut ratatui::Frame, request: &MoveRequest, scroll: u16) -> 
         below.extend(indented(t!(mcp_move_this_session_only), muted, width));
     }
 
-    draw_pinned(
-        frame,
-        inside,
-        declared,
-        (destination, needed),
+    let keys = |answerable| vec![answer_keys(t!(mcp_move_yes), t!(mcp_move_no), answerable)];
+    let question = Question {
+        above: declared,
+        body: destination,
+        deciding: 0,
+        opening: 0,
+        needed,
         below,
-        (t!(mcp_move_yes), t!(mcp_move_no)),
-        scroll,
-    )
+        keys: &keys,
+        picture: None,
+    };
+    pinned::draw(frame, inside, question, scroll, seen)
+}
+
+/// Ask whether to remove a checkout something was done in, blocking until answered (CHECKOUT-15).
+///
+/// Asked with no turn running, so ctrl-c keeps the checkout like a no, and nothing is stopped.
+pub fn ask_remove_checkout<B: Backend>(
+    terminal: &mut Terminal<B>,
+    checkout: &bravebot_agent::workspace::SessionCheckout,
+) -> Answer {
+    let mut scroll = 0u16;
+    let mut seen = Seen::default();
+    loop {
+        let mut drawn = Drawn::default();
+        if terminal
+            .draw(|frame| drawn = draw_remove_checkout(frame, checkout, scroll, &mut seen))
+            .is_err()
+        {
+            return Answer::Reject;
+        }
+
+        match input::read() {
+            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
+            Ok(TermEvent::Key(key)) => match answer_for(key, &drawn) {
+                Some(Response::Answer(answer)) => return answer,
+                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
+                None => continue,
+            },
+            Ok(_) => continue,
+            Err(_) => return Answer::Reject,
+        }
+    }
+}
+
+/// Draw the question of whether to remove a checkout.
+///
+/// Which checkout and what removing it deletes are pinned. The names written in it scroll, since a
+/// delegate can write any number of files.
+fn draw_remove_checkout(
+    frame: &mut ratatui::Frame,
+    checkout: &bravebot_agent::workspace::SessionCheckout,
+    scroll: u16,
+    seen: &mut Seen,
+) -> Drawn {
+    let area = centred(frame.area());
+    let inside = panel(frame, area, theme::note(), t!(remove_checkout_title));
+    let width = inside.width as usize;
+    let muted = Style::default().fg(theme::muted());
+
+    let id = checkout.id.as_str();
+    let mut above = indented(
+        t!(
+            remove_checkout_which,
+            id = id,
+            delegate = checkout.delegate.to_string()
+        ),
+        muted,
+        width,
+    );
+    above.extend(indented(
+        checkout.path.display().to_string(),
+        Style::default().add_modifier(Modifier::BOLD),
+        width,
+    ));
+    above.push(Line::raw(""));
+
+    let mut written = Vec::new();
+    for name in &checkout.candidates.named {
+        written.extend(indented(name.clone(), Style::default(), width));
+    }
+    let referenced = checkout.candidates.referenced;
+    if referenced > 0 {
+        written.extend(indented(
+            t!(checkouts_referenced, id = id, count = referenced),
+            muted,
+            width,
+        ));
+    }
+    written.extend(indented(t!(checkouts_unread, id = id), muted, width));
+
+    let mut below = vec![Line::raw("")];
+    below.extend(indented(
+        t!(remove_checkout_explained),
+        Style::default().fg(theme::fail()),
+        width,
+    ));
+
+    let (yes, no) = (t!(remove_checkout_yes), t!(remove_checkout_no));
+    let keys = |answerable| vec![Line::from(yes_and_no(yes, no, answerable))];
+    let question = Question {
+        above,
+        body: written,
+        deciding: 0,
+        opening: 0,
+        needed: 1,
+        below,
+        keys: &keys,
+        picture: None,
+    };
+    pinned::draw(frame, inside, question, scroll, seen)
 }
 
 /// Draw the offer to vouch for a quarantined file, and wait for an answer.
 pub fn ask_vouch<B: Backend>(terminal: &mut Terminal<B>, request: &VouchRequest) -> Answer {
     let mut scroll = 0u16;
+    let mut seen = Seen::default();
     loop {
-        let mut most = 0u16;
+        let mut drawn = Drawn::default();
         if terminal
-            .draw(|frame| most = draw_vouch(frame, request, scroll))
+            .draw(|frame| drawn = draw_vouch(frame, request, scroll, &mut seen))
             .is_err()
         {
             return Answer::Reject;
@@ -2291,11 +2782,9 @@ pub fn ask_vouch<B: Backend>(terminal: &mut Terminal<B>, request: &VouchRequest)
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
-            Ok(TermEvent::Key(key)) => match answer_for(key) {
+            Ok(TermEvent::Key(key)) => match answer_for(key, &drawn) {
                 Some(Response::Answer(answer)) => return answer,
-                Some(Response::Scroll(by)) => {
-                    scroll = scroll.saturating_add_signed(by).min(most);
-                }
+                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
                 None => continue,
             },
             Ok(_) => continue,
@@ -2304,14 +2793,22 @@ pub fn ask_vouch<B: Backend>(terminal: &mut Terminal<B>, request: &VouchRequest)
     }
 }
 
-/// Draw the vouch offer, returning how far it can be scrolled.
+/// Draw the vouch offer, returning what the draw decided for its keys.
 ///
 /// The preview carries the same margin bar as everything else the model has not been allowed to
 /// read, because that is exactly what it is until this question is answered.
 ///
 /// The banner above it is what a check made of the file. It is advice and never an answer: a yes
 /// writes the trust rule whatever the word was, and a no writes nothing whatever the word was.
-fn draw_vouch(frame: &mut ratatui::Frame, request: &VouchRequest, scroll: u16) -> u16 {
+///
+/// The path, the check and what a yes grants decide the question, and the preview's first row is
+/// what it is about, so no yes is taken until those have been drawn.
+fn draw_vouch(
+    frame: &mut ratatui::Frame,
+    request: &VouchRequest,
+    scroll: u16,
+    seen: &mut Seen,
+) -> Drawn {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::ok(), t!(vouch_title));
 
@@ -2364,6 +2861,7 @@ fn draw_vouch(frame: &mut ratatui::Frame, request: &VouchRequest, scroll: u16) -
     // while the marker below says there is more would be the prompt contradicting itself over a
     // file the person is about to trust. So the blank rows are drawn, and the marker speaks for
     // them. Either the message or the rows, never both: two of them is the blank box again.
+    let deciding = lines.len();
     if request.preview.trim().is_empty() && !request.truncated {
         lines.extend(marked_rows(
             &margin,
@@ -2390,55 +2888,14 @@ fn draw_vouch(frame: &mut ratatui::Frame, request: &VouchRequest, scroll: u16) -
         ));
     }
 
-    let keys = Line::from(vec![
-        Span::styled(
-            "  y",
-            Style::default()
-                .fg(theme::ok())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(" {}    ", t!(vouch_yes))),
-        Span::styled(
-            "n",
-            Style::default()
-                .fg(theme::fail())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(" {}    ", t!(vouch_no))),
-        Span::styled(
-            "ctrl-c",
-            Style::default()
-                .fg(theme::muted())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" {}", t!(stop_the_turn)),
-            Style::default().fg(theme::muted()),
-        ),
-    ]);
-
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(inside);
-
-    let body = Paragraph::new(lines).wrap(Wrap { trim: false });
-    let drawn = body.line_count(rows[0].width) as u16;
-    let furthest = drawn.saturating_sub(rows[0].height);
-    let offset = scroll.min(furthest);
-    frame.render_widget(body.scroll((offset, 0)), rows[0]);
-
-    let mut keys = keys;
-    if furthest > 0 {
-        let below = furthest - offset;
-        keys.push_span(Span::styled(
-            scroll_hint(below),
-            Style::default().fg(theme::ok()),
-        ));
-    }
-    frame.render_widget(Paragraph::new(keys), rows[1]);
-
-    furthest
+    let keys = |answerable| vec![answer_keys(t!(vouch_yes), t!(vouch_no), answerable)];
+    pinned::draw(
+        frame,
+        inside,
+        Question::scrolled(lines, deciding, 1, &keys),
+        scroll,
+        seen,
+    )
 }
 
 /// Put the tools an MCP server offers to the person, blocking until answered (SERVERS-8).
@@ -2447,10 +2904,11 @@ fn draw_vouch(frame: &mut ratatui::Frame, request: &VouchRequest, scroll: u16) -
 /// prompt here. A standing decision like the vouch offer, so the keys are the vouch offer's too.
 pub fn ask_tool_list<B: Backend>(terminal: &mut Terminal<B>, request: &ToolListRequest) -> Answer {
     let mut scroll = 0u16;
+    let mut seen = Seen::default();
     loop {
-        let mut most = 0u16;
+        let mut drawn = Drawn::default();
         if terminal
-            .draw(|frame| most = draw_tool_list(frame, request, scroll))
+            .draw(|frame| drawn = draw_tool_list(frame, request, scroll, &mut seen))
             .is_err()
         {
             return Answer::Reject;
@@ -2462,11 +2920,9 @@ pub fn ask_tool_list<B: Backend>(terminal: &mut Terminal<B>, request: &ToolListR
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
-            Ok(TermEvent::Key(key)) => match tool_list_answer_for(key) {
+            Ok(TermEvent::Key(key)) => match tool_list_answer_for(key, &drawn) {
                 Some(Response::Answer(answer)) => return answer,
-                Some(Response::Scroll(by)) => {
-                    scroll = scroll.saturating_add_signed(by).min(most);
-                }
+                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
                 None => continue,
             },
             Ok(_) => continue,
@@ -2476,24 +2932,31 @@ pub fn ask_tool_list<B: Backend>(terminal: &mut Terminal<B>, request: &ToolListR
 }
 
 /// One key at the tool list, or `None` for a key that answers nothing.
-fn tool_list_answer_for(key: KeyEvent) -> Option<Response> {
+fn tool_list_answer_for(key: KeyEvent, drawn: &Drawn) -> Option<Response> {
     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
         match key.code {
-            KeyCode::Char('1') => return Some(Response::Answer(Answer::Approve)),
+            KeyCode::Char('1') => return drawn.take(Some(Response::Answer(Answer::Approve))),
             KeyCode::Char('2') => return Some(Response::Answer(Answer::Reject)),
             _ => {}
         }
     }
-    answer_for(key)
+    answer_for(key, drawn)
 }
 
-/// Draw the tool list, returning how far it can be scrolled.
+/// Draw the tool list, returning what the draw decided for its keys.
 ///
 /// Every tool is drawn, and every row of every description: a yes promotes exactly this text, so a
 /// description cut short here would be words the planner reads that nobody did. The descriptions
 /// carry the margin because they are the server's, and the names and arguments do not because the
 /// client drew them from an alphabet with nothing in it that can pass for this program's words.
-fn draw_tool_list(frame: &mut ratatui::Frame, request: &ToolListRequest, scroll: u16) -> u16 {
+/// For the same reason all of it decides the question, and no yes is taken until all of it has
+/// been drawn.
+fn draw_tool_list(
+    frame: &mut ratatui::Frame,
+    request: &ToolListRequest,
+    scroll: u16,
+    seen: &mut Seen,
+) -> Drawn {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::ok(), t!(mcp_tools_title));
     let width = inside.width as usize;
@@ -2554,62 +3017,23 @@ fn draw_tool_list(frame: &mut ratatui::Frame, request: &ToolListRequest, scroll:
         ));
     }
 
-    let keys = Line::from(vec![
-        Span::styled(
-            "  1",
-            Style::default()
-                .fg(theme::ok())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(" {}    ", t!(mcp_tools_yes))),
-        Span::styled(
-            "2",
-            Style::default()
-                .fg(theme::fail())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(" {}    ", t!(mcp_tools_no))),
-        Span::styled(
-            "ctrl-c",
-            Style::default()
-                .fg(theme::muted())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(format!(" {}", t!(stop_the_turn)), muted),
-    ]);
-
-    scrolled(frame, inside, lines, keys, scroll)
-}
-
-/// Lay out a prompt's body over its keys, returning how far the body can be scrolled.
-fn scrolled(
-    frame: &mut ratatui::Frame,
-    inside: Rect,
-    lines: Vec<Line<'static>>,
-    mut keys: Line<'static>,
-    scroll: u16,
-) -> u16 {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(inside);
-
-    let body = Paragraph::new(lines).wrap(Wrap { trim: false });
-    let drawn = body.line_count(rows[0].width) as u16;
-    let furthest = drawn.saturating_sub(rows[0].height);
-    let offset = scroll.min(furthest);
-    frame.render_widget(body.scroll((offset, 0)), rows[0]);
-
-    if furthest > 0 {
-        let below = furthest - offset;
-        keys.push_span(Span::styled(
-            scroll_hint(below),
-            Style::default().fg(theme::ok()),
-        ));
-    }
-    frame.render_widget(Paragraph::new(keys), rows[1]);
-
-    furthest
+    let keys = |answerable: bool| {
+        let mut spans = vec![
+            Span::styled("  1", approving(theme::ok(), answerable)),
+            Span::raw(format!(" {}    ", t!(mcp_tools_yes))),
+            Span::styled("2", refusing()),
+            Span::raw(format!(" {}    ", t!(mcp_tools_no))),
+        ];
+        spans.extend(stopping());
+        vec![Line::from(spans)]
+    };
+    pinned::draw(
+        frame,
+        inside,
+        Question::scrolled(lines, usize::MAX, 0, &keys),
+        scroll,
+        seen,
+    )
 }
 
 /// What the person did with a call to a server's tool.
@@ -2657,7 +3081,7 @@ enum CallResponse {
 /// bound only where a run can be remembered: a key granting what the same screen says cannot be
 /// granted is worse than an unbound one. The rows keep their numbers either way, so `3` is no
 /// wherever it is pressed.
-fn call_answer_for(key: KeyEvent, request: &McpCallRequest) -> Option<CallResponse> {
+fn call_answer_for(key: KeyEvent, request: &McpCallRequest, drawn: &Drawn) -> Option<CallResponse> {
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         return match key.code {
             KeyCode::Char('c') => Some(CallResponse::Answer(CallAnswer::Interrupt)),
@@ -2665,7 +3089,8 @@ fn call_answer_for(key: KeyEvent, request: &McpCallRequest) -> Option<CallRespon
         };
     }
 
-    match key.code {
+    let page = drawn.page();
+    drawn.take(match key.code {
         KeyCode::Char('1' | 'y' | 'Y') => Some(CallResponse::Answer(CallAnswer::Approve)),
         KeyCode::Char('2') if request.may_stand => {
             Some(CallResponse::Answer(CallAnswer::ApproveAndStand))
@@ -2676,13 +3101,25 @@ fn call_answer_for(key: KeyEvent, request: &McpCallRequest) -> Option<CallRespon
         KeyCode::Char('e' | 'E') => Some(CallResponse::Expand),
         KeyCode::Up => Some(CallResponse::Scroll(-1)),
         KeyCode::Down => Some(CallResponse::Scroll(1)),
-        KeyCode::PageUp => Some(CallResponse::Scroll(-10)),
-        KeyCode::PageDown => Some(CallResponse::Scroll(10)),
+        KeyCode::PageUp => Some(CallResponse::Scroll(-page)),
+        KeyCode::PageDown => Some(CallResponse::Scroll(page)),
         KeyCode::Home => Some(CallResponse::Scroll(i16::MIN)),
         KeyCode::End => Some(CallResponse::Scroll(i16::MAX)),
         // Enter is deliberately not an approval: it is the key most likely to be pressed out of
         // habit, and this prompt sends the arguments to a server.
         _ => None,
+    })
+}
+
+impl pinned::Approving for CallResponse {
+    fn approves(&self) -> bool {
+        match self {
+            CallResponse::Answer(answer) => match answer {
+                CallAnswer::Approve | CallAnswer::ApproveAndStand => true,
+                CallAnswer::Reject | CallAnswer::Interrupt => false,
+            },
+            CallResponse::Scroll(_) | CallResponse::Expand => false,
+        }
     }
 }
 
@@ -2695,11 +3132,12 @@ pub fn ask_mcp_call<B: Backend>(
     request: &McpCallRequest,
 ) -> CallAnswer {
     let mut scroll = 0u16;
+    let mut seen = Seen::default();
     let mut expanded = false;
     loop {
-        let mut most = 0u16;
+        let mut drawn = Drawn::default();
         if terminal
-            .draw(|frame| most = draw_mcp_call(frame, request, expanded, scroll))
+            .draw(|frame| drawn = draw_mcp_call(frame, request, expanded, scroll, &mut seen))
             .is_err()
         {
             return CallAnswer::Reject;
@@ -2709,11 +3147,9 @@ pub fn ask_mcp_call<B: Backend>(
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
-            Ok(TermEvent::Key(key)) => match call_answer_for(key, request) {
+            Ok(TermEvent::Key(key)) => match call_answer_for(key, request, &drawn) {
                 Some(CallResponse::Answer(answer)) => return answer,
-                Some(CallResponse::Scroll(by)) => {
-                    scroll = scroll.saturating_add_signed(by).min(most);
-                }
+                Some(CallResponse::Scroll(by)) => scroll = drawn.moved(scroll, by),
                 Some(CallResponse::Expand) => expanded = !expanded,
                 None => continue,
             },
@@ -2723,18 +3159,22 @@ pub fn ask_mcp_call<B: Backend>(
     }
 }
 
-/// Draw a call prompt, returning how far it can be scrolled.
+/// Draw a call prompt, returning what the draw decided for its keys.
 ///
 /// The arguments are the planner's own, which it wrote with nothing untrusted in its context, so
 /// they are drawn as they are. The description is the server's, the one somebody read on its list,
 /// and is behind the margin and cut to its first rows until asked for: the tool is named above it
 /// and the arguments are what this call is about.
+///
+/// The question and its numbered rows are drawn with the keys, so they keep their rows however
+/// long the arguments are, and no row that approves is taken until every argument has been drawn.
 fn draw_mcp_call(
     frame: &mut ratatui::Frame,
     request: &McpCallRequest,
     expanded: bool,
     scroll: u16,
-) -> u16 {
+    seen: &mut Seen,
+) -> Drawn {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::ok(), t!(mcp_call_title));
     let width = inside.width as usize;
@@ -2775,6 +3215,7 @@ fn draw_mcp_call(
         }
     }
 
+    let deciding = lines.len();
     if let Some(description) = &request.description {
         lines.push(Line::raw(""));
         let mut rows: Vec<Line<'static>> = Vec::new();
@@ -2795,41 +3236,56 @@ fn draw_mcp_call(
         }
     }
 
-    lines.push(Line::raw(""));
-    lines.extend(indented(t!(mcp_call_question), bold, width));
-    // A row that wraps carries on under its text rather than under its number.
-    let hanging = Span::raw("     ");
-    let option = |number: &'static str, colour: Color, text: Span<'static>| {
-        let mut rows = marked_rows(&hanging, &[text], width);
-        if let Some(margin) = rows.first_mut().and_then(|row| row.spans.first_mut()) {
-            *margin = Span::styled(
-                format!("  {number}. "),
-                Style::default().fg(colour).add_modifier(Modifier::BOLD),
-            );
+    let keys = |answerable: bool| {
+        let mut rows = indented(t!(mcp_call_question), bold, width);
+        // A row that wraps carries on under its text rather than under its number.
+        let hanging = Span::raw("     ");
+        let option = |number: &'static str, style: Style, text: Span<'static>| {
+            let mut rows = marked_rows(&hanging, &[text], width);
+            if let Some(margin) = rows.first_mut().and_then(|row| row.spans.first_mut()) {
+                *margin = Span::styled(format!("  {number}. "), style);
+            }
+            rows
+        };
+        rows.extend(option(
+            "1",
+            approving(theme::ok(), answerable),
+            Span::raw(t!(mcp_call_yes)),
+        ));
+        let stand = t!(mcp_call_stand, tool = request.name());
+        match request.may_stand {
+            true => rows.extend(option(
+                "2",
+                approving(theme::ok(), answerable),
+                Span::raw(stand),
+            )),
+            false => {
+                rows.extend(option(
+                    "2",
+                    approving(theme::muted(), answerable),
+                    Span::styled(stand, muted),
+                ));
+                rows.extend(marked_rows(
+                    &hanging,
+                    &[Span::styled(t!(mcp_call_cannot_stand), muted)],
+                    width,
+                ));
+            }
         }
+        rows.extend(option("3", refusing(), Span::raw(t!(mcp_call_no))));
+        rows.push(Line::from(vec![
+            Span::styled("  ctrl-c", muted.add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" {}", t!(stop_the_turn)), muted),
+        ]));
         rows
     };
-    lines.extend(option("1", theme::ok(), Span::raw(t!(mcp_call_yes))));
-    let stand = t!(mcp_call_stand, tool = request.name());
-    match request.may_stand {
-        true => lines.extend(option("2", theme::ok(), Span::raw(stand))),
-        false => {
-            lines.extend(option("2", theme::muted(), Span::styled(stand, muted)));
-            lines.extend(marked_rows(
-                &hanging,
-                &[Span::styled(t!(mcp_call_cannot_stand), muted)],
-                width,
-            ));
-        }
-    }
-    lines.extend(option("3", theme::fail(), Span::raw(t!(mcp_call_no))));
-
-    let keys = Line::from(vec![
-        Span::styled("  ctrl-c", muted.add_modifier(Modifier::BOLD)),
-        Span::styled(format!(" {}", t!(stop_the_turn)), muted),
-    ]);
-
-    scrolled(frame, inside, lines, keys, scroll)
+    pinned::draw(
+        frame,
+        inside,
+        Question::scrolled(lines, deciding, 0, &keys),
+        scroll,
+        seen,
+    )
 }
 
 /// Put a file the scan found a credential in to the person, blocking until answered.
@@ -2839,12 +3295,13 @@ fn draw_mcp_call(
 /// and so to whoever performs inference. CRED-15 is where that is settled.
 pub fn ask_exposure<B: Backend>(terminal: &mut Terminal<B>, request: &ExposureRequest) -> Answer {
     let mut scroll = 0u16;
+    let mut seen = Seen::default();
     loop {
-        let mut most = 0u16;
+        let mut drawn = Drawn::default();
         // A terminal that cannot be drawn to cannot show what was found, and sending a credential
         // to a model nobody warned anybody about is the one thing this question cannot mean.
         if terminal
-            .draw(|frame| most = draw_exposure(frame, request, scroll))
+            .draw(|frame| drawn = draw_exposure(frame, request, scroll, &mut seen))
             .is_err()
         {
             return Answer::Reject;
@@ -2854,11 +3311,9 @@ pub fn ask_exposure<B: Backend>(terminal: &mut Terminal<B>, request: &ExposureRe
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
-            Ok(TermEvent::Key(key)) => match answer_for(key) {
+            Ok(TermEvent::Key(key)) => match answer_for(key, &drawn) {
                 Some(Response::Answer(answer)) => return answer,
-                Some(Response::Scroll(by)) => {
-                    scroll = scroll.saturating_add_signed(by).min(most);
-                }
+                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
                 None => continue,
             },
             Ok(_) => continue,
@@ -2867,14 +3322,21 @@ pub fn ask_exposure<B: Backend>(terminal: &mut Terminal<B>, request: &ExposureRe
     }
 }
 
-/// Draw the exposure question, returning how far it can be scrolled.
+/// Draw the exposure question, returning what the draw decided for its keys.
 ///
 /// No preview and no margin, which is what makes this different from every other prompt that
 /// shows content. There is nothing quarantined here: the file is one the trust map already covers,
 /// and the rows under the heading are findings rather than bytes. A finding is a kind, a place and
 /// a mask of the value, so drawing one repeats no part of what it describes, and showing the line
 /// the key is on would put the key on a screen in order to warn that it was about to be on one.
-fn draw_exposure(frame: &mut ratatui::Frame, request: &ExposureRequest, scroll: u16) -> u16 {
+///
+/// Every finding decides the question, so no yes is taken until all of them have been drawn.
+fn draw_exposure(
+    frame: &mut ratatui::Frame,
+    request: &ExposureRequest,
+    scroll: u16,
+    seen: &mut Seen,
+) -> Drawn {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::fail(), t!(expose_title));
 
@@ -2912,55 +3374,14 @@ fn draw_exposure(frame: &mut ratatui::Frame, request: &ExposureRequest, scroll: 
         ));
     }
 
-    let keys = Line::from(vec![
-        Span::styled(
-            "  y",
-            Style::default()
-                .fg(theme::ok())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(" {}    ", t!(expose_yes))),
-        Span::styled(
-            "n",
-            Style::default()
-                .fg(theme::fail())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(" {}    ", t!(expose_no))),
-        Span::styled(
-            "ctrl-c",
-            Style::default()
-                .fg(theme::muted())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" {}", t!(stop_the_turn)),
-            Style::default().fg(theme::muted()),
-        ),
-    ]);
-
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(inside);
-
-    let body = Paragraph::new(lines).wrap(Wrap { trim: false });
-    let drawn = body.line_count(rows[0].width) as u16;
-    let furthest = drawn.saturating_sub(rows[0].height);
-    let offset = scroll.min(furthest);
-    frame.render_widget(body.scroll((offset, 0)), rows[0]);
-
-    let mut keys = keys;
-    if furthest > 0 {
-        let below = furthest - offset;
-        keys.push_span(Span::styled(
-            scroll_hint(below),
-            Style::default().fg(theme::ok()),
-        ));
-    }
-    frame.render_widget(Paragraph::new(keys), rows[1]);
-
-    furthest
+    let keys = |answerable| vec![answer_keys(t!(expose_yes), t!(expose_no), answerable)];
+    pinned::draw(
+        frame,
+        inside,
+        Question::scrolled(lines, usize::MAX, 0, &keys),
+        scroll,
+        seen,
+    )
 }
 
 /// Put a whole frozen plan to the person, blocking until answered.
@@ -2972,12 +3393,13 @@ fn draw_exposure(frame: &mut ratatui::Frame, request: &ExposureRequest, scroll: 
 /// happen. MANIFEST-10 is where that is settled.
 pub fn ask_manifest<B: Backend>(terminal: &mut Terminal<B>, request: &ManifestRequest) -> Answer {
     let mut scroll = 0u16;
+    let mut seen = Seen::default();
     loop {
-        let mut most = 0u16;
+        let mut drawn = Drawn::default();
         // A terminal that cannot be drawn to cannot show the plan, and running a program nobody was
         // shown is the one thing this question cannot mean.
         if terminal
-            .draw(|frame| most = draw_manifest(frame, request, scroll))
+            .draw(|frame| drawn = draw_manifest(frame, request, scroll, &mut seen))
             .is_err()
         {
             return Answer::Reject;
@@ -2987,13 +3409,11 @@ pub fn ask_manifest<B: Backend>(terminal: &mut Terminal<B>, request: &ManifestRe
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
-            Ok(TermEvent::Key(key)) => match answer_for(key) {
+            Ok(TermEvent::Key(key)) => match manifest_answer_for(key, &drawn) {
                 Some(Response::Answer(answer)) => return answer,
                 // A plan longer than the box is the one most worth reading before answering, since
                 // approving it approves the steps below the fold as well.
-                Some(Response::Scroll(by)) => {
-                    scroll = scroll.saturating_add_signed(by).min(most);
-                }
+                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
                 None => continue,
             },
             Ok(_) => continue,
@@ -3002,13 +3422,21 @@ pub fn ask_manifest<B: Backend>(terminal: &mut Terminal<B>, request: &ManifestRe
     }
 }
 
-/// Draw the plan, returning how far its body can be scrolled.
+/// Draw the plan, returning what the draw decided for its keys.
 ///
 /// No margin bar down the steps, unlike every other body in this file. The others are somebody
 /// else's bytes; this is the driver's own rendering of a program that came from a context holding
 /// the task string and the driver's words. A bar here would mark the steps as content nobody may
 /// trust, which is the opposite of why they can be shown at all.
-fn draw_manifest(frame: &mut ratatui::Frame, request: &ManifestRequest, scroll: u16) -> u16 {
+///
+/// Every step and what a yes settles decide the question, so no yes is taken until all of them
+/// have been drawn.
+fn draw_manifest(
+    frame: &mut ratatui::Frame,
+    request: &ManifestRequest,
+    scroll: u16,
+    seen: &mut Seen,
+) -> Drawn {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::brand_primary(), t!(plan_title));
 
@@ -3058,55 +3486,14 @@ fn draw_manifest(frame: &mut ratatui::Frame, request: &ManifestRequest, scroll: 
         ));
     }
 
-    let keys = Line::from(vec![
-        Span::styled(
-            "  y",
-            Style::default()
-                .fg(theme::ok())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(" {}    ", t!(plan_yes))),
-        Span::styled(
-            "n",
-            Style::default()
-                .fg(theme::fail())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(" {}    ", t!(plan_no))),
-        Span::styled(
-            "ctrl-c",
-            Style::default()
-                .fg(theme::muted())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" {}", t!(stop_the_turn)),
-            Style::default().fg(theme::muted()),
-        ),
-    ]);
-
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(inside);
-
-    let body = Paragraph::new(lines).wrap(Wrap { trim: false });
-    let drawn = body.line_count(rows[0].width) as u16;
-    let furthest = drawn.saturating_sub(rows[0].height);
-    let offset = scroll.min(furthest);
-    frame.render_widget(body.scroll((offset, 0)), rows[0]);
-
-    let mut keys = keys;
-    if furthest > 0 {
-        let below = furthest - offset;
-        keys.push_span(Span::styled(
-            scroll_hint(below),
-            Style::default().fg(theme::brand_primary()),
-        ));
-    }
-    frame.render_widget(Paragraph::new(keys), rows[1]);
-
-    furthest
+    let keys = |answerable| vec![answer_keys(t!(plan_yes), t!(plan_no), answerable)];
+    pinned::draw(
+        frame,
+        inside,
+        Question::scrolled(lines, usize::MAX, 0, &keys),
+        scroll,
+        seen,
+    )
 }
 
 /// Draw the outer box of a prompt, and return the area inside its border.
@@ -3165,6 +3552,7 @@ mod tests {
 
     fn request(contents: &str, existing: Option<&str>) -> WriteRequest {
         WriteRequest {
+            written_since_checkout: false,
             path: "src/main.rs".into(),
             contents: contents.into(),
             diff: Diff::compute(existing.unwrap_or_default(), contents),
@@ -3186,7 +3574,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw(frame, request, 0);
+                draw(frame, request, 0, &mut Seen::default());
             })
             .expect("draw");
         terminal
@@ -3313,7 +3701,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(160, 24)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw_run(frame, request, 0);
+                draw_run(frame, request, 0, &mut RowsShown::default());
             })
             .expect("draw");
         terminal
@@ -3329,22 +3717,20 @@ mod tests {
         fetch_screen(request, (160, 24), 0).0.concat()
     }
 
-    /// A question laid out by [`draw_pinned`] drawn at this size, one string per row of the screen.
+    /// A question laid out by [`pinned::draw`] drawn at this size, one string per row of the screen.
     fn pinned_screen(
         (width, height): (u16, u16),
-        draw: impl Fn(&mut ratatui::Frame) -> PinnedDrawn,
-    ) -> (Vec<String>, PinnedDrawn) {
-        let mut drawn = PinnedDrawn::default();
+        draw: impl Fn(&mut ratatui::Frame) -> Drawn,
+    ) -> (Vec<String>, Drawn) {
+        let mut drawn = Drawn::default();
         let rows = rows_of(width, height, |frame| drawn = draw(frame));
         (rows, drawn)
     }
 
-    fn fetch_screen(
-        request: &FetchRequest,
-        size: (u16, u16),
-        scroll: u16,
-    ) -> (Vec<String>, PinnedDrawn) {
-        pinned_screen(size, |frame| draw_fetch(frame, request, scroll))
+    fn fetch_screen(request: &FetchRequest, size: (u16, u16), scroll: u16) -> (Vec<String>, Drawn) {
+        pinned_screen(size, |frame| {
+            draw_fetch(frame, request, scroll, &mut Seen::default())
+        })
     }
 
     /// What each row of the box holds between its borders.
@@ -3388,12 +3774,10 @@ mod tests {
         move_screen(request, (160, 24), 0).0.concat()
     }
 
-    fn move_screen(
-        request: &MoveRequest,
-        size: (u16, u16),
-        scroll: u16,
-    ) -> (Vec<String>, PinnedDrawn) {
-        pinned_screen(size, |frame| draw_move(frame, request, scroll))
+    fn move_screen(request: &MoveRequest, size: (u16, u16), scroll: u16) -> (Vec<String>, Drawn) {
+        pinned_screen(size, |frame| {
+            draw_move(frame, request, scroll, &mut Seen::default())
+        })
     }
 
     /// The issue's reply: a destination whose userinfo names the declared site for 1,500
@@ -3536,16 +3920,16 @@ mod tests {
                 "{width} columns: the host is not drawn under the destination: {screen}"
             );
             assert!(
-                drawn.furthest > 0,
+                drawn.furthest() > 0,
                 "a destination of 1,534 characters fitted"
             );
             assert!(
                 inside
                     .iter()
-                    .any(|row| row.contains(scroll_hint(drawn.furthest).trim())),
+                    .any(|row| row.contains(scroll_hint(drawn.furthest()).trim())),
                 "{width} columns: the box does not say how much is below: {screen}"
             );
-            assert!(drawn.answerable, "{width} columns: {screen}");
+            assert!(drawn.answerable(), "{width} columns: {screen}");
         }
     }
 
@@ -3568,7 +3952,7 @@ mod tests {
             "the whole destination fitted, so nothing here scrolls"
         );
 
-        let (rows, _) = move_screen(&request, (80, 24), drawn.furthest);
+        let (rows, _) = move_screen(&request, (80, 24), drawn.furthest());
         let screen = rows.join("\n");
         assert!(
             joined(&rows).contains(end),
@@ -3595,7 +3979,7 @@ mod tests {
                 for width in [1, 2, 24, 40, 50, 56, 60, 64, 80, 160] {
                     for height in 1..=30 {
                         let (rows, drawn) = move_screen(&request, (width, height), 0);
-                        if !drawn.answerable {
+                        if !drawn.answerable() {
                             continue;
                         }
                         let screen = rows.join("\n");
@@ -3618,10 +4002,10 @@ mod tests {
                             "{width}x{height}: none of the destination's url is drawn: {screen}"
                         );
                         assert!(
-                            drawn.furthest == 0
+                            drawn.furthest() == 0
                                 || inside
                                     .iter()
-                                    .any(|row| row.contains(scroll_hint(drawn.furthest).trim())),
+                                    .any(|row| row.contains(scroll_hint(drawn.furthest()).trim())),
                             "{width}x{height}: the box does not say how much is below: {screen}"
                         );
                     }
@@ -3642,13 +4026,13 @@ mod tests {
             (1, 1),
         ] {
             assert!(
-                !move_screen(&request, size, 0).1.answerable,
+                !move_screen(&request, size, 0).1.answerable(),
                 "{size:?} took a yes"
             );
         }
         for size in [(80, 24), (50, 24)] {
             assert!(
-                move_screen(&request, size, 0).1.answerable,
+                move_screen(&request, size, 0).1.answerable(),
                 "{size:?} refused a yes"
             );
         }
@@ -3657,13 +4041,13 @@ mod tests {
         let n = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
         let (_, cut_off) = move_screen(&request, (80, 4), 0);
         let (_, whole) = move_screen(&request, (80, 24), 0);
-        assert_eq!(cut_off.response_to(y), None);
+        assert_eq!(answer_for(y, &cut_off), None);
         assert_eq!(
-            cut_off.response_to(n),
+            answer_for(n, &cut_off),
             Some(Response::Answer(Answer::Reject))
         );
         assert_eq!(
-            whole.response_to(y),
+            answer_for(y, &whole),
             Some(Response::Answer(Answer::Approve))
         );
     }
@@ -3785,7 +4169,7 @@ mod tests {
                 matches!((host_row, url_row), (Some(host), Some(url)) if host < url),
                 "{width} columns: the host is not drawn above the URL: {screen}"
             );
-            assert!(drawn.furthest > 0, "a URL of 2,000 characters fitted");
+            assert!(drawn.furthest() > 0, "a URL of 2,000 characters fitted");
             assert!(
                 box_words(&rows).contains(&keys_words(t!(fetch_yes), t!(fetch_no))),
                 "{width} columns: the keys were pushed off: {screen}"
@@ -3793,10 +4177,10 @@ mod tests {
             assert!(
                 inside
                     .iter()
-                    .any(|row| row.contains(scroll_hint(drawn.furthest).trim())),
+                    .any(|row| row.contains(scroll_hint(drawn.furthest()).trim())),
                 "{width} columns: the box does not say how much of the URL is below: {screen}"
             );
-            assert!(drawn.answerable, "{width} columns: {screen}");
+            assert!(drawn.answerable(), "{width} columns: {screen}");
         }
     }
 
@@ -3823,7 +4207,7 @@ mod tests {
             shown.contains(&keys_words(t!(fetch_yes), t!(fetch_no))),
             "{screen}"
         );
-        assert!(drawn.answerable, "{screen}");
+        assert!(drawn.answerable(), "{screen}");
     }
 
     /// FETCH-2: the rest of the URL is reachable by the arrows, and the host stays where it was
@@ -3840,7 +4224,7 @@ mod tests {
             "the whole URL fitted, so nothing here scrolls"
         );
 
-        let (rows, _) = fetch_screen(&request, (80, 24), drawn.furthest);
+        let (rows, _) = fetch_screen(&request, (80, 24), drawn.furthest());
         let screen = rows.join("\n");
         assert!(
             box_rows(&rows).concat().contains(end),
@@ -3861,7 +4245,7 @@ mod tests {
         for width in [1, 2, 24, 40, 50, 56, 60, 64, 80, 160] {
             for height in 1..=30 {
                 let (rows, drawn) = fetch_screen(&request, (width, height), 0);
-                if !drawn.answerable {
+                if !drawn.answerable() {
                     continue;
                 }
                 let screen = rows.join("\n");
@@ -3882,13 +4266,13 @@ mod tests {
         }
         for size in [(80, 3), (80, 4), (80, 10), (24, 6), (2, 40), (1, 1)] {
             assert!(
-                !fetch_screen(&request, size, 0).1.answerable,
+                !fetch_screen(&request, size, 0).1.answerable(),
                 "{size:?} took a yes"
             );
         }
         for size in [(80, 24), (50, 24)] {
             assert!(
-                fetch_screen(&request, size, 0).1.answerable,
+                fetch_screen(&request, size, 0).1.answerable(),
                 "{size:?} refused a yes"
             );
         }
@@ -3897,13 +4281,13 @@ mod tests {
         let n = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
         let (_, cut_off) = fetch_screen(&request, (80, 4), 0);
         let (_, whole) = fetch_screen(&request, (80, 24), 0);
-        assert_eq!(cut_off.response_to(y), None);
+        assert_eq!(answer_for(y, &cut_off), None);
         assert_eq!(
-            cut_off.response_to(n),
+            answer_for(n, &cut_off),
             Some(Response::Answer(Answer::Reject))
         );
         assert_eq!(
-            whole.response_to(y),
+            answer_for(y, &whole),
             Some(Response::Answer(Answer::Approve))
         );
     }
@@ -3915,16 +4299,16 @@ mod tests {
         let request = a_metadata_fetch_behind_a_long_userinfo();
         let (_, short) = fetch_screen(&request, (80, 16), 0);
         let (_, tall) = fetch_screen(&request, (80, 30), 0);
-        assert!(short.furthest > tall.furthest && tall.furthest > 0);
+        assert!(short.furthest() > tall.furthest() && tall.furthest() > 0);
 
-        let scrolled_to_the_end = short.furthest;
+        let scrolled_to_the_end = short.furthest();
         assert_eq!(
             tall.moved(scrolled_to_the_end, -1),
-            tall.furthest - 1,
+            tall.furthest() - 1,
             "Up moved nothing after the terminal grew"
         );
         assert_eq!(tall.moved(0, -1), 0);
-        assert_eq!(tall.moved(tall.furthest, i16::MAX), tall.furthest);
+        assert_eq!(tall.moved(tall.furthest(), i16::MAX), tall.furthest());
     }
 
     /// Vouching grants two things, and the prompt has to ask for both in as many words. The
@@ -4342,7 +4726,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(160, 48)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw_run(frame, request, 0);
+                draw_run(frame, request, 0, &mut RowsShown::default());
             })
             .expect("draw");
         terminal
@@ -4501,6 +4885,312 @@ mod tests {
         assert!(!RunAnswer::Reject.decision().remember);
     }
 
+    /// A run whose last argument changes what it does, behind more arguments than a box of 24 rows
+    /// shows, on a prompt that offers all three keys that run it.
+    fn a_run_with_a_long_argument_list() -> RunRequest {
+        let mut args = vec!["-cf".to_string(), "bundle.tar".to_string()];
+        args.extend((1..=36).map(|n| format!("draft-{n:02}-of-the-quarterly-report.txt")));
+        args.push("--remove-files".to_string());
+        RunRequest {
+            record: a_recordable_run().record,
+            ..RunRequest::from_pipeline(
+                &bravebot_core::Pipeline::new(vec![bravebot_core::Stage::new("tar", args)]),
+                &["/usr/bin/tar".into()],
+                "/home/someone/project",
+            )
+        }
+    }
+
+    /// The run question drawn at this size from `scroll`, after the draws `shown` remembers.
+    fn run_screen(
+        request: &RunRequest,
+        (width, height): (u16, u16),
+        scroll: u16,
+        shown: &mut RowsShown,
+    ) -> (Vec<String>, RunDrawn) {
+        let mut drawn = RunDrawn::default();
+        let rows = rows_of(width, height, |frame| {
+            drawn = draw_run(frame, request, scroll, shown);
+        });
+        (rows, drawn)
+    }
+
+    /// Where the plan starts once PageDown is pressed at `drawn`.
+    fn paged_down(drawn: &RunDrawn, request: &RunRequest, scroll: u16) -> u16 {
+        let Some(RunResponse::Page(by)) = drawn.response_to(press(KeyCode::PageDown), request)
+        else {
+            panic!("PageDown did not page");
+        };
+        drawn.moved(scroll, i32::from(by) * i32::from(drawn.page))
+    }
+
+    const RUNS_IT: [char; 3] = ['y', 'a', 'r'];
+
+    /// Which of the keys that run the line `drawn` takes.
+    fn taken(drawn: &RunDrawn, request: &RunRequest) -> Vec<char> {
+        RUNS_IT
+            .into_iter()
+            .filter(|key| {
+                drawn
+                    .response_to(press(KeyCode::Char(*key)), request)
+                    .is_some()
+            })
+            .collect()
+    }
+
+    /// PROMPT-1, PROMPT-4: a plan longer than the box leaves the keys whole and says how much of it
+    /// is unread, where before the argument list pushed the keys off the bottom with no cue that
+    /// anything was below.
+    #[test]
+    fn a_plan_longer_than_the_box_keeps_the_run_keys_and_says_how_many_rows_are_unread() {
+        let request = a_run_with_a_long_argument_list();
+        let keys = words(&format!(
+            "y {} a {} r {} n {} ctrl-c {}",
+            t!(run_yes),
+            t!(run_always),
+            t!(run_remember),
+            t!(run_no),
+            t!(stop_the_turn)
+        ));
+        for size in [(80, 24), (64, 24), (56, 30)] {
+            let (rows, drawn) = run_screen(&request, size, 0, &mut RowsShown::default());
+            let text = box_text(&rows);
+            assert!(
+                box_words(&rows).ends_with(&keys),
+                "{size:?}: the keys were not whole: {rows:#?}"
+            );
+            assert!(drawn.unread > 0, "{size:?}: the plan fit: {rows:#?}");
+            assert!(
+                text.contains(&squeezed(&t!(run_unseen, count = drawn.unread))),
+                "{size:?}: nothing said rows were unread: {rows:#?}"
+            );
+            assert!(!text.contains("--remove-files"), "{size:?}: {rows:#?}");
+            assert_eq!(taken(&drawn, &request), [], "{size:?}");
+        }
+    }
+
+    /// PROMPT-4: `y`, `a` and `r` each run the line, so none is taken while a row of it has not been
+    /// on the screen, and `y` is once paging has put every row there. Refusing never waits.
+    #[test]
+    fn no_key_runs_a_long_plan_until_every_row_of_it_has_been_on_the_screen() {
+        let request = a_run_with_a_long_argument_list();
+        let mut shown = RowsShown::default();
+        let mut scroll = 0;
+        let (mut rows, mut drawn) = run_screen(&request, (80, 24), scroll, &mut shown);
+        for key in RUNS_IT {
+            assert_eq!(
+                drawn.response_to(press(KeyCode::Char(key)), &request),
+                None,
+                "`{key}` ran a line whose last argument was never drawn"
+            );
+        }
+        assert_eq!(
+            drawn.response_to(press(KeyCode::Char('n')), &request),
+            Some(RunResponse::Answer(RunAnswer::Reject))
+        );
+        assert_eq!(
+            drawn.response_to(
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                &request
+            ),
+            Some(RunResponse::Answer(RunAnswer::Interrupt))
+        );
+
+        let (mut drew_the_last_argument, mut drew_the_access) = (false, false);
+        while drawn.unread > 0 {
+            assert_eq!(taken(&drawn, &request), [], "{rows:#?}");
+            assert!(
+                scroll < drawn.furthest,
+                "paged to the end and still taken nothing: {rows:#?}"
+            );
+            scroll = paged_down(&drawn, &request, scroll);
+            (rows, drawn) = run_screen(&request, (80, 24), scroll, &mut shown);
+            drew_the_last_argument |= box_text(&rows).contains("--remove-files");
+            drew_the_access |= box_text(&rows).contains(&squeezed(t!(run_not_sandboxed)));
+        }
+
+        assert!(drew_the_last_argument);
+        assert!(
+            drew_the_access,
+            "`y` was taken before the access it spends was drawn"
+        );
+        assert_eq!(
+            drawn.response_to(press(KeyCode::Char('y')), &request),
+            Some(RunResponse::Answer(RunAnswer::Approve))
+        );
+    }
+
+    /// PROMPT-4: `a` and `r` grant more than running the line, so each also waits for the rows
+    /// saying what it grants, where `y` waits only for the plan.
+    #[test]
+    fn a_and_r_each_wait_for_the_rows_saying_what_they_grant_besides_running_the_line() {
+        let request = a_run_with_a_long_argument_list();
+        let path = request.record.as_ref().expect("recordable").display();
+        let path = path.to_string();
+        let says = [
+            (
+                'a',
+                [
+                    t!(run_always_explained),
+                    t!(run_always_output_trusted),
+                    t!(run_always_this_directory),
+                ],
+            ),
+            (
+                'r',
+                [
+                    t!(run_remember_explained),
+                    t!(run_remember_only_asking),
+                    path.as_str(),
+                ],
+            ),
+        ];
+        let mut shown = RowsShown::default();
+        let mut scroll = 0;
+        let mut read = String::new();
+        let mut waited = false;
+        loop {
+            let (rows, drawn) = run_screen(&request, (80, 24), scroll, &mut shown);
+            read.push_str(&box_text(&rows));
+            read.push('\n');
+            let taken = taken(&drawn, &request);
+            for (key, sentences) in &says {
+                for sentence in sentences.iter().filter(|_| taken.contains(key)) {
+                    assert!(
+                        read.contains(&squeezed(sentence)),
+                        "`{key}` was taken before {sentence:?} was drawn: {rows:#?}"
+                    );
+                }
+            }
+            if taken == RUNS_IT {
+                break;
+            }
+            if taken.contains(&'y') {
+                waited = true;
+                let count = drawn.always_unread + drawn.record_unread;
+                assert!(
+                    box_text(&rows).contains(&squeezed(&t!(run_grant_unseen, count = count))),
+                    "nothing said why {taken:?} were all that was taken: {rows:#?}"
+                );
+            }
+            assert!(scroll < drawn.furthest, "paged to the end: {rows:#?}");
+            scroll = paged_down(&drawn, &request, scroll);
+        }
+        assert!(waited, "no draw took `y` alone, so nothing here waited");
+    }
+
+    /// PROMPT-4: having reached the bottom is not having read what was passed over on the way, and
+    /// End passes over the plan's arguments, which run as surely as the ones that were drawn.
+    #[test]
+    fn jumping_to_the_end_of_a_long_plan_leaves_the_rows_passed_over_unread() {
+        let request = a_run_with_a_long_argument_list();
+        let mut shown = RowsShown::default();
+        let (_, top) = run_screen(&request, (80, 24), 0, &mut shown);
+        let Some(RunResponse::Scroll(by)) = top.response_to(press(KeyCode::End), &request) else {
+            panic!("End did not scroll");
+        };
+        let (rows, end) = run_screen(&request, (80, 24), top.moved(0, i32::from(by)), &mut shown);
+
+        assert_eq!(top.moved(0, i32::from(by)), end.furthest);
+        assert!(end.unread > 0, "End read the rows it passed over");
+        assert!(
+            box_text(&rows).contains(&squeezed(&t!(run_unseen, count = end.unread))),
+            "the bottom said nothing was left to read: {rows:#?}"
+        );
+        for key in RUNS_IT {
+            assert_eq!(
+                end.response_to(press(KeyCode::Char(key)), &request),
+                None,
+                "`{key}` ran a line whose arguments were passed over"
+            );
+        }
+    }
+
+    /// PROMPT-4: a box too small for the question or its keys takes no key that runs the line,
+    /// wherever the plan is scrolled to and whatever an earlier, larger draw showed. A short prompt
+    /// in a box that holds it is answered at once, so the wait costs nothing where nothing is unread.
+    #[test]
+    fn a_run_prompt_too_small_for_its_question_takes_no_key_that_runs_the_line() {
+        for request in [a_recordable_run(), a_run_with_a_long_argument_list()] {
+            for size in [(80, 3), (80, 4), (24, 6), (2, 40), (1, 1)] {
+                let mut shown = RowsShown::default();
+                let (_, first) = run_screen(&request, size, 0, &mut shown);
+                for scroll in 0..=first.furthest {
+                    let (rows, drawn) = run_screen(&request, size, scroll, &mut shown);
+                    assert_eq!(
+                        taken(&drawn, &request),
+                        [],
+                        "{size:?} at {scroll}: {rows:#?}"
+                    );
+                }
+            }
+        }
+
+        let request = a_recordable_run();
+        let mut shown = RowsShown::default();
+        let (rows, whole) = run_screen(&request, (80, 40), 0, &mut shown);
+        assert_eq!(
+            taken(&whole, &request),
+            RUNS_IT,
+            "a prompt that fits waited to be scrolled: {rows:#?}"
+        );
+        let (rows, cut) = run_screen(&request, (80, 4), 0, &mut shown);
+        assert_eq!(
+            taken(&cut, &request),
+            [],
+            "a prompt read in a larger box was answered from one that cut it off: {rows:#?}"
+        );
+    }
+
+    /// PROMPT-4: another width wraps the plan into other rows, so a plan read at one width is unread
+    /// at the next until its rows there have been on the screen.
+    #[test]
+    fn a_plan_read_at_one_width_is_unread_again_at_another() {
+        let request = a_run_with_a_long_argument_list();
+        let mut shown = RowsShown::default();
+        let mut scroll = 0;
+        let (_, mut drawn) = run_screen(&request, (80, 24), scroll, &mut shown);
+        while drawn.unread > 0 && scroll < drawn.furthest {
+            scroll = paged_down(&drawn, &request, scroll);
+            (_, drawn) = run_screen(&request, (80, 24), scroll, &mut shown);
+        }
+        assert!(taken(&drawn, &request).contains(&'y'));
+
+        let (rows, fresh) = run_screen(&request, (120, 24), 0, &mut RowsShown::default());
+        assert!(fresh.unread > 0, "the plan fit the wider box: {rows:#?}");
+
+        let (rows, wider) = run_screen(&request, (120, 24), 0, &mut shown);
+        assert_eq!(
+            wider.unread, fresh.unread,
+            "rows read at 80 columns were counted at 120"
+        );
+        assert_eq!(taken(&wider, &request), [], "{rows:#?}");
+    }
+
+    /// PROMPT-4: a page is one row fewer than the box shows, so paging through a plan in a box
+    /// shorter than ten rows puts every row on the screen and every key that runs it is then taken.
+    #[test]
+    fn paging_through_a_long_plan_in_a_short_box_puts_every_row_on_the_screen() {
+        let request = a_run_with_a_long_argument_list();
+        let mut shown = RowsShown::default();
+        let mut scroll = 0;
+        let (rows, mut drawn) = run_screen(&request, (80, 14), scroll, &mut shown);
+        // Ten rows with the question and the keys in them leaves the plan fewer than ten.
+        assert!(
+            box_rows(&rows).len() <= 10,
+            "the box was not short: {rows:#?}"
+        );
+        while taken(&drawn, &request) != RUNS_IT {
+            assert!(
+                scroll < drawn.furthest,
+                "paging passed over {} rows: {drawn:?}",
+                drawn.unread + drawn.always_unread + drawn.record_unread
+            );
+            scroll = paged_down(&drawn, &request, scroll);
+            (_, drawn) = run_screen(&request, (80, 14), scroll, &mut shown);
+        }
+    }
+
     fn a_vetting(verdict: Verdict, reason: Option<&str>, content: &str) -> VetRequest {
         VetRequest {
             origin: "example.com/notes".into(),
@@ -4513,11 +5203,112 @@ mod tests {
         }
     }
 
+    fn a_checkout_forty_files_were_written_in() -> bravebot_agent::workspace::SessionCheckout {
+        bravebot_agent::workspace::SessionCheckout {
+            id: "c2".into(),
+            path: "/state/checkouts/work/c2".into(),
+            repository: "/work/.git".into(),
+            commit: "0123456789abcdef0123456789abcdef01234567".into(),
+            delegate: bravebot_core::delegate::DelegateId::nth(1),
+            worked_in: true,
+            candidates: bravebot_agent::workspace::Candidates {
+                named: (0..40).map(|n| format!("src/{n:02}.rs")).collect(),
+                referenced: 2,
+            },
+            size: None,
+        }
+    }
+
+    fn remove_checkout_screen(
+        checkout: &bravebot_agent::workspace::SessionCheckout,
+        size: (u16, u16),
+        scroll: u16,
+    ) -> (Vec<String>, Drawn) {
+        pinned_screen(size, |frame| {
+            draw_remove_checkout(frame, checkout, scroll, &mut Seen::default())
+        })
+    }
+
+    /// What a person answering whether to remove a checkout has to see, squeezed.
+    fn remove_checkout_pinned() -> Vec<String> {
+        [
+            t!(remove_checkout_which, id = "c2", delegate = "d1").to_string(),
+            "/state/checkouts/work/c2".to_string(),
+            t!(remove_checkout_explained).to_string(),
+            format!("y {} n {}", t!(remove_checkout_yes), t!(remove_checkout_no)),
+        ]
+        .iter()
+        .map(|text| squeezed(text))
+        .collect()
+    }
+
+    /// CHECKOUT-15. The question names the checkout, where it is and what removing it deletes, and
+    /// the names written in it scroll beneath. No turn runs at rest, so the keys offer none to stop.
+    #[test]
+    fn the_remove_checkout_question_names_the_checkout_and_what_removing_it_deletes() {
+        let checkout = a_checkout_forty_files_were_written_in();
+        let (rows, drawn) = remove_checkout_screen(&checkout, (100, 30), 0);
+        let screen = rows.join("\n");
+        let shown = box_text(&rows);
+        for pinned in remove_checkout_pinned() {
+            assert!(shown.contains(&pinned), "{pinned}: {screen}");
+        }
+        assert!(shown.contains("src/00.rs"), "{screen}");
+        assert!(!shown.contains("src/39.rs"), "forty names fitted: {screen}");
+        assert!(
+            !shown.contains(&squeezed(t!(stop_the_turn))),
+            "the keys offer to stop a turn: {screen}"
+        );
+        assert!(!shown.contains("ctrl-c"), "{screen}");
+        assert!(drawn.answerable(), "{screen}");
+
+        let (end, _) = remove_checkout_screen(&checkout, (100, 30), drawn.furthest());
+        let screen = end.join("\n");
+        let shown = box_text(&end);
+        for at_the_end in [
+            "src/39.rs".to_string(),
+            squeezed(&t!(checkouts_referenced, id = "c2", count = 2)),
+            squeezed(&t!(checkouts_unread, id = "c2")),
+        ] {
+            assert!(shown.contains(&at_the_end), "{at_the_end}: {screen}");
+        }
+        for pinned in remove_checkout_pinned() {
+            assert!(shown.contains(&pinned), "{pinned}: {screen}");
+        }
+    }
+
+    /// CHECKOUT-15. `y` is not taken from a draw that cut off which checkout it is, what removing
+    /// it deletes or the keys, whatever the size of the terminal.
+    #[test]
+    fn a_remove_checkout_question_takes_a_yes_only_from_a_draw_showing_what_it_removes() {
+        let checkout = a_checkout_forty_files_were_written_in();
+        let pinned = remove_checkout_pinned();
+        let mut answered = 0;
+        for width in [1, 2, 24, 40, 56, 80, 100] {
+            for height in 1..=30 {
+                let (rows, drawn) = remove_checkout_screen(&checkout, (width, height), 0);
+                if !drawn.answerable() {
+                    continue;
+                }
+                answered += 1;
+                let screen = rows.join("\n");
+                let shown = box_text(&rows);
+                for expected in &pinned {
+                    assert!(
+                        shown.contains(expected),
+                        "{width}x{height}: {expected}: {screen}"
+                    );
+                }
+            }
+        }
+        assert!(answered > 0, "no draw took a yes");
+    }
+
     fn rendered_vet(request: &VetRequest) -> String {
         let mut terminal = Terminal::new(TestBackend::new(100, 40)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw_vet(frame, request, 0, None);
+                draw_vet(frame, request, 0, None, &mut Seen::default());
             })
             .expect("draw");
         terminal
@@ -4593,7 +5384,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(size.0, size.1)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw_vet(frame, request, scroll, picture);
+                draw_vet(frame, request, scroll, picture, &mut Seen::default());
             })
             .expect("draw");
         let buffer = terminal.backend().buffer().clone();
@@ -4634,6 +5425,40 @@ mod tests {
             drawn.contains("a model reads words in a picture"),
             "{drawn}"
         );
+    }
+
+    /// The picture is what a yes here is about, and it is painted whole or not at all, so a box too
+    /// short for it takes no yes however far the rest has been scrolled.
+    #[test]
+    fn a_picture_the_box_cannot_paint_takes_no_yes() {
+        let request = a_picture_request("image/png");
+        let thumb = drawn_with(ratatui_image::picker::ProtocolType::Kitty);
+        for (height, painted) in [(16, false), (50, true)] {
+            let mut seen = Seen::default();
+            let mut drawn = Drawn::default();
+            let mut scroll = 0;
+            let mut graphics = false;
+            loop {
+                let rows = rows_of(100, height, |frame| {
+                    drawn = draw_vet(frame, &request, scroll, Some(&thumb), &mut seen)
+                });
+                graphics |= rows.iter().any(|row| row.contains("\x1b_G"));
+                let next = drawn.moved(scroll, 1);
+                if next == scroll {
+                    break;
+                }
+                scroll = next;
+            }
+            assert_eq!(graphics, painted, "at 100x{height}");
+            assert_eq!(drawn.rows() >= thumb.height(), painted, "at 100x{height}");
+            for key in ['y', 'a'] {
+                assert_eq!(
+                    approves(vet_answer_for(press(KeyCode::Char(key)), &request, &drawn)),
+                    painted.then_some(true),
+                    "at 100x{height}, {key}"
+                );
+            }
+        }
     }
 
     /// The picture is the file's, so it is drawn inside the margin on every row it reaches, and
@@ -4832,7 +5657,8 @@ mod tests {
             assert_eq!(
                 vet_answer_for(
                     KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
-                    &request
+                    &request,
+                    &Drawn::taking_yes()
                 ),
                 Some(VetResponse::Answer(VetAnswer::Approve)),
                 "{verdict}"
@@ -4840,7 +5666,8 @@ mod tests {
             assert_eq!(
                 vet_answer_for(
                     KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
-                    &request
+                    &request,
+                    &Drawn::taking_yes()
                 ),
                 Some(VetResponse::Answer(VetAnswer::Reject)),
                 "{verdict}"
@@ -4881,13 +5708,21 @@ mod tests {
             Verdict::Inconclusive("the check could not be made"),
         ] {
             assert_eq!(
-                vet_answer_for(key, &a_vetting(verdict, None, "a page")),
+                vet_answer_for(
+                    key,
+                    &a_vetting(verdict, None, "a page"),
+                    &Drawn::taking_yes()
+                ),
                 None,
                 "{verdict} bound the key that turns the asking off"
             );
         }
         assert_eq!(
-            vet_answer_for(key, &a_vetting(Verdict::Safe, None, "a page")),
+            vet_answer_for(
+                key,
+                &a_vetting(Verdict::Safe, None, "a page"),
+                &Drawn::taking_yes()
+            ),
             Some(VetResponse::Answer(VetAnswer::ApproveAlways)),
             "the key was not bound where the prompt draws it"
         );
@@ -4925,7 +5760,11 @@ mod tests {
             Verdict::Inconclusive("the check could not be made"),
         ] {
             assert_eq!(
-                vet_answer_for(key, &a_vetting(verdict, None, "a page")),
+                vet_answer_for(
+                    key,
+                    &a_vetting(verdict, None, "a page"),
+                    &Drawn::taking_yes()
+                ),
                 None,
                 "{verdict}"
             );
@@ -4967,7 +5806,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(100, 24)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw_output(frame, request, 0);
+                draw_output(frame, request, 0, &mut Seen::default());
             })
             .expect("draw");
         terminal
@@ -5078,7 +5917,7 @@ mod tests {
         let pressed = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
 
         assert_eq!(
-            output_answer_for(pressed, &an_output("Darwin")),
+            output_answer_for(pressed, &an_output("Darwin"), &Drawn::taking_yes()),
             Some(VetResponse::Answer(VetAnswer::ApproveAlways)),
             "a safe verdict did not bind the standing key"
         );
@@ -5090,7 +5929,7 @@ mod tests {
             let mut request = an_output("Darwin");
             request.verdict = verdict;
             assert_eq!(
-                output_answer_for(pressed, &request),
+                output_answer_for(pressed, &request, &Drawn::taking_yes()),
                 None,
                 "{verdict} bound a key the prompt does not draw"
             );
@@ -5111,7 +5950,8 @@ mod tests {
             assert_eq!(
                 output_answer_for(
                     KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
-                    &request
+                    &request,
+                    &Drawn::taking_yes()
                 ),
                 Some(VetResponse::Answer(VetAnswer::Approve)),
                 "{verdict}"
@@ -5119,7 +5959,8 @@ mod tests {
             assert_eq!(
                 output_answer_for(
                     KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
-                    &request
+                    &request,
+                    &Drawn::taking_yes()
                 ),
                 Some(VetResponse::Answer(VetAnswer::Reject)),
                 "{verdict}"
@@ -5133,7 +5974,10 @@ mod tests {
     #[test]
     fn ctrl_c_refuses_the_write_and_stops_the_turn() {
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert_eq!(answer_for(key), Some(Response::Answer(Answer::Interrupt)));
+        assert_eq!(
+            answer_for(key, &Drawn::taking_yes()),
+            Some(Response::Answer(Answer::Interrupt))
+        );
         assert_eq!(Answer::Interrupt.decision(), Decision::Reject);
         assert!(
             Answer::Interrupt.stops_the_turn(),
@@ -5147,7 +5991,10 @@ mod tests {
     #[test]
     fn saying_no_does_not_stop_the_turn() {
         let key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
-        assert_eq!(answer_for(key), Some(Response::Answer(Answer::Reject)));
+        assert_eq!(
+            answer_for(key, &Drawn::taking_yes()),
+            Some(Response::Answer(Answer::Reject))
+        );
         assert_eq!(Answer::Reject.decision(), Decision::Reject);
         assert!(
             !Answer::Reject.stops_the_turn(),
@@ -5159,6 +6006,7 @@ mod tests {
     /// there is a record to name, as the driver hands one over.
     fn a_credential_write(may_always: bool, record: bool) -> WriteRequest {
         WriteRequest {
+            written_since_checkout: false,
             path: "config/master.key".into(),
             credentials: vec!["a secret standing as a file's whole contents".into()],
             may_always,
@@ -5172,7 +6020,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(160, 48)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw(frame, request, 0);
+                draw(frame, request, 0, &mut Seen::default());
             })
             .expect("draw");
         terminal
@@ -5189,7 +6037,11 @@ mod tests {
     #[test]
     fn the_write_keys_bind_only_the_standing_answers_the_prompt_offers() {
         let press = |code, modifiers, request: &WriteRequest| {
-            write_answer_for(KeyEvent::new(code, modifiers), request)
+            write_answer_for(
+                KeyEvent::new(code, modifiers),
+                request,
+                &Drawn::taking_yes(),
+            )
         };
         for (request, always, remember) in [
             (request("new\n", None), None, None),
@@ -5291,7 +6143,12 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw(frame, &a_credential_write(true, true), 0);
+                draw(
+                    frame,
+                    &a_credential_write(true, true),
+                    0,
+                    &mut Seen::default(),
+                );
             })
             .expect("draw");
         let screen: String = terminal
@@ -5313,6 +6170,27 @@ mod tests {
                 "`{key}` was not drawn whole: {screen}"
             );
         }
+    }
+
+    /// A prompt offering neither standing answer keeps its keys on one row in a box too narrow for
+    /// their usual gaps, rather than giving a row of the diff to the key that stops the turn.
+    #[test]
+    fn a_narrow_write_prompt_with_no_standing_answer_keeps_its_keys_on_one_row() {
+        let rows = rows_of(60, 20, |frame| {
+            draw(
+                frame,
+                &a_credential_write(false, false),
+                0,
+                &mut Seen::default(),
+            );
+        });
+        assert!(
+            rows.iter().any(|row| row.contains("y write it")
+                && row.contains("n leave it alone")
+                && row.contains("ctrl-c stop the turn")),
+            "the keys were not on one row:\n{}",
+            rows.join("\n")
+        );
     }
 
     /// The same at the run prompt, which has three ways of approving and one of refusing before
@@ -5391,13 +6269,13 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
         let mut furthest = 0;
         terminal
-            .draw(|frame| furthest = draw(frame, &request, 0))
+            .draw(|frame| furthest = draw(frame, &request, 0, &mut Seen::default()).furthest())
             .expect("draw");
         assert!(furthest > 0, "a 200 line body reported nothing to scroll");
 
         terminal
             .draw(|frame| {
-                draw(frame, &request, furthest);
+                draw(frame, &request, furthest, &mut Seen::default());
             })
             .expect("draw");
         let drawn: String = terminal
@@ -5415,6 +6293,33 @@ mod tests {
         assert!(drawn.contains("write it"), "the question scrolled away");
     }
 
+    /// CHECKOUT-14. The prompt for a file brought back from a checkout says the session wrote the
+    /// path in the working directory since, and a prompt for any other write says nothing of it.
+    #[test]
+    fn a_write_since_the_checkout_is_said_in_the_question() {
+        let drawn = |since: bool| {
+            rendered(&WriteRequest {
+                written_since_checkout: since,
+                path: "out.txt".into(),
+                diff: Diff::compute("mine\n", "theirs\n"),
+                contents: "theirs\n".into(),
+                existing: Some("mine\n".into()),
+                intent: Intent::Overwrite,
+                untrusted: false,
+                remark: None,
+                credentials: Vec::new(),
+                may_always: false,
+                record: None,
+            })
+        };
+        assert!(
+            drawn(true).contains("in the working directory"),
+            "the question does not say it: {}",
+            drawn(true)
+        );
+        assert!(!drawn(false).contains("in the working directory"));
+    }
+
     /// The reason this exists: a one-line change to a large file must show that one line
     /// rather than a screenful of unchanged text.
     #[test]
@@ -5423,6 +6328,7 @@ mod tests {
         let after = before.replace("line 150\n", "line 150 changed\n");
 
         let output = rendered(&WriteRequest {
+            written_since_checkout: false,
             path: "src/main.rs".into(),
             diff: Diff::compute(&before, &after),
             contents: after,
@@ -5454,6 +6360,7 @@ mod tests {
     #[test]
     fn an_untrusted_body_is_marked_in_the_prompt() {
         let output = rendered(&WriteRequest {
+            written_since_checkout: false,
             path: "game.js".into(),
             contents: "const SPEED = 50;\n".into(),
             existing: Some("const SPEED = 100;\n".into()),
@@ -5487,6 +6394,7 @@ mod tests {
         let after: String = (0..3000).map(|n| format!("new {n}\n")).collect();
 
         let output = rendered(&WriteRequest {
+            written_since_checkout: false,
             path: "src/main.rs".into(),
             diff: Diff::compute(&before, &after),
             contents: after,
@@ -5505,33 +6413,34 @@ mod tests {
         );
     }
 
-    /// A prompt that panics on a small terminal takes the session with it, and one that drops the
-    /// question is worse: it blocks everything else while showing nothing to answer, and a key
-    /// pressed at it answers a question that was never on the screen. So the small case is held to
-    /// what it asks about and the key that answers, not merely to surviving the draw.
+    /// A prompt that panics on a small terminal takes the session with it, and one that takes a yes
+    /// there is worse: a key pressed at it answers a question that was never on the screen. A box
+    /// with no room for the question beside its keys draws the keys and takes only the ones that
+    /// refuse.
     #[test]
-    fn a_tiny_terminal_still_renders_the_prompt() {
-        let mut terminal = Terminal::new(TestBackend::new(20, 8)).expect("terminal");
-        terminal
-            .draw(|frame| {
-                draw(frame, &request("x", None), 0);
-            })
-            .expect("must not panic on a small area");
-
-        let drawn: String = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect();
+    fn a_tiny_terminal_draws_the_write_keys_and_takes_no_yes() {
+        let request = request("x", None);
+        let mut drawn = Drawn::default();
+        let rows = rows_of(20, 8, |frame| {
+            drawn = draw(frame, &request, 0, &mut Seen::default());
+        });
+        let screen = rows.concat();
         assert!(
-            drawn.contains("src/main.rs"),
-            "the prompt did not say what it was asking about: {drawn}"
+            screen.contains("write it"),
+            "the keys were drawn out of view: {screen}"
         );
         assert!(
-            drawn.contains("write it"),
-            "the key that approves the write was drawn out of view: {drawn}"
+            !screen.contains("src/main.rs"),
+            "the box had room for the question after all, so this case tests nothing: {screen}"
+        );
+        let press = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert_eq!(
+            write_answer_for(press(KeyCode::Char('y')), &request, &drawn),
+            None
+        );
+        assert_eq!(
+            write_answer_for(press(KeyCode::Char('n')), &request, &drawn),
+            Some(WriteResponse::Answer(WriteAnswer::Reject))
         );
     }
 
@@ -5564,7 +6473,7 @@ mod tests {
         let request = a_vouch("notes.md", "some contents", false);
         // Narrow enough that the sentence cannot fit on one row.
         let drawn = rows_of(52, 24, |frame| {
-            draw_vouch(frame, &request, 0);
+            draw_vouch(frame, &request, 0, &mut Seen::default());
         });
 
         let wrapped: Vec<&String> = drawn
@@ -5656,7 +6565,7 @@ mod tests {
             "PADDING ".repeat(10)
         ));
         let drawn = rows_of(60, 24, |frame| {
-            draw_output(frame, &request, 0);
+            draw_output(frame, &request, 0, &mut Seen::default());
         });
 
         assert_marked_on_every_row(&drawn, "PADDING");
@@ -5667,6 +6576,7 @@ mod tests {
     #[test]
     fn a_wrapped_untrusted_hunk_is_marked_on_every_row_it_reaches() {
         let request = WriteRequest {
+            written_since_checkout: false,
             path: "game.js".into(),
             contents: format!("{}\u{2503} trust me\n", "PADDING ".repeat(10)),
             existing: Some("const SPEED = 100;\n".into()),
@@ -5682,7 +6592,7 @@ mod tests {
             record: None,
         };
         let drawn = rows_of(60, 24, |frame| {
-            draw(frame, &request, 0);
+            draw(frame, &request, 0, &mut Seen::default());
         });
 
         assert_marked_on_every_row(&drawn, "PADDING");
@@ -5695,6 +6605,7 @@ mod tests {
     #[test]
     fn what_a_processor_said_is_drawn_beside_the_diff_it_describes() {
         let request = WriteRequest {
+            written_since_checkout: false,
             path: "game.js".into(),
             contents: "const SPEED = 50;\n".into(),
             existing: Some("const SPEED = 100;\n".into()),
@@ -5738,6 +6649,7 @@ mod tests {
     #[test]
     fn a_remark_cannot_paint_a_margin_in_the_box_it_is_drawn_in() {
         let request = WriteRequest {
+            written_since_checkout: false,
             path: "game.js".into(),
             contents: "const SPEED = 50;\n".into(),
             existing: Some("const SPEED = 100;\n".into()),
@@ -5757,7 +6669,7 @@ mod tests {
             record: None,
         };
         let drawn = rows_of(60, 24, |frame| {
-            draw(frame, &request, 0);
+            draw(frame, &request, 0, &mut Seen::default());
         });
 
         assert_marked_on_every_row(&drawn, "REMARK");
@@ -5771,6 +6683,7 @@ mod tests {
     #[test]
     fn a_long_remark_does_not_push_the_diff_off_the_screen() {
         let request = WriteRequest {
+            written_since_checkout: false,
             path: "game.js".into(),
             contents: "const SPEED = 50;
 "
@@ -5795,9 +6708,9 @@ mod tests {
             record: None,
         };
 
-        for (width, height) in [(80, 24), (100, 30), (60, 20)] {
+        for (width, height) in [(80, 24), (100, 30)] {
             let drawn = rows_of(width, height, |frame| {
-                draw(frame, &request, 0);
+                draw(frame, &request, 0, &mut Seen::default());
             });
             let screen = drawn.join(
                 "
@@ -5815,6 +6728,25 @@ mod tests {
 {screen}"
             );
         }
+
+        // A box this small has no room for the change under the claim, so the yes waits until the
+        // change has been scrolled to.
+        let yes = press(KeyCode::Char('y'));
+        let mut seen = Seen::default();
+        let mut drawn = Drawn::default();
+        let top = rows_of(60, 20, |frame| drawn = draw(frame, &request, 0, &mut seen));
+        assert!(top.iter().any(|row| row.contains("claim")));
+        assert!(!top.iter().any(|row| row.contains("-const SPEED = 100;")));
+        assert_eq!(write_answer_for(yes, &request, &drawn), None);
+        let end = drawn.furthest();
+        let bottom = rows_of(60, 20, |frame| {
+            drawn = draw(frame, &request, end, &mut seen)
+        });
+        assert!(bottom.iter().any(|row| row.contains("-const SPEED = 100;")));
+        assert_eq!(
+            write_answer_for(yes, &request, &drawn),
+            Some(WriteResponse::Answer(WriteAnswer::Approve))
+        );
     }
 
     /// Neutralised rather than dropped, as everywhere else: a remark that could clear the line
@@ -5822,6 +6754,7 @@ mod tests {
     #[test]
     fn a_control_character_in_a_remark_is_replaced() {
         let request = WriteRequest {
+            written_since_checkout: false,
             path: "game.js".into(),
             contents: "const SPEED = 50;\n".into(),
             existing: Some("const SPEED = 100;\n".into()),
@@ -5879,31 +6812,31 @@ mod tests {
             (
                 "write",
                 unpainted_cell(painted, |frame| {
-                    draw(frame, &write, 0);
+                    draw(frame, &write, 0, &mut Seen::default());
                 }),
             ),
             (
                 "run",
                 unpainted_cell(painted, |frame| {
-                    draw_run(frame, &run, 0);
+                    draw_run(frame, &run, 0, &mut RowsShown::default());
                 }),
             ),
             (
                 "output",
                 unpainted_cell(painted, |frame| {
-                    draw_output(frame, &output, 0);
+                    draw_output(frame, &output, 0, &mut Seen::default());
                 }),
             ),
             (
                 "vouch",
                 unpainted_cell(painted, |frame| {
-                    draw_vouch(frame, &vouch, 0);
+                    draw_vouch(frame, &vouch, 0, &mut Seen::default());
                 }),
             ),
             (
                 "plan",
                 unpainted_cell(painted, |frame| {
-                    draw_manifest(frame, &plan, 0);
+                    draw_manifest(frame, &plan, 0, &mut Seen::default());
                 }),
             ),
         ];
@@ -5959,7 +6892,7 @@ mod tests {
             false,
         );
         let drawn = rows_of(60, 24, |frame| {
-            draw_vouch(frame, &request, 0);
+            draw_vouch(frame, &request, 0, &mut Seen::default());
         });
 
         assert_marked_on_every_row(&drawn, "PADDING");
@@ -5977,7 +6910,7 @@ mod tests {
             let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
             terminal
                 .draw(|frame| {
-                    draw_vouch(frame, &request, 0);
+                    draw_vouch(frame, &request, 0, &mut Seen::default());
                 })
                 .expect("draw");
             let drawn: String = terminal
@@ -6008,7 +6941,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 40)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw_vouch(frame, &request, 0);
+                draw_vouch(frame, &request, 0, &mut Seen::default());
             })
             .expect("draw");
         let drawn: String = terminal
@@ -6038,7 +6971,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(100, 40)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw_vouch(frame, &request, 0);
+                draw_vouch(frame, &request, 0, &mut Seen::default());
             })
             .expect("draw");
         let drawn: String = terminal
@@ -6082,7 +7015,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(100, 40)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw_exposure(frame, &request, 0);
+                draw_exposure(frame, &request, 0, &mut Seen::default());
             })
             .expect("draw");
         let drawn: String = terminal
@@ -6128,7 +7061,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(100, 40)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw_vouch(frame, &request, 0);
+                draw_vouch(frame, &request, 0, &mut Seen::default());
             })
             .expect("draw");
         let drawn: String = terminal
@@ -6157,7 +7090,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw_manifest(frame, request, 0);
+                draw_manifest(frame, request, 0, &mut Seen::default());
             })
             .expect("draw");
         terminal
@@ -6217,7 +7150,10 @@ mod tests {
     #[test]
     fn enter_does_not_approve_a_plan() {
         assert_eq!(
-            answer_for(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            answer_for(
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                &Drawn::taking_yes()
+            ),
             None
         );
 
@@ -6227,6 +7163,39 @@ mod tests {
         assert!(
             !drawn.to_lowercase().contains("enter"),
             "the plan prompt offers Enter as an answer: {drawn}"
+        );
+    }
+
+    /// MANIFEST-11. Escape at the plan prompt stops the run, as it does a step later, so the run is
+    /// not written as a record. Read as a plain decline it reaches the session as a `Reject`, which
+    /// does not set the cancel token. Saying no with `n` is still a decline that leaves the session
+    /// and its run going to the record, and Ctrl-C stops the run as before.
+    #[test]
+    fn escape_at_the_plan_prompt_stops_the_run_and_n_declines_it() {
+        let escape = manifest_answer_for(press(KeyCode::Esc), &Drawn::taking_yes());
+        assert_eq!(escape, Some(Response::Answer(Answer::Interrupt)));
+        assert!(
+            Answer::Interrupt.stops_the_turn(),
+            "the interrupt would not set the cancel token"
+        );
+
+        let no = manifest_answer_for(press(KeyCode::Char('n')), &Drawn::taking_yes());
+        assert_eq!(no, Some(Response::Answer(Answer::Reject)));
+        assert!(!Answer::Reject.stops_the_turn());
+
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(
+            manifest_answer_for(ctrl_c, &Drawn::taking_yes()),
+            Some(Response::Answer(Answer::Interrupt))
+        );
+        assert_eq!(
+            manifest_answer_for(press(KeyCode::Char('y')), &Drawn::taking_yes()),
+            Some(Response::Answer(Answer::Approve))
+        );
+        assert_eq!(
+            Answer::Interrupt.decision(),
+            Decision::Reject,
+            "stopping the run approved the plan"
         );
     }
 
@@ -6244,13 +7213,15 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
         let mut furthest = 0;
         terminal
-            .draw(|frame| furthest = draw_manifest(frame, &request, 0))
+            .draw(|frame| {
+                furthest = draw_manifest(frame, &request, 0, &mut Seen::default()).furthest()
+            })
             .expect("draw");
         assert!(furthest > 0, "a sixty step plan reported nothing to scroll");
 
         terminal
             .draw(|frame| {
-                draw_manifest(frame, &request, furthest);
+                draw_manifest(frame, &request, furthest, &mut Seen::default());
             })
             .expect("draw");
         let drawn: String = terminal
@@ -6285,7 +7256,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 30)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw_mcp_call(frame, request, expanded, 0);
+                draw_mcp_call(frame, request, expanded, 0, &mut Seen::default());
             })
             .expect("draw");
         terminal
@@ -6306,7 +7277,11 @@ mod tests {
     #[test]
     fn a_call_prompt_answers_by_its_rows_and_never_by_enter() {
         let standing = call(true, None);
-        let answer = |key: KeyEvent, request: &McpCallRequest| match call_answer_for(key, request) {
+        let answer = |key: KeyEvent, request: &McpCallRequest| match call_answer_for(
+            key,
+            request,
+            &Drawn::taking_yes(),
+        ) {
             Some(CallResponse::Answer(answer)) => Some(answer),
             _ => None,
         };
@@ -6341,14 +7316,21 @@ mod tests {
             ),
             Some(CallAnswer::Interrupt)
         );
-        assert_eq!(call_answer_for(press(KeyCode::Enter), &standing), None);
         assert_eq!(
-            call_answer_for(press(KeyCode::Char('2')), &call(false, None)),
+            call_answer_for(press(KeyCode::Enter), &standing, &Drawn::taking_yes()),
+            None
+        );
+        assert_eq!(
+            call_answer_for(
+                press(KeyCode::Char('2')),
+                &call(false, None),
+                &Drawn::taking_yes()
+            ),
             None,
             "a key granted what the screen says cannot be kept"
         );
         assert_eq!(
-            call_answer_for(press(KeyCode::Char('e')), &standing),
+            call_answer_for(press(KeyCode::Char('e')), &standing, &Drawn::taking_yes()),
             Some(CallResponse::Expand)
         );
     }
@@ -6431,7 +7413,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 30)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw_tool_list(frame, &tool_list(true), 0);
+                draw_tool_list(frame, &tool_list(true), 0, &mut Seen::default());
             })
             .expect("draw");
         let drawn: String = terminal
@@ -6466,7 +7448,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw_tool_list(frame, &request, 0);
+                draw_tool_list(frame, &request, 0, &mut Seen::default());
             })
             .expect("draw");
         let drawn: String = terminal
@@ -6486,12 +7468,591 @@ mod tests {
     /// `1` and `2` answer the list as its rows say, and Enter does not approve it.
     #[test]
     fn a_tool_list_answers_by_its_rows() {
-        let answer = |key| match tool_list_answer_for(key) {
+        let answer = |key| match tool_list_answer_for(key, &Drawn::taking_yes()) {
             Some(Response::Answer(answer)) => Some(answer),
             _ => None,
         };
         assert_eq!(answer(press(KeyCode::Char('1'))), Some(Answer::Approve));
         assert_eq!(answer(press(KeyCode::Char('2'))), Some(Answer::Reject));
-        assert!(tool_list_answer_for(press(KeyCode::Enter)).is_none());
+        assert!(tool_list_answer_for(press(KeyCode::Enter), &Drawn::taking_yes()).is_none());
+    }
+
+    /// Words that each appear once, so every part of a long field can be looked for on the screen.
+    fn numbered(prefix: char, count: usize) -> Vec<String> {
+        (0..count).map(|at| format!("{prefix}{at:04}")).collect()
+    }
+
+    /// Whether a key approved, refused or did nothing.
+    fn approves<R: pinned::Approving>(response: Option<R>) -> Option<bool> {
+        response.map(|response| response.approves())
+    }
+
+    macro_rules! kinds {
+        ($($kind:ident),* $(,)?) => {
+            /// One for each question the interface puts to a person.
+            #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+            enum Kind {
+                $($kind),*
+            }
+
+            const KINDS: &[Kind] = &[$(Kind::$kind),*];
+
+            // Exhaustive over the replies, so a question added there without a kind here does not
+            // build, and a kind does not build without a row in [`oversized`].
+            const _: fn(&crate::remote_confirm::Reply) -> Kind = |reply| match reply {
+                $(crate::remote_confirm::Reply::$kind(_) => Kind::$kind),*
+            };
+        };
+    }
+
+    kinds!(
+        Write, Run, ReadOutput, Vet, Fetch, Vouch, Exposure, Server, Manifest, ToolList, McpCall,
+        Move, Ask,
+    );
+
+    /// What a question remembers between its draws: the rows of each kind that have been shown.
+    #[derive(Default)]
+    struct Memory {
+        seen: Seen,
+        shown: RowsShown,
+    }
+
+    /// What one draw of a question decided, whichever gate the question is under.
+    #[derive(Clone, Copy)]
+    enum Looked {
+        Pinned(Drawn),
+        Run(RunDrawn),
+    }
+
+    impl Default for Looked {
+        fn default() -> Self {
+            Looked::Pinned(Drawn::default())
+        }
+    }
+
+    impl Looked {
+        fn pinned(&self) -> &Drawn {
+            match self {
+                Looked::Pinned(drawn) => drawn,
+                Looked::Run(_) => panic!("a run prompt's draw was read as a pinned one"),
+            }
+        }
+
+        fn run(&self) -> &RunDrawn {
+            match self {
+                Looked::Run(drawn) => drawn,
+                Looked::Pinned(_) => panic!("a pinned draw was read as a run prompt's"),
+            }
+        }
+
+        /// The rows a page moves.
+        fn page(&self) -> i16 {
+            match self {
+                Looked::Pinned(drawn) => drawn.page(),
+                Looked::Run(drawn) => i16::try_from(drawn.page).unwrap_or(i16::MAX),
+            }
+        }
+
+        fn moved(&self, scroll: u16, by: i16) -> u16 {
+            match self {
+                Looked::Pinned(drawn) => drawn.moved(scroll, by),
+                Looked::Run(drawn) => drawn.moved(scroll, i32::from(by)),
+            }
+        }
+
+        /// Whether the question, its keys and a row of the body were all on the screen.
+        fn has_room(&self) -> bool {
+            match self {
+                Looked::Pinned(drawn) => drawn.rows() > 0,
+                Looked::Run(drawn) => drawn.whole,
+            }
+        }
+    }
+
+    /// A question drawn scrolled this far.
+    type Draws = Box<dyn Fn(&mut ratatui::Frame, u16, &mut Memory) -> Looked>;
+
+    /// A question laid out by [`pinned::draw`], drawn scrolled this far.
+    fn pinned(draw: impl Fn(&mut ratatui::Frame, u16, &mut Memory) -> Drawn + 'static) -> Draws {
+        Box::new(move |frame, scroll, memory| Looked::Pinned(draw(frame, scroll, memory)))
+    }
+
+    /// What a key did at a draw: `Some(true)` where it approved.
+    type Answers = Box<dyn Fn(KeyEvent, &Looked) -> Option<bool>>;
+
+    /// A question too long for the box, and what to look for while it is scrolled through.
+    struct Case {
+        draw: Draws,
+        answer: Answers,
+        approving: Vec<char>,
+        refusing: char,
+        /// Text that decides the question, all of which has to have been drawn before a yes.
+        deciding: Vec<String>,
+        /// Text that only the key beside it grants anything by, so only that key waits on it.
+        grants: Vec<(char, Vec<String>)>,
+    }
+
+    /// Each question with its deciding fields grown past what one screen holds.
+    fn oversized(kind: Kind) -> Option<Case> {
+        match kind {
+            Kind::Write => {
+                let findings = numbered('k', 12);
+                let record = "/home/someone/.bravebot/remembered/recordedhere";
+                let request = WriteRequest {
+                    written_since_checkout: false,
+                    credentials: findings
+                        .iter()
+                        .map(|found| format!("{found} a secret standing in a config line"))
+                        .collect(),
+                    may_always: true,
+                    record: Some(record.into()),
+                    ..request(&(numbered('d', 40).join("\n") + "\n"), None)
+                };
+                let drawn = request.clone();
+                let mut deciding = findings;
+                deciding.extend([record.to_string(), "+d0000".to_string()]);
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw(frame, &drawn, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(move |key, looked| {
+                        approves(write_answer_for(key, &request, looked.pinned()))
+                    }),
+                    approving: vec!['y', 'a', 'r'],
+                    refusing: 'n',
+                    grants: Vec::new(),
+                    deciding,
+                })
+            }
+            Kind::Run => {
+                let request = a_run_with_a_long_argument_list();
+                let path = request.record.as_ref().expect("recordable").display();
+                let record = path.to_string();
+                let mut deciding = request
+                    .plan
+                    .steps()
+                    .iter()
+                    .flat_map(|step| step.args.clone())
+                    .collect::<Vec<_>>();
+                deciding.push(squeezed(t!(run_not_sandboxed)));
+                let drawn = request.clone();
+                Some(Case {
+                    draw: Box::new(move |frame, scroll, memory| {
+                        Looked::Run(draw_run(frame, &drawn, scroll, &mut memory.shown))
+                    }),
+                    answer: Box::new(move |key, looked| {
+                        match looked.run().response_to(key, &request)? {
+                            RunResponse::Answer(answer) => Some(answer.decision().approved()),
+                            RunResponse::Scroll(_) | RunResponse::Page(_) => None,
+                        }
+                    }),
+                    approving: vec!['y', 'a', 'r'],
+                    refusing: 'n',
+                    grants: vec![
+                        (
+                            'a',
+                            vec![
+                                squeezed(t!(run_always_output_trusted)),
+                                squeezed(t!(run_always_this_directory)),
+                            ],
+                        ),
+                        (
+                            'r',
+                            vec![squeezed(t!(run_remember_only_asking)), squeezed(&record)],
+                        ),
+                    ],
+                    deciding,
+                })
+            }
+            Kind::ReadOutput => {
+                let reason = numbered('r', 500);
+                let request = OutputRequest {
+                    verdict: Verdict::Unsafe,
+                    reason: Some(reason.join(" ")),
+                    ..an_output(&numbered('o', 100).join("\n"))
+                };
+                let drawn = request.clone();
+                let mut deciding = reason;
+                deciding.push("o0000".to_string());
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_output(frame, &drawn, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(move |key, looked| {
+                        approves(output_answer_for(key, &request, looked.pinned()))
+                    }),
+                    approving: vec!['y'],
+                    refusing: 'n',
+                    grants: Vec::new(),
+                    deciding,
+                })
+            }
+            Kind::Vet => {
+                let reason = numbered('r', 500);
+                let request = a_vetting(
+                    Verdict::Unsafe,
+                    Some(&reason.join(" ")),
+                    &numbered('c', 50).join("\n"),
+                );
+                let drawn = request.clone();
+                let mut deciding = reason;
+                deciding.push("c0000".to_string());
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_vet(frame, &drawn, scroll, None, &mut memory.seen)
+                    }),
+                    answer: Box::new(move |key, looked| {
+                        approves(vet_answer_for(key, &request, looked.pinned()))
+                    }),
+                    approving: vec!['y'],
+                    refusing: 'n',
+                    grants: Vec::new(),
+                    deciding,
+                })
+            }
+            // The host and what it is are pinned, which the fetch prompt's own tests hold at every
+            // size, and the address scrolls under them.
+            Kind::Fetch => None,
+            Kind::Vouch => {
+                let reason = numbered('r', 300);
+                let folders = numbered('f', 30);
+                let request = VouchRequest {
+                    verdict: Verdict::Unsafe,
+                    reason: Some(reason.join(" ")),
+                    ..a_vouch(
+                        &format!("/home/someone/{}/notes.md", folders.join("/")),
+                        numbered('p', 100).join("\n"),
+                        false,
+                    )
+                };
+                let drawn = request.clone();
+                let mut deciding = reason;
+                deciding.extend(folders);
+                deciding.push("p0000".to_string());
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_vouch(frame, &drawn, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(|key, looked| approves(answer_for(key, looked.pinned()))),
+                    approving: vec!['y'],
+                    refusing: 'n',
+                    grants: Vec::new(),
+                    deciding,
+                })
+            }
+            Kind::Exposure => {
+                let findings = numbered('x', 30);
+                let request = ExposureRequest {
+                    path: "config/master.key".into(),
+                    credentials: findings
+                        .iter()
+                        .map(|found| format!("{found} a secret standing in a config line"))
+                        .collect(),
+                };
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_exposure(frame, &request, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(|key, looked| approves(answer_for(key, looked.pinned()))),
+                    approving: vec!['y'],
+                    refusing: 'n',
+                    grants: Vec::new(),
+                    deciding: findings,
+                })
+            }
+            Kind::Server => {
+                let program = numbered('s', 100);
+                let workspace = numbered('w', 100);
+                let request = ServerRequest {
+                    language: "Rust",
+                    program: format!("/{}/rust-analyzer", program.join("/")),
+                    workspace: format!("/{}", workspace.join("/")),
+                    runs_build_tooling: true,
+                };
+                let mut deciding = program;
+                deciding.extend(workspace);
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_server(frame, &request, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(|key, looked| approves(answer_for(key, looked.pinned()))),
+                    approving: vec!['y'],
+                    refusing: 'n',
+                    grants: Vec::new(),
+                    deciding,
+                })
+            }
+            Kind::Manifest => {
+                let steps = numbered('m', 60);
+                let request = ManifestRequest {
+                    task: "tidy the notes".into(),
+                    steps: steps
+                        .iter()
+                        .map(|step| format!("{step} move a note"))
+                        .collect(),
+                };
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_manifest(frame, &request, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(|key, looked| approves(answer_for(key, looked.pinned()))),
+                    approving: vec!['y'],
+                    refusing: 'n',
+                    grants: Vec::new(),
+                    deciding: steps,
+                })
+            }
+            Kind::ToolList => {
+                let names = numbered('t', 60);
+                let descriptions = numbered('e', 60);
+                let request = ToolListRequest {
+                    tools: names
+                        .iter()
+                        .zip(&descriptions)
+                        .map(|(name, description)| bravebot_agent::confirm::ListedTool {
+                            name: format!("weather:{name}"),
+                            arguments: vec!["city (string, required)".into()],
+                            description: Some(format!("Get the forecast. {description}")),
+                        })
+                        .collect(),
+                    ..tool_list(false)
+                };
+                let mut deciding = names;
+                deciding.extend(descriptions);
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_tool_list(frame, &request, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(|key, looked| {
+                        approves(tool_list_answer_for(key, looked.pinned()))
+                    }),
+                    approving: vec!['1', 'y'],
+                    refusing: '2',
+                    grants: Vec::new(),
+                    deciding,
+                })
+            }
+            Kind::McpCall => {
+                let words = numbered('q', 834);
+                let request = McpCallRequest {
+                    arguments: vec![("query".into(), format!("\"{}\"", words.join(" ")))],
+                    ..call(true, Some("Look a thing up."))
+                };
+                let drawn = request.clone();
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_mcp_call(frame, &drawn, false, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(move |key, looked| {
+                        approves(call_answer_for(key, &request, looked.pinned()))
+                    }),
+                    approving: vec!['1', '2'],
+                    refusing: '3',
+                    grants: Vec::new(),
+                    deciding: words,
+                })
+            }
+            // As for the fetch prompt: the destination's host is pinned, and the move prompt's own
+            // tests hold it there.
+            Kind::Move => None,
+            // Every answer goes to the planner as an answer, and none of them approves anything.
+            Kind::Ask => None,
+        }
+    }
+
+    /// Scroll through a case from the top by `step` until it moves no further, checking each draw.
+    ///
+    /// Text counts as drawn once a draw so far has shown it whole. Each piece is shorter than a
+    /// row and a step overlaps the last draw by a row, so a piece that wraps is whole in one draw.
+    fn scroll_through(
+        kind: Kind,
+        case: &Case,
+        (width, height): (u16, u16),
+        step: fn(&Looked) -> i16,
+    ) {
+        let mut memory = Memory::default();
+        let mut scroll = 0;
+        let mut unseen: Vec<&String> = case.deciding.iter().collect();
+        let mut unseen_grants: Vec<(char, Vec<&String>)> = case
+            .grants
+            .iter()
+            .map(|(key, texts)| (*key, texts.iter().collect()))
+            .collect();
+        let mut first = true;
+        loop {
+            let mut drawn = Looked::default();
+            let rows = rows_of(width, height, |frame| {
+                drawn = (case.draw)(frame, scroll, &mut memory);
+            });
+            let shown = box_text(&rows).replace('┃', "");
+            unseen.retain(|text| !shown.contains(text.as_str()));
+            for (_, texts) in &mut unseen_grants {
+                texts.retain(|text| !shown.contains(text.as_str()));
+            }
+            let screen = rows.join("\n");
+            assert!(
+                !first || !unseen.is_empty(),
+                "{kind:?} fits one {width}x{height} screen, so it tests nothing there:\n{screen}"
+            );
+            first = false;
+            let refused = (case.answer)(press(KeyCode::Char(case.refusing)), &drawn);
+            assert_eq!(
+                refused,
+                Some(false),
+                "{kind:?} at {width}x{height}, scrolled {scroll}: {} did not refuse",
+                case.refusing
+            );
+            let next = drawn.moved(scroll, step(&drawn));
+            for &key in &case.approving {
+                let taken = (case.answer)(press(KeyCode::Char(key)), &drawn);
+                let waiting = unseen.first().copied().or_else(|| {
+                    unseen_grants
+                        .iter()
+                        .filter(|(granting, _)| *granting == key)
+                        .find_map(|(_, texts)| texts.first().copied())
+                });
+                match waiting {
+                    Some(unseen) => assert_eq!(
+                        taken, None,
+                        "{kind:?} at {width}x{height}, scrolled {scroll}: {key} was taken with \
+                         {unseen} never drawn:\n{screen}"
+                    ),
+                    None if next == scroll => assert_eq!(
+                        taken,
+                        Some(true),
+                        "{kind:?} at {width}x{height}: {key} was not taken at the end:\n{screen}"
+                    ),
+                    None => {}
+                }
+            }
+            if next == scroll {
+                let grants_unseen: Vec<_> = unseen_grants.iter().flat_map(|(_, t)| t).collect();
+                assert!(
+                    unseen.is_empty() && grants_unseen.is_empty(),
+                    "{kind:?} at {width}x{height}: {unseen:?} {grants_unseen:?} never drawn:\n{screen}"
+                );
+                return;
+            }
+            scroll = next;
+        }
+    }
+
+    /// PROMPT-1, PROMPT-4: a key that approves does nothing until every row that decides the
+    /// question has been drawn, whichever question it is, a row or a page at a time, at the size a
+    /// terminal opens at and at a small one. The key that refuses works at every draw.
+    #[test]
+    fn no_question_takes_a_yes_before_every_row_deciding_it_has_been_drawn() {
+        for &kind in KINDS {
+            let Some(case) = oversized(kind) else {
+                continue;
+            };
+            for size in [(80, 24), (60, 15)] {
+                scroll_through(kind, &case, size, |_| 1);
+                scroll_through(kind, &case, size, Looked::page);
+            }
+        }
+    }
+
+    /// PROMPT-4: a box with no row for the body once the keys are drawn whole takes no yes
+    /// anywhere, at the top, the bottom, or on the way down.
+    #[test]
+    fn a_box_with_no_room_for_the_body_beside_the_keys_takes_no_yes() {
+        for &kind in KINDS {
+            let Some(case) = oversized(kind) else {
+                continue;
+            };
+            let mut memory = Memory::default();
+            let mut scroll = 0;
+            loop {
+                let mut drawn = Looked::default();
+                let rows = rows_of(20, 6, |frame| {
+                    drawn = (case.draw)(frame, scroll, &mut memory);
+                });
+                assert!(
+                    !drawn.has_room(),
+                    "{kind:?} found a row for the body, so this size tests nothing:\n{}",
+                    rows.join("\n")
+                );
+                for &key in &case.approving {
+                    assert_eq!(
+                        (case.answer)(press(KeyCode::Char(key)), &drawn),
+                        None,
+                        "{kind:?}, scrolled {scroll}: {key} was taken:\n{}",
+                        rows.join("\n")
+                    );
+                }
+                let next = drawn.moved(scroll, 1);
+                if next == scroll {
+                    break;
+                }
+                scroll = next;
+            }
+        }
+    }
+
+    /// Rows drawn at one width are not the rows of another, so a yes earned by reading the whole
+    /// question in a wide box is not taken once the box is narrower.
+    #[test]
+    fn a_question_read_at_one_width_takes_no_yes_at_another() {
+        let case = oversized(Kind::Exposure).expect("the exposure prompt has a case");
+        let mut memory = Memory::default();
+        let mut drawn = Looked::default();
+        let mut scroll = 0;
+        loop {
+            rows_of(90, 24, |frame| {
+                drawn = (case.draw)(frame, scroll, &mut memory)
+            });
+            let next = drawn.moved(scroll, 1);
+            if next == scroll {
+                break;
+            }
+            scroll = next;
+        }
+        let yes = press(KeyCode::Char('y'));
+        assert_eq!((case.answer)(yes, &drawn), Some(true));
+        let wide = drawn;
+
+        rows_of(80, 24, |frame| {
+            drawn = (case.draw)(frame, scroll, &mut memory)
+        });
+        // The same number of rows at both widths, so only the width can start the count again.
+        assert_eq!(
+            (drawn.pinned().furthest(), drawn.pinned().rows()),
+            (wide.pinned().furthest(), wide.pinned().rows())
+        );
+        assert_eq!((case.answer)(yes, &drawn), None);
+    }
+
+    /// A key that does nothing is a key the person presses again, so the row under the body says
+    /// how much of what decides the question is still to be drawn, and goes back to the scroll
+    /// hint once it all has been.
+    #[test]
+    fn a_question_says_how_many_rows_are_left_to_read_before_a_yes() {
+        let case = oversized(Kind::Vet).expect("the vet prompt has a case");
+        let mut memory = Memory::default();
+        let mut drawn = Looked::default();
+        let mut scroll = 0;
+        let mut rows = rows_of(80, 24, |frame| {
+            drawn = (case.draw)(frame, scroll, &mut memory)
+        });
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("more rows to read before a yes")),
+            "{}",
+            rows.join("\n")
+        );
+        while drawn.moved(scroll, 1) != scroll {
+            scroll = drawn.moved(scroll, 1);
+            rows = rows_of(80, 24, |frame| {
+                drawn = (case.draw)(frame, scroll, &mut memory)
+            });
+        }
+        let bottom = rows;
+        assert!(
+            !bottom.iter().any(|row| row.contains("before a yes"))
+                && bottom.iter().any(|row| row.contains(scroll_hint(0).trim())),
+            "{}",
+            bottom.join("\n")
+        );
     }
 }

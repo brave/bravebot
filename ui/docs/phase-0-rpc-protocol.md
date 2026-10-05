@@ -148,9 +148,9 @@ Honest limits. Two things could eventually want an upstream change, and neither 
 - **Structured `doctor` output.** The checks live in `crates/cli/src/main.rs`, a binary,
   so they cannot be called as a library. v1 shells out to `bravebot doctor` and shows its text
   (§7.3). A small upstream extraction would be nicer and is optional.
-- **New approval types.** Command, fetch, language-server, plan and credential-exposure
-  approval are implemented. MCP requests are currently refused; adding UI support requires
-  adapting the bridge, not editing upstream.
+- **New approval types.** Command, fetch, language-server, plan, credential-exposure and MCP
+  approvals are implemented. MCP server startup is shared with the terminal through
+  `bravebot_agent::servers`, which takes its questions through an `Asker` the bridge supplies.
 
 If anything else appears to need an upstream edit, that is a signal the bridge is
 reaching for something it should not, and it should be raised rather than patched.
@@ -399,8 +399,8 @@ Returns `{ "session": "s2", "directory": "…", "branch": "main", "remembered": 
 turn, matching `Session::begin` + `save`, so an opened-and-abandoned window leaves nothing
 behind.
 
-Errors with `not_a_directory` if the path is not one, or `no_home` if `~/.bravebot` cannot be
-located.
+Errors with `not_a_directory` if the path is not one. Where there is no state directory the
+session still opens and its turns run, and nothing is written (SESSION-28).
 
 #### `session.fork`
 
@@ -617,11 +617,16 @@ See §8. Returns `{}`. An unknown or already-answered `request` errors
 #### Other decision replies
 
 `run.reply`, `output.reply`, `vouch.reply`, `fetch.reply`, `server.reply`,
-`manifest.reply`, `exposure.reply` and `ask.reply` all require `session` and `request`, and
+`manifest.reply`, `exposure.reply`, `mcp-server.reply`, `mcp-tools.reply`, `mcp-call.reply`,
+`mcp-move.reply` and `ask.reply` all require `session` and `request`, and
 must match the pending question's kind as well as its ID. `run.reply` accepts `decision` and `remember`; only an approval with literal
 `remember: true` records a command grant. Output, vouch, fetch, server, manifest and
 exposure replies accept `decision`. A fetch reply has no `remember`: an approval covers the one URL it was given
 for. A server reply has none either: an approval lasts as long as the session does.
+`mcp-server.reply` and `mcp-call.reply` accept `decision` and `remember`, read as a run's are:
+`remember: true` with an approval is the third answer, every future server in this project for
+the first and no more questions about this tool in this project for the second. `mcp-tools.reply`
+and `mcp-move.reply` accept `decision`.
 `ask.reply` accepts an `answers` array, whose entries contain `typed` text or `chosen`
 indices; unreadable entries decline. Choices are fitted to the question before use.
 
@@ -637,6 +642,29 @@ session's map as it is. It returns the updated lists, and refuses `kind: "rememb
 session is running. Revocation can reduce existing grants; it cannot add trust.
 
 ### 7.3 Trust and diagnostics
+
+#### Connectors
+
+The MCP servers a person declares, approves and turns on from the window (SERVERS-3). Each method
+except `connectors.preview` returns what `connectors.list` returns.
+
+- `connectors.list` takes nothing and returns `{ home, state, writable, unavailable, connectors }`.
+  `home` is the person's home directory, which a `~/` in the window's catalog stands for. Each
+  connector carries `alias`, `transport`, `command` or `url`, `variables` (`{ name, stored }`; a
+  stored value is never sent), `reads`, `directory`, `digest`, `approved`, `requested` (in the home
+  settings file), `connected` (both), `changed` and `refused`, or `alias` and `problem` for a
+  declaration that cannot be used.
+- `connectors.preview` takes a form, `{ alias, transport, url }` or `{ alias, transport, command,
+  variables, directory }`, where a variable is `{ name, value }` to store a value, `{ name }` to
+  read it from the environment at launch, or `{ name, keep: true }` to keep the value the existing
+  declaration stores. It writes nothing, and returns the declaration drawn as above with
+  `fingerprint` (the whole digest), `exists`, `same` and `fetching`.
+- `connectors.connect` takes the same form and the `fingerprint` the person was shown, and
+  `replace: true` to write over a different declaration of the same name. It declares, approves and
+  requests the server in `~/.bravebot/settings.json`, and refuses with `bad_request` where the form
+  no longer resolves to that fingerprint.
+- `connectors.disconnect` takes `alias` and takes the request out of the home settings file,
+  keeping the declaration and its approval. `connectors.remove` also deletes those.
 
 #### `trust.reply`
 
@@ -735,6 +763,12 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `manifest.done` | `{ run, reply, model, steps, clean, tokens, outputTokens, notices, attempt, record, trust }` | a run finished |
 | `manifest.error` | `{ run, kind, message, category, attempts, status, stopped, declined, problem, attempt, record, notices }` | a run stopped |
 | `exposure.request` | `{ request, path, credentials, summary }` | let the planner read a file holding a credential |
+| `mcp.starting` | `{ servers }` | a session's first turn is starting the MCP servers its settings request |
+| `mcp-server.request` | `{ request, alias, transport, command, url, program, variables, reads, directory, digest, requestedBy, changed, fetching }` | use an MCP server (SERVERS-4) |
+| `mcp.started` | `{ servers, confined, notes }` | what started, and a line for each request that did not |
+| `mcp-tools.request` | `{ request, alias, tools, refused, changed, vetting }` | offer a server's tools to the model (SERVERS-8) |
+| `mcp-call.request` | `{ request, alias, tool, name, arguments, description, mayStand }` | call a server's tool (SERVERS-7) |
+| `mcp-move.request` | `{ request, alias, declared, destination, authority, mayRecord }` | a remote server's reply pointed elsewhere (SERVERS-11) |
 | `ask.request` | `{ request, prompts }` | user questions |
 | `trust.request` | `{ directory, keeping }` | initial project trust; `keeping` as §9 |
 | `turn.done` | see §8.2 | `Ok(Outcome)` |
@@ -982,12 +1016,13 @@ the directory was made.
 
 ## 11. Current limits
 
-- MCP approval requests are refused until their UI is implemented. Command, output, vouch,
-  fetch, language-server, plan, credential-exposure and question approvals are implemented.
+- Command, output, vouch, fetch, language-server, plan, credential-exposure, MCP and question
+  approvals are implemented. A plan-first run is offered no MCP server's tools.
 - A manifest run's audit events carry `run` and no `turn`. The window does not show them yet.
 - What a manifest run released for a screen is not saved, so a run read back does not show it.
 - Replies arrive whole in `turn.done`; output-token events report counts, not text.
-- MCP configuration, subscription import and skills authoring have no dedicated UI.
+- MCP configuration (declaring, approving ahead of time, enabling and forgetting), subscription
+  import and skills authoring have no dedicated UI. `bravebot mcp` in a terminal does the first.
 - File browsing, previews and attachments are Electron IPC features, not RPC methods.
 - One `bravebot-rpc` process has one client. There is no multi-client transport.
 
@@ -1212,6 +1247,23 @@ Still open:
   request and explicit decision, and its kind is distinct from every other reply's.
 - An approval covers the file for the session, as the agent keeps it. It is not written to the
   record, so a reopened or new session asks again.
+- A session's first turn starts the MCP servers its settings request, after the trust question,
+  and sends `mcp.starting` and then `mcp.started`. The questions it puts while it does are
+  `mcp-server.request` and `mcp-move.request`, through the turn like any other. The servers are
+  held until the session closes and are not written to the record, so a reopened or forked
+  session starts its own. A turn stopped while they start starts none, and the next turn asks
+  again. `session.new`, `session.open` and `session.fork` no longer carry `serversNote`.
+- `mcp-server.request` carries the declaration as fields. `command` is the argv of a local
+  server and `url` the address of a remote one; `program` is where a local server's program
+  resolved, sent only where that is not its first word. `variables` holds `{ name, stored }`,
+  and a stored value is never sent. `fetching` is the agent's lines about a runner that fetches
+  what it runs. `digest` is what an approval binds to.
+- `mcp-tools.request` carries each tool as the client drew it: `name` (`alias:tool`),
+  `arguments` (one line each) and `description`, which is the server's own text. `refused`
+  counts the tools that could not be offered. `vetting` is shaped as on `vet.request`.
+- `mcp-call.request` carries `arguments` as `{ name, value }` with the value as JSON, and
+  `mayStand`, which says whether the third answer can be recorded. A `remember: true` sent
+  where it is false is read as a yes to the one call.
 - `session.new`, `session.open`, `session.fork` and `permissions.list` carry `settingsRules`:
   `{ deny, ask, allow, unreadable, proposed, directories }`. The first three are the rules in
   force, as the files spelled them. `unreadable` holds `{ rule, said }` for each entry that is

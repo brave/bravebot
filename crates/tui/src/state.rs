@@ -121,7 +121,97 @@ pub struct Output {
     pub read_by_the_planner: bool,
     /// How the command ended, as the driver said it from the exit codes and the clock.
     pub outcome: bravebot_agent::report::Outcome,
+    /// The background job this row is, where it is one (RUN-26).
+    ///
+    /// One row for the whole of a job's life, made when it starts, so it is the row a person finds
+    /// a running build at rather than one that appears the first time the planner looks.
+    pub job: Option<JobView>,
 }
+
+impl Output {
+    /// Whether the planner read what the row holds, or `None` for a job that has printed nothing
+    /// yet, where there is nothing it could have read or been kept from.
+    pub fn read(&self) -> Option<bool> {
+        (self.job.is_none() || self.total > 0).then_some(self.read_by_the_planner)
+    }
+}
+
+/// A background job, as the driver reported it (RUN-26).
+///
+/// Every field is the driver's or this end's own: a name the driver minted, the line the person
+/// endorsed, a clock reading taken here, and an outcome said from exit codes. None of it comes from
+/// a byte the job printed, so the hint line, `/status` and the row may decide from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobView {
+    /// The name the driver gave it, which is the one the planner reads it by.
+    pub name: String,
+    /// The delegate whose job it is, where it is not the turn's own: each delegate mints names of
+    /// its own, so `job:1` can be two jobs at once.
+    pub delegate: Option<bravebot_agent::report::DelegateId>,
+    /// When this end was told it started, so how long it has run is this end's clock and not a
+    /// figure the worker sent.
+    pub since: Instant,
+    /// How long the run had been waited for when the person moved it, where they did.
+    pub moved_after: Option<Duration>,
+    pub state: JobState,
+    /// The token `/jobs stop` sets, which the turn reads at its next step (RUN-27).
+    pub stop: bravebot_core::cancel::JobStop,
+}
+
+/// Where a background job is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobState {
+    Running,
+    /// The person asked to stop it and the turn has not reached its next step to do so.
+    Stopping,
+    /// It exited, or the planner or the person stopped it, and somebody was told how.
+    Ended,
+    /// Still running when its turn ended, and stopped with the turn.
+    EndedWithTurn,
+}
+
+impl JobView {
+    /// Whether its program may still be going, which a job being stopped still is.
+    pub fn is_running(&self) -> bool {
+        matches!(self.state, JobState::Running | JobState::Stopping)
+    }
+
+    /// Where it is, in the words the row's view and `/status` say it in.
+    ///
+    /// From the state and this end's clock. An ended job is left to the outcome beside it, which
+    /// says how it ended from its exit codes. A moved line counts from when it started, not from
+    /// the move, as the planner is told.
+    pub fn standing(&self, outcome: &bravebot_agent::report::Outcome) -> String {
+        match self.state {
+            JobState::Running => t!(
+                job_running,
+                ran_for = crate::loops::spell(
+                    self.since.elapsed() + self.moved_after.unwrap_or_default()
+                )
+            )
+            .to_string(),
+            JobState::Stopping => t!(job_stopping).to_string(),
+            JobState::Ended => outcome.summary(),
+            JobState::EndedWithTurn => t!(job_ended_with_turn).to_string(),
+        }
+    }
+
+    /// The name, with the delegate's number where it is a delegate's job.
+    pub fn label(&self) -> String {
+        match self.delegate {
+            Some(delegate) => t!(
+                job_of_delegate,
+                name = self.name.clone(),
+                number = delegate.to_string()
+            )
+            .to_string(),
+            None => self.name.clone(),
+        }
+    }
+}
+
+/// How many of a job's lines its row keeps, the same as the driver keeps of one look.
+const JOB_ROW_LINES: usize = 2000;
 
 /// Something the delegate view can open.
 ///
@@ -409,13 +499,24 @@ impl Entry {
 /// the prompt was, so the context around it is drawn without asking what any of it says. There is
 /// no row of this interface's own to draw instead, and inventing one from a tag this build happens
 /// to know would put a line on the screen that the live session never had.
-fn recalled_entry(line: &bravebot_agent::conversation::Said) -> Entry {
+///
+/// A reply goes through [`crate::reasoning::spoken`] as it did live (VIEW-18): the record holds
+/// the reply whole, reasoning block included, and a resume that drew it would put back the
+/// paragraph the live session kept off the screen. A reply with nothing left is no entry, as
+/// [`Session::narrate`] drops it.
+fn recalled_entry(line: &bravebot_agent::conversation::Said) -> Option<Entry> {
     use bravebot_agent::conversation::Said;
-    match line {
+    Some(match line {
         Said::User(text) | Said::Composed { text, .. } => Entry::user(text),
-        Said::Assistant(text) => Entry::assistant(text, Vec::new()),
+        Said::Assistant(text) => {
+            let text = crate::reasoning::spoken(text);
+            if text.trim().is_empty() {
+                return None;
+            }
+            Entry::assistant(text, Vec::new())
+        }
         Said::Tool { line, why } => Entry::recalled_tool(line, why),
-    }
+    })
 }
 
 /// A line typed while a turn was running, waiting for it to end.
@@ -554,67 +655,6 @@ impl Finished {
     }
 }
 
-/// Compose a localized failure reason from safe fields, without raw backend error text.
-///
-/// `cut_off` is what a reply the output ceiling stopped was doing, whose one name is a tool the
-/// request offered, spelt as it offered it.
-pub fn failure_reason(
-    diagnosis: bravebot_agent::Diagnosis,
-    cut_off: Option<&bravebot_aichat::CutOff>,
-) -> String {
-    use bravebot_agent::Category;
-    use bravebot_aichat::OpenCall;
-    let what: std::borrow::Cow<'_, str> = match diagnosis.category {
-        Category::Unauthorized => t!(failure_unauthorized).into(),
-        Category::RateLimited => t!(failure_rate_limited).into(),
-        Category::Unavailable => t!(failure_unavailable).into(),
-        Category::Refused => t!(failure_refused).into(),
-        Category::Transport => t!(failure_transport).into(),
-        Category::Incomplete => t!(failure_incomplete).into(),
-        Category::Undecodable => t!(failure_undecodable).into(),
-        // The one category that says a number. It is this program's own configured ceiling, not
-        // anything the service reported, and without it the sentence names no remedy.
-        // What the reply was writing is said as well, since a reply that spent the ceiling on one
-        // file's worth of argument is asked for in parts, and one that spent it thinking is not.
-        Category::TooLong => match (diagnosis.ceiling, cut_off) {
-            (None, _) => t!(failure_too_long).into(),
-            (Some(tokens), None) => t!(failure_too_long_at, tokens = tokens).into(),
-            (Some(tokens), Some(cut_off)) => match (&cut_off.call, cut_off.thought) {
-                (
-                    Some(OpenCall {
-                        tool: Some(tool), ..
-                    }),
-                    _,
-                ) => t!(
-                    failure_too_long_in_call,
-                    tokens = tokens,
-                    tool = tool.as_str()
-                )
-                .into(),
-                (Some(OpenCall { tool: None, .. }), _) => {
-                    t!(failure_too_long_in_a_call, tokens = tokens).into()
-                }
-                (None, true) => t!(failure_too_long_thinking, tokens = tokens).into(),
-                (None, false) => t!(failure_too_long_at, tokens = tokens).into(),
-            },
-        },
-        Category::Unconfigured => t!(failure_unconfigured).into(),
-        Category::Blocked => t!(failure_blocked).into(),
-        Category::Workspace => t!(failure_workspace).into(),
-        Category::Internal => t!(failure_internal).into(),
-    };
-    let mut said = what.to_string();
-    if let Some(status) = diagnosis.status {
-        said = t!(failure_with_status, what = said, status = status);
-    }
-    // Said only where there was more than one, since "after 1 attempts" is a worse sentence than
-    // the silence it replaces, and one attempt is what an unremarkable failure took.
-    if let Some(attempts) = diagnosis.attempts.filter(|count| *count > 1) {
-        said = t!(failure_with_attempts, what = said, attempts = attempts);
-    }
-    t!(session_error, problem = said)
-}
-
 /// What a half-typed line could still become.
 ///
 /// One kind at a time: a word opening with a slash is a command or a skill's name, and one opening
@@ -682,6 +722,18 @@ fn bigword_class(c: char) -> Class {
 pub struct Yanked {
     text: String,
     lines: bool,
+}
+
+/// A readline kill, as it left the line.
+#[derive(Debug, Clone)]
+struct Kill {
+    /// Whether it took text after the caret, which joins at the end of the kill buffer, rather than
+    /// before it, which joins at the start.
+    forward: bool,
+    /// All that the kills joined so far took.
+    text: String,
+    line: String,
+    caret: usize,
 }
 
 /// A selection that has ended, as the row and the column each of its ends was at, counting from
@@ -774,6 +826,35 @@ fn preview_of_dropped(found: &crate::dropped::Dropped) -> Option<crate::preview:
         crate::preview::Source::File(std::path::PathBuf::from(&found.path)),
         crate::preview::Fit::Thumbnail,
     ))
+}
+
+/// Thumbnails for pictures and files going back into the box, each started again from what was
+/// staged.
+///
+/// A line that is sent clears its previews, and a drawable picture cannot be cloned into the sent
+/// set, so a line that returns to the box (a stopped turn, an unqueue) has its thumbnails made
+/// again. Display only, as the first ones were.
+fn previews_restaged(
+    pasted: &[AttachedImage],
+    attached: &[Attached],
+) -> Vec<(String, crate::preview::Preview)> {
+    let pictures = pasted.iter().map(|picture| {
+        (
+            picture.marker.clone(),
+            crate::preview::Preview::start(
+                crate::preview::Source::Bytes(picture.bytes.clone()),
+                crate::preview::Fit::Thumbnail,
+            ),
+        )
+    });
+    let files = attached.iter().filter_map(|file| {
+        let dropped = crate::dropped::Dropped {
+            path: file.shown.clone(),
+            kind: file.kind,
+        };
+        preview_of_dropped(&dropped).map(|preview| (file.marker.clone(), preview))
+    });
+    pictures.chain(files).collect()
 }
 
 /// A file dropped on the box, and the marker standing for it in the line.
@@ -908,6 +989,8 @@ pub struct PastedText {
 pub struct Laid {
     /// Columns the transcript was drawn in.
     pub width: u16,
+    /// Columns the whole frame had, which is what decides whether the info panel fits.
+    pub columns: u16,
     /// Rows it had room for.
     pub height: u16,
     /// Rows the whole of it came to.
@@ -926,6 +1009,20 @@ pub struct Laid {
     /// A match is reached at the row the line holding it begins at, as a prompt is: a line the
     /// width wraps is several rows of the screen and one entry here.
     pub matches: Vec<u16>,
+}
+
+/// What the info panel names the session by: its name, its directory, its branch and its links.
+///
+/// The name is the session record's title, which is the person's first prompt or what they typed
+/// at `/rename`. The directory and the branch are the ones the resume list shows, and the links are
+/// the ones the person gave with `/issue` and `/pr`.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Identity {
+    pub name: String,
+    pub directory: String,
+    pub branch: Option<String>,
+    pub issue: Option<String>,
+    pub pull_request: Option<String>,
 }
 
 /// The scroller, while it is open.
@@ -1205,6 +1302,13 @@ pub struct Session {
     /// one line of thought has nothing to file. Not the system clipboard either, which Ctrl-V owns and
     /// which a person shares with every other window they have open.
     register: Option<Yanked>,
+    /// The last readline kill, so the next one in the same direction joins it rather than replacing
+    /// it.
+    ///
+    /// The line and caret the kill left behind are kept with it, and a kill joins only when both are
+    /// still as they were: any edit or move in between changes one of them, which is how this knows
+    /// the kills were consecutive without every edit having to clear it.
+    last_kill: Option<Kill>,
     /// The last change, for the key that does it again.
     ///
     /// The instruction and what was typed into it, rather than the line it produced, so `.` acts at
@@ -1224,6 +1328,12 @@ pub struct Session {
     pub status: Status,
     /// Whether the audit trail is shown alongside replies.
     pub show_trail: bool,
+    /// Whether the person has the info panel open, which the frame then draws only where it fits.
+    panel: bool,
+    /// Whether `/caffeinate` is on, and the hold it keeps while work is pending.
+    pub(crate) caffeinate: crate::caffeinate::KeepAwake,
+    /// What the info panel says this session is.
+    identity: Identity,
     /// Scroll offset from the bottom, in lines.
     pub scroll: u16,
     /// The scroller, while it is open.
@@ -1242,6 +1352,11 @@ pub struct Session {
     /// whole session the way it lists delegates, and an entry is the wrong place to look for the
     /// third command when the second one scrolled away.
     outputs: Vec<Output>,
+    /// Where the rows of the turn in flight, or of the last one, begin in `outputs`.
+    ///
+    /// The jobs the hint line counts and `/status` lists are the rows from here on: a job cannot
+    /// outlive its turn, so the last turn's are the only ones there is anything to say about.
+    jobs_from: usize,
     /// Every question asked beside the work this session, oldest first.
     ///
     /// Held here rather than in the transcript, because none of it is in the conversation: an
@@ -1268,6 +1383,9 @@ pub struct Session {
     /// The MCP servers this session started, which is what makes the confinement above one it is
     /// using rather than one it has on offer.
     pub servers: Servers,
+    /// The language servers this session has started, which the turns' servers report to and the
+    /// info panel reads.
+    language_servers: bravebot_agent::lsp::Roster,
     /// How much this session asks before it acts, which one key cycles.
     ///
     /// Not persisted, like `shell` and unlike the trust map: a mode is a standing answer somebody
@@ -1333,6 +1451,11 @@ pub struct Session {
     /// is a name rather than an optional one: every turn asks for something, whether a person picked
     /// it or the settings file did.
     served: Option<(String, String)>,
+    /// The model an earlier process recorded as having answered, for a session picked up from its
+    /// record. Read by [`Session::served_model`] only until a turn here sets [`Session::served`],
+    /// so a save before the first turn writes back what the record already says rather than
+    /// no model, which reads as a record written before the model was kept.
+    recorded_model: Option<String>,
     /// Whether the two halves of [`Session::served`] are names from one roster.
     ///
     /// False where the request named an opaque handle standing for a model rather than a model, since
@@ -1365,7 +1488,7 @@ pub struct Session {
     /// Kept after the button comes up, so a user can see what they copied rather than watching
     /// it vanish at the moment it is taken.
     pub selection: Option<crate::select::Selection>,
-    /// How much the last copy took, until the next thing happens.
+    /// How much the last copy took, until the next click or the next prompt.
     pub copied: Option<usize>,
     /// What the turn that just finished cost, until the next one starts.
     ///
@@ -1451,6 +1574,12 @@ pub struct Session {
     /// to name it, and scanning back through the transcript for the tail would be a worse way
     /// to answer a question the session already knows the answer to.
     pub running: Option<Activity>,
+    /// The token that moves the turn's command in flight to the background, while one can be.
+    ///
+    /// Held only between the driver offering it and that call finishing, and only for the turn's
+    /// own call. Delegates run alongside the turn, so a delegate's call finishing while the turn's
+    /// command is running must not take the turn's token with it.
+    movable: Option<bravebot_core::cancel::Handoff>,
     /// Prompts typed and sent while a turn was running, in the order they were typed.
     ///
     /// Not in the transcript: they have not happened. They are drawn under the box as waiting,
@@ -1465,8 +1594,9 @@ pub struct Session {
     /// Whether the person has asked for what is running to stop, since the last turn began.
     ///
     /// A turn being stopped takes nothing more at its round boundaries, so a prompt waiting behind
-    /// it is not going into it. Only the rows under the box read this, and only while a turn is in
-    /// flight, which is why the next turn beginning is the one place it goes down.
+    /// it is not going into it. The rows under the box and the status line read this, and only
+    /// while a turn is in flight, which is why the next turn beginning is the one place it goes
+    /// down.
     stopping: bool,
     /// Whether the terminal tells Ctrl-Enter from Enter.
     ///
@@ -1500,6 +1630,12 @@ pub struct Session {
     /// with no mode to leave (ADDRESS-10). Private, because only [`Session::address`] may set it:
     /// that is what keeps a loop's tick, a goal or a watch from ever carrying one (ADDRESS-3).
     addressing: Option<Addressed>,
+    /// The words `--system-prompt` and `--append-system-prompt` named, which every turn of this
+    /// session carries, loop ticks and goal rounds included (CLI-19).
+    ///
+    /// Held as the plain strings they were typed as. A turn reads them off the session, and nothing
+    /// stores them in the conversation or the record (INSTR-5).
+    system_prompts: bravebot_agent::turn::SystemPrompts,
     /// The definition `--agent` named, which every turn this session starts addresses unless a
     /// `/agent` line addressed another for one turn.
     ///
@@ -1537,6 +1673,12 @@ pub struct Session {
     /// Held as it arrived. What is drawn from it is [`Session::reply_so_far`], since a model
     /// that has nowhere else to put its working writes it in here.
     streaming: String,
+    /// What the commands carried out during the turn in flight have said, drawn at the tail.
+    ///
+    /// Not in the transcript until the turn has ended (CMD-8). A stopped turn gives its prompt
+    /// back only where the transcript has nothing after it, and a failed one hangs its trail on the
+    /// last entry, so a note put there mid-turn would cost a person the prompt they stopped.
+    said_while_working: Vec<Entry>,
     /// The call the model is writing, named as the model named it, until the round's calls start.
     ///
     /// Beside the spinner rather than in the transcript for the reason the reply taking shape is
@@ -1569,7 +1711,8 @@ pub struct Session {
     ///
     /// Display only: nothing here is sent anywhere. Held apart from [`AttachedImage`] because a
     /// drawable picture is neither comparable nor cloneable the way the bytes it came from are.
-    /// Emptied when the line is sent, so a picture recalled with its line has no thumbnail.
+    /// Emptied when the line is sent. A line that returns to the box after a stopped turn or an
+    /// unqueue has them made again from the staged pictures.
     previews: Vec<(String, crate::preview::Preview)>,
     /// The pictures the line carried when it was sent.
     ///
@@ -1694,21 +1837,27 @@ impl Session {
             typed_over: Vec::new(),
             typing_over_begins_a_change: false,
             register: None,
+            last_kill: None,
             last_change: None,
             undo: std::collections::VecDeque::new(),
             inserting: None,
             status: Status::Idle,
             show_trail: false,
+            panel: false,
+            caffeinate: Default::default(),
+            identity: Identity::default(),
             scroll: 0,
             scroller: None,
             watching: None,
             outputs: Vec::new(),
+            jobs_from: 0,
             asides: Vec::new(),
             held_view: None,
             history_search: None,
             laid: Laid::default(),
             confinement: confinement.into(),
             servers: Servers::default(),
+            language_servers: bravebot_agent::lsp::Roster::default(),
             // Asking, which is what a session has always done. `allowing_bypass` moves it, and is
             // the only thing that can: the flag is the record that somebody accepted the cost.
             permission_mode: bravebot_agent::PermissionMode::default(),
@@ -1727,6 +1876,7 @@ impl Session {
             timing: std::collections::BTreeMap::new(),
             occupancy: Occupancy::Unmeasured,
             served: None,
+            recorded_model: None,
             // Nothing has been served, so nothing has been compared. Set by the first turn.
             served_names_are_comparable: true,
             premium: None,
@@ -1746,6 +1896,7 @@ impl Session {
             phase: None,
             checking: None,
             running: None,
+            movable: None,
             queued: Vec::new(),
             turn_in_flight: false,
             stopping: false,
@@ -1754,11 +1905,13 @@ impl Session {
             watches: watch::Watches::new(),
             goal: None,
             addressing: None,
+            system_prompts: bravebot_agent::turn::SystemPrompts::default(),
             standing: None,
             rewind_points: Vec::new(),
             turn_start: TurnStart::default(),
             pending: crate::remote_confirm::Interjections::new(),
             streaming: String::new(),
+            said_while_working: Vec::new(),
             composing: None,
             attributed_to: None,
             answers: Vec::new(),
@@ -1823,6 +1976,11 @@ impl Session {
     /// How much this session asks before it acts.
     pub fn permission_mode(&self) -> bravebot_agent::PermissionMode {
         self.permission_mode
+    }
+
+    /// Whether the session was started with the flag that skips permissions.
+    pub fn bypass_available(&self) -> bool {
+        self.bypass_available
     }
 
     /// Move to the next mode, and say nothing: the line under the box is the answer.
@@ -1919,11 +2077,20 @@ impl Session {
 
     /// What the indicator should call what is happening, most specific first.
     ///
-    /// A check in flight is the most immediate answer, then the call the model is writing, then
-    /// the phase it is waiting in. `None` only before the first request goes out, when
-    /// there is genuinely nothing to say yet and the turn's own word is all there is.
+    /// A stop asked for is the first answer, then a check in flight, then the call the model is
+    /// writing, then the phase it is waiting in. `None` only before the first request goes out,
+    /// when there is genuinely nothing to say yet and the turn's own word is all there is.
     fn what_is_happening(&self) -> Option<String> {
-        // A check first, and ahead of every phase: it is a whole model call inside the tool call
+        // A stop ahead of everything, because everything else on this row is what the turn is
+        // being taken away from. The turn ends once its worker and its delegates return, which can
+        // take seconds, and a row still naming the work through that wait reads as a press nobody
+        // heard. Every further press finds the same word, which is its answer too: it asks for the
+        // stop already underway.
+        if self.stopping && self.a_turn_is_running() {
+            return Some(t!(indicator_stopping).to_string());
+        }
+
+        // A check next, and ahead of every phase: it is a whole model call inside the tool call
         // on the row above, so the round's own word is the one thing here that is not what the
         // session is waiting on. With auto-vetting on and a safe verdict no prompt is ever drawn
         // for it either, so without this the two words on that row are the whole of what a person
@@ -2000,6 +2167,22 @@ impl Session {
     pub fn restore_spend(&mut self, tokens: u64, by_turn: std::collections::BTreeMap<usize, u64>) {
         self.tokens = tokens;
         self.spend = by_turn;
+    }
+
+    /// Take on the model an earlier session's record says answered.
+    ///
+    /// Separate from [`Session::served`] because that records a request made in this process, with
+    /// the tier it ran on, and nothing has been asked yet.
+    pub fn restore_model(&mut self, model: Option<String>) {
+        self.recorded_model = model;
+    }
+
+    /// Take on what a record says about what answered and what it cost: the spend, the timing and
+    /// the model, which are the figures a save writes back whole.
+    pub fn restore_accounts(&mut self, record: &bravebot_session::sessions::Record) {
+        self.restore_spend(record.tokens, record.spend.clone());
+        self.restore_timing(record.timing.clone());
+        self.restore_model(record.model.clone());
     }
 
     /// Take on how an earlier session's turns spent their time.
@@ -2263,6 +2446,7 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.running = None;
+        self.movable = None;
         self.started = None;
         self.scroll = 0;
         self.selection = None;
@@ -2275,11 +2459,23 @@ impl Session {
         // The loop goes with the conversation it was started in. A schedule surviving into a
         // session that knows nothing about it would send a prompt whose context has been thrown
         // away, which is neither what was asked for nor recognisable as a mistake.
-        self.looping = None;
+        //
+        // Said rather than done in silence (LOOP-11): a schedule that stopped sending turns with
+        // nothing written about it looks like one that is live and has found nothing. Silent where
+        // there was no loop, and after the transcript was emptied, so the line is the new
+        // conversation's first.
+        if self.looping.take().is_some() {
+            self.note(t!(loop_cleared));
+        }
         // The goal goes the same way, and for a sharper version of the same reason: a condition
         // judged against an exchange that has been thrown away is judged against nothing, and the
         // first turn of the new session would be sent back for failing a test nobody set here.
-        self.goal = None;
+        //
+        // Said rather than done in silence (GOAL-10): a condition that stopped holding the session
+        // open with nothing written about it looks like one that was met or never set. Silent where
+        // there was no goal, and after the transcript was emptied, so the line is the new
+        // conversation's first.
+        self.clear_goal();
         // And the watches, for the sharper version of the same reason again: a fire is a sentence
         // this program writes about a file, and one arriving in a conversation that never asked
         // for it has nothing above it to explain itself by.
@@ -2299,6 +2495,7 @@ impl Session {
         // than in it, so it is dropped here by name: a conversation nobody remembers leaving its
         // commands openable is the one case the view could show work from a session that is gone.
         self.outputs.clear();
+        self.jobs_from = 0;
         // An aside is a question about a particular exchange, asked over a copy of it. The
         // exchange is gone, so the question no longer has anything to be about, and a row that
         // outlived it would offer an answer to a conversation nobody can read.
@@ -2575,19 +2772,108 @@ impl Session {
     ///
     /// Appended rather than attached to a line, so the third command is where the view expects it
     /// once the second one has scrolled away.
+    ///
+    /// A look at a background job goes on that job's row instead, after what earlier looks found,
+    /// so a finish does not move the row under somebody stepping through the list (WATCH-15).
     pub fn command_printed(&mut self, printed: Printed) {
+        if let Some(row) = printed.job.as_deref().and_then(|name| self.job_row(name)) {
+            // Each look keeps its first lines. Appending stops at the first look that left some out,
+            // so the view never joins two runs of lines with a gap between them, and the row stays
+            // bounded however often the job is looked at. The count says what was left out.
+            if row.lines.len() == row.total {
+                let room = JOB_ROW_LINES.saturating_sub(row.lines.len());
+                row.lines.extend(printed.lines.into_iter().take(room));
+            }
+            row.total += printed.total;
+            // Kept from the planner if any look was: one standing for the row cannot say both, and
+            // saying a model read what it was kept from is the reading that misleads.
+            row.read_by_the_planner &= printed.read_by_the_planner;
+            row.outcome = printed.outcome;
+            return;
+        }
         self.outputs.push(Output {
             command: printed.command,
             lines: printed.lines,
             total: printed.total,
             read_by_the_planner: printed.read_by_the_planner,
             outcome: printed.outcome,
+            job: None,
         });
+    }
+
+    /// A background job started, ended, or is being stopped with its turn (RUN-26).
+    ///
+    /// Its row is made when it starts, with nothing printed yet, and every later event changes that
+    /// row. Whose job it is comes from the driver's attribution, never from anything in the event.
+    pub fn job(&mut self, event: bravebot_agent::report::JobEvent) {
+        use bravebot_agent::report::JobEvent;
+        match event {
+            JobEvent::Started {
+                name,
+                line,
+                moved_after,
+                stop,
+            } => self.outputs.push(Output {
+                command: line,
+                lines: Vec::new(),
+                total: 0,
+                // True so the first look's standing is the row's: looks are merged with `&=`.
+                read_by_the_planner: true,
+                outcome: bravebot_agent::report::Outcome::Running {
+                    ran_for: moved_after.unwrap_or_default(),
+                    waited: None,
+                },
+                job: Some(JobView {
+                    name,
+                    delegate: self.attributed_to,
+                    since: Instant::now(),
+                    moved_after,
+                    state: JobState::Running,
+                    stop,
+                }),
+            }),
+            JobEvent::Ended { name, outcome } => {
+                if let Some(row) = self.job_row(&name) {
+                    row.outcome = outcome;
+                    if let Some(job) = row.job.as_mut() {
+                        job.state = JobState::Ended;
+                    }
+                }
+            }
+            JobEvent::Dropped { name } => {
+                if let Some(job) = self.job_row(&name).and_then(|row| row.job.as_mut()) {
+                    job.state = JobState::EndedWithTurn;
+                }
+            }
+        }
+    }
+
+    /// The row of the job by this name, among the jobs of the turn in flight that belong to whoever
+    /// the driver last said the reports are from.
+    fn job_row(&mut self, name: &str) -> Option<&mut Output> {
+        let whose = self.attributed_to;
+        self.outputs[self.jobs_from..].iter_mut().rev().find(|row| {
+            row.job
+                .as_ref()
+                .is_some_and(|job| job.name == name && job.delegate == whose)
+        })
     }
 
     /// Every command this session ran, oldest first.
     pub fn outputs(&self) -> &[Output] {
         &self.outputs
+    }
+
+    /// The background jobs of the turn in flight, or of the last one, in the order they started.
+    pub fn jobs(&self) -> impl Iterator<Item = (&Output, &JobView)> {
+        self.outputs[self.jobs_from..]
+            .iter()
+            .filter_map(|row| row.job.as_ref().map(|job| (row, job)))
+    }
+
+    /// How many background jobs are running now, for the hint line.
+    pub fn jobs_running(&self) -> usize {
+        self.jobs().filter(|(_, job)| job.is_running()).count()
     }
 
     /// Keep a question asked beside the work, and open the view on it.
@@ -2923,6 +3209,9 @@ impl Session {
     /// happened is worse than an unpaired line.
     pub fn finish_activity(&mut self, activity: Activity) {
         self.running = None;
+        if self.attributed_to.is_none() {
+            self.movable = None;
+        }
         let target = self
             .working_lines()
             .iter_mut()
@@ -2950,6 +3239,36 @@ impl Session {
 
     fn still_running(entry: &Entry) -> bool {
         entry.activity.as_ref().is_some_and(Activity::is_running)
+    }
+
+    /// Hold the token that moves the turn's command in flight to the background.
+    ///
+    /// A delegate's is dropped. Its call is not the one the screen shows running, and the driver
+    /// offers it none, so a token attributed to one is not a token anybody here could mean.
+    pub fn movable(&mut self, handoff: bravebot_core::cancel::Handoff) {
+        if self.attributed_to.is_none() {
+            self.movable = Some(handoff);
+        }
+    }
+
+    /// Whether the turn's command in flight can be moved to the background now.
+    pub fn can_move_to_background(&self) -> bool {
+        self.movable.is_some()
+    }
+
+    /// Ask for the turn's command in flight to go on in the background, where one can.
+    ///
+    /// Taken as it is requested, so the hint goes and a second press does nothing. A press with
+    /// no command that can be moved does nothing either, which is the key being pressed between
+    /// two calls: the next call gets a token of its own, and this press does not reach it.
+    ///
+    /// Whether a command was moved.
+    pub fn move_to_background(&mut self) -> bool {
+        let Some(handoff) = self.movable.take() else {
+            return false;
+        };
+        handoff.request();
+        true
     }
 
     /// Accept a typed character.
@@ -3021,6 +3340,8 @@ impl Session {
         }
         self.abandon_the_selection();
         self.history.leave();
+        // A line that grew under the list is one the list was not put up over.
+        self.shortcuts = false;
         self.input.insert(self.caret, '\n');
         self.caret += 1;
         // A command is one line by definition, and a reference ends at whitespace, so a newline
@@ -3395,6 +3716,10 @@ impl Session {
         // stretch, so what the next operator acts on is what the caret is on and nothing invisible.
         self.let_go_of_the_selection();
         self.mode = crate::vim::Mode::Normal;
+        // Escape takes the list of keys down in every editing style. The ordinary box clears the
+        // line on it, which takes the list down through the line; here the key is the mode's, and
+        // `?` in NORMAL mode is vi's own key, so nothing else could close it from there.
+        self.shortcuts = false;
         // Where vi leaves it. The caret in NORMAL mode sits on a character rather than between two,
         // so the position one past the end of the line is not one it can hold, and Escape at the end
         // of a line somebody has just typed lands on the last character they typed.
@@ -5453,8 +5778,78 @@ impl Session {
         self.history.leave();
         let was = self.caret;
         self.move_word_left();
-        self.input.replace_range(self.caret..was, "");
+        self.kill(self.caret, was, false);
+    }
+
+    /// Delete the word after the caret, with the blanks in front of it.
+    ///
+    /// Nothing at the end of the line, for the reason [`Session::delete_word_before`] does nothing
+    /// at the start of it.
+    pub fn delete_word_after(&mut self) {
+        let was = self.caret;
+        self.move_word_right();
+        let end = std::mem::replace(&mut self.caret, was);
+        if end == was || self.typing_over() {
+            return;
+        }
+        self.abandon_the_selection();
+        self.history.leave();
+        self.kill(was, end, true);
+    }
+
+    /// Take `from..to` out of the line and keep it for [`Session::yank`], joined to what the last
+    /// kill took where this one goes the same way and the line has not changed since.
+    ///
+    /// The register vi's `p` reads, so there is one place for removed text, and it is put back as
+    /// characters whatever the register held before.
+    fn kill(&mut self, from: usize, to: usize, forward: bool) {
+        let taken = self.input[from..to].to_string();
+        // Where the caret was: the callers may have moved it to the far end of the stretch already.
+        let was = if forward { from } else { to };
+        let joined = self.last_kill.take().filter(|last| {
+            last.forward == forward
+                && last.line == self.input
+                && last.caret == was
+                && self
+                    .register
+                    .as_ref()
+                    .is_some_and(|r| !r.lines && r.text == last.text)
+        });
+        let text = match joined {
+            Some(last) if forward => last.text + &taken,
+            Some(last) => taken + &last.text,
+            None => taken,
+        };
+        self.input.replace_range(from..to, "");
+        self.caret = from;
         self.completion = 0;
+        self.register = Some(Yanked {
+            text: text.clone(),
+            lines: false,
+        });
+        self.last_kill = Some(Kill {
+            forward,
+            text,
+            line: self.input.clone(),
+            caret: self.caret,
+        });
+    }
+
+    /// Put the text the last kill or vi's `d` or `y` took back at the caret.
+    ///
+    /// Nothing where nothing has been taken. A marker in it names its attachment again while that is
+    /// still staged, and is text like any other once it is not.
+    pub fn yank(&mut self) {
+        let Some(yanked) = self.register.clone() else {
+            return;
+        };
+        if yanked.text.is_empty() {
+            return;
+        }
+        self.begin_a_change();
+        self.abandon_the_selection();
+        self.input.insert_str(self.caret, &yanked.text);
+        self.caret += yanked.text.len();
     }
 
     /// Delete from the caret back to the start of its line.
@@ -5472,9 +5867,7 @@ impl Session {
         }
         self.abandon_the_selection();
         self.history.leave();
-        self.input.replace_range(start..self.caret, "");
-        self.caret = start;
-        self.completion = 0;
+        self.kill(start, self.caret, false);
     }
 
     /// Delete from the caret to the end of its line.
@@ -5488,8 +5881,7 @@ impl Session {
         }
         self.abandon_the_selection();
         self.history.leave();
-        self.input.replace_range(self.caret..end, "");
-        self.completion = 0;
+        self.kill(self.caret, end, true);
     }
 
     /// Hold the skills a slash word could become while the line holds a slash word, and let them go
@@ -5508,7 +5900,14 @@ impl Session {
     }
 
     /// The skills held while a slash word is being typed, and none otherwise.
+    ///
+    /// None while work runs, even if the line that started it was holding some: the loop that
+    /// calls [`Session::settle_skills`] is not reached again until the work ends, so what was held
+    /// when Enter was pressed would otherwise be drawn as recognised for the whole turn.
     pub fn held_skills(&self) -> &[crate::skills::Skill] {
+        if self.status == Status::Working {
+            return &[];
+        }
         self.skills.as_deref().unwrap_or_default()
     }
 
@@ -5756,17 +6155,16 @@ impl Session {
             .first()
             .filter(|e| e.speaker == Speaker::User)
             .map(|e| e.text.clone());
-        let outcome = self.finished.map(|finished| match finished.ending {
-            bravebot_agent::Ending::Done => StoredOutcome::Completed,
-            bravebot_agent::Ending::Failed(diagnosis) => StoredOutcome::Failed {
-                reason: entries
-                    .iter()
-                    .find(|e| e.speaker == Speaker::Failure)
-                    .map_or_else(|| failure_reason(diagnosis, None), |e| e.text.clone()),
-            },
-            bravebot_agent::Ending::Stopped { .. } => StoredOutcome::Cancelled {
-                reason: t!(turn_cancelled, turn = self.turns),
-            },
+        let outcome = self.finished.map(|finished| {
+            match StoredOutcome::ended(self.turns, finished.ending, None) {
+                StoredOutcome::Failed { reason } => StoredOutcome::Failed {
+                    reason: entries
+                        .iter()
+                        .find(|e| e.speaker == Speaker::Failure)
+                        .map_or(reason, |e| e.text.clone()),
+                },
+                outcome => outcome,
+            }
         });
         let end = conversation.recounted().len();
         let reset_context = end < start;
@@ -5847,7 +6245,7 @@ impl Session {
                 };
                 // Messages outside turns (for example shell mode) have no turn ownership.
                 for line in said.iter().take(start).skip(cursor) {
-                    self.transcript.push(recalled_entry(line));
+                    self.transcript.extend(recalled_entry(line));
                 }
                 self.turn_places.insert(turn.number, self.transcript.len());
                 if let Some(prompt) = &turn.prompt {
@@ -5859,7 +6257,7 @@ impl Session {
                         if turn.prompt_offset == Some(offset - start) {
                             continue;
                         }
-                        self.transcript.push(recalled_entry(line));
+                        self.transcript.extend(recalled_entry(line));
                     }
                     match &turn.outcome {
                         Some(StoredOutcome::Failed { reason }) => {
@@ -5886,7 +6284,7 @@ impl Session {
                 cursor = end;
             }
             for line in said.iter().skip(cursor) {
-                self.transcript.push(recalled_entry(line));
+                self.transcript.extend(recalled_entry(line));
             }
             self.turn_history = history.clone();
             self.turns = recalled
@@ -5900,7 +6298,7 @@ impl Session {
         // prompts. None of those roles establish turn ownership. Keep the messages unassigned
         // and preserve the recorded count rather than saving guessed boundaries as history.
         self.transcript
-            .extend(conversation.recounted().iter().map(recalled_entry));
+            .extend(conversation.recounted().iter().filter_map(recalled_entry));
         self.turns = recalled.turns.unwrap_or(0);
 
         // Into the view and not into the transcript, which is the whole of what an aside is: the
@@ -5936,6 +6334,18 @@ impl Session {
         self.copied = Some(characters);
     }
 
+    /// The replies in this session's transcript, the latest first, as the transcript holds them.
+    ///
+    /// A blank one is passed over, since it has nothing to copy and the export skips it too.
+    pub fn replies_newest_first(&self) -> impl Iterator<Item = &str> {
+        self.transcript
+            .iter()
+            .rev()
+            .filter(|entry| entry.speaker == Speaker::Assistant)
+            .map(|entry| entry.text.as_str())
+            .filter(|text| !text.trim().is_empty())
+    }
+
     /// Insert pasted text into the input.
     ///
     /// Kept apart from typing because a paste is one act, not a stream of keys. Pasted text
@@ -5949,6 +6359,10 @@ impl Session {
     pub fn paste(&mut self, text: &str) {
         self.abandon_the_selection();
         self.history.leave();
+        // Every path that writes text in whole comes through here (a paste, a dropped file, an
+        // image marker), and the list stands over a line that arrived under it as it does over a
+        // recalled one.
+        self.shortcuts = false;
         let text = normalised(text);
         self.input.insert_str(self.caret, &text);
         self.caret += text.len();
@@ -6058,12 +6472,23 @@ impl Session {
     /// an unsupported type or a path naming no file at all, has its path written out, which is
     /// what dropping a file did before any of this existed.
     ///
+    /// In shell mode every file has its path written out and nothing is staged, so the command the
+    /// shell is given names the file and no record is left behind the line (`dropping.md` DROP-6).
+    ///
     /// Returns whether the text was a drop at all. A paste that was not one is left to
     /// [`Session::paste`], untouched.
     pub fn drop_files(&mut self, text: &str) -> bool {
         let exists = |path: &str| std::path::Path::new(path).is_file();
         if !crate::dropped::is_drop(text, exists) {
             return false;
+        }
+
+        // The line in shell mode is a command and nothing else, and the shell is handed it as it
+        // stands. A marker there would reach it as text, so nothing is staged and the path is
+        // written, which is what a terminal does when a file is dropped into a shell.
+        if self.shell {
+            self.paste(&format!("{} ", crate::dropped::paths(text).join(" ")));
+            return true;
         }
 
         let taken = crate::dropped::dropped_with(text, exists);
@@ -6330,6 +6755,7 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.running = None;
+        self.movable = None;
         // A prompt is English and a command line is not, so the line coming back must not land
         // behind a marker that would run it. Belt and braces with the guard in
         // [`Session::type_char`]: this is the state the returning text lands in, and it has to be
@@ -6387,6 +6813,10 @@ impl Session {
         self.set_input(returning);
         // The pictures come back with the words. A line that returned without them would return
         // carrying markers that name nothing, and the user has no way to tell.
+        // The thumbnails were cleared when the line was sent, so they are made again from the
+        // staged pictures, or the line would name pictures it draws nothing for.
+        let restaged = previews_restaged(&self.sent_pasted, &self.sent);
+        self.previews.extend(restaged);
         // A stashed draft can still name attachments staged while this turn ran.
         self.attached.append(&mut self.sent);
         self.pasted.append(&mut self.sent_pasted);
@@ -6651,10 +7081,12 @@ impl Session {
         let pasted = self.pasted_named(&typed);
         let attached = self.attachments_named(&typed);
         let line = self.unfolded(&typed);
-        self.pasted.clear();
-        self.previews.clear();
-        self.attached.clear();
-        self.clear_input();
+        self.settle_staged();
+        // Not through [`Session::clear_input`], which keeps a line typed mid-turn: a command carried
+        // out while a turn runs (CMD-8) leaves the box as one carried out at rest does.
+        self.history.leave();
+        self.set_input(String::new());
+        self.shell = false;
         Commanded {
             line,
             pasted,
@@ -6712,6 +7144,14 @@ impl Session {
     /// anywhere, and nothing about it is in the conversation while it waits.
     pub fn queue_command(&mut self) -> bool {
         self.queue_line(Waiting::Command)
+    }
+
+    /// The commands waiting for the turn to end, as they were typed and in that order.
+    pub fn commands_waiting(&self) -> impl Iterator<Item = &str> {
+        self.queued
+            .iter()
+            .filter(|line| line.waiting == Waiting::Command)
+            .map(|line| line.prompt.as_str())
     }
 
     /// Take the current line as a command line to run when the turn in flight has finished.
@@ -6831,7 +7271,9 @@ impl Session {
         self.stopping = true;
     }
 
-    fn a_turn_is_running(&self) -> bool {
+    /// Whether what the session is working on is a turn, rather than a compaction, an aside or
+    /// another of the loops that share the working status.
+    pub fn a_turn_is_running(&self) -> bool {
         self.status == Status::Working && self.turn_in_flight
     }
 
@@ -7102,6 +7544,20 @@ impl Session {
         self.standing = Some(definition);
     }
 
+    /// Carry these words in the system prompt of every turn this session sends (CLI-19).
+    pub fn with_system_prompts(
+        mut self,
+        system_prompts: bravebot_agent::turn::SystemPrompts,
+    ) -> Self {
+        self.system_prompts = system_prompts;
+        self
+    }
+
+    /// The words the command line put in the system prompt of every turn this session sends.
+    pub fn system_prompts(&self) -> &bravebot_agent::turn::SystemPrompts {
+        &self.system_prompts
+    }
+
     /// The definition every turn of this session addresses, where it was started under one.
     pub fn standing_definition(&self) -> Option<&Addressed> {
         self.standing.as_ref()
@@ -7275,6 +7731,56 @@ impl Session {
         // not a message from the catalog: it goes to a model rather than to a reader.
         let prompt = bravebot_agent::goal::carry_on(&condition, &reason);
         Some(self.begin_turn(prompt, (Vec::new(), Vec::new()), Vec::new()))
+    }
+
+    /// Act on what a check of the goal came back with, and give back the prompt that sends the
+    /// work back where there is one.
+    ///
+    /// `Err` is a check whose request failed, carrying what a person can be told about it.
+    pub fn goal_judged(
+        &mut self,
+        judged: Result<bravebot_agent::goal::Verdict, String>,
+    ) -> Option<String> {
+        use bravebot_agent::goal::Verdict;
+        let verdict = match judged {
+            Ok(verdict) => verdict,
+            Err(problem) => {
+                self.drop_goal();
+                self.note(t!(goal_failed, problem = problem));
+                return None;
+            }
+        };
+
+        // A goal taken off while the check was in flight is a person having said stop. The verdict
+        // is about a goal that no longer exists, so it is not acted on and not reported: telling
+        // them the condition cannot be met, a moment after they cleared it, describes a session
+        // they are no longer in.
+        self.goal.as_ref()?;
+
+        // Four of the five verdicts end the goal, and the person is told which one it was in each
+        // case. Only one sends the work back, and even that one stops where the rounds are spent.
+        match verdict {
+            Verdict::NotMet { reason } => self.goal_not_met(reason),
+            Verdict::Met { reason } => {
+                self.goal_met(reason);
+                None
+            }
+            Verdict::Impossible { reason } => {
+                self.drop_goal();
+                self.note(t!(goal_impossible, reason = &reason));
+                None
+            }
+            Verdict::Unreadable => {
+                self.drop_goal();
+                self.note(t!(goal_unreadable));
+                None
+            }
+            Verdict::Quarantined => {
+                self.drop_goal();
+                self.note(t!(goal_quarantined));
+                None
+            }
+        }
     }
 
     /// Every live watch, oldest first, for the report that lists them.
@@ -7486,13 +7992,164 @@ impl Session {
         }
     }
 
+    /// Say which background jobs the turn in flight has, or the last one had, and where each is,
+    /// or that there are none (RUN-27).
+    ///
+    /// Named as `/jobs stop` takes them, with the words `/status` uses for where each one is. Every
+    /// word is the driver's or this end's clock, and none is anything a job printed.
+    pub fn report_jobs(&mut self) {
+        let lines: Vec<String> = self
+            .jobs()
+            .map(|(row, job)| {
+                let command = crate::status::cut(&row.command, crate::status::JOB_LINE);
+                let standing = job.standing(&row.outcome);
+                match job.delegate {
+                    Some(delegate) => t!(
+                        jobs_listed_of_delegate,
+                        name = job.name.clone(),
+                        number = delegate.to_string(),
+                        command = command,
+                        standing = standing
+                    )
+                    .to_string(),
+                    None => t!(
+                        jobs_listed,
+                        name = job.name.clone(),
+                        command = command,
+                        standing = standing
+                    )
+                    .to_string(),
+                }
+            })
+            .collect();
+        if lines.is_empty() {
+            self.note(t!(jobs_none));
+            return;
+        }
+        for line in lines {
+            self.note(line);
+        }
+    }
+
+    /// Ask for one background job to be stopped, and say whether it is (RUN-27).
+    ///
+    /// Sets the job's token and nothing else: the turn reads it at its next step and does the
+    /// stopping, so the row says the job is being stopped until the driver says it was. A job of
+    /// another delegate by the same name is a different job, which is why the delegate is part of
+    /// the match.
+    pub fn stop_job(&mut self, name: &str, delegate: Option<&str>) -> bool {
+        let label = match delegate {
+            Some(number) => t!(
+                job_of_delegate,
+                name = name.to_string(),
+                number = number.to_string()
+            )
+            .to_string(),
+            None => name.to_string(),
+        };
+        let job = self.outputs[self.jobs_from..]
+            .iter_mut()
+            .rev()
+            .filter_map(|row| row.job.as_mut())
+            .find(|job| {
+                job.name == name && job.delegate.map(|id| id.to_string()).as_deref() == delegate
+            });
+        let (said, asked) = match job {
+            None => (t!(jobs_no_such, name = label).to_string(), false),
+            Some(job) => match job.state {
+                JobState::Running => {
+                    job.stop.request();
+                    job.state = JobState::Stopping;
+                    (t!(job_stop_asked, name = label).to_string(), true)
+                }
+                JobState::Stopping => (t!(job_stop_already_asked, name = label).to_string(), false),
+                JobState::Ended | JobState::EndedWithTurn => {
+                    (t!(jobs_already_ended, name = label).to_string(), false)
+                }
+            },
+        };
+        self.note(said);
+        asked
+    }
+
+    /// Say which checkouts the session keeps, what each took on disk, whether a remote branch is
+    /// at its commit as `pushed` reads it, and what the record shows done in each, or that it keeps
+    /// none (CHECKOUT-15).
+    ///
+    /// The names are the ones a planner typed. Twenty at most, since a delegate can write
+    /// thousands of files and the transcript is not where to read that many.
+    pub fn report_checkouts(
+        &mut self,
+        checkouts: &[bravebot_agent::workspace::SessionCheckout],
+        mut pushed: impl FnMut(
+            &bravebot_agent::workspace::SessionCheckout,
+        ) -> crate::checkouts_command::Pushed,
+    ) {
+        use crate::checkouts_command::Pushed;
+        const NAMED: usize = 20;
+        if checkouts.is_empty() {
+            self.note(t!(checkouts_none));
+            return;
+        }
+        for checkout in checkouts {
+            let id = checkout.id.as_str();
+            self.note(t!(
+                checkouts_listed,
+                id = id,
+                path = checkout.path.display().to_string(),
+                commit = checkout.commit.get(..10).unwrap_or(&checkout.commit),
+                delegate = checkout.delegate.to_string()
+            ));
+            self.note(match checkout.size {
+                Some(size) if size.whole => t!(checkouts_size, id = id, size = on_disk(&size)),
+                Some(size) => t!(checkouts_size_partial, id = id, size = on_disk(&size)),
+                None => t!(checkouts_size_unmeasured, id = id),
+            });
+            self.note(match pushed(checkout) {
+                Pushed::At {
+                    branch: Some(branch),
+                    remote,
+                } => t!(checkouts_pushed, id = id, branch = branch, remote = remote),
+                Pushed::At {
+                    branch: None,
+                    remote,
+                } => t!(checkouts_detached_pushed, id = id, remote = remote),
+                Pushed::Nowhere {
+                    branch: Some(branch),
+                } => t!(checkouts_unpushed, id = id, branch = branch),
+                Pushed::Nowhere { branch: None } => t!(checkouts_detached_unpushed, id = id),
+                Pushed::Unread => t!(checkouts_head_unread, id = id),
+            });
+            if !checkout.worked_in {
+                self.note(t!(checkouts_nothing_done, id = id));
+                continue;
+            }
+            let named = &checkout.candidates.named;
+            if !named.is_empty() {
+                let mut paths: Vec<String> = named.iter().take(NAMED).cloned().collect();
+                if named.len() > NAMED {
+                    paths.push(t!(checkouts_more, count = named.len() - NAMED).to_string());
+                }
+                self.note(t!(checkouts_written, id = id, paths = paths.join(", ")));
+            }
+            let referenced = checkout.candidates.referenced;
+            if referenced > 0 {
+                self.note(t!(checkouts_referenced, id = id, count = referenced));
+            }
+            self.note(t!(checkouts_unread, id = id));
+        }
+    }
+
     /// Send the next tick, if one is due and the session is free to take it.
     ///
     /// Called on the way round the interface's own loop, so a tick waits for the turn in flight
     /// and for everything the person queued behind it. A schedule is a request to be asked
     /// again, not a licence to interrupt.
     pub fn loop_tick(&mut self) -> Option<String> {
-        let now = Instant::now();
+        self.loop_tick_at(Instant::now())
+    }
+
+    fn loop_tick_at(&mut self, now: Instant) -> Option<String> {
         let running = self.looping.as_ref()?;
         if running.aged_out(now) {
             self.looping = None;
@@ -7516,7 +8173,11 @@ impl Session {
         };
         if !running.ended(wakeup, Instant::now()) {
             self.looping = None;
-            self.note(t!(loop_unpaced));
+            if wakeup.is_some_and(|wakeup| wakeup.stop) {
+                self.note(t!(loop_finished));
+            } else {
+                self.note(t!(loop_unpaced));
+            }
         }
     }
 
@@ -7594,6 +8255,9 @@ impl Session {
         if !self.input.is_empty() {
             lines.push(std::mem::take(&mut self.input));
         }
+        // Only what the reclaimed lines named: what the box already held still has its own.
+        let restaged = previews_restaged(&pasted, &attached);
+        self.previews.extend(restaged);
         attached.append(&mut self.attached);
         self.attached = attached;
         pasted.append(&mut self.pasted);
@@ -7609,12 +8273,22 @@ impl Session {
     /// out means the same thing whether the thing behind it was dropped or pasted.
     fn take_line(&mut self, prompt: &str) -> (Vec<Attached>, Vec<AttachedImage>) {
         let attached = self.attachments_named(prompt);
-        self.attached.clear();
         let pasted = self.pasted_named(prompt);
-        self.pasted.clear();
-        self.previews.clear();
+        self.settle_staged();
         self.set_input(String::new());
         (attached, pasted)
+    }
+
+    /// Drop what was staged, except what the line put away still names.
+    ///
+    /// A stashed line holds only its words, and what its markers stand for stays staged beside it
+    /// (INPUT-17). Sending some other line must not take that with it, or the line comes back
+    /// carrying markers that name nothing.
+    fn settle_staged(&mut self) {
+        let stashed = self.stashed.as_deref().unwrap_or("");
+        self.attached.retain(|a| stashed.contains(&a.marker));
+        self.pasted.retain(|p| stashed.contains(&p.marker));
+        self.previews.retain(|(marker, _)| stashed.contains(marker));
     }
 
     /// Start a turn for a prompt, whether it was sent just now or waited for its turn.
@@ -7650,6 +8324,9 @@ impl Session {
         // The last turn's figures are not this one's, and a line reporting a finished turn while
         // another is running is a line about the wrong turn.
         self.finished = None;
+        // Left up past the next prompt, a copy's count would hide the hint that a picture is on
+        // the clipboard, and no key would take it down.
+        self.copied = None;
         // The previous turn's plan is not this turn's. Leaving it would show finished work as
         // though the new turn had it outstanding.
         self.todos.clear();
@@ -7658,7 +8335,11 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.running = None;
+        self.movable = None;
         self.started = Some(Instant::now());
+        // The last turn's jobs ended with it, and the rows stay in the list; what the hint line
+        // and `/status` say about jobs is about this turn's from here on.
+        self.jobs_from = self.outputs.len();
         prompt
     }
 
@@ -7682,8 +8363,16 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.running = None;
+        self.movable = None;
         self.streaming.clear();
         self.composing = None;
+        // The driver says which jobs the turn stopped before it says the turn is over. A worker
+        // that ended without saying so stopped them all the same, since none outlives its turn.
+        for row in &mut self.outputs[self.jobs_from..] {
+            if let Some(job) = row.job.as_mut().filter(|job| job.is_running()) {
+                job.state = JobState::EndedWithTurn;
+            }
+        }
     }
 
     /// Record a completed turn, and what it cost.
@@ -7889,8 +8578,13 @@ impl Session {
     }
 
     /// The model the server last reported using, or `None` before any turn has run.
+    ///
+    /// In a resumed session that has not yet had a turn, the model its record names.
     pub fn served_model(&self) -> Option<&str> {
-        self.served.as_ref().map(|(_, served)| served.as_str())
+        match &self.served {
+            Some((_, served)) => Some(served.as_str()),
+            None => self.recorded_model.as_deref(),
+        }
     }
 
     /// The model the last turn asked for, where the server answered with something else.
@@ -7952,6 +8646,7 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.running = None;
+        self.movable = None;
         self.started = Some(Instant::now());
     }
 
@@ -7982,6 +8677,7 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.running = None;
+        self.movable = None;
         self.tokens += tokens;
         // Zero before the first turn, which is the leading entry: whatever is spent there is spent
         // outside every turn, and that is what the number says.
@@ -8000,9 +8696,8 @@ impl Session {
     /// spent reading a plan as minutes a model spent thinking, and the plan prompt is the longest
     /// wait this mode has.
     ///
-    /// `spent` is `None` from a run that stopped, which carries no breakdown back. Then only the
-    /// wall clock is charged and the breakdown is left absent, exactly as [`Session::fail`] does:
-    /// time nothing has claimed reads better than time claimed by the wrong thing.
+    /// `spent` is absent only when no timing report arrived. Failed and stopped runs retain the
+    /// latest measured breakdown. The session measures its own wall time.
     pub fn end_run(&mut self, tokens: u64, spent: Option<bravebot_agent::timing::Timing>) {
         self.status = Status::Idle;
         self.streaming.clear();
@@ -8013,6 +8708,7 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.running = None;
+        self.movable = None;
         self.tokens += tokens;
         // To the leading entry before the first turn, for the reason an aside is.
         *self.spend.entry(self.turns).or_insert(0) += tokens;
@@ -8029,6 +8725,31 @@ impl Session {
         self.transcript.push(Entry::system(message));
     }
 
+    /// Carry out a command while a turn is working, holding what it says until the turn has ended.
+    ///
+    /// Everything `answer` notes is moved off the transcript into [`Session::said_while_working`],
+    /// which is drawn under the turn. A command answered here only appends, so what it put on the
+    /// end is all of what it said.
+    pub fn answer_while_working<R>(&mut self, answer: impl FnOnce(&mut Self) -> R) -> R {
+        let before = self.transcript.len();
+        let answered = answer(self);
+        let said = self.transcript.split_off(before);
+        self.said_while_working.extend(said);
+        self.scroll = 0;
+        answered
+    }
+
+    /// What the commands carried out during the turn in flight have said, oldest first.
+    pub fn said_while_working(&self) -> &[Entry] {
+        &self.said_while_working
+    }
+
+    /// Put what was said during the turn into the transcript, now that the turn has been folded in.
+    pub fn settle_what_was_said(&mut self) {
+        let said = std::mem::take(&mut self.said_while_working);
+        self.transcript.extend(said);
+    }
+
     /// Put what each turn has spent in the transcript.
     ///
     /// What `/cost` answers, and the question the session total cannot: a total tells twenty even
@@ -8041,10 +8762,21 @@ impl Session {
     /// at a fraction of a fresh one while the record keeps no cache split per turn, so a figure in
     /// money would be composed here rather than measured.
     pub fn report_spend(&mut self) {
-        let total = self.tokens;
+        // A turn still running is charged when it ends, so what it has spent so far is added here:
+        // asked mid-turn (CMD-8), the count of turns already includes it.
+        let mut spend = self.spend.clone();
+        let running = if self.a_turn_is_running() {
+            self.progress.tokens
+        } else {
+            0
+        };
+        if running > 0 {
+            *spend.entry(self.turns).or_default() += running;
+        }
+        let total = self.tokens + running;
         let mut lines = vec![crate::status::Line::new(
             t!(status_this_session),
-            if total == 0 && self.spend.is_empty() {
+            if total == 0 && spend.is_empty() {
                 t!(cost_nothing_spent).to_string()
             } else {
                 format!(
@@ -8055,7 +8787,7 @@ impl Session {
             },
         )];
 
-        for (turn, spent) in &self.spend {
+        for (turn, spent) in &spend {
             let label = match turn {
                 0 => t!(cost_before_the_first_turn).to_string(),
                 number => t!(cost_turn, number = number),
@@ -8072,7 +8804,7 @@ impl Session {
         // the part it spent before the resume, so an empty breakdown is the far end of this case
         // rather than a case of its own. Left out, the rows would read as an account of the total
         // that quietly does not add up to it.
-        let unattributed = total.saturating_sub(self.spend.values().sum());
+        let unattributed = total.saturating_sub(spend.values().sum());
         if unattributed > 0 {
             lines.push(
                 crate::status::Line::new("", crate::status::tokens(unattributed))
@@ -8159,6 +8891,156 @@ impl Session {
 
     pub fn toggle_trail(&mut self) {
         self.show_trail = !self.show_trail;
+    }
+
+    /// Open the info panel where it was left open last time.
+    ///
+    /// Read only for a session that persists, as the editing style is, so a test is not handed the
+    /// developer's own choice. Closed where nothing was recorded.
+    pub fn adopt_panel(&mut self) {
+        self.panel = self
+            .persist
+            .then(bravebot_session::store::load_panel)
+            .flatten()
+            .unwrap_or(false);
+    }
+
+    /// Take the answer an earlier session gave to `/caffeinate`'s explanation.
+    ///
+    /// Read only for a session that persists, as the panel is, so a test is not handed the
+    /// developer's own answer.
+    pub fn adopt_caffeinate(&mut self) {
+        if self.persist && bravebot_session::store::load_caffeinate_confirmed() {
+            self.caffeinate.confirm();
+        }
+    }
+
+    /// Carry out `/caffeinate`, and take or release the hold it changes at once.
+    pub fn toggle_caffeinate(&mut self) {
+        use crate::caffeinate::Toggled;
+        match self.caffeinate.toggle() {
+            Toggled::Explained => self.note(t!(caffeinate_explained)),
+            Toggled::Confirmed => {
+                if self.persist {
+                    bravebot_session::store::save_caffeinate_confirmed();
+                }
+                self.note(t!(caffeinate_on));
+            }
+            Toggled::On => self.note(t!(caffeinate_on)),
+            Toggled::Off => self.note(t!(caffeinate_off)),
+        }
+        self.keep_awake();
+    }
+
+    /// Whether the session has work that sleeping would stop: a turn in flight, or a loop with a
+    /// tick to come, which a `schedule_next` wait is.
+    ///
+    /// A background job ends with its turn, so the turn covers it. A watch is not counted: it waits
+    /// on a file with no end in view, and holding a laptop awake for that is holding it awake for
+    /// as long as the session is open.
+    pub fn work_pending(&self) -> bool {
+        self.status == Status::Working || self.looping.is_some()
+    }
+
+    /// Hold the machine awake where `/caffeinate` is on and work is pending, and release it
+    /// otherwise. A hold that could not be kept is said, and `/caffeinate` is then off.
+    pub fn keep_awake(&mut self) {
+        use crate::caffeinate::Unavailable;
+        let busy = self.work_pending();
+        match self.caffeinate.follow(busy) {
+            Ok(()) => {}
+            Err(Unavailable::Missing(error)) => self.note(t!(
+                caffeinate_unavailable,
+                program = crate::caffeinate::PROGRAM,
+                reason = error.to_string()
+            )),
+            Err(Unavailable::Ended) => {
+                self.note(t!(caffeinate_ended, program = crate::caffeinate::PROGRAM))
+            }
+        }
+    }
+
+    /// Whether the person has the info panel open, whether or not the last frame had room for it.
+    pub fn panel_open(&self) -> bool {
+        self.panel
+    }
+
+    /// Open or close the info panel.
+    ///
+    /// On a terminal too narrow to draw it, a press to open changes nothing and a note says why.
+    /// Opening a panel the screen cannot show would leave the press looking as if it did nothing,
+    /// and the next widening would bring back a panel nobody remembered opening. A press to close
+    /// always closes, so a panel left open before the terminal was narrowed can be put away.
+    pub fn toggle_panel(&mut self) {
+        if !self.panel && !crate::panel::fits(self.laid.columns) {
+            self.note(t!(panel_too_narrow, columns = crate::panel::NARROWEST));
+            return;
+        }
+        self.panel = !self.panel;
+        if self.persist {
+            bravebot_session::store::save_panel(self.panel);
+        }
+    }
+
+    /// Record what the info panel names the session by. True where an open panel now has
+    /// something to show that the last frame did not, so the caller draws another.
+    pub fn identify(&mut self, name: &str, directory: String, branch: Option<&str>) -> bool {
+        let identity = Identity {
+            name: name.to_string(),
+            directory,
+            branch: branch.map(str::to_string),
+            ..self.identity.clone()
+        };
+        self.reidentify(identity)
+    }
+
+    /// Record the links the info panel shows, answering as [`Session::identify`] does.
+    pub fn link(&mut self, issue: Option<&str>, pull_request: Option<&str>) -> bool {
+        let identity = Identity {
+            issue: issue.map(str::to_string),
+            pull_request: pull_request.map(str::to_string),
+            ..self.identity.clone()
+        };
+        self.reidentify(identity)
+    }
+
+    fn reidentify(&mut self, identity: Identity) -> bool {
+        let changed = self.identity != identity;
+        self.identity = identity;
+        changed && self.panel
+    }
+
+    /// Where the language servers this session starts report themselves, for the turns to hand to
+    /// their servers.
+    pub fn language_servers(&self) -> &bravebot_agent::lsp::Roster {
+        &self.language_servers
+    }
+
+    /// Name the language servers the panel shows, where a test has no process to start.
+    #[cfg(test)]
+    pub(crate) fn report_language_servers(&mut self, roster: bravebot_agent::lsp::Roster) {
+        self.language_servers = roster;
+    }
+
+    /// What the info panel names the session by.
+    pub fn identity(&self) -> &Identity {
+        &self.identity
+    }
+
+    /// The task list the panel shows: the one the turn in flight reported, or else the last one a
+    /// turn finished with.
+    ///
+    /// Read off the transcript rather than kept, so a resumed session shows the plan it was left
+    /// with and `/clear`, which empties the transcript, empties this too.
+    pub fn plan(&self) -> &[bravebot_core::todo::Row] {
+        if !self.todos.is_empty() {
+            return &self.todos;
+        }
+        self.transcript
+            .iter()
+            .rev()
+            .find(|entry| !entry.todos.is_empty())
+            .map_or(&[], |entry| entry.todos.as_slice())
     }
 
     /// Whether any turn has left a trail, meaning the toggle has something to reveal.
@@ -8616,6 +9498,25 @@ fn along(line: &str, column: usize) -> usize {
     line.char_indices()
         .nth(column)
         .map_or(line.len(), |(index, _)| index)
+}
+
+/// What a checkout takes on disk: whole kilobytes, rounded up, under a megabyte, megabytes under a
+/// gigabyte and gigabytes from there.
+fn on_disk(size: &bravebot_agent::git::checkout::Size) -> String {
+    use bravebot_agent::git::checkout::Amount;
+    let tenths = |tenths: u64| {
+        format!(
+            "{}{}{}",
+            tenths / 10,
+            t!(number_decimal_separator),
+            tenths % 10
+        )
+    };
+    match size.amount() {
+        Amount::Kilobytes(kilobytes) => t!(kilobytes, size = kilobytes.to_string()),
+        Amount::Megabytes(megabytes) => t!(megabytes, size = tenths(megabytes)),
+        Amount::Gigabytes(gigabytes) => t!(gigabytes, size = tenths(gigabytes)),
+    }
 }
 
 #[cfg(test)]
@@ -9357,6 +10258,7 @@ mod tests {
                 total: 2,
                 read_by_the_planner: read,
                 outcome: bravebot_agent::report::Outcome::Succeeded,
+                job: None,
             });
         }
 
@@ -9420,6 +10322,355 @@ mod tests {
                 .map(|output| output.read_by_the_planner)
                 .collect();
             assert_eq!(kept, [false, true]);
+        }
+
+        fn job_started(session: &mut Session, name: &str, line: &str) {
+            session.job(bravebot_agent::report::JobEvent::Started {
+                name: name.to_string(),
+                line: line.to_string(),
+                moved_after: None,
+                stop: bravebot_core::cancel::JobStop::new(),
+            });
+        }
+
+        fn job_looked(session: &mut Session, name: &str, lines: &[&str]) {
+            session.command_printed(bravebot_agent::report::Printed {
+                command: "job_output".to_string(),
+                lines: lines.iter().map(|line| line.to_string()).collect(),
+                total: lines.len(),
+                read_by_the_planner: true,
+                outcome: bravebot_agent::report::Outcome::Running {
+                    ran_for: Duration::from_secs(4),
+                    waited: None,
+                },
+                job: Some(name.to_string()),
+            });
+        }
+
+        fn job_ended(session: &mut Session, name: &str) {
+            session.job(bravebot_agent::report::JobEvent::Ended {
+                name: name.to_string(),
+                outcome: bravebot_agent::report::Outcome::Succeeded,
+            });
+        }
+
+        /// A job that has printed nothing yet is still running, and a list that shows it only once
+        /// it is looked at says nothing while that is the one thing a person needs to know.
+        #[test]
+        fn a_job_has_its_row_from_the_moment_it_starts() {
+            let mut session = Session::new("none");
+            job_started(&mut session, "job:1", "cargo build");
+
+            assert_eq!(session.outputs().len(), 1, "starting made no row");
+            let (row, job) = session.jobs().next().expect("the row was not a job");
+            assert_eq!(row.command, "cargo build");
+            assert_eq!(job.name, "job:1");
+            assert!(row.lines.is_empty());
+            assert_eq!(session.jobs_running(), 1);
+        }
+
+        /// Each look and the finish land on the row made at the start. A row per look would move
+        /// the job under somebody stepping through the list and leave a running row behind it.
+        #[test]
+        fn a_look_and_the_finish_update_the_jobs_row_and_add_none() {
+            let mut session = Session::new("none");
+            job_started(&mut session, "job:1", "cargo build");
+            job_looked(&mut session, "job:1", &["Compiling a"]);
+            job_looked(&mut session, "job:1", &["Compiling b"]);
+            job_ended(&mut session, "job:1");
+
+            assert_eq!(session.outputs().len(), 1, "a look added a row");
+            let (row, job) = session.jobs().next().unwrap();
+            assert_eq!(row.lines, ["Compiling a", "Compiling b"]);
+            assert_eq!(row.total, 2);
+            assert_eq!(row.outcome, bravebot_agent::report::Outcome::Succeeded);
+            assert_eq!(job.state, JobState::Ended);
+            assert_eq!(session.jobs_running(), 0);
+        }
+
+        /// A delegate runs its own turn with its own numbering, so its `job:1` and the turn's are
+        /// two jobs, and ending one ends only that one.
+        #[test]
+        fn a_delegates_job_and_the_turns_of_the_same_name_are_two_rows() {
+            let mut session = Session::new("none");
+            job_started(&mut session, "job:1", "cargo build");
+            let id = spawn(&mut session, "reader", "find the parser");
+            job_started(&mut session, "job:1", "cargo test");
+            // The delegate's job is the newer row, so a search that ignored whose it is finds it.
+            session.reporting_for(None);
+            job_ended(&mut session, "job:1");
+
+            let jobs: Vec<_> = session
+                .jobs()
+                .map(|(row, job)| (row.command.as_str(), job.delegate, job.state))
+                .collect();
+            assert_eq!(
+                jobs,
+                [
+                    ("cargo build", None, JobState::Ended),
+                    ("cargo test", Some(id), JobState::Running),
+                ]
+            );
+        }
+
+        /// A job the turn stopped did not finish and did not fail, and "running" would be a lie
+        /// once the turn that owned it is gone.
+        #[test]
+        fn a_job_the_turn_stopped_reads_as_stopped_with_the_turn() {
+            let mut session = Session::new("none");
+            job_started(&mut session, "job:1", "sleep 600");
+            session.job(bravebot_agent::report::JobEvent::Dropped {
+                name: "job:1".to_string(),
+            });
+
+            let (row, job) = session.jobs().next().unwrap();
+            assert_eq!(job.state, JobState::EndedWithTurn);
+            assert_eq!(job.standing(&row.outcome), "stopped when the turn ended");
+            assert_eq!(session.jobs_running(), 0);
+        }
+
+        /// No job outlives its turn, so a turn that ends without a word about a job has ended it
+        /// all the same; and the next turn's count starts from nothing.
+        #[test]
+        fn a_turn_ending_ends_its_jobs_and_the_next_counts_only_its_own() {
+            let mut session = session();
+            session.type_char('a');
+            session.submit();
+            job_started(&mut session, "job:1", "sleep 600");
+            session.complete("an answer", Vec::new(), 0);
+
+            let (_, job) = session
+                .jobs()
+                .next()
+                .expect("the ended turn's job was gone");
+            assert_eq!(job.state, JobState::EndedWithTurn);
+            assert_eq!(session.jobs_running(), 0);
+
+            session.type_char('b');
+            session.submit();
+            assert_eq!(
+                session.jobs().count(),
+                0,
+                "the last turn's job was this one's"
+            );
+            assert_eq!(
+                session.outputs().len(),
+                1,
+                "the last turn's row left the list"
+            );
+        }
+
+        /// A row keeps what one look keeps and no more, and adds nothing after a look that left
+        /// lines out, so it never runs two stretches of lines together as if nothing came between.
+        #[test]
+        fn a_jobs_row_stops_adding_lines_at_a_gap_and_at_what_one_look_keeps() {
+            let look = |session: &mut Session, lines: Vec<String>, total: usize| {
+                session.command_printed(bravebot_agent::report::Printed {
+                    command: "job_output".to_string(),
+                    lines,
+                    total,
+                    read_by_the_planner: true,
+                    outcome: bravebot_agent::report::Outcome::Running {
+                        ran_for: Duration::from_secs(4),
+                        waited: None,
+                    },
+                    job: Some("job:1".to_string()),
+                });
+            };
+
+            let mut session = Session::new("none");
+            job_started(&mut session, "job:1", "cargo build");
+            job_looked(&mut session, "job:1", &["a", "b"]);
+            look(&mut session, vec!["c".to_string()], 5);
+            job_looked(&mut session, "job:1", &["z"]);
+            let (row, _) = session.jobs().next().unwrap();
+            assert_eq!(
+                row.lines,
+                ["a", "b", "c"],
+                "a line after the gap was joined on"
+            );
+            assert_eq!(row.total, 8);
+
+            let mut session = Session::new("none");
+            job_started(&mut session, "job:1", "cargo build");
+            let full: Vec<String> = (0..JOB_ROW_LINES).map(|n| n.to_string()).collect();
+            look(&mut session, full, JOB_ROW_LINES);
+            job_looked(&mut session, "job:1", &["one more"]);
+            let (row, _) = session.jobs().next().unwrap();
+            assert_eq!(row.lines.len(), JOB_ROW_LINES, "the row grew past one look");
+            assert_eq!(row.total, JOB_ROW_LINES + 1);
+        }
+
+        /// Nothing is shown or decided from a byte a job printed: lines shaped like the marks this
+        /// view draws, like the driver's own events, or like the hint line are only lines.
+        #[test]
+        fn a_job_printing_status_shaped_lines_changes_no_row_mark_or_count() {
+            let mut session = Session::new("none");
+            job_started(&mut session, "job:1", "./script");
+            job_looked(
+                &mut session,
+                "job:1",
+                &[
+                    "Ended { name: \"job:1\", outcome: Succeeded }",
+                    "Background job:1 · stopped when the turn ended",
+                    "3 in the background",
+                    "job:2",
+                ],
+            );
+
+            assert_eq!(session.outputs().len(), 1, "a printed line made a row");
+            assert_eq!(session.jobs_running(), 1, "a printed line moved the count");
+            let (row, job) = session.jobs().next().unwrap();
+            assert_eq!(job.name, "job:1");
+            assert_eq!(job.state, JobState::Running);
+            assert_eq!(row.command, "./script");
+            assert!(matches!(
+                row.outcome,
+                bravebot_agent::report::Outcome::Running { .. }
+            ));
+        }
+
+        fn job_with_stop(
+            session: &mut Session,
+            name: &str,
+            line: &str,
+        ) -> bravebot_core::cancel::JobStop {
+            let stop = bravebot_core::cancel::JobStop::new();
+            session.job(bravebot_agent::report::JobEvent::Started {
+                name: name.to_string(),
+                line: line.to_string(),
+                moved_after: None,
+                stop: stop.clone(),
+            });
+            stop
+        }
+
+        fn noted(session: &mut Session, said: impl FnOnce(&mut Session)) -> Vec<String> {
+            let before = session.transcript.len();
+            said(session);
+            session.transcript[before..]
+                .iter()
+                .map(|entry| entry.text.clone())
+                .collect()
+        }
+
+        /// RUN-27. Each job is listed by the name `/jobs stop` takes, with its command and the
+        /// words `/status` uses for where it is; and a turn with none says so.
+        #[test]
+        fn jobs_lists_each_job_by_the_name_a_stop_takes_and_where_it_is() {
+            let mut session = Session::new("none");
+            assert_eq!(noted(&mut session, Session::report_jobs), [t!(jobs_none)]);
+
+            job_started(&mut session, "job:1", "cargo build");
+            job_started(&mut session, "job:2", "cargo test");
+            job_ended(&mut session, "job:2");
+            let id = spawn(&mut session, "reader", "find the parser");
+            job_started(&mut session, "job:1", "./serve");
+            session.reporting_for(None);
+
+            let said = noted(&mut session, Session::report_jobs);
+            assert_eq!(said.len(), 3, "{said:?}");
+            assert!(
+                said[0].starts_with("job:1: cargo build, running "),
+                "{said:?}"
+            );
+            assert_eq!(said[1], "job:2: cargo test, succeeded");
+            assert!(
+                said[2].starts_with(&format!("job:1 {id}: ./serve, running ")),
+                "{said:?}"
+            );
+            assert!(
+                said[2].ends_with(&format!(", started by delegate {id}")),
+                "{said:?}"
+            );
+        }
+
+        /// RUN-27. A stop sets the job's token and nothing more, so the row says it is being
+        /// stopped, and counts as running, until the driver says it ended and who ended it.
+        #[test]
+        fn a_stop_sets_the_jobs_token_and_the_row_waits_for_the_driver() {
+            let mut session = Session::new("none");
+            let stop = job_with_stop(&mut session, "job:1", "sleep 600");
+            let other = job_with_stop(&mut session, "job:2", "sleep 600");
+
+            let said = noted(&mut session, |session| {
+                assert!(session.stop_job("job:1", None));
+            });
+            assert_eq!(said, [t!(job_stop_asked, name = "job:1")]);
+            assert!(stop.is_requested());
+            assert!(!other.is_requested(), "the stop reached another job");
+            let (row, job) = session.jobs().next().unwrap();
+            assert_eq!(job.state, JobState::Stopping);
+            assert_eq!(job.standing(&row.outcome), "being stopped");
+            assert_eq!(session.jobs_running(), 2);
+
+            let said = noted(&mut session, |session| {
+                assert!(!session.stop_job("job:1", None));
+            });
+            assert_eq!(said, [t!(job_stop_already_asked, name = "job:1")]);
+
+            session.job(bravebot_agent::report::JobEvent::Ended {
+                name: "job:1".to_string(),
+                outcome: bravebot_agent::report::Outcome::StoppedByTheUser(Duration::from_secs(3)),
+            });
+            let (row, job) = session.jobs().next().unwrap();
+            assert_eq!(job.state, JobState::Ended);
+            assert!(
+                job.standing(&row.outcome)
+                    .starts_with("stopped by you after"),
+                "{}",
+                job.standing(&row.outcome)
+            );
+            assert_eq!(session.jobs_running(), 1);
+        }
+
+        /// RUN-27. Each delegate numbers its own jobs, so the delegate's number is what tells two
+        /// `job:1`s apart, and a stop without one is the turn's own.
+        #[test]
+        fn a_stop_reaches_the_job_of_the_delegate_it_names_and_no_other() {
+            let mut session = Session::new("none");
+            let turns = job_with_stop(&mut session, "job:1", "cargo build");
+            let id = spawn(&mut session, "reader", "find the parser");
+            let delegates = job_with_stop(&mut session, "job:1", "cargo test");
+            session.reporting_for(None);
+
+            assert!(session.stop_job("job:1", Some(&id.to_string())));
+            assert!(delegates.is_requested());
+            assert!(!turns.is_requested(), "the turn's job:1 was stopped");
+
+            assert!(session.stop_job("job:1", None));
+            assert!(turns.is_requested());
+        }
+
+        /// RUN-27. A job that is not there, or has already ended, is only answered: no token is
+        /// set, since there is nothing left to stop.
+        #[test]
+        fn a_stop_of_a_job_that_is_not_running_says_so_and_sets_nothing() {
+            let mut session = Session::new("none");
+            let ended = job_with_stop(&mut session, "job:1", "cargo build");
+            job_ended(&mut session, "job:1");
+            let dropped = job_with_stop(&mut session, "job:2", "sleep 600");
+            session.job(bravebot_agent::report::JobEvent::Dropped {
+                name: "job:2".to_string(),
+            });
+
+            let said = noted(&mut session, |session| {
+                assert!(!session.stop_job("job:9", None));
+                assert!(!session.stop_job("job:1", Some("d1")));
+                assert!(!session.stop_job("job:1", None));
+                assert!(!session.stop_job("job:2", None));
+            });
+            assert_eq!(
+                said,
+                [
+                    t!(jobs_no_such, name = "job:9").to_string(),
+                    t!(jobs_no_such, name = "job:1 of delegate d1").to_string(),
+                    t!(jobs_already_ended, name = "job:1").to_string(),
+                    t!(jobs_already_ended, name = "job:2").to_string(),
+                ]
+            );
+            assert!(!ended.is_requested());
+            assert!(!dropped.is_requested());
         }
 
         /// Stepping through the list reaches both kinds, since it is one list and the keys that
@@ -9954,6 +11205,166 @@ mod tests {
                 "a command from the forgotten conversation is still openable"
             );
         }
+
+        /// A delegate's call finishing while the turn's command still runs says nothing about the
+        /// turn's command. Taking the token there would leave a build running with no key to move
+        /// it, for no reason the person could see.
+        #[test]
+        fn a_delegates_call_ending_leaves_the_turns_command_movable() {
+            let mut session = session();
+            session.type_char('a');
+            session.submit();
+            session.start_activity(Activity::running("Run", "make check"));
+            let handoff = bravebot_core::cancel::Handoff::new();
+            session.movable(handoff.clone());
+
+            spawn(&mut session, "explore", "look around");
+            session.start_activity(Activity::running("Read", "src/main.rs"));
+            session.finish_activity(Activity::running("Read", "src/main.rs").done("1 line"));
+            session.reporting_for(None);
+
+            assert!(
+                session.can_move_to_background(),
+                "a delegate's call took the turn's command's token"
+            );
+            session.move_to_background();
+            assert!(
+                handoff.is_requested(),
+                "the press did not reach the turn's command"
+            );
+        }
+
+        /// The screen shows the turn's command running, never a delegate's, so a token reported
+        /// for a delegate is one no press here means.
+        #[test]
+        fn a_delegate_offers_nothing_to_move() {
+            let mut session = session();
+            session.type_char('a');
+            session.submit();
+            spawn(&mut session, "checker", "run the build");
+            let handoff = bravebot_core::cancel::Handoff::new();
+            session.movable(handoff.clone());
+            session.reporting_for(None);
+
+            assert!(!session.can_move_to_background());
+            session.move_to_background();
+            assert!(
+                !handoff.is_requested(),
+                "a press moved a delegate's command"
+            );
+        }
+    }
+
+    /// One press moves the command and the offer goes with it, so the hint is gone and a second
+    /// press has nothing to ask.
+    #[test]
+    fn a_press_moves_the_turns_command_once() {
+        let mut session = session();
+        session.type_char('a');
+        session.submit();
+        let handoff = bravebot_core::cancel::Handoff::new();
+        session.movable(handoff.clone());
+        assert!(session.can_move_to_background());
+
+        session.move_to_background();
+        assert!(handoff.is_requested(), "the press did not ask for the move");
+        assert!(
+            !session.can_move_to_background(),
+            "the hint still offers a move already asked for"
+        );
+    }
+
+    /// A press a moment after a command ended is about that command. Reaching the next one, which
+    /// the person has not seen start, would move a line nobody chose to move.
+    #[test]
+    fn a_press_after_a_command_ends_does_not_reach_the_next_one() {
+        let mut session = session();
+        session.type_char('a');
+        session.submit();
+        session.start_activity(Activity::running("Run", "make check"));
+        let first = bravebot_core::cancel::Handoff::new();
+        session.movable(first.clone());
+        session.finish_activity(Activity::running("Run", "make check").done("passed"));
+
+        assert!(!session.can_move_to_background());
+        session.move_to_background();
+
+        session.start_activity(Activity::running("Run", "make test"));
+        let second = bravebot_core::cancel::Handoff::new();
+        session.movable(second.clone());
+        assert!(
+            !first.is_requested(),
+            "a press moved a command that had ended"
+        );
+        assert!(
+            !second.is_requested(),
+            "a press made before the command started moved it"
+        );
+    }
+
+    /// A turn that ends takes its offer with it, so the next turn's first moment is not one where
+    /// the key answers for a command from the last.
+    #[test]
+    fn a_turn_ending_takes_the_offer_with_it() {
+        let mut session = session();
+        session.type_char('a');
+        session.submit();
+        session.movable(bravebot_core::cancel::Handoff::new());
+        session.fail("went wrong", went_wrong());
+
+        assert!(!session.can_move_to_background());
+    }
+
+    /// A stopped turn ends without the finish that would take the offer down, and an offer left
+    /// standing is a hint on an idle screen for a press that moves nothing.
+    #[test]
+    fn a_stopped_turn_takes_the_offer_with_it() {
+        let mut session = session();
+        session.type_char('a');
+        session.submit();
+        session.movable(bravebot_core::cancel::Handoff::new());
+        session.restore("a");
+
+        assert!(
+            !session.can_move_to_background(),
+            "a stopped turn left its command movable"
+        );
+    }
+
+    /// A save outside a turn rewrites the whole record from the session, so a resumed session that
+    /// has not been answered yet must still hold the model the record names.
+    #[test]
+    fn a_resumed_session_keeps_the_recorded_model_until_a_turn_replaces_it() {
+        let mut session = Session::new("none");
+        assert_eq!(session.served_model(), None);
+        let record: bravebot_session::sessions::Record =
+            serde_json::from_value(serde_json::json!({
+                "id": "1-2",
+                "directory": "/tmp/x",
+                "title": "a session",
+                "started": 1,
+                "updated": 1,
+                "turns": 1,
+                "tokens": 10,
+                "model": "qwen-14b",
+                "conversation": {
+                    "messages": [],
+                    "context": "trusted",
+                    "references": 0,
+                    "archive": [],
+                    "measured": 0,
+                },
+            }))
+            .expect("a record parses");
+        session.restore_accounts(&record);
+        assert_eq!(session.served_model(), Some("qwen-14b"));
+        assert_eq!(
+            session.substituted_model(),
+            None,
+            "a recorded model was reported as a substitution before anything was asked"
+        );
+        session.served("claude-opus", "claude-opus", false, true);
+        assert_eq!(session.served_model(), Some("claude-opus"));
     }
 
     /// The endpoint substitutes rather than refusing, so a session that asked for one model and was
@@ -10472,6 +11883,58 @@ mod tests {
         );
     }
 
+    /// A killed marker comes back as the marker, naming the picture that is still staged.
+    #[test]
+    fn a_killed_marker_yanked_back_names_its_picture_again() {
+        let mut s = session();
+        s.attach(picture(b"pixels"));
+        s.delete_to_line_start();
+        assert_eq!(s.input, "");
+        s.yank();
+        assert_eq!(s.input, "[Image #1]");
+
+        let sent = s.submit().expect("submitted");
+        assert_eq!(sent, "[Image #1]");
+        assert_eq!(s.sent_pasted().len(), 1, "the picture was not sent");
+    }
+
+    /// The kill buffer is vi's register, so `p` puts back what Ctrl-K took, as characters.
+    #[test]
+    fn vi_put_reads_what_a_kill_took() {
+        let mut s = normal("keep drop", 4);
+        s.delete_to_line_end();
+        assert_eq!(s.input, "keep");
+        s.type_char('p');
+        assert_eq!(s.input, "keep drop");
+    }
+
+    /// Ctrl-Y puts back what vi's `d` took, one place for removed text.
+    #[test]
+    fn yank_reads_what_vi_deleted() {
+        let mut s = normal("keep drop", 4);
+        s.type_char('D');
+        s.type_char('A');
+        s.yank();
+        assert_eq!(s.input, "keep drop");
+    }
+
+    /// A vi yank between two kills at the same place is not joined to the kill before it.
+    #[test]
+    fn a_kill_does_not_join_a_vi_yank() {
+        let mut s = session();
+        for c in "one two".chars() {
+            s.type_char(c);
+        }
+        s.delete_word_before();
+        s.register = Some(Yanked {
+            text: "other".to_string(),
+            lines: false,
+        });
+        s.delete_word_before();
+        s.yank();
+        assert_eq!(s.input, "one ");
+    }
+
     /// A marker is one thing on the screen, so it is one press to get rid of. Nibbling a character
     /// off the end would leave text that still reads as an attachment behind a picture that is no
     /// longer attached, and the user would only find out by carrying on pressing.
@@ -10793,6 +12256,37 @@ mod tests {
         assert_eq!(s.input, "look at [Image #1]");
         s.submit().expect("submitted");
         assert_eq!(s.sent_pasted().len(), 1, "the picture did not come back");
+    }
+
+    /// The thumbnail is cleared when the line is sent, so a line that comes back after a stop has to
+    /// have one made again, or the box names a picture and draws nothing for it (PASTE-6).
+    #[test]
+    fn a_cancelled_turn_restages_the_thumbnail_with_the_picture() {
+        let mut s = session();
+        s.attach(picture(b"pixels"));
+        let sent = s.submit().expect("submitted");
+        assert!(s.previews.is_empty(), "sending kept the thumbnail");
+
+        s.restore(sent);
+
+        let staged: Vec<&str> = s.previews.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(staged, ["[Image #1]"], "the thumbnail was not restaged");
+    }
+
+    /// The same for a prompt taken back out of the queue.
+    #[test]
+    fn taking_the_queue_back_restages_the_thumbnails_of_what_it_named() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        s.attach(picture(b"pixels"));
+        s.queue();
+        assert!(s.previews.is_empty(), "queueing kept the thumbnail");
+
+        assert!(s.unqueue(), "nothing came back");
+
+        let staged: Vec<&str> = s.previews.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(staged, ["[Image #1]"], "the thumbnail was not restaged");
     }
 
     /// A pasted paragraph keeps its lines: it was written with them, and the box draws them.
@@ -11870,6 +13364,243 @@ mod tests {
         );
     }
 
+    fn reported_checkouts(
+        checkouts: &[bravebot_agent::workspace::SessionCheckout],
+        pushed: impl Fn(&bravebot_agent::workspace::SessionCheckout) -> crate::checkouts_command::Pushed,
+    ) -> Vec<String> {
+        let mut s = session();
+        let before = s.transcript.len();
+        s.report_checkouts(checkouts, pushed);
+        s.transcript[before..]
+            .iter()
+            .map(|entry| entry.text.clone())
+            .collect()
+    }
+
+    /// CHECKOUT-15. Each checkout is listed with what the record shows done in it, and with the
+    /// warning that its status was not read wherever something was.
+    #[test]
+    fn the_checkouts_report_names_what_was_done_in_each() {
+        use crate::checkouts_command::Pushed;
+        use bravebot_agent::workspace::{Candidates, SessionCheckout};
+        assert_eq!(
+            reported_checkouts(&[], |_| Pushed::Unread),
+            [t!(checkouts_none)]
+        );
+
+        let idle = SessionCheckout {
+            id: "c1".into(),
+            path: "/state/checkouts/work/c1".into(),
+            repository: "/work/.git".into(),
+            commit: "0123456789abcdef0123456789abcdef01234567".into(),
+            delegate: bravebot_core::delegate::DelegateId::nth(1),
+            worked_in: false,
+            candidates: Candidates::default(),
+            size: None,
+        };
+        let written = SessionCheckout {
+            id: "c2".into(),
+            path: "/state/checkouts/work/c2".into(),
+            worked_in: true,
+            candidates: Candidates {
+                named: (0..22).map(|n| format!("src/{n:02}.rs")).collect(),
+                referenced: 3,
+            },
+            ..idle.clone()
+        };
+        let ran = SessionCheckout {
+            id: "c3".into(),
+            path: "/state/checkouts/work/c3".into(),
+            worked_in: true,
+            ..idle.clone()
+        };
+        let mut twenty: Vec<String> = (0..20).map(|n| format!("src/{n:02}.rs")).collect();
+        twenty.push(t!(checkouts_more, count = 2).to_string());
+        let listed = |id: &str| {
+            t!(
+                checkouts_listed,
+                id = id,
+                path = format!("/state/checkouts/work/{id}"),
+                commit = "0123456789",
+                delegate = "d1"
+            )
+            .to_string()
+        };
+        let unknown = |id: &str| {
+            [
+                t!(checkouts_size_unmeasured, id = id).to_string(),
+                t!(checkouts_head_unread, id = id).to_string(),
+            ]
+        };
+        assert_eq!(
+            reported_checkouts(&[idle, written, ran], |_| Pushed::Unread),
+            [
+                vec![listed("c1")],
+                unknown("c1").to_vec(),
+                vec![t!(checkouts_nothing_done, id = "c1").to_string()],
+                vec![listed("c2")],
+                unknown("c2").to_vec(),
+                vec![
+                    t!(checkouts_written, id = "c2", paths = twenty.join(", ")).to_string(),
+                    t!(checkouts_referenced, id = "c2", count = 3).to_string(),
+                    t!(checkouts_unread, id = "c2").to_string(),
+                ],
+                vec![listed("c3")],
+                unknown("c3").to_vec(),
+                vec![t!(checkouts_unread, id = "c3").to_string()],
+            ]
+            .concat()
+        );
+    }
+
+    /// CHECKOUT-15. Each checkout in the list says what it took on disk, in megabytes or
+    /// gigabytes and as a lower bound where measuring stopped, and whether a remote branch is at
+    /// its commit.
+    #[test]
+    fn the_checkouts_report_says_what_each_takes_and_whether_it_is_pushed() {
+        use crate::checkouts_command::Pushed;
+        use bravebot_agent::git::checkout::Size;
+        use bravebot_agent::workspace::SessionCheckout;
+        const MEGABYTE: u64 = 1024 * 1024;
+        let checkout = |id: &str, size: Option<Size>| SessionCheckout {
+            id: id.into(),
+            path: format!("/state/checkouts/work/{id}").into(),
+            repository: "/work/.git".into(),
+            commit: "0123456789abcdef0123456789abcdef01234567".into(),
+            delegate: bravebot_core::delegate::DelegateId::nth(1),
+            worked_in: false,
+            candidates: Default::default(),
+            size,
+        };
+        let checkouts = [
+            checkout(
+                "c1",
+                Some(Size {
+                    bytes: 5 * MEGABYTE + 300 * 1024,
+                    whole: true,
+                }),
+            ),
+            checkout(
+                "c2",
+                Some(Size {
+                    bytes: 7 * 1024 * MEGABYTE + 512 * MEGABYTE,
+                    whole: false,
+                }),
+            ),
+            checkout(
+                "c3",
+                Some(Size {
+                    bytes: 1023 * MEGABYTE,
+                    whole: true,
+                }),
+            ),
+            // Short of a gigabyte, but 1024.0 megabytes once rounded.
+            checkout(
+                "c4",
+                Some(Size {
+                    bytes: 1024 * MEGABYTE - 50 * 1024,
+                    whole: true,
+                }),
+            ),
+            checkout("c5", None),
+            checkout(
+                "c6",
+                Some(Size {
+                    bytes: 4097,
+                    whole: true,
+                }),
+            ),
+        ];
+        let pushed = |checkout: &SessionCheckout| match checkout.id.as_str() {
+            "c1" => Pushed::At {
+                branch: Some("fix".into()),
+                remote: "origin/fix".into(),
+            },
+            "c2" => Pushed::Nowhere {
+                branch: Some("fix-more".into()),
+            },
+            "c3" => Pushed::At {
+                branch: None,
+                remote: "upstream/main".into(),
+            },
+            "c4" => Pushed::Nowhere { branch: None },
+            _ => Pushed::Unread,
+        };
+        let decimal =
+            |whole: u32, tenth: u32| format!("{whole}{}{tenth}", t!(number_decimal_separator));
+        let listed = |id: &str| {
+            t!(
+                checkouts_listed,
+                id = id,
+                path = format!("/state/checkouts/work/{id}"),
+                commit = "0123456789",
+                delegate = "d1"
+            )
+            .to_string()
+        };
+        let idle = |id: &str| t!(checkouts_nothing_done, id = id).to_string();
+        assert_eq!(
+            reported_checkouts(&checkouts, pushed),
+            [
+                listed("c1"),
+                t!(
+                    checkouts_size,
+                    id = "c1",
+                    size = t!(megabytes, size = decimal(5, 3))
+                )
+                .to_string(),
+                t!(
+                    checkouts_pushed,
+                    id = "c1",
+                    branch = "fix",
+                    remote = "origin/fix"
+                )
+                .to_string(),
+                idle("c1"),
+                listed("c2"),
+                t!(
+                    checkouts_size_partial,
+                    id = "c2",
+                    size = t!(gigabytes, size = decimal(7, 5))
+                )
+                .to_string(),
+                t!(checkouts_unpushed, id = "c2", branch = "fix-more").to_string(),
+                idle("c2"),
+                listed("c3"),
+                t!(
+                    checkouts_size,
+                    id = "c3",
+                    size = t!(megabytes, size = decimal(1023, 0))
+                )
+                .to_string(),
+                t!(
+                    checkouts_detached_pushed,
+                    id = "c3",
+                    remote = "upstream/main"
+                )
+                .to_string(),
+                idle("c3"),
+                listed("c4"),
+                t!(
+                    checkouts_size,
+                    id = "c4",
+                    size = t!(gigabytes, size = decimal(1, 0))
+                )
+                .to_string(),
+                t!(checkouts_detached_unpushed, id = "c4").to_string(),
+                idle("c4"),
+                listed("c5"),
+                t!(checkouts_size_unmeasured, id = "c5").to_string(),
+                t!(checkouts_head_unread, id = "c5").to_string(),
+                idle("c5"),
+                listed("c6"),
+                t!(checkouts_size, id = "c6", size = t!(kilobytes, size = "5")).to_string(),
+                t!(checkouts_head_unread, id = "c6").to_string(),
+                idle("c6"),
+            ]
+        );
+    }
+
     /// A schedule is a request to be asked again, not a licence to interrupt. A tick that fired
     /// into a running turn would share its state with a turn nobody had finished reading.
     #[test]
@@ -11891,6 +13622,190 @@ mod tests {
         s.queue();
         s.complete("done", Vec::new(), 0);
         assert!(s.loop_tick().is_none(), "a tick jumped the queue");
+    }
+
+    /// A loop whose next tick is already due, so that what holds it back is the session.
+    fn a_loop_that_is_due() -> crate::loops::Running {
+        crate::loops::Running::armed(
+            "watch".to_string(),
+            crate::loops::Wakeup::asked(60, false),
+            std::time::Instant::now() - std::time::Duration::from_secs(600),
+        )
+    }
+
+    /// The other half of LOOP-6: a due tick is held while a turn runs and while a prompt waits,
+    /// and goes once both are done. A test that never reaches a due tick cannot tell a hold from
+    /// a tick that was never due.
+    #[test]
+    fn a_due_tick_is_held_for_a_running_turn_and_a_queued_prompt_and_then_goes() {
+        let mut s = session();
+        s.looping = Some(a_loop_that_is_due());
+
+        for c in "their own question".chars() {
+            s.type_char(c);
+        }
+        s.submit();
+        assert!(
+            s.loop_tick().is_none(),
+            "a due tick interrupted a running turn"
+        );
+
+        for c in "and another".chars() {
+            s.type_char(c);
+        }
+        s.queue();
+        s.complete("done", Vec::new(), 0);
+        assert!(!s.queued.is_empty(), "the prompt was not left waiting");
+        assert!(s.loop_tick().is_none(), "a due tick jumped the queue");
+
+        assert!(s.unqueue());
+        assert!(
+            s.loop_tick().is_some(),
+            "a due tick was never sent once the session was free"
+        );
+    }
+
+    fn caffeinated() -> Session {
+        fn stand_in() -> std::io::Result<crate::caffeinate::Held> {
+            Ok(crate::caffeinate::Held::stand_in())
+        }
+        let mut s = session();
+        s.caffeinate = crate::caffeinate::KeepAwake::starting_with(stand_in);
+        s.caffeinate.confirm();
+        s.toggle_caffeinate();
+        assert!(s.caffeinate.is_on());
+        s
+    }
+
+    /// CMD-12: a loop waiting for the tick a turn asked for with `schedule_next` is pending work,
+    /// though no turn is running. Holding only while the status says a turn runs would let the
+    /// machine sleep through every wait, which is the sleep the command is for.
+    #[test]
+    fn a_loop_waiting_for_its_next_tick_holds_the_machine_awake() {
+        let mut s = caffeinated();
+        s.keep_awake();
+        assert!(
+            !s.caffeinate.holding(),
+            "an idle session held the machine awake"
+        );
+
+        s.start_loop(crate::loops::request("watch"), Vec::new(), Vec::new());
+        s.keep_awake();
+        assert!(s.caffeinate.holding(), "a running tick held nothing");
+
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(Some(crate::loops::Wakeup::asked(900, false)));
+        assert_eq!(s.status, Status::Idle);
+        s.keep_awake();
+        assert!(s.caffeinate.holding(), "a pending wakeup held nothing");
+
+        s.stop_loop();
+        s.keep_awake();
+        assert!(
+            !s.caffeinate.holding(),
+            "a stopped loop still held the machine"
+        );
+    }
+
+    /// CMD-12: a typed prompt holds the machine while its turn runs and lets it go at the end.
+    #[test]
+    fn a_turn_holds_the_machine_awake_until_it_ends() {
+        let mut s = caffeinated();
+        s.type_char('x');
+        s.submit();
+        s.keep_awake();
+        assert!(s.caffeinate.holding());
+        s.complete("done", Vec::new(), 0);
+        s.keep_awake();
+        assert!(!s.caffeinate.holding());
+    }
+
+    /// CMD-12: a program that will not start is said in the transcript and leaves `/caffeinate`
+    /// off, so the person is not left believing a machine they walk away from is held.
+    #[test]
+    fn a_missing_inhibitor_is_said_and_turns_caffeinate_off() {
+        fn missing() -> std::io::Result<crate::caffeinate::Held> {
+            Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+        }
+        let mut s = session();
+        s.caffeinate = crate::caffeinate::KeepAwake::starting_with(missing);
+        s.caffeinate.confirm();
+        s.toggle_caffeinate();
+        s.type_char('x');
+        s.submit();
+        s.keep_awake();
+        assert!(!s.caffeinate.is_on());
+        let said = s.transcript.last().expect("a note").text.clone();
+        assert!(
+            said.starts_with("/caffeinate is unavailable"),
+            "nothing said about the missing program: {said:?}"
+        );
+    }
+
+    /// CMD-12: the explanation comes first, in the transcript, and turns nothing on.
+    #[test]
+    fn the_first_caffeinate_says_what_it_does_and_holds_nothing() {
+        let mut s = session();
+        s.toggle_caffeinate();
+        assert!(!s.caffeinate.is_on());
+        let said = s.transcript.last().expect("a note").text.clone();
+        assert_eq!(said, t!(caffeinate_explained));
+        assert!(said.contains("screen can still lock"));
+    }
+
+    /// LOOP-13: each tick says which one it is, and how many in a row found nothing once any have.
+    #[test]
+    fn each_tick_is_announced_with_its_number_and_its_quiet_count() {
+        fn last_note(s: &Session) -> String {
+            s.transcript
+                .iter()
+                .rev()
+                .find(|entry| entry.speaker == Speaker::System)
+                .expect("a note")
+                .text
+                .clone()
+        }
+        let mut s = session();
+        s.start_loop(crate::loops::request("watch"), Vec::new(), Vec::new());
+        assert_eq!(last_note(&s), "loop 1");
+
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(Some(crate::loops::Wakeup::asked(60, true)));
+        s.dispatch_tick();
+        assert_eq!(last_note(&s), "loop 2, after 1 tick that found nothing");
+
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(Some(crate::loops::Wakeup::asked(60, true)));
+        s.dispatch_tick();
+        assert_eq!(last_note(&s), "loop 3, after 2 ticks that found nothing");
+
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(Some(crate::loops::Wakeup::asked(60, false)));
+        s.dispatch_tick();
+        assert_eq!(last_note(&s), "loop 4");
+    }
+
+    /// A turn that says the loop is finished ends it at once and the screen names that ending,
+    /// not the one for a turn that forgot to say when to run again.
+    #[test]
+    fn a_turn_that_says_the_loop_is_finished_ends_it_and_says_so() {
+        let mut s = session();
+        s.start_loop(crate::loops::request("watch"), Vec::new(), Vec::new());
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(Some(crate::loops::Wakeup::finished(true)));
+        assert!(s.looping().is_none());
+        let note = s
+            .transcript
+            .iter()
+            .rev()
+            .find(|entry| entry.speaker == Speaker::System)
+            .expect("a note")
+            .text
+            .clone();
+        assert_eq!(
+            note,
+            "that turn said the loop is finished, so the loop has stopped"
+        );
     }
 
     /// The person's own prompt is not a tick of the loop, so finishing it must not re-arm one.
@@ -11947,6 +13862,40 @@ mod tests {
         s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
         s.clear();
         assert!(s.looping().is_none());
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(loop_cleared)),
+            "the ending was not announced"
+        );
+    }
+
+    #[test]
+    fn clearing_a_session_with_no_loop_says_nothing_of_one() {
+        let mut s = session();
+        s.clear();
+        assert!(
+            !s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(loop_cleared))
+        );
+    }
+
+    /// The loop's age is read where a tick would otherwise be sent, and ending there is said.
+    #[test]
+    fn a_loop_past_its_age_ends_and_says_so_instead_of_ticking() {
+        let mut s = session();
+        s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
+        s.complete("done", Vec::new(), 0);
+        let later = Instant::now() + crate::loops::MAX_AGE;
+        assert_eq!(s.loop_tick_at(later), None);
+        assert!(s.looping().is_none(), "an aged-out loop kept running");
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(loop_aged_out)),
+            "the ending was not announced"
+        );
     }
 
     #[test]
@@ -12067,11 +14016,29 @@ mod tests {
         s.start_goal("cargo test exits 0".to_string());
         s.clear();
         assert!(s.goal().is_none());
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(goal_cleared)),
+            "the ending was not announced"
+        );
+    }
+
+    #[test]
+    fn clearing_a_session_with_no_goal_says_nothing_of_one() {
+        let mut s = session();
+        s.clear();
+        assert!(
+            !s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(goal_cleared))
+        );
     }
 
     /// Both of these keep a session working without anybody typing. Together, the interval stops
     /// meaning anything and the condition is judged against a turn that was going to repeat
-    /// anyway, so whichever was asked for second is the one that stands.
+    /// anyway, so whichever was asked for second is the one that stands, and the one it replaced
+    /// is reported as stopped: otherwise a loop somebody is waiting on ends in silence.
     #[test]
     fn a_goal_and_a_loop_are_never_both_running() {
         let mut s = session();
@@ -12079,12 +14046,24 @@ mod tests {
         s.start_goal("cargo test exits 0".to_string());
         assert!(s.looping().is_none(), "the loop outlived the goal");
         assert!(s.goal().is_some());
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(goal_replaces_loop)),
+            "the goal took the loop off without saying so"
+        );
 
         let mut s = session();
         s.start_goal("cargo test exits 0".to_string());
         s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
         assert!(s.goal().is_none(), "the goal outlived the loop");
         assert!(s.looping().is_some());
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(loop_replaces_goal)),
+            "the loop took the goal off without saying so"
+        );
     }
 
     /// The prompt that carries the work on is the driver's own sentence with the judge's reason
@@ -12107,6 +14086,9 @@ mod tests {
 
     /// A condition nobody can satisfy would otherwise spend the session's whole budget, since
     /// every round is a turn with the conversation re-sent.
+    ///
+    /// Ten written out rather than read from the constant, because the number is what the
+    /// specification promises a person and the constant is what would change.
     #[test]
     fn a_goal_that_runs_out_of_rounds_stops_rather_than_sending_the_work_back_again() {
         let mut s = session();
@@ -12114,7 +14096,7 @@ mod tests {
 
         let sent = spend(&mut s, "still nothing");
 
-        assert!(sent > 0, "the goal gave up before sending anything");
+        assert_eq!(sent, 10, "the goal sent the work back {sent} times");
         assert!(s.goal().is_none(), "a goal that gave up is still armed");
     }
 
@@ -12166,6 +14148,100 @@ mod tests {
         let mut s = session();
         assert!(s.goal_not_met("still nothing".to_string()).is_none());
         assert_eq!(s.status, Status::Idle);
+    }
+
+    /// Every outcome a check can have: the five verdicts, and a request that failed.
+    fn every_check_outcome() -> Vec<Result<bravebot_agent::goal::Verdict, String>> {
+        use bravebot_agent::goal::Verdict;
+        vec![
+            Ok(Verdict::NotMet {
+                reason: "nothing above runs the tests".to_string(),
+            }),
+            Ok(Verdict::Met {
+                reason: "the run above exits 0".to_string(),
+            }),
+            Ok(Verdict::Impossible {
+                reason: "there is no such crate".to_string(),
+            }),
+            Ok(Verdict::Unreadable),
+            Ok(Verdict::Quarantined),
+            Err("the connection was refused".to_string()),
+        ]
+    }
+
+    /// One verdict sends the work back, and every other outcome ends the goal. The two that mean
+    /// nobody can read the judge are the ones a retry would be tempting for, and a stopping
+    /// condition nobody can read is not a reason to keep a session working.
+    #[test]
+    fn only_a_condition_not_met_yet_carries_the_work_on_and_every_other_outcome_ends_the_goal() {
+        for judged in every_check_outcome() {
+            let carries_on = matches!(judged, Ok(bravebot_agent::goal::Verdict::NotMet { .. }));
+            let mut s = session();
+            s.start_goal("cargo test exits 0".to_string());
+
+            let sent = s.goal_judged(judged.clone());
+
+            if carries_on {
+                assert!(sent.is_some(), "{judged:?} did not send the work back");
+                assert!(s.goal().is_some(), "{judged:?} ended the goal");
+                assert_eq!(s.status, Status::Working, "{judged:?}");
+            } else {
+                assert!(sent.is_none(), "{judged:?} sent the work back");
+                assert!(s.goal().is_none(), "{judged:?} left the goal set");
+                assert_eq!(s.status, Status::Idle, "{judged:?}");
+                assert_eq!(s.turns, 0, "{judged:?} started a turn");
+            }
+        }
+    }
+
+    /// Each outcome is said as it arrives, in its own words: a turn nobody typed a prompt for is
+    /// the one thing about a session that cannot be read off the transcript, and a goal that ended
+    /// on a judge nobody could read is a different thing to fix from one that was met.
+    #[test]
+    fn each_verdict_is_announced_as_it_arrives() {
+        let said = [
+            t!(goal_not_met, reason = "nothing above runs the tests"),
+            t!(goal_met, reason = "the run above exits 0"),
+            t!(goal_impossible, reason = "there is no such crate"),
+            t!(goal_unreadable).to_string(),
+            t!(goal_quarantined).to_string(),
+            t!(goal_failed, problem = "the connection was refused"),
+        ];
+        for (judged, said) in every_check_outcome().into_iter().zip(said) {
+            let mut s = session();
+            s.start_goal("cargo test exits 0".to_string());
+            let before = s.transcript.len();
+
+            s.goal_judged(judged.clone());
+
+            assert!(
+                s.transcript[before..]
+                    .iter()
+                    .any(|entry| entry.text == said),
+                "{judged:?} was not announced as {said:?}: {:?}",
+                s.transcript[before..]
+                    .iter()
+                    .map(|entry| &entry.text)
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// A check that comes back after the goal was taken off is about a goal that no longer
+    /// exists, so even the verdict that would send the work back sends nothing and says nothing.
+    #[test]
+    fn a_verdict_after_the_goal_was_cleared_is_neither_acted_on_nor_announced() {
+        // A request that failed is not a verdict, and is still said.
+        for judged in every_check_outcome().into_iter().filter(Result::is_ok) {
+            let mut s = session();
+            s.start_goal("cargo test exits 0".to_string());
+            s.clear_goal();
+            let before = s.transcript.len();
+
+            assert!(s.goal_judged(judged.clone()).is_none(), "{judged:?}");
+            assert_eq!(s.turns, 0, "{judged:?} started a turn");
+            assert_eq!(s.transcript.len(), before, "{judged:?} was announced");
+        }
     }
 
     /// The case that reaches the one above: a check is one request and cannot be stopped part
@@ -12267,74 +14343,6 @@ mod tests {
         assert_eq!(s.status, Status::Idle);
         assert_eq!(s.transcript.len(), 2);
         assert_eq!(s.transcript[1].speaker, Speaker::Assistant);
-    }
-
-    /// "the model reached its output limit" leaves somebody guessing a budget nothing shows them.
-    /// The figure is what names the setting to raise, and it is this program's own configured
-    /// number rather than anything the service said, so repeating it gives nothing away.
-    #[test]
-    fn a_reply_stopped_at_a_ceiling_says_which_ceiling() {
-        use bravebot_agent::{Category, Diagnosis};
-
-        let vague = failure_reason(Diagnosis::of(Category::TooLong), None);
-        assert!(
-            !vague.contains("8192") && !vague.contains("8,192"),
-            "a ceiling nobody measured was named anyway: {vague}"
-        );
-
-        // Two different ceilings, because a sentence that hard-coded one would pass with either.
-        for ceiling in [8_192_u64, 64_000] {
-            let said = failure_reason(Diagnosis::of(Category::TooLong).at_ceiling(ceiling), None);
-            assert!(
-                said.contains(&ceiling.to_string()),
-                "the ceiling that stopped the reply is not in {said}"
-            );
-            assert!(
-                said.contains(bravebot_config::env_var::OUTPUT_BUDGET),
-                "the setting that raises it is not in {said}"
-            );
-        }
-    }
-
-    /// A reply stopped part way through a call and one stopped while it was thinking want
-    /// different remedies, and the failure line is the only thing left on screen that can tell
-    /// them apart. The tool is named where the request offered it, and only then.
-    #[test]
-    fn a_reply_stopped_at_the_ceiling_says_what_it_was_writing() {
-        use bravebot_agent::{Category, Diagnosis};
-        use bravebot_aichat::{CutOff, OpenCall};
-
-        let diagnosis = Diagnosis::of(Category::TooLong).at_ceiling(64_000);
-        let stopped = |call: Option<Option<&str>>, thought: bool| {
-            failure_reason(
-                diagnosis,
-                Some(&CutOff {
-                    ceiling: 64_000,
-                    call: call.map(|tool| OpenCall {
-                        tool: tool.map(str::to_owned),
-                        arguments: 0,
-                    }),
-                    thought,
-                }),
-            )
-        };
-
-        let in_a_call = stopped(Some(Some("write_file")), false);
-        assert!(in_a_call.contains("write_file"), "{in_a_call}");
-        assert!(in_a_call.contains("64000"), "{in_a_call}");
-        assert!(in_a_call.contains("not made"), "{in_a_call}");
-
-        let unnamed = stopped(Some(None), false);
-        assert!(unnamed.contains("a tool call"), "{unnamed}");
-
-        let thinking = stopped(None, true);
-        assert!(thinking.contains("thinking"), "{thinking}");
-
-        assert_eq!(
-            stopped(None, false),
-            failure_reason(diagnosis, None),
-            "a reply that wrote nothing at all is reported as it always was"
-        );
     }
 
     #[test]
@@ -14559,6 +16567,37 @@ mod tests {
             assert!(s.checking.is_none(), "a check outlived the turn");
         }
 
+        /// A stop takes the word from everything else on the row and gives it up with the turn it
+        /// was asked of, however that turn ends. What runs next, an aside or another turn, is not
+        /// being stopped, and a word that outlived the turn would say it was.
+        #[test]
+        fn the_stopping_mark_ends_with_the_turn() {
+            let mut s = working();
+            s.set_phase(Phase::Planning);
+            s.checking(bravebot_core::vetting::Checking::Lines(3));
+            s.stop_asked();
+            assert_eq!(s.indicator().expect("working").verb, "Stopping");
+
+            stop(&mut s, "a");
+            s.begin_aside();
+            s.set_phase(Phase::Compacting);
+            assert_eq!(s.indicator().expect("working").verb, "Compacting");
+            s.end_aside(0);
+
+            s.submit().expect("submitted");
+            s.stop_asked();
+            s.complete("an answer that beat the stop", Vec::new(), 0);
+            s.begin_aside();
+            s.set_phase(Phase::Compacting);
+            assert_eq!(s.indicator().expect("working").verb, "Compacting");
+            s.end_aside(0);
+
+            s.type_char('b');
+            s.submit().expect("submitted");
+            s.set_phase(Phase::Planning);
+            assert_eq!(s.indicator().expect("working").verb, "Planning");
+        }
+
         /// A call the model is writing has no line of its own yet, and a service holding its
         /// argument back sends nothing else, so it is the word beside the spinner. Named by the
         /// word its line will start with, so a name the model made up is not drawn as it wrote it.
@@ -14777,7 +16816,8 @@ mod tests {
                     path: "readme.md".into(),
                 },
                 text: file.into(),
-            });
+            })
+            .expect("a composed message is always drawn");
             assert_eq!(attached.speaker, Speaker::User);
             assert_eq!(attached.text, file);
 
@@ -14788,9 +16828,62 @@ mod tests {
                     path: "/etc/hosts".into(),
                 },
                 text: sentence.into(),
-            });
+            })
+            .expect("a composed message is always drawn");
             assert_eq!(fired.speaker, Speaker::User);
             assert_eq!(fired.text, sentence);
+        }
+
+        /// The record holds a reply whole, so a model with no channel of its own for its working
+        /// has the block in it. A resume that drew the record as written would put back the
+        /// paragraph the live session kept off the screen (VIEW-18). A round's narration before a
+        /// tool call is the same text on the same path, and a narration that was only thought is
+        /// dropped as the live session drops it.
+        #[test]
+        fn a_resumed_reply_leaves_off_its_leading_reasoning_block() {
+            let transcript = resumed(
+                vec![
+                    Message::user("question"),
+                    Message::assistant("<think>weighing it up</think>\n\nThe answer"),
+                    Message::assistant("<think>only thinking</think>"),
+                    Message::assistant("Mentions <think> further down, keeps every word"),
+                ],
+                &BTreeMap::new(),
+            );
+            let said: Vec<&str> = transcript
+                .iter()
+                .filter(|entry| entry.speaker == Speaker::Assistant)
+                .map(|entry| entry.text.as_str())
+                .collect();
+            assert_eq!(
+                said,
+                vec![
+                    "The answer",
+                    "Mentions <think> further down, keeps every word"
+                ]
+            );
+        }
+
+        /// A record with no turn history is replayed on a path of its own, and it is the one an
+        /// older session takes.
+        #[test]
+        fn a_legacy_resumed_reply_leaves_off_its_leading_reasoning_block() {
+            let mut conversation = Conversation::new();
+            conversation.push(Message::user("question"));
+            conversation.push(Message::assistant(
+                "<think>weighing it up</think>The answer",
+            ));
+            let recalled = bravebot_session::sessions::Recalled {
+                history: None,
+                turns: None,
+                trails: BTreeMap::new(),
+                todos: BTreeMap::new(),
+                asides: Vec::new(),
+            };
+            let mut s = session();
+            s.replay(&conversation, "a title", &recalled);
+            assert!(s.transcript.iter().any(|e| e.text == "The answer"));
+            assert!(!s.transcript.iter().any(|e| e.text.contains("weighing")));
         }
 
         /// The audit is written beside the record, so what a gate decided two sessions ago is on
@@ -15580,6 +17673,43 @@ mod tests {
             1,
             "the picture did not survive the round trip"
         );
+    }
+
+    /// Sending another line settles what that line named and nothing a put-away line still names:
+    /// the picture and the dropped file behind a stashed marker are there when the words come back,
+    /// and what nothing names is gone.
+    #[test]
+    fn sending_another_line_keeps_what_a_stashed_line_names() {
+        let mut s = session();
+        for c in "look at ".chars() {
+            s.type_char(c);
+        }
+        s.attach(picture(b"pixels"));
+        let line = s.input.clone();
+        s.stash();
+        for c in "hello".chars() {
+            s.type_char(c);
+        }
+        s.take_line("hello");
+
+        s.stash();
+        assert_eq!(s.input, line);
+        assert_eq!(
+            s.pasted_named(&s.input).len(),
+            1,
+            "sending another line cleared the picture the stashed line named"
+        );
+    }
+
+    /// The other half: a marker nothing names is still discarded, so keeping is not "never clear".
+    #[test]
+    fn sending_a_line_still_settles_what_nothing_names() {
+        let mut s = session();
+        s.attach(picture(b"pixels"));
+        let line = s.input.clone();
+        let (_, pasted) = s.take_line(&line);
+        assert_eq!(pasted.len(), 1);
+        assert!(s.pasted.is_empty(), "a sent picture stayed staged");
     }
 
     /// Off is what a session opens with, so a prompt appears for every slot until somebody says
@@ -16438,6 +18568,8 @@ mod tests {
         for keys in [
             "ma", "\"a", "zz", "]]", "g'a", "g`a", "g?w", "g??", "g?iw", "g?fa", "g?gg", "g?'a",
             "gu'a", "d'a", "dzz", "dm", "c\"", "yq", "d@", "dr", "dZ", "dR",
+            // A count in front of the stretch, as `d2iw` has.
+            "g?2iw", "g?2w", "gq12iw", "gw3fa", "g@2gg", "g?2'a", "2g?3iw",
         ] {
             assert_eq!(
                 edited("one two", 0, &format!("{keys}x")),

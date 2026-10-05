@@ -57,7 +57,7 @@
 //! attempted: what holds is narrow and exact rather than broad and approximate.
 
 use bravebot_core::Pipeline;
-use bravebot_core::cancel::Cancel;
+use bravebot_core::cancel::{Cancel, Handoff, JobStop};
 use bravebot_core::command::{Joiner, Plan, Route, Step, Steps, is_the_null_device};
 use std::fmt;
 use std::io::{Read, Write};
@@ -420,6 +420,53 @@ pub fn run_plan_observed(
     running.finish(&plan.steps)
 }
 
+/// How a run that could be moved to the background came back.
+#[derive(Debug)]
+pub enum Waited {
+    /// It was waited for to the end, as [`run_plan`] waits.
+    Ran(Ran),
+    /// A person asked for it to go on running, and it is still running.
+    Moved(Moved),
+}
+
+/// A line that stopped being waited for part way through, with every step it started.
+#[derive(Debug)]
+pub struct Moved {
+    /// The same processes and the same pipes, so what it printed before the move is still there.
+    pub running: Background,
+    /// How long it had been waited for when the person asked.
+    pub after: Duration,
+}
+
+/// [`run_plan`], for a line a person may ask to go on running in the background.
+///
+/// Only a line [`Steps::unrouted_pipeline`] accepts reads `handoff`, because that is the one shape a
+/// job can hold. Any other line runs exactly as [`run_plan`] runs it and a request on the token does
+/// nothing to it.
+///
+/// The token is read on every pass of the wait, after the cancellation token. A pass that finds
+/// both set kills the line, because a person who asked the turn to stop has asked for everything
+/// in it to stop. What the move hands over is the processes themselves: they are never killed and
+/// started again, so a build that was half done is still half done.
+///
+/// No stdin is taken, because a line fed a reference is not one this is offered for: its bytes
+/// would have to be written into a job nobody waits for.
+pub fn run_plan_movable(
+    plan: &Plan,
+    cancel: &Cancel,
+    handoff: &Handoff,
+    limit: Duration,
+    scratch: Option<&std::path::Path>,
+) -> Result<Waited, ExecError> {
+    let mut running = Running::new(&plan.directory, cancel, limit, scratch, None);
+    running.handoff = plan.steps.unrouted_pipeline().map(|_| handoff);
+    let ended_well = running.run(&plan.steps)?;
+    Ok(match running.moved.take() {
+        Some(moved) => Waited::Moved(moved),
+        None => Waited::Ran(running.into_ran(ended_well)),
+    })
+}
+
 /// Where one of a step's streams goes.
 enum Where {
     /// The stage before this one.
@@ -469,6 +516,22 @@ struct Running<'a> {
     /// reading the reference and `wc` reading what `sed` printed, which is what a reader of the
     /// line expects and the only reading under which the bytes are released once.
     stdin: Option<&'a str>,
+    /// The token a person presses to stop waiting, where this line is one that can be moved.
+    handoff: Option<&'a Handoff>,
+    /// The pipeline the token took, once it has.
+    moved: Option<Moved>,
+}
+
+/// Why a wait came back without an error.
+enum Ending {
+    /// Every step is over, by exiting or by being stopped at the deadline.
+    Over(Vec<Option<i32>>),
+    /// A person asked for the steps to go on without being waited for, and at least one is still
+    /// running.
+    Handed {
+        codes: Vec<Option<i32>>,
+        finished: Vec<bool>,
+    },
 }
 
 impl<'a> Running<'a> {
@@ -491,18 +554,24 @@ impl<'a> Running<'a> {
             stopped: None,
             scratch,
             stdin,
+            handoff: None,
+            moved: None,
         }
     }
 
     fn finish(mut self, steps: &Steps) -> Result<Ran, ExecError> {
         let ended_well = self.run(steps)?;
-        Ok(Ran {
+        Ok(self.into_ran(ended_well))
+    }
+
+    fn into_ran(self, ended_well: bool) -> Ran {
+        Ran {
             stdout: self.stdout,
             stderr: self.stderr,
             codes: self.codes,
             stopped: self.stopped,
             ended_well,
-        })
+        }
     }
 
     /// Run one shape of a plan, and say whether it ended well.
@@ -700,7 +769,35 @@ impl<'a> Running<'a> {
             }
         }
 
-        let codes = self.wait(&mut children)?;
+        // Offered only with a pipe for standard output, since that is the one a job reads from.
+        let handoff = self.handoff.filter(|_| tail.is_some());
+        let (codes, tail) = match (self.wait(&mut children, handoff)?, tail) {
+            (Ending::Handed { codes, finished }, Some(stdout)) => {
+                // Taken out of the guard in the one expression that hands them on, so there is
+                // no point at which its drop could kill them and nothing else holds them.
+                self.moved = Some(Moved {
+                    running: Background {
+                        children: std::mem::take(&mut children.0),
+                        stdout,
+                        stderr: std::mem::take(&mut draining),
+                        codes,
+                        finished,
+                        started: self.started,
+                        exited: None,
+                    },
+                    after: self.started.elapsed(),
+                });
+                return Ok(false);
+            }
+            // Not reached, since the token is offered only with a tail. Stopped as the deadline
+            // stops a line, so nothing is left running behind a result that says it ended.
+            (Ending::Handed { codes, .. }, None) => {
+                stop(&mut children.0);
+                self.stopped = Some(self.started.elapsed());
+                (codes, None)
+            }
+            (Ending::Over(codes), tail) => (codes, tail),
+        };
 
         // Collected once the steps are over, whether they ended on their own or were killed. The
         // usual case is that every pipe reached its end the moment the step writing to it did; the
@@ -724,8 +821,13 @@ impl<'a> Running<'a> {
         Ok(self.stopped.is_none() && codes.iter().all(|code| *code == Some(0)))
     }
 
-    /// Wait for every child, until they are done, the user says stop, or the time runs out.
-    fn wait(&mut self, children: &mut [Child]) -> Result<Vec<Option<i32>>, ExecError> {
+    /// Wait for every child, until they are done, the user says stop, the user says to stop
+    /// waiting, or the time runs out.
+    fn wait(
+        &mut self,
+        children: &mut [Child],
+        handoff: Option<&Handoff>,
+    ) -> Result<Ending, ExecError> {
         let mut codes = vec![None; children.len()];
         let mut finished = vec![false; children.len()];
 
@@ -746,7 +848,7 @@ impl<'a> Running<'a> {
             }
 
             if finished.iter().all(|done| *done) {
-                return Ok(codes);
+                return Ok(Ending::Over(codes));
             }
 
             // Both of these kill. Something still running is an effect in progress, and neither a
@@ -755,11 +857,16 @@ impl<'a> Running<'a> {
                 stop(children);
                 return Err(ExecError::Cancelled);
             }
+            // Before the deadline, so a press that arrived in time is not lost to a pass that
+            // happens to land after it.
+            if handoff.is_some_and(Handoff::is_requested) {
+                return Ok(Ending::Handed { codes, finished });
+            }
             let waited = self.started.elapsed();
             if waited >= self.limit {
                 stop(children);
                 self.stopped = Some(waited);
-                return Ok(codes);
+                return Ok(Ending::Over(codes));
             }
 
             std::thread::sleep(TICK);
@@ -922,17 +1029,32 @@ impl Drain {
     /// lossily. Decoding a half-arrived character now would hand back U+FFFD and move the offset
     /// past it, so the character that is on its way would never be handed to anybody. Bytes that
     /// are not the start of a character are not waited for: they are not going to become valid.
-    fn since(&self, seen: &mut usize) -> String {
+    fn since(&self, seen: &mut Mark) -> String {
         let read = self.read.lock().unwrap_or_else(|e| e.into_inner());
-        let rest = &read[(*seen).min(read.len())..];
+        let rest = &read[seen.handed.min(read.len())..];
         let take = match std::str::from_utf8(rest) {
             Ok(_) => rest.len(),
             Err(error) if error.error_len().is_none() => error.valid_up_to(),
             Err(_) => rest.len(),
         };
-        *seen = read.len() - rest.len() + take;
+        seen.handed = read.len() - rest.len() + take;
+        // Taken under the same lock as the bytes, so what was looked at is exactly what had arrived
+        // when they were taken, and nothing landing after this is counted as looked at.
+        seen.looked = read.len();
         String::from_utf8_lossy(&rest[..take]).into_owned()
     }
+}
+
+/// How much of one pipe a caller has been handed, and how much of it had arrived at that look.
+///
+/// The two differ while a character is half delivered: the look holds its bytes back, so they are
+/// not handed over, and they are not news either. Only bytes arriving past `looked` are.
+#[derive(Debug, Default, Clone, Copy)]
+struct Mark {
+    /// Bytes of the pipe handed to the caller.
+    handed: usize,
+    /// Bytes the pipe had delivered when the caller last looked.
+    looked: usize,
 }
 
 /// How much of each of a job's pipes a caller has already been handed.
@@ -947,9 +1069,9 @@ impl Drain {
 /// what arrived, and nothing here reads a byte of it.
 #[derive(Debug, Default)]
 pub struct Seen {
-    stdout: usize,
+    stdout: Mark,
     /// One per standard-error pipe, grown to match when a pipeline's stages are first looked at.
-    stderr: Vec<usize>,
+    stderr: Vec<Mark>,
 }
 
 /// Kill every stage and reap it, so nothing is left behind.
@@ -1047,7 +1169,7 @@ impl Background {
     /// complete. Anything waiting to a bound has to ask this instead: the grace would carry the wait
     /// past the bound it was given, and it does not look at the cancellation token, so a person who
     /// changed their mind would still sit through it.
-    fn steps_exited(&mut self) -> bool {
+    pub(crate) fn steps_exited(&mut self) -> bool {
         for (index, child) in self.children.iter_mut().enumerate() {
             if self.finished[index] {
                 continue;
@@ -1098,34 +1220,39 @@ impl Background {
     /// advancing `seen` by what is taken.
     ///
     /// Per pipe rather than an offset into the composition, which is the whole point of [`Seen`].
+    /// Each delivery that carries standard error carries the label with it, so a reader of a later
+    /// delivery, which holds none of the earlier ones, can still tell the stream apart (CMDLINE-10).
     pub fn since(&self, seen: &mut Seen) -> String {
-        seen.stderr.resize(self.stderr.len(), 0);
-        let mut text = self.stdout.since(&mut seen.stdout);
+        seen.stderr.resize(self.stderr.len(), Mark::default());
+        let stdout = self.stdout.since(&mut seen.stdout);
+        let mut errored = String::new();
         for (drain, seen) in self.stderr.iter().zip(seen.stderr.iter_mut()) {
-            let errored = drain.since(seen);
-            if !errored.is_empty() {
-                if !text.is_empty() && !text.ends_with('\n') {
-                    text.push('\n');
-                }
-                text.push_str(&errored);
+            let text = drain.since(seen);
+            if text.is_empty() {
+                continue;
             }
+            if !errored.is_empty() && !errored.ends_with('\n') {
+                errored.push('\n');
+            }
+            errored.push_str(&text);
         }
-        text
+        both_streams(&stdout, &errored)
     }
 
-    /// Whether any pipe has delivered anything past `seen`.
+    /// Whether any pipe has delivered anything since the caller last looked.
     ///
     /// Byte counts per pipe, so asking costs nothing however much a job has printed. Composing the
     /// text to measure its length would copy the whole log every time somebody wanted to know
-    /// whether there was anything in it.
+    /// whether there was anything in it. Measured from the last look rather than from what that look
+    /// handed over, so the bytes of a half-delivered character, which the look held back, do not
+    /// count as news until the rest of the character arrives.
     pub fn has_more(&self, seen: &Seen) -> bool {
-        if self.stdout.bytes_read() > seen.stdout {
+        if self.stdout.bytes_read() > seen.stdout.looked {
             return true;
         }
-        self.stderr
-            .iter()
-            .enumerate()
-            .any(|(at, drain)| drain.bytes_read() > seen.stderr.get(at).copied().unwrap_or(0))
+        self.stderr.iter().enumerate().any(|(at, drain)| {
+            drain.bytes_read() > seen.stderr.get(at).map_or(0, |mark| mark.looked)
+        })
     }
 
     /// How long it has been running.
@@ -1143,39 +1270,44 @@ impl Background {
         stop(&mut self.children);
     }
 
-    /// How many bytes every pipe has delivered between them.
+    /// Wait for something to happen, and return at the first of five things.
     ///
-    /// Not the length of what [`Background::printed`] composes: that joins the streams and is taken
-    /// lossily. This is the raw total, and the one thing it answers is whether more has arrived
-    /// since it was last asked.
-    fn arrived(&self) -> usize {
-        self.stdout.bytes_read() + self.stderr.iter().map(Drain::bytes_read).sum::<usize>()
-    }
-
-    /// Wait for something to happen, and return at the first of four things.
-    ///
-    /// More arriving than had arrived when the wait started, every step having exited, `bound`
-    /// running out, and `cancel` being set. Which of the four it was is not reported, because the
-    /// caller then takes the account [`Background::ended`] and [`Background::printed`] give and that
-    /// account says it.
+    /// Output past `seen` being there, every step having exited, `bound` running out, `cancel`
+    /// being set, and one of `stops` being set. `seen` is where the caller's last look left off, so output
+    /// that arrived after that look and before this call ends the wait at once. Which it was is not
+    /// reported, because the caller then takes the account [`Background::ended`] and
+    /// [`Background::printed`] give and that account says it.
     ///
     /// **Nothing of the output is read.** Both conditions are counts this struct kept about a
-    /// pipeline it started: how many bytes have arrived, and which steps have exited. A program
-    /// that decides its own output therefore decides when this returns, which is exactly what a
-    /// caller waiting to be told about new output asked for, and the bytes themselves still reach
-    /// anybody only under the label the plan was given.
+    /// pipeline it started: how many bytes each pipe has delivered against how many the caller has
+    /// been handed, and which steps have exited. A program that decides its own output therefore
+    /// decides when this returns, which is exactly what a caller waiting to be told about new output
+    /// asked for, and the bytes themselves still reach anybody only under the label the plan was
+    /// given.
     ///
-    /// `cancel` is checked on every pass rather than once at the end, and nothing inside a pass
-    /// blocks. The bound runs to ten minutes, and a person who has changed their mind should not have
-    /// to sit through the rest of somebody else's `tail -f`. This is also why the steps are asked
-    /// about with [`Background::steps_exited`] and not with [`Background::ended`]: the latter waits
-    /// out [`DRAIN_GRACE`] for the pipes, which would carry the wait past `bound` and would not look
-    /// at `cancel` while it did.
-    pub fn wait_for_more(&mut self, bound: Duration, cancel: &Cancel) {
-        let arrived = self.arrived();
+    /// `stops` holds the token of every job the turn has not finished with, this one's among them,
+    /// since a stop of any of them is carried out by the turn's next step and this wait holds that
+    /// step back. The tokens are checked on every pass rather than once at the end, and nothing
+    /// inside a pass blocks. The bound runs to ten minutes, and a person who has changed their
+    /// mind, about the turn or about one job, should not have to sit through the rest of somebody
+    /// else's `tail -f`. This is also why the steps are asked about with
+    /// [`Background::steps_exited`] and not with [`Background::ended`]: the latter waits out
+    /// [`DRAIN_GRACE`] for the pipes, which would carry the wait past `bound` and would not look at
+    /// the tokens while it did.
+    pub fn wait_for_more(
+        &mut self,
+        seen: &Seen,
+        bound: Duration,
+        cancel: &Cancel,
+        stops: &[JobStop],
+    ) {
         let until = Instant::now() + bound;
         loop {
-            if cancel.is_cancelled() || self.arrived() > arrived || self.steps_exited() {
+            if cancel.is_cancelled()
+                || stops.iter().any(JobStop::is_requested)
+                || self.has_more(seen)
+                || self.steps_exited()
+            {
                 return;
             }
             if Instant::now() >= until {

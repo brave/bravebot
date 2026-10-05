@@ -8,12 +8,12 @@
 //!
 //! # Why the alignment is exact
 //!
-//! `recounted` reports a `Role::User` message as something other than a prompt in two cases: its
-//! text starts with one of three markers the agent writes itself, a tool result, a resume note or
-//! a compaction summary, or the record says the agent composed it. Every one of those decisions is
-//! a function of the role, the text and the recorded tag, and of nothing else. A message whose tag
-//! is absent and whose text *equals* the text of a prompt the transcript showed therefore cannot
-//! have been one of them: had it started with a marker, its own line would have been dropped too.
+//! `recounted` reports a `Role::User` message as something other than a prompt in one case: the
+//! record says the agent composed it, as a file somebody named, a watch, a tool result sent as
+//! prose, a resume note or a compaction summary. That decision is a function of the role and the
+//! recorded tag, and of nothing else. A message whose tag is absent and whose text *equals* the
+//! text of a prompt the transcript showed therefore cannot have been one of them, whatever words
+//! it opens with.
 //!
 //! So walking the messages and consuming the drawn prompts in order is not a guess and not a
 //! second copy of upstream's filter rules. It matches on what upstream published rather than on
@@ -229,13 +229,19 @@ mod tests {
 
     #[test]
     fn a_prompt_the_transcript_never_showed_is_not_a_fork_point() {
-        let before = snapshot(vec![
-            Message::user("first"),
-            Message::user(format!("{TOOL_RESULT_PREFIX}read_file: contents")),
-            Message::user(format!("{RESUMED_PREFIX} references are dead")),
-            Message::assistant("one"),
-            Message::user("second"),
-        ]);
+        let mut before = snapshot(vec![Message::user("first")]);
+        before.messages.push(Stored {
+            message: Message::user(format!("{TOOL_RESULT_PREFIX}read_file: contents")),
+            composed: Some(Composed::ToolResult),
+        });
+        before.messages.push(Stored {
+            message: Message::user(format!("{RESUMED_PREFIX} references are dead")),
+            composed: Some(Composed::Resumed),
+        });
+        before
+            .messages
+            .push(Stored::plain(Message::assistant("one")));
+        before.messages.push(Stored::plain(Message::user("second")));
         let said = drawn(&before);
         assert_eq!(prompts(&said), vec!["first", "second"]);
 
@@ -244,6 +250,25 @@ mod tests {
         // Everything before it, the agent's own messages included: they were never the user's
         // to cut at, but they are still what the model was working from.
         assert_eq!(cut.before.messages.len(), 4);
+    }
+
+    /// A person typed a prompt that opens with the words the agent's notes open with. It is
+    /// recorded untagged, so it is a prompt and a fork in front of it lands on it.
+    #[test]
+    fn a_typed_prompt_that_opens_like_a_note_is_a_fork_point() {
+        let typed = format!("{TOOL_RESULT_PREFIX}my experiment: please explain it");
+        let before = snapshot(vec![
+            Message::user("first"),
+            Message::assistant("one"),
+            Message::user(typed.clone()),
+            Message::assistant("two"),
+        ]);
+        let said = drawn(&before);
+        assert_eq!(prompts(&said), vec!["first", typed.as_str()]);
+
+        let cut = cut(&before, &said, 1).expect("the prompt somebody typed");
+        assert_eq!(cut.prompt, typed);
+        assert_eq!(cut.before.messages.len(), 2);
     }
 
     /// A file the agent put in front of the planner is not a prompt, so the prompts after it keep
@@ -295,10 +320,12 @@ mod tests {
 
     #[test]
     fn a_fork_inside_the_archive_puts_what_compaction_took_back_into_the_request() {
-        let mut before = snapshot(vec![
-            Message::user(format!("{COMPACTED_PREFIX}\n\nearlier, in short")),
-            Message::user("third"),
-        ]);
+        let mut before = snapshot(Vec::new());
+        before.messages.push(Stored {
+            message: Message::user(format!("{COMPACTED_PREFIX}\n\nearlier, in short")),
+            composed: Some(Composed::Summary),
+        });
+        before.messages.push(Stored::plain(Message::user("third")));
         before.archive = plain(vec![
             Message::user("first"),
             Message::assistant("one"),
@@ -319,12 +346,16 @@ mod tests {
 
     #[test]
     fn the_summary_standing_in_for_the_archive_survives_a_later_cut() {
-        let mut before = snapshot(vec![
-            Message::user(format!("{COMPACTED_PREFIX}\n\nearlier, in short")),
+        let mut before = snapshot(Vec::new());
+        before.messages.push(Stored {
+            message: Message::user(format!("{COMPACTED_PREFIX}\n\nearlier, in short")),
+            composed: Some(Composed::Summary),
+        });
+        before.messages.extend(plain(vec![
             Message::user("third"),
             Message::assistant("three"),
             Message::user("fourth"),
-        ]);
+        ]));
         before.archive = plain(vec![Message::user("first"), Message::assistant("one")]);
         let said = drawn(&before);
 

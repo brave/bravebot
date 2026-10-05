@@ -24,6 +24,7 @@ use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// How long a request may wait for the index to settle before answering from what there is.
@@ -968,6 +969,46 @@ pub struct Question<'a> {
     pub query: Option<&'a str>,
 }
 
+/// The programs of the servers a session has started, readable by a caller that is not the one
+/// asking.
+///
+/// A second view of [`Servers`] rather than a lock on it: `Servers` is held for the whole of one
+/// question, an approval prompt included, so a screen redrawing while a question waits cannot
+/// read it. This is written after a server starts and when the set is dropped, behind a lock held
+/// for the length of a copy.
+///
+/// It holds the name from the fixed table ([`Language::server`]), which is the program the person
+/// approved at LSP-5, and never anything a server says about itself.
+#[derive(Debug, Clone, Default)]
+pub struct Roster(Arc<Mutex<Vec<&'static str>>>);
+
+impl Roster {
+    /// The programs of the servers running, in name order.
+    pub fn programs(&self) -> Vec<&'static str> {
+        self.0
+            .lock()
+            .unwrap_or_else(|held| held.into_inner())
+            .clone()
+    }
+
+    /// A roster already holding the servers for `languages`, which is what a screen under test
+    /// needs in place of a process to start.
+    pub fn of(languages: impl IntoIterator<Item = Language>) -> Self {
+        let roster = Self::default();
+        let mut programs: Vec<&'static str> = languages
+            .into_iter()
+            .map(|language| language.server().0)
+            .collect();
+        programs.sort_unstable();
+        roster.set(programs);
+        roster
+    }
+
+    fn set(&self, programs: Vec<&'static str>) {
+        *self.0.lock().unwrap_or_else(|held| held.into_inner()) = programs;
+    }
+}
+
 /// The servers a session has started, one per language.
 ///
 /// LSP-8: started on the first request for a language, kept for the session, and stopped when this
@@ -995,6 +1036,8 @@ pub struct Servers {
     session: Option<SessionIndex>,
     /// This agent's own credential names, withheld from every server. RUN-12's reason.
     withheld: Vec<String>,
+    /// What the running servers are, for a screen that may not take this set's lock.
+    roster: Roster,
 }
 
 impl std::fmt::Debug for Servers {
@@ -1021,7 +1064,24 @@ impl Servers {
             incognito,
             session: None,
             withheld,
+            roster: Roster::default(),
         }
+    }
+
+    /// Report the running servers to `roster` from now on, and say which are running now.
+    pub fn reporting_to(&mut self, roster: Roster) {
+        self.roster = roster;
+        self.publish();
+    }
+
+    fn publish(&self) {
+        let mut programs: Vec<&'static str> = self
+            .running
+            .keys()
+            .map(|language| language.server().0)
+            .collect();
+        programs.sort_unstable();
+        self.roster.set(programs);
     }
 
     /// How many servers are running. Zero until something asks.
@@ -1089,6 +1149,7 @@ impl Servers {
             let cache = self.index_dir(language)?;
             let server = Server::launch(language, &resolved, &self.root, &cache, &self.withheld)?;
             self.running.insert(language, server);
+            self.publish();
         }
 
         let server = self
@@ -1135,6 +1196,7 @@ impl Servers {
 impl Drop for Servers {
     fn drop(&mut self) {
         self.running.clear();
+        self.publish();
     }
 }
 

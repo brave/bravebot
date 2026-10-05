@@ -14,38 +14,23 @@ use bravebot_core::trust::TrustStore;
 use bravebot_session::sessions::{self, Handle, Standing};
 use std::collections::BTreeMap;
 
-/// A directory nothing else is using, inside the real session store.
-///
-/// Sessions are keyed by the working directory they ran in, so an unused path gets its own
-/// directory under `~/.bravebot/sessions` and cannot disturb a real one.
-///
-/// Under the workspace `target/` rather than the system temporary directory, which is what
-/// every other crate here does: a fixed name under a directory shared between users and
-/// between processes at different privileges collides whenever two checkouts run the tests
-/// at once, and it is the insecure-temporary-file pattern the security scan flags.
-/// `target/` is per-checkout and already ignored by git.
+#[path = "../../session/test-support/profile.rs"]
+mod profile;
+
+/// A project in the profile [`profile::in_isolated_profile`] made, which is removed with the
+/// records written about it whether or not the test passes.
 fn scratch(name: &str) -> std::path::PathBuf {
-    // CARGO_MANIFEST_DIR is `<workspace>/crates/ui-bridge`, so two pops reach the root.
-    let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.pop();
-    path.pop();
-    path.push("target");
-    path.push("test-scratch");
-    path.push(format!("bravebot-ui-bridge-interop-{name}"));
+    let path = profile::project(name);
     std::fs::create_dir_all(&path).expect("a scratch directory");
     path
 }
 
-fn clean_up(project: &std::path::Path) {
-    if let Some(directory) = sessions::project_directory(project) {
-        let _ = std::fs::remove_dir_all(directory);
-    }
-}
-
 #[test]
 fn a_record_written_here_is_read_back_by_the_agents_own_reader() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
     let project = scratch("round-trip");
-    clean_up(&project);
 
     let mut conversation = bravebot_agent::Conversation::new();
     conversation.push(Message::user("what does this do?"));
@@ -115,15 +100,15 @@ fn a_record_written_here_is_read_back_by_the_agents_own_reader() {
             .any(|entry| entry.summary.id == id && entry.project == project),
         "a session in a new project must be discovered without being told where to look"
     );
-
-    clean_up(&project);
 }
 
 /// The bridge recounts a stored conversation the same way the terminal does.
 #[test]
 fn a_stored_conversation_recounts_to_what_a_person_said() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
     let project = scratch("recount");
-    clean_up(&project);
 
     let mut conversation = bravebot_agent::Conversation::new();
     conversation.push(Message::user("first question"));
@@ -175,8 +160,6 @@ fn a_stored_conversation_recounts_to_what_a_person_said() {
 
     assert!(text.contains(&"first question"));
     assert!(text.contains(&"second answer"));
-
-    clean_up(&project);
 }
 
 /// Resuming a session and taking a turn continues that session, rather than forking it.
@@ -194,8 +177,10 @@ fn a_stored_conversation_recounts_to_what_a_person_said() {
 /// resume notice rather than about the conversation.
 #[test]
 fn resuming_a_session_writes_back_to_it_rather_than_forking() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
     let project = scratch("resume-continues");
-    clean_up(&project);
 
     let mut conversation = bravebot_agent::Conversation::new();
     conversation.push(Message::user("remember the word haddock"));
@@ -323,8 +308,6 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
         reread.title, "remember the word haddock",
         "the title survives the resume"
     );
-
-    clean_up(&project);
 }
 
 // ------------------------------------------------------------------------------- forking
@@ -399,8 +382,10 @@ fn two_prompt_session(project: &std::path::Path, trust: Option<&TrustStore>) -> 
 /// The whole promise of a fork: the session it came from is left exactly as it was.
 #[test]
 fn forking_a_stored_session_leaves_the_parent_record_untouched() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
     let project = scratch("fork-parent-untouched");
-    clean_up(&project);
     let mut trust = TrustStore::new(&project);
     trust.trust(".");
     let parent = two_prompt_session(&project, Some(&trust));
@@ -433,14 +418,14 @@ fn forking_a_stored_session_leaves_the_parent_record_untouched() {
         before.conversation.messages.len(),
         "the parent keeps the whole of its history",
     );
-
-    clean_up(&project);
 }
 
 #[test]
 fn a_fork_writes_nothing_until_it_has_something_to_say() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
     let project = scratch("fork-writes-nothing");
-    clean_up(&project);
     let parent = two_prompt_session(&project, Some(&TrustStore::new(&project)));
 
     let (mut bridge, _) = harness();
@@ -470,14 +455,14 @@ fn a_fork_writes_nothing_until_it_has_something_to_say() {
         sessions::load(&project, &child).is_none(),
         "the id is reserved, but nothing stands behind it until the first turn",
     );
-
-    clean_up(&project);
 }
 
 #[test]
 fn a_fork_recounts_to_everything_before_the_prompt_it_was_cut_at() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
     let project = scratch("fork-recount");
-    clean_up(&project);
     let parent = two_prompt_session(&project, Some(&TrustStore::new(&project)));
 
     let (mut bridge, _) = harness();
@@ -526,14 +511,14 @@ fn a_fork_recounts_to_everything_before_the_prompt_it_was_cut_at() {
         bridge.dispatch(&request).is_err(),
         "an ordinal the front-end disagrees with is not a place to cut",
     );
-
-    clean_up(&project);
 }
 
 #[test]
 fn a_fork_inherits_the_trust_map_rather_than_asking_again() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
     let project = scratch("fork-trust-inherited");
-    clean_up(&project);
     let mut trust = TrustStore::new(&project);
     trust.trust(".");
     let parent = two_prompt_session(&project, Some(&trust));
@@ -563,16 +548,16 @@ fn a_fork_inherits_the_trust_map_rather_than_asking_again() {
         ),
         "the person who answered for this directory is the person forking in it",
     );
-
-    clean_up(&project);
 }
 
 /// A parent still holding the question hands the question down, rather than an answer nobody
 /// gave. Nothing recorded is not the same as nothing trusted.
 #[test]
 fn a_fork_of_a_record_with_no_trust_map_asks() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
     let project = scratch("fork-trust-unknown");
-    clean_up(&project);
     let parent = two_prompt_session(&project, Some(&TrustStore::new(&project)));
 
     // Strip the map the way a record written before maps existed has none.
@@ -609,16 +594,16 @@ fn a_fork_of_a_record_with_no_trust_map_asks() {
         ),
         "the fork must ask what its parent never answered",
     );
-
-    clean_up(&project);
 }
 
 /// The mirror of `resuming_a_session_writes_back_to_it_rather_than_forking`, and it belongs
 /// beside it: one says a resume must not fork, the other says a fork must not resume.
 #[test]
 fn a_fork_gets_an_id_of_its_own_rather_than_the_one_it_came_from() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
     let project = scratch("fork-new-id");
-    clean_up(&project);
     let parent = two_prompt_session(&project, Some(&TrustStore::new(&project)));
     let record = sessions::load(&project, &parent).expect("the record should load");
 
@@ -688,8 +673,6 @@ fn a_fork_gets_an_id_of_its_own_rather_than_the_one_it_came_from() {
         written.title, "remember the word haddock",
         "a fork keeps the name of what it came from rather than being renamed by its new prompt",
     );
-
-    clean_up(&project);
 }
 
 /// Two forks taken in the same second are still two sessions.
@@ -698,8 +681,10 @@ fn a_fork_gets_an_id_of_its_own_rather_than_the_one_it_came_from() {
 /// click rather than by a turn, so nothing slow sits between them.
 #[test]
 fn two_forks_in_the_same_second_stay_two_sessions() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
     let project = scratch("fork-same-second");
-    clean_up(&project);
     let parent = two_prompt_session(&project, Some(&TrustStore::new(&project)));
 
     let (mut bridge, _) = harness();
@@ -727,8 +712,6 @@ fn two_forks_in_the_same_second_stay_two_sessions() {
     );
     assert_ne!(first["id"].as_str(), Some(parent.as_str()));
     assert_ne!(second["id"].as_str(), Some(parent.as_str()));
-
-    clean_up(&project);
 }
 
 /// A resumed session says how much compaction has already taken out of it.
@@ -742,8 +725,10 @@ fn two_forks_in_the_same_second_stay_two_sessions() {
 /// without having watched it happen.
 #[test]
 fn a_resumed_session_reports_what_compaction_took_out_of_it() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
     let project = scratch("archived-count");
-    clean_up(&project);
     std::fs::create_dir_all(&project).expect("a project directory");
 
     let id = two_prompt_session(&project, None);
@@ -758,8 +743,6 @@ fn a_resumed_session_reports_what_compaction_took_out_of_it() {
         opened["archived"], 0,
         "a conversation nothing has been taken out of has archived nothing"
     );
-
-    clean_up(&project);
 }
 
 /// One list across every project is ordered by when each session was written.
@@ -774,10 +757,11 @@ fn a_resumed_session_reports_what_compaction_took_out_of_it() {
 /// the project paths happen to sort as the timestamps do.
 #[test]
 fn every_project_is_listed_in_one_order_rather_than_project_by_project() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
     let first = scratch("order-a");
     let second = scratch("order-b");
-    clean_up(&first);
-    clean_up(&second);
 
     let oldest = two_prompt_session(&first, None);
     let second_oldest = two_prompt_session(&second, None);
@@ -807,9 +791,6 @@ fn every_project_is_listed_in_one_order_rather_than_project_by_project() {
         ],
         "the list is one ordering across the projects, not each project's own"
     );
-
-    clean_up(&first);
-    clean_up(&second);
 }
 
 /// Set when a record says it was last written, so an ordering test does not race the clock.
@@ -865,8 +846,10 @@ fn a_session_written_by(project: &std::path::Path, front: sessions::Front) -> St
 /// and means nothing.
 #[test]
 fn opening_a_session_the_terminal_wrote_says_which_surface_drew_it() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
     let project = scratch("front-note");
-    clean_up(&project);
 
     let from_the_terminal = a_session_written_by(&project, sessions::Front::Terminal);
 
@@ -893,8 +876,6 @@ fn opening_a_session_the_terminal_wrote_says_which_surface_drew_it() {
         "the note names neither surface: {note}"
     );
 
-    clean_up(&project);
-
     let from_the_app = a_session_written_by(&project, bravebot_ui_bridge::FRONT);
     let opened = call(
         &mut bridge,
@@ -914,6 +895,4 @@ fn opening_a_session_the_terminal_wrote_says_which_surface_drew_it() {
         "opening the app's own session is not worth a caveat: {}",
         opened["frontNote"]
     );
-
-    clean_up(&project);
 }
