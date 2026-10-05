@@ -654,6 +654,13 @@ one the server chose.
 A body that is not valid UTF-8 is carried anyway rather than reported as an error, since nothing here
 reads it. Bodies are size-capped, and a truncated one says so.
 
+**Every fetch asks for Markdown first.** The request carries one fixed header,
+`Accept: text/markdown, text/html;q=0.9, text/plain;q=0.8, */*;q=0.1`, on the first request and on
+every hop of a redirect. A site that can serve a page as Markdown serves far fewer tokens than its
+HTML, and a processor reading the page pays for every one of them. Nothing in the planner's call or
+in a server's reply changes the header, and asking is all bravebot does: converting HTML to Markdown
+would mean reading the page, which only a processor does.
+
 ## `spawn_processor`
 
 Transforms quarantined content the planner was not shown. It spawns an isolated model with no tools,

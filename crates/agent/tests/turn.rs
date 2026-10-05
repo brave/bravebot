@@ -27775,7 +27775,10 @@ fn an_offset_into_output_nobody_vouched_for_is_refused_and_nobody_is_asked() {
 }
 
 /// A page server, for the fetch tests. Answers each request with the next reply it was given and
-/// reports the request lines it was sent, so a test can tell what actually went out.
+/// reports the request heads it was sent, so a test can tell what actually went out.
+///
+/// The head is the request line and every header, joined by newlines, because what a fetch asks
+/// for is in both halves of it.
 ///
 /// Keeps listening past the end of its replies for the reason the chat server does: a fetch that is
 /// retried should meet the page again rather than a closed port.
@@ -27804,6 +27807,7 @@ fn serve_pages(replies: Vec<String>) -> (String, MockRequests) {
                 if header == "\r\n" || header == "\n" {
                     break;
                 }
+                request.push_str(&header);
             }
             let _ = sender.send(request.clone());
 
@@ -27842,6 +27846,14 @@ fn serve_pages(replies: Vec<String>) -> (String, MockRequests) {
 fn page(body: &str) -> String {
     format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// A page the server states a content type for, so a test can serve the same bytes as two types.
+fn page_of_type(content_type: &str, body: &str) -> String {
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )
 }
@@ -28173,6 +28185,176 @@ fn a_fetched_page_can_be_processed_and_written_without_being_read() {
         clean.iter().any(|body| body.contains("fetch_url")),
         "no planner request was seen, so this proves nothing"
     );
+}
+
+/// The header value every fetch must carry, with its trailing line break, lower-cased for a
+/// comparison against a request head.
+///
+/// The wildcard is assembled rather than written out. `agents/skills/check-spec` reads a raw
+/// string's glob as opening a block comment and the wildcard's closing pair as ending one, and
+/// this file holds raw strings with glob rules in them, so either written literally here moves
+/// which lines the guarded-symbol counts in `docs/specs/labels.md` are measured over, in a file
+/// whose counts have nothing to do with a fetch.
+fn expected_accept() -> String {
+    format!(
+        "accept: text/markdown, text/html;q=0.9, text/plain;q=0.8, {}/{};q=0.1\r\n",
+        "*", "*"
+    )
+}
+
+/// FETCH-7. Every fetch asks for Markdown first, with a fixed header this program's own source
+/// holds. A server that can answer with Markdown otherwise answers with HTML, and the whole HTML
+/// body, up to the cap, is what a processor then pays tokens to read.
+///
+/// The header is read off the wire rather than out of the request this process built, because what
+/// the tool asked for is only what actually went out.
+#[test]
+fn a_fetch_asks_for_markdown_ahead_of_html() {
+    let scratch = Scratch::new("fetch-accept");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (site, requests) = serve_pages(vec![page("the docs")]);
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/docs"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the docs page"),
+        &mut bravebot_agent::confirm::ApproveFetches,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let head = requests
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the request went out");
+    // The whole value, in order: a header naming the types in any other order, or dropping a
+    // quality, asks a server for something else.
+    assert!(
+        head.to_lowercase().contains(&expected_accept()),
+        "the fetch did not ask for Markdown ahead of HTML: {head:?}"
+    );
+}
+
+/// The same header on the hop past a redirect. A same-host redirect is the ordinary approved case
+/// (FETCH-4), so a header carried only on the first request would be absent from most of the
+/// requests that actually fetch a page.
+#[test]
+fn a_redirected_fetch_still_asks_for_markdown_ahead_of_html() {
+    let scratch = Scratch::new("fetch-accept-redirect");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (site, requests) = serve_pages(vec![moved_to("/moved"), page("the docs")]);
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/start"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the start page"),
+        &mut bravebot_agent::confirm::ApproveFetches,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let first = requests
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the first request went out");
+    let second = requests
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the hop past the redirect went out");
+    assert!(
+        first.contains("/start") && second.contains("/moved"),
+        "the redirect was not followed: {first:?}, then {second:?}"
+    );
+    let expected = expected_accept();
+    assert!(
+        second.to_lowercase().contains(&expected),
+        "the hop past the redirect asked for something else: {second:?}"
+    );
+}
+
+/// The header changes nothing about the label. A Markdown body is content nobody vouched for,
+/// exactly as an HTML one is, and the label comes from `Capability::WebFetch` before the request
+/// goes out, so what a server answers with cannot raise it (FETCH-1).
+///
+/// Both types in one test, because the claim is that they are labelled the same: a test over
+/// Markdown alone would pass over an implementation that trusted it and left HTML untrusted.
+#[test]
+fn a_markdown_body_is_labelled_exactly_as_an_html_body_is() {
+    for content_type in ["text/markdown", "text/html"] {
+        let scratch = Scratch::new("fetch-markdown-label");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let (site, _requests) =
+            serve_pages(vec![page_of_type(content_type, "SENTINEL-TYPED-BYTES")]);
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/docs"}}"#)),
+            tool_request_2(
+                "write_file",
+                r#"{"path":"page.out","contents_ref":"ref:1"}"#,
+            ),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        let outcome = turn::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("read the docs page"),
+            &mut ApprovesFetchesAndWrites::default(),
+            &mut sink,
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+
+        // Untrusted and public, which is the label the transport gate names as the body arrives.
+        assert!(
+            sink.events().iter().any(|event| matches!(
+                event,
+                Event::GatePassed { gate: "transport", detail }
+                    if detail.contains("fetch_url") && detail.contains("(U,pub)")
+            )),
+            "{content_type}: the body did not arrive untrusted and public: {:?}",
+            sink.events()
+        );
+        // The planner was handed a reference and never the bytes, whichever type it was.
+        let _first = received.recv().expect("first request");
+        let second = received.recv().expect("second request");
+        assert!(
+            !second.contains("SENTINEL-TYPED-BYTES"),
+            "{content_type}: the body reached the planner's context: {second}"
+        );
+        // And the file it was written to is no longer trusted, which is what the untrusted half
+        // of the label costs a write.
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join("page.out")).unwrap(),
+            "SENTINEL-TYPED-BYTES",
+            "{content_type}: the body never reached the file"
+        );
+        assert!(
+            !outcome.trust.is_trusted("page.out"),
+            "{content_type}: a file holding a fetched body reads back trusted"
+        );
+    }
 }
 
 /// A page that is not valid UTF-8 is still the page that was asked for. Nothing reads it, so a

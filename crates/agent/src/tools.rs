@@ -7165,6 +7165,18 @@ fn runs_git(step: &bravebot_core::command::Step) -> bool {
     step.resolved.file_stem().is_some_and(|stem| stem == "git")
 }
 
+/// What every fetch asks for, in the order it prefers.
+///
+/// A fixed string in this program's own source. The planner's `url` argument takes no part in it,
+/// no reply can change it, and every hop of every fetch sends the same bytes, so nothing a server
+/// writes decides what the next request asks for.
+///
+/// Markdown first because the body is read by a processor and nothing else: the same page as
+/// Markdown is a fraction of the tokens its HTML is, and a server that can serve both otherwise
+/// serves HTML. `*/*` last so a server holding none of the named types answers with what it has
+/// rather than refusing.
+const FETCH_ACCEPT: &str = "text/markdown, text/html;q=0.9, text/plain;q=0.8, */*;q=0.1";
+
 fn fetch_url<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
@@ -7231,7 +7243,10 @@ fn fetch_url<S: Sink, C: Confirmer>(
         policy.record_ambient(&[spent]);
     }
 
-    let request = bravebot_net::Request::get(&url);
+    // The header is this program's own, fixed at compile time: a preference for the cheapest form
+    // of the page a processor will read. Nothing of the planner's or of a server's reaches it, and
+    // every hop of the chain re-sends it, because the egress crate re-sends the whole request.
+    let request = bravebot_net::Request::get(&url).header("accept", FETCH_ACCEPT);
     let fetched = tools
         .chat
         .egress
