@@ -12,6 +12,12 @@ on:
 permissions:
   contents: read
 
+# A push or an edit cancels the run still going for the pull request, since the new run reads the
+# same commits and the current title and body.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   narration:
     name: Process narration

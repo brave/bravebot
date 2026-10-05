@@ -12,6 +12,13 @@ on:
 permissions:
   contents: read
 
+# A push to a pull request cancels the run still going for its previous head, which nobody will
+# merge. Every other run is a group of its own, so each commit on main and each tag is checked
+# whole rather than replaced by the next one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   # No credentials here, and none needed: these jobs compile and test rather than

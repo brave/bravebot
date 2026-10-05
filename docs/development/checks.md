@@ -54,7 +54,8 @@ builds that crate, which is any crate the two bridge crates name, however far do
 by its condition reports success, and branch protection counts that as passing, so every doubt runs
 the job: a path no rule names runs everything, and so do a change to the workflows, the Makefile or
 the classifier, any run that is not a pull request, and a run where the classifier itself failed.
-Main and every tag are checked whole. A file outside `crates/` that a Rust test reads belongs in
+Main and every tag are checked whole, and a push to a pull request cancels the run still going
+for its previous head. A file outside `crates/` that a Rust test reads belongs in
 the classifier's `READ_BY_RUST`; its selftest scans the crates for strings naming such a file and
 stops on one that is in neither that list nor `NAMED_NOT_READ`.
 
