@@ -19,7 +19,7 @@ guards:
       - crates/agent/tests/workspace.rs: 35
       - crates/aichat/src/lib.rs: 5
       - crates/bedrock/src/lib.rs: 6
-      - crates/core/src/policy.rs: 110
+      - crates/core/src/policy.rs: 111
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 7
       - crates/mcp/src/http.rs: 2
@@ -313,6 +313,7 @@ settled.
 `verified-by: bravebot_core::policy::requesting_untrusted_content_is_refused`
 `verified-by: bravebot_core::policy::an_argument_cannot_be_read_once_the_context_has_met_something_untrusted`
 `verified-by: bravebot_core::policy::a_reference_cannot_be_named_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_core::policy::a_proposal_cannot_be_promoted_once_the_context_has_met_something_untrusted`
 `verified-by: bravebot_core::policy::a_private_argument_is_refused_rather_than_read`
 `verified-by: bravebot_agent::tools::an_edit_from_a_trusted_context_replaces_the_passage`
 `verified-by: bravebot_agent::tools::an_edit_is_refused_once_the_context_has_met_something_untrusted`
@@ -322,6 +323,7 @@ settled.
 `verified-by: bravebot_agent::tools::a_url_is_refused_once_the_context_has_met_something_untrusted`
 `verified-by: bravebot_agent::tools::a_job_name_is_read_from_a_trusted_context`
 `verified-by: bravebot_agent::tools::a_job_name_is_refused_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::tools::a_skill_name_is_refused_once_the_context_has_met_something_untrusted`
 
 <a id="LABEL-6"></a>
 ### LABEL-6: minting a witness is not permission to inspect

@@ -6196,13 +6196,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// by construction.
     ///
     /// The trust does not come from the value. It comes from two things that hold
-    /// regardless of what the model asks for:
+    /// regardless of what the model asks for, and from a context that has met nothing
+    /// untrusted:
     ///
     /// - the operation cannot change anything, so a wrong choice wastes a step rather
     ///   than causing harm; and
     /// - the operation is confined to a boundary the user established, a workspace root,
     ///   so the *set* of reachable targets was authorised up front even though the
     ///   individual choice was not.
+    ///
+    /// The two bound what a wrong choice reaches. The context is what makes the choice the
+    /// planner's own: the proposal is the planner's words, and their integrity is the integrity
+    /// of the context they were written in, so a fallen context is refused here as
+    /// [`Policy::read_planner_argument`] refuses it (LABEL-5). A context falls only by resuming
+    /// one that was not saved as trusted, so a turn today does not reach this refusal. It is here
+    /// so that a change letting untrusted bytes into the planner's context stops every path the
+    /// planner proposes, not only the ones that also pass through the argument gate.
     ///
     /// It must never be used for an effect. A write, an exec, or a network destination
     /// chosen this way would hand routing to whatever text the model just read, which is
@@ -6229,6 +6238,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 format!(
                     "{tool}.{field} cannot be promoted from {label}: private content must \
                      be declassified first"
+                ),
+            ));
+        }
+        if self.context != Integrity::Trusted {
+            return Err(self.deny(
+                "promote",
+                Principle::IntegrityGate,
+                format!(
+                    "{tool}.{field} cannot be promoted: this context has met untrusted content, \
+                     so what the planner proposes is untrusted too and must not decide anything"
                 ),
             ));
         }
@@ -12044,6 +12063,59 @@ five
             .expect_err("private content must not be promoted");
         assert_eq!(err.principle, Principle::Confinement);
         assert!(!policy.finish());
+    }
+
+    /// A promoted field is still an argument the planner wrote, so it falls with the context
+    /// as the arguments the other gates read do. Left open, it would go on deciding which file
+    /// is read after the planner's words had stopped being its own.
+    #[test]
+    fn a_proposal_cannot_be_promoted_once_the_context_has_met_something_untrusted() {
+        let mut sink = RecordingSink::new();
+        {
+            let mut policy = Policy::begin(
+                routing_with("task", "explore"),
+                ReleasePlan::new(),
+                all_capabilities(),
+                &mut sink,
+            )
+            .unwrap()
+            .resuming(Integrity::Untrusted);
+
+            let proposed = Labelled::new("src/main.rs".to_string(), Label::untrusted_public());
+            let denial = policy
+                .promote_confined_read("file_read", "path", &proposed)
+                .expect_err("a fallen context must not have its proposals promoted");
+
+            assert_eq!(denial.principle, Principle::IntegrityGate);
+            assert!(
+                denial.message.contains("must not decide anything"),
+                "the refusal does not say why: {denial}"
+            );
+            assert!(!policy.finish(), "the refusal was not recorded");
+        }
+
+        assert!(
+            !sink.events().iter().any(|e| matches!(
+                e,
+                Event::GatePassed {
+                    gate: "promote",
+                    ..
+                }
+            )),
+            "a refused promotion was recorded as passed"
+        );
+        assert!(
+            sink.events().iter().any(|e| matches!(
+                e,
+                Event::GateBlocked {
+                    gate: "promote",
+                    principle: Principle::IntegrityGate,
+                    ..
+                }
+            )),
+            "the trail does not say the promotion gate refused on integrity: {:?}",
+            sink.events()
+        );
     }
 
     /// A destination is authorised by the person who approved it rather than by its label, and
