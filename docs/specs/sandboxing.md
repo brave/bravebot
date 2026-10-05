@@ -20,7 +20,9 @@ Operating-system confinement for processes that run code we did not write, which
 stdio servers in [mcp.md](mcp.md). What this is *not* for is our own code: a processor is a model
 call made by our own code, and confining that would fence in the trusted half and leave the
 untrusted half free. A program the user asked for runs with the access their own shell would give
-it, and what confining one would mean is the last section here.
+it, and what confining one would mean is the last section here. The inhibitor `/caffeinate` starts
+is neither: its program and arguments are fixed in our code
+([commands.md](commands.md#CMD-12)), so it is not confined.
 
 Confinement is an operating-system boundary. Everywhere else in these specs the boundary is the
 capability set and the label on a value, which is a different mechanism answering a different

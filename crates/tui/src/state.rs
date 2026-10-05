@@ -1311,6 +1311,8 @@ pub struct Session {
     pub show_trail: bool,
     /// Whether the person has the info panel open, which the frame then draws only where it fits.
     panel: bool,
+    /// Whether `/caffeinate` is on, and the hold it keeps while work is pending.
+    pub(crate) caffeinate: crate::caffeinate::KeepAwake,
     /// What the info panel says this session is.
     identity: Identity,
     /// Scroll offset from the bottom, in lines.
@@ -1822,6 +1824,7 @@ impl Session {
             status: Status::Idle,
             show_trail: false,
             panel: false,
+            caffeinate: Default::default(),
             identity: Identity::default(),
             scroll: 0,
             scroller: None,
@@ -8812,6 +8815,61 @@ impl Session {
             .unwrap_or(false);
     }
 
+    /// Take the answer an earlier session gave to `/caffeinate`'s explanation.
+    ///
+    /// Read only for a session that persists, as the panel is, so a test is not handed the
+    /// developer's own answer.
+    pub fn adopt_caffeinate(&mut self) {
+        if self.persist && bravebot_session::store::load_caffeinate_confirmed() {
+            self.caffeinate.confirm();
+        }
+    }
+
+    /// Carry out `/caffeinate`, and take or release the hold it changes at once.
+    pub fn toggle_caffeinate(&mut self) {
+        use crate::caffeinate::Toggled;
+        match self.caffeinate.toggle() {
+            Toggled::Explained => self.note(t!(caffeinate_explained)),
+            Toggled::Confirmed => {
+                if self.persist {
+                    bravebot_session::store::save_caffeinate_confirmed();
+                }
+                self.note(t!(caffeinate_on));
+            }
+            Toggled::On => self.note(t!(caffeinate_on)),
+            Toggled::Off => self.note(t!(caffeinate_off)),
+        }
+        self.keep_awake();
+    }
+
+    /// Whether the session has work that sleeping would stop: a turn in flight, or a loop with a
+    /// tick to come, which a `schedule_next` wait is.
+    ///
+    /// A background job ends with its turn, so the turn covers it. A watch is not counted: it waits
+    /// on a file with no end in view, and holding a laptop awake for that is holding it awake for
+    /// as long as the session is open.
+    pub fn work_pending(&self) -> bool {
+        self.status == Status::Working || self.looping.is_some()
+    }
+
+    /// Hold the machine awake where `/caffeinate` is on and work is pending, and release it
+    /// otherwise. A hold that could not be kept is said, and `/caffeinate` is then off.
+    pub fn keep_awake(&mut self) {
+        use crate::caffeinate::Unavailable;
+        let busy = self.work_pending();
+        match self.caffeinate.follow(busy) {
+            Ok(()) => {}
+            Err(Unavailable::Missing(error)) => self.note(t!(
+                caffeinate_unavailable,
+                program = crate::caffeinate::PROGRAM,
+                reason = error.to_string()
+            )),
+            Err(Unavailable::Ended) => {
+                self.note(t!(caffeinate_ended, program = crate::caffeinate::PROGRAM))
+            }
+        }
+    }
+
     /// Whether the person has the info panel open, whether or not the last frame had room for it.
     pub fn panel_open(&self) -> bool {
         self.panel
@@ -13463,6 +13521,94 @@ mod tests {
             s.loop_tick().is_some(),
             "a due tick was never sent once the session was free"
         );
+    }
+
+    fn caffeinated() -> Session {
+        fn stand_in() -> std::io::Result<crate::caffeinate::Held> {
+            Ok(crate::caffeinate::Held::stand_in())
+        }
+        let mut s = session();
+        s.caffeinate = crate::caffeinate::KeepAwake::starting_with(stand_in);
+        s.caffeinate.confirm();
+        s.toggle_caffeinate();
+        assert!(s.caffeinate.is_on());
+        s
+    }
+
+    /// CMD-12: a loop waiting for the tick a turn asked for with `schedule_next` is pending work,
+    /// though no turn is running. Holding only while the status says a turn runs would let the
+    /// machine sleep through every wait, which is the sleep the command is for.
+    #[test]
+    fn a_loop_waiting_for_its_next_tick_holds_the_machine_awake() {
+        let mut s = caffeinated();
+        s.keep_awake();
+        assert!(
+            !s.caffeinate.holding(),
+            "an idle session held the machine awake"
+        );
+
+        s.start_loop(crate::loops::request("watch"), Vec::new(), Vec::new());
+        s.keep_awake();
+        assert!(s.caffeinate.holding(), "a running tick held nothing");
+
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(Some(crate::loops::Wakeup::asked(900, false)));
+        assert_eq!(s.status, Status::Idle);
+        s.keep_awake();
+        assert!(s.caffeinate.holding(), "a pending wakeup held nothing");
+
+        s.stop_loop();
+        s.keep_awake();
+        assert!(
+            !s.caffeinate.holding(),
+            "a stopped loop still held the machine"
+        );
+    }
+
+    /// CMD-12: a typed prompt holds the machine while its turn runs and lets it go at the end.
+    #[test]
+    fn a_turn_holds_the_machine_awake_until_it_ends() {
+        let mut s = caffeinated();
+        s.type_char('x');
+        s.submit();
+        s.keep_awake();
+        assert!(s.caffeinate.holding());
+        s.complete("done", Vec::new(), 0);
+        s.keep_awake();
+        assert!(!s.caffeinate.holding());
+    }
+
+    /// CMD-12: a program that will not start is said in the transcript and leaves `/caffeinate`
+    /// off, so the person is not left believing a machine they walk away from is held.
+    #[test]
+    fn a_missing_inhibitor_is_said_and_turns_caffeinate_off() {
+        fn missing() -> std::io::Result<crate::caffeinate::Held> {
+            Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+        }
+        let mut s = session();
+        s.caffeinate = crate::caffeinate::KeepAwake::starting_with(missing);
+        s.caffeinate.confirm();
+        s.toggle_caffeinate();
+        s.type_char('x');
+        s.submit();
+        s.keep_awake();
+        assert!(!s.caffeinate.is_on());
+        let said = s.transcript.last().expect("a note").text.clone();
+        assert!(
+            said.starts_with("/caffeinate is unavailable"),
+            "nothing said about the missing program: {said:?}"
+        );
+    }
+
+    /// CMD-12: the explanation comes first, in the transcript, and turns nothing on.
+    #[test]
+    fn the_first_caffeinate_says_what_it_does_and_holds_nothing() {
+        let mut s = session();
+        s.toggle_caffeinate();
+        assert!(!s.caffeinate.is_on());
+        let said = s.transcript.last().expect("a note").text.clone();
+        assert_eq!(said, t!(caffeinate_explained));
+        assert!(said.contains("screen can still lock"));
     }
 
     /// LOOP-13: each tick says which one it is, and how many in a row found nothing once any have.
