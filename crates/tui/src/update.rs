@@ -161,11 +161,28 @@ struct Record {
 /// The line to say at startup, having started the ask that answers the next launch.
 ///
 /// Nothing waits on that ask. Whatever is said here was already on disk when the process started.
-pub fn at_startup() -> Option<String> {
+///
+/// `setting` is what the `updateCheck` key said. Switched off, by it or by the environment, this
+/// returns before anything is read, asked or written (UPDATE-11).
+pub fn at_startup(setting: Option<bool>) -> Option<String> {
+    if !check_enabled(
+        setting,
+        std::env::var(bravebot_config::env_var::UPDATE_CHECK)
+            .ok()
+            .as_deref(),
+    ) {
+        return None;
+    }
     let install = installed_how()?;
     let stored = stored_record(install);
     refresh(install, stored);
     line(install, running_version()?, stored?.latest?)
+}
+
+/// Whether the person has left the check on. Either the key being `false` or the variable being
+/// `0` turns it off, and neither can turn it on again against the other.
+fn check_enabled(setting: Option<bool>, env: Option<&str>) -> bool {
+    setting != Some(false) && env != Some("0")
 }
 
 /// What to say when a newer version is out, or nothing when this copy is not behind it.
@@ -771,6 +788,19 @@ mod tests {
     #[test]
     fn an_answer_stamped_in_the_future_is_asked_again() {
         assert!(worth_asking(true, 1_000_000, Some(2_000_000)));
+    }
+
+    /// A person who turned the check off gets no read, no request and no line, however they did it.
+    #[test]
+    fn either_switch_turns_the_check_off() {
+        assert!(check_enabled(None, None));
+        assert!(check_enabled(Some(true), None));
+        assert!(check_enabled(None, Some("1")));
+        assert!(check_enabled(None, Some("")));
+        assert!(!check_enabled(Some(false), None));
+        assert!(!check_enabled(None, Some("0")));
+        assert!(!check_enabled(Some(true), Some("0")));
+        assert!(!check_enabled(Some(false), Some("1")));
     }
 
     /// A session that keeps nothing has nowhere to put an answer, so asking for one would be a
