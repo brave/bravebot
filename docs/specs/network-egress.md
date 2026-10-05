@@ -203,7 +203,10 @@ that a proxy was named and is not the route; the credential itself is never prin
 
 A variable that is set and non-empty and whose value is not a uri is named too, one line each, in
 the order the variables are read and in either case. Only the name: the value is withheld on the
-same terms the credential is. The reader passes over such a value and goes on to the next variable,
+same terms the credential is. One line each counts variables and not spellings: where the
+environment matches a name without regard to case, as Windows does, both spellings answer with the
+one value somebody set and it is named once, under the spelling read first. Two spellings holding
+two different values are two variables and are named separately. The reader passes over such a value and goes on to the next variable,
 so a later variable may still be the route, and every unparseable variable is named whether or not
 one of them was: a variable naming no route is a statement about this machine the program is not
 honouring, and `doctor` ends on a configuration error for it as it does for a path that holds no
@@ -254,6 +257,8 @@ did, since the usual mistake is a uri missing its scheme and the username stays 
 `verified-by: bravebot_net::transport::a_proxy_variable_that_parses_or_is_empty_is_not_named`
 `verified-by: bravebot_net::transport::every_proxy_variable_that_cannot_be_parsed_is_named_in_the_order_they_are_read`
 `verified-by: bravebot_net::transport::a_lower_case_proxy_variable_that_cannot_be_parsed_is_named`
+`verified-by: bravebot_net::transport::a_proxy_variable_a_case_folding_lookup_answers_twice_is_named_once`
+`verified-by: bravebot_net::transport::two_spellings_of_a_proxy_variable_holding_different_values_are_both_named`
 `verified-by: bravebot_cli::main::the_network_section_names_a_proxy_variable_that_cannot_be_parsed`
 `verified-by: bravebot_cli::main::the_network_section_names_every_proxy_variable_that_cannot_be_parsed`
 `verified-by: bravebot_cli::main::a_proxy_this_build_cannot_connect_through_is_reported_as_not_the_route`

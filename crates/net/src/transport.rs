@@ -401,17 +401,32 @@ fn from_pem(bytes: &[u8]) -> Vec<Certificate<'static>> {
 /// one that reader passed over. That reader stops at the first variable it can parse and this does
 /// not stop at all: a variable set after the one in force is reported too, since whoever set it
 /// stated a route and is otherwise told nothing about why it is not the one in use.
+///
+/// Both spellings are read, and a spelling holding a value another spelling of the same variable
+/// already answered with is passed over. Windows matches an environment name without regard to
+/// case, so there both spellings answer with the one value somebody set, and naming each would
+/// print the variable twice and send the reader to correct a spelling nobody wrote.
 fn unparseable_proxy_variables(lookup: &impl Fn(&str) -> Option<OsString>) -> Vec<String> {
-    PROXY_VARIABLES
-        .iter()
-        .flat_map(|name| [name.to_string(), name.to_ascii_lowercase()])
-        .filter(|name| {
-            lookup(name)
+    let mut named = Vec::new();
+    for variable in PROXY_VARIABLES {
+        let mut answered: Vec<String> = Vec::new();
+        for name in [variable.to_string(), variable.to_ascii_lowercase()] {
+            let Some(value) = lookup(&name)
                 .and_then(|value| value.into_string().ok())
                 .filter(|value| !value.is_empty())
-                .is_some_and(|value| Proxy::new(&value).is_err())
-        })
-        .collect()
+            else {
+                continue;
+            };
+            if answered.contains(&value) {
+                continue;
+            }
+            answered.push(value.clone());
+            if Proxy::new(&value).is_err() {
+                named.push(name);
+            }
+        }
+    }
+    named
 }
 
 /// Whether this build can actually connect through a proxy of this protocol.
@@ -906,6 +921,38 @@ mod tests {
             unparseable_proxy_variables(&environment(&[("https_proxy", "ht tp://proxy.corp")]));
 
         assert_eq!(named, ["https_proxy"]);
+    }
+
+    /// Windows matches an environment name without regard to case, so both spellings answer with the
+    /// one value somebody set. NET-8 says a variable is named one line, and a reader told to correct
+    /// `https_proxy` on a machine where only `HTTPS_PROXY` exists is sent after a variable that is
+    /// not there.
+    ///
+    /// The lookup folds case rather than the test running on Windows, because the suite runs on
+    /// Linux and macOS too and the behaviour under test is the lookup's, not the platform's.
+    #[test]
+    fn a_proxy_variable_a_case_folding_lookup_answers_twice_is_named_once() {
+        let folding = |name: &str| match name.eq_ignore_ascii_case("HTTPS_PROXY") {
+            true => Some(OsString::from("ht tp://proxy.corp")),
+            false => None,
+        };
+
+        let named = unparseable_proxy_variables(&folding);
+
+        assert_eq!(named, ["HTTPS_PROXY"]);
+    }
+
+    /// Two spellings of one variable holding two different values are two variables, which is only
+    /// reachable where the lookup does not fold case. Both are routes somebody stated and neither is
+    /// honoured, so the dedup above must key on the value and not on the variable.
+    #[test]
+    fn two_spellings_of_a_proxy_variable_holding_different_values_are_both_named() {
+        let named = unparseable_proxy_variables(&environment(&[
+            ("HTTPS_PROXY", "ht tp://proxy.corp"),
+            ("https_proxy", "gopher://proxy.corp"),
+        ]));
+
+        assert_eq!(named, ["HTTPS_PROXY", "https_proxy"]);
     }
 
     /// The built-in roots are what a client gets when nothing named others, so a build that ships
