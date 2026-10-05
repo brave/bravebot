@@ -203,7 +203,8 @@ pub fn compose_in<S: Sink>(
              this loop ends with it.\n"
         } else if tick.self_paced {
             "Nobody gave an interval, so this loop runs for exactly as long as you keep pacing \
-             it: call schedule_next once, at the end of this turn, or the loop ends.\n"
+             it: call schedule_next once, at the end of this turn, with a wait or with stop true once there \
+             is nothing left to watch.\n"
         } else {
             "The user gave the interval, so the timing is theirs. There is nothing here for you \
              to schedule and no tool for it: do this tick's work and answer.\n"

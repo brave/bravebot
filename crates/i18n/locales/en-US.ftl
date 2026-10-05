@@ -2221,6 +2221,7 @@ loop-stopped = the loop is stopped
 loop-cleared = the loop is stopped, because it belonged to the session that was cleared
 loop-aged-out = the loop has run for a week and stopped itself
 loop-unpaced = that turn did not say when to run again, so the loop has stopped
+loop-finished = that turn said the loop is finished, so the loop has stopped
 loop-busy = /loop starts with a turn of its own, so it waits until this one is done
 loop-replaces-goal =
     the goal that was set has been cleared: a session works towards one thing at a time

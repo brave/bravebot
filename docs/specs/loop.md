@@ -187,9 +187,12 @@ loop.
 **Why.** The first silence is a turn that forgot. The second is a loop nobody is running, and
 waking it every twenty minutes for the rest of the session helps nobody. A tick that does say
 when to run again restores the fallback, because the budget is for turns that stopped answering.
+A tick that sends `stop` to `schedule_next` ([SCHED-4](tools/schedule-next.md#SCHED-4)) is not a
+silence: it ends the loop at once, with the fallback wake unspent ([LOOP-11](#LOOP-11)).
 
 `verified-by: bravebot_tui::loops::a_self_paced_turn_that_says_nothing_is_woken_once_more_and_then_the_loop_ends`
 `verified-by: bravebot_tui::loops::a_turn_that_says_when_to_wake_restores_the_fallback`
+`verified-by: bravebot_tui::loops::a_turn_that_says_the_loop_is_finished_ends_it_without_a_keepalive`
 
 <a id="LOOP-10"></a>
 ### LOOP-10: a tick is told that it is one, and which kind of loop it is in
@@ -210,13 +213,14 @@ never has and tells the user it is missing. Both were observed before this claus
 ## What ends one
 
 <a id="LOOP-11"></a>
-### LOOP-11: five things end a loop, and each of them says so
+### LOOP-11: six things end a loop, and each of them says so
 
 | What | When |
 |---|---|
 | the person asks | `/loop stop`, which leaves the turn in flight running; typed during one it ends the loop as it is typed, unless a `/loop` is waiting for that turn, which it waits behind ([commands.md](commands.md#CMD-8)) |
 | the person interrupts | Ctrl-C, read against the loop after the turn in flight and the line in the box, and before leaving |
 | a turn is stopped | any turn cancelled while a loop runs, whether or not it was a tick |
+| the turn says it is finished | a tick of a self-paced loop that calls `schedule_next` with `stop`, which ends the loop with no further tick |
 | the session moves on | `/clear`, and leaving |
 | age | seven days after it started |
 
@@ -249,6 +253,8 @@ arriving after its loop has gone would otherwise start a new loop on the line ju
 `verified-by: bravebot_tui::state::a_loop_past_its_age_ends_and_says_so_instead_of_ticking`
 `verified-by: bravebot_tui::app::stopping_a_turn_ends_the_loop_and_says_so`
 `verified-by: bravebot_tui::loops::a_loop_older_than_a_week_has_aged_out`
+`verified-by: bravebot_tui::loops::a_turn_that_says_the_loop_is_finished_ends_it_without_a_keepalive`
+`verified-by: bravebot_tui::state::a_turn_that_says_the_loop_is_finished_ends_it_and_says_so`
 
 <a id="LOOP-12"></a>
 ### LOOP-12: a loop is never written down

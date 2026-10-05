@@ -8173,7 +8173,11 @@ impl Session {
         };
         if !running.ended(wakeup, Instant::now()) {
             self.looping = None;
-            self.note(t!(loop_unpaced));
+            if wakeup.is_some_and(|wakeup| wakeup.stop) {
+                self.note(t!(loop_finished));
+            } else {
+                self.note(t!(loop_unpaced));
+            }
         }
     }
 
@@ -13780,6 +13784,29 @@ mod tests {
         s.loop_turn_ended(Some(crate::loops::Wakeup::asked(60, false)));
         s.dispatch_tick();
         assert_eq!(last_note(&s), "loop 4");
+    }
+
+    /// A turn that says the loop is finished ends it at once and the screen names that ending,
+    /// not the one for a turn that forgot to say when to run again.
+    #[test]
+    fn a_turn_that_says_the_loop_is_finished_ends_it_and_says_so() {
+        let mut s = session();
+        s.start_loop(crate::loops::request("watch"), Vec::new(), Vec::new());
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(Some(crate::loops::Wakeup::finished(true)));
+        assert!(s.looping().is_none());
+        let note = s
+            .transcript
+            .iter()
+            .rev()
+            .find(|entry| entry.speaker == Speaker::System)
+            .expect("a note")
+            .text
+            .clone();
+        assert_eq!(
+            note,
+            "that turn said the loop is finished, so the loop has stopped"
+        );
     }
 
     /// The person's own prompt is not a tick of the loop, so finishing it must not re-arm one.

@@ -808,15 +808,16 @@ happen; a call from any other turn is answered the way any unoffered name is.
 
 | Parameter | |
 |---|---|
-| `delay_seconds` | how long to wait; routing, and required |
+| `delay_seconds` | how long to wait; routing, and required unless `stop` is true |
 | `noop` | whether this tick found anything; routing, and required |
+| `stop` | true to end the self-paced loop this tick belongs to, with no further tick; routing, and offered only to a tick of a self-paced loop |
 | `reason` | what the turn is waiting on, in its own words; content |
 
 **There is no argument for what the next run asks.** The prompt is the line you typed, and it is sent
 again unchanged.
 
 The wait is held between a minute and an hour **before** it is reported back, so the number the
-planner is told is the number it is getting. A call missing the delay or the verdict is refused rather
+planner is told is the number it is getting. A call missing the delay (unless it sets `stop`) or the verdict is refused rather
 than filled in, since the count of quiet ticks you are shown is built from the verdict. `reason`
 reaches your screen and stops there.
 

@@ -1853,6 +1853,7 @@ loop-stopped = la boucle est arrêtée
 loop-cleared = la boucle est arrêtée, car elle appartenait à la session effacée
 loop-aged-out = la boucle a tourné une semaine et s'est arrêtée d'elle-même
 loop-unpaced = ce tour n'a pas dit quand recommencer, la boucle est donc arrêtée
+loop-finished = ce tour a dit que la boucle est terminée, la boucle est donc arrêtée
 loop-busy = /loop commence par un tour à lui, il attend donc la fin de celui-ci
 loop-replaces-goal =
     l'objectif qui était fixé a été retiré : une session ne travaille qu'à une chose à la fois
