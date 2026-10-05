@@ -43,6 +43,13 @@ export function setConversation(key: string, patch: Partial<ConversationPreferen
   persist(key, next)
 }
 
+/** Forget a deleted conversation here. The main process has already removed it from disk. */
+export function dropConversation(key: string) {
+  const { [key]: _gone, ...rest } = state.conversations
+  state = { ...state, conversations: rest }
+  emit()
+}
+
 export function setExperience(key: 'recentModels', value: Experience['recentModels']) {
   state = { ...state, [key]: value }
   persist(key, value)

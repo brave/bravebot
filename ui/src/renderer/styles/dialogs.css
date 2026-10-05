@@ -32,6 +32,9 @@
 }
 .modal-header-action { display: inline-flex; margin-left: auto; font: var(--type-body); }
 .modal-subtitle { display: block; margin-top: var(--leo-spacing-s); font: var(--type-body); color: var(--ink-secondary); }
+.confirm-archive p { margin: 0; }
+.confirm-delete { --leo-button-color: var(--status-error-ink); }
+.confirm-archive-name { color: var(--ink-primary); font: var(--type-body-strong); overflow-wrap: anywhere; }
 
 .modal p { margin: 0 0 var(--leo-spacing-l); font: var(--type-body); color: var(--ink-secondary); }
 .modal h3 { margin: var(--leo-spacing-2xl) 0 var(--leo-spacing-s); font: var(--type-body-strong); color: var(--ink-primary); }

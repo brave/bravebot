@@ -7,6 +7,7 @@ import { Dropdown, Input, TextArea } from '../nala'
 import { BotAvatar } from './BotAvatar'
 import { BotMemory } from './BotMemory'
 import type { BotFormValue } from './Bots'
+import { ConfirmArchive } from './ConfirmArchive'
 import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
 
@@ -24,6 +25,7 @@ export function BotDetails({ bot, onSave, onArchive }: {
   const [name, setName] = useState(bot.name)
   const [purpose, setPurpose] = useState(bot.purpose)
   const [folder, setFolder] = useState(bot.home)
+  const [archiving, setArchiving] = useState(false)
   // One field at a time, so saving one does not overwrite what is being typed in the other.
   useEffect(() => { setName(bot.name) }, [bot.slug, bot.name])
   useEffect(() => { setPurpose(bot.purpose) }, [bot.slug, bot.purpose])
@@ -52,7 +54,7 @@ export function BotDetails({ bot, onSave, onArchive }: {
         <div className="inspector-title">
           <strong>Bot details</strong>
           <IconMenu icon="more-vertical" label={`Actions for ${bot.name}`} tooltip={false} className="bot-details-more">
-            <leo-menu-item onClick={onArchive}>
+            <leo-menu-item onClick={() => setArchiving(true)}>
               <span className="menu-icon-row">Archive bot</span>
             </leo-menu-item>
           </IconMenu>
@@ -87,6 +89,10 @@ export function BotDetails({ bot, onSave, onArchive }: {
         )}
         <BotMemory key={`${bot.slug}:${folder}`} slug={bot.slug} directory={folder} />
       </div>
+      {archiving && (
+        <ConfirmArchive kind="bot" name={bot.name} onCancel={() => setArchiving(false)}
+          onConfirm={() => { setArchiving(false); onArchive() }} />
+      )}
     </div>
   )
 }

@@ -43,7 +43,7 @@ import * as t from './transcript'
 import { receiveTurn, type Turns, type TurnDisclosure } from './turn-details'
 import { AuditInspector } from './components/AuditInspector'
 import { conversationKey } from '../shared/experience'
-import { useExperience, conversationPreferences, setConversation, experienceError } from './experience'
+import { useExperience, conversationPreferences, setConversation, dropConversation, experienceError } from './experience'
 import { showToast } from './toasts'
 import { applyAppearance } from './theme'
 import { SYSTEM, parseAppearance, type Appearance } from '../shared/theme'
@@ -977,6 +977,29 @@ export function App(): React.JSX.Element {
     [closeSession, live?.bot?.slug, readBots],
   )
 
+  /**
+   * Delete an archived conversation from disk.
+   *
+   * The agent refuses to delete a conversation it has open, and a conversation looked at earlier
+   * stays open behind the window after another is chosen. So every open handle for it is closed
+   * first, the one on screen included.
+   */
+  const deleteConversation = useCallback(async (summary: SessionSummary) => {
+    try {
+      const held = [...openedLives.current.values()].filter((item) => item.summary.id === summary.id && item.summary.directory === summary.directory)
+      for (const item of held) {
+        if (item.handle === handleRef.current) await closeSession()
+        else {
+          await call('session.close', { session: item.handle }).catch(() => undefined)
+          openedLives.current.delete(item.handle)
+        }
+      }
+      await call('session.delete', { directory: summary.directory, id: summary.id })
+      dropConversation(conversationKey(summary.directory, summary.id))
+      await Promise.all([refresh(), readForks(), readBots()])
+    } catch (error) { setProblem(String(error)) }
+  }, [closeSession, refresh, readForks, readBots])
+
   const about = useCallback(async () => {
     try {
       const info = await call<AboutInfo>('agent.info')
@@ -1409,6 +1432,7 @@ export function App(): React.JSX.Element {
         openId={live?.summary.id ?? live?.draftId ?? reading?.record.id ?? undefined}
         forked={forked}
         onOpen={stableShowSession}
+        onDelete={deleteConversation}
         onNew={stableCreate}
         onNewChat={stableNewChat}
         onTab={stableSwitchTab}

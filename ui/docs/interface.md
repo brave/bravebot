@@ -76,7 +76,7 @@ anything: **Queue message** explicitly queues a follow-up. Stop or an error paus
 the queue; **Resume queue** is required to continue it. Automatic bot-memory
 maintenance reserves the session until it finishes.
 
-Conversation actions include pin, archive and restore. Code blocks offer copy and wrap
+Conversation actions include pin, archive and restore. Archiving asks for confirmation first; restoring does not. An archived conversation also offers **Delete conversation**, which asks first and then removes the record from disk; it cannot be undone. Code blocks offer copy and wrap
 controls; local file references can open previews. **New activity** returns to the latest
 entries when new events arrive while you are reading older ones. The header pills show only
 what can be acted on (**Approval needed**, **Jump to latest**); whether a turn is running is
@@ -255,8 +255,9 @@ mark.
 
 #### Archiving one
 
-A bot leaves the list by being **archived**, from the menu on its details. It drops into a
-folded **Archived** section at the foot of the tab, and comes back from there with one click.
+A bot leaves the list by being **archived**, from the menu on its details, after a confirmation
+dialog that says where it goes and how it comes back. It drops into a folded **Archived** section
+at the foot of the tab, and comes back from there with one click and no confirmation.
 
 Nothing about it changes but a single field recording when it was put away. It keeps its slug, so
 it keeps its memory file; it keeps its seed, so it keeps its face; it keeps its session, so
@@ -269,17 +270,17 @@ comfort: what was dropped was the definition, and the definition is the only thi
 pieces together. A bot made again afterwards gets a fresh slug — so a different memory file — and
 a fresh seed, so a different face. It was a different bot wearing the same name.
 
-Taking a bot away for good still exists, as **Delete**, and it is offered only from an archived
-row — the second deliberate step rather than the first one on the way past. It is the only act in
-this window that cannot be taken back, and it is the only control that says so before it is
-hovered: it carries the colour a deletion wears in a diff, where everything else in that column
-earns its colour on the way past.
+An archived row has one control, an actions menu (⋯) shown on hover like a conversation's, with **Restore bot**
+and **Delete bot**. Restore brings the bot back with one click.
 
-It also asks. The row turns, the purpose is replaced by what the deletion costs, and the
-answer is a different button in a different place, so nobody arrives at it by pressing twice. The
-question is asked *in the row* rather than in a dialog, for the reason the agent's own questions
-are asked in the transcript: a modal takes the thing being decided off the screen and replaces it
-with a sentence about it, and here the sentence needs the bot's name still beside it.
+Taking a bot away for good still exists, as **Delete bot**, and it is offered only from an
+archived row — the second deliberate step rather than the first one on the way past. It is the
+only act in this window that cannot be taken back, and it is the only menu item that says so before
+it is hovered: it carries the colour a deletion wears in a diff, where everything else in that
+column earns its colour on the way past.
+
+It also asks, in a dialog that names the bot and says what the deletion costs, with Cancel and a
+red **Delete**. The dialog is the same one a conversation's deletion uses.
 
 Deletion removes the bot definition, cached briefing and app-owned memory revision
 histories. Saved conversations stay under `~/.bravebot`, the project memory files stay in
@@ -289,11 +290,10 @@ Archiving changes nothing in Chats. A bot's conversations are listed there wheth
 archived or not, and one opened from there is still that bot's conversation, so restoring the bot
 continues the same record.
 
-An archived row has no face, and that is deliberate twice over. A page gets a limited number of
-WebGL contexts, as the avatar section below explains at some length, and an archive is exactly the
-list that can grow to forty rows nobody is looking at. And a posture is a claim about what a bot
-is doing: there is no word in that vocabulary for "not here", and a figure looking about beside a
-Restore button would be saying something untrue.
+An archived row is drawn like any other bot row, with the actions menu shown on hover or focus.
+Its face is a still picture (`BotFace`) instead of the animated figure. A page gets a limited number
+of WebGL contexts, as the avatar section below explains, and an archive is the list that can grow
+to forty rows nobody is looking at.
 
 #### The face
 

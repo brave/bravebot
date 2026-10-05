@@ -127,6 +127,7 @@ impl Bridge {
             "session.open" => self.open_session(request),
             "session.new" => self.new_session(request),
             "session.fork" => self.fork_session(request),
+            "session.delete" => self.delete_session(request),
             "session.close" => self.close_session(request),
             "turn.send" => self.send_turn(request),
             "turn.cancel" => self.cancel_turn(request),
@@ -638,6 +639,57 @@ impl Bridge {
         });
         merge(&mut forked, reported);
         Ok(forked)
+    }
+
+    /// Remove a stored session from disk (SESSION-30).
+    ///
+    /// Keyed on the `directory` and `id` the list gave, like `session.open`, and nothing read out
+    /// of a record decides any part of it. A session this bridge has open is refused rather than
+    /// closed from under its window: a turn that saved afterwards would write the record again.
+    fn delete_session(&mut self, request: &Request) -> Result<Value, Failure> {
+        let directory = PathBuf::from(request.string("directory")?);
+        let id = request.string("id")?;
+
+        let handles: Vec<String> = self.open.keys().cloned().collect();
+        for handle in &handles {
+            self.reap(handle);
+        }
+        let key = bravebot_session::sessions::key_for(&directory);
+        let holder = self.open.values().find(|open| {
+            bravebot_session::sessions::key_for(&open.project) == key
+                && match open.state.try_lock() {
+                    Ok(state) => state.handle.as_ref().is_some_and(|held| held.id() == id),
+                    // A worker keeps the lock for the whole of its turn, so it cannot be ruled out.
+                    Err(_) => true,
+                }
+        });
+        if let Some(open) = holder {
+            return Err(if open.running.is_some() {
+                Failure::new(
+                    ErrorCode::TurnInFlight,
+                    "a turn is running in the session being deleted",
+                )
+            } else {
+                Failure::bad_request(
+                    "the session is open; close it with session.close before deleting it",
+                )
+            });
+        }
+
+        store::delete(&directory, &id).map_err(|refusal| match refusal {
+            bravebot_session::sessions::Deletion::Invalid => {
+                Failure::bad_request(format!("`{id}` is not a session name"))
+            }
+            bravebot_session::sessions::Deletion::NotFound => Failure::new(
+                ErrorCode::NoSuchSession,
+                format!("no session `{id}` in {}", directory.display()),
+            ),
+            bravebot_session::sessions::Deletion::Failed(error) => Failure::new(
+                ErrorCode::Internal,
+                format!("could not delete session `{id}`: {error}"),
+            ),
+        })?;
+        Ok(json!({ "deleted": true }))
     }
 
     fn close_session(&mut self, request: &Request) -> Result<Value, Failure> {

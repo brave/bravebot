@@ -329,31 +329,30 @@
 .bot-archive .session-group-head { position: static; background: none; }
 .bot-archive-rows { max-height: 40vh; overflow-y: auto; }
 
-/* A row with no face — an archive is exactly the list that can grow to forty rows nobody is
-   looking at, and a WebGL context apiece would cost the bots in use theirs. */
-.bot-archived {
+/* An archived bot is drawn as a bot row, with a still face: an archive can grow to forty rows
+   nobody is looking at, and a WebGL context apiece would cost the bots in use theirs. The
+   actions menu is laid over the right edge, and shows the way a conversation's does. */
+.bot-archived-body { cursor: default; }
+/* Centred by flex rather than a transform: a transformed ancestor makes the menu's fixed popup
+   position against this row, and the archive's scrolling list then clips it. */
+.bot-more-menu {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: var(--leo-spacing-s);
   display: flex;
   align-items: center;
-  gap: var(--leo-spacing-s);
-  min-height: var(--hit);
-  padding: var(--leo-spacing-s) var(--leo-spacing-m);
-  border-radius: var(--radius-control);
-  color: var(--ink-secondary);
+  opacity: 0;
+  transition: opacity var(--motion-fast);
 }
-.bot-archived:hover { background: var(--surface-hover); }
-.bot-archived .bot-said { flex: 1; }
-.bot-archived .bot-name { font: var(--type-meta); }
+.bot-archived:hover .bot-more-menu,
+.bot-more-menu:focus-within,
+.bot-archived.menu-open .bot-more-menu { opacity: 1; }
+.bot-archived.menu-open { z-index: 2; }
+.bot-archived .bot-purpose { padding-right: calc(var(--hit) + var(--leo-spacing-s) - var(--leo-spacing-l)); }
 /* The one act in this column that cannot be taken back carries its colour without being hovered. */
-.bot-archived .bot-delete { --leo-button-color: var(--status-error-ink); }
-.bot-archived .bot-delete-armed { font-weight: 600; }
-.bot-asking { background: var(--status-error-bg); }
-.bot-asking .bot-name { color: var(--ink-primary); }
-.bot-warning {
-  white-space: normal;
-  overflow-wrap: anywhere;
-  font: var(--type-caption);
-  color: var(--status-error-ink);
-}
+.bot-delete .menu-icon-row,
+.session-delete .menu-icon-row { color: var(--status-error-ink); --leo-icon-color: var(--status-error); }
 
 /* ------------------------------------------------------------------ foot */
 

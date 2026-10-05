@@ -14,8 +14,20 @@ export function writeExperience(key: unknown, value: unknown): Experience {
   else if (typeof key === 'string' && key.startsWith('[') && key.length <= 10000) {
     state.conversations[key] = parseConversation(value)
   } else throw new Error('Invalid preference')
+  save(state)
+  return state
+}
+
+/** Drop what was kept for a conversation that no longer exists. */
+export function removeConversation(key: string): void {
+  const state = readExperience()
+  if (!(key in state.conversations)) return
+  delete state.conversations[key]
+  save(state)
+}
+
+function save(state: Experience): void {
   // Drafts are work, not disposable preferences. Report write failures and replace atomically.
   writeFileSync(`${file()}.tmp`, JSON.stringify(state), { encoding: 'utf8', mode: 0o600 })
   renameSync(`${file()}.tmp`, file())
-  return state
 }

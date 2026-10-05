@@ -38,6 +38,7 @@ interface Props {
   forked: ReadonlySet<string>
   onOpen: (summary: SessionSummary) => void
   /** Start a chat in this folder, or ask for one with the picker when none is named. */
+  onDelete: (summary: SessionSummary) => void
   onNew: (directory?: string) => void
   /** Start a chat in the project used last. */
   onNewChat: () => void
@@ -61,6 +62,7 @@ export const Sidebar = memo(function Sidebar({
   openId,
   forked,
   onOpen,
+  onDelete,
   onNew,
   onNewChat,
   onTab,
@@ -138,6 +140,7 @@ export const Sidebar = memo(function Sidebar({
           openId={openId}
           forked={forked}
           onOpen={onOpen}
+          onDelete={onDelete}
           onNew={onNew}
           onNewChat={onNewChat}
           grouped={grouped}

@@ -127,6 +127,7 @@ const editDetail = async (page, name, value) => {
 const archiveOpen = async (page, name) => {
   await page.getByRole('button', { name: `Actions for ${name}`, exact: true }).click()
   await page.getByRole('menuitem', { name: 'Archive bot', exact: true }).click()
+  await page.locator('[data-test="archive-confirm"]').click()
   await page.waitForTimeout(600)
 }
 
@@ -359,6 +360,7 @@ check(
 )
 await back.screenshot({ path: '/tmp/bravebot-ui/23-bots-archived.png' })
 
+await archivedRow.getByRole('button', { name: /^Actions for / }).click()
 await archivedRow.locator('.bot-restore').click()
 await back.waitForTimeout(600)
 const after = onDisk(MINE[0])
@@ -402,23 +404,25 @@ await openArchive()
 // The one act in this window that cannot be taken back, so the claim worth a driver is that one
 // press does not perform it. A confirmation that a test never checks is a confirmation somebody
 // removes in a refactor without noticing what it was for.
+await archivedRow.getByRole('button', { name: /^Actions for / }).click()
 await archivedRow.locator('.bot-delete').click()
 await back.waitForTimeout(400)
 check(
-  onDisk(MINE[0]) !== null && (await archivedRow.locator('.bot-keep').count()) === 1,
+  onDisk(MINE[0]) !== null && (await back.locator('[data-test="delete-cancel"]').count()) === 1,
   'pressing Delete asks rather than deletes, and offers the way out first',
 )
 await back.screenshot({ path: '/tmp/bravebot-ui/24-bots-delete.png' })
-await archivedRow.locator('.bot-keep').click()
+await back.locator('[data-test="delete-cancel"]').click()
 await back.waitForTimeout(400)
 check(
   onDisk(MINE[0]) !== null && (await archivedRow.locator('.bot-restore').count()) === 1,
   'and answering no leaves the bot exactly where it was',
 )
 
+await archivedRow.getByRole('button', { name: /^Actions for / }).click()
 await archivedRow.locator('.bot-delete').click()
 await back.waitForTimeout(400)
-await archivedRow.locator('.bot-delete-armed').click()
+await back.locator('[data-test="delete-confirm"]').click()
 await back.waitForTimeout(600)
 check(
   (await backMine.count()) === 0 &&

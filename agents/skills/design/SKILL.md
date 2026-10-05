@@ -65,7 +65,9 @@ The structure is set in `styles/shell.css` and `columns.ts`. New surfaces fit in
 - **Dialogs.** Dialogs use `Modal` in one of four widths: `sm` 400, `md` 500, `lg` 760, `xl` 1080.
   The head is a title and at most one line saying what the dialog is for. The primary action is at
   the right of the footer. A secondary action that should stand apart (Cancel, Stop all) carries
-  `modal-leading` and goes to the left.
+  `modal-leading` and goes to the left. A dialog of a sentence or two passes `compact` to `Modal`
+  to tighten the vertical spacing around the body; the archive confirmation also keeps Cancel next
+  to the primary action at the right.
 
 ## Hard rules
 

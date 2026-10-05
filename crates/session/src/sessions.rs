@@ -1825,6 +1825,56 @@ pub fn load(project: &Path, id: &str) -> Option<Record> {
     read(&directory.join(format!("{id}.json")))
 }
 
+/// Why a session was not deleted.
+#[derive(Debug)]
+pub enum Deletion {
+    /// The id is not shaped like a session's name, so it was not looked for.
+    Invalid,
+    /// No record of that name in that directory's store.
+    NotFound,
+    /// The record or the trail beside it could not be removed.
+    Failed(std::io::Error),
+}
+
+/// Whether `id` is a name a session could have been given: one path segment of letters, digits,
+/// `-` and `_`, which covers the version 4 UUID of today and the time-and-process-id names of older
+/// builds, and nothing that could lead out of the directory it is joined onto.
+fn is_a_session_name(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// Remove one session from disk: its record and the trail beside it (SESSION-30).
+///
+/// Keyed on the directory and the id alone. The trail goes first, so a failure part way leaves a
+/// record that still opens rather than a trail with nothing to belong to. A link standing where one
+/// of the two files should be is removed as a link and never followed, so what it points at is
+/// untouched. Forks are copies made whole, which share no file with the session they came from.
+pub fn delete(project: &Path, id: &str) -> Result<(), Deletion> {
+    if !is_a_session_name(id) {
+        return Err(Deletion::Invalid);
+    }
+    let directory = project_directory(project).ok_or(Deletion::NotFound)?;
+    let record = directory.join(format!("{id}.json"));
+    if std::fs::symlink_metadata(&record).is_err() {
+        return Err(Deletion::NotFound);
+    }
+    for beside in [
+        directory.join(format!("{id}.audit.jsonl")),
+        directory.join(format!("{id}.tmp")),
+    ] {
+        match std::fs::remove_file(&beside) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(Deletion::Failed(error)),
+        }
+    }
+    std::fs::remove_file(&record).map_err(Deletion::Failed)
+}
+
 /// What a resumed session shows beneath each turn, by turn number.
 ///
 /// Two files behind one type: the plan comes out of the record and the trail out of the audit
@@ -4066,6 +4116,209 @@ mod tests {
         handle.discard_unwritten("release audit");
 
         assert_eq!(handle.title(), "release audit");
+    }
+
+    /// Two sessions in one project, with a trail each, so that a delete has a neighbour to get
+    /// wrong. Returns their ids.
+    fn two_sessions_with_trails(root: &Path) -> (String, String) {
+        let mut ids = Vec::new();
+        for prompt in ["first question", "second question"] {
+            let mut handle = Handle::begin(root, Front::Terminal, A_BUILD);
+            handle.save(
+                prompt,
+                Standing {
+                    history: None,
+                    conversation: &bravebot_agent::Conversation::new().snapshot(),
+                    turns: 1,
+                    tokens: 0,
+                    spend: &BTreeMap::new(),
+                    timing: &BTreeMap::new(),
+                    model: None,
+                    todos: &BTreeMap::new(),
+                    asides: &[],
+                    trust: &TrustStore::new("/work"),
+                    programs: &TrustedPrograms::default(),
+                    directories: &[],
+                    manifest: None,
+                    rewind: &[],
+                },
+            );
+            handle.append_audit(
+                1,
+                &[crate::audit::Stamped {
+                    at: 1,
+                    from: None,
+                    event: bravebot_core::event::Event::GatePassed {
+                        gate: "file_read",
+                        detail: "notes.txt".to_string(),
+                    },
+                }],
+            );
+            ids.push(handle.id().to_string());
+        }
+        (ids.remove(0), ids.remove(0))
+    }
+
+    /// Deleting names one session. A delete that matched on the directory alone, or on a prefix of
+    /// the id, would take its neighbour with it, and the list would look right until somebody
+    /// opened the one they expected to find.
+    #[test]
+    fn deleting_a_session_removes_its_record_and_trail_and_only_those() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-delete-one");
+        let (gone, kept) = two_sessions_with_trails(&root);
+        assert_eq!(list(&root).len(), 2);
+
+        delete(&root, &gone).expect("the session was not deleted");
+
+        let left: Vec<String> = list(&root).into_iter().map(|s| s.id).collect();
+        assert_eq!(left, vec![kept.clone()], "the wrong session was removed");
+        assert!(load(&root, &gone).is_none());
+        assert!(
+            audit_of(&root, &gone).is_empty(),
+            "the trail outlived its record"
+        );
+        assert!(
+            !project_directory(&root)
+                .unwrap()
+                .join(format!("{gone}.audit.jsonl"))
+                .exists(),
+            "the trail file is still on disk"
+        );
+        assert!(load(&root, &kept).is_some());
+        assert!(
+            !audit_of(&root, &kept).is_empty(),
+            "the other session lost its trail"
+        );
+    }
+
+    /// Two projects can hold a session each, and a delete is made in one of them.
+    #[test]
+    fn deleting_in_one_project_leaves_another_projects_session_alone() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let here = an_empty_project("bravebot-delete-here");
+        let there = an_empty_project("bravebot-delete-there");
+        let mut in_here = Handle::begin(&here, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut in_here);
+        let mut in_there = Handle::begin(&there, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut in_there);
+
+        assert!(matches!(
+            delete(&there, in_here.id()),
+            Err(Deletion::NotFound)
+        ));
+
+        assert!(load(&here, in_here.id()).is_some());
+        assert!(load(&there, in_there.id()).is_some());
+    }
+
+    /// A manifest run is a record like any other and is deleted like one.
+    #[test]
+    fn a_manifest_run_can_be_deleted() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-delete-run");
+        let id = record_manifest_run(
+            &root,
+            "summarise the specs",
+            &a_failed_run(),
+            Front::Terminal,
+            A_BUILD,
+        )
+        .expect("the run was not recorded");
+        assert_eq!(list(&root).len(), 1);
+
+        delete(&root, &id).expect("the run was not deleted");
+
+        assert!(list(&root).is_empty());
+    }
+
+    /// A name that is not one of ours is refused before any path is built from it, and a name
+    /// that is ours but names nothing is a refusal too, not a success.
+    #[test]
+    fn deleting_refuses_a_name_that_could_leave_the_directory_and_one_that_names_nothing() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-delete-names");
+        let (first, _second) = two_sessions_with_trails(&root);
+        let store = project_directory(&root).unwrap();
+        std::fs::write(store.parent().unwrap().join("outside.json"), "{}").expect("write");
+
+        for name in ["", "..", "../outside", "a/b", "a\\b", "x.json", "."] {
+            assert!(
+                matches!(delete(&root, name), Err(Deletion::Invalid)),
+                "{name:?} was not refused as a name"
+            );
+        }
+        assert!(store.parent().unwrap().join("outside.json").exists());
+        assert!(matches!(
+            delete(&root, "00000000-0000-4000-8000-000000000000"),
+            Err(Deletion::NotFound)
+        ));
+        assert_eq!(list(&root).len(), 2);
+        assert!(load(&root, &first).is_some());
+    }
+
+    /// A link where the trail should be is removed as a link. A delete that opened it or
+    /// removed its target would reach a file the state directory does not own.
+    #[test]
+    #[cfg(unix)]
+    fn deleting_does_not_follow_a_link_out_of_the_state_directory() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-delete-link");
+        let (id, _other) = two_sessions_with_trails(&root);
+        let store = project_directory(&root).unwrap();
+        let outside = crate::testutil::scratch_dir("bravebot-delete-link-outside");
+        let _ = std::fs::remove_file(&outside);
+        std::fs::create_dir_all(outside.parent().unwrap()).expect("create");
+        std::fs::write(&outside, "not ours").expect("write");
+        let trail = store.join(format!("{id}.audit.jsonl"));
+        std::fs::remove_file(&trail).expect("remove the real trail");
+        std::os::unix::fs::symlink(&outside, &trail).expect("symlink");
+
+        delete(&root, &id).expect("the session was not deleted");
+
+        assert_eq!(
+            std::fs::read_to_string(&outside).ok().as_deref(),
+            Some("not ours"),
+            "the file the link pointed at was removed or changed"
+        );
+        assert!(
+            std::fs::symlink_metadata(&trail).is_err(),
+            "the link is still in the store"
+        );
+        assert!(load(&root, &id).is_none());
+        let _ = std::fs::remove_file(&outside);
+    }
+
+    /// A fork is written whole, so deleting the session it came from leaves it openable with the
+    /// history it was cut from.
+    #[test]
+    fn deleting_a_session_leaves_its_fork_openable_with_its_trail() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-delete-parent-of-fork");
+        let (parent, _other) = two_sessions_with_trails(&root);
+        let child = fork(&root, &parent).expect("the fork was not made");
+
+        delete(&root, &parent).expect("the parent was not deleted");
+
+        assert!(load(&root, &parent).is_none());
+        let reopened = load(&root, &child.id).expect("the fork cannot be opened");
+        assert_eq!(reopened.id, child.id);
+        assert!(
+            !audit_of(&root, &child.id).is_empty(),
+            "the fork lost the trail it was given"
+        );
     }
 
     /// The lexical check on `..` says nothing about where a directory inside the tree actually

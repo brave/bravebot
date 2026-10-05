@@ -19,7 +19,7 @@ import { installMenu, popupContext, rebuildMenu, refreshMenu } from './menu'
 import { noteProject, recents } from './recents'
 import { putBots, putLayout, putTheme, putView, readState } from './state'
 import { isProjectPath } from '../shared/recents'
-import { forks, noteFork } from './forks'
+import { forgetFork, forks, noteFork } from './forks'
 import {
   bot,
   bots,
@@ -34,6 +34,7 @@ import {
   nudgeDue,
   releaseBotSession,
   retireBot,
+  forgetBotConversation,
   saveBotModel,
   saveForm,
   migrateBot,
@@ -42,6 +43,7 @@ import {
 } from './bots'
 import { botFolders, isBotModel, withoutBot, type Bot } from '../shared/bots'
 import { isSessionId, parseForkResult } from '../shared/forks'
+import { conversationKey } from '../shared/experience'
 import { rootForSession, forgetRoot, list, noteRoot, open as openInApp, preview, search, chooseAttachments, attachmentPaths } from './files'
 import { isSubpath } from '../shared/files'
 import { chooseDirectory, mayOpenSessionIn, offerDirectories } from './opened'
@@ -57,7 +59,7 @@ import {
 import { printToPdf } from './export'
 import { applyNativeAppearance } from './theme'
 import { parseAppearance } from '../shared/theme'
-import { readExperience, writeExperience } from './experience'
+import { readExperience, removeConversation, writeExperience } from './experience'
 import { editMemory, memoryHistory, snapshotMemory, removeMemoryHistory, tidyMemory } from './memory'
 
 /**
@@ -436,6 +438,7 @@ const ALLOWED = new Set([
   'session.open',
   'session.new',
   'session.fork',
+  'session.delete',
   'session.close',
   'turn.send',
   'turn.cancel',
@@ -599,6 +602,16 @@ app.whenReady().then(() => {
       // always, the directory for an opened or forked session — so a root the tree can browse is
       // one the agent confirmed rather than one the renderer asserted. See `files.ts`.
       noteOpenedRoot(method, params, ok)
+      // The agent has removed the record, so what this app kept about it goes too. The coordinate
+      // is the one the agent confirmed deleting, which is the one the window named.
+      if (method === 'session.delete' && (ok as { deleted?: unknown } | null)?.deleted === true) {
+        const { directory, id } = (params ?? {}) as { directory?: unknown; id?: unknown }
+        if (typeof directory === 'string' && isSessionId(id)) {
+          removeConversation(conversationKey(directory, id))
+          forgetFork({ directory, id })
+          forgetBotConversation(directory, id)
+        }
+      }
       if (method === 'session.close') {
         const closing = (params as { session?: unknown } | null)?.session
         if (isSessionId(closing)) {

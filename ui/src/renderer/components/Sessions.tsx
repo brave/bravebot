@@ -8,6 +8,8 @@ import { keyOf } from '../../shared/forks'
 import { Fold } from './Fold'
 import { ForkIcon } from './ForkIcon'
 import { BotFace } from './BotAvatar'
+import { ConfirmArchive } from './ConfirmArchive'
+import { ConfirmDelete } from './ConfirmDelete'
 import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
 import { conversationKey } from '../../shared/experience'
@@ -36,6 +38,8 @@ interface Props {
   /** Which sessions came out of another one, by `directory/id`. */
   forked: ReadonlySet<string>
   onOpen: (summary: SessionSummary) => void
+  /** Remove an archived conversation from disk. */
+  onDelete: (summary: SessionSummary) => void
   onNew: (directory?: string) => void
   /** Start a chat in the project used last. */
   onNewChat: () => void
@@ -122,6 +126,7 @@ export function Sessions({
   openId,
   forked,
   onOpen,
+  onDelete,
   onNew,
   onNewChat,
   grouped,
@@ -241,6 +246,7 @@ export function Sessions({
                 current={session.id === openId}
                 forked={forked.has(keyOf(session.directory, session.id))}
                 onOpen={onOpen}
+                onDelete={onDelete}
               />
             ))}
             <ShowMore page={active} onMore={() => setLimit((shown) => shown + PAGE)} />
@@ -259,6 +265,7 @@ export function Sessions({
               openId={openId}
               forked={forked}
               onOpen={onOpen}
+              onDelete={onDelete}
               onNew={onNew}
             />
           ))}
@@ -279,6 +286,7 @@ export function Sessions({
                   current={session.id === openId}
                   forked={forked.has(keyOf(session.directory, session.id))}
                   onOpen={onOpen}
+                  onDelete={onDelete}
                 />
               ))}
               <ShowMore page={archived} onMore={() => setArchiveLimit((shown) => shown + PAGE)} />
@@ -336,6 +344,7 @@ function Group({
   openId,
   forked,
   onOpen,
+  onDelete,
   onNew,
 }: {
   group: Group
@@ -347,6 +356,7 @@ function Group({
   openId: string | undefined
   forked: ReadonlySet<string>
   onOpen: (summary: SessionSummary) => void
+  onDelete: (summary: SessionSummary) => void
   onNew: (directory: string) => void
 }): React.JSX.Element {
   const drawn = page(group.sessions, shown, keep)
@@ -386,6 +396,7 @@ function Group({
             current={session.id === openId}
             forked={forked.has(keyOf(session.directory, session.id))}
             onOpen={onOpen}
+            onDelete={onDelete}
           />
         ))}
         <ShowMore page={drawn} onMore={() => onMore(group.directory, shown)} />
@@ -409,19 +420,32 @@ const Session = memo(function Session({
   current,
   forked,
   onOpen,
+  onDelete,
 }: {
   session: SessionSummary
   current: boolean
   forked: boolean
   onOpen: (summary: SessionSummary) => void
+  onDelete: (summary: SessionSummary) => void
 }): React.JSX.Element {
   const key = conversationKey(session.directory, session.id)
   const preferences = useConversationPreferences(key)
   const info = useContext(SessionInfo)[key]
   const [menu, setMenu] = useState(false)
+  const [archiving, setArchiving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const trigger = useRef<HTMLElement>(null)
-  const choose = (id: 'pin' | 'archive') =>
+  const choose = (id: 'pin' | 'archive' | 'delete') => {
+    if (id === 'delete') return setDeleting(true)
+    // Archiving asks first; restoring is undone by archiving again, so it does not.
+    if (id === 'archive' && !preferences?.archived) return setArchiving(true)
     setConversation(key, id === 'pin' ? { pinned: !preferences?.pinned } : { archived: !preferences?.archived })
+  }
+  const leaveArchiving = () => {
+    setArchiving(false)
+    setDeleting(false)
+    trigger.current?.focus()
+  }
   const shut = ({ reason }: { reason: string }) => {
     setMenu(false)
     // Escape and a chosen item return focus to the button that opened the menu; a click elsewhere
@@ -464,9 +488,22 @@ const Session = memo(function Session({
           <leo-menu-item onClick={() => choose('archive')}>
             <span className="menu-icon-row"><Icon name="inbox" />{preferences?.archived ? 'Restore conversation' : 'Archive conversation'}</span>
           </leo-menu-item>
+          {preferences?.archived && (
+            <leo-menu-item className="session-delete" onClick={() => choose('delete')}>
+              <span className="menu-icon-row"><Icon name="trash" />Delete conversation</span>
+            </leo-menu-item>
+          )}
         </Menu>
       )}
     </div>
+    {archiving && (
+      <ConfirmArchive kind="conversation" name={session.title} onCancel={leaveArchiving}
+        onConfirm={() => { setConversation(key, { archived: true }); leaveArchiving() }} />
+    )}
+    {deleting && (
+      <ConfirmDelete kind="conversation" name={session.title} onCancel={leaveArchiving}
+        onConfirm={() => { setDeleting(false); onDelete(session) }} />
+    )}
   </div>
 })
 

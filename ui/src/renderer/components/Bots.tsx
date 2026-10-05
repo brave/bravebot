@@ -1,5 +1,7 @@
 import { SidebarSearch } from './SidebarTools'
 import { IconButton } from './IconButton'
+import { ConfirmDelete } from './ConfirmDelete'
+import { IconMenu } from './IconMenu'
 import { Modal } from './Modal'
 import { Alert, Button, Icon, Input, TextArea } from '../nala'
 /**
@@ -17,7 +19,7 @@ import { Alert, Button, Icon, Input, TextArea } from '../nala'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { activeBots, retiredBots, type Bot } from '../../shared/bots'
 import { newAvatarSeed } from '../../shared/avatar'
-import { BotAvatar, type Doing } from './BotAvatar'
+import { BotAvatar, BotFace, type Doing } from './BotAvatar'
 import { Fold } from './Fold'
 
 /** What a window may say about a bot. Everything else about one is the main process's. */
@@ -54,9 +56,6 @@ export function Bots({
   // is where things go to stop being in the way, and one that opened itself every launch would be
   // in the way.
   const [showing, setShowing] = useState(false)
-  // Which archived bot has been asked about, if any. One at a time — arming a second disarms the
-  // first, so there is never a fold of rows all sitting a click away from being deleted.
-  const [deleting, setDeleting] = useState<string | null>(null)
 
   const inUse = useMemo(() => activeBots(bots).filter((bot) => `${bot.name} ${bot.purpose}`.toLowerCase().includes(query.toLowerCase())), [bots, query])
   const away = useMemo(() => retiredBots(bots), [bots])
@@ -104,12 +103,7 @@ export function Bots({
               type="button"
               className="session-group-fold"
               aria-expanded={showing}
-              // Closing the archive puts down whatever was picked up in it. A row left armed
-              // behind a closed fold would be a question nobody can see waiting for an answer.
-              onClick={() => {
-                setDeleting(null)
-                setShowing(!showing)
-              }}
+              onClick={() => setShowing(!showing)}
             >
               <Icon className={`chevron ${showing ? 'open' : ''}`} name="carat-right" />
               <span className="session-group-name">Archived</span>
@@ -121,17 +115,8 @@ export function Bots({
               <ArchivedRow
                 key={bot.slug}
                 bot={bot}
-                asking={deleting === bot.slug}
-                onAsk={() => setDeleting(bot.slug)}
-                onCancel={() => setDeleting(null)}
-                onRestore={() => {
-                  setDeleting(null)
-                  onRetire(bot.slug, false)
-                }}
-                onDelete={() => {
-                  setDeleting(null)
-                  onRemove(bot.slug)
-                }}
+                onRestore={() => onRetire(bot.slug, false)}
+                onDelete={() => onRemove(bot.slug)}
               />
             ))}
           </Fold>
@@ -169,92 +154,53 @@ function BotRow({
 /**
  * One bot that has been put away.
  *
- * Plainer than the row above it on purpose, and the missing piece is the face. Two reasons, and
- * they point the same way. A page gets a limited number of WebGL contexts — the whole of what
- * `BotAvatar`'s stage is arranged around — and an archive is exactly the list that can grow to
- * forty rows nobody is looking at, so spending one apiece there would cost the bots somebody *is*
- * looking at their faces. And a posture is a claim about what a bot is doing: the vocabulary has
- * no word for "not here", and a figure turning slowly beside a Restore button would be saying
- * something untrue quietly.
+ * Drawn like the row above it, with the face as a still picture (`BotFace`) instead of the animated
+ * figure. A page gets a limited number of WebGL contexts, and an archive is the list that can grow
+ * to forty rows nobody is looking at, so spending one apiece would cost the bots in use their
+ * faces. A still face also makes no claim about what the bot is doing.
  *
- * Two things to do with an archived bot, and they are not the same size. Restore is free — it is
- * the archive's whole point, and undoing it is one more click. **Delete** is the only act in this
- * window that cannot be taken back, so it is the only control wearing the colour a deletion wears
- * in a diff, and it asks before it does anything.
+ * Two things to do with an archived bot, both in the row's actions menu, and they are not the same
+ * size. Restore is free: it is the archive's whole point, and undoing it is one more click.
+ * **Delete** is the only act in this window that cannot be taken back, so it is the only menu item
+ * wearing the colour a deletion wears in a diff, and it asks in a dialog before it does anything.
  *
- * It asks *in the row* rather than in a dialog, which is the same call the transcript makes about
- * the agent's own questions: a modal takes the thing being decided off the screen and replaces it
- * with a sentence about it. Here the sentence goes where the purpose was, so the name of
- * the bot is still in front of whoever is answering. The second press is a different button in a
- * different place, so nobody arrives at it by double-clicking the first.
- *
- * What the words have to carry is that this is final, and they have to do it without overclaiming.
- * Saved sessions and project memory stay. App-owned memory revisions and the cached briefing
- * are deleted with the bot definition.
+ * What the dialog has to carry is that this is final, without overclaiming. Saved sessions and
+ * project memory stay. App-owned memory revisions and the cached briefing are deleted with the bot
+ * definition.
  */
 function ArchivedRow({
   bot,
-  asking,
-  onAsk,
-  onCancel,
   onRestore,
   onDelete,
 }: {
   bot: Bot
-  /** Whether this row is the one that has been asked about. */
-  asking: boolean
-  onAsk: () => void
-  onCancel: () => void
   onRestore: () => void
   onDelete: () => void
 }): React.JSX.Element {
+  const [menu, setMenu] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   return (
-    <div className={`bot-archived${asking ? ' bot-asking' : ''}`}>
-      <span className="bot-said">
-        <span className="bot-name">{bot.name}</span>
-        {asking ? (
-          // Keep the retention notice visible and wrapping at narrow sidebar widths.
-          <span className="bot-warning">Deletes local memory history. Project files, conversations and the home folder stay.</span>
-        ) : (
+    <div className={`bot bot-archived${menu ? ' menu-open' : ''}`}>
+      <div className="bot-open-button bot-archived-body">
+        <BotFace seed={bot.avatar} size={40} />
+        <span className="bot-said">
+          <span className="bot-name">{bot.name}</span>
           <span className="bot-purpose" data-tooltip={bot.purpose}>{bot.purpose}</span>
-        )}
-      </span>
-      {asking ? (
-        <>
-          <Button kind="plain-faint" size="tiny" className="bot-keep" onClick={onCancel}>
-            Keep
-          </Button>
-          <Button
-            kind="outline"
-            size="tiny"
-            className="bot-delete bot-delete-armed"
-            data-tooltip={`Delete ${bot.name} and its local memory history for good. Project files, conversations and the home folder are kept.`}
-            onClick={onDelete}
-          >
-            Delete
-          </Button>
-        </>
-      ) : (
-        <>
-          <Button
-            kind="outline"
-            size="tiny"
-            className="bot-restore"
-            data-tooltip={`Bring ${bot.name} back, with its session, its memory and its face.`}
-            onClick={onRestore}
-          >
-            Restore
-          </Button>
-          <Button
-            kind="plain-faint"
-            size="tiny"
-            className="bot-delete"
-            data-tooltip={`Delete ${bot.name} for good. Local memory history is deleted. Project files, conversations and the home folder are kept.`}
-            onClick={onAsk}
-          >
-            Delete
-          </Button>
-        </>
+        </span>
+      </div>
+      <div className="bot-more-menu">
+        <IconMenu icon="more-vertical" size="tiny" label={`Actions for ${bot.name}`} tooltip={false} onOpen={setMenu}>
+          <leo-menu-item className="bot-restore" onClick={onRestore}>
+            <span className="menu-icon-row"><Icon name="arrow-undo" />Restore bot</span>
+          </leo-menu-item>
+          <leo-menu-item className="bot-delete" onClick={() => setDeleting(true)}>
+            <span className="menu-icon-row"><Icon name="trash" />Delete bot</span>
+          </leo-menu-item>
+        </IconMenu>
+      </div>
+      {deleting && (
+        <ConfirmDelete kind="bot" name={bot.name} onCancel={() => setDeleting(false)}
+          onConfirm={() => { setDeleting(false); onDelete() }} />
       )}
     </div>
   )
