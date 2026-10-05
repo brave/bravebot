@@ -671,14 +671,14 @@ open the home.
 
 ## Programs a person asked for
 
-A program `run` ([tools/run.md](tools/run.md)) starts used to get the access the user's own shell
-would give it, on the ground that `git push` needs `~/.ssh` and the programs somebody might ask for
-cannot be listed in advance. The decision is that it is confined, and that what confinement bounds
-is the filesystem: a program is held to the paths the plan a person endorsed accounts for, and not
-to whatever else it could open. On Linux and macOS this section is in force
+A program `run` ([tools/run.md](tools/run.md)) starts is confined on Linux and macOS
 ([SANDBOX-17](#SANDBOX-17), [SANDBOX-18](#SANDBOX-18)), and the clauses above are what the profile
-is held to. Windows has no base yet, so a program there is unconfined. Each part of the decision
-that is not built is marked where it appears.
+is held to. What confinement bounds is the filesystem: a program is held to the paths the plan a
+person endorsed accounts for, and not to whatever else it could open. The programs somebody might
+ask for cannot be listed in advance, and a `git push` needs the credentials under `~/.ssh`, so the
+remote scope above is what lends those to a stage whose argv names the operation. Windows has no
+base yet, so a program there is unconfined. Each part of the decision that is not built is marked
+where it appears.
 
 **The grant is the plan, not the prompt.** A command line compiles to a plan carrying its read set,
 its write set and each stage's resolved binary, and that plan is what a person is shown and what an
