@@ -2918,9 +2918,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 "advice",
                 Principle::Confinement,
                 format!(
-                    "the question for the advisor is {label}, because the conversation holds \
-                     private content, and that is not sent to a second model; carry on without \
-                     the advisor"
+                    "the question for the advisor is {label} and private content must not become \
+                     one; say what to ask rather than pasting what was read"
                 ),
             ));
         }
@@ -6839,6 +6838,12 @@ mod tests {
             .before_advice(&private)
             .expect_err("a private question must not reach the advisor");
         assert_eq!(denial.principle, Principle::Confinement);
+        assert!(
+            denial
+                .message
+                .contains("say what to ask rather than pasting what was read"),
+            "the planner was not told what to do instead: {denial}"
+        );
 
         let public = Labelled::new("which file first?".to_string(), Label::untrusted_public());
         assert_eq!(

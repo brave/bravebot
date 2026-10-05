@@ -1121,3 +1121,6 @@ its first question could not reach.
 
 `verified-by: bravebot_cli::main::an_advisor_flag_names_the_model_the_planner_may_consult`
 `verified-by: bravebot_cli::main::a_blank_advisor_is_refused_rather_than_read_as_no_choice`
+`verified-by: bravebot_cli::main::an_advisor_the_managed_settings_refuse_is_refused_before_the_run`
+`verified-by: bravebot_cli::running::an_advisor_nothing_serves_is_refused_before_the_run`
+`verified-by: bravebot_cli::running::an_advisor_is_refused_with_a_manifest_run`

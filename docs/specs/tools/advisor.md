@@ -38,8 +38,8 @@ The call takes a short question, written by the planner, and nothing else: no mo
 to add, no tools to grant. The advisor is sent the request the planner was sent on that round,
 unchanged, followed by one message that carries the question, and the request offers no tools.
 
-**Why.** The planner's context holds nothing untrusted, so a model shown exactly that context is
-shown nothing new. A field for the model would let the planner route the conversation to a
+**Why.** Whatever the context holds, a model shown exactly that context is shown nothing the
+planner was not already shown. A field for the model would let the planner route the conversation to a
 destination it chose. A tool for the advisor would make it a second planner.
 
 `verified-by: bravebot_agent::turn::the_advisor_is_asked_with_the_planners_context_and_no_tools`

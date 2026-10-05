@@ -868,12 +868,11 @@ fn run_task(
 
     // Resolved like `--model`, and refused like it where the machine-level layer refuses the
     // name, so a run never starts with an advisor its first question could not reach (BACKEND-48).
-    let advisor = advisor.map(|name| config.model_named(&name));
-    if let Some(advisor) = &advisor
-        && let Some(how) = nothing_serves(&config, advisor)
-    {
-        return stopped_before_the_turn(as_json, Ending::Configuration, how);
-    }
+    let advisor = match advisor.map(|name| resolve_advisor(&config, &name)) {
+        Some(Ok(advisor)) => Some(advisor),
+        Some(Err(how)) => return stopped_before_the_turn(as_json, Ending::Configuration, how),
+        None => None,
+    };
 
     let settings = bravebot_config::Settings::load();
 
@@ -1567,6 +1566,15 @@ fn nothing_serves(config: &Config, model: &str) -> Option<String> {
             Some(managed_refusal(model, &file, why))
         }
         bravebot_agent::backend::Serving::Configured => None,
+    }
+}
+
+/// The model `--advisor` names, resolved like `--model`, or what to say where nothing could ask it.
+fn resolve_advisor(config: &Config, name: &str) -> Result<String, String> {
+    let advisor = config.model_named(name);
+    match nothing_serves(config, &advisor) {
+        Some(how) => Err(how),
+        None => Ok(advisor),
     }
 }
 
@@ -5849,6 +5857,38 @@ mod tests {
             let err = parse_invocation(&typed).expect_err("must refuse");
             assert!(err.contains("--advisor"), "{typed:?}: {err}");
         }
+    }
+
+    /// CLI-21. A machine whose managed settings refuse a model does not request it for an advisor
+    /// either, and the run stops before the first round naming the file that refused it, rather than
+    /// starting with an advisor whose first question could not be sent.
+    ///
+    /// Not a binary run, because the managed file is read from a fixed system path that a test
+    /// cannot point elsewhere. The configuration is built from a managed file the test writes.
+    #[test]
+    fn an_advisor_the_managed_settings_refuse_is_refused_before_the_run() {
+        let scratch = Scratch::new("cli-advisor-managed");
+        let (managed, file) = pinned(&scratch, r#"{"models": {"deny": ["stub/advisor-model"]}}"#);
+        let settings = layers(
+            &scratch,
+            Some(
+                r#"{"provider": {"stub": {"options": {"baseURL": "http://127.0.0.1:1/v1"},
+                    "models": {"planner": {}, "advisor-model": {}}}}}"#,
+            ),
+            None,
+        );
+        let config = Config::from_env_and_settings(&settings, &managed).expect("a configuration");
+
+        let how = resolve_advisor(&config, "stub/advisor-model").expect_err("must be refused");
+        assert!(
+            how.contains("stub/advisor-model") && how.contains(&file.display().to_string()),
+            "the refusal named neither the model nor the file that refused it: {how}"
+        );
+        assert_eq!(
+            resolve_advisor(&config, "stub/planner").as_deref(),
+            Ok("stub/planner"),
+            "a model the file does not name was refused"
+        );
     }
 
     /// The level a run asks for, in any case, and nothing where the flag was not given, which

@@ -290,6 +290,86 @@ fn a_configured_gateway_is_not_refused() {
     );
 }
 
+/// CLI-21. An advisor nothing is configured to serve stops the run before the first round, as the
+/// same name given to `--model` would, rather than starting a run whose first question could not be
+/// sent. The control is the run without the flag, which reaches the gateway, so the stop is known to
+/// be the advisor's.
+#[test]
+fn an_advisor_nothing_serves_is_refused_before_the_run() {
+    let scratch = Scratch::new("cli-running-advisor-unserved").with_settings(
+        r#"{
+            "provider": {
+                "openrouter": {
+                    "env": ["OPENROUTER_API_KEY"],
+                    "options": {"baseURL": "http://127.0.0.1:1/api/v1"},
+                    "models": {"z-ai/glm-4.6": {}}
+                }
+            }
+        }"#,
+    );
+    let environment = [
+        ("SERVICES_KEY_AICHAT", "a-services-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+        ("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com"),
+        (
+            "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+            "https://ai-chat-premium.bsg.brave.com",
+        ),
+        ("OPENROUTER_API_KEY", "a-token"),
+    ];
+    let planner = ["-p", "say something", "--model", "openrouter/z-ai/glm-4.6"];
+
+    let control = bravebot(&scratch.path, &environment, &planner);
+    let (_, stderr) = said(&control);
+    assert_eq!(
+        control.status.code(),
+        Some(5),
+        "the run without an advisor did not reach the gateway: {stderr}"
+    );
+
+    let mut with_advisor = planner.to_vec();
+    with_advisor.extend(["--advisor", "opus"]);
+    let output = bravebot(&scratch.path, &environment, &with_advisor);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(
+        stdout.is_empty(),
+        "the reply stream carried the explanation instead: {stdout}"
+    );
+    assert!(
+        !stderr.contains("127.0.0.1:1"),
+        "the run went to the gateway with an advisor nothing serves: {stderr}"
+    );
+}
+
+/// CLI-21. A manifest run writes its plan and runs the steps without a planner that could ask, so
+/// an advisor would be named and never consulted. It is refused as a bad argument, naming both
+/// flags, before any configuration is read.
+#[test]
+fn an_advisor_is_refused_with_a_manifest_run() {
+    let scratch = Scratch::new("cli-running-advisor-manifest");
+    let output = bravebot(
+        &scratch.path,
+        &[],
+        &[
+            "-p",
+            "say something",
+            "--mode",
+            "manifest",
+            "--advisor",
+            "some-model",
+        ],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("--advisor") && stderr.contains("--mode manifest"),
+        "the refusal named neither flag: {stderr}"
+    );
+}
+
 /// A service configured while the model in force is still Brave's own has no service for that
 /// model, and is the case a settings block copied out of another tool lands in: those blocks name
 /// their models and name no default, so the model stays the one this build baked in.
