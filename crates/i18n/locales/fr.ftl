@@ -404,6 +404,8 @@ doctor-proxy-absent = aucun ({ $variables } en désigne un, en majuscules ou en 
 doctor-proxy-in-force = { $proxy }
 doctor-proxy-authenticated = { $proxy } (avec un identifiant, jamais affiché)
 doctor-proxy-unsupported = { $protocol } n'est pas pris en charge par cette version, les requêtes sont directes
+doctor-proxy-unparseable = pas un uri
+doctor-proxy-unparseable-detail = { $variable } contient une valeur qui n'est pas un uri, elle n'est donc pas la route utilisée (sa valeur n'est jamais affichée)
 doctor-no-proxy = sans proxy
 
 

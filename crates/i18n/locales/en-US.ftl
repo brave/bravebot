@@ -501,6 +501,8 @@ doctor-proxy-absent = none ({ $variables } names one, in upper case or lower)
 doctor-proxy-in-force = { $proxy }
 doctor-proxy-authenticated = { $proxy } (with a credential, never printed)
 doctor-proxy-unsupported = { $protocol } is not supported by this build, so requests go direct
+doctor-proxy-unparseable = not a uri
+doctor-proxy-unparseable-detail = { $variable } is set to something that is not a uri, so it is not the route (its value is never printed)
 doctor-no-proxy = not proxied
 
 
