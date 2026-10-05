@@ -700,7 +700,9 @@ fn a_picture_pasted_into_the_task_is_named_in_the_audit_trail() {
         sink.events().iter().any(|event| matches!(
             event,
             Event::GatePassed { gate: "provenance", detail }
-                if detail.contains("image/png") && detail.contains("pasted by the user")
+                if detail.contains("image/png")
+                    && detail.contains("of 6 bytes")
+                    && detail.contains("pasted by the user")
         )),
         "the paste left no trace: {:?}",
         sink.events()

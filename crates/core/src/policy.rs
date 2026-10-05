@@ -13223,7 +13223,9 @@ five
             sink.events().iter().any(|e| matches!(
                 e,
                 Event::GatePassed { gate: "provenance", detail }
-                    if detail.contains("image/png") && detail.contains("pasted by the user")
+                    if detail.contains("image/png")
+                    && detail.contains("of 4096 bytes")
+                    && detail.contains("pasted by the user")
             )),
             "the provenance decision left no trace: {:?}",
             sink.events()

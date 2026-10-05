@@ -355,7 +355,9 @@ fn a_pasted_image_is_named_in_the_audit_trail() {
         sink.events().iter().any(|event| matches!(
             event,
             Event::GatePassed { gate: "provenance", detail }
-                if detail.contains("image/png") && detail.contains("pasted by the user")
+                if detail.contains("image/png")
+                    && detail.contains("of 6 bytes")
+                    && detail.contains("pasted by the user")
         )),
         "the paste left no trace: {:?}",
         sink.events()
@@ -16530,6 +16532,7 @@ fn a_picture_a_person_opens_and_lets_through_is_attached_after_the_results() {
         "the copy left no record in the trail: {:#?}",
         sink.events()
     );
+    assert_no_paste_was_recorded(&sink);
 }
 
 /// VET-2: a reference to a file nothing has read yet is opened rather than refused, and a picture
@@ -21157,7 +21160,9 @@ fn a_picture_pasted_into_a_question_is_named_in_the_audit_trail() {
         sink.events().iter().any(|event| matches!(
             event,
             Event::GatePassed { gate: "provenance", detail }
-                if detail.contains("image/png") && detail.contains("pasted by the user")
+                if detail.contains("image/png")
+                    && detail.contains("of 6 bytes")
+                    && detail.contains("pasted by the user")
         )),
         "the paste left no trace: {:?}",
         sink.events()
@@ -30546,6 +30551,19 @@ fn a_png() -> Vec<u8> {
         .expect("the fixture decodes")
 }
 
+/// PASTE-2: the provenance entry a paste leaves. A picture that reached a turn any other way must
+/// not leave it, because the entry says a person pasted the picture at their own keyboard.
+fn assert_no_paste_was_recorded(sink: &RecordingSink) {
+    assert!(
+        !sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "provenance", detail } if detail.contains("pasted by the user")
+        )),
+        "a picture nobody pasted was recorded as a paste: {:#?}",
+        sink.events()
+    );
+}
+
 /// The property images rest on. A screenshot carries whatever words are in it, so a planner that
 /// could look at one could be instructed by one: the bytes go to a slot and the planner is handed a
 /// reference, exactly as an untrusted file's text is. What lets one through is `vet_content`, one
@@ -30591,6 +30609,7 @@ fn a_picture_is_never_shown_to_the_planner() {
         second.contains("image/png"),
         "the planner was not told what kind of thing it has: {second}"
     );
+    assert_no_paste_was_recorded(&sink);
 }
 
 /// The reference is usable, which is the whole point: a processor is handed the picture as a picture
@@ -30643,6 +30662,7 @@ fn a_processor_is_given_a_picture_as_a_picture() {
         !carrying.contains("read_file"),
         "the request carrying the picture was offered tools, so it was not a processor"
     );
+    assert_no_paste_was_recorded(&sink);
 }
 
 /// Runs one `run` call and hands back how the command ended. A deadline is only observable in the
@@ -37362,6 +37382,66 @@ fn read_git_shows_the_planner_the_history_of_a_trusted_repository() {
     assert!(
         answered.contains(&format!("2023-11-14 A U Thor {SUBJECT}")),
         "the log of a trusted repository did not reach the planner: {answered}"
+    );
+}
+
+/// GIT-9. A log asked for no count lists 20 commits, and one asked for more than 200 lists 200,
+/// each with the note that commits were left out. The repository holds 205 commits, so a default
+/// that was higher, or a maximum that was not applied, lists a different number of them.
+#[test]
+fn a_log_lists_twenty_commits_unasked_and_never_more_than_two_hundred() {
+    let scratch = Scratch::new("read-git-counts");
+    for number in 0..205 {
+        repository::commit_files(
+            &scratch.path,
+            &[("README", "hello\n")],
+            &format!("SUBJECT-{number:03}"),
+        );
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"log"}"#),
+        tool_request_2("read_git", r#"{"query":"log","count":100000}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let _second = received.recv().expect("second request");
+    let third = received.recv().expect("third request");
+    let parsed: serde_json::Value = serde_json::from_str(&third).expect("a request");
+    let answers: Vec<String> = parsed["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .filter(|message| message["role"] == "tool")
+        .map(|message| message["content"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(answers.len(), 2, "{answers:?}");
+    let listed = |answer: &str| answer.matches("SUBJECT-").count();
+    assert_eq!(listed(&answers[0]), 20, "{}", answers[0]);
+    assert!(answers[0].contains("SUBJECT-204"), "{}", answers[0]);
+    assert!(
+        answers[0].contains("more commits to list"),
+        "{}",
+        answers[0]
+    );
+    assert_eq!(listed(&answers[1]), 200, "{}", answers[1]);
+    assert!(answers[1].contains("SUBJECT-204"), "{}", answers[1]);
+    assert!(
+        answers[1].contains("more commits to list"),
+        "{}",
+        answers[1]
     );
 }
 

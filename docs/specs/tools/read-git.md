@@ -262,6 +262,7 @@ though it were the whole draws conclusions from what is missing.
 `verified-by: bravebot_agent::git::a_file_past_the_size_cap_is_described_by_its_size`
 `verified-by: bravebot_agent::git::a_read_out_of_time_says_so`
 `verified-by: bravebot_agent::git::a_listing_or_a_diff_that_fills_the_answer_says_it_was_cut_only_when_more_was_left`
+`verified-by: bravebot_agent::turn::a_log_lists_twenty_commits_unasked_and_never_more_than_two_hundred`
 
 <a id="GIT-10"></a>
 ### GIT-10: status lists what `git status --short --no-renames` lists
