@@ -97,6 +97,43 @@ pub struct GitQuestion<'a> {
     pub until: Option<i64>,
 }
 
+/// Whether the first component of `named` is exactly `~`.
+fn named_home(named: &str) -> bool {
+    Path::new(named).components().next() == Some(Component::Normal(std::ffi::OsStr::new("~")))
+}
+
+/// `named` with a leading `~` replaced by `home`, or `None` where it does not start with one.
+///
+/// Only a whole first component counts, so `~notes/x` stays a relative path (CMD-5). A machine
+/// naming no home refuses the `~` rather than reading it as a directory named `~` (CMDLINE-4).
+fn expand_home(named: &str, home: Option<&Path>) -> Result<Option<PathBuf>, &'static str> {
+    if !named_home(named) {
+        return Ok(None);
+    }
+    let path = Path::new(named);
+    let home = home.ok_or("`~` stands for the home directory and this user has none")?;
+    Ok(Some(
+        home.join(path.components().skip(1).collect::<PathBuf>()),
+    ))
+}
+
+/// What a failed read says, where a missing file also says what a relative path was joined to.
+///
+/// "No such file or directory" alone reads as the file being absent, when the writer may have
+/// meant another directory than the one the path was joined to.
+fn io_detail(error: &std::io::Error, named: &str, root: &Path) -> String {
+    if error.kind() == std::io::ErrorKind::NotFound
+        && !Path::new(named).is_absolute()
+        && !named_home(named)
+    {
+        return format!(
+            "{error}; a relative path is looked up under the working directory, as {}",
+            root.join(named).display()
+        );
+    }
+    error.to_string()
+}
+
 #[derive(Debug)]
 pub enum WorkspaceError {
     /// The policy refused the operation.
@@ -1458,7 +1495,25 @@ impl Workspace {
     /// lexical test that saw nothing wrong. What comes back is that destination, so a caller that
     /// needs the file rather than the name has it.
     pub(crate) fn resolve(&self, relative: &str) -> Result<PathBuf, WorkspaceError> {
-        let candidate = Path::new(relative);
+        self.resolve_with_home(relative, crate::home::profile().as_deref())
+    }
+
+    /// [`Workspace::resolve`] with the home directory a leading `~` stands for supplied, so the
+    /// rule is testable without whose machine the test runs on.
+    ///
+    /// A first component that is exactly `~` is the person's home directory, expanded before any
+    /// check is made so what follows sees an absolute path like any other: reachable only inside
+    /// an opened directory, and refused otherwise. Messages keep the spelling that was written.
+    fn resolve_with_home(
+        &self,
+        relative: &str,
+        home: Option<&Path>,
+    ) -> Result<PathBuf, WorkspaceError> {
+        let expanded = expand_home(relative, home).map_err(|reason| WorkspaceError::Invalid {
+            path: relative.to_string(),
+            reason,
+        })?;
+        let candidate = expanded.as_deref().unwrap_or_else(|| Path::new(relative));
 
         if candidate.is_absolute() {
             return self.resolve_added(candidate, relative);
@@ -1685,7 +1740,7 @@ impl Workspace {
 
         let raw = std::fs::read(&resolved).map_err(|e| WorkspaceError::Io {
             path: relative.clone(),
-            detail: e.to_string(),
+            detail: io_detail(&e, &relative, &self.root),
         })?;
 
         // Named as binary rather than surfacing a decoding error. "stream did not contain
@@ -1812,7 +1867,7 @@ impl Workspace {
     ) -> Result<String, WorkspaceError> {
         let raw = std::fs::read(resolved).map_err(|e| WorkspaceError::Io {
             path: relative.to_string(),
-            detail: e.to_string(),
+            detail: io_detail(&e, relative, &self.root),
         })?;
 
         if raw.len() > MAX_ATTACHMENT_BYTES {
@@ -1874,7 +1929,7 @@ impl Workspace {
         let resolved = self.resolve(relative).map_err(WorkspaceError::for_a_read)?;
         let io = |e: std::io::Error| WorkspaceError::Io {
             path: relative.to_string(),
-            detail: e.to_string(),
+            detail: io_detail(&e, relative, &self.root),
         };
 
         // Before the bytes rather than after them. A file written while it is being read hands back
@@ -1936,7 +1991,7 @@ impl Workspace {
         let resolved = self.resolve(relative).map_err(WorkspaceError::for_a_read)?;
         let io = |e: std::io::Error| WorkspaceError::Io {
             path: relative.to_string(),
-            detail: e.to_string(),
+            detail: io_detail(&e, relative, &self.root),
         };
 
         let size = std::fs::metadata(&resolved).map_err(io)?.len();
@@ -4156,11 +4211,20 @@ impl Workspace {
     /// landing in no open directory keeps a root of its own rather than being read under the
     /// project's ([`bravebot_core::spelling::to_key`]).
     pub(crate) fn trust_key(&self, named: &str) -> String {
-        self.keyed(named, BACKSLASH_SEPARATES)
+        self.keyed(
+            named,
+            BACKSLASH_SEPARATES,
+            crate::home::profile().as_deref(),
+        )
     }
 
-    /// The same with the host's answer supplied, for the reason [`Workspace::displayed`] takes one.
-    fn keyed(&self, named: &str, backslash_separates: bool) -> String {
+    /// The same with the host's answer and the home a leading `~` stands for supplied, for the
+    /// reason [`Workspace::displayed`] takes one.
+    fn keyed(&self, named: &str, backslash_separates: bool, home: Option<&Path>) -> String {
+        // A `~` is spelled as the absolute path it stands for, so the key is the one the expanded
+        // path has; a machine with no home leaves it, and `resolve` refuses it.
+        let expanded = expand_home(named, home).ok().flatten();
+        let named = expanded.as_deref().and_then(Path::to_str).unwrap_or(named);
         let candidate = Path::new(named);
         let climbs = candidate
             .components()
@@ -4832,13 +4896,13 @@ mod tests {
             "a directory on a drive letter was refused"
         );
         assert_eq!(
-            workspace.keyed(r"C:\elsewhere\secret.txt", true),
+            workspace.keyed(r"C:\elsewhere\secret.txt", true, None),
             "/C:/elsewhere/secret.txt",
             "a drive-letter name outside every open directory was keyed under the project"
         );
 
         assert_eq!(
-            workspace.keyed(r"C:\notes", false),
+            workspace.keyed(r"C:\notes", false, None),
             r"C:\notes",
             "a file whose name holds a backslash was keyed as a drive"
         );
@@ -4901,7 +4965,7 @@ mod tests {
         let named = root.join("src\\main.rs");
 
         assert_eq!(
-            workspace.keyed("src\\main.rs", true),
+            workspace.keyed("src\\main.rs", true, None),
             "src/main.rs",
             "the key a rule was recorded under is one opaque segment"
         );
@@ -4912,7 +4976,7 @@ mod tests {
         );
 
         assert_eq!(
-            workspace.keyed("src\\main.rs", false),
+            workspace.keyed("src\\main.rs", false, None),
             "src\\main.rs",
             "a name the host spells as one segment was taken apart"
         );
@@ -5065,5 +5129,133 @@ mod tests {
         assert_eq!(workspace.landing("./.github/./new.yml"), None);
         assert_eq!(workspace.landing("."), None);
         let _ = std::fs::remove_dir_all(path);
+    }
+
+    /// A person's home and a project beside it, both canonical so a comparison is on the file.
+    fn home_and_project(name: &str) -> (PathBuf, PathBuf) {
+        let base = crate::testutil::scratch_dir(name);
+        let _ = std::fs::remove_dir_all(&base);
+        let home = base.join("home");
+        let project = base.join("project");
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(&project).expect("project");
+        (
+            home.canonicalize().expect("canonical home"),
+            project.canonicalize().expect("canonical project"),
+        )
+    }
+
+    /// The planner writes `~/todo.txt` for a file in the person's home, and an opened home has to
+    /// reach it. Read as a relative path it lands on `<project>/~/todo.txt`, which is a different
+    /// file and the one the bug looked for.
+    #[test]
+    fn a_leading_tilde_reaches_a_file_in_an_opened_home() {
+        let (home, project) = home_and_project("tilde-opened");
+        std::fs::write(home.join("todo.txt"), "milk").expect("file");
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        workspace
+            .add_directory(home.to_str().expect("utf-8"))
+            .expect("home opened");
+
+        let resolved = workspace.resolve_with_home("~/todo.txt", Some(&home));
+        assert_eq!(resolved.expect("reaches the home"), home.join("todo.txt"));
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// Expanding does not widen reach: a home nobody opened is outside the workspace and is refused
+    /// as any other absolute path there is, under the spelling the planner wrote.
+    #[test]
+    fn a_leading_tilde_is_refused_when_the_home_is_not_opened() {
+        let (home, project) = home_and_project("tilde-closed");
+        let workspace = Workspace::new(&project).expect("workspace");
+
+        let error = workspace
+            .resolve_with_home("~/todo.txt", Some(&home))
+            .expect_err("home is outside the workspace");
+        assert!(
+            matches!(&error, WorkspaceError::Escapes { path, .. } if path == "~/todo.txt"),
+            "{error:?}"
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// A write to `~/notes.txt` names a file that does not exist yet, which `resolve` accepts, so
+    /// the fault would be a destination under a directory named `~` in the project.
+    #[test]
+    fn a_tilde_destination_that_does_not_exist_yet_is_not_put_under_a_directory_named_tilde() {
+        let (home, project) = home_and_project("tilde-new");
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        workspace
+            .add_directory(home.to_str().expect("utf-8"))
+            .expect("home opened");
+
+        let resolved = workspace
+            .resolve_with_home("~/notes.txt", Some(&home))
+            .expect("a new file in the home");
+        assert_eq!(resolved, home.join("notes.txt"));
+        assert!(!project.join("~").exists());
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// Only a whole first segment is a home, so `~notes` is a directory of the project like any
+    /// other name.
+    #[test]
+    fn a_name_that_only_starts_with_a_tilde_stays_relative() {
+        let (home, project) = home_and_project("tilde-name");
+        let workspace = Workspace::new(&project).expect("workspace");
+
+        let resolved = workspace
+            .resolve_with_home("~notes/x", Some(&home))
+            .expect("a relative path");
+        assert_eq!(resolved, project.join("~notes").join("x"));
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// With no home the `~` is refused and named, and is not read as a directory called `~`.
+    #[test]
+    fn a_tilde_with_no_home_is_refused_and_not_read_as_a_directory() {
+        let (home, project) = home_and_project("tilde-no-home");
+        let workspace = Workspace::new(&project).expect("workspace");
+
+        let error = workspace
+            .resolve_with_home("~/todo.txt", None)
+            .expect_err("no home");
+        assert!(
+            matches!(&error, WorkspaceError::Invalid { reason, .. } if reason.contains("home")),
+            "{error:?}"
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// The trust map is asked under the key, so a `~` spelled in the key would be a rule for a
+    /// directory named `~` while `resolve` reads the home. Both spellings of one file have to key
+    /// the same, in an opened home where the key is the recorded name.
+    #[test]
+    fn a_leading_tilde_and_the_home_it_stands_for_give_the_same_trust_key() {
+        let (home, project) = home_and_project("tilde-key");
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        workspace
+            .add_directory(home.to_str().expect("utf-8"))
+            .expect("home opened");
+        let absolute = home.join("src").join("x.txt");
+
+        let tilde = workspace.keyed("~/src/x.txt", false, Some(&home));
+        assert_eq!(
+            tilde,
+            workspace.keyed(absolute.to_str().expect("utf-8"), false, None)
+        );
+        assert_ne!(tilde, "~/src/x.txt");
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// A missing relative file says where it was looked for, so a path that is merely absent reads
+    /// differently from one the writer meant somewhere else.
+    #[test]
+    fn a_missing_relative_file_says_where_it_was_looked_for() {
+        let missing = io::Error::from(io::ErrorKind::NotFound);
+        let detail = io_detail(&missing, "todo.txt", Path::new("/work/project"));
+        assert!(detail.contains("/work/project/todo.txt"), "{detail}");
+        let absolute = io_detail(&missing, "/home/me/todo.txt", Path::new("/work/project"));
+        assert!(!absolute.contains("/work/project"), "{absolute}");
     }
 }

@@ -480,8 +480,13 @@ Reading, writing, editing, listing and searching are confined to the working dir
 whatever has been opened beside it, the directory the session was given among them (TRUST-16). `..`
 and an absolute path outside those are refused rather than resolved, in an added directory exactly as
 in the project, and a symlink leaving one is refused.
-A relative path always means the project, so no file has two spellings. Naming a directory
-includes nothing, since a directory is somewhere to type through rather than a file to read.
+A relative path always means the project, so no file has two spellings. A path whose first segment
+is exactly `~` is read as the person's home directory, the one a command line's `~` stands for
+([CMDLINE-4](tools/command-line.md#CMDLINE-4)), and is expanded before any check, so it is then an
+absolute path like any other, reachable only inside an opened directory, and the trust key and the
+trail see the expanded spelling. `~notes/x` is a relative path. Where there is no home the `~` is
+refused and named, never read as a directory called `~`. A missing relative path says what it was
+joined to. Naming a directory includes nothing, since a directory is somewhere to type through rather than a file to read.
 [CHECKOUT-7](checkouts.md#CHECKOUT-7) gives a delegate a checkout of its
 own as its working directory, from which the session's working directory is not reachable.
 
@@ -514,6 +519,13 @@ prompt showed that path, so the bytes go there. A path kept to put back later me
 tree makes of it then, and a pull in between can turn a directory on it into a link out.
 
 `verified-by: bravebot_agent::workspace::an_absolute_path_outside_every_added_directory_is_still_refused`
+`verified-by: bravebot_agent::workspace::a_leading_tilde_reaches_a_file_in_an_opened_home`
+`verified-by: bravebot_agent::workspace::a_leading_tilde_is_refused_when_the_home_is_not_opened`
+`verified-by: bravebot_agent::workspace::a_tilde_destination_that_does_not_exist_yet_is_not_put_under_a_directory_named_tilde`
+`verified-by: bravebot_agent::workspace::a_name_that_only_starts_with_a_tilde_stays_relative`
+`verified-by: bravebot_agent::workspace::a_tilde_with_no_home_is_refused_and_not_read_as_a_directory`
+`verified-by: bravebot_agent::workspace::a_leading_tilde_and_the_home_it_stands_for_give_the_same_trust_key`
+`verified-by: bravebot_agent::workspace::a_missing_relative_file_says_where_it_was_looked_for`
 `verified-by: bravebot_agent::workspace::a_refusal_outside_the_workspace_says_what_the_person_can_do`
 `verified-by: bravebot_agent::workspace::a_refusal_that_opening_a_directory_would_not_cure_offers_nothing`
 `verified-by: bravebot_agent::workspace::a_refused_write_outside_the_workspace_does_not_offer_a_drop`
