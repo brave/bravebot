@@ -3322,6 +3322,20 @@ mod tests {
         }
     }
 
+    /// BACKEND-34: an `env` that is not a block costs that block and nothing else in the file. The
+    /// `model` key beside it is still read, so one mistyped block does not discard a file that still
+    /// describes a working backend.
+    #[test]
+    fn a_block_that_is_not_a_block_leaves_the_rest_of_its_file_read() {
+        for spelling in ["null", "5", "\"AWS_PROFILE=personal\"", "[]"] {
+            let settings = Layers::new(&format!("rest-of-file-{}", spelling.len()))
+                .global(&format!(r#"{{"env": {spelling}, "model": "kept-model"}}"#))
+                .read();
+            assert_eq!(settings.get("AWS_PROFILE"), None, "{spelling}");
+            assert_eq!(settings.model(), Some("kept-model"), "{spelling}");
+        }
+    }
+
     /// Somebody working in a directory that carries no settings gets exactly what they had before
     /// any of this existed.
     #[test]

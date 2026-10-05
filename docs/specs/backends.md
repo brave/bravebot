@@ -1337,6 +1337,7 @@ single mistyped `env` takes a person's own variables away with the checkout's.
 `verified-by: bravebot_config::settings::a_value_that_is_not_a_string_leaves_the_name_unset_in_every_layer`
 `verified-by: bravebot_config::settings::a_block_that_is_not_a_block_leaves_no_names_under_it`
 `verified-by: bravebot_config::settings::a_model_that_is_blank_or_not_a_string_names_nothing`
+`verified-by: bravebot_config::settings::a_block_that_is_not_a_block_leaves_the_rest_of_its_file_read`
 
 <a id="BACKEND-35"></a>
 ### BACKEND-35: an exported variable, then the build, then the file
@@ -1367,6 +1368,8 @@ file and from none of these three, which is BACKEND-38.
 `verified-by: bravebot_config::lib::the_settings_file_applies_when_the_environment_is_silent`
 `verified-by: bravebot_config::lib::a_blank_variable_does_not_shadow_a_built_in_value`
 `verified-by: bravebot_config::lib::a_blank_variable_survives_when_nothing_was_built_in`
+`verified-by: bravebot_config::lib::an_exported_value_outranks_the_build_which_outranks_the_file`
+`verified-by: bravebot_config::lib::a_blank_export_hides_the_file_but_not_the_build`
 
 <a id="BACKEND-36"></a>
 ### BACKEND-36: a name nothing reads is kept and decides nothing
