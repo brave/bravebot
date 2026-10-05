@@ -1753,6 +1753,11 @@ turn-cancelled = turn { $turn } cancelled
 ## Picking up a session that ran somewhere, or on something, else
 
 session-reopen-failed = could not reopen { $directory }: { $problem }
+session-checkout-not-restored =
+    { $count ->
+        [one] checkout { $ids } was kept by this session but is not where it was made, so it is not listed
+       *[other] checkouts { $ids } were kept by this session but are not where they were made, so they are not listed
+    }
 session-branch-moved = this session ran on { $was }; this checkout is on { $now }
 session-branch-gone = this session ran on { $was }; this checkout is not on a branch
 session-branch-new = this session ran on no branch; this checkout is on { $now }

@@ -8290,3 +8290,95 @@ fn a_command_gap_in_a_checkout_is_also_a_checkout_gap_in_the_sessions_coverage()
     made.mark_rewind_gap(CoverageGap::Command);
     assert_eq!(coverage.gaps(), [CoverageGap::Checkout].into());
 }
+
+/// CHECKOUT-16. A workspace opened in the same directory takes back the checkouts a record
+/// listed, with what the driver recorded in them, and the next one made is numbered after them.
+///
+/// The failure this rejects is a resume that lists nothing, or lists the checkouts without the
+/// paths the delegate wrote, which leaves a kept checkout with nothing to bring back.
+#[test]
+fn a_workspace_taking_the_records_checkouts_back_lists_them_with_their_candidates() {
+    use bravebot_core::delegate::DelegateId;
+    let (scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-resumed", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    made.checkout().unwrap().record_typed("src/new.rs");
+    workspace
+        .checkout_for(&policy, &state.path, DelegateId::nth(2).child(1).unwrap())
+        .expect("a second checkout");
+    let recorded = workspace.session_checkouts();
+    assert_eq!(recorded.len(), 2);
+    assert!(recorded[0].candidates.named.contains("src/new.rs"));
+
+    let resumed = Workspace::new(&scratch.path).expect("workspace");
+    assert_eq!(resumed.session_checkouts(), []);
+    let unplaced = resumed.restore_session_checkouts(&state.path, &recorded);
+
+    assert_eq!(unplaced, Vec::<String>::new());
+    let listed = resumed.session_checkouts();
+    assert_eq!(listed.len(), 2);
+    for (was, now) in recorded.iter().zip(&listed) {
+        assert_eq!(
+            (&was.id, &was.path, &was.commit, was.delegate),
+            (&now.id, &now.path, &now.commit, now.delegate)
+        );
+        assert_eq!(was.candidates, now.candidates);
+    }
+    let third = resumed
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout after the resume");
+    assert_eq!(third.checkout().unwrap().id(), "c3");
+}
+
+/// CHECKOUT-16. A record is a claim: a checkout it names at any other path, under a number that
+/// is not its directory's, without its entry in the repository, at a commit that is not an object
+/// id, or as a link, is not taken back, and is named.
+///
+/// The failure this rejects is a resume that trusts the path in the record, which would give
+/// `/checkouts remove` a path to delete that no session made.
+#[test]
+fn a_checkout_the_record_names_anywhere_but_where_one_was_made_is_not_taken_back() {
+    use bravebot_agent::workspace::SessionCheckout;
+    let (scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-claimed", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    let good = workspace.session_checkouts().remove(0);
+    let elsewhere = Scratch::new("checkout-claimed-elsewhere");
+    let link = good.path.with_file_name("c9");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&elsewhere.path, &link).unwrap();
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(&link).unwrap();
+    let with = |change: &dyn Fn(&mut SessionCheckout)| {
+        let mut one = good.clone();
+        change(&mut one);
+        one
+    };
+    let claims = [
+        with(&|one| one.path = elsewhere.path.clone()),
+        with(&|one| one.id = "c2".into()),
+        with(&|one| one.id = "x1".into()),
+        with(&|one| one.commit = "../../etc".into()),
+        {
+            let mut one = good.clone();
+            one.id = "c9".into();
+            one.path = link;
+            one
+        },
+    ];
+
+    let resumed = Workspace::new(&scratch.path).expect("workspace");
+    let unplaced = resumed.restore_session_checkouts(&state.path, &claims);
+
+    assert_eq!(unplaced, ["c1", "c2", "x1", "c1", "c9"]);
+    assert_eq!(resumed.session_checkouts(), []);
+    assert!(elsewhere.path.exists(), "a path in a record was reached");
+}

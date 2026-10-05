@@ -3239,6 +3239,7 @@ fn rewind(
                 directories: workspace.added_directories(),
                 manifest: None,
                 rewind: session.rewind_points(),
+                checkouts: &workspace.session_checkouts(),
             },
         );
     }
@@ -3352,7 +3353,7 @@ fn event_loop(
             TrustedPrograms::new(),
         ),
         Start::Resuming(record) => {
-            let handle = bravebot_session::sessions::Handle::resuming(
+            let mut handle = bravebot_session::sessions::Handle::resuming(
                 workspace.root(),
                 &record,
                 bravebot_session::sessions::Front::Terminal,
@@ -3406,6 +3407,11 @@ fn event_loop(
             // open for an absolute path in it to resolve at all. Restored here so the rule and
             // the reach come back together, rather than the rule alone.
             for note in record.reopen_added_directories(&mut workspace) {
+                session.note(note);
+            }
+            // Beside them, the checkouts the session's delegates were given: their rules came
+            // back with the map, and the list and the candidate paths come back here (CHECKOUT-16).
+            if let Some(note) = record.restore_checkouts(&workspace, &mut handle) {
                 session.note(note);
             }
             // After the transcript rather than before it, because each point's place in that
@@ -3791,6 +3797,7 @@ fn event_loop(
                                 directories: workspace.added_directories(),
                                 manifest: None,
                                 rewind: session.rewind_points(),
+                                checkouts: &workspace.session_checkouts(),
                             },
                         );
                     }
@@ -3826,6 +3833,7 @@ fn event_loop(
                             directories: workspace.added_directories(),
                             manifest: None,
                             rewind: session.rewind_points(),
+                            checkouts: &workspace.session_checkouts(),
                         },
                     );
                 }
@@ -3984,6 +3992,7 @@ fn event_loop(
                         directories: workspace.added_directories(),
                         manifest: None,
                         rewind: session.rewind_points(),
+                        checkouts: &workspace.session_checkouts(),
                     },
                 );
                 stored.append_audit(session.turns, &events);
@@ -4035,6 +4044,7 @@ fn event_loop(
                                 directories: workspace.added_directories(),
                                 manifest: None,
                                 rewind: session.rewind_points(),
+                                checkouts: &workspace.session_checkouts(),
                             },
                         );
                         stored.append_audit(session.turns, &events);
@@ -4099,6 +4109,7 @@ fn event_loop(
                             // record of its own where that field is filled.
                             manifest: None,
                             rewind: session.rewind_points(),
+                            checkouts: &workspace.session_checkouts(),
                         },
                         &events,
                     );
@@ -4266,6 +4277,7 @@ fn event_loop(
                             directories: workspace.added_directories(),
                             manifest: None,
                             rewind: session.rewind_points(),
+                            checkouts: &workspace.session_checkouts(),
                         },
                     );
                     stored.append_audit(session.turns, &events);
@@ -4311,6 +4323,7 @@ fn event_loop(
                         directories: workspace.added_directories(),
                         manifest: None,
                         rewind: session.rewind_points(),
+                        checkouts: &workspace.session_checkouts(),
                     },
                 );
                 stored.append_audit(session.turns, &events);
@@ -21098,6 +21111,7 @@ mod tests {
                     directories: &[],
                     manifest: None,
                     rewind: session.rewind_points(),
+                    checkouts: &[],
                 },
             );
         }
@@ -21671,6 +21685,7 @@ mod tests {
                 directories: &[],
                 manifest: None,
                 rewind: session.rewind_points(),
+                checkouts: &workspace.session_checkouts(),
             },
         );
         assert_eq!(
@@ -23418,6 +23433,7 @@ mod tests {
                     directories: &[],
                     manifest: None,
                     rewind: session.rewind_points(),
+                    checkouts: &[],
                 },
             );
         }

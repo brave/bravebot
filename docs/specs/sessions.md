@@ -87,9 +87,10 @@ written before they were kept reads as having neither.
 
 What the record says about each individual turn is SESSION-23.
 
-[CHECKOUT-15](checkouts.md#CHECKOUT-15), which nothing yet builds, adds the checkouts a session's
-delegates were given and it keeps: each one's path, its commit, its number, the number of the
-delegate given it, and the paths the driver recorded a file effect on in it.
+The record also holds the checkouts a session's delegates were given and it keeps
+([CHECKOUT-15](checkouts.md#CHECKOUT-15)): each one's path, its commit, its number, the number of
+the delegate given it, the paths the driver recorded a file effect on in it and what it took on
+disk. A record written before they were kept reads as having none.
 
 `verified-by: bravebot_tui::sessions::renaming_a_session_rewrites_the_record_immediately`
 `verified-by: bravebot_tui::sessions::a_chosen_name_survives_the_next_turn`
@@ -97,6 +98,7 @@ delegate given it, and the paths the driver recorded a file effect on in it.
 `verified-by: bravebot_tui::sessions::an_empty_name_is_refused`
 `verified-by: bravebot_session::sessions::a_link_is_written_at_once_and_a_resume_and_a_fork_keep_it`
 `verified-by: bravebot_session::sessions::a_record_from_before_the_links_reads_as_having_none`
+`verified-by: bravebot_tui::sessions::a_record_from_before_checkouts_were_kept_reads_as_having_none`
 
 <a id="SESSION-4"></a>
 ### SESSION-4: a title comes from the prompt, and is cut rather than mangled
@@ -473,8 +475,8 @@ the continuation rule in SESSION-10.
 
 Both full-record and mid-history forks keep the source's current file decisions and inherit no
 rewind points. Forking does not rewind disk. The source record stays unchanged.
-[CHECKOUT-16](checkouts.md#CHECKOUT-16), which nothing yet builds, keeps a fork from carrying the
-source's checkouts or the rules copied for them.
+[CHECKOUT-16](checkouts.md#CHECKOUT-16) keeps a fork from carrying the source's checkouts or the
+rules copied for them.
 
 **Why.** Exploring an alternative technical path from a shared prefix preserves the expensive
 context already built up without polluting the original session. Refusing manifest runs maintains
