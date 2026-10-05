@@ -3133,6 +3133,31 @@ mod tests {
         );
     }
 
+    /// The record is what a resume reads, so a mode that a record kept would be one a resume could
+    /// restore. A record that was handed one, as a newer build or a hand edit would, writes back
+    /// without it, and one built fresh never had a place for it.
+    #[test]
+    fn a_record_does_not_keep_a_permission_mode() {
+        let with_a_mode = serde_json::json!({
+            "id": "1-2",
+            "directory": "/tmp/x",
+            "title": "a session",
+            "started": 1,
+            "updated": 1,
+            "permission_mode": "bypass",
+            "conversation": {"messages": [], "context": "trusted"},
+        });
+        let loaded: Record = serde_json::from_value(with_a_mode).expect("the record loads");
+
+        for (which, record) in [("loaded", loaded), ("built", a_record())] {
+            let written = serde_json::to_string(&record).expect("the record is written");
+            assert!(
+                !written.contains("permission_mode") && !written.contains("bypass"),
+                "the {which} record kept a mode: {written}"
+            );
+        }
+    }
+
     /// The picker offers the top entry, so a reversed comparator would silently hand someone
     /// the session they last touched a month ago. Nothing else in the suite pins the direction.
     #[test]

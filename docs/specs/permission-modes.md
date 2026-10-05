@@ -354,6 +354,7 @@ wrong direction for this to be wrong in.
 
 `verified-by: bravebot_tui::state::cycling_the_mode_changes_nothing_a_resume_would_read`
 `verified-by: bravebot_session::sessions::a_resumed_session_asks_about_writes_whatever_the_record_says`
+`verified-by: bravebot_session::sessions::a_record_does_not_keep_a_permission_mode`
 
 ## Known costs
 
