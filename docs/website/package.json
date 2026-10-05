@@ -44,7 +44,7 @@
     ]
   },
   "overrides": {
-    "serialize-javascript": "7.1.1",
+    "serialize-javascript": "7.1.2",
     "uuid": "^14.0.0",
     "js-yaml": "^5.0.0",
     "qs": "^6.16.0",
