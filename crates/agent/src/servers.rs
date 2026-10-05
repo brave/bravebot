@@ -3626,17 +3626,18 @@ done
         );
 
         assert_eq!(started.len(), 1, "the server did not start: {notes:?}");
-        assert_eq!(
-            notes,
-            vec![
-                t!(
-                    servers_paths_left_out,
-                    alias = "weather",
-                    paths = absent.display().to_string()
-                )
-                .to_string()
-            ],
-            "the launch did not say which granted path it was started without"
+        // One note, naming the row this test made absent. Not the whole list: the base names
+        // spellings a distribution may lack, so on Linux the prelude's own absent rows are in here
+        // too and are no part of what this is about. What the note says in full is
+        // `a_server_started_without_paths_its_backend_cannot_name_has_a_note_naming_each_one`,
+        // which writes the whole policy down and so does not read this machine's.
+        let [said] = notes.as_slice() else {
+            panic!("one note, saying which granted paths the launch left out: {notes:?}");
+        };
+        assert!(
+            said.contains(&absent.display().to_string()),
+            "the launch did not say it was started without {}: {said}",
+            absent.display()
         );
     }
 
