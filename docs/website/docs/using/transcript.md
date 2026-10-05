@@ -18,7 +18,8 @@ the call starts, the round ends, or the request has to be sent again.
 
 A resumed session redraws what the earlier turns did: each one keeps the prompt you sent and how it
 ended, failures and cancellations included, so reading a transcript back does not depend on
-remembering the session. A task list stays on the turn that made it, and a later turn without one
+remembering the session. A reply that opened with the model's working leaves that block off when it
+is redrawn, as it was left off the first time. A task list stays on the turn that made it, and a later turn without one
 does not inherit it.
 
 **Untrusted content is shown to you on purpose.** You are the one party allowed to read it, and the
@@ -40,8 +41,16 @@ note drawn in the wrong one would still be outside a block.
 Where a result went is drawn only where that is not the ordinary answer. A quarantined read says so,
 and an ordinary one does not clutter the transcript saying what always happens.
 
-**Each call says why it was made**, in the model's own words, dim after the call on the same row.
-It stays there once the call is over, and a resumed session draws it too.
+**Each call says why it was made.** In the terminal, and in a headless run's progress, the model's own
+words are the call's headline and the call itself (its verb and what it is about) is drawn under it,
+ahead of what came of it. A reason of several lines is cut to its first. A call given no reason is
+headed by the call itself. The reason stays once the call is over, and a resumed session draws it
+too. The desktop window draws the reason after the call on the call's own row.
+
+A `run` call shows its command line, so a command that needs no prompt is still visible. A command
+of several lines is shown as its first line and `...`. A command line that carries a credential you
+declared, on any of its lines, is shown as the verb alone, because `run` refuses such a line before
+anyone is shown it.
 
 **A call the model read shows a few lines of what it found**, drawn under the call behind a plain
 margin. A command shows its last five lines, because that is where a build or a test run says how it
@@ -241,6 +250,9 @@ included, and Escape abandons it without closing anything.
 matched as a **substring, character for character, never as a pattern**: case-insensitive while the
 needle is all lower case, exact from the moment it holds a capital.
 
+A needle wider than the footer row is cut from its start, so the end you are typing stays visible, and
+the match count is drawn ahead of any of it, so the way out stays on the row.
+
 Every match is highlighted where it already is, how many there are is drawn, and `n` and `N` walk
 them and wrap at the ends. **Two matches on one row are two matches**: the count says so, and the
 second is a press of its own, which moves the count on and leaves the view where it is.
@@ -254,6 +266,9 @@ never quotes what it matched.
 `q`, Escape and Ctrl-O each close the scroller, and the view stays where it left it. Escape abandons
 a count waiting for its key first, then clears a standing search, since each is the nearer thing to
 stop; the press after that closes. The other ways out close it even while a needle is half typed.
+
+The scroller can also be open when a command you queued behind a turn starts to run. The same four
+keys close it there, and the press after that reaches the command.
 
 Ctrl-C closes the scroller and does nothing else. A turn in flight goes on running, and the press
 that reaches it is the next one. Each press answers the nearest thing there is to stop, and the

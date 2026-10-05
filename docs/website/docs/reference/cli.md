@@ -365,6 +365,11 @@ Answers "what will this actually use", and changes nothing. It reports:
 - for each AWS account, whether it is signed in, and `bravebot auth login bedrock` where signing in
   is what is missing;
 - which settings files are in force, and which of them won a name more than one set;
+- any top-level key in a settings file that this build does not read, by name and file, never its
+  value: the file still applies and the report still passes;
+- any project or local settings file whose `provider` block or `model` key was ignored, since those two
+  are read from your own file and the one `--settings` names;
+- whether a gateway key is stored by `bravebot auth login gateway`, without printing it;
 - any settings file that tries to declare an [MCP server](../customize/mcp-servers.md), which fails
   the report, since only `~/.bravebot/mcp.json` declares one;
 - which names a machine-level file pinned, and where that file is;

@@ -57,11 +57,14 @@ profile.
 **One file, not one per channel.** You have one subscription however many Brave builds are installed,
 so importing from Nightly replaces what was imported from Stable rather than sitting beside it. The
 channel only says which browser profile to read the order id from, which is a fact about your machine
-rather than about the agent, so `--forget` takes no channel. Forgetting removes the file, and is not
+rather than about the agent, so `--forget` takes no channel: `bravebot import-leo-creds --forget
+nightly` is refused as a bad argument and removes nothing. Forgetting removes the file, and is not
 an error when there was nothing to remove.
 
-A malformed or empty file is reported as such rather than treated as absent credentials, and a
-credential without a token is rejected on load. With no home directory there is nowhere a secret
+A malformed or empty file is reported as such rather than treated as absent credentials, and so is one
+recording a version this build does not write. Each refusal says to re-import with `bravebot auth login
+leo` or to forget the batch with `bravebot auth logout leo`. A credential without a token is rejected
+on load. With no home directory there is nowhere a secret
 belongs, and that is reported rather than guessed at.
 
 ## When a subscription cannot be read
@@ -95,7 +98,8 @@ your screen would connect that to the store.
 
 **What `/status` says about the tier is what the last turn actually did**, not what the build was
 compiled with. Before the first turn it says premium is *available*, rather than claiming it is or is
-not in use.
+not in use. A turn that ran on a model named by an addressed definition or by a skill is recorded the
+same way, so `/status` does not stay on "nothing sent yet" or on an earlier turn's tier after one.
 
 The opening screen draws the tier beside the confinement, from the configuration, in the same words
 `/status` uses before a turn has run. It deliberately does **not** read the credential store: a

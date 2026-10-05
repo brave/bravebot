@@ -185,6 +185,11 @@ than the ones to reject. A list to reject fails open: `-S` makes BSD `grep` foll
 meets while walking, and `grep -A 1 -r TODO` walks the working directory while appearing to name a
 path. An option the entry does not list leaves the step unproven, so the line is asked about as usual.
 
+BSD and GNU versions of `head`, `tail`, `wc`, `cut` and `grep` read a word after the first operand
+differently: BSD opens it as a file, GNU takes it as an option. A word spelled like an option after an
+operand therefore leaves the step unproven, so `grep -r TODO src -n` is asked about, and
+`grep -r -n TODO src` is not.
+
 Five other things leave a step unproven. Naming the program by path rather than by name, since a file
 called `wc` in the directory the line runs in would otherwise answer as the audited one. A name that
 resolves to a file inside the workspace, for the same reason: a `PATH` entry in the project can put
@@ -409,6 +414,10 @@ the label the output will carry are all settled before anything starts. Being le
 reason to ask for less.
 
 `deadline_seconds` does nothing here, since nothing is waited for.
+
+Anything a job wrote to standard error is marked as such wherever it is reported, so an error message
+is not read as though the program had printed it as output. [`/jobs`](commands.md#jobs-stop-name-delegate)
+lists the jobs a turn has started and stops one.
 
 **One pipeline, and no redirection.** A line with `&&` or `||` decides where to go next by waiting on
 the part before it, and nothing waits here; a redirection names a destination nothing is reading.

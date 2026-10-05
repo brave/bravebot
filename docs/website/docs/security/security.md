@@ -152,8 +152,10 @@ something holding the session back.
 
 Where confinement is used, it **fails closed**: if it cannot be established the process does not run,
 rather than running unconfined. A profile starts denying everything and grants accumulate onto it, and
-a policy that would confine nothing is rejected rather than applied. The network is denied unless it
-was asked for. A backend reports what the kernel actually enforces rather than what it was asked for,
+a policy that would confine nothing is rejected rather than applied, and a write grant on the root
+directory, or on a drive root on Windows, confines nothing and is rejected the same way. The network
+is denied unless it was asked for. On macOS, a process that is given the network reaches a unix
+socket only under a directory it may write, so a Docker daemon's socket elsewhere stays out of reach. A backend reports what the kernel actually enforces rather than what it was asked for,
 and a policy demanding something it cannot deliver is refused.
 
 **A policy is granted as written, or it is refused.** A backend that cannot install a grant for one of
@@ -191,7 +193,8 @@ so nothing is created for one.
 
 **Looking at a path is not reading it.** A confined process can learn whether something is at any
 path, what kind of thing it is, its size, when it changed and where a link points. It cannot open a
-file outside its grants or list a directory outside them. Linux's Landlock bounds no look at all,
+file outside its grants or list a directory outside them, except that on macOS it can list the names
+in `/`, which are the system's top-level directories. Linux's Landlock bounds no look at all,
 and on macOS a profile that refused one refused the walk to a grant too, which no node program
 survives.
 
@@ -202,9 +205,15 @@ decision rather than something that differs per platform.
 
 Confinement does not cover the rest of the system. A processor is a model call made by our own code,
 and a program you asked for runs with the access your own shell would give it. Everywhere else, the
-boundary is the capability set and the label on a value. Windows has published binaries and no
-confinement backend yet, and failing closed means refusing rather than running unconfined, so anything
-that has to be confined is refused there until that platform has one.
+boundary is the capability set and the label on a value.
+
+**Windows confines a process in a container, and a grant there is a change to your directories.**
+Each path a policy grants gets an access entry written onto the directory, and the entries are
+removed when the run ends. A run that is killed before it gets that far can leave an entry behind.
+Every run uses a container profile of its own, so a leftover entry names a container that no longer
+exists and never a standing grant to something still running. A file or directory created so a
+write grant has something to name is reachable by your account and nobody else. A policy that
+requires denying subprocesses is refused there, because the container cannot enforce it.
 
 ## Data collection, usage, and retention
 

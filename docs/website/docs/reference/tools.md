@@ -339,7 +339,9 @@ cost of a server, so paying it per request would make each call slower than the 
 
 A `checker` or `worker` delegate asks the same servers, so a language you approved is not put to you
 again and the tree is not indexed twice. A `reader` delegate is not offered `lsp` at all: starting a
-server runs the project's build tooling, and a reader may not run programs.
+server runs the project's build tooling, and a reader may not run programs. A delegate working in a
+[checkout](../customize/agents.md#a-checkout-of-its-own) is not offered it either, since the server
+indexes your working tree.
 
 ### A location is structure; the text at it is content
 
@@ -438,7 +440,10 @@ is `spawn_processor` plus `write_file`.
 
 Brings the files a delegate wrote in a kept [checkout](../customize/agents.md#a-checkout-of-its-own)
 back into your working directory. **You are asked about every file, and shown the difference from
-your own file as it is now,** even where the file's path is one you trust.
+your own file as it is now,** even where the file's path is one you trust. The question also says so
+when this session has written that path in your working directory since the checkout was made, whether
+the planner or another delegate did it. A write by a program other than through a redirection, or
+through a reference, is not seen, so the absence of that note says nothing about the file.
 
 | Parameter | |
 |---|---|
@@ -545,12 +550,19 @@ Reports what a [background job](run-tool.md#leaving-a-pipeline-running) has prin
 
 Each look reports what is new, counted in bytes, and whether the job has ended. Asking about a job
 that does not exist says so. What is new is counted separately for standard output and standard error,
-so a line arriving on one does not hide what arrived on the other.
+so a line arriving on one does not hide what arrived on the other, and text from standard error is
+marked as such.
+
+A `job` naming a [delegate](#spawn_agent) rather than a job is answered as that: `job_output` neither
+reads nor stops a delegate, and its report reaches the planner on its own when it finishes. Only a
+name that is neither is reported as no job.
 
 **A finished job reaches the turn without being asked about.** Between rounds the turn checks whether
 any of its jobs has ended, and the handle, the exit codes and whatever was printed since anybody last
 looked go into the conversation on their own. So a background job that ends quietly is still reported.
-The account is given once, by whichever route got there first.
+The account is given once, by whichever route got there first. Where the output is quarantined it
+says how to lift that, as a `run` result does: [`read_output`](#read_output) for this output, and
+vouching for every stage of the exact command for the next.
 
 ### A look may wait
 
@@ -667,6 +679,7 @@ of capabilities, and gets back one report.
 | `task` | the whole of what the delegate is told |
 | `each` | optional; starts one delegate per entry, each told `task` followed by its own entry |
 | `mcp_servers` | optional; the [MCP servers](../customize/mcp-servers.md) a `worker` keeps, out of the ones its parent may call. `[]` keeps none |
+| `isolation` | optional; `checkout` gives each delegate [a checkout of its own](../customize/agents.md#a-checkout-of-its-own) to work in |
 
 | Kind | Holds | For |
 |---|---|---|
@@ -702,6 +715,14 @@ mail server.
 A name is the server's part of its tools' names, as in `mcp__gmail__search`. A name the turn holds
 no grant for is refused and starts nothing, and the refusal lists the servers it holds. The list
 never adds a server.
+
+**`isolation: checkout` keeps delegates out of your working tree.** Each delegate works in a new
+checkout of the last commit, so delegates writing at the same time do not edit or build in one tree.
+Changes you have not committed are not in it, and what it writes stays there until
+[`apply_checkout`](#apply_checkout) brings it back. It is refused for a `reader` and for a delegate
+already in a checkout. A delegate in a checkout is not offered [`lsp`](#lsp). Checkouts share
+remote-tracking refs and tags with your working directory and with each other, so the planner is
+told to run a `git fetch` once rather than have each delegate run one.
 
 The delegate cannot see the conversation the task came from, so a task that leaves something out is a
 delegate that never learns it. It cannot come back for more, since there is no channel to ask

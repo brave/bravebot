@@ -89,7 +89,9 @@ Enter sends, Escape clears, Tab takes what is offered, and the arrows walk the c
 A settings file that could claim `x` would be one that took a letter out of the alphabet. Shift over a
 character is refused too, because a terminal reports Shift-A as `A` with Shift held, so `shift-a`
 names an event that never arrives. Four chords are refused even carrying Ctrl: Ctrl-C and Ctrl-D,
-which stop and leave, and Ctrl-J and Shift-Enter, which start a line.
+which stop and leave, and Ctrl-J and Shift-Enter, which start a line. Ctrl-Alt-C and Ctrl-Alt-D are
+different chords from those two and can be given to an action; pressing them never stops a turn,
+clears the box or leaves.
 
 **Every action is left on a key of its own.** A chord that cannot be read, or one the box already
 answers, leaves that action on its default, and so does a chord two actions both ask for: both give it
@@ -136,7 +138,8 @@ you wrote no arguments of your own.
 ## Looking up the keys
 
 `?` on an empty line puts up every key and what it does. A second `?` takes the list down, as does
-Escape, or typing anything at all. It is a mode rather than a character, the way `!` is: nothing
+Escape, or typing anything at all, and so does a line arriving in the box by recall, a paste, your
+editor, the stash, or a stopped turn handing its prompt back. It is a mode rather than a character, the way `!` is: nothing
 lands in the box, so there is nothing to delete afterwards.
 
 Only on an empty line. A `?` part-way through a sentence is the punctuation you are asking a
@@ -147,10 +150,14 @@ what they mean everywhere else while it is up. It folds into as many columns as 
 no row runs past the edge.
 
 The row beneath the box carries what the session is doing (the mode in force where it is not just
-asking, how full the context is, the trail, a [`/loop`](../reference/commands.md#loop-interval-prompt)
-that is running and when its next tick is due, and the key that opens the delegates and the commands
-once the session has anything to open), and then `? for shortcuts`. It names no other binding of its
-own.
+asking, how full the context is and the share of the prompt read from the cache, the trail, a
+[`/loop`](../reference/commands.md#loop-interval-prompt) that is running and when its next tick is
+due, how many [background jobs](#moving-a-command-to-the-background) the turn has running, the key
+that opens the delegates and the commands once the session has anything to open, and the key that
+moves the command the turn is waiting on to the background while there is one), then
+`? for shortcuts`, and then the key that opens the [info panel](sessions.md#telling-sessions-apart)
+while the panel is closed and the terminal is wide enough for it. While the panel is drawn, the
+context and cache figures are in the panel and not on this row. It names no other binding of its own.
 
 **The context reading says which of three things the session knows.** A session that has measured a
 request says how full the context is, as a percentage of the budget it would be compacted at. One
@@ -190,9 +197,9 @@ answered, since which one arrives is the terminal's choice rather than yours.
 
 The mode leads the row beneath the box and is the only part of it drawn in a colour. Asking about
 everything takes no room at all: what is drawn is a mode somebody chose. When the terminal is too
-narrow, the parts are given up whole and in order (a reading with no figure in it, then the way to the
-bindings, then the trail key, then the figures, and a running loop after all of them), and the mode is
-the last to go. A note about what a press just did is drawn at the right of the same row and takes its
+narrow, the parts are given up whole and in order (the key that opens the info panel, a reading with
+no figure in it, the way to the bindings, the trail key, the figures, the move key, the count of
+background jobs, and a running loop after all of them), and the mode is the last to go. A note about what a press just did is drawn at the right of the same row and takes its
 room ahead of all of them, since a part fitted against the whole width is one the note writes over.
 
 See [modes](../security/permissions.md#answering-in-advance-modes) for what each one answers and what
@@ -213,6 +220,11 @@ Offering the way out says so on the row beneath the box, and names the key that 
 Ctrl-D leaves an empty box the same way. The offer lives for exactly one press: any input that is not
 one of the two keys that leave withdraws it, a mouse report or a resize included, and letting go of a
 key does not.
+
+**A turn you asked to stop says so until it ends.** From the press, the working indicator reads
+"Stopping" ahead of whatever it would otherwise say. A turn ends only once every delegate it started
+has returned, which can take seconds, and a further press finds the same word. If several delegates are waiting on an approval, the first press answers the one
+drawn and declines the rest without drawing them.
 
 **Leaving takes two separate presses.** Ctrl-C or Ctrl-D that arrives in the same read as other input
 does not count, and neither does one that answers an offer made by the same read. A program that
@@ -274,7 +286,7 @@ the turn ends becomes a turn of its own.
 **A [slash command](../reference/commands.md) is never sent.** Most wait to be carried out: one
 comes off the box and is drawn under it like anything else waiting, but it is not offered to the turn
 in flight, so nothing about it reaches the planner. It runs when the queue is reached after the turn
-has ended, and a prompt behind it goes once it has. During a turn, `/cost`, `/watch`, `/panel`, `/loop`
+has ended, and a prompt behind it goes once it has. During a turn, `/cost`, `/status`, `/watch`, `/jobs`, `/panel`, `/copy`, `/loop`
 and `/goal` are carried out as you press Enter instead, except a `/loop` that starts a loop and a `/goal`
 that sets one, which wait. `/rename`, `/issue`, `/pr`, `/forget-trust`, `/theme <name>` and
 `/effort <level>` are too
@@ -426,7 +438,10 @@ the hint does not appear for them.
 **A job stays on the screen after its block scrolls away.** For as long as the turn has a job
 running, whether you moved it or the model started it in the background, the hint line says how many,
 as in `1 in the background`, in shell mode too. Each job is one row under
-[Ctrl-L](#watching-a-delegate-reading-a-command-and-asking-something-aside), and
+[Ctrl-L](#watching-a-delegate-reading-a-command-and-asking-something-aside), made when the job
+starts and before it has printed anything. The row says `background`, leads with the job's name, and
+says whether the job is still running and for how long, or how it ended. A delegate's `job:1` and the
+turn's `job:1` are separate rows.
 [`/status`](../reference/commands.md#status) and
 [`/jobs`](../reference/commands.md#jobs-stop-name-delegate) list them. `/jobs stop job:1` stops one
 while the rest of the turn goes on, and the model is told you stopped it. When the turn ends with a

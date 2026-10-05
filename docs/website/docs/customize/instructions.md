@@ -77,6 +77,10 @@ same route as any other path, so [confinement](../security/security.md#confineme
 decide whether it may be read at all, and a pointer naming something outside the workspace is refused
 there.
 
+A file a `deny` [rule](configuration.md#permissions) covers is left out of the turn, whether the
+project's instructions file is that file, points at it, or is a link to it. You are told it was left
+out.
+
 ## Words from the command line
 
 [`--append-system-prompt`](../reference/cli.md#--system-prompt-prompt-and---append-system-prompt-prompt)

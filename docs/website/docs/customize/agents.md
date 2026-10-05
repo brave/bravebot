@@ -233,11 +233,15 @@ one can take an entry you stashed in your working tree. The planner and each del
 this. Each delegate is told not to use `git stash`, and the planner is told not to ask one to and to
 have the fetch done once rather than by each delegate.
 
+A delegate in a checkout is not offered the `lsp` tool, because the session's language servers are
+rooted at your working directory. The answer to the spawn says so.
+
 A checkout a delegate wrote in is kept, and the agent's reply names it by number with the paths the
 delegate typed for what it wrote. The agent brings those files back with
 [`apply_checkout`](../reference/tools.md#apply_checkout), and you are asked about each one, shown
 the difference from your own file as it is now, whatever your trust settings say about that path.
-Bringing a file back is an ordinary write, so [`/undo`](../reference/commands.md#undo) puts your file
+Where the session has written that path in your working directory since the checkout was made, the
+question says so. Bringing a file back is an ordinary write, so [`/undo`](../reference/commands.md#undo) puts your file
 back. A file a program wrote other than through a redirection is not found, and a command that
 brings work back by hand is not built yet. A checkout stays where it is until you remove it with
 [`/checkouts remove`](../reference/commands.md#checkouts-remove-n), and
@@ -278,6 +282,9 @@ for the directory and is left out when you did not:
 Counted and never named, because a file in a project nobody vouched for can be given a name that
 reads like an instruction. A definition that fails the gate is dropped entirely rather than
 quarantined: an instruction is either followed or absent.
+
+A project definition that a `deny` [rule](configuration.md#permissions) covers, under the name it was
+found by or the file it links to, is not selectable, and you are told it was left out.
 
 **A definition's body is the whole of what a second agent is told it is.** A skill's body is
 guidance a turn may follow; this is more than that. Read one before you install it, the way you
