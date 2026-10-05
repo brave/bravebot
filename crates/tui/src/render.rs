@@ -6115,6 +6115,34 @@ mod tests {
             assert!(!output.contains(STOPPING), "{output}");
         }
 
+        /// The wait is on the delegates the turn started, and the row says how many are left, so a
+        /// stop that takes seconds shows the number going down rather than one word standing still.
+        #[test]
+        fn a_stopping_turn_draws_the_delegates_it_waits_on() {
+            let mut session = working();
+            let ids = [1, 2].map(bravebot_agent::report::DelegateId::nth);
+            for id in ids {
+                session.delegate_started(bravebot_agent::report::Delegation {
+                    id,
+                    kind: "reader".to_string(),
+                    task: "find the parser".to_string(),
+                });
+            }
+            session.stop_asked();
+            let output = rendered(&session);
+            assert!(
+                output.contains("Stopping, waiting on 2 delegates…"),
+                "{output}"
+            );
+
+            session.delegate_finished(ids[0], "stopped".to_string(), true, None);
+            let output = rendered(&session);
+            assert!(
+                output.contains("Stopping, waiting on 1 delegate…"),
+                "{output}"
+            );
+        }
+
         /// Only the prompt that starts a turn leaves the buffer that turn reads, so the prompts behind
         /// it go into the turn it starts, a command between them or not. Said to be turns of their
         /// own, each would promise a turn that never begins. A command ahead of the first is no
