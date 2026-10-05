@@ -4479,6 +4479,30 @@ fn a_search_skips_vendored_dependencies() {
     assert_eq!(found.matches[0].path, "mine.rs");
 }
 
+/// A linked worktree under `.claude/worktrees` is a full copy of the tree, so a walk that entered
+/// it would report every match twice. Naming a directory inside it still reaches it.
+#[test]
+fn a_search_skips_a_linked_worktree_under_claude_worktrees() {
+    let scratch = Scratch::new("grep-linked-worktree");
+    std::fs::write(scratch.path.join("mine.rs"), "needle\n").unwrap();
+    let copy = scratch.path.join(".claude/worktrees/pr-fix");
+    std::fs::create_dir_all(&copy).unwrap();
+    std::fs::write(copy.join("mine.rs"), "needle\n").unwrap();
+
+    let found = search_in(&scratch.path, &["needle"], None, true, 1);
+    let paths: Vec<&str> = found.matches.iter().map(|m| m.path.as_str()).collect();
+    assert_eq!(paths, ["mine.rs"], "a linked worktree was walked");
+
+    let named = search_in(
+        &scratch.path.join(".claude/worktrees/pr-fix"),
+        &["needle"],
+        None,
+        true,
+        1,
+    );
+    assert_eq!(named.matches.len(), 1, "naming the worktree found nothing");
+}
+
 /// A cap the caller cannot ask past is a cap that loses whatever is behind it. Saying the answer
 /// is a sample leaves the planner narrowing the pattern and guessing, and a guess that misses
 /// drops the matches it was meant to find.

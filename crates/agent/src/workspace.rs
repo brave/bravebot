@@ -2548,6 +2548,17 @@ pub fn is_ignored_directory(name: &str) -> bool {
     IGNORED_DIRECTORIES.contains(&name)
 }
 
+/// Whether the directory `name`, found inside `parent`, is one a walk from above steps over.
+///
+/// A name on its own, or a two-segment name: `.claude/worktrees` holds linked worktrees, each a
+/// full copy of the tree, so a walk that entered it would report every match twice. Decided from
+/// the two names alone, as the single names are. A search that names a directory inside it still
+/// reaches it, because the walk then starts below the skipped name.
+fn is_ignored_in(parent: &Path, name: &str) -> bool {
+    is_ignored_directory(name)
+        || (name == "worktrees" && parent.file_name().is_some_and(|p| p == ".claude"))
+}
+
 const IGNORED_DIRECTORIES: &[&str] = &[
     // Version control.
     ".git",
@@ -3888,7 +3899,7 @@ impl Workspace {
                 // Version control, build output and vendored dependencies would dominate a
                 // listing without adding anything a task needs.
                 let name = entry.file_name();
-                if is_ignored_directory(name.to_string_lossy().as_ref()) {
+                if is_ignored_in(directory, name.to_string_lossy().as_ref()) {
                     continue;
                 }
                 directories.push(entry.path());
@@ -3981,7 +3992,7 @@ impl Workspace {
             if kind.is_symlink() {
                 false
             } else if kind.is_dir() {
-                !is_ignored_directory(entry.file_name().to_string_lossy().as_ref())
+                !is_ignored_in(directory, entry.file_name().to_string_lossy().as_ref())
                     && self.selects_beneath(&entry.path(), wanted)
             } else {
                 kind.is_file() && wanted.admits(&self.relative_display(&entry.path()))
