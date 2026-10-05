@@ -5255,6 +5255,7 @@ fn branch_session(
                     directories: workspace.added_directories(),
                     manifest: None,
                     rewind: session.rewind_points(),
+                    checkouts: &workspace.session_checkouts(),
                 },
             );
             session.note(t!(
@@ -21361,6 +21362,7 @@ mod tests {
                 directories: &[],
                 manifest: None,
                 rewind: session.rewind_points(),
+                checkouts: &[],
             },
         );
         session.start_goal("cargo test exits 0".to_string());

@@ -1614,7 +1614,10 @@ impl Handle {
             server_children_may_run: record.server_children_may_run(),
             build: build.to_string(),
             front,
-            unplaced: Vec::new(),
+            // Every checkout the record holds is carried through a save until a front end that
+            // restores them says which it took back, so one that restores none (the desktop)
+            // does not write them away (CHECKOUT-16).
+            unplaced: record.checkouts.clone(),
         }
     }
 

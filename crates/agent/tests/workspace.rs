@@ -8353,6 +8353,11 @@ fn a_checkout_the_record_names_anywhere_but_where_one_was_made_is_not_taken_back
     let good = workspace.session_checkouts().remove(0);
     let elsewhere = Scratch::new("checkout-claimed-elsewhere");
     let link = good.path.with_file_name("c9");
+    // The link has its entry in the repository, so the one thing wrong with it is being a link.
+    std::fs::create_dir_all(scratch.path.join(".git/worktrees/c9")).unwrap();
+    // This one is a real directory in the right place, and has no entry in the repository.
+    let unentered = good.path.with_file_name("c8");
+    std::fs::create_dir_all(&unentered).unwrap();
     #[cfg(unix)]
     std::os::unix::fs::symlink(&elsewhere.path, &link).unwrap();
     #[cfg(not(unix))]
@@ -8373,12 +8378,18 @@ fn a_checkout_the_record_names_anywhere_but_where_one_was_made_is_not_taken_back
             one.path = link;
             one
         },
+        {
+            let mut one = good.clone();
+            one.id = "c8".into();
+            one.path = unentered;
+            one
+        },
     ];
 
     let resumed = Workspace::new(&scratch.path).expect("workspace");
     let unplaced = resumed.restore_session_checkouts(&state.path, &claims);
 
-    assert_eq!(unplaced, ["c1", "c2", "x1", "c1", "c9"]);
+    assert_eq!(unplaced, ["c1", "c2", "x1", "c1", "c9", "c8"]);
     assert_eq!(resumed.session_checkouts(), []);
     assert!(elsewhere.path.exists(), "a path in a record was reached");
 }

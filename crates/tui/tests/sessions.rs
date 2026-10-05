@@ -4886,3 +4886,59 @@ fn a_checkout_that_is_not_where_the_record_put_it_is_named_on_resume() {
         "a checkout that could not be taken back was erased from the record"
     );
 }
+
+/// CHECKOUT-16. A front end that resumes a record and restores no checkout, as the desktop does,
+/// writes the record's checkouts back on its next save.
+///
+/// The failure this rejects is a resumed handle that starts with nothing to carry, so one turn
+/// from such a front end rewrites the record as `checkouts: []` and the terminal's next resume
+/// has lost them.
+#[test]
+fn a_resume_that_restores_no_checkout_still_writes_the_records_checkouts_back() {
+    let scratch = Scratch::new("checkouts-carried");
+    let conversation = a_conversation();
+    let save = |handle: &mut Handle, checkouts: &[bravebot_agent::workspace::SessionCheckout]| {
+        handle.save(
+            "make a space invaders game",
+            Standing {
+                history: None,
+                conversation: &conversation.snapshot(),
+                turns: 1,
+                tokens: 1,
+                spend: &BTreeMap::new(),
+                timing: &BTreeMap::new(),
+                model: None,
+                todos: &BTreeMap::new(),
+                asides: &[],
+                trust: &a_trust_map(),
+                programs: &TrustedPrograms::new(),
+                directories: &[],
+                manifest: None,
+                rewind: &[],
+                checkouts,
+            },
+        );
+    };
+    let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
+    save(&mut handle, &[a_kept_checkout()]);
+    let record = sessions::load(&scratch.project, handle.id()).expect("loads");
+
+    let mut resumed = Handle::resuming(
+        &scratch.project,
+        &record,
+        Front::Desktop,
+        bravebot_stamp::BUILD,
+    );
+    save(&mut resumed, &[]);
+
+    let again = sessions::load(&scratch.project, handle.id()).expect("loads");
+    assert_eq!(
+        again
+            .checkouts
+            .iter()
+            .map(|one| one.id.as_str())
+            .collect::<Vec<_>>(),
+        ["c1"],
+        "a checkout the record held was erased by a front end that restored none"
+    );
+}
