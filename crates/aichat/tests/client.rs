@@ -239,6 +239,8 @@ enum Attempt {
     Dropped,
     /// Answer with a status and nothing else.
     Status(u16),
+    /// Answer 200 with this body as JSON.
+    Json(String),
     /// Answer properly, with these SSE frames.
     Frames(Vec<String>),
     /// Complete SSE frames followed by an unfinished HTTP chunked body.
@@ -302,6 +304,13 @@ fn serve_attempts(attempts: Vec<Attempt>) -> (String, mpsc::Receiver<Captured>) 
                 Attempt::Status(status) => {
                     let _ = stream.write_all(
                         format!("HTTP/1.1 {status} Nope\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                            .as_bytes(),
+                    );
+                    let _ = stream.flush();
+                }
+                Attempt::Json(body) => {
+                    let _ = stream.write_all(
+                        format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
                             .as_bytes(),
                     );
                     let _ = stream.flush();
@@ -2160,6 +2169,47 @@ fn a_gateway_with_a_credential_is_asked_what_that_account_may_reach() {
     let captured = received.recv().expect("request captured");
     assert_eq!(captured.request_line, "GET /v1/models/user HTTP/1.1");
     assert_eq!(captured.header("authorization"), Some("Bearer a-token"));
+}
+
+/// The account-scoped route is a gateway's own extension, so a gateway without it still has to end
+/// up with a roster. A 404 and a 200 nobody can decode are the two ways such a gateway answers, and
+/// each is followed by the service-wide question rather than by an empty roster or an error.
+#[test]
+fn a_gateway_that_cannot_answer_the_account_question_is_asked_for_its_whole_roster() {
+    let unanswered = [
+        ("a 404", Attempt::Status(404)),
+        ("an undecodable body", Attempt::Json("not a roster".into())),
+    ];
+    for (name, first) in unanswered {
+        let (endpoint, received) =
+            serve_attempts(vec![first, Attempt::Json(GATEWAY_ROSTER.into())]);
+        let provider = gateway_at(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("policy");
+
+        let models = bravebot_aichat::models::list_from_gateway(
+            &mut policy,
+            &provider,
+            Some("a-token"),
+            &egress,
+        )
+        .unwrap_or_else(|e| panic!("{name}: the roster was not fetched: {e:?}"));
+
+        assert_eq!(models[0].key, "ollama/qwen3-coder:30b", "{name}");
+        let asked: Vec<String> = received.try_iter().map(|c| c.request_line).collect();
+        assert_eq!(
+            asked,
+            ["GET /v1/models/user HTTP/1.1", "GET /v1/models HTTP/1.1"],
+            "{name}"
+        );
+    }
 }
 
 /// A Google Vertex entry is pointed at the local server by a stated endpoint, which is the one way

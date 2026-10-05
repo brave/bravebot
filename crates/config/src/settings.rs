@@ -4559,6 +4559,24 @@ mod tests {
         assert!(!settings.effort_outranks_a_pick());
     }
 
+    /// The file `--settings` named may name a model, so a blank or non-string `model` there is the
+    /// case where the key is kept rather than dropped. It names nothing, so it does not outrank a
+    /// pick, and it still displaces the key the person's own file named: a run with nothing
+    /// recorded then reaches the exported variable or the build, not the home file's word.
+    #[test]
+    fn a_named_file_spelling_the_model_blank_displaces_the_home_key_and_names_nothing() {
+        for (name, spelling) in [("blank", r#""  ""#), ("number", "7"), ("list", r#"["a"]"#)] {
+            let settings = Layers::new(&format!("named-{name}"))
+                .global(r#"{"model": "personal"}"#)
+                .named(&format!(r#"{{"model": {spelling}}}"#))
+                .read();
+            let seen = settings.layers().collect::<Vec<_>>();
+            assert_eq!(settings.model(), None, "{name}: {seen:?}");
+            assert!(!settings.model_outranks_a_pick(), "{name}: {seen:?}");
+            assert_eq!(settings.model_ignored().count(), 0, "{name}: {seen:?}");
+        }
+    }
+
     /// A layer that says nothing about the model leaves the one a weaker layer named, on the same
     /// footing as every other name.
     #[test]

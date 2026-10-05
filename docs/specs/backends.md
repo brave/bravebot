@@ -298,6 +298,7 @@ and the pick is the later of the two.
 `verified-by: bravebot_config::settings::a_layer_above_the_home_one_does_not_pick_a_model`
 `verified-by: bravebot_config::settings::the_home_layer_does_not_outrank_a_saved_pick`
 `verified-by: bravebot_config::settings::a_layer_above_that_names_nothing_does_not_outrank_a_saved_pick`
+`verified-by: bravebot_config::settings::a_named_file_spelling_the_model_blank_displaces_the_home_key_and_names_nothing`
 `verified-by: bravebot_cli::running::doctor_says_a_checkouts_provider_block_is_not_obeyed`
 `verified-by: bravebot_session::store::a_checkouts_model_cannot_displace_the_saved_pick_and_the_home_file_does_not`
 `verified-by: bravebot_tui::persist::a_recorded_model_answers_over_a_checkouts_file_and_the_persons_own`
@@ -591,6 +592,7 @@ the same conservative default a stated roster gets.
 `verified-by: bravebot_aichat::models::fetched_gateway_models_are_not_marked_premium`
 `verified-by: bravebot_aichat::client::a_gateway_with_a_credential_is_asked_what_that_account_may_reach`
 `verified-by: bravebot_aichat::client::a_gateway_needing_no_credential_is_asked_for_its_roster_unauthenticated`
+`verified-by: bravebot_aichat::client::a_gateway_that_cannot_answer_the_account_question_is_asked_for_its_whole_roster`
 `verified-by: bravebot_tui::app::a_fetched_roster_leads_with_the_model_in_force`
 `verified-by: bravebot_tui::app::a_fetched_roster_nobody_has_chosen_from_is_still_sorted`
 

@@ -1463,6 +1463,7 @@ cannot see scroll away above it.
 `verified-by: bravebot_tui::app::the_row_keys_walk_a_paragraph`
 `verified-by: bravebot_tui::app::the_row_keys_reach_the_prompt_history_at_the_ends_of_the_input`
 `verified-by: bravebot_tui::app::a_slash_opens_the_search_over_earlier_prompts`
+`verified-by: bravebot_tui::app::the_letters_that_spell_keys_reach_the_history_and_the_search_mid_turn`
 `verified-by: bravebot_tui::app::the_letters_that_spell_keys_are_typed_in_insert_mode`
 `verified-by: bravebot_tui::app::an_operator_takes_the_row_keys_rather_than_walking_the_ladder`
 
