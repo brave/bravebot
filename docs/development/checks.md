@@ -14,8 +14,10 @@ the change is still local. The broader before-push requirements below still appl
 ## Before a commit
 
 **fmt and clippy.** Both take seconds and have no exemption for a change that only touched a
-comment, a document, or a name: they fail on those as readily as on anything else, and `make init`
-installs a pre-commit hook that refuses a commit failing either.
+comment or a name: they fail on those as readily as on anything else, and `make init` installs a
+pre-commit hook that refuses a commit failing either. The hook skips a commit that stages nothing
+but files under `docs/` or `agents/`, Markdown, `LICENSE` or `CODEOWNERS`, which nothing compiled
+reads; a commit that stages anything else, or nothing, runs both.
 
 Then run the tests the diff is under, scoped as tightly as the diff is: `cargo test -p bravebot-tui
 --lib` for the interface, `cargo test -p bravebot-agent --test workspace` for one test binary. A
