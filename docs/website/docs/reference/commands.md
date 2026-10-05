@@ -16,7 +16,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/theme` | `[name]` | Choose which theme paints the interface |
 | `/effort` | `[level]` | Choose how hard to think before answering |
 | `/config` | | Choose how the input box edits text |
-| `/add-dir` | `<path>` | Open another directory, and trust it for this session |
+| `/add-dir` | `<path> \| close <path>` | Open another directory and trust it for this session, or close one |
 | `/cd` | `<path>` | Work in another directory from now on, and trust it for this session |
 | `/rename` | `<name>` | Call this conversation something else |
 | `/compact` | | Summarise the conversation so far, keeping the recent part |
@@ -173,6 +173,10 @@ somebody who has never used this panel.
 Makes a directory both reachable and trusted, for this session. `--resume` carries both halves and
 `/clear` closes it. A directory already inside the project is refused. See
 [Trusted directories](../security/trust.md#add-dir).
+
+`/add-dir close <path>` closes that one directory and keeps the conversation. A file only it reached
+is refused again, and the directory is no longer trusted. Every other open directory stays open.
+`/status` lists what is open, under the names `close` takes.
 
 An added directory contributes **no** standing instructions and no skills, whatever it contains.
 

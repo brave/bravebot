@@ -426,6 +426,17 @@ map says, and it is recorded as trusted. It lasts the session, `--resume` carrie
 A directory already inside the project is refused. A directory a resume cannot open again, because
 it has moved or gone, is said so rather than passed over.
 
+`/add-dir close ~/notes` closes that one directory and takes both halves back together: a file that
+only it reached is refused again, and the trusted rule at its own path is removed, under every
+spelling the volume reads as that path. Where a broader rule would then trust the directory, an
+undecided boundary takes the rule's place, since the rule removed may have been written over a
+distrust. A distrusted or undecided rule there stays, and so does every rule beneath it, so closing
+never raises what a path answers as. Another directory stays open, a directory opened beneath it
+included, and a name that is not open is refused. The name is matched as it is spelled and then as
+it resolves now, through what still exists of it, so a link put there since cannot redirect the
+close and a directory that has gone closes under any name that reached it. The session record is
+written again at once wherever one is on disk, so a resume does not reopen it.
+
 A directory that *holds* the project is not refused, and the rule it records covers the project's
 files as it covers everything else in that tree. Vouching for a directory is a standing statement
 about the place (TRUST-2) and the project is in it, so there is nothing to except. The project's own
@@ -435,10 +446,20 @@ given inside the project from being undone by a yes given above it.
 **Why.** Either half alone is no use, one leaving a rule about files nothing can open and the other
 leaving a directory that prompts on every edit. It closes with the session for the reason every
 other answer here does (TRUST-6): leaving a tree reachable once nothing vouches for it would
-outlive the answer that allowed it.
+outlive the answer that allowed it. Closing one takes both halves for the same reason, and without it
+`/clear` was the only way to close a directory, which discards the conversation too.
 
 `verified-by: bravebot_agent::workspace::a_file_in_an_added_directory_is_readable_by_its_absolute_path`
 `verified-by: bravebot_agent::workspace::closing_added_directories_makes_them_unreachable_again`
+`verified-by: bravebot_agent::workspace::closing_one_added_directory_refuses_what_only_it_reached`
+`verified-by: bravebot_agent::workspace::closing_a_directory_leaves_one_opened_beneath_it_and_refuses_one_never_opened`
+`verified-by: bravebot_agent::workspace::a_directory_deleted_since_it_was_opened_still_closes`
+`verified-by: bravebot_agent::workspace::a_deleted_directory_closes_under_a_name_through_a_linked_ancestor`
+`verified-by: bravebot_agent::workspace::a_link_put_where_an_opened_directory_was_closes_that_directory`
+`verified-by: bravebot_core::trust::withdrawing_trust_keeps_every_rule_that_lowers_a_path`
+`verified-by: bravebot_core::trust::withdrawing_trust_beneath_a_trusted_rule_leaves_the_path_undecided`
+`verified-by: bravebot_core::trust::withdrawing_trust_reaches_every_spelling_a_folding_volume_reads_as_one`
+`verified-by: bravebot_tui::app::add_dir_close_withdraws_the_reach_and_the_rule_together`
 `verified-by: bravebot_agent::workspace::a_new_file_can_be_created_in_an_added_directory`
 `verified-by: bravebot_agent::turn::a_turn_can_read_a_file_in_an_added_directory`
 `verified-by: bravebot_tui::sessions::a_resumed_session_can_still_open_the_directory_it_added`

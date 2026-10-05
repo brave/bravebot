@@ -203,6 +203,37 @@ impl TrustStore {
         self.rules.keys().any(|key| covers(&under, key, folds))
     }
 
+    /// Drop the rule at `path` if it trusts that path, and nothing else (TRUST-9).
+    ///
+    /// Whether a rule was dropped. A distrust or an undecided boundary at `path` stays, and so
+    /// does every rule beneath it: a directory beneath may be open in its own right, and a path
+    /// held out of a trusted rule above it would answer to that rule once its own rule went.
+    ///
+    /// Every spelling [`TrustStore::folding_case`] reads as `path` is one rule, since any of them
+    /// may be the one deciding it. Where a broader rule would still trust `path` once its own
+    /// went, an undecided boundary takes its place: the rule dropped may have been written over
+    /// a distrust, and the broader one never spoke for what is here. Either way `path` answers
+    /// as trusted by no rule afterwards.
+    pub fn withdraw_trust(&mut self, path: &str) -> bool {
+        let key = self.key(path);
+        let folded = self.folds_case.then(|| fold_case(&key));
+        let before = self.rules.len();
+        self.rules.retain(|rule, decision| {
+            let here = match &folded {
+                Some(folded) => fold_case(rule) == *folded,
+                None => *rule == key,
+            };
+            !here || *decision != Some(Integrity::Trusted)
+        });
+        if self.rules.len() == before {
+            return false;
+        }
+        if self.integrity_at_key(&key) == Some(Integrity::Trusted) {
+            self.rules.insert(key, None);
+        }
+        true
+    }
+
     /// The lower effective decision at every path. Explicit distrust survives either map;
     /// an absent decision stays absent unless the other map explicitly distrusts it.
     /// Evaluate inherited rules at every boundary, including nested exceptions.
@@ -1248,5 +1279,73 @@ mod tests {
         map.copy_beneath("", "/state/c2");
         assert!(!map.withdraw_beneath("/state/c2"));
         assert_eq!(map.integrity_of("/state/c2/a.rs"), None);
+    }
+
+    /// Closing a directory takes its own trusted rule and leaves every rule that lowers a path.
+    #[test]
+    fn withdrawing_trust_keeps_every_rule_that_lowers_a_path() {
+        let mut map = TrustStore::new("/work");
+        map.trust("/notes");
+        map.undecide("/notes/inbox");
+        map.distrust("/notes/fetched.md");
+        map.trust("/shared");
+        map.distrust("/mail");
+
+        assert!(map.withdraw_trust("/notes"));
+        assert_eq!(
+            map.keyed().collect::<Vec<_>>(),
+            vec![
+                ("/mail", Some(Integrity::Untrusted)),
+                ("/notes/fetched.md", Some(Integrity::Untrusted)),
+                ("/notes/inbox", None),
+                ("/shared", Some(Integrity::Trusted)),
+            ]
+        );
+        assert!(!map.withdraw_trust("/mail"), "a distrust was withdrawn");
+        assert!(!map.withdraw_trust("/notes/inbox"));
+        assert_eq!(map.integrity_of("/mail/a.md"), Some(Integrity::Untrusted));
+    }
+
+    /// A trusted rule above the closed directory does not take over from the rule withdrawn.
+    #[test]
+    fn withdrawing_trust_beneath_a_trusted_rule_leaves_the_path_undecided() {
+        let mut map = TrustStore::new("/work");
+        map.trust("/home");
+        map.trust("/home/downloads");
+        map.trust("/home/notes");
+        map.trust("/home/notes/inbox");
+
+        assert!(map.withdraw_trust("/home/downloads"));
+        assert_eq!(map.integrity_of("/home/downloads/a.md"), None);
+        assert!(map.withdraw_trust("/home/notes"));
+        assert_eq!(map.integrity_of("/home/notes/a.md"), None);
+        assert_eq!(
+            map.integrity_of("/home/notes/inbox/a.md"),
+            Some(Integrity::Trusted)
+        );
+        assert_eq!(map.integrity_of("/home/a.md"), Some(Integrity::Trusted));
+    }
+
+    /// On a volume that folds case, the rule under another spelling of the name is the same rule.
+    #[test]
+    fn withdrawing_trust_reaches_every_spelling_a_folding_volume_reads_as_one() {
+        let mut map = TrustStore::new("/work").folding_case(true);
+        map.trust("/Users/x/Notes");
+        map.distrust("/Users/x/NOTES/fetched.md");
+
+        assert!(map.withdraw_trust("/Users/x/notes"));
+        assert_eq!(map.integrity_of("/Users/x/notes/a.md"), None);
+        assert_eq!(
+            map.integrity_of("/Users/x/notes/fetched.md"),
+            Some(Integrity::Untrusted)
+        );
+
+        let mut exact = TrustStore::new("/work");
+        exact.trust("/Users/x/Notes");
+        assert!(!exact.withdraw_trust("/Users/x/notes"));
+        assert_eq!(
+            exact.integrity_of("/Users/x/Notes/a.md"),
+            Some(Integrity::Trusted)
+        );
     }
 }

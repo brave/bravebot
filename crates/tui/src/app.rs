@@ -94,6 +94,9 @@ const CONFIG_COMMAND: &str = "/config";
 /// The line that opens another directory, taking the path to open as its argument.
 const ADD_DIR_COMMAND: &str = "/add-dir";
 
+/// The word after `/add-dir` that closes the directory named after it instead.
+const ADD_DIR_CLOSE: &str = "close";
+
 /// The line that moves the session to another working directory, taking the path as its argument.
 const CD_COMMAND: &str = "/cd";
 
@@ -272,7 +275,7 @@ pub fn commands() -> [Command; 28] {
         },
         Command {
             name: ADD_DIR_COMMAND,
-            argument: "<path>",
+            argument: "<path> | close <path>",
             description: t!(command_add_dir),
             mid_turn: MidTurn::Waits,
         },
@@ -543,6 +546,9 @@ pub enum Action {
     ChooseEditing,
     /// Open another directory. Needs the workspace and the trust map, which the loop owns.
     AddDirectory(String),
+    /// Close one directory `/add-dir` opened. Needs the workspace, the trust map and the session
+    /// record, which the loop owns.
+    CloseDirectory(String),
     /// Work somewhere else from now on. Needs the workspace, the trust map and the session
     /// record, all of which the loop owns.
     ChangeDirectory(String),
@@ -1754,7 +1760,13 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         return Action::Rewind(turns.to_string());
     }
     if let Some(directory) = argument_to(line, ADD_DIR_COMMAND) {
-        return Action::AddDirectory(directory.to_string());
+        // No directory is opened by a relative name, so `close` and `close <path>` never name one
+        // that `/add-dir` alone could have opened.
+        return match directory.split_once(char::is_whitespace) {
+            Some((ADD_DIR_CLOSE, named)) => Action::CloseDirectory(named.trim().to_string()),
+            None if directory == ADD_DIR_CLOSE => Action::CloseDirectory(String::new()),
+            _ => Action::AddDirectory(directory.to_string()),
+        };
     }
     if let Some(directory) = argument_to(line, CD_COMMAND) {
         return Action::ChangeDirectory(directory.to_string());
@@ -3710,6 +3722,39 @@ fn event_loop(
                 session.close_rewind_window();
                 add_directory(&mut session, &mut workspace, &mut answers.trust, &directory);
             }
+            Action::CloseDirectory(directory) => {
+                if close_directory(&mut session, &mut workspace, &mut answers.trust, &directory) {
+                    // The snapshot holds a trust map with this directory's rule in it, while the
+                    // directory itself would stay closed.
+                    session.close_rewind_window();
+                    // Written now rather than at the end of the next turn: a session that closed
+                    // a directory and then quit would otherwise resume with it open and trusted.
+                    // Wherever a record is on disk, which a rewind to before the first turn can
+                    // leave, and not only once a turn has been had.
+                    if session.turns > 0 || stored.resumable().is_some() {
+                        let title = stored.title().to_string();
+                        stored.save(
+                            &title,
+                            bravebot_session::sessions::Standing {
+                                history: Some(session.turn_history()),
+                                conversation: &conversation.snapshot(),
+                                turns: session.turns,
+                                tokens: session.tokens,
+                                spend: session.spend_by_turn(),
+                                timing: session.timing_by_turn(),
+                                model: session.served_model(),
+                                todos: &session.todos_by_turn(),
+                                asides: session.asides(),
+                                trust: &answers.trust,
+                                programs: &answers.programs,
+                                directories: workspace.added_directories(),
+                                manifest: None,
+                                rewind: session.rewind_points(),
+                            },
+                        );
+                    }
+                }
+            }
             Action::ChangeDirectory(directory) => {
                 // The record moves with the working directory, so the snapshot describes a
                 // session that is no longer written where it was.
@@ -4257,6 +4302,45 @@ fn add_directory(
             directory = directory,
             problem = error
         )),
+    }
+}
+
+/// Close one directory `/add-dir` opened, and withdraw the trust it was opened with (TRUST-9).
+///
+/// Both halves go, because the person closing it is withdrawing the answer that allowed both: a
+/// rule left behind would go on vouching for every file there that reaches a turn some other way,
+/// and the session record would carry it into a resume. Says whether a directory closed, since
+/// the record then has to be written again.
+fn close_directory(
+    session: &mut Session,
+    workspace: &mut Workspace,
+    trust: &mut TrustStore,
+    directory: &str,
+) -> bool {
+    if directory.is_empty() {
+        session.note(t!(session_close_dir_needs_a_path));
+        return false;
+    }
+    match workspace.close_added_directory(&expand_home(directory)) {
+        Ok(closed) => {
+            let directory = closed.display().to_string();
+            // Where no trusted rule went, the directory answers as it did before the close, so
+            // saying trust was withdrawn would tell the person something that did not happen.
+            if trust.withdraw_trust(&bravebot_agent::workspace::key_of(&closed)) {
+                session.note(t!(session_directory_withdrawn, directory = directory));
+            } else {
+                session.note(t!(session_directory_closed, directory = directory));
+            }
+            true
+        }
+        Err(error) => {
+            session.note(t!(
+                session_directory_not_closed,
+                directory = directory,
+                problem = error
+            ));
+            false
+        }
     }
 }
 
@@ -13712,6 +13796,47 @@ mod tests {
         );
     }
 
+    /// After `close` and a space, the rest of the line is the directory to close, spaces and all.
+    /// `close` alone is still the close command, which the loop answers by asking for a path, and a
+    /// name that only begins with the word is a directory to open.
+    ///
+    /// The failures this rejects are a parse with no `close` arm, which would try to open a
+    /// directory called "close ~/my notes", and one that strips the word as a prefix, which would
+    /// read `/add-dir closet` as closing a directory called "t".
+    #[test]
+    fn the_add_dir_close_command_carries_the_directory_to_close() {
+        for (typed, expected) in [
+            (
+                "/add-dir close ~/my notes",
+                Action::CloseDirectory("~/my notes".to_string()),
+            ),
+            ("/add-dir close", Action::CloseDirectory(String::new())),
+            (
+                "/add-dir closet",
+                Action::AddDirectory("closet".to_string()),
+            ),
+            (
+                "/add-dir /work/close",
+                Action::AddDirectory("/work/close".to_string()),
+            ),
+        ] {
+            let mut session = Session::new("none");
+            for c in typed.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                expected,
+                "{typed}"
+            );
+            assert!(
+                session.transcript.is_empty(),
+                "{typed} was sent as a prompt"
+            );
+        }
+    }
+
     /// A longer word beginning with the command is not the command, or "/add-dirs are useful"
     /// would open a directory called "s are useful".
     #[test]
@@ -19743,6 +19868,103 @@ mod tests {
                 .contains("permissions.readsStayInWorkspace"),
             "the refusal did not name the key that made it: {}",
             session.transcript[0].text
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// TRUST-9: `/add-dir close` takes back both halves `/add-dir` gave, the reach and the rule, for
+    /// the directory named and no other. A second close of it, and a close with no path, are
+    /// refused and say why, so nobody is told a directory closed when nothing did.
+    ///
+    /// The failures this rejects are a close that leaves the rule, which would go on vouching for
+    /// files there that reach a turn some other way and be carried into a resume, a close of
+    /// the workspace's list alone that leaves the directory trusted, and a note saying trust was
+    /// withdrawn where the rule at the directory was a distrust that stays.
+    #[test]
+    fn add_dir_close_withdraws_the_reach_and_the_rule_together() {
+        let root = crate::testutil::scratch_dir("bravebot-add-dir-close-test");
+        let project = root.join("project");
+        let notes = root.join("notes");
+        let shared = root.join("shared");
+        for directory in [&project, &notes, &shared] {
+            std::fs::create_dir_all(directory).expect("scratch");
+        }
+
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        let mut trust = TrustStore::new(workspace.root());
+        let mut session = Session::new("none");
+        for directory in [&notes, &shared] {
+            add_directory(
+                &mut session,
+                &mut workspace,
+                &mut trust,
+                &directory.display().to_string(),
+            );
+        }
+        let notes = notes.canonicalize().expect("canonical");
+        let shared = shared.canonicalize().expect("canonical");
+        let note = notes.join("todo.md");
+        assert!(workspace.confines(&note).is_ok());
+        assert!(trust.is_trusted(&note.display().to_string()));
+
+        assert!(close_directory(
+            &mut session,
+            &mut workspace,
+            &mut trust,
+            &notes.display().to_string(),
+        ));
+
+        assert!(
+            workspace.confines(&note).is_err(),
+            "the closed directory is still reachable"
+        );
+        assert!(
+            !trust.is_trusted(&note.display().to_string()),
+            "the closed directory is still trusted"
+        );
+        assert!(workspace.confines(&shared.join("todo.md")).is_ok());
+        assert!(
+            trust.is_trusted(&shared.join("todo.md").display().to_string()),
+            "closing one directory withdrew another's rule"
+        );
+        let said = &session.transcript.last().expect("a note").text;
+        assert!(said.contains("no longer trusting it"), "{said}");
+
+        assert!(!close_directory(
+            &mut session,
+            &mut workspace,
+            &mut trust,
+            &notes.display().to_string(),
+        ));
+        let said = &session.transcript.last().expect("a note").text;
+        assert!(said.contains("could not close"), "{said}");
+        assert!(!close_directory(
+            &mut session,
+            &mut workspace,
+            &mut trust,
+            ""
+        ));
+        let said = &session.transcript.last().expect("a note").text;
+        assert!(said.contains("/add-dir close needs a directory"), "{said}");
+        assert_eq!(workspace.added_directories(), std::slice::from_ref(&shared));
+
+        let kept = shared.join("todo.md").display().to_string();
+        trust.distrust(&bravebot_agent::workspace::key_of(&shared));
+        assert!(close_directory(
+            &mut session,
+            &mut workspace,
+            &mut trust,
+            &shared.display().to_string(),
+        ));
+        let said = &session.transcript.last().expect("a note").text;
+        assert!(
+            !said.contains("no longer trusting it"),
+            "a close that withdrew nothing said it did: {said}"
+        );
+        assert_eq!(
+            trust.integrity_of(&kept),
+            Some(bravebot_core::label::Integrity::Untrusted)
         );
 
         std::fs::remove_dir_all(&root).ok();
