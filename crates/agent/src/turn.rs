@@ -784,6 +784,11 @@ pub struct Task {
     /// answers a person is still carrying from an earlier session and a flat list cannot.
     /// Supplied per turn for the reason `home` is: which session this is belongs to the caller.
     pub remembering: Option<String>,
+    /// A model the planner may put a question to, when the session named one.
+    ///
+    /// `None` offers no `advisor` tool. Never set on a delegate's turn: a delegate is not shown
+    /// the tool and a call to it is answered as an unknown name.
+    pub advisor: Option<String>,
     /// The model to request, when the user has chosen one.
     ///
     /// `None` means the configured default applies. Supplied per turn rather than read here for
@@ -1012,6 +1017,7 @@ impl Task {
             // Nothing is remembered past the session unless a caller says which session this is,
             // which is the caller saying there is somebody a prompt could be put to.
             remembering: None,
+            advisor: None,
             model: None,
             effort: None,
             tick: None,
@@ -1156,6 +1162,12 @@ impl Task {
     /// record of remembered lines nor writes one, and every run asks.
     pub fn remembering(mut self, session: Option<String>) -> Self {
         self.remembering = session;
+        self
+    }
+
+    /// Name the model the planner may consult, or `None` to offer no `advisor` tool.
+    pub fn with_advisor(mut self, model: Option<String>) -> Self {
+        self.advisor = model;
         self
     }
 
@@ -1911,6 +1923,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             profile: task.profile.as_deref(),
             cache: task.cache.as_deref(),
             remembering: task.remembering.as_deref(),
+            advising: None,
             delegated: false,
             confined_to: None,
             servers: None,
@@ -3121,6 +3134,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         task.deadlines,
                         tools::Running::Offered,
                     );
+                    if task.advisor.is_some() {
+                        tools::offer_advisor(&mut offered);
+                    }
                     let names: Vec<&str> = offered
                         .iter()
                         .map(|tool| tool.function.name.as_str())
@@ -3142,6 +3158,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 task.deadlines,
                                 tools::Running::Withheld,
                             );
+                            if task.advisor.is_some() {
+                                tools::offer_advisor(&mut offered);
+                            }
                         }
                         offered.retain(|tool| addressed.tools().contains(&tool.function.name));
                     }
@@ -3657,6 +3676,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // about several files.
         let mut watches: Vec<String> = Vec::new();
         let mut armed = 0usize;
+        // How many questions the planner has put to its advisor this turn, which the bound on them
+        // is read against.
+        let mut advice_asked = 0usize;
         // The pipelines this turn leaves running. Held here so they end here: dropping this kills
         // whatever is still going, which is what keeps a background job from outliving the turn that
         // started it and becoming an effect nobody is watching.
@@ -4226,6 +4248,15 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 profile: task.profile.as_deref(),
                                 cache: task.cache.as_deref(),
                                 remembering: task.remembering.as_deref(),
+                                advising: task
+                                    .advisor
+                                    .as_deref()
+                                    .filter(|_| task.delegate.is_none())
+                                    .map(|model| crate::advisor::Advising {
+                                        model,
+                                        context: &request.messages,
+                                        asked: &mut advice_asked,
+                                    }),
                                 delegated: task.delegate.is_some(),
                                 confined_to: addressed.as_ref().map(|addressed| addressed.tools()),
                                 servers: servers.as_deref_mut(),

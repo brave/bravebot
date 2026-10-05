@@ -2902,6 +2902,49 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         }
     }
 
+    /// Take the question the planner put to its advisor, to be sent with the context it was
+    /// written in.
+    ///
+    /// The advisor is given the planner's own request and nothing else, so what reaches it is
+    /// what the planner already holds. The question is the planner's words, read here for the
+    /// reason a processor's instruction is: the call changes nothing outside the answer that
+    /// comes back, and what it can reach was fixed by the session's configuration rather than
+    /// by the value. It must be public, so a question cannot carry private content the
+    /// planner's context does not already hold.
+    pub fn before_advice(&mut self, question: &Labelled<String>) -> Gated<String> {
+        let label = question.label();
+        if !label.is_public() {
+            return Err(self.deny(
+                "advice",
+                Principle::Confinement,
+                format!(
+                    "the question for the advisor is {label}, because the conversation holds \
+                     private content, and that is not sent to a second model; carry on without \
+                     the advisor"
+                ),
+            ));
+        }
+        let proof = Declassification::authorise("the question the planner put to its advisor");
+        Ok(question.clone().declassify(&proof))
+    }
+
+    /// Record one call to the advisor: which model answered, what it cost, and how long the
+    /// question was.
+    ///
+    /// `model` is the one the session asked for, from its configuration or its command line, and
+    /// not the one the server reports. `call` counts this turn's calls from one, so a reader of
+    /// the trail sees where the per-turn limit was reached. The length of the question and none
+    /// of its words, so the trail carries no more content than it did.
+    pub fn record_advice(&mut self, model: &str, call: usize, cost: u64, question: usize) {
+        self.allow(
+            "advice",
+            format!(
+                "call {call} to the advisor {model}: a question of {question} character(s), \
+                 costing {cost} tokens"
+            ),
+        );
+    }
+
     /// Fix what one processor may do, before it exists.
     ///
     /// A processor is the only reader quarantined content ever gets, so what it is allowed to
@@ -6782,6 +6825,49 @@ mod tests {
             "the refusal does not say why: {denial}"
         );
         assert!(!policy.finish(), "the refusal was not recorded");
+    }
+
+    /// The advisor is sent the planner's question as a request body, so a question carrying private
+    /// content would be that content leaving. Nothing upstream labels one so; this refuses it.
+    #[test]
+    fn a_private_question_is_not_put_to_the_advisor() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+
+        let private = Labelled::new("the user's key".to_string(), Label::untrusted_private());
+        let denial = policy
+            .before_advice(&private)
+            .expect_err("a private question must not reach the advisor");
+        assert_eq!(denial.principle, Principle::Confinement);
+
+        let public = Labelled::new("which file first?".to_string(), Label::untrusted_public());
+        assert_eq!(
+            policy
+                .before_advice(&public)
+                .expect("a public question passes"),
+            "which file first?"
+        );
+    }
+
+    /// A consultation is a request to a second model, so it is in the trail with the model and what
+    /// it cost.
+    #[test]
+    fn a_consultation_is_recorded_with_its_model_and_cost() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        policy.record_advice("advisor-model", 2, 230, 24);
+        drop(policy);
+        assert!(
+            sink.events().iter().any(|e| matches!(
+                e,
+                Event::GatePassed { gate: "advice", detail }
+                    if detail.contains("call 2")
+                        && detail.contains("advisor-model")
+                        && detail.contains("230 tokens")
+            )),
+            "{:?}",
+            sink.events()
+        );
     }
 
     /// A private argument is the user's data in a field the driver reads back out. Nothing

@@ -7,7 +7,7 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 175
+      - crates/agent/src/tools.rs: 182
   - symbol: Produced::refused_with_a_note
     sites:
       - crates/agent/src/tools.rs: 8
@@ -48,6 +48,7 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`todo_write`](todo-write.md) | none | `todos` | confirmation |
 | [`schedule_next`](schedule-next.md) | `delay_seconds`, `noop` | `reason` | the wait that will happen |
 | [`watch_file`](watch-file.md) | `path` | none | confirmation that the watch exists |
+| [`advisor`](advisor.md) | none | `question` | the advisor's reply |
 | [`ask_user`](ask-user.md) | `questions` | none | what the user answered |
 
 Every tool also takes `why`, which is content on every one of them and is left out of the table for

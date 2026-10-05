@@ -1104,3 +1104,20 @@ what fails when they differ. Session ids are not completed.
 `verified-by: bravebot_cli::running::the_bash_script_completes_commands_subcommands_and_flags_by_position`
 `verified-by: bravebot_cli::main::a_definition_is_refused_where_nothing_would_work_under_it`
 `verified-by: bravebot_cli::main::the_system_prompt_flags_are_refused_where_nothing_would_use_them`
+
+<a id="CLI-21"></a>
+### CLI-21: `--advisor <name>` offers the planner a second model to consult
+
+`--advisor <name>` names the model the `advisor` tool asks for one run, in the words `--model`
+takes, tier words included. Without it the planner is offered no such tool. The flag is refused
+before the run starts when it has no name after it, when the name is blank, when the machine-level
+settings refuse the model, when nothing is configured to serve it, and with `--mode manifest`,
+which has no planner to ask. What the tool then does is [tools/advisor.md](tools/advisor.md).
+
+**Why.** A blank name is refused for the reason a blank `--model` is: a script that computed an
+empty variable asked for an advisor, and running without one would not say so. The refusal for a
+model the machine refuses is made before the first round so that a run never starts with an advisor
+its first question could not reach.
+
+`verified-by: bravebot_cli::main::an_advisor_flag_names_the_model_the_planner_may_consult`
+`verified-by: bravebot_cli::main::a_blank_advisor_is_refused_rather_than_read_as_no_choice`

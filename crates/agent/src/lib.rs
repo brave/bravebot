@@ -6,6 +6,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod advisor;
 pub mod agents;
 pub mod aside;
 pub mod attached;

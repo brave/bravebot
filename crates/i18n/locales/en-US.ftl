@@ -96,6 +96,7 @@ cli-option-append-system-prompt =
     Add this text to the planner's standing instructions for every turn, after AGENTS.md
 cli-option-mode = turn (default) decides step by step; manifest plans the whole run first
 cli-option-model = The model this run asks for, in place of the remembered or configured one
+cli-option-advisor = A model the agent may put a question to, offered to it as the advisor tool
 cli-option-effort = How hard this run asks the model to think, in place of the remembered or configured level
 cli-option-print = Non-interactive. Reads piped stdin as quarantined context
 cli-option-trace = Print the audit trail
@@ -159,6 +160,8 @@ cli-bypass-unreachable =
     that mode unreachable here. Remove it there, or run without the flag.
 cli-mode-needs-a-name = --mode requires one of { $names }
 cli-model-needs-a-name = --model requires the name of a model
+cli-advisor-needs-a-name = --advisor requires the name of a model
+cli-advisor-not-with-a-manifest = --advisor cannot be used with --mode manifest, which runs its plan without a planner to ask
 cli-effort-needs-a-level = --effort requires one of { $levels }
 cli-unexpected-argument = unexpected argument: { $argument }
 cli-task-required = a task is required
@@ -2532,6 +2535,7 @@ verb-job-output = Job
 verb-spawn-agent = Delegate
 verb-schedule-next = Schedule
 verb-watch-file = Watch
+verb-advisor = Advise
 verb-mcp-call = MCP
 verb-unknown = Tool
 

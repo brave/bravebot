@@ -60,6 +60,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--plain` | a session in lines, taking nothing from the terminal ([below](#--plain)) |
 | `--mode <turn\|manifest>` | how a one-shot is run; `turn` (the default) decides step by step, `manifest` plans the whole run first ([below](#--mode-turnmanifest)) |
 | `--model <name>` | the model this run asks for; outranks every other way one is named ([below](#--model-name)) |
+| `--advisor <name>` | a model the planner may put a question to, through the `advisor` tool ([below](#--advisor-name)) |
 | `--effort <level>` | how hard this run asks the model to think; outranks every other way one is named ([below](#--effort-level)) |
 | `--settings <path>` | read one more settings file, above every layer found ([below](#--settings-path)) |
 | `--agent <name>` | address every turn to one of your definitions, as `/agent` does for one ([below](#--agent-name)) |
@@ -139,6 +140,21 @@ also **exits non-zero**, which is the part a script is certain to read. A run th
 takes whatever was recorded or configured and does not fail over it. Two cases are neither reported
 nor failed: an entry that resolves per request, such as `automatic-bravebot`, and a backend asked by
 an opaque handle, which never reports back the name it was given.
+
+## `--advisor <name>`
+
+```sh
+bravebot --advisor opus "plan the migration, then carry it out"
+```
+
+Names a second model the planner may consult during the run. The planner is then offered an
+[`advisor`](tools.md#advisor) tool, which sends the conversation so far and a question the planner
+wrote to that model and returns its reply. Without the flag there is no such tool. The name is read as
+`--model` reads it, so `opus`, `sonnet` and `haiku` name a tier.
+
+`--advisor` with no name, a blank one, a model this machine's managed settings refuse, a model
+nothing is configured to serve, or `--mode manifest` is refused and the run stops before it starts.
+A turn may ask its advisor at most three times. The advisor's tokens are added to the run's total.
 
 ## `--effort <level>`
 
