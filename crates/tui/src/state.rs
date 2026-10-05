@@ -724,6 +724,18 @@ pub struct Yanked {
     lines: bool,
 }
 
+/// A readline kill, as it left the line.
+#[derive(Debug, Clone)]
+struct Kill {
+    /// Whether it took text after the caret, which joins at the end of the kill buffer, rather than
+    /// before it, which joins at the start.
+    forward: bool,
+    /// All that the kills joined so far took.
+    text: String,
+    line: String,
+    caret: usize,
+}
+
 /// A selection that has ended, as the row and the column each of its ends was at, counting from
 /// zero and a column in characters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1290,6 +1302,13 @@ pub struct Session {
     /// one line of thought has nothing to file. Not the system clipboard either, which Ctrl-V owns and
     /// which a person shares with every other window they have open.
     register: Option<Yanked>,
+    /// The last readline kill, so the next one in the same direction joins it rather than replacing
+    /// it.
+    ///
+    /// The line and caret the kill left behind are kept with it, and a kill joins only when both are
+    /// still as they were: any edit or move in between changes one of them, which is how this knows
+    /// the kills were consecutive without every edit having to clear it.
+    last_kill: Option<Kill>,
     /// The last change, for the key that does it again.
     ///
     /// The instruction and what was typed into it, rather than the line it produced, so `.` acts at
@@ -1818,6 +1837,7 @@ impl Session {
             typed_over: Vec::new(),
             typing_over_begins_a_change: false,
             register: None,
+            last_kill: None,
             last_change: None,
             undo: std::collections::VecDeque::new(),
             inserting: None,
@@ -5758,8 +5778,78 @@ impl Session {
         self.history.leave();
         let was = self.caret;
         self.move_word_left();
-        self.input.replace_range(self.caret..was, "");
+        self.kill(self.caret, was, false);
+    }
+
+    /// Delete the word after the caret, with the blanks in front of it.
+    ///
+    /// Nothing at the end of the line, for the reason [`Session::delete_word_before`] does nothing
+    /// at the start of it.
+    pub fn delete_word_after(&mut self) {
+        let was = self.caret;
+        self.move_word_right();
+        let end = std::mem::replace(&mut self.caret, was);
+        if end == was || self.typing_over() {
+            return;
+        }
+        self.abandon_the_selection();
+        self.history.leave();
+        self.kill(was, end, true);
+    }
+
+    /// Take `from..to` out of the line and keep it for [`Session::yank`], joined to what the last
+    /// kill took where this one goes the same way and the line has not changed since.
+    ///
+    /// The register vi's `p` reads, so there is one place for removed text, and it is put back as
+    /// characters whatever the register held before.
+    fn kill(&mut self, from: usize, to: usize, forward: bool) {
+        let taken = self.input[from..to].to_string();
+        // Where the caret was: the callers may have moved it to the far end of the stretch already.
+        let was = if forward { from } else { to };
+        let joined = self.last_kill.take().filter(|last| {
+            last.forward == forward
+                && last.line == self.input
+                && last.caret == was
+                && self
+                    .register
+                    .as_ref()
+                    .is_some_and(|r| !r.lines && r.text == last.text)
+        });
+        let text = match joined {
+            Some(last) if forward => last.text + &taken,
+            Some(last) => taken + &last.text,
+            None => taken,
+        };
+        self.input.replace_range(from..to, "");
+        self.caret = from;
         self.completion = 0;
+        self.register = Some(Yanked {
+            text: text.clone(),
+            lines: false,
+        });
+        self.last_kill = Some(Kill {
+            forward,
+            text,
+            line: self.input.clone(),
+            caret: self.caret,
+        });
+    }
+
+    /// Put the text the last kill or vi's `d` or `y` took back at the caret.
+    ///
+    /// Nothing where nothing has been taken. A marker in it names its attachment again while that is
+    /// still staged, and is text like any other once it is not.
+    pub fn yank(&mut self) {
+        let Some(yanked) = self.register.clone() else {
+            return;
+        };
+        if yanked.text.is_empty() {
+            return;
+        }
+        self.begin_a_change();
+        self.abandon_the_selection();
+        self.input.insert_str(self.caret, &yanked.text);
+        self.caret += yanked.text.len();
     }
 
     /// Delete from the caret back to the start of its line.
@@ -5777,9 +5867,7 @@ impl Session {
         }
         self.abandon_the_selection();
         self.history.leave();
-        self.input.replace_range(start..self.caret, "");
-        self.caret = start;
-        self.completion = 0;
+        self.kill(start, self.caret, false);
     }
 
     /// Delete from the caret to the end of its line.
@@ -5793,8 +5881,7 @@ impl Session {
         }
         self.abandon_the_selection();
         self.history.leave();
-        self.input.replace_range(self.caret..end, "");
-        self.completion = 0;
+        self.kill(self.caret, end, true);
     }
 
     /// Hold the skills a slash word could become while the line holds a slash word, and let them go
@@ -11791,6 +11878,58 @@ mod tests {
             s.sent_pasted().is_empty(),
             "a picture nothing referred to was sent"
         );
+    }
+
+    /// A killed marker comes back as the marker, naming the picture that is still staged.
+    #[test]
+    fn a_killed_marker_yanked_back_names_its_picture_again() {
+        let mut s = session();
+        s.attach(picture(b"pixels"));
+        s.delete_to_line_start();
+        assert_eq!(s.input, "");
+        s.yank();
+        assert_eq!(s.input, "[Image #1]");
+
+        let sent = s.submit().expect("submitted");
+        assert_eq!(sent, "[Image #1]");
+        assert_eq!(s.sent_pasted().len(), 1, "the picture was not sent");
+    }
+
+    /// The kill buffer is vi's register, so `p` puts back what Ctrl-K took, as characters.
+    #[test]
+    fn vi_put_reads_what_a_kill_took() {
+        let mut s = normal("keep drop", 4);
+        s.delete_to_line_end();
+        assert_eq!(s.input, "keep");
+        s.type_char('p');
+        assert_eq!(s.input, "keep drop");
+    }
+
+    /// Ctrl-Y puts back what vi's `d` took, one place for removed text.
+    #[test]
+    fn yank_reads_what_vi_deleted() {
+        let mut s = normal("keep drop", 4);
+        s.type_char('D');
+        s.type_char('A');
+        s.yank();
+        assert_eq!(s.input, "keep drop");
+    }
+
+    /// A vi yank between two kills at the same place is not joined to the kill before it.
+    #[test]
+    fn a_kill_does_not_join_a_vi_yank() {
+        let mut s = session();
+        for c in "one two".chars() {
+            s.type_char(c);
+        }
+        s.delete_word_before();
+        s.register = Some(Yanked {
+            text: "other".to_string(),
+            lines: false,
+        });
+        s.delete_word_before();
+        s.yank();
+        assert_eq!(s.input, "one ");
     }
 
     /// A marker is one thing on the screen, so it is one press to get rid of. Nibbling a character
