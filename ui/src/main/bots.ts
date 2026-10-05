@@ -400,7 +400,7 @@ function ownDirectory(slug: string): string {
 }
 
 /**
- * Where a bot's memory sits inside a folder it works in, as the agent would name it.
+ * Where a bot's memory sits inside its checkout, as the agent would name it.
  *
  * A bot with a definition keeps its memory where the agent keeps every definition's, which the run
  * is told about and reads itself (MEMORY-4). A bot made before definitions existed has none until
@@ -422,7 +422,7 @@ export function definitionMemoryPath(definition: string): string {
   return `.bravebot/memory/${definition}.md`
 }
 
-/** The same, absolutely, for this process to read and seed. */
+/** The same, absolutely, in one of the folders the bot works in, for this process to read and seed. */
 function memoryFile(directory: string, bot: Pick<Bot, 'slug' | 'definition'>): string {
   return join(directory, memoryPath(bot))
 }
@@ -467,6 +467,21 @@ export function noteBotMemory(slug: string, directory: string): void {
   const stamp = memoryStamp(held, directory)
   if (stamp !== held.remembered) saveBot({ ...held, remembered: stamp, quiet: 0 })
   else saveBot({ ...held, quiet: held.quiet + 1 })
+}
+
+/**
+ * Run a change this app makes to a bot's memory without it counting as the bot having written.
+ *
+ * `noteBotMemory` reads a newer file than the mark as the bot writing, which would put off its next
+ * reminder. The mark follows the change only when it was current before it.
+ */
+export function keepingMemoryMark(slug: string, directory: string, change: () => void): void {
+  const before = bot(slug)
+  if (!before) return change()
+  const stamp = memoryStamp(before, directory)
+  change()
+  const after = bot(slug)
+  if (after && after.remembered === stamp) saveBot({ ...after, remembered: memoryStamp(after, directory) })
 }
 
 /**
@@ -535,14 +550,31 @@ export const AFTER_COMPACTION =
  */
 const NAME_MAX = 200
 
+/** What every memory file says about itself, at the top. */
+const MEMORY_NOTE =
+  'Written by the bot itself, and shown in the transcript each time it changes. Anything here is carried into every conversation it has; anything not here is forgotten when the conversation is compacted.'
+
+/** The same note as earlier versions wrote it, broken at about 90 columns. */
+const WRAPPED_MEMORY_NOTE = [
+  'Written by the bot itself, and shown in the transcript each time it changes. Anything here',
+  'is carried into every conversation it has; anything not here is forgotten when the',
+  'conversation is compacted.',
+].join('\n')
+
+/**
+ * The text with the note joined onto one line, or `null` when it does not hold the note exactly as
+ * earlier versions wrapped it. Only that fixed block is replaced; the rest is carried as it is.
+ */
+export function unwrapMemoryNote(text: string): string | null {
+  return text.includes(WRAPPED_MEMORY_NOTE) ? text.replace(WRAPPED_MEMORY_NOTE, () => MEMORY_NOTE) : null
+}
+
 /** What a memory file says before anything has been remembered in it. */
 function emptyMemory(bot: Bot): string {
   return [
     `# ${bot.name.slice(0, NAME_MAX)} — memory`,
     '',
-    'Written by the bot itself, and shown in the transcript each time it changes. Anything here',
-    'is carried into every conversation it has; anything not here is forgotten when the',
-    'conversation is compacted.',
+    MEMORY_NOTE,
     '',
     'Nothing remembered yet.',
     '',

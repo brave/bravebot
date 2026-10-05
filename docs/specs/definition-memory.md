@@ -22,6 +22,7 @@ governs:
   - ui/scripts/bot-directory.test.mjs
   - ui/scripts/bot-grounding.test.mjs
   - ui/scripts/bot-model.test.mjs
+  - ui/scripts/memory-note.test.mjs
 documented-by:
   - docs/website/docs/customize/agents.md
 ---
@@ -71,6 +72,9 @@ which its memory did not change. Its memory is a file in the folder the conversa
 `.bravebot-ui/bots/<slug>.md`, one in each folder it works in, which the briefing names and the bot
 reads and writes with its ordinary tools. The desktop keeps up to thirty earlier versions of each in
 its own data directory, and a person can edit the memory and restore an earlier version from a panel.
+A memory file the desktop seeded for a bot made before definitions existed, and that still holds the
+opening note as earlier versions wrapped it, has the note joined onto one line the first time it is
+read while the bot has no conversation running, and the version it replaces stays in the history.
 
 ## The comparison
 

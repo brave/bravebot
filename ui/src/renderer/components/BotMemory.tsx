@@ -19,7 +19,9 @@ export function BotMemory({ slug, directory }: { slug: string; directory: string
   const [open, setOpen] = useState(false)
   useEffect(() => {
     let gone = false
-    void Promise.all([window.bravebot.readBotMemory(slug, directory), window.bravebot.readMemoryHistory(slug, directory)]).then(([memory, revisions]) => {
+    // In turn, because reading the memory may tidy it, and the version that replaces is in the history.
+    void window.bravebot.readBotMemory(slug, directory).then(async (memory) => {
+      const revisions = await window.bravebot.readMemoryHistory(slug, directory)
       if (!gone) { setText(memory); setHistory(revisions) }
     }).catch(() => { if (!gone) setProblem('Memory could not be loaded.') }).finally(() => { if (!gone) setBusy(false) })
     return () => { gone = true }

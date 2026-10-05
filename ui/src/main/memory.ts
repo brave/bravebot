@@ -2,7 +2,7 @@ import { app } from 'electron'
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { bot, folderOf, memory, memoryPath } from './bots'
+import { bot, folderOf, keepingMemoryMark, memory, memoryPath, unwrapMemoryNote } from './bots'
 import { replaceProjectMemory } from './project-files'
 
 export interface MemoryRevision { at: number; text: string; source: 'agent' | 'user' }
@@ -59,4 +59,26 @@ export function editMemory(slug: unknown, directory: unknown, text: unknown, exp
   if (previous !== null) recordMemory(held.slug, folder, previous, 'agent')
   recordMemory(held.slug, folder, text, 'user')
   return text
+}
+
+/**
+ * Join the note at the top of a memory file that earlier versions wrapped, once.
+ *
+ * Nothing is written unless the file still holds that note exactly. The write replaces the text that
+ * was read, so a bot writing at the same moment wins, and the version it replaces stays in history.
+ * A file that cannot be written now is left as it is and looked at again on the next read.
+ */
+export function tidyMemory(slug: unknown, directory: unknown): void {
+  const held = bot(slug)
+  const folder = held ? folderOf(held, directory) : null
+  if (!held || !folder || held.definition !== null) return
+  const text = memory(held.slug, folder)
+  const tidy = text === null ? null : unwrapMemoryNote(text)
+  if (text === null || tidy === null) return
+  try {
+    keepingMemoryMark(held.slug, folder, () => {
+      replaceProjectMemory(folder, memoryPath(held), tidy, text)
+      recordMemory(held.slug, folder, text, 'agent')
+    })
+  } catch { /* changed since it was read, or not writable */ }
 }

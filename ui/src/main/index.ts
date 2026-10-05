@@ -59,7 +59,7 @@ import { printToPdf } from './export'
 import { applyNativeAppearance } from './theme'
 import { parseAppearance } from '../shared/theme'
 import { readExperience, writeExperience } from './experience'
-import { editMemory, memoryHistory, snapshotMemory, removeMemoryHistory } from './memory'
+import { editMemory, memoryHistory, snapshotMemory, removeMemoryHistory, tidyMemory } from './memory'
 
 /**
  * Which live session belongs to which bot, for the length of this run.
@@ -772,10 +772,14 @@ app.whenReady().then(() => {
   })
 
   // Each names a folder, which is checked against the folders this process recorded for the bot.
-  ipcMain.handle('bravebot:bots:memory', (_event, slug: unknown, directory: unknown) => memory(slug, directory))
+  const botRunning = (slug: unknown) => [...botHandles].some(([handle, owner]) => owner === slug && runningHandles.has(handle))
+  ipcMain.handle('bravebot:bots:memory', (_event, slug: unknown, directory: unknown) => {
+    if (!botRunning(slug)) tidyMemory(slug, directory)
+    return memory(slug, directory)
+  })
   ipcMain.handle('bravebot:bots:memory-history', (_event, slug: unknown, directory: unknown) => memoryHistory(slug, directory))
   ipcMain.handle('bravebot:bots:edit-memory', (_event, slug: unknown, directory: unknown, text: unknown, expected: unknown) => {
-    if ([...botHandles].some(([handle, owner]) => owner === slug && runningHandles.has(handle))) throw new Error('Stop this bot’s running conversations before editing its memory.')
+    if (botRunning(slug)) throw new Error('Stop this bot’s running conversations before editing its memory.')
     return editMemory(slug, directory, text, expected)
   })
 
