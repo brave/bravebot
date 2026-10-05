@@ -4316,6 +4316,12 @@ fn add_directory(
                 session_directory_added,
                 directory = added.display().to_string()
             ));
+            if workspace.ends_checkouts(&added) {
+                session.note(t!(
+                    session_directory_ends_checkouts,
+                    directory = added.display().to_string()
+                ));
+            }
         }
         Err(error) => session.note(t!(
             session_directory_not_added,
@@ -19937,6 +19943,47 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// CHECKOUT-7. `/add-dir` on a directory that holds the working directory says, when it is
+    /// opened and not when a spawn is refused, that no delegate is given a checkout while it is
+    /// open. A directory that holds nothing of the kind says nothing of the sort.
+    #[test]
+    fn add_dir_of_a_directory_holding_the_project_says_it_ends_checkouts() {
+        let root = crate::testutil::scratch_dir("bravebot-add-dir-ends-checkouts-test");
+        let project = root.join("project");
+        let notes = root.join("notes");
+        for directory in [&project, &notes] {
+            std::fs::create_dir_all(directory).expect("scratch");
+        }
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        let mut trust = TrustStore::new(workspace.root());
+        let mut session = Session::new("none");
+
+        add_directory(
+            &mut session,
+            &mut workspace,
+            &mut trust,
+            &notes.display().to_string(),
+        );
+        let said: Vec<&str> = session.transcript.iter().map(|n| n.text.as_str()).collect();
+        assert!(
+            said.iter().all(|text| !text.contains("no delegate")),
+            "{said:?}"
+        );
+
+        add_directory(
+            &mut session,
+            &mut workspace,
+            &mut trust,
+            &root.display().to_string(),
+        );
+        let said = &session.transcript.last().expect("a note").text;
+        assert!(
+            said.contains("no delegate is given a checkout while it is open"),
+            "{said}"
+        );
+        assert!(said.contains("/add-dir close"), "{said}");
     }
 
     /// TRUST-9: `/add-dir close` takes back both halves `/add-dir` gave, the reach and the rule, for

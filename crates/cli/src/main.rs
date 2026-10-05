@@ -847,8 +847,13 @@ fn run_task(
     // Fatal rather than said and carried on with. A session leaves the person to retype it; a
     // script that asked to reach a directory and did not gets a turn that fails somewhere further
     // in, over a file it was told it could open.
-    if let Err(problem) = open_directories(&mut workspace, &directories) {
-        return stopped_before_the_turn(as_json, Ending::Argument, problem);
+    match open_directories(&mut workspace, &directories) {
+        Ok(notices) => {
+            for notice in notices {
+                eprintln!("{}", t!(cli_notice, notice = notice));
+            }
+        }
+        Err(problem) => return stopped_before_the_turn(as_json, Ending::Argument, problem),
     }
 
     // The rules the settings file carried, read before the definition is matched so the match
@@ -1409,17 +1414,31 @@ fn rules_for_a_one_shot_run(
 /// `~` is left to the shell, which expands it before this ever sees the path. A path that is not
 /// absolute, does not exist, is not a directory, or lies inside the working one is refused by the
 /// workspace, and the refusal names which.
-fn open_directories(workspace: &mut Workspace, directories: &[String]) -> Result<(), String> {
+///
+/// Returns what the person is to be told about the ones that opened: a directory holding the
+/// working directory leaves no delegate a checkout (CHECKOUT-7), and a run is where nobody is
+/// watching to find that out.
+fn open_directories(
+    workspace: &mut Workspace,
+    directories: &[String],
+) -> Result<Vec<String>, String> {
+    let mut notices = Vec::new();
     for directory in directories {
-        workspace.add_directory(directory).map_err(|problem| {
+        let added = workspace.add_directory(directory).map_err(|problem| {
             t!(
                 session_directory_not_added,
                 directory = directory,
                 problem = problem.to_string()
             )
         })?;
+        if workspace.ends_checkouts(&added) {
+            notices.push(t!(
+                cli_directory_ends_checkouts,
+                directory = added.display().to_string()
+            ));
+        }
     }
-    Ok(())
+    Ok(notices)
 }
 
 /// The model the definition `--agent` named will ask for, where it names one the command line did
@@ -5962,6 +5981,27 @@ mod tests {
         );
         open_directories(&mut workspace, &[beside.display().to_string()]).expect("opens");
         assert!(workspace.confines(&file).is_ok(), "not reachable after");
+    }
+
+    /// CHECKOUT-7. `--add-dir` of a directory holding the working directory says so, since a run
+    /// is where nobody is watching to find out from a refused spawn; one beside it says nothing.
+    #[test]
+    fn a_directory_holding_the_working_directory_is_said_to_end_checkouts() {
+        let scratch = Scratch::new("add-dir-ends-checkouts");
+        let project = scratch.directory("project");
+        let beside = scratch.directory("beside");
+        let mut workspace = Workspace::new(project).expect("a workspace");
+
+        let notices =
+            open_directories(&mut workspace, &[beside.display().to_string()]).expect("opens");
+        assert!(notices.is_empty(), "{notices:?}");
+        let notices =
+            open_directories(&mut workspace, &[scratch.path.display().to_string()]).expect("opens");
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(
+            notices[0].contains("no delegate is given a checkout while it is open"),
+            "{notices:?}"
+        );
     }
 
     /// A script that asked to reach a directory and did not would otherwise fail somewhere further

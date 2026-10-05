@@ -7015,6 +7015,74 @@ fn a_checkout_refusal_names_the_added_directory_that_holds_the_checkouts() {
     );
 }
 
+/// CHECKOUT-7. `ends_checkouts` is what `/add-dir` and `--add-dir` ask after opening a directory,
+/// and the planner's refusals for it, the read and the checkout, say the same thing about it.
+///
+/// The failures this rejects are a test that asks only whether the working directory is inside the
+/// directory (a sibling would warn too), one that asks whether the directory is inside the working
+/// directory (the home directory would never warn, which is the issue), and the three sentences
+/// drifting into different wordings.
+#[test]
+fn a_directory_that_holds_the_working_directory_is_the_one_that_ends_checkouts() {
+    let holder = Scratch::new("ends-checkouts-holder");
+    let project = holder.path.join("project");
+    let sibling = holder.path.join("sibling");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&sibling).unwrap();
+    std::fs::write(holder.path.join("todo.txt"), "a list").unwrap();
+    std::fs::write(sibling.join("todo.txt"), "a list").unwrap();
+    let state = Scratch::new("ends-checkouts-state");
+    repository::commit_files(&project, &[("README", "hello\n")], "first");
+
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    let beside = workspace
+        .add_directory(&sibling.to_string_lossy())
+        .expect("a sibling opens");
+    assert!(
+        !workspace.ends_checkouts(&beside),
+        "a sibling holds nothing of the kind"
+    );
+    let holding = workspace
+        .add_directory(&holder.path.to_string_lossy())
+        .expect("the parent opens");
+    assert!(workspace.ends_checkouts(&holding));
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    let checkout = workspace
+        .checkout_for(
+            &checkout_policy(&workspace, &mut RecordingSink::new(), &["."], &[]),
+            &state.path,
+            d1(),
+        )
+        .expect_err("the parent is open");
+    let wording = "while one is open no delegate is given a checkout";
+    assert!(checkout.contains(wording), "{checkout}");
+
+    let fresh = Workspace::new(&project).expect("workspace");
+    let held = holder.path.join("todo.txt").display().to_string();
+    let read = fresh
+        .read(&mut policy, &Labelled::trusted(held.clone()))
+        .expect_err("outside")
+        .describe(&held);
+    let write = fresh
+        .write(
+            &mut policy,
+            &Labelled::trusted(held.clone()),
+            &Labelled::trusted("text".to_string()),
+        )
+        .expect_err("outside")
+        .describe(&held);
+    assert!(read.contains(wording), "{read}");
+    assert!(write.contains(wording), "{write}");
+}
+
 /// CHECKOUT-7. A read refused for being outside the workspace warns, where opening its directory
 /// would open one that holds the working directory, that doing so leaves no delegate a checkout.
 /// The drop comes first for a read, since it reaches the file and costs nothing.

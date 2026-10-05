@@ -184,7 +184,7 @@ impl WorkspaceError {
                 "'{named}' resolves outside the workspace; refusing to touch it. The person can \
                  open the directory it is in, with /add-dir in the terminal or --add-dir when \
                  starting bravebot, after which this path reaches it. That directory holds the \
-                 working directory, and while one is open no delegate is given a checkout"
+                 working directory, and {ENDS_CHECKOUTS}"
             ),
             Self::Escapes {
                 remedy: Remedy::DropOrOpenEndsCheckouts,
@@ -194,7 +194,7 @@ impl WorkspaceError {
                  drop the file on the window to have it read with their next message. Opening the \
                  directory it is in, with /add-dir in the terminal or --add-dir when starting \
                  bravebot, would also reach it, but that directory holds the working directory, \
-                 and while one is open no delegate is given a checkout"
+                 and {ENDS_CHECKOUTS}"
             ),
             Self::Escapes {
                 remedy: Remedy::Kept,
@@ -294,6 +294,10 @@ impl WorkspaceError {
         }
     }
 }
+
+/// What opening a directory that holds the working directory costs, in the words every sentence
+/// the planner reads uses for it (CHECKOUT-7).
+const ENDS_CHECKOUTS: &str = "while one is open no delegate is given a checkout";
 
 /// What a person can do so that a path refused for leaving the workspace reaches its file.
 ///
@@ -894,8 +898,8 @@ impl CheckoutOverlap<'_> {
             Self::InsideWorkingDirectory => "it would sit inside the working directory".to_string(),
             Self::AddedHoldsWorkingDirectory(dir) => format!(
                 "'{}', a directory opened beside the working directory, holds the working \
-                 directory, so a delegate in a checkout would still reach the working directory \
-                 through it. {}",
+                 directory, so {ENDS_CHECKOUTS}, since a delegate in a checkout would still reach \
+                 the working directory through it. {}",
                 dir.display(),
                 way_out(dir)
             ),
@@ -1285,6 +1289,14 @@ impl Workspace {
             self.added.push(canonical.clone());
         }
         Ok(canonical)
+    }
+
+    /// Whether `directory`, as [`Workspace::add_directory`] returned it, holds the working
+    /// directory, so that no delegate is given a checkout while it is open (CHECKOUT-7).
+    ///
+    /// Decided from the two paths alone, both of which a person typed.
+    pub fn ends_checkouts(&self, directory: &Path) -> bool {
+        self.root.starts_with(directory)
     }
 
     /// The directories added by name, in the order they were added.
