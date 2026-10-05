@@ -203,7 +203,9 @@ clause asks of one; what it rules out is a search deciding for itself.
 ### SEARCH-7: vendored and generated directories are not walked
 
 A fixed list of directory names is skipped: version control, build output, caches, and dependencies
-fetched or vendored. This is size hygiene applied to **names**, and nothing is read to decide it.
+fetched or vendored, and `.claude/worktrees`, where linked worktrees live: each is a full copy of
+the tree, so walking it reports every match twice. A search that names a directory inside it still
+reads it; only a walk from above skips it. This is size hygiene applied to **names**, and nothing is read to decide it.
 
 **Why.** A tree that mirrors its dependencies holds far more of them than of its own code, so a
 walk that counts them reaches its cap without reaching the project. A real search for a common word
@@ -216,6 +218,7 @@ its own files from a search is a tree that can hide them from review. The names 
 ones no project uses for its own sources, so skipping them needs nobody's word for it.
 
 `verified-by: bravebot_agent::workspace::a_search_skips_vendored_dependencies`
+`verified-by: bravebot_agent::workspace::a_search_skips_a_linked_worktree_under_claude_worktrees`
 
 <a id="SEARCH-8"></a>
 ### SEARCH-8: a search stopped by the match cap says where to continue from
