@@ -239,6 +239,38 @@ test('a bot made before definitions is migrated once, and the briefing never nam
   } finally { rmSync(profile, { recursive: true, force: true }) }
 })
 
+test('a migrated bot is asked to carry its old notes over only in the folder they were recorded in', () => {
+  const profile = mkdtempSync(join(tmpdir(), 'bravebot-carry-over-'))
+  const source = buildSync({ entryPoints: ['src/main/bots.ts'], bundle: true, write: false, platform: 'node', format: 'cjs', external: ['electron'] }).outputFiles[0].text
+  const module = { exports: {} }
+  const mockedRequire = (id) => id === 'electron' ? { app: { getPath: () => profile } } : require(id)
+  new Function('require', 'module', 'exports', source)(mockedRequire, module, module.exports)
+  const { owesCarryOver, carryOverPrompt } = module.exports
+  const first = 'a1b2c3d4-0000-4000-8000-000000000001'
+  const second = 'a1b2c3d4-0000-4000-8000-000000000002'
+  try {
+    const fresh = { ...parseBots({ bots: [{ ...definition }] }).bots[0], definition: null, conversations: [] }
+    const worked = { ...fresh, conversations: [{ id: first, directory: '/work/site' }, { id: second, directory: '/work/other' }] }
+    // The record holds the home folder for a bot that has never worked anywhere else, and the folder
+    // of its first conversation for one that has: a turn in any other folder names a file the
+    // record does not cover.
+    assert.equal(owesCarryOver(fresh, '/tmp/bot-homes/web-dev'), true)
+    assert.equal(owesCarryOver(fresh, '/work/site'), false)
+    assert.equal(owesCarryOver(worked, '/work/site'), true)
+    assert.equal(owesCarryOver(worked, '/work/other'), false)
+    assert.equal(owesCarryOver(worked, '/tmp/bot-homes/web-dev'), false)
+    // A bot that has a definition has already been migrated, or never needed it.
+    assert.equal(owesCarryOver({ ...worked, definition: 'web-dev-2' }, '/work/site'), false)
+
+    // The turn names the old file to read and the definition's memory to write, and they are two
+    // different files: a prompt built from one path would ask the bot to copy a file onto itself.
+    const prompt = carryOverPrompt({ slug: 'web-dev', definition: 'web-dev-2' })
+    assert.ok(prompt.includes('`.bravebot-ui/bots/web-dev.md`'), prompt)
+    assert.ok(prompt.includes('`.bravebot/memory/web-dev-2.md`'), prompt)
+    assert.ok(!prompt.includes('—'), 'no em-dash')
+  } finally { rmSync(profile, { recursive: true, force: true }) }
+})
+
 // Rejects a migration that drops the folder an old bot was pinned to: its conversations ran there,
 // so pairing them with the new home would send the next turn to a folder with none of its memory.
 test('a bot written before home folders keeps its conversations in the folder it was pinned to', () => {

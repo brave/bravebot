@@ -42,11 +42,11 @@ file says so at the place it changes.
 The memory and the checkout are built, [MEMORY-2](#MEMORY-2) to [MEMORY-7](#MEMORY-7), and so are
 writing a bot's definition, [MEMORY-8](#MEMORY-8), rewriting it on an edit,
 [MEMORY-9](#MEMORY-9), addressing it in a bot's turns, [MEMORY-10](#MEMORY-10), for a bot that has
-one, and the part of [MEMORY-11](#MEMORY-11) that migrates an existing bot. The rest of the desktop
-half is not: [MEMORY-1](#MEMORY-1), the composed turn in [MEMORY-11](#MEMORY-11), the briefing and
-quiet-turn counter a bot made before definitions still uses, and the
-sentences in [MEMORY-4](#MEMORY-4) about the desktop's panel are a design, written to be agreed
-before that work starts.
+one, and [MEMORY-11](#MEMORY-11), which migrates an existing bot and asks it to carry its old notes
+over. [MEMORY-1](#MEMORY-1), the split between the file and the desktop's store, is what those
+build. Not built are the briefing and quiet-turn counter a bot made before definitions still uses
+until it is opened, and the sentences in [MEMORY-4](#MEMORY-4) about the desktop's panel, which are a
+design, written to be agreed before that work starts.
 
 ## What exists today
 
@@ -120,9 +120,11 @@ write one.
 when the bot is made ([MEMORY-3](#MEMORY-3)), since its memory is named after it. What a person
 calls the bot is free text they may change, like its avatar.
 
-Nothing builds this yet.
+[MEMORY-8](#MEMORY-8) to [MEMORY-11](#MEMORY-11) build this split.
 
-`verified-by: none`
+`verified-by: bravebot_agent::agents::making_a_bot_writes_a_worker_keeping_a_project_memory`
+`verified-by: bravebot_agent::agents::nothing_typed_into_the_form_becomes_a_key`
+`verified-by: by-construction (the desktop's store is ui/src/shared/bots.ts, written only by the main process, and the definition file is written only by the agent crate; ui/scripts/bot-model.test.mjs pins that a window cannot name the definition a turn is addressed to and that a row keeps only a definition name that is a slug; make check-ui runs it)`
 
 ## The memory
 
@@ -566,11 +568,11 @@ one, named after its old slug where that name is free. Its old memory file is le
 nothing reads its bytes on the way. Its path goes into the record [MEMORY-5](#MEMORY-5) keeps, so
 from then on it is untrusted in every session, as a memory a write left untrusted is.
 
-The first turn after that is one the desktop composes and addresses. It tells the run where the old
-notes are, in the words of the turn and never as a file handed to it, and asks it to carry what
-still holds into its memory. The run's read of them is quarantined, so a person is shown them, with
-what a check found in all of them, and asked before they reach the run
-([TRUST-8](trust-map.md#TRUST-8)).
+The turn that opened the bot runs addressed to the new definition. When it ends, the next turn is one
+the desktop composes and addresses. It tells the run where the old notes are, in the words of the
+turn and never as a file handed to it, and asks it to carry what still holds into its memory. The
+run's read of them is quarantined, so a person is shown them, with what a check found in all of
+them, and asked before they reach the run ([TRUST-8](trust-map.md#TRUST-8)).
 
 **Why untrusted whatever the map would say.** A write in an earlier session may have left them
 untrusted, and the map that recorded it is gone ([TRUST-6](trust-map.md#TRUST-6)). Until its fix,
@@ -584,8 +586,7 @@ the run writes from notes a person let it read is what it writes from any file i
 **Why not handed as a file.** A file handed to a turn is one a person is recorded as vouching for,
 and nobody vouched for these notes.
 
-Nothing builds the composed turn yet. The migration and the briefing are built, and the turn waits
-for [MEMORY-10](#MEMORY-10), which addresses the bot's turns:
+All of it is built:
 
 - `bravebot_agent::agents::migrate_definition` gives the bot its definition as `make_definition`
   does and records the path `.bravebot-ui/bots/<old slug>.md` under the folder the bot's first conversation ran in, or its home folder where it has none, in the record
@@ -595,11 +596,16 @@ for [MEMORY-10](#MEMORY-10), which addresses the bot's turns:
   bridge method `bot.migrate`, which the window cannot call.
 - The desktop asks for it before it sends any turn for a bot whose row has no definition, keeps the
   name the agent answers with, and sends nothing if that fails, so it tries again on the next
-  turn. Once the row has a definition, no briefing or composed turn names the old path, and the
-  briefing names the definition's memory, `.bravebot/memory/<name>.md`, in its place. The desktop
-  no longer makes the old file for a bot that has a definition.
-- Until [MEMORY-10](#MEMORY-10), the turns of a migrated bot are still unaddressed, so nothing
-  yet tells the run where the old notes are or asks it to carry them over.
+  turn. Once the row has a definition, no briefing or composed turn names the old path except the
+  one below, and the briefing names the definition's memory, `.bravebot/memory/<name>.md`, in its
+  place. The desktop no longer makes the old file for a bot that has a definition.
+- When the turn that migrated the bot ends, the desktop sends the composed turn, tagged
+  `consolidation` so that a reopened transcript draws it as the housekeeping it is. The turn names
+  the old file, `.bravebot-ui/bots/<old slug>.md`, and the definition's memory. It is sent only in
+  the folder the old path was recorded under, since the record holds no other folder's notes.
+  Where a compaction's consolidation is owed at the same time, that goes first and this one follows
+  the next turn that ends without one. A turn owed when the window or the session closes is not
+  sent: the old notes stay recorded as untrusted and a person can ask the bot for them.
 
 `verified-by: bravebot_agent::agents::migrating_a_bot_records_its_old_memory_as_untrusted_and_leaves_it_alone`
 `verified-by: bravebot_agent::agents::a_migrated_bot_given_another_name_still_records_its_old_slug`
@@ -607,7 +613,7 @@ for [MEMORY-10](#MEMORY-10), which addresses the bot's turns:
 `verified-by: bravebot_agent::memory::a_persons_yes_to_the_old_notes_takes_them_out_of_the_record`
 `verified-by: bravebot_ui_bridge::definitions::a_bot_made_before_definitions_is_migrated_and_its_old_memory_recorded`
 `verified-by: bravebot_ui_bridge::definitions::a_refused_migration_writes_nothing`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-model.test.mjs pins its half: a bot with no definition is migrated through bot.migrate with the folder its first conversation ran in or its home folder, the row keeps only a name the agent answers with that is a slug, a failed migration leaves the row as it was, a bot with a definition is not migrated again, and the composed prompt names the definition's memory and never the old path; make check-ui runs it)`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-model.test.mjs pins its half: a bot with no definition is migrated through bot.migrate with the folder its first conversation ran in or its home folder, the row keeps only a name the agent answers with that is a slug, a failed migration leaves the row as it was, a bot with a definition is not migrated again, the compaction's composed prompt names the definition's memory and never the old path, the carry-over prompt names both the old file and the definition's memory, and a turn owes the carry-over only for a bot with no definition in the folder its old notes were recorded under; make check-ui runs it)`
 
 ## Open questions
 
