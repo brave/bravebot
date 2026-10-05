@@ -70,6 +70,13 @@ comes back. A picture read into a `data:` URI is held to the working directory a
 the user added exactly as a page of text is: what the file turns out to contain is not a reason to
 resolve its path differently.
 
+A path the planner writes with a leading `~` is the person's home directory, expanded before the
+confinement is decided ([TRUST-10](../trust-map.md#TRUST-10)), so a file in an opened home is reached
+by it and one in a home nobody opened is refused as outside the workspace.
+
+`verified-by: bravebot_agent::workspace::a_leading_tilde_reaches_a_file_in_an_opened_home`
+`verified-by: bravebot_agent::workspace::a_leading_tilde_is_refused_when_the_home_is_not_opened`
+
 `verified-by: bravebot_core::policy::a_model_proposal_can_be_promoted_for_a_confined_read`
 `verified-by: bravebot_core::policy::a_read_and_a_write_leave_different_trails`
 `verified-by: bravebot_agent::turn::a_model_cannot_escape_the_workspace`
