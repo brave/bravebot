@@ -21190,11 +21190,6 @@ mod tests {
         let (workspace, mut session, mut stored, conversation, mut answers) =
             a_session_to_branch(&root);
         let prompt = "write a line saying hello into notes.txt";
-        session.arm_watch(
-            "notes.md",
-            "/work",
-            bravebot_agent::watch::Looked::Saw("first".to_string()),
-        );
 
         let original = stored.id().to_string();
         let original_path = sessions::project_directory(&root)
@@ -21225,10 +21220,6 @@ mod tests {
         assert!(
             session.rewind_points().is_empty(),
             "the copy kept the original's rewind points"
-        );
-        assert!(
-            session.watches().is_empty(),
-            "a watch carried over to the copy"
         );
         let said = session.transcript.last().expect("a note").text.clone();
         assert!(
@@ -21354,6 +21345,49 @@ mod tests {
         assert!(
             session.goal().is_none(),
             "the goal carried over to the copy"
+        );
+    }
+
+    /// SESSION-31: a watch is not written down, so the copy has none, and the person who armed it
+    /// is told it ended. The setup's loop is stopped first, as a loop and a watch do not stand
+    /// together.
+    #[test]
+    fn branching_a_session_with_a_watch_ends_it_and_says_so() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-branch-watch");
+        std::fs::create_dir_all(&root).expect("create");
+        let (workspace, mut session, mut stored, conversation, mut answers) =
+            a_session_to_branch(&root);
+        session.stop_loop();
+        session.arm_watch(
+            "notes.md",
+            "/work",
+            bravebot_agent::watch::Looked::Saw("first".to_string()),
+        );
+        assert_eq!(session.watches().len(), 1, "the watch was not armed");
+
+        assert!(branch_session(
+            &mut session,
+            &mut stored,
+            &conversation,
+            &mut answers,
+            &workspace,
+            &[],
+            "",
+        ));
+
+        assert!(
+            session.watches().is_empty(),
+            "a watch carried over to the copy"
+        );
+        assert!(
+            session
+                .transcript
+                .iter()
+                .any(|entry| entry.text == t!(watches_stopped, count = 1)),
+            "the watch ended in silence"
         );
     }
 

@@ -1037,6 +1037,7 @@ into a conversation it was not started in.
 `verified-by: bravebot_tui::app::branching_a_session_with_no_turn_says_so_and_stays_put`
 `verified-by: bravebot_tui::app::the_branch_command_waits_for_the_turn_in_flight`
 `verified-by: bravebot_tui::app::branching_a_session_with_a_goal_takes_the_goal_off`
+`verified-by: bravebot_tui::app::branching_a_session_with_a_watch_ends_it_and_says_so`
 `verified-by: bravebot_tui::app::a_branch_keeps_what_the_record_holds_and_forgets_the_rest`
 `verified-by: bravebot_tui::app::branching_is_refused_while_the_session_keeps_a_checkout`
 `verified-by: bravebot_tui::app::the_branch_command_carries_its_name`
