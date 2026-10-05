@@ -113,7 +113,13 @@ export function SettingsView({ page, onPage, onBack, session, chosen, onAppearan
   )
 }
 
-/** Whether a Leo menu or dropdown list is open, which closes on the same Escape itself. */
+/**
+ * Whether a Leo menu or dropdown list is open, which closes on the same Escape itself.
+ *
+ * A dropdown keeps its list in the page while it is closed, inside a `hidden` wrapper, so finding
+ * the list is not enough.
+ */
 function menuOpen(): boolean {
-  return [...document.querySelectorAll('leo-buttonmenu, leo-dropdown')].some((menu) => menu.shadowRoot?.querySelector('[role="menu"]'))
+  return [...document.querySelectorAll('leo-buttonmenu, leo-dropdown')]
+    .some((menu) => menu.shadowRoot?.querySelector('[role="menu"]')?.checkVisibility() === true)
 }
