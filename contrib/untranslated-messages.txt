@@ -7,6 +7,11 @@
 # No count is kept here. Two branches that each translate a message both edit the count, so it
 # conflicts where the lists themselves merge cleanly, and a count nothing reads is wrong quietly.
 
+fr:caffeinate-ended
+fr:caffeinate-explained
+fr:caffeinate-off
+fr:caffeinate-on
+fr:caffeinate-unavailable
 fr:checkouts-detached-pushed
 fr:checkouts-detached-unpushed
 fr:checkouts-head-unread
@@ -15,5 +20,6 @@ fr:checkouts-size
 fr:checkouts-size-partial
 fr:checkouts-size-unmeasured
 fr:checkouts-unpushed
+fr:command-caffeinate
 fr:gigabytes
 fr:kilobytes

@@ -1873,6 +1873,21 @@ panel-hint = { $chord } info
 panel-hide = { $chord } hide panel
 # Left in the transcript when the info panel's key is pressed on a terminal too narrow for it.
 panel-too-narrow = The info panel needs a terminal at least { $columns } columns wide.
+# Left in the transcript by the first /caffeinate, which turns nothing on.
+caffeinate-explained =
+    /caffeinate keeps the computer from going to sleep while a turn runs or a loop waits for its
+    next tick, and lets it sleep again once nothing is pending. The display can still turn off and
+    the screen can still lock, but the machine keeps running, with your credentials on it, while
+    you are away. Turn it on only where your device policy allows that. Type /caffeinate again to
+    turn it on.
+# Left in the transcript when /caffeinate turns on, and when it turns off.
+caffeinate-on = the computer is kept awake while a turn runs or a loop waits
+caffeinate-off = the computer may sleep again
+# Left in the transcript when the program that holds off sleep would not start, which turns
+# /caffeinate off.
+caffeinate-unavailable = /caffeinate is unavailable: `{ $program }` could not be started ({ $reason })
+# Left in the transcript when that program exited by itself, which turns /caffeinate off.
+caffeinate-ended = /caffeinate is off: `{ $program }` stopped holding the computer awake
 # The info panel's section headings.
 panel-session = Session
 panel-goal = Goal
@@ -1946,6 +1961,7 @@ command-goal = Keep working until a condition you set is judged met
 command-watch = List the files this session is watching, and stop one by its number
 command-jobs = List this turn's background jobs, and stop one by its name
 command-panel = Show or hide the info panel beside the transcript
+command-caffeinate = Keep the computer awake while a turn or loop is pending
 command-checkouts = List the checkouts delegates kept, and remove one by its number
 command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
 command-agent = Run one of your definitions on a task, by its name

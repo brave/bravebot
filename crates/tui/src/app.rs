@@ -153,6 +153,9 @@ const JOBS_COMMAND: &str = "/jobs";
 /// The line that opens or closes the info panel, as its key does.
 const PANEL_COMMAND: &str = "/panel";
 
+/// The line that turns holding off system sleep on or off.
+const CAFFEINATE_COMMAND: &str = "/caffeinate";
+
 /// The line that lists the checkouts delegates kept, and removes one by its number.
 ///
 /// A checkout something was done in outlives its delegate, and nothing else removes it.
@@ -235,7 +238,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 28] {
+pub fn commands() -> [Command; 29] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -343,6 +346,12 @@ pub fn commands() -> [Command; 28] {
             name: PANEL_COMMAND,
             argument: "",
             description: t!(command_panel),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: CAFFEINATE_COMMAND,
+            argument: "",
+            description: t!(command_caffeinate),
             mid_turn: MidTurn::Runs,
         },
         Command {
@@ -1867,6 +1876,10 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     }
     if line.trim() == PANEL_COMMAND {
         session.toggle_panel();
+        return Action::Redraw;
+    }
+    if line.trim() == CAFFEINATE_COMMAND {
+        session.toggle_caffeinate();
         return Action::Redraw;
     }
     if let Some(argument) = argument_to(line, CHECKOUTS_COMMAND) {
@@ -3421,6 +3434,7 @@ fn event_loop(
     session.adopt_vetting(bravebot_core::vetting::asked_for(), settings.auto_vetting());
     session.adopt_keybindings(settings.keybindings());
     session.adopt_panel();
+    session.adopt_caffeinate();
     crate::title::adopt(
         settings.terminal_title(),
         bravebot_core::incognito::engaged(),
@@ -3509,6 +3523,9 @@ fn event_loop(
     let mut drawn_at = Instant::now();
 
     loop {
+        // Every pass, so a hold goes as soon as the last turn ends and the loop stops, and one is
+        // taken for a loop's next tick before the wait for it begins.
+        session.keep_awake();
         // Before the frame and before the next key, so what a slash offers is on the screen as the
         // slash is, and Tab never reaches a list the frame did not show.
         session.settle_skills(|| {
@@ -4067,6 +4084,9 @@ fn event_loop(
                 };
                 let mut sending = Some((prompt, whose));
                 while let Some((prompt, wrote)) = sending {
+                    // Here as well as at the top of the outer loop, which no turn in this chain
+                    // goes back round until the last one ends.
+                    session.keep_awake();
                     let history_start = conversation.recounted().len();
                     // With the record's rules, which the turn about to run will read: without them a
                     // yes this turn gives to a recorded memory would outlive rewinding past it.
@@ -13424,6 +13444,51 @@ mod tests {
         );
     }
 
+    /// CMD-2: `/caffeinate` is a command only as the whole line, so a question about it is a prompt.
+    #[test]
+    fn a_prompt_containing_the_caffeinate_command_is_still_a_prompt() {
+        let mut session = Session::new("none");
+        for c in "what does /caffeinate hold".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("what does /caffeinate hold".to_string())
+        );
+        assert!(!session.caffeinate.is_on());
+    }
+
+    /// CMD-2: a longer word that starts with the command is not the command.
+    #[test]
+    fn a_longer_word_starting_with_caffeinate_is_a_prompt() {
+        let mut session = Session::new("none");
+        for c in "/caffeinated".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("/caffeinated".to_string())
+        );
+    }
+
+    /// CMD-12: the command reaches the session from the line, and says what it does first.
+    #[test]
+    fn the_caffeinate_command_explains_before_it_turns_on() {
+        let mut session = Session::new("none");
+        for c in "/caffeinate".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+        assert!(!session.caffeinate.is_on());
+        assert_eq!(
+            session.transcript.last().expect("a note").text,
+            t!(caffeinate_explained)
+        );
+    }
+
     /// Naming a level on the line takes it without opening the picker.
     #[test]
     fn the_effort_command_carries_its_level() {
@@ -17271,6 +17336,7 @@ mod tests {
         assert_eq!(
             skipping,
             vec![
+                CAFFEINATE_COMMAND,
                 COPY_COMMAND,
                 COST_COMMAND,
                 EFFORT_COMMAND,

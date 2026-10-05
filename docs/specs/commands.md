@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/tui/src/app.rs
   - crates/tui/src/skills.rs
+  - crates/tui/src/caffeinate.rs
 guards:
   - symbol: commands
 documented-by: docs/website/docs/reference/commands.md
@@ -22,7 +23,7 @@ trust map's, in [trust-map.md](trust-map.md); `/compact` is [compaction.md](comp
 conversation never sees, and where its answer is drawn is [watching.md](watching.md)'s;
 `/manifest` starts the other kind of run, which is [manifest.md](manifest.md)'s. The `!` prompt is
 a different surface entirely and is [shell-mode.md](shell-mode.md). `/copy` has no other spec to
-belong to, so what it copies is CMD-11.
+belong to, so what it copies is CMD-11, and neither has `/caffeinate`, so what it holds is CMD-12.
 
 **Skills are offered here, and are never commands.** A slash word is offered the skills a turn
 starting now would advertise to the planner, beneath the commands at the start of a line and alone
@@ -95,6 +96,8 @@ stay a question. Prefix matching would have made `/add-dirs are useful` open a d
 `verified-by: bravebot_tui::app::a_prompt_containing_the_btw_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_longer_word_starting_with_btw_is_a_prompt`
 `verified-by: bravebot_tui::app::the_bare_btw_command_is_still_the_command`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_caffeinate_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::a_longer_word_starting_with_caffeinate_is_a_prompt`
 
 
 <a id="CMD-3"></a>
@@ -256,7 +259,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches only what the session keeps | `/cost`; `/status`; `/copy`; `/rename`, `/issue` and `/pr`; `/forget-trust`; `/theme <name>` and `/effort <level>`; `/watch` and `/jobs` in every form; `/panel`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| touches only what the session keeps | `/cost`; `/status`; `/copy`; `/rename`, `/issue` and `/pr`; `/forget-trust`; `/theme <name>` and `/effort <level>`; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
 | everything else | every other command, `/theme` and `/effort` alone, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something goes ahead of every line already waiting, and a line behind
@@ -497,6 +500,63 @@ screen and `/export` already writes to a file.
 `verified-by: bravebot_tui::app::a_copys_count_is_taken_down_by_the_next_prompt`
 `verified-by: bravebot_tui::app::copy_reaches_the_replies_a_resumed_session_brought_back`
 `verified-by: bravebot_tui::app::copy_typed_mid_turn_takes_the_reply_without_waiting`
+
+## Keeping the machine awake
+
+<a id="CMD-12"></a>
+### CMD-12: `/caffeinate` holds off idle sleep while work is pending, and only then
+
+`/caffeinate` turns keeping the computer awake on, and typed again turns it off. It is off when a
+session starts. While it is on, the platform's inhibitor runs whenever the session has work pending,
+and is ended once it has none. Work is pending while a turn is in flight and while a loop has a tick
+to come, which includes the wait a turn asked for with `schedule_next`
+([tools/schedule-next.md](tools/schedule-next.md#SCHED-1)). A background job is covered by its turn,
+since none outlives it ([tools/run.md](tools/run.md#RUN-15)). A watch waiting on a file holds
+nothing, and neither does an idle session.
+
+The first `/caffeinate` in a person's state directory turns nothing on. It says what the command
+does, that the display can still turn off and the screen can still lock, and that the machine keeps
+running with their credentials on it while they are away, and it asks for `/caffeinate` again. That
+second one turns it on and writes `confirmed` to `~/.bravebot/caffeinate`, after which it turns on at
+once. An incognito session neither reads nor writes that file, so it explains every time.
+
+The inhibitor is a fixed argument vector, and only idle sleep is held off:
+
+| Platform | Program and arguments |
+|---|---|
+| macOS | `/usr/bin/caffeinate -i -w <this process's id>` |
+| Windows | `powershell -NoProfile -NonInteractive -EncodedCommand <script>`, the script calling `SetThreadExecutionState(ES_CONTINUOUS \| ES_SYSTEM_REQUIRED)` and then reading its standard input to the end |
+| every other platform | `systemd-inhibit --what=idle --who=bravebot --why=/caffeinate --mode=block cat` |
+
+Each one's standard input is a pipe this process holds, and each ends the hold when this process
+ends, so a crash leaves no machine held awake. An inhibitor that will not start, and one that exits
+by itself, is said in the transcript with the program's name, and `/caffeinate` is then off.
+
+**Why.** A laptop that sleeps during a long turn, a loop or a `schedule_next` wait stops the request
+in flight and the programs the turn runs, and the person comes back to a stalled session or a failed
+request. Holding the machine only while work is pending keeps it from sleeping through that and lets
+it sleep as usual otherwise; a watch is left out because it can wait for as long as the session is
+open. The screen still locks, but the machine stays up with whatever credentials it holds, so the
+command is off until a person has read that and asked for it a second time, which is where a person
+working under a device policy finds out whether it is allowed. A hold that could not be kept turns
+the command off, so nobody walks away from a machine they believe is held. Nothing from a model, a
+file or a setting reaches the argument vector, so the inhibitor is not a process running code we did
+not write ([sandboxing.md](sandboxing.md)).
+
+`verified-by: bravebot_tui::state::a_loop_waiting_for_its_next_tick_holds_the_machine_awake`
+`verified-by: bravebot_tui::state::a_turn_holds_the_machine_awake_until_it_ends`
+`verified-by: bravebot_tui::state::a_missing_inhibitor_is_said_and_turns_caffeinate_off`
+`verified-by: bravebot_tui::state::the_first_caffeinate_says_what_it_does_and_holds_nothing`
+`verified-by: bravebot_tui::app::the_caffeinate_command_explains_before_it_turns_on`
+`verified-by: bravebot_tui::caffeinate::an_idle_session_holds_nothing_while_caffeinate_is_on`
+`verified-by: bravebot_tui::caffeinate::pending_work_is_held_and_released_once_it_is_done`
+`verified-by: bravebot_tui::caffeinate::caffeinate_off_holds_nothing_and_turning_it_off_releases`
+`verified-by: bravebot_tui::caffeinate::a_missing_inhibitor_is_reported_and_turns_caffeinate_off`
+`verified-by: bravebot_tui::caffeinate::the_first_caffeinate_explains_and_the_second_turns_it_on`
+`verified-by: bravebot_tui::caffeinate::starting_a_program_that_does_not_exist_fails`
+`verified-by: bravebot_tui::caffeinate::an_inhibitor_that_ended_by_itself_is_reported`
+`verified-by: bravebot_tui::caffeinate::the_macos_inhibitor_holds_idle_sleep_for_this_process_alone`
+`verified-by: bravebot_session::store::only_the_confirmed_word_is_an_agreement_to_caffeinate`
 
 ## Known costs
 

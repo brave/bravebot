@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Slash commands
-description: The twenty-eight commands the interface acts on itself, and the rules every one of them shares.
+description: The twenty-nine commands the interface acts on itself, and the rules every one of them shares.
 ---
 
 # Slash commands
@@ -28,6 +28,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
 | `/jobs` | `[stop <name> [<delegate>]]` | List this turn's background jobs, and stop one by its name |
 | `/panel` | | Show or hide the info panel beside the transcript |
+| `/caffeinate` | | Keep the computer awake while a turn or loop is pending |
 | `/pr` | `[<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
 | `/issue` | `[<url> \| clear]` | Say which issue this session is for, show it, or clear it |
 | `/checkouts` | `[remove <n>]` | List the checkouts delegates kept, and remove one by its number |
@@ -461,6 +462,22 @@ the plan. It needs a terminal at least 100 columns wide, and says so on a narrow
 open is kept for the next session. [Telling sessions apart](../using/sessions.md#telling-sessions-apart)
 has the rest.
 
+## `/caffeinate`
+
+Keeps the computer from going to sleep while a turn runs or a loop waits for its next tick,
+including a wait the model asked for, and lets it sleep again once nothing is pending. Typed again,
+it turns off. It is off when a session starts, and a watch waiting on a file does not count as
+pending.
+
+Only idle sleep is held off. The display can still turn off and the screen can still lock, but the
+machine keeps running with your credentials on it while you are away, so use it only where your
+device policy allows that. The first `/caffeinate` says this and turns nothing on; the second turns
+it on and records your answer in `~/.bravebot/caffeinate`, so later sessions turn it on at once. An
+incognito session asks every time.
+
+It runs `/usr/bin/caffeinate` on macOS, `systemd-inhibit` on Linux and PowerShell on Windows. If the
+program cannot be started, or stops by itself, the transcript says so and `/caffeinate` turns off.
+
 ## `/checkouts [remove <n>]`
 
 Lists the checkouts this session keeps for its delegates, and removes one by its number.
@@ -766,7 +783,7 @@ place of a drop. `/btw`, `/manifest` and `/loop` send their argument, so a marke
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/copy`,
-`/watch`, `/panel`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/watch`, `/panel`, `/caffeinate`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. The exception is a line of the same command already waiting, which they wait behind, so
