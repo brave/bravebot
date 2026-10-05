@@ -525,6 +525,7 @@ tree makes of it then, and a pull in between can turn a directory on it into a l
 `verified-by: bravebot_agent::workspace::a_name_that_only_starts_with_a_tilde_stays_relative`
 `verified-by: bravebot_agent::workspace::a_tilde_with_no_home_is_refused_and_not_read_as_a_directory`
 `verified-by: bravebot_agent::workspace::a_leading_tilde_and_the_home_it_stands_for_give_the_same_trust_key`
+`verified-by: bravebot_agent::workspace::a_path_is_spelled_out_from_the_home_only_by_a_whole_leading_tilde`
 `verified-by: bravebot_agent::workspace::a_missing_relative_file_says_where_it_was_looked_for`
 `verified-by: bravebot_agent::workspace::a_refusal_outside_the_workspace_says_what_the_person_can_do`
 `verified-by: bravebot_agent::workspace::a_refusal_that_opening_a_directory_would_not_cure_offers_nothing`
