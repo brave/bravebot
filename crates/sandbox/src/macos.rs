@@ -1664,6 +1664,20 @@ int main(void) {
             .to_str()
             .expect("the temporary directory is UTF-8");
 
+        // The shims keep what a lookup found in a database in the temporary directory, and a lookup
+        // that misses it runs `xcodebuild`, which a confined process cannot start. Looked up here
+        // unconfined, so that the confined runs below read what is already there rather than
+        // depend on whether this machine had run the lookup before.
+        for tool in ["git", "make"] {
+            let _ = Command::new("/usr/bin/xcrun")
+                .args(["--find", tool])
+                .env_clear()
+                .env("HOME", &home)
+                .env("PATH", "/usr/bin:/bin")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
         for program in ["/usr/bin/git", "/usr/bin/make"] {
             assert!(
                 Command::new(program)
