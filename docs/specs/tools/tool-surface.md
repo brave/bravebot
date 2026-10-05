@@ -31,7 +31,7 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 |---|---|---|---|
 | [`read_file`](read-file.md) | `path`, `path_ref`, `offset`, `limit` | none | the lines, or a reference |
 | [`list_files`](list-files.md) | `directory`, `pattern`, `depth` | none | the paths, or a reference per entry |
-| [`search`](search.md) | `pattern`, `directory`, `include`, `offset`, `case_sensitive` | none | matching lines, or a reference |
+| [`search`](search.md) | `pattern`, `directory`, `include`, `offset`, `case_sensitive`, `context` | none | matching lines, or a reference |
 | [`read_git`](read-git.md) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | the answer, or a reference |
 | [`lsp`](lsp.md) | `operation`, `path`, `line`, `character`, `query` | none | locations, with their text shown or referenced |
 | [`write_file`](write-file.md) | `path`, `path_ref`, `contents_ref` | `contents` | confirmation |

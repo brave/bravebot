@@ -4350,6 +4350,163 @@ fn search_in(
     found.declassify(&proof)
 }
 
+/// [`search_in`] asking for lines around each match.
+fn search_around(
+    root: &std::path::Path,
+    pattern: &str,
+    offset: usize,
+    context: usize,
+) -> bravebot_agent::workspace::Matches {
+    let workspace = Workspace::new(root).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    let found = workspace
+        .grep_around(
+            &mut policy,
+            &[Labelled::trusted(pattern.to_string())],
+            &Labelled::trusted(".".to_string()),
+            None,
+            true,
+            offset,
+            context,
+        )
+        .expect("grep succeeds");
+    let proof = policy.authorise_content_release("test", "matches");
+    found.declassify(&proof)
+}
+
+fn context_lines(found: &bravebot_agent::workspace::Matches) -> Vec<(String, usize, String)> {
+    found
+        .context
+        .iter()
+        .map(|c| (c.path.clone(), c.line, c.text.clone()))
+        .collect()
+}
+
+/// The point of the argument: the lines a hit sits among come back with it, so reading one is not
+/// a second call. A match that is itself near another is shown once, as a match.
+#[test]
+fn a_search_with_context_returns_the_lines_around_a_hit() {
+    let scratch = Scratch::new("grep-context");
+    std::fs::write(
+        scratch.path.join("a.txt"),
+        "one\ntwo\nneedle\nfour\nfive\nsix\nneedle\nneedle\nten\n",
+    )
+    .unwrap();
+
+    let found = search_around(&scratch.path, "needle", 1, 1);
+
+    assert_eq!(
+        found.matches.iter().map(|m| m.line).collect::<Vec<_>>(),
+        vec![3, 7, 8]
+    );
+    let lines: Vec<(usize, &str)> = found
+        .context
+        .iter()
+        .map(|c| (c.line, c.text.as_str()))
+        .collect();
+    assert_eq!(
+        lines,
+        vec![(2, "two"), (4, "four"), (6, "six"), (9, "ten")],
+        "context is the neighbours that did not match, each once"
+    );
+    assert!(!found.context_truncated);
+
+    // And without it nothing changes for a caller that never asked.
+    assert!(
+        search_around(&scratch.path, "needle", 1, 0)
+            .context
+            .is_empty()
+    );
+}
+
+/// Context lines are not matches. If they counted toward the cap or the offset, a search with
+/// context would page differently from one without and a continuation would skip or repeat hits.
+#[test]
+fn context_does_not_count_toward_the_match_cap_or_the_offset() {
+    let scratch = Scratch::new("grep-context-offset");
+    let body: String = (0..201)
+        .map(|n| format!("needle {n}\nfiller {n}\n"))
+        .collect();
+    std::fs::write(scratch.path.join("a.txt"), body).unwrap();
+
+    let found = search_around(&scratch.path, "needle", 1, 1);
+    assert_eq!(
+        found.matches.len(),
+        200,
+        "context took a place among the matches"
+    );
+    assert_eq!(found.paging(), Some(Paging::Continue(201)));
+    assert_eq!(found.matched, 200);
+    assert!(
+        found.context.iter().all(|c| c.line < 401),
+        "the match collected only to detect the cap brought its neighbours along"
+    );
+
+    // Offset 2 starts at the second match, whatever lies between the first and it.
+    let later = search_around(&scratch.path, "needle", 2, 1);
+    assert_eq!(later.matches[0].line, 3);
+    assert_eq!(later.first_match, 2);
+    assert!(
+        context_lines(&later).iter().all(|(_, line, _)| *line >= 2),
+        "the skipped first match was given context"
+    );
+}
+
+/// The match cap does not bound context, so a cap of its own does, and the result has to say when
+/// it bit: matches after it come back with nothing near them, which reads as nothing being there.
+#[test]
+fn a_search_with_more_context_than_the_cap_allows_says_it_is_incomplete() {
+    let scratch = Scratch::new("grep-context-cap");
+    // Matches far enough apart that no two share a neighbour: 200 matches, 20 lines around each.
+    let mut body = String::new();
+    for n in 0..200 {
+        body.push_str(&format!("needle {n}\n"));
+        for filler in 0..20 {
+            body.push_str(&format!("filler {n} {filler}\n"));
+        }
+    }
+    std::fs::write(scratch.path.join("a.txt"), body).unwrap();
+
+    let found = search_around(&scratch.path, "needle", 1, 10);
+    assert_eq!(found.matches.len(), 200);
+    assert!(!found.truncated, "the matches themselves were complete");
+    assert!(found.context_truncated);
+    assert_eq!(found.context.len(), 1_000);
+
+    let small = search_around(&scratch.path, "needle 1$", 1, 2);
+    assert!(
+        !small.context_truncated,
+        "a result under the cap made the claim"
+    );
+}
+
+/// A planner asking for the moon gets the largest context there is, on each side.
+#[test]
+fn a_context_past_the_maximum_is_held_to_it() {
+    let scratch = Scratch::new("grep-context-max");
+    let body: String = (1..=100)
+        .map(|n| {
+            if n == 50 {
+                "needle\n".to_string()
+            } else {
+                format!("l{n}\n")
+            }
+        })
+        .collect();
+    std::fs::write(scratch.path.join("a.txt"), body).unwrap();
+
+    let found = search_around(&scratch.path, "needle", 1, 1_000);
+    let lines: Vec<usize> = found.context.iter().map(|c| c.line).collect();
+    assert_eq!(lines, (40..50).chain(51..=60).collect::<Vec<_>>());
+}
+
 /// The distinction the whole `considered` field exists for. A search whose include glob
 /// selected nothing read no files, so it has learned nothing about the tree, and reported as
 /// "no matches" it reads as proof the pattern is absent. A real turn took that reading and

@@ -14,7 +14,7 @@ that is merely carried.
 |---|---|---|---|
 | [`read_file`](#read_file) | `path`, `path_ref`, `offset`, `limit` | none | only to trust a quarantined file |
 | [`list_files`](#list_files) | `directory`, `pattern`, `depth` | none | no |
-| [`search`](#search) | `pattern`, `directory`, `include`, `offset`, `case_sensitive` | none | no |
+| [`search`](#search) | `pattern`, `directory`, `include`, `offset`, `case_sensitive`, `context` | none | no |
 | [`read_git`](#read_git) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | only if what it would show holds a credential |
 | [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
 | [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, every time** |
@@ -147,6 +147,7 @@ Finds lines matching a **regular expression** in workspace files.
 | `include` | optional glob limiting which files are searched: `*`, `?`, `**` and brace groups like `**/*.{cc,h,mm}`. One with a `/` may be written from `directory` or from the workspace root |
 | `offset` | which match to resume from, to read past the match cap ([below](#a-capped-search-can-be-asked-past-its-cap)) |
 | `case_sensitive` | defaults to true. `(?i)` in the pattern asks for the same thing |
+| `context` | lines to show before and after each match, as `grep -C` does: none unless given, at most 10 |
 
 Supported: literals, `.`, `*`, `+`, `?`, `|`, `(...)`, `(?:...)`, `[...]` with ranges and negation,
 `\d`, `\w`, `\s` and their negations, `^`, `$`, `\b`, `\B`, and a backslash before a metacharacter to
@@ -195,6 +196,13 @@ and says how many matches there were.
 
 Only the match cap can be asked past. A walk that stopped short of the tree or ran out of time is not
 a page to be continued: narrow the pattern or point at a subdirectory instead.
+
+### Lines around a match
+
+With `context`, each match comes with the lines either side of it, written `path-line- text` where a
+match is `path:line: text`, and a `--` line between groups that are not adjacent. Those lines are not
+matches: they count toward neither the match cap nor the offset. A separate cap bounds how many are
+returned, and a search that reached it says it is incomplete.
 
 ### The caps are configurable
 

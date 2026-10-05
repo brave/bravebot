@@ -6106,6 +6106,100 @@ fn a_quarantined_capped_search_says_where_to_continue() {
     );
 }
 
+/// The planner sees the lines around a hit in grep's own shape, with a `--` where two groups are
+/// not adjacent, so a gap is not read as the lines having been next to each other.
+#[test]
+fn a_search_with_context_shows_the_lines_around_each_hit() {
+    let scratch = Scratch::new("search-context");
+    std::fs::write(
+        scratch.path.join("a.txt"),
+        "one\ntwo\nneedle\nfour\nfive\nsix\nseven\nneedle\nnine\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "search",
+            r#"{"pattern":"needle","directory":".","context":1}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("find needle");
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains(
+            "a.txt-2- two\\na.txt:3: needle\\na.txt-4- four\\n--\\na.txt-7- seven\\na.txt:8: needle\\na.txt-9- nine"
+        ),
+        "the context was not laid out as grep lays it out: {second}"
+    );
+}
+
+/// Quarantine is the default footing, and a notice written into a body the planner never reads
+/// reaches nobody. A context cap that bit has to be said beside the reference.
+#[test]
+fn a_quarantined_search_cut_short_of_its_context_still_says_it_is_incomplete() {
+    let scratch = Scratch::new("search-context-quarantined");
+    let mut body = String::new();
+    for n in 0..200 {
+        body.push_str(&format!("needle {n}\n"));
+        for filler in 0..20 {
+            body.push_str(&format!("filler {n} {filler}\n"));
+        }
+    }
+    std::fs::write(scratch.path.join("a.txt"), body).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "search",
+            r#"{"pattern":"needle","directory":".","context":10}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("find needle");
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        !second.contains("a.txt:1: needle"),
+        "the matches reached the model, so this is not the quarantined case: {second}"
+    );
+    assert!(
+        second.contains("incomplete"),
+        "a search cut short of its context made no claim to a planner that may not read it: {second}"
+    );
+}
+
 /// A page past the last match returns nothing, and a search reports nothing when the pattern is
 /// absent. Told apart here, because the planner asked for this offset off the back of a page it
 /// already has: read as absence, the matches it was shown a round ago look withdrawn.

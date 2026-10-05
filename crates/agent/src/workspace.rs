@@ -2493,6 +2493,16 @@ pub const MAX_SEARCH_FILES: usize = 100_000;
 const MAX_MATCHES: usize = 200;
 const MAX_MATCH_LINE: usize = 500;
 
+/// The most lines a search shows on each side of a match, whatever it asked for.
+pub const MAX_SEARCH_CONTEXT: usize = 10;
+
+/// How many context lines one search returns in all, beside the matches.
+///
+/// A cap of its own because the match cap cannot bound them: two hundred matches with the most
+/// context each would be four thousand lines, a result the planner pays for in every later round.
+/// Reached, the search keeps the matches and stops adding the lines around them, and says so.
+const MAX_CONTEXT_LINES: usize = 1_000;
+
 /// How long a search may spend opening files, where nothing configured otherwise.
 ///
 /// The match cap already stops a *productive* search early. This is for the other one: a
@@ -2740,6 +2750,19 @@ pub struct Match {
     pub text: String,
 }
 
+/// A line shown beside a match because it is near one, and not because it matched.
+///
+/// Kept apart from [`Match`] so that it counts toward neither [`MAX_MATCHES`] nor an offset.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextLine {
+    /// Workspace-relative path.
+    pub path: String,
+    /// 1-based line number.
+    pub line: usize,
+    /// The line, truncated to [`MAX_MATCH_LINE`].
+    pub text: String,
+}
+
 /// The result of a directory listing.
 ///
 /// Carries whether a cap was reached, because a model shown exactly [`MAX_ENTRIES`] paths
@@ -2769,6 +2792,14 @@ pub struct Listing {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Matches {
     pub matches: Vec<Match>,
+    /// The lines around the matches that were asked for, in file and line order, without a line
+    /// that is itself one of `matches`. Empty for a search that asked for no context.
+    pub context: Vec<ContextLine>,
+    /// Whether the cap on context lines stopped the lines around some match being added.
+    ///
+    /// The matches are all there; it is the lines beside the later ones that are missing, which
+    /// reads as those matches having nothing near them unless it is said.
+    pub context_truncated: bool,
     /// Whether matches were left out because the match cap was reached.
     pub truncated: bool,
     /// Whether files were left unopened because the walk hit its entry cap.
@@ -3036,6 +3067,35 @@ impl Workspace {
         case_sensitive: bool,
         offset: usize,
     ) -> Result<Labelled<Matches>, WorkspaceError> {
+        self.grep_around(
+            policy,
+            patterns,
+            directory,
+            include,
+            case_sensitive,
+            offset,
+            0,
+        )
+    }
+
+    /// [`grep`](Self::grep) that also returns `context` lines on each side of every match, at most
+    /// [`MAX_SEARCH_CONTEXT`].
+    ///
+    /// The lines come from the file the walk already read, so they carry the label the matches do
+    /// and nothing is opened or decided for them. They are not matches: they count toward neither
+    /// the match cap nor the offset, and a cap of their own bounds how many are returned.
+    #[allow(clippy::too_many_arguments)]
+    pub fn grep_around<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        patterns: &[Labelled<String>],
+        directory: &Labelled<String>,
+        include: Option<&Labelled<String>>,
+        case_sensitive: bool,
+        offset: usize,
+        context: usize,
+    ) -> Result<Labelled<Matches>, WorkspaceError> {
+        let context = context.min(MAX_SEARCH_CONTEXT);
         policy.capture_files(|policy, _capture| {
             policy.before_capability(Capability::FileRead)?;
             for pattern in patterns {
@@ -3144,6 +3204,8 @@ impl Workspace {
             // Collected one past the cap for the same reason as `walk`: reaching the limit has
             // to be distinguishable from happening to have exactly that many matches.
             let mut matches = Vec::new();
+            let mut around = Vec::new();
+            let mut context_truncated = false;
             let mut searched = 0usize;
             let mut timed_out = false;
             // Counted rather than collected until the offset is reached, so asking for a later page
@@ -3168,6 +3230,8 @@ impl Workspace {
                     continue;
                 };
                 searched += 1;
+                let first_in_file = matches.len();
+                let mut hit_lines = Vec::new();
                 for (index, line) in contents.lines().enumerate() {
                     if matches.len() > MAX_MATCHES {
                         break;
@@ -3180,6 +3244,37 @@ impl Workspace {
                         let mut text = line.to_string();
                         truncate_on_char_boundary(&mut text, MAX_MATCH_LINE);
                         matches.push(Match {
+                            path: path.clone(),
+                            line: index + 1,
+                            text,
+                        });
+                        hit_lines.push(index);
+                    }
+                }
+                if context > 0 && !hit_lines.is_empty() && !context_truncated {
+                    // The match collected one past the cap only detects the cap, so no lines are
+                    // kept for it.
+                    if first_in_file + hit_lines.len() > MAX_MATCHES {
+                        hit_lines.truncate(MAX_MATCHES - first_in_file);
+                    }
+                    let lines: Vec<&str> = contents.lines().collect();
+                    let mut wanted = std::collections::BTreeSet::new();
+                    for &hit in &hit_lines {
+                        let from = hit.saturating_sub(context);
+                        let to = (hit + context).min(lines.len() - 1);
+                        wanted.extend(from..=to);
+                    }
+                    for hit in &hit_lines {
+                        wanted.remove(hit);
+                    }
+                    for index in wanted {
+                        if around.len() >= MAX_CONTEXT_LINES {
+                            context_truncated = true;
+                            break;
+                        }
+                        let mut text = lines[index].to_string();
+                        truncate_on_char_boundary(&mut text, MAX_MATCH_LINE);
+                        around.push(ContextLine {
                             path: path.clone(),
                             line: index + 1,
                             text,
@@ -3200,6 +3295,8 @@ impl Workspace {
             Ok(Labelled::new(
                 Matches {
                     matches,
+                    context: around,
+                    context_truncated,
                     truncated,
                     unvisited,
                     timed_out,
