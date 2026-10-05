@@ -27,6 +27,7 @@ governs:
   - ui/src/main/bots.ts
   - ui/src/main/memory.ts
   - ui/src/main/index.ts
+  - ui/src/main/sanitise.ts
   - ui/scripts/bot-directory.test.mjs
   - ui/scripts/session-directory.test.mjs
   - ui/src/renderer/components/Permissions.tsx

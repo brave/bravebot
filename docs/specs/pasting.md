@@ -7,6 +7,7 @@ governs:
   - crates/tui/src/state.rs
   - crates/tui/src/app.rs
   - crates/tui/src/invisible.rs
+  - crates/ui-bridge/src/attached.rs
 guards:
   - symbol: Policy::admit_pasted_image
 documented-by: docs/website/docs/using/context.md
@@ -80,8 +81,14 @@ place of everything the person pasted, with nothing on the screen to say so.
 Never bytes a tool read, never anything a processor produced, never an image a path in model
 output named. Each of those is content, and routing it here would launder it.
 
-**Why.** The justification cannot be checked from the bytes, so it lives at the call site. Today
-that is the TUI's Ctrl-V and nothing else.
+**Why.** The justification cannot be checked from the bytes, so it lives at the call site. There
+are two. One is the TUI's Ctrl-V. The other is the `images` list a front end sends with
+`turn.send`, each entry a `media` type and the picture's bytes as standard base64. The bridge cannot
+see the gesture, so a front end putting a picture there is saying that a person pasted it, as a
+`dropped` path says a person dropped it ([DROP-10](dropping.md#DROP-10)). The bridge holds the list
+to what a string can be held to: a type from [PASTE-3](#PASTE-3)'s set, data that decodes, and no
+more than the terminal's 10 MB cap. Anything else, or a list of any other shape, refuses the send
+rather than starting a turn without the picture.
 
 A picture a tool read has one way into the planner's context, and it is not this one.
 [VET-4](tools/vet-content.md#VET-4)'s `vet_content` lets one picture through where a person handed a
@@ -94,6 +101,8 @@ the person's own message. This gate still admits a paste and nothing else.
 `verified-by: bravebot_agent::turn::a_picture_is_never_shown_to_the_planner`
 `verified-by: bravebot_agent::turn::a_processor_is_given_a_picture_as_a_picture`
 `verified-by: bravebot_agent::turn::a_picture_a_person_opens_and_lets_through_is_attached_after_the_results`
+`verified-by: bravebot_ui_bridge::attaching::a_pasted_picture_reaches_the_model_with_the_prompt`
+`verified-by: bravebot_ui_bridge::attaching::a_picture_the_bridge_cannot_carry_refuses_the_send`
 
 
 <a id="PASTE-3"></a>
@@ -102,7 +111,12 @@ the person's own message. This gate still admits a paste and nothing else.
 It ends up in the data URL, where it is routing, so it comes from a fixed set
 the clipboard reader owns, and never from a filename or from what a tool printed.
 
+The bridge keeps its own fixed set: `image/png`, `image/jpeg`, `image/gif` and `image/webp`. A
+front end's `media` string selects an entry, and the entry is what is sent; a string that matches
+none, `IMAGE/PNG` included, refuses the send.
+
 `verified-by: by-construction (the type is a static string from the clipboard reader's literals to the data URL it is formatted into, so a media type read from a filename or from what a tool printed does not compile)`
+`verified-by: bravebot_ui_bridge::attaching::a_picture_the_bridge_cannot_carry_refuses_the_send`
 
 
 <a id="PASTE-4"></a>
@@ -237,6 +251,7 @@ own input.
 
 `verified-by: bravebot_tui::sessions::a_pasted_picture_is_kept_with_the_session_and_comes_back_on_a_resume`
 `verified-by: bravebot_tui::state::a_resumed_prompt_that_carried_a_picture_shows_its_words_and_not_the_bytes`
+`verified-by: bravebot_ui_bridge::attaching::a_pasted_picture_is_still_in_the_conversation_after_the_session_is_reopened`
 
 <a id="PASTE-10"></a>
 ### PASTE-10: characters a terminal draws as nothing are removed from a paste, and counted

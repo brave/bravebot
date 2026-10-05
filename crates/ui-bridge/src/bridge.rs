@@ -810,6 +810,8 @@ impl Bridge {
             })
             .unwrap_or_default();
         let dropped = dropped_paths(request)?;
+        let attachments = crate::attached::dropped(request)?;
+        let images = crate::attached::pasted(request)?;
         // The definition a bot's conversation is addressed to (MEMORY-10). Named by the desktop's
         // main process from the bot's row, never by a window, and checked to be a name a
         // definition can carry. Once a session has one, every later turn in it is addressed to it
@@ -973,6 +975,8 @@ impl Bridge {
                 composed,
                 files,
                 dropped,
+                attachments,
+                images,
                 recall,
                 turn: turn_number,
                 cancel,
@@ -1005,7 +1009,7 @@ impl Bridge {
         }
         // A named file is context a turn reads before it decides. A run fixes its plan before
         // anything is read (MANIFEST-9), so the file would be dropped. Refuse instead.
-        for named in ["files", "dropped", "attachments"] {
+        for named in ["files", "dropped", "attachments", "images"] {
             let given = request
                 .params
                 .get(named)
@@ -1692,6 +1696,10 @@ struct Work {
     composed: Option<bravebot_agent::conversation::Composed>,
     files: Vec<String>,
     dropped: Vec<String>,
+    /// Pictures and PDFs a person dropped, each with the type its extension names.
+    attachments: Vec<(String, &'static str)>,
+    /// Pictures a person pasted.
+    images: Vec<bravebot_agent::turn::PastedImage>,
     /// Whether this prompt joins the shared recall history, and may name the session.
     recall: bool,
     turn: usize,
@@ -1741,6 +1749,8 @@ fn work(work: Work) {
         composed,
         files,
         dropped,
+        attachments,
+        images,
         recall,
         turn,
         cancel,
@@ -1813,6 +1823,12 @@ fn work(work: Work) {
     }
     for path in &dropped {
         task = task.with_dropped_text(path);
+    }
+    for (path, media) in attachments {
+        task = task.with_attachment(path, media);
+    }
+    for image in images {
+        task = task.with_image(image);
     }
 
     let free = watches

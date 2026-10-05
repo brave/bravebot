@@ -172,7 +172,7 @@ test('saves from a window run one at a time and an edit changes only the fields 
 // would let a window address a turn to any definition on the machine (MEMORY-10).
 test('a window cannot name the definition a turn is addressed to', () => {
   const main = readFileSync('src/main/index.ts', 'utf8')
-  const strip = main.slice(main.indexOf('function sanitised('), main.indexOf('app.whenReady()'))
+  const strip = readFileSync('src/main/sanitise.ts', 'utf8')
   assert.match(strip, /definition: _definition/, 'the strip no longer removes `definition` from a window’s turn.send')
   const sets = [...main.matchAll(/params\.definition\s*=/g)]
   assert.equal(sets.length, 1, 'more than one place sets the definition a turn is addressed to')

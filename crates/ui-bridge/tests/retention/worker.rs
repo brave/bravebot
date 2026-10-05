@@ -58,6 +58,8 @@ fn take_turn(
             composed: None,
             files: vec![],
             dropped: vec![],
+            attachments: vec![],
+            images: vec![],
             recall: false,
             turn: if first { 1 } else { 2 },
             cancel,

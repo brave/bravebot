@@ -624,7 +624,8 @@ fn a_session_is_busy_until_its_run_ends() {
 }
 
 /// A run is refused before it starts where it could not be what was asked for: with no task,
-/// with a file to read first, or in a session nobody has answered the trust question for.
+/// with a file or a picture to read first, or in a session nobody has answered the trust
+/// question for.
 #[test]
 fn a_run_that_cannot_be_what_was_asked_for_is_refused() {
     let scratch = Scratch::new("bridge-manifest-refused");
@@ -636,6 +637,7 @@ fn a_run_that_cannot_be_what_was_asked_for_is_refused() {
         json!({"session": session, "task": "   "}),
         json!({"session": session, "task": TASK, "files": ["notes.md"]}),
         json!({"session": session, "task": TASK, "attachments": ["a1"]}),
+        json!({"session": session, "task": TASK, "images": [{"media": "image/png", "data": "iVBORw0KGgo="}]}),
     ] {
         let refused = front.answered("manifest.run", params.clone());
         assert_eq!(

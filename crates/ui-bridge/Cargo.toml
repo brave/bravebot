@@ -8,6 +8,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# A pasted picture crosses the pipe as base64 and the agent takes its bytes.
+base64 = { workspace = true }
 bravebot-agent = { path = "../agent" }
 # For `Message` and `Role`: cutting a conversation has to look at what a message *is*, and
 # `Snapshot::messages` is a `Vec<Message>` from this crate. Reading the type the agent already
