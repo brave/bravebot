@@ -2,13 +2,14 @@
 // can check without running it.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SENTINEL } from './fuses.mjs'
 import { executableTarget } from './package.mjs'
-import { HELPERS, assetName, buildInstaller, checkBundle, checkHost, installerConfig } from './windows-installer.mjs'
+import { ARCHES, HELPERS, assetName, buildInstaller, checkBundle, checkHost, installerConfig } from './windows-installer.mjs'
 
 const X64 = 0x8664
 const ARM64 = 0xaa64
@@ -17,15 +18,18 @@ const ARM64 = 0xaa64
 const FUSED = '000011011'
 const SHIPPED = '101100011'
 
-// A PE as far as its machine word, then a fuse wire: all an installer reads of an executable.
+// A PE as far as its machine word, and a fuse wire: all an installer reads of an executable. Also
+// what 7-Zip reads to choose the filter it compresses an executable through: the PE32+ magic, and a
+// size over 512 bytes and a multiple of 4, as a real one's is.
 function executable(machine, wire) {
-  const header = Buffer.alloc(0x86)
-  header.write('MZ', 0, 'latin1')
-  header.writeUInt32LE(0x80, 0x3c)
-  header.write('PE\0\0', 0x80, 'latin1')
-  header.writeUInt16LE(machine, 0x84)
-  if (wire === undefined) return header
-  return Buffer.concat([header, Buffer.from(SENTINEL), Buffer.from([1, wire.length]), Buffer.from(wire, 'latin1')])
+  const bytes = Buffer.alloc(0x400)
+  bytes.write('MZ', 0, 'latin1')
+  bytes.writeUInt32LE(0x80, 0x3c)
+  bytes.write('PE\0\0', 0x80, 'latin1')
+  bytes.writeUInt16LE(machine, 0x84)
+  bytes.writeUInt16LE(0x20b, 0x98)
+  if (wire !== undefined) Buffer.concat([Buffer.from(SENTINEL), Buffer.from([1, wire.length]), Buffer.from(wire, 'latin1')]).copy(bytes, 0x200)
+  return bytes
 }
 
 // A bundle with the three executables `scripts/package.mjs` puts in one, and nothing else.
@@ -171,4 +175,50 @@ test('the installer carries the bundle as it was handed over, under the asset na
   assert.equal(versionString(installer, 'ProductVersion'), version)
   assert.equal(versionString(installer, 'FileVersion'), version)
   assert.equal(fixedVersion(installer), `${version}.0`)
+})
+
+// The coders a bundle's archive uses that the installer's own 7-Zip, older than electron-builder's,
+// can decode. It skips a file it cannot, and the install still succeeds.
+const EXTRACTABLE = new Set(['LZMA', 'LZMA2', 'BCJ', 'BCJ2'])
+
+// Each file's coders in a 7z archive, read by electron-builder's own 7-Zip. The listing describes
+// the archive before the first line of dashes, and each file after it.
+function coders(sevenZip, archive) {
+  const listing = execFileSync(sevenZip, ['l', '-slt', archive], { encoding: 'utf8' })
+  const found = {}
+  let path
+  for (const line of listing.slice(listing.search(/^-{10}\r?$/m)).split(/\r?\n/)) {
+    if (line.startsWith('Path = ')) path = line.slice('Path = '.length)
+    else if (line.startsWith('Method = ') && line.length > 'Method = '.length) {
+      found[path] = line.slice('Method = '.length).split(' ').map((coder) => coder.split(':')[0])
+    }
+  }
+  return found
+}
+
+// 7-Zip 23 and later put an ARM64 executable through a filter of its own, which the installer's
+// extractor lacks, so an arm64 install would have no executable in it at all. Each executable
+// has to go through a branch filter both have, or the stand-in would not show the fault.
+// The 7-Zip electron-builder fetches for Windows is the build that cannot open an NSIS installer.
+const OPENS_NO_INSTALLER = { linux: 'needs Wine', win32: "electron-builder's 7-Zip here cannot open an NSIS installer" }
+test("each installer's archive uses only coders the installer's own 7-Zip can decode", { skip: OPENS_NO_INSTALLER[process.platform] ?? false }, async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'windows-installer-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const { getPath7za } = await import('app-builder-lib/out/toolsets/7zip.js')
+  const sevenZip = await getPath7za()
+
+  for (const [arch, machine] of [['amd64', X64], ['arm64', ARM64]]) {
+    const dir = bundle(root, `Brave Bot-win32-${ARCHES[arch]}`, { machine })
+    const installer = await buildInstaller({ bundle: dir, arch, out: join(root, 'out') })
+    const unpacked = join(root, arch)
+    execFileSync(sevenZip, ['x', '-y', `-o${unpacked}`, installer, '$PLUGINSDIR/app-*.7z'], { stdio: 'ignore' })
+    const [archive] = readdirSync(join(unpacked, '$PLUGINSDIR'))
+    const found = coders(sevenZip, join(unpacked, '$PLUGINSDIR', archive))
+
+    assert.deepEqual(Object.keys(found).sort(), ['Brave Bot.exe', ...HELPERS.map((name) => join('resources', name))].sort(), arch)
+    for (const [file, used] of Object.entries(found)) {
+      assert.deepEqual(used.filter((coder) => !EXTRACTABLE.has(coder)), [], `${arch}: ${file} is compressed with ${used.join(' ')}`)
+      assert.ok(used.includes('BCJ') || used.includes('BCJ2'), `${arch}: ${file} went through no branch filter (${used.join(' ')})`)
+    }
+  }
 })

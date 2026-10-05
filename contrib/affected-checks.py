@@ -47,6 +47,14 @@ READ_BY_INSTALLER_TESTS = {
     "npm/scripts/postinstall.js": frozenset({"npm", "rust"}),
 }
 
+# The scripts that build, fuse and check the Windows installers. CI runs them only in the job
+# after the cross-build, so a change to one needs the cross-build too, or the job that installs
+# the result is skipped and reports success.
+WINDOWS_INSTALLER_SCRIPTS = (
+    "ui/scripts/windows-installer.mjs", "ui/scripts/check-windows-install.mjs",
+    "ui/scripts/package.mjs", "ui/scripts/fuses.mjs",
+)
+
 # Named by a crate's source without being read from this tree, which the selftest's scan cannot
 # tell from a read by itself.
 NAMED_NOT_READ = {
@@ -107,6 +115,8 @@ def classify(path, desktop):
         return frozenset({"rust"})
     if path in READ_BY_INSTALLER_TESTS:
         return READ_BY_INSTALLER_TESTS[path]
+    if path in WINDOWS_INSTALLER_SCRIPTS:
+        return frozenset({"ui", "build"})
     if path.startswith("extension/"):
         # The job for the desktop UI runs the extension's tests, and a Rust test reads its files.
         return frozenset({"rust", "ui"})
@@ -281,6 +291,11 @@ CASES = (
     ("docs/website/package-lock.json", {"docs", "npm"}),
     ("ui/src/App.tsx", {"ui"}),
     ("ui/package.json", {"ui", "npm"}),
+    ("ui/scripts/windows-installer.mjs", {"ui", "build"}),
+    ("ui/scripts/check-windows-install.mjs", {"ui", "build"}),
+    ("ui/scripts/package.mjs", {"ui", "build"}),
+    ("ui/scripts/fuses.mjs", {"ui", "build"}),
+    ("ui/scripts/windows-installer.test.mjs", {"ui"}),
     ("extension/tools.js", {"rust", "ui"}),
     ("extension/tests/tools.test.mjs", {"rust", "ui"}),
     ("npm/scripts/postinstall.js", {"npm", "rust"}),

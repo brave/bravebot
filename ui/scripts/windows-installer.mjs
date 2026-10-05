@@ -123,6 +123,14 @@ export function installerConfig({ arch }) {
   }
 }
 
+// The 7-Zip electron-builder compresses the bundle with puts each ARM64 executable through a filter
+// the 7-Zip the installer extracts it with predates. The installer skips every file it cannot
+// decode and still exits 0, so an arm64 install left to that has no `Brave Bot.exe`, no helpers
+// and no DLLs.
+// A filter named here goes on every file instead, at about a tenth more in size, and BCJ is one
+// both have. The x64 executables get BCJ2 unasked, which both have too.
+const ARCHIVE_FILTERS = { arm64: 'BCJ' }
+
 // Build the installer for one architecture's bundle into `out`, and return its path. electron-builder
 // writes into a scratch directory, since it leaves its logs and intermediate files beside the
 // installer, and only the installer is copied out.
@@ -130,6 +138,8 @@ export async function buildInstaller({ bundle, arch, out }) {
   checkHost(process.platform)
   checkBundle({ bundle, arch })
   const scratch = mkdtempSync(join(tmpdir(), 'windows-installer-'))
+  const filter = process.env.ELECTRON_BUILDER_7Z_FILTER
+  if (Object.hasOwn(ARCHIVE_FILTERS, arch)) process.env.ELECTRON_BUILDER_7Z_FILTER = ARCHIVE_FILTERS[arch]
   try {
     await build({
       projectDir: UI,
@@ -144,6 +154,8 @@ export async function buildInstaller({ bundle, arch, out }) {
     copyFileSync(join(scratch, assetName(arch)), written)
     return written
   } finally {
+    if (filter === undefined) delete process.env.ELECTRON_BUILDER_7Z_FILTER
+    else process.env.ELECTRON_BUILDER_7Z_FILTER = filter
     rmSync(scratch, { recursive: true, force: true })
   }
 }
