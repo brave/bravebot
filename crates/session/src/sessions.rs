@@ -4227,6 +4227,7 @@ mod tests {
             &root,
             "summarise the specs",
             &a_failed_run(),
+            None,
             Front::Terminal,
             A_BUILD,
         )
