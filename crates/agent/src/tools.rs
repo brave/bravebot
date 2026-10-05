@@ -3940,6 +3940,13 @@ fn refuse_denied_path<S: Sink>(
         Purpose::Effect => policy.before_write(name),
     };
     ask(policy, path).map_err(|_| denied_by_rule(path))?;
+    // Spelled out as well, because a rule anchored at the home directory never matches `~/x`, and
+    // the landing below exists only once the home is opened, so until then the refusal would offer
+    // opening it for a file a rule refuses once it is.
+    let expanded = workspace.expanded(path);
+    if expanded != path {
+        ask(policy, &expanded).map_err(|_| denied_by_rule(path))?;
+    }
     match workspace.landing(path) {
         Some(landed) => ask(policy, &landed).map_err(|_| denied_by_rule(path)),
         None => Ok(()),
@@ -5455,7 +5462,9 @@ fn watch_file<S: Sink>(
     if let Err(denial) = policy.promote_confined_read("watch_file", "path", &found.path) {
         return Produced::problem(format!("refused: {denial}"));
     }
-    let path = found.released;
+    // The absolute path a `~` stands for: the session looks again from a working directory that
+    // may have moved, where `~/x` reads as a relative path and would end the watch.
+    let path = workspace.expanded(&found.released);
 
     // A directory is refused at the surface rather than watched and reported on. What changed
     // inside one is a file name the filesystem produced, and putting that in a fire's prompt is
@@ -12601,6 +12610,41 @@ mod tests {
             assert!(told.starts_with("watching: a.txt"), "{told}");
         }
 
+        /// A watch is looked at again from wherever the session is by then. Armed on `~/todo.txt`
+        /// it would read as a relative path and end at the first `/cd`, though it names the same
+        /// file as before, so it is armed on the path the `~` stands for.
+        #[test]
+        fn a_file_named_from_the_home_directory_is_armed_on_the_path_it_stands_for() {
+            let scratch = Scratch::new("home-file");
+            let home = scratch.path.join("home");
+            let project = scratch.path.join("project");
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::create_dir_all(&project).unwrap();
+            std::fs::write(home.join("todo.txt"), "milk\n").unwrap();
+            let home = home.canonicalize().unwrap();
+            let mut workspace = Workspace::new(&project)
+                .expect("workspace")
+                .with_home(Some(home.clone()));
+            workspace
+                .add_directory(home.to_str().expect("utf-8"))
+                .expect("home opened");
+
+            let mut count = 0;
+            let (produced, _) = armed(
+                &workspace,
+                Arming::Allowed { free: 8 },
+                &mut count,
+                json!({"path": "~/todo.txt"}),
+            );
+
+            let expected = home.join("todo.txt").to_string_lossy().into_owned();
+            assert_eq!(produced.watch.as_deref(), Some(expected.as_str()));
+            assert!(
+                crate::watch::names_the_same_file(&expected, &project, &home),
+                "the watch would end when the working directory moved"
+            );
+        }
+
         /// A session does one thing at a time that happens without anybody typing, and the
         /// planner is told which of the three reasons it is so that it can say so.
         #[test]
@@ -13391,6 +13435,51 @@ mod tests {
         use bravebot_core::capability::{Capability, CapabilitySet};
         use bravebot_core::event::{Event, RecordingSink};
         use bravebot_core::policy::{ReleasePlan, Routing};
+
+        /// A rule in the settings file is anchored at the home directory, so it never matches the
+        /// spelling `~/secret.txt`. Until the home is opened there is no landing to ask about
+        /// either, and the refusal would offer `/add-dir` for a file the rule refuses once it is.
+        #[test]
+        fn a_rule_over_a_home_file_refuses_a_path_spelled_from_the_home_directory() {
+            let scratch = Scratch::new("deny-home-file");
+            let home = scratch.path.join("home");
+            let project = scratch.path.join("project");
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::create_dir_all(&project).unwrap();
+            std::fs::write(home.join("secret.txt"), "hunter2\n").unwrap();
+            let home = home.canonicalize().unwrap();
+            let workspace = Workspace::new(&project)
+                .expect("workspace")
+                .with_home(Some(home.clone()));
+
+            let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+                &["Read(~/secret.txt)".to_string()],
+                &[],
+                &[],
+                &bravebot_core::permissions::Anchors {
+                    home: home.to_str().map(str::to_string),
+                    ..bravebot_core::permissions::Anchors::none()
+                },
+            );
+            assert!(rejected.is_empty(), "the rule did not parse: {rejected:?}");
+
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "read a file");
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_permissions(permissions);
+
+            let refusal =
+                refuse_denied_path(&mut policy, &workspace, Purpose::Read, "~/secret.txt")
+                    .expect_err("the rule covers the file");
+            assert_eq!(refusal, denied_by_rule("~/secret.txt"));
+        }
 
         /// What the planner was told, the trail's confinement refusals, and whether the turn
         /// would end as clean, for one call to `run`.
