@@ -1223,6 +1223,28 @@ mod tests {
         );
     }
 
+    /// The deny-over-ask order needs one subject in both lists, the ask rule narrower in the first
+    /// case and broader in the second. With no subject in both, an implementation that tried ask
+    /// first gives the same answers.
+    #[test]
+    fn deny_beats_ask_for_the_same_subject() {
+        let permissions = rules(&["Bash(git push *)"], &["Bash(git push origin main)"], &[]);
+        assert_eq!(
+            permissions.for_command(&words("git push origin main")),
+            Decision::Ruled(Ruling::Deny)
+        );
+
+        let permissions = rules(&["Read(src/secret.rs)"], &["Read(src/**)"], &[]);
+        assert_eq!(
+            permissions.for_path(Subject::Read, "src/secret.rs"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "src/main.rs"),
+            Decision::Ruled(Ruling::Ask)
+        );
+    }
+
     /// A bare family name and `(*)` are the same rule, and both cover every use.
     #[test]
     fn a_bare_family_name_covers_every_use_of_it() {
