@@ -242,10 +242,11 @@ bot's turn run in. A conversation with no project has no context panel.
 
 The right column of a bot's page holds its details: the face, with a button for a new one, the
 name and the purpose, which are saved when a field is left, and the memory. A bot keeps one memory per folder it works in, so a
-**Memory for** menu picks which folder's memory is shown once there is more than one. The memory is
-shown as the bot wrote it; **Edit memory** opens it for editing with an explicit save, **History**
-lists earlier versions for review and restoration, one history per folder, and **Reset…** asks
-before it empties the memory. Reset preserves history; deleting a bot removes
+**Memory for** menu picks which folder's memory is shown once there is more than one. The column shows
+the first lines of the memory as the bot wrote it. **Edit memory** opens a dialog with the whole text
+for editing and an explicit save. The dialog's **History** lists earlier versions for review and
+restoration, one history per folder, and its **Reset…** asks before it empties the memory. Reset
+preserves history; deleting a bot removes
 its app-owned histories and cached briefing. See [file retention](file-access-security.md) for what
 stays in the project.
 

@@ -366,12 +366,10 @@
 .bot-details-face .bot-avatar-refresh { position: absolute; right: calc(-1 * var(--leo-spacing-xs)); bottom: calc(-1 * var(--leo-spacing-xs)); }
 .bot-details .bot-memory-panel { gap: var(--leo-spacing-m); }
 .bot-field-label { font: var(--type-meta-strong); color: var(--ink-primary); }
-/* The memory as the bot wrote it, in the outlined box a text field draws. */
+/* The top of the memory as the bot wrote it, in the outlined box a text field draws. The rest is in the dialog. */
 .bot-details .bot-memory {
-  max-height: 320px;
   margin: 0;
   padding: var(--leo-spacing-m) var(--leo-spacing-l);
-  overflow: auto;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-control);
   background: var(--surface-panel);
@@ -381,4 +379,9 @@
   overflow-wrap: anywhere;
   user-select: text;
 }
-.bot-details .bot-memory:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+.bot-details .memory-excerpt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  overflow: hidden;
+}

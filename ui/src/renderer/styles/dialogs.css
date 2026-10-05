@@ -238,6 +238,9 @@
 .memory-revision { border-bottom: 1px solid var(--border-hairline); --leo-collapse-summary-padding: var(--leo-spacing-m) 0; }
 .memory-history pre { max-height: 240px; margin: 0 0 var(--leo-spacing-m); padding: var(--leo-spacing-l); overflow: auto; border-radius: var(--radius-control); background: var(--surface-sunken); white-space: pre-wrap; font: var(--type-code); }
 .memory-actions { display: flex; flex-wrap: wrap; gap: var(--leo-spacing-m); }
+.memory-body { padding-block: var(--leo-spacing-xs); }
+.memory-tools { display: flex; gap: var(--leo-spacing-m); }
+.memory-dialog .memory-reset, .memory-dialog .memory-history { margin-top: var(--leo-spacing-l); }
 .memory-loading { font: var(--type-meta); color: var(--ink-secondary); }
 
 @media (prefers-reduced-motion: reduce) {
