@@ -1351,6 +1351,17 @@ pub struct Resumable {
     pub directory: PathBuf,
 }
 
+/// Why [`Handle::branch`] copied nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unbranched {
+    /// No record exists yet, so there is nothing to copy.
+    NothingWritten,
+    /// Records are not written here, as in an incognito session, so a copy would not outlive it.
+    Unwritable,
+    /// A manifest run, which cannot be continued or forked (SESSION-10).
+    Refused,
+}
+
 /// Which of the two links a session keeps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Link {
@@ -1485,6 +1496,34 @@ impl Handle {
         }
         let title = self.title.clone();
         self.save(&title, standing);
+    }
+
+    /// Copy this session as `--fork` does and carry on in the copy, which is what `/branch` does.
+    ///
+    /// The copy is read back from the record on disk, so the caller saves first where the session
+    /// holds anything the record does not. A `name` becomes the copy's title in place of the
+    /// marked one; an empty one keeps the mark. The original's record and trail are not touched,
+    /// and what is returned is how to pick it up again (SESSION-8).
+    ///
+    /// Refused where nothing was written, because there is no record to copy; where the record
+    /// cannot be written, which an incognito session never does; and for a manifest run, which
+    /// [`fork`] refuses.
+    pub fn branch_off(&mut self, name: &str) -> Result<Resumable, Unbranched> {
+        let Some(original) = self.to_resume() else {
+            return Err(Unbranched::NothingWritten);
+        };
+        let Some(directory) = self.directory() else {
+            return Err(Unbranched::Unwritable);
+        };
+        let Some(record) = fork(&self.project, &self.id) else {
+            return Err(Unbranched::Refused);
+        };
+        if !directory.join(format!("{}.json", record.id)).is_file() {
+            return Err(Unbranched::Unwritable);
+        }
+        *self = Self::resuming(&self.project, &record, self.front, &self.build);
+        self.rename(name);
+        Ok(original)
     }
 
     pub fn id(&self) -> &str {
@@ -4014,6 +4053,143 @@ mod tests {
         std::fs::write(&path, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
 
         assert!(fork(&root, "manifest-sess").is_none());
+    }
+
+    /// SESSION-31: the copy has its own id and the marked title, the handle moves onto it, and the
+    /// original is left byte for byte as it was, including after the copy saves a turn of its own.
+    #[test]
+    fn branching_moves_onto_a_marked_copy_and_leaves_the_original_untouched() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-branch-copy");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut handle);
+        let original_id = handle.id().to_string();
+        let original_path = project_directory(&root)
+            .expect("dir")
+            .join(format!("{original_id}.json"));
+        let before = std::fs::read(&original_path).expect("the original record");
+
+        let left = handle
+            .branch_off("")
+            .expect("a session with a record branches");
+
+        assert_eq!(
+            left.id, original_id,
+            "the id handed back is not the original's"
+        );
+        assert_eq!(left.directory, root);
+        assert_ne!(handle.id(), original_id, "the copy kept the original's id");
+        assert_eq!(handle.title(), "what do the specs say (fork)");
+        let copy = load(&root, handle.id()).expect("the copy's record");
+        assert_eq!(copy.title, "what do the specs say (fork)");
+        assert_eq!(copy.turns, 1, "the copy did not bring the turns along");
+
+        save_a_turn_session(&mut handle);
+        assert_eq!(
+            std::fs::read(&original_path).expect("the original record"),
+            before,
+            "the original's record changed"
+        );
+    }
+
+    /// SESSION-31: a name given to `/branch` is the copy's title, in place of the mark.
+    #[test]
+    fn a_named_branch_takes_the_name_as_its_title() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-branch-named");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut handle);
+
+        handle.branch_off("try the other parser").expect("branches");
+
+        assert_eq!(handle.title(), "try the other parser");
+        assert_eq!(
+            load(&root, handle.id()).expect("the copy").title,
+            "try the other parser"
+        );
+    }
+
+    /// SESSION-31: nothing is copied before the session has a record, and the handle stays where
+    /// it was.
+    #[test]
+    fn branching_before_anything_is_written_refuses_and_stays_put() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-branch-unwritten");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        let id = handle.id().to_string();
+
+        assert_eq!(handle.branch_off(""), Err(Unbranched::NothingWritten));
+        assert_eq!(handle.id(), id);
+    }
+
+    /// SESSION-31: where the session directory cannot be written, as in an incognito session, the
+    /// command is refused, the handle keeps its id, and no copy is written.
+    #[test]
+    fn branching_where_records_cannot_be_written_refuses_and_writes_no_copy() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-branch-unwritable");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut handle);
+        let id = handle.id().to_string();
+        let directory = project_directory(&root).expect("dir");
+        std::fs::remove_dir_all(&directory).expect("remove the records");
+        std::fs::write(&directory, b"not a directory").expect("block the directory");
+
+        assert_eq!(handle.branch_off(""), Err(Unbranched::Unwritable));
+
+        assert_eq!(
+            handle.id(),
+            id,
+            "the handle moved although nothing was copied"
+        );
+        assert_eq!(
+            std::fs::read(&directory).expect("the blocker is untouched"),
+            b"not a directory",
+            "a copy was written"
+        );
+        std::fs::remove_file(&directory).expect("unblock the directory");
+    }
+
+    /// SESSION-31: a manifest run is refused as `--fork` refuses it, and writes no copy.
+    #[test]
+    fn branching_a_manifest_run_is_refused() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-branch-manifest");
+        let record = Record {
+            id: "branch-manifest".to_string(),
+            directory: root.display().to_string(),
+            turns: 1,
+            manifest: Some(StoredManifest {
+                shape: None,
+                proposed: None,
+                plan: None,
+                steps: vec!["one".to_string()],
+                failure: None,
+            }),
+            ..a_record()
+        };
+        let dir = project_directory(&root).expect("dir");
+        std::fs::create_dir_all(&dir).expect("create dir");
+        std::fs::write(
+            dir.join("branch-manifest.json"),
+            serde_json::to_vec_pretty(&record).unwrap(),
+        )
+        .unwrap();
+        let mut handle = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+
+        assert_eq!(handle.branch_off(""), Err(Unbranched::Refused));
+        assert_eq!(handle.id(), "branch-manifest");
+        assert_eq!(list(&root).len(), 1, "a copy of a manifest run was written");
     }
 
     #[test]
