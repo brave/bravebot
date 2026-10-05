@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/cli/src/main.rs
   - crates/cli/src/auth.rs
+  - crates/cli/src/completion.rs
   - crates/cli/src/exit.rs
   - crates/cli/src/json.rs
   - crates/cli/src/plain.rs
@@ -1037,9 +1038,9 @@ The flags are refused, with the status for an argument (CLI-6), when no words fo
 words are blank, and when they open with `-` and hold no whitespace, since that is the next flag:
 taken as the words, `--json` would be removed and the run would answer in the other format. A
 sentence that opens with `-` holds a space and is words. If a flag is given twice, the last is used.
-They are refused with `--mode manifest`, and with `doctor`, `auth`, `mcp`, `import-leo-creds` and
-`import-providers`, which start neither a session nor a task. A refusal writes the result object of
-CLI-12 if one was asked for, sends nothing, and says why through the catalogue
+They are refused with `--mode manifest`, and with `doctor`, `auth`, `mcp`, `import-leo-creds`,
+`import-providers` and `completion`, which start neither a session nor a task. A refusal writes the
+result object of CLI-12 if one was asked for, sends nothing, and says why through the catalogue
 ([LOCALE-2](localization.md#LOCALE-2)).
 
 **Why.** A person running bravebot from a script or a wrapper has words of their own that the
@@ -1070,3 +1071,36 @@ because no part of `auth` would use them.
 `verified-by: bravebot_agent::turn::a_replaced_opening_takes_the_place_of_the_opening_alone`
 `verified-by: bravebot_agent::turn::words_that_allow_writes_allow_none`
 `verified-by: bravebot_tui::app::a_session_keeps_the_system_prompt_words_it_started_with_through_every_turn`
+
+<a id="CLI-20"></a>
+### CLI-20: `completion <shell>` prints a completion script and does nothing else
+
+`bravebot completion bash`, `zsh` or `fish` writes a script to stdout that completes the
+subcommands, the words after `auth`, `mcp` and `completion`, and every flag in the usage table.
+Anything else completes as a file path. The script is the whole of stdout and stderr is empty:
+CLI-5 says stdout carries the reply, and for this command the script is the reply.
+
+The command makes no request and reads and writes nothing under `~/.bravebot`. The scripts are
+built from fixed lists in the program, so the output is the same wherever the command runs, and the
+script completes names bravebot defines and never a value read from a directory: no session id, no
+definition name, no model name. A command line with no shell, a shell this build has no script for
+or any argument after the shell is refused with the status for an argument (CLI-6), prints nothing
+on stdout and says why through the catalogue ([LOCALE-2](localization.md#LOCALE-2)). `--agent`, `--system-prompt` and `--append-system-prompt` are refused with `completion`, as
+with the other commands that start neither a session nor a task.
+
+**Why.** A person who cannot remember a flag's spelling opens `--help` to find it, and a shell can
+offer it on Tab. A script that read the state directory would start a process that reads private
+files on every keypress, and a completed session id or definition name would put text from a
+workspace into the person's command line, so the script completes only what the program itself
+names.
+
+**Known costs.** The lists are written out beside the usage table rather than generated from it,
+so adding a flag takes two edits. The test that reads `--help` and compares it with each script is
+what fails when they differ. Session ids are not completed.
+
+`verified-by: bravebot_cli::running::a_completion_script_names_every_command_and_flag_the_usage_table_lists`
+`verified-by: bravebot_cli::running::a_completion_script_reads_and_writes_nothing_under_the_home`
+`verified-by: bravebot_cli::running::a_completion_with_no_script_to_print_is_refused_with_the_argument_status`
+`verified-by: bravebot_cli::running::the_bash_script_completes_commands_subcommands_and_flags_by_position`
+`verified-by: bravebot_cli::main::a_definition_is_refused_where_nothing_would_work_under_it`
+`verified-by: bravebot_cli::main::the_system_prompt_flags_are_refused_where_nothing_would_use_them`
