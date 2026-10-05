@@ -201,7 +201,7 @@ export function installMenu(window: BrowserWindow): void {
       ],
     },
     {
-      label: 'Session',
+      label: 'Chat',
       submenu: [item('turn.send'), item('turn.cancel')],
     },
     { role: 'windowMenu' },

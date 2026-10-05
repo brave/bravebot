@@ -11,7 +11,7 @@
  * The agent's own record cannot hold this; `src/shared/forks.ts` says why.
  */
 
-import { type Fork, withFork } from '../shared/forks'
+import { type Fork, type SessionRef, keyOf, withFork } from '../shared/forks'
 import { putForks, readState } from './state'
 
 /** Every fork taken before, newest first. Never throws; an unreadable file is empty. */
@@ -28,4 +28,9 @@ export function forks(): Fork[] {
  */
 export function noteFork(fork: Fork): void {
   putForks(withFork(forks(), fork))
+}
+
+/** Forget which session a deleted one came from. Forks taken from it keep their own line. */
+export function forgetFork(child: SessionRef): void {
+  putForks(forks().filter((each) => keyOf(each.child.directory, each.child.id) !== keyOf(child.directory, child.id)))
 }

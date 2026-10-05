@@ -74,6 +74,11 @@ async function settle(page, seconds = 90) {
 }
 
 const app = await launch()
+// The bot's conversation runs in the scratch checkout, picked in the composer's project menu. The
+// picker is native, so the dialog it opens is answered here.
+await app.evaluate(({ dialog }, directory) => {
+  dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] })
+}, checkout)
 const page = await app.firstWindow()
 await page.waitForLoadState('domcontentloaded')
 page.on('pageerror', (error) => console.log('PAGE ERROR:', error.message))
@@ -81,16 +86,13 @@ await page.waitForTimeout(2500)
 
 // The purpose carries a word nothing else would produce, so the reply is evidence the briefing
 // arrived rather than evidence the model is agreeable.
-await page.evaluate(
-  ([directory]) =>
-    window.bravebot.writeBot({
-      name: 'Custodian',
-      purpose:
-        'You are the custodian of this checkout. Whenever you are greeted, and only then, ' +
-        'reply with exactly the word: harbour. Do not explain it.',
-      directory,
-    }),
-  [checkout],
+await page.evaluate(() =>
+  window.bravebot.writeBot({
+    name: 'Custodian',
+    purpose:
+      'You are the custodian of this checkout. Whenever you are greeted, and only then, ' +
+      'reply with exactly the word: harbour. Do not explain it.',
+  }),
 )
 await page.reload()
 await page.waitForTimeout(2000)
@@ -102,19 +104,24 @@ const mine = page
   .filter({ has: page.locator('.bot-name', { hasText: /^Custodian$/ }) })
 check((await mine.count()) === 1, 'the bot is in the list')
 await mine.locator('.bot-open-button').click()
+await page.locator('[data-test="bot-page"]').waitFor()
+
+// The bot's page starts a conversation from its composer, in the project picked in its footer.
+await page.locator('[data-test="project-trigger"]').click()
+await page.locator('[data-test="project-pick"]').click()
+await page.waitForTimeout(400)
+await page.locator('.composer textarea').fill('Hello.')
+await page.locator('.send').click()
 await page.waitForTimeout(1500)
 
-// A bot that has never spoken has no session to resume, so opening it begins one — which asks the
-// trust question, exactly as any new session does.
+// A new conversation in a folder nobody has trusted asks the trust question, exactly as any new
+// chat does; the message waits for the answer.
 const trust = page.locator('.trust button').first()
 if (await trust.isVisible().catch(() => false)) {
   await trust.click()
   await page.waitForTimeout(600)
-  check(true, 'a bot with no session yet asks about the checkout, like any new session')
+  check(true, 'a new bot conversation asks about the checkout, like any new chat')
 }
-
-await page.locator('.composer textarea').fill('Hello.')
-await page.locator('.send').click()
 console.log('  ..   sent; waiting for the turn…')
 const first = await settle(page)
 check(first === 'done', `the turn finished (${first})`)
@@ -148,6 +155,10 @@ check(
 // The id the agent minted has been written down, which is what a resume needs.
 const stored = (readState().bots ?? []).find((bot) => bot.slug === MINE)
 check(typeof stored?.session === 'string', `the bot remembers its session (${stored?.session})`)
+check(
+  stored?.conversations?.some((each) => each.id === stored.session && each.directory === checkout),
+  'and the folder that conversation ran in',
+)
 
 await app.close()
 
@@ -162,6 +173,7 @@ await page2
   .filter({ has: page2.locator('.bot-name', { hasText: /^Custodian$/ }) })
   .locator('.bot-open-button')
   .click()
+await page2.locator('[data-test="bot-conversations"] .bot-history-row').first().click()
 await page2.waitForTimeout(2000)
 
 check(
@@ -172,32 +184,13 @@ check(
   (await page2.locator('.attached').count()) >= 1,
   'the briefing is drawn as a file that was read rather than as something somebody typed',
 )
-// Exactly one session fewer on screen than the agent has records for, and the missing one is this
-// bot's. Counted rather than matched on a title: a session is named after its first prompt, so
-// looking for the words that were typed also matches a leftover from an earlier run of this driver
-// — which is how this assertion first went wrong.
-// Every record the agent has, minus the ones that belong to a bot — this driver's, and any the
-// person running it already had. Counted rather than matched on a title: a session is named after
-// its first prompt, so looking for the words that were typed also matches a leftover from an
-// earlier run of this driver, which is how this assertion first went wrong.
-const { known, owned } = await page2.evaluate(async () => {
-  const answer = await window.bravebot.request('session.list')
-  const bots = await window.bravebot.readBots()
-  const theirs = new Set(
-    bots.filter((bot) => bot.session).map((bot) => `${bot.directory}/${bot.session}`),
-  )
-  return {
-    known: answer.ok.sessions.length,
-    owned: answer.ok.sessions.filter((s) => theirs.has(`${s.directory}/${s.id}`)).length,
-  }
-})
+// A bot's conversation is a chat like any other, so it is in the Chats list too, marked with the
+// bot's face and named for the project it ran in.
 await page2.locator('.sidebar-tabs [role="option"]').nth(0).click()
 await page2.waitForTimeout(400)
-const drawn = await page2.locator('.session').count()
-check(
-  owned >= 1 && drawn === known - owned,
-  `every bot's session is kept out of the sessions list (${drawn} drawn of ${known}, ${owned} owned by bots)`,
-)
+const listed = page2.locator('.session').filter({ has: page2.locator('.bot-face') })
+  .filter({ has: page2.locator('.session-project', { hasText: checkout.split('/').at(-1) }) })
+check((await listed.count()) >= 1, 'the bot’s conversation is in the Chats list with its face and project')
 await page2.screenshot({ path: '/tmp/bravebot-ui/25-bot-resumed.png' })
 
 await back.close()
@@ -205,6 +198,7 @@ await back.close()
 putKey('bots', withoutMine())
 putKey('view', { ...(hadView ?? { grouped: false, collapsed: [] }), tab: 'sessions' })
 rmSync(checkout, { recursive: true, force: true })
+rmSync(join(userData, 'bot-homes', MINE), { recursive: true, force: true })
 // And the records the agent wrote. Sessions are kept per checkout under a directory named by
 // mangling its path — every character outside `[A-Za-z0-9._]` becomes a dash — so the scratch
 // checkout has one of its own and nothing else is in it. Without this, every run of this driver

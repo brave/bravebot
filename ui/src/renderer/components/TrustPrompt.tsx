@@ -21,15 +21,15 @@ interface Props {
 export function TrustPrompt({ directory, keeping, onAnswer }: Props): React.JSX.Element {
   return (
     <Modal title="Project trust" size="sm" className="trust" subtitle="Do you trust this directory?" subtitleId="trust-title" actions={<>
-      <Button kind="plain-faint" size="small" className="modal-leading" onClick={() => onAnswer(false)} data-test="trust-decline">
+      <Button kind="plain-faint" className="modal-leading" onClick={() => onAnswer(false)} data-test="trust-decline">
         Don't trust
       </Button>
       {keeping && (
-        <Button kind="outline" size="small" onClick={() => onAnswer(true, true)} data-test="trust-remember">
+        <Button kind="outline" onClick={() => onAnswer(true, true)} data-test="trust-remember">
           Trust and remember
         </Button>
       )}
-      <Button kind="filled" size="small" onClick={() => onAnswer(true)} data-test="trust-approve">
+      <Button kind="filled" onClick={() => onAnswer(true)} data-test="trust-approve">
         Trust this directory
       </Button>
     </>}>

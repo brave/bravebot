@@ -104,20 +104,22 @@ async function settle(page, seconds = 90) {
 }
 
 const app = await launch()
+// The conversation runs in the scratch checkout, picked in the composer's project menu; the native
+// dialog that opens is answered here.
+await app.evaluate(({ dialog }, directory) => {
+  dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] })
+}, checkout)
 const page = await app.firstWindow()
 await page.waitForLoadState('domcontentloaded')
 page.on('pageerror', (error) => console.log('PAGE ERROR:', error.message))
 await page.waitForTimeout(2500)
 
-await page.evaluate(
-  ([directory]) =>
-    window.bravebot.writeBot({
-      name: 'Archivist',
-      purpose:
-        'You are the archivist of this checkout. Keep your answers to one short sentence.',
-      directory,
-    }),
-  [checkout],
+await page.evaluate(() =>
+  window.bravebot.writeBot({
+    name: 'Archivist',
+    purpose:
+      'You are the archivist of this checkout. Keep your answers to one short sentence.',
+  }),
 )
 await page.reload()
 await page.waitForTimeout(2000)
@@ -129,18 +131,23 @@ const mine = page
   .filter({ has: page.locator('.bot-name', { hasText: /^Archivist$/ }) })
 check((await mine.count()) === 1, 'the bot is in the list')
 await mine.locator('.bot-open-button').click()
-await page.waitForTimeout(1500)
+await page.locator('[data-test="bot-page"]').waitFor()
+await page.locator('[data-test="project-trigger"]').click()
+await page.locator('[data-test="project-pick"]').click()
+await page.waitForTimeout(400)
 
+// --- one ordinary turn, to ground the session --------------------------------------------
+
+// Sent from the bot's page, which starts the conversation; the message waits for the trust
+// question a new folder asks.
+await page.locator('.composer textarea').fill('Name one file in this checkout.')
+await page.locator('.send').click()
+await page.waitForTimeout(1500)
 const trust = page.locator('.trust button').first()
 if (await trust.isVisible().catch(() => false)) {
   await trust.click()
   await page.waitForTimeout(600)
 }
-
-// --- one ordinary turn, to ground the session --------------------------------------------
-
-await page.locator('.composer textarea').fill('Name one file in this checkout.')
-await page.locator('.send').click()
 console.log('  ..   sent the first turn; waiting…')
 const first = await settle(page)
 // Asked before anything is asserted. A machine with no credentials has not failed this driver, it
@@ -240,6 +247,7 @@ await page2
   .filter({ has: page2.locator('.bot-name', { hasText: /^Archivist$/ }) })
   .locator('.bot-open-button')
   .click()
+await page2.locator('[data-test="bot-conversations"] .bot-history-row').first().click()
 await page2.waitForTimeout(2500)
 
 // LAYER-6. Nothing in this session was composed by the app, so nothing in it is drawn as the row
@@ -273,6 +281,7 @@ putKey('bots', withoutMine())
 putKey('view', { ...(hadView ?? { grouped: false, collapsed: [] }), tab: 'sessions' })
 rmSync(checkout, { recursive: true, force: true })
 rmSync(join(userData, 'bots', MINE), { recursive: true, force: true })
+rmSync(join(userData, 'bot-homes', MINE), { recursive: true, force: true })
 // And the records the agent wrote, kept per checkout under a directory named by mangling its path.
 rmSync(join(homedir(), '.bravebot', 'sessions', checkout.replace(/[^A-Za-z0-9._]/g, '-')), {
   recursive: true,

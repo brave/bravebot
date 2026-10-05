@@ -50,7 +50,7 @@ export interface StoredState {
  * decision it does not have to make. Each key is delegated whole to the validator that owns that
  * shape, and `layout` keeps its own nullability because "never arranged" is a real state there.
  */
-export function parseState(value: unknown): StoredState {
+export function parseState(value: unknown, homeFor?: (slug: string) => string): StoredState {
   const held = typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
   return {
     layout: parseLayout(held.layout),
@@ -59,7 +59,7 @@ export function parseState(value: unknown): StoredState {
     // expect to read, and handed to their validators in the shape those already judge.
     recents: parseRecents({ directories: held.recents }).directories,
     forks: parseForks({ forks: held.forks }).forks,
-    bots: parseBots({ bots: held.bots }).bots,
+    bots: parseBots({ bots: held.bots }, homeFor).bots,
     // Judged by `parseAppearance`, which lives beside the appearance names rather than here —
     // the same arrangement the four above have, where the validator sits with the shape it
     // understands. The key stays `theme` so existing `bravebot-ui.json` files keep working.

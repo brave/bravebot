@@ -2,8 +2,10 @@
  * The bots somebody has defined, and the one thing that decides whether a file on disk is that
  * list.
  *
- * A bot is a name, a purpose, a memory, and one checkout, with a history of conversations.
- * Its identity persists when a new conversation starts or an earlier one resumes.
+ * A bot is a name, a purpose and a home folder of its own, with a history of conversations. Each
+ * conversation runs in the bot's home folder or in a project somebody picked for it, and the bot
+ * keeps one memory file in each folder it has worked in. Its identity persists when a new
+ * conversation starts or an earlier one resumes.
  * Everything here is what the agent's own record cannot hold.
  *
  * It cannot hold it for the reason `forks.ts` states about lineage: `Record` has no field for any
@@ -37,9 +39,9 @@ export interface Bot {
    * The name every file belonging to this bot is named after.
    *
    * Restricted to `[a-z0-9-]` and composed from the name once, at creation. Both matter: this
-   * becomes a path segment in two places — the ground file under `userData` and the memory file
-   * inside somebody's checkout — and a path segment that arrived as free text is a path segment
-   * that can be `..`.
+   * becomes a path segment in three places (the ground file under `userData`, the home folder
+   * under `userData`, and the memory file inside each folder the bot works in), and a path segment
+   * that arrived as free text is a path segment that can be `..`.
    */
   slug: string
   /** What the bot is called, as somebody wrote it. Free text, and renamable. */
@@ -57,8 +59,11 @@ export interface Bot {
   avatar: string
   /** Inference model; null uses the configured default for older bots. */
   model: string | null
-  /** The checkout it works in, chosen when it was made and pinned from then on. */
-  directory: string
+  /**
+   * The folder its conversations with no project run in, made by the main process under its own
+   * data directory. Never one a window named. Main-written.
+   */
+  home: string
   /**
    * The name of the definition in `~/.bravebot/agents` that making this bot wrote, or `null` for a
    * bot made before that was done. The agent chose it (the slug, or the next free name after it),
@@ -72,8 +77,12 @@ export interface Bot {
    * turn, so a bot made and not yet talked to genuinely has no session to name. Main-written.
    */
   session: string | null
-  /** Every recorded conversation for this bot; retained when Continue changes. */
-  conversations: string[]
+  /**
+   * Every recorded conversation for this bot, with the folder it ran in; retained when Continue
+   * changes. The folders here are the projects the bot may be sent into again without the picker.
+   * Main-written.
+   */
+  conversations: BotConversationRef[]
   /**
    * How much compaction had taken out of that session, last time anyone looked.
    *
@@ -124,6 +133,22 @@ export function isBotModel(value: unknown): value is string | null {
   return value === null || (
     typeof value === 'string' && value.trim().length > 0 && value.length <= 512 && !value.includes('\0')
   )
+}
+
+/** A conversation a bot has had, and the folder it ran in. */
+export interface BotConversationRef {
+  id: string
+  directory: string
+}
+
+/** The folders a bot has worked in, home first. */
+export function botFolders(bot: Bot): string[] {
+  return [...new Set([bot.home, ...bot.conversations.map((each) => each.directory)])]
+}
+
+/** The projects a bot has worked in, newest conversation first, without its home folder. */
+export function botProjects(bot: Bot): string[] {
+  return [...new Set(bot.conversations.map((each) => each.directory).reverse())].filter((each) => each !== bot.home)
 }
 
 export interface StoredBots {
@@ -191,11 +216,15 @@ function isText(value: unknown): value is string {
  * unreadable line should not cost somebody every bot they have. Nothing is coerced, and a slug
  * appears once — it names files, and two bots claiming one would be two bots sharing a memory.
  *
- * The one field allowed to be missing is `avatar`. A seed is repaired from the slug rather than
- * costing the bot its row, because an icon is a smaller thing than a bot and the failure it would
- * otherwise cause — a definition disappearing because its decoration was malformed — is absurd.
+ * Two fields may be missing. `avatar` is repaired from the slug rather than costing the bot its
+ * row, because an icon is a smaller thing than a bot. `home` is missing from every bot written
+ * before bots had one, and `homeFor` supplies it; without `homeFor` such a bot is dropped, because
+ * a bot with nowhere to run cannot be shown as one that can.
+ *
+ * A bot written before then also has a `directory` it was pinned to. Its conversations are paired
+ * with that folder, so they keep running where they always ran.
  */
-export function parseBots(value: unknown): StoredBots {
+export function parseBots(value: unknown, homeFor?: (slug: string) => string): StoredBots {
   if (typeof value !== 'object' || value === null) return { bots: [] }
   const { bots } = value as { bots?: unknown }
   if (!Array.isArray(bots)) return { bots: [] }
@@ -210,6 +239,7 @@ export function parseBots(value: unknown): StoredBots {
       purpose,
       avatar,
       model,
+      home,
       directory,
       definition,
       session,
@@ -224,7 +254,10 @@ export function parseBots(value: unknown): StoredBots {
 
     if (!isSlug(slug) || seen.has(slug)) continue
     if (!isText(name) || !isText(purpose)) continue
-    if (!isProjectPath(directory)) continue
+    const placed = isProjectPath(home) ? home : homeFor?.(slug)
+    if (!isProjectPath(placed)) continue
+    // Only bots written before homes existed carry this. It is where their conversations ran.
+    const legacy = isProjectPath(directory) ? directory : null
     // Null and absent both mean "has not spoken yet". Anything else claiming to be an id has to
     // look like one, and a bot pointing at a session that cannot exist is dropped rather than
     // shown as openable.
@@ -240,10 +273,10 @@ export function parseBots(value: unknown): StoredBots {
       purpose,
       avatar: isText(avatar) ? avatar : slug,
       model: isBotModel(model) && model !== null ? model : null,
-      directory,
+      home: placed,
       definition: isSlug(definition) ? definition : null,
       session: isSessionId(session) ? session : null,
-      conversations: [...new Set([...(Array.isArray(conversations) ? conversations.filter(isSessionId) : []), ...(isSessionId(session) ? [session] : [])])],
+      conversations: parseConversations(conversations, isSessionId(session) ? session : null, legacy ?? placed),
       // Clamped rather than refused. It is a watermark, and a nonsense one costs one needless
       // re-grounding, where dropping the bot over it costs the bot.
       archived:
@@ -265,6 +298,33 @@ export function parseBots(value: unknown): StoredBots {
     if (kept.length === BOTS_MAX) break
   }
   return { bots: kept }
+}
+
+/**
+ * A bot's conversations, each id once.
+ *
+ * An entry is either a pair or, from a bot written before pairs existed, a bare id, which is
+ * paired with `fallback`: the folder that bot was pinned to.
+ */
+function parseConversations(value: unknown, session: string | null, fallback: string): BotConversationRef[] {
+  const seen = new Set<string>()
+  const kept: BotConversationRef[] = []
+  const add = (id: unknown, directory: unknown) => {
+    if (!isSessionId(id) || !isProjectPath(directory)) return
+    const key = `${directory}\u0000${id}`
+    if (seen.has(key)) return
+    seen.add(key)
+    kept.push({ id, directory })
+  }
+  for (const entry of Array.isArray(value) ? value : []) {
+    if (typeof entry === 'string') add(entry, fallback)
+    else if (typeof entry === 'object' && entry !== null) {
+      const { id, directory } = entry as Record<string, unknown>
+      add(id, directory)
+    }
+  }
+  if (session && !kept.some((each) => each.id === session)) add(session, fallback)
+  return kept
 }
 
 /** The one with this slug, or `null`. */
@@ -311,20 +371,4 @@ export function retiredBots(bots: Bot[]): Bot[] {
 /** The list without the bot of this slug. The memory file and the session are not this list's. */
 export function withoutBot(bots: Bot[], slug: string): Bot[] {
   return bots.filter((bot) => bot.slug !== slug)
-}
-
-/**
- * Every session that belongs to a bot, keyed the way `forks.keyOf` keys one.
- *
- * Archived bots are counted too, and that is the point rather than an oversight. Their session is
- * still theirs — bringing one back resumes it — so letting it surface in the session list while
- * the bot was away would mean a conversation that could be opened twice, once as itself and once
- * as the bot restored on top of it. Archiving therefore changes nothing about the other tab.
- */
-export function botSessions(bots: Bot[]): Set<string> {
-  const keys = new Set<string>()
-  for (const bot of bots) {
-    if (bot.session) keys.add(`${bot.directory}/${bot.session}`)
-  }
-  return keys
 }

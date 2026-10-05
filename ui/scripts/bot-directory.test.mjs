@@ -1,11 +1,13 @@
-// Which folder a bot may be pinned to.
+// Which folders a bot may work in.
 //
-// A saved bot's project folder becomes the directory the confined file helper is pinned to: its
-// memory is created under `<folder>/.bravebot-ui/bots/<slug>.md` by a process that checks the
-// walk and not the tree it walks in, and no session, no picker and no prompt stands between the
-// channel that takes the folder and that write. So the property is about where the folder came
+// A bot's turn seeds its memory under `<folder>/.bravebot-ui/bots/<slug>.md` in the folder the
+// conversation runs in, by a process that checks the walk and not the tree it walks in, and no
+// prompt stands between the send and that write. So the property is about where the folder came
 // from rather than about the shape of a path, and the fault it rejects is the well-formedness
 // check standing in for it: `isProjectPath` accepts every absolute path on the account.
+//
+// A bot may work in its home folder, which the main process composes, in a folder it has recorded
+// a conversation in, and in one the picker handed over in this run. Nothing else.
 //
 // One bundle for both modules, because the folders the picker handed over are one module's state
 // and the composition that reads them is another's — two separate loads would be two sets.
@@ -13,7 +15,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { buildSync } from 'esbuild'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -41,25 +43,52 @@ function load(userData, showOpenDialog) {
 const scratch = (name) => mkdtempSync(join(tmpdir(), `bravebot-${name}-`))
 const form = (extra) => ({ name: 'Custodian', purpose: 'Keep the harbour lights lit', ...extra })
 
-test('a new bot is pinned only to a folder the picker handed over', async () => {
-  const userData = scratch('bot-directory-app')
-  const chosen = scratch('bot-directory-project')
-  const elsewhere = scratch('bot-directory-elsewhere')
+test('a new bot gets a home folder composed from its slug, whatever the window sent', () => {
+  const userData = scratch('bot-home-app')
+  const elsewhere = scratch('bot-home-elsewhere')
+  try {
+    const main = load(userData, async () => ({ canceled: true, filePaths: [] }))
+    // A window that names a folder of its own is ignored: the home is never a field it can send.
+    const made = main.botFromForm(form({ home: elsewhere, directory: elsewhere }))
+    assert.equal(made.home, join(userData, 'bot-homes', made.slug))
+    assert.equal(main.ensureHome(made), true)
+    assert.ok(statSync(made.home).isDirectory())
+  } finally { for (const at of [userData, elsewhere]) rmSync(at, { recursive: true, force: true }) }
+})
+
+test('a bot works in its home, a folder the picker handed over, and nowhere else', async () => {
+  const userData = scratch('bot-folder-app')
+  const chosen = scratch('bot-folder-project')
+  const elsewhere = scratch('bot-folder-elsewhere')
   try {
     const main = load(userData, async () => ({ canceled: false, filePaths: [chosen] }))
+    const made = main.botFromForm(form())
     // Both are absolute and hold no NUL, so `isProjectPath` cannot tell them apart. Nothing has
     // been opened yet, so neither is a folder anybody pointed at.
-    assert.equal(main.botFromForm(form({ directory: chosen })), null)
-    assert.equal(main.botFromForm(form({ directory: elsewhere })), null)
+    assert.equal(main.worksIn(made, made.home), true)
+    assert.equal(main.worksIn(made, chosen), false)
+    assert.equal(main.worksIn(made, elsewhere), false)
+    assert.equal(main.worksIn(made, undefined), false, 'a session whose folder nobody confirmed')
 
     assert.equal(await main.chooseDirectory({}), chosen)
-    assert.equal(main.botFromForm(form({ directory: chosen }))?.directory, chosen)
-    assert.equal(
-      main.botFromForm(form({ directory: elsewhere })),
-      null,
-      'opening one folder says nothing about the folder beside it',
-    )
+    assert.equal(main.worksIn(made, chosen), true)
+    assert.equal(main.worksIn(made, elsewhere), false, 'opening one folder says nothing about the folder beside it')
   } finally { for (const at of [userData, chosen, elsewhere]) rmSync(at, { recursive: true, force: true }) }
+})
+
+test('a folder a bot has worked in stays one it may work in after a restart', async () => {
+  const userData = scratch('bot-recorded-app')
+  const chosen = scratch('bot-recorded-project')
+  try {
+    const first = load(userData, async () => ({ canceled: false, filePaths: [chosen] }))
+    await first.chooseDirectory({})
+    const made = first.botFromForm(form())
+    first.saveBot(made)
+    first.noteBotSession(made.slug, 'a1b2c3d4-0000-4000-8000-000000000001', chosen)
+    // A fresh load has an empty picker record, so only the recorded conversation can answer.
+    const second = load(userData, async () => ({ canceled: true, filePaths: [] }))
+    assert.equal(second.worksIn(second.bot(made.slug), chosen), true)
+  } finally { for (const at of [userData, chosen]) rmSync(at, { recursive: true, force: true }) }
 })
 
 test('a cancelled picker leaves nothing a window may name', async () => {
@@ -70,24 +99,21 @@ test('a cancelled picker leaves nothing a window may name', async () => {
     // the answer afterwards is the answer from before.
     const main = load(userData, async () => ({ canceled: true, filePaths: [offered] }))
     assert.equal(await main.chooseDirectory({}), null)
-    assert.equal(main.botFromForm(form({ directory: offered })), null)
+    assert.equal(main.worksIn(main.botFromForm(form()), offered), false)
   } finally { for (const at of [userData, offered]) rmSync(at, { recursive: true, force: true }) }
 })
 
-test('editing a bot cannot move it to another folder', async () => {
+test('editing a bot cannot move its home', () => {
   const userData = scratch('bot-move-app')
-  const chosen = scratch('bot-move-project')
   const elsewhere = scratch('bot-move-elsewhere')
   try {
-    const main = load(userData, async () => ({ canceled: false, filePaths: [chosen] }))
-    await main.chooseDirectory({})
-    const made = main.botFromForm(form({ directory: chosen }))
+    const main = load(userData, async () => ({ canceled: true, filePaths: [] }))
+    const made = main.botFromForm(form())
     main.saveBot(made)
-    // The form fixes the folder of a bot that already exists and sends back the one it holds, so
-    // this is a payload only something bypassing the form composes.
-    const edited = main.botFromForm(form({ slug: made.slug, name: 'Keeper', directory: elsewhere }))
+    // A payload only something bypassing the form composes.
+    const edited = main.botFromForm(form({ slug: made.slug, name: 'Keeper', home: elsewhere }))
     assert.equal(edited.slug, made.slug)
     assert.equal(edited.name, 'Keeper')
-    assert.equal(edited.directory, chosen, 'a rename is not a move')
-  } finally { for (const at of [userData, chosen, elsewhere]) rmSync(at, { recursive: true, force: true }) }
+    assert.equal(edited.home, made.home, 'a rename is not a move')
+  } finally { for (const at of [userData, elsewhere]) rmSync(at, { recursive: true, force: true }) }
 })
