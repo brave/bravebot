@@ -252,6 +252,31 @@ Zero goes with it: the bound is checked after a round, so zero would run as one.
 `verified-by: bravebot_agent::agents::a_definition_asking_past_its_kinds_ceiling_says_what_it_is_given`
 `verified-by: bravebot_agent::turn::no_kind_lets_a_definition_run_longer_than_an_unwatched_turn`
 
+<a id="DELEGATE-25"></a>
+### DELEGATE-25: a delegate that reached its bound says so beside its report
+
+A delegate held to [DELEGATE-6](#DELEGATE-6)'s bound answers with what it has, which reads like a
+finished answer. So the driver adds one sentence of its own, naming the bound and saying the work
+may not be finished: to the planner's message, and to the person's note beside it.
+
+The sentence sits beside the report rather than inside it, so the planner is told the same thing
+whether it is shown the words or handed a reference to them
+([AGENT-4](tools/spawn-agent.md#AGENT-4), [DELEGATE-8](#DELEGATE-8)). Nothing is derived from the
+report.
+
+**Why the driver says it rather than the delegate.** DELEGATE-6 has the delegate told on its
+limiting round to say what stopped it, and that is model text: a delegate may spend its last round
+on something else, and a quarantined report reaches the planner as a reference holding no words at
+all. What the driver says arrives either way.
+
+**What the comparison reads.** Two counts the driver already holds, the rounds the run made and the
+bound its spec fixed before it started. Neither comes from a report, so this takes no decision from
+untrusted bytes ([LABEL-5](labels.md#LABEL-5)).
+
+`verified-by: bravebot_agent::turn::a_delegate_held_to_its_bound_says_so_to_the_planner_and_the_person`
+`verified-by: bravebot_agent::turn::a_delegate_that_answered_early_says_nothing_about_a_limit`
+`verified-by: bravebot_agent::turn::a_quarantined_report_carries_the_same_sentence_about_the_bound`
+
 <a id="DELEGATE-7"></a>
 ### DELEGATE-7: a delegate may delegate, to a fixed depth and under one ceiling for the turn
 

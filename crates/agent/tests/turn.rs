@@ -25014,7 +25014,143 @@ fn a_delegate_that_reached_its_round_limit_says_so_in_the_trail_and_the_note() {
     );
     assert_eq!(
         note,
-        "a one-round delegate reached its limit of 1 round and answered with what it had"
+        "a one-round delegate reached its limit of 1 round and answered with what it had, so it \
+         may not be finished"
+    );
+}
+
+/// DELEGATE-25: a delegate held to its bound answers with what it has, which reads to the planner
+/// like any other answer. The driver says the bound was reached in the planner's own message and in
+/// the person's note, from the two counts it holds rather than from anything the delegate wrote.
+#[test]
+fn a_delegate_held_to_its_bound_says_so_to_the_planner_and_the_person() {
+    let scratch = Scratch::new("delegate-bound-said");
+    std::fs::write(scratch.path.join("notes.txt"), "a line\n").expect("write the file");
+    let home = Scratch::new("delegate-bound-said-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("one-round.md"),
+        "---\nname: one-round\ndescription: Looks once.\nkind: reader\nrounds: 1\n---\n\nLook once.\n",
+    )
+    .expect("write the definition");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "SEND-ONE-WITH-ONE-ROUND",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"one-round","task":"LOOK-ONLY-ONCE"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("relayed"),
+            ],
+        ),
+        (
+            "LOOK-ONLY-ONCE",
+            vec![
+                tool_request("read_file", r#"{"path":"notes.txt"}"#),
+                reply_with("WHAT-ONE-LOOK-FOUND"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("SEND-ONE-WITH-ONE-ROUND").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let asked = every_request(&received);
+    let told = asked
+        .iter()
+        .filter(|body| body.contains("SEND-ONE-WITH-ONE-ROUND"))
+        .find(|body| body.contains("WHAT-ONE-LOOK-FOUND"))
+        .expect("the report was never put in front of the planner");
+    assert!(
+        told.contains("It stopped at its limit of 1 round and may not be finished."),
+        "the planner was not told the delegate stopped at its bound: {told}"
+    );
+
+    let (_, note, _) = reporter
+        .delegates_finished
+        .first()
+        .expect("no delegate was reported as finishing");
+    assert!(
+        note.contains("so it may not be finished"),
+        "the person's note does not say the work may be unfinished: {note}"
+    );
+}
+
+/// DELEGATE-25 the other way: a delegate that answered with rounds to spare has nothing to say
+/// about a limit, so the sentence is absent rather than always present.
+#[test]
+fn a_delegate_that_answered_early_says_nothing_about_a_limit() {
+    let scratch = Scratch::new("delegate-bound-unreached");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "SEND-A-READER",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"ANSWER-AT-ONCE"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("relayed"),
+            ],
+        ),
+        ("ANSWER-AT-ONCE", vec![reply_with("ANSWERED-EARLY")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("SEND-A-READER"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let asked = every_request(&received);
+    let told = asked
+        .iter()
+        .filter(|body| body.contains("SEND-A-READER"))
+        .find(|body| body.contains("ANSWERED-EARLY"))
+        .expect("the report was never put in front of the planner");
+    assert!(
+        !told.contains("stopped at its limit"),
+        "a delegate with rounds to spare was reported as held to its bound: {told}"
+    );
+
+    let (_, note, _) = reporter
+        .delegates_finished
+        .first()
+        .expect("no delegate was reported as finishing");
+    assert!(
+        !note.contains("may not be finished"),
+        "the person's note claimed an unfinished delegate: {note}"
     );
 }
 
