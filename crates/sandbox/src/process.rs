@@ -250,15 +250,12 @@ pub(crate) fn confined(
     }
 }
 
-/// Start a command a backend has made confining, or refuse.
+/// Give `command` the environment `environment` names and no other.
+///
+/// Matched rather than compared, so a fourth answer added here is a compile error
+/// instead of a program quietly handed everything this process holds.
 #[cfg(unix)]
-pub(crate) fn start(
-    mut command: Command,
-    streams: Streams,
-    environment: &Environment,
-) -> Result<ConfinedChild, SandboxError> {
-    // Matched rather than compared, so a fourth answer added here is a compile error
-    // instead of a program quietly handed everything this process holds.
+pub(crate) fn apply_environment(command: &mut Command, environment: &Environment) {
     match environment {
         Environment::Empty => {
             command.env_clear();
@@ -269,6 +266,16 @@ pub(crate) fn start(
         }
         Environment::Inherited => {}
     }
+}
+
+/// Start a command a backend has made confining, or refuse.
+#[cfg(unix)]
+pub(crate) fn start(
+    mut command: Command,
+    streams: Streams,
+    environment: &Environment,
+) -> Result<ConfinedChild, SandboxError> {
+    apply_environment(&mut command, environment);
     command
         .stdin(Stdio::from(streams.stdin))
         .stdout(Stdio::from(streams.stdout))

@@ -118,7 +118,7 @@ impl SeatbeltSandbox {
         // A repository's configuration and hooks are commands git runs, unconfined, the next time
         // anybody runs git there. Seatbelt lets the last matching rule decide, so this follows the
         // rows it narrows.
-        if !policy.writable.is_empty() {
+        if !policy.writable.is_empty() && !policy.git_directories_writable {
             out.push_str(GIT_DIRECTORY_WRITE);
         }
 
@@ -245,6 +245,31 @@ impl Sandbox for SeatbeltSandbox {
         streams: Streams,
         environment: Environment,
     ) -> Result<ConfinedChild, SandboxError> {
+        let wrapped = Self::wrapping(program, args, policy, &environment)?;
+        crate::process::start(wrapped, streams, &environment)
+    }
+
+    fn command(
+        &self,
+        program: &str,
+        args: &[String],
+        policy: &SandboxPolicy,
+        environment: &Environment,
+    ) -> Result<Command, SandboxError> {
+        let mut wrapped = Self::wrapping(program, args, policy, environment)?;
+        crate::process::apply_environment(&mut wrapped, environment);
+        Ok(wrapped)
+    }
+}
+
+impl SeatbeltSandbox {
+    /// `program` behind `sandbox-exec` with the profile for `policy`, or a refusal of the policy.
+    fn wrapping(
+        program: &str,
+        args: &[String],
+        policy: &SandboxPolicy,
+        environment: &Environment,
+    ) -> Result<Command, SandboxError> {
         if !policy.is_meaningful() {
             return Err(SandboxError::PolicyTooPermissive);
         }
@@ -254,14 +279,14 @@ impl Sandbox for SeatbeltSandbox {
         wrapped.args(confined_argv(
             program,
             args,
-            &environment,
+            environment,
             &std::env::vars_os().collect::<Vec<_>>(),
         )?);
         if let Some(directory) = &policy.starting_in {
             wrapped.current_dir(directory);
         }
 
-        crate::process::start(wrapped, streams, &environment)
+        Ok(wrapped)
     }
 }
 
@@ -1192,6 +1217,130 @@ int main(void) {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A caller running a program a person asked to run against a repository may lift the
+    /// withholding, and the lifting reaches the `.git` and nothing else: the control that gives
+    /// the refusal above its meaning, since a profile dropping every write refusal passes the
+    /// writes below just as readily.
+    #[test]
+    fn a_policy_allowing_git_directory_writes_reaches_a_git_directory() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+
+        let dir = crate::testutil::scratch_dir("bravebot-sandbox-git-directory-allowed");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".git")).expect("the scratch directory is creatable");
+
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read(&dir)
+            .allow_write(&dir)
+            .allow_git_directory_writes();
+        let target = dir.join(".git").join("config");
+        let status = sandbox
+            .spawn(
+                "/usr/bin/touch",
+                &[target.display().to_string()],
+                &policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("should spawn")
+            .wait()
+            .expect("should wait");
+
+        assert!(status.success(), "a write under .git was refused");
+        assert!(target.exists(), "the write created nothing");
+        let outside = dir.parent().expect("a parent").join("bravebot-not-granted");
+        let refused = sandbox
+            .spawn(
+                "/usr/bin/touch",
+                &[outside.display().to_string()],
+                &policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("should spawn")
+            .wait()
+            .expect("should wait");
+        assert_eq!(refused.code(), Some(TOUCH_FAILED));
+        assert!(!outside.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The profile carries the `.git` refusal exactly when a write is granted and the policy has
+    /// not lifted it, so neither a read-only policy gains a stray rule nor a lifted one keeps it.
+    #[test]
+    fn the_git_refusal_is_in_the_profile_only_for_a_policy_that_writes_and_has_not_lifted_it() {
+        let writes = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_write("/work");
+        assert!(SeatbeltSandbox::profile(&writes).contains(GIT_DIRECTORY_WRITE));
+        assert!(
+            !SeatbeltSandbox::profile(&writes.clone().allow_git_directory_writes())
+                .contains(GIT_DIRECTORY_WRITE)
+        );
+        assert!(
+            !SeatbeltSandbox::profile(&SandboxPolicy::strict().allow_read("/usr"))
+                .contains(GIT_DIRECTORY_WRITE)
+        );
+    }
+
+    /// A command handed back for the caller to spawn is confined by the time it runs: the caller
+    /// wires its own streams, as a pipeline must, and the profile and the environment it was given
+    /// are still what the process gets. A `command` that handed back the bare program passes the
+    /// granted half and fails the refused one.
+    #[test]
+    fn a_command_handed_back_is_confined_when_the_caller_spawns_it() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let granted = crate::testutil::scratch_dir("bravebot-sandbox-command-granted");
+        let withheld = crate::testutil::scratch_dir("bravebot-sandbox-command-withheld");
+        for dir in [&granted, &withheld] {
+            let _ = std::fs::remove_dir_all(dir);
+            std::fs::create_dir_all(dir).expect("the scratch directory is creatable");
+        }
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_write(&granted);
+        let environment = Environment::Only(crate::Variables::new().with("PATH", "/usr/bin:/bin"));
+        let touch = |target: &Path| {
+            sandbox
+                .command(
+                    "/usr/bin/touch",
+                    &[target.display().to_string()],
+                    &policy,
+                    &environment,
+                )
+                .expect("a command")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .expect("spawned")
+                .code()
+        };
+
+        assert_eq!(touch(&granted.join("written")), Some(0));
+        assert!(granted.join("written").exists());
+        assert_eq!(touch(&withheld.join("written")), Some(TOUCH_FAILED));
+        assert!(!withheld.join("written").exists());
+
+        let printed = sandbox
+            .command("/usr/bin/env", &[], &policy, &environment)
+            .expect("a command")
+            .output()
+            .expect("spawned");
+        assert_eq!(
+            String::from_utf8_lossy(&printed.stdout).trim(),
+            "PATH=/usr/bin:/bin"
+        );
+
+        for dir in [&granted, &withheld] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
     /// What a program may be trusted with in the environment is the caller's decision and
     /// not a backend's: a credential lives in a variable rather than in a file, so no
     /// grant over paths either withholds one or hands one over, and the agent socket a
@@ -1496,12 +1645,15 @@ int main(void) {
         let developer_directory = PathBuf::from(String::from_utf8_lossy(&selected.stdout).trim())
             .canonicalize()
             .expect("the selected developer directory is there");
+        // The repository is initialised under the temporary directory, which a write row would
+        // keep git from doing while a `.git` is withheld from it.
         let policy = crate::base::base(
             crate::base::Prelude::MacOs,
             &temporary,
             Some(&developer_directory),
             None,
-        );
+        )
+        .allow_git_directory_writes();
         let home = std::env::var_os("HOME").expect("cargo runs a test with a HOME");
         let repository = temporary.join(format!(
             "bravebot-sandbox-a-shim-repository-{}",
