@@ -533,6 +533,14 @@ fn table(
                                         result that stopped at the match cap gives the offset to \
                                         continue from: use it rather than guessing a narrower \
                                         glob, which drops the matches you have not seen yet."
+                    },
+                    "context": {
+                        "type": "integer",
+                        "description": "Lines to show before and after each match, as grep -C \
+                                        does. Defaults to 0, at most 10. Use it to read a hit \
+                                        without a second call. Lines of context are not \
+                                        matches and do not count toward the match cap or the \
+                                        offset."
                     }
                 },
                 "required": ["pattern"]
@@ -8451,13 +8459,51 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
 }
 
 /// The lines a search matched, one `path:line: text` each and nothing of the driver's.
+///
+/// With context, the lines around them follow grep's shape: `path-line- text` for a line that did
+/// not match, and a `--` line between groups that are not adjacent in the file, so a gap is not
+/// read as the lines having been next to each other.
 fn match_lines(found: &crate::workspace::Matches) -> String {
-    found
+    if found.context.is_empty() {
+        return found
+            .matches
+            .iter()
+            .map(|m| format!("{}:{}: {}", m.path, m.line, m.text))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    // Both lists are in file and line order, so a merge keeps that order.
+    let mut rows: Vec<(&str, usize, String)> = found
         .matches
         .iter()
-        .map(|m| format!("{}:{}: {}", m.path, m.line, m.text))
-        .collect::<Vec<_>>()
-        .join("\n")
+        .map(|m| {
+            (
+                m.path.as_str(),
+                m.line,
+                format!("{}:{}: {}", m.path, m.line, m.text),
+            )
+        })
+        .chain(found.context.iter().map(|c| {
+            (
+                c.path.as_str(),
+                c.line,
+                format!("{}-{}- {}", c.path, c.line, c.text),
+            )
+        }))
+        .collect();
+    rows.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+    let mut out = Vec::with_capacity(rows.len());
+    let mut previous: Option<(&str, usize)> = None;
+    for (path, line, text) in &rows {
+        if let Some((before, at)) = previous
+            && (before != *path || at + 1 != *line)
+        {
+            out.push("--".to_string());
+        }
+        out.push(text.clone());
+        previous = Some((path, *line));
+    }
+    out.join("\n")
 }
 
 fn search<S: Sink>(
@@ -8527,13 +8573,21 @@ fn search<S: Sink>(
         .max(1)
         .min(usize::MAX as u64) as usize;
 
-    match workspace.grep(
+    // A plain number as well, and for the same reason: it names nothing. Capped by the workspace.
+    let context = arguments
+        .get("context")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .min(usize::MAX as u64) as usize;
+
+    match workspace.grep_around(
         policy,
         &patterns,
         &directory,
         include.as_ref(),
         case_sensitive,
         offset,
+        context,
     ) {
         Ok(found) => {
             let note = note_for(policy, "search", &found, |found| {
@@ -8558,7 +8612,10 @@ fn search<S: Sink>(
             let (incomplete, paging) = {
                 let shaped = policy.render_in_place("search", &found, |found| {
                     (
-                        found.truncated || found.unvisited || found.timed_out,
+                        found.truncated
+                            || found.unvisited
+                            || found.timed_out
+                            || found.context_truncated,
                         found.paging(),
                     )
                 });
@@ -8637,6 +8694,13 @@ fn search<S: Sink>(
                          rest; narrow it with a directory or an include glob)",
                         found.searched
                     ));
+                }
+                if found.context_truncated {
+                    body.push_str(
+                        "\n\n(the cap on context lines was reached, so the matches after the \
+                         last context line shown come without theirs and the result is \
+                         incomplete; ask for less context or search a narrower tree)",
+                    );
                 }
                 if found.truncated {
                     // Without this a model that gets exactly the cap concludes it has

@@ -12,9 +12,10 @@ documented-by: docs/website/docs/reference/tools.md
 
 ## Scope
 
-Finding lines in the workspace that match a pattern. `pattern`, `directory`, `include`, `offset` and
-`case_sensitive` are routing: the first three name where to look and what to look for, the offset
-names which page of the matches to return, and the flag decides which of the lines there match.
+Finding lines in the workspace that match a pattern. `pattern`, `directory`, `include`, `offset`,
+`case_sensitive` and `context` are routing: the first three name where to look and what to look for,
+the offset names which page of the matches to return, the flag decides which of the lines there
+match, and the context is a count of how many neighbouring lines to show with each.
 The only content argument is the `why` every tool takes ([TOOL-5](tool-surface.md#TOOL-5)). The result is
 the matching lines, or a reference.
 
@@ -306,3 +307,30 @@ had configured them, which is the one thing a test of a cap cannot have.
 `verified-by: bravebot_ui_bridge::workspace::caps_nobody_named_leave_a_turn_on_the_built_in_ones`
 `verified-by: bravebot_ui_bridge::workspace::a_turns_search_runs_under_the_cap_the_settings_name`
 `verified-by: bravebot_agent::workspace::a_search_that_ran_out_of_time_says_so`
+
+<a id="SEARCH-10"></a>
+### SEARCH-10: a search may show the lines around each match
+
+`context` is a count of lines to show before and after every match, at most ten and none unless
+asked. The lines come from the file the walk already read, so the result keeps the label
+[SEARCH-2](#SEARCH-2) gives it and nothing is opened or decided for them. A line that is itself a
+match is shown once, as a match.
+
+Context lines are not matches. They count toward neither the match cap nor the offset
+([SEARCH-8](#SEARCH-8)), and a match skipped by an offset or left behind by the cap brings none. A
+cap of its own bounds how many are returned, and one that stopped the lines around later matches
+being added makes the search incomplete exactly as [SEARCH-3](#SEARCH-3) says of the other caps,
+whether or not the planner may read the result.
+
+**Why.** Understanding a hit otherwise costs a second call per hit, a round trip and a read of a
+file the search had open. The match cap cannot bound the lines around matches: two hundred matches
+with ten lines either side is four thousand lines, which the planner pays for in every later round,
+hence a cap that is not the match cap. A cap that bit silently would leave later matches looking as
+though nothing lay near them.
+
+`verified-by: bravebot_agent::workspace::a_search_with_context_returns_the_lines_around_a_hit`
+`verified-by: bravebot_agent::workspace::context_does_not_count_toward_the_match_cap_or_the_offset`
+`verified-by: bravebot_agent::workspace::a_search_with_more_context_than_the_cap_allows_says_it_is_incomplete`
+`verified-by: bravebot_agent::workspace::a_context_past_the_maximum_is_held_to_it`
+`verified-by: bravebot_agent::turn::a_search_with_context_shows_the_lines_around_each_hit`
+`verified-by: bravebot_agent::turn::a_quarantined_search_cut_short_of_its_context_still_says_it_is_incomplete`
