@@ -368,7 +368,7 @@ pub fn commands() -> [Command; 29] {
         },
         Command {
             name: CHECKOUTS_COMMAND,
-            argument: "[remove <n>]",
+            argument: "[apply <n> | remove <n>]",
             description: t!(command_checkouts),
             mid_turn: MidTurn::Waits,
         },
@@ -611,6 +611,9 @@ pub enum Action {
     /// Remove the checkout with this number. Needs the workspace, the trust map and the terminal
     /// to ask on, which the loop owns.
     RemoveCheckout(String),
+    /// Bring back the files written in the checkout with this number. Needs the workspace, the
+    /// trust map and the terminal to ask on, which the loop owns.
+    ApplyCheckout(String),
     /// Run a command the user typed in shell mode. Needs the workspace and the conversation.
     Run(String),
     /// Put the transcript in front of the user in their editor. Needs the terminal, which the
@@ -1891,6 +1894,7 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         return match crate::checkouts_command::parse(argument) {
             crate::checkouts_command::Asked::List => Action::ListCheckouts,
             crate::checkouts_command::Asked::Remove(id) => Action::RemoveCheckout(id),
+            crate::checkouts_command::Asked::Apply(id) => Action::ApplyCheckout(id),
             crate::checkouts_command::Asked::Unreadable => {
                 session.note(t!(checkouts_command_takes));
                 Action::Redraw
@@ -3864,6 +3868,57 @@ fn event_loop(
                 );
                 let removal = removal_trail(named.as_ref(), &workspace.session_checkouts());
                 stored.append_audit(session.turns, removal.events());
+                needs_draw = true;
+            }
+            Action::ApplyCheckout(id) => {
+                // The person's own typing is the request, so no turn is run: each file goes
+                // through the write gate and is put to them, whatever the map would have said
+                // (CHECKOUT-14).
+                let permission_mode = session.permission_mode();
+                let task = Task::new(format!("/checkouts apply {id}"))
+                    .with_home(bravebot_agent::home::directory())
+                    .with_profile(bravebot_agent::home::profile())
+                    .with_cache(bravebot_agent::home::cache())
+                    .remembering(Some(stored.id().to_string()))
+                    .with_permissions(answers.rules.permissions.clone())
+                    .with_permission_mode(permission_mode)
+                    .with_auto_vetting(session.auto_vetting())
+                    .with_deadlines(bravebot_agent::exec::Deadlines::resolve(
+                        settings.run_deadlines(),
+                    ));
+                let mut trail = Trail::new();
+                let mut asking = crate::confirm::TerminalConfirmer::new(terminal);
+                let mut confirmer =
+                    bravebot_agent::Confining::new(&mut asking, permission_mode, task.auto_vetting);
+                match turn::apply_checkout_asked_for(
+                    config,
+                    &Egress::new(),
+                    &workspace,
+                    &task,
+                    &id,
+                    &mut confirmer,
+                    &mut trail,
+                    answers.trust.clone(),
+                ) {
+                    Ok(done) => {
+                        answers.trust = done.trust;
+                        let heading = match done.applied {
+                            true => t!(checkouts_applied, id = &id),
+                            false => t!(checkouts_not_applied, id = &id),
+                        };
+                        session.note(format!("{heading}\n{}", done.text));
+                    }
+                    Err(_)
+                        if !workspace
+                            .session_checkouts()
+                            .iter()
+                            .any(|kept| kept.id == id) =>
+                    {
+                        session.note(t!(checkouts_no_such, id = &id))
+                    }
+                    Err(refusal) => session.note(refusal),
+                }
+                stored.append_audit(session.turns, trail.events());
                 needs_draw = true;
             }
             Action::Compact(focus) => {
@@ -15552,6 +15607,10 @@ mod tests {
         let mut session = Session::new("none");
         for (typed, asked) in [
             ("/checkouts", Action::ListCheckouts),
+            (
+                "/checkouts apply c2",
+                Action::ApplyCheckout("c2".to_string()),
+            ),
             (
                 "/checkouts remove 2",
                 Action::RemoveCheckout("c2".to_string()),

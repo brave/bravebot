@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 
 /// The word that removes a checkout, rather than naming one.
 const REMOVE: &str = "remove";
+/// The word that brings a checkout's files back into the working directory.
+const APPLY: &str = "apply";
 
 /// What the argument to `/checkouts` asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +22,8 @@ pub enum Asked {
     List,
     /// Remove the checkout with this number, spelled the way the list spells it.
     Remove(String),
+    /// Bring back the files written in the checkout with this number, spelled the same way.
+    Apply(String),
     /// Anything else, answered by saying what the command takes.
     Unreadable,
 }
@@ -27,13 +31,14 @@ pub enum Asked {
 /// Read the argument to `/checkouts`.
 ///
 /// A number is taken as the list prints it, `c2`, or bare, `2`. Anything else is unreadable rather
-/// than a guess, since removing the wrong checkout deletes work.
+/// than a guess, since removing the wrong checkout deletes work and applying the wrong one writes
+/// into the working directory.
 pub fn parse(argument: &str) -> Asked {
     let argument = argument.trim();
     if argument.is_empty() {
         return Asked::List;
     }
-    let Some((REMOVE, named)) = argument.split_once(char::is_whitespace) else {
+    let Some((word, named)) = argument.split_once(char::is_whitespace) else {
         return Asked::Unreadable;
     };
     let named = named.trim();
@@ -41,9 +46,13 @@ pub fn parse(argument: &str) -> Asked {
     if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
         return Asked::Unreadable;
     }
-    match digits.parse::<u64>() {
-        Ok(number) => Asked::Remove(format!("c{number}")),
-        Err(_) => Asked::Unreadable,
+    let Ok(number) = digits.parse::<u64>() else {
+        return Asked::Unreadable;
+    };
+    match word {
+        REMOVE => Asked::Remove(format!("c{number}")),
+        APPLY => Asked::Apply(format!("c{number}")),
+        _ => Asked::Unreadable,
     }
 }
 
@@ -327,6 +336,14 @@ mod tests {
     fn the_bare_word_lists_the_checkouts() {
         assert_eq!(parse(""), Asked::List);
         assert_eq!(parse("   "), Asked::List);
+    }
+
+    #[test]
+    fn apply_and_a_number_brings_back_that_checkouts_files() {
+        assert_eq!(parse("apply c3"), Asked::Apply("c3".to_string()));
+        assert_eq!(parse("apply 12"), Asked::Apply("c12".to_string()));
+        assert_eq!(parse("apply"), Asked::Unreadable);
+        assert_eq!(parse("apply all"), Asked::Unreadable);
     }
 
     #[test]

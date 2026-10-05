@@ -242,9 +242,11 @@ delegate typed for what it wrote. The agent brings those files back with
 the difference from your own file as it is now, whatever your trust settings say about that path.
 Where the session has written that path in your working directory since the checkout was made, the
 question says so. Bringing a file back is an ordinary write, so [`/undo`](../reference/commands.md#undo) puts your file
-back. A file a program wrote other than through a redirection is not found, and a command that
-brings work back by hand is not built yet. A checkout stays where it is until you remove it with
-[`/checkouts remove`](../reference/commands.md#checkouts-remove-n), and
+back. You can bring them back yourself with
+[`/checkouts apply`](../reference/commands.md#checkouts-apply-n--remove-n), which asks the same
+questions. A file a program wrote other than through a redirection is not found. A checkout stays
+where it is until you remove it with
+[`/checkouts remove`](../reference/commands.md#checkouts-apply-n--remove-n), and
 [`/status`](../reference/commands.md#status) and `/checkouts` list each one the session has kept.
 
 ## Which one wins

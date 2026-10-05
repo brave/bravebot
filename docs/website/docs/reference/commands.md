@@ -31,7 +31,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/caffeinate` | | Keep the computer awake while a turn or loop is pending |
 | `/pr` | `[<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
 | `/issue` | `[<url> \| clear]` | Say which issue this session is for, show it, or clear it |
-| `/checkouts` | `[remove <n>]` | List the checkouts delegates kept, and remove one by its number |
+| `/checkouts` | `[apply <n> \| remove <n>]` | List kept checkouts, bring their files back, or remove one |
 | `/manifest` | `<task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
 | `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
 | `/export` | `[path]` | Export the session transcript to a markdown file |
@@ -480,12 +480,13 @@ incognito session asks every time.
 It runs `/usr/bin/caffeinate` on macOS, `systemd-inhibit` on Linux and PowerShell on Windows. If the
 program cannot be started, or stops by itself, the transcript says so and `/caffeinate` turns off.
 
-## `/checkouts [remove <n>]`
+## `/checkouts [apply <n> | remove <n>]`
 
-Lists the checkouts this session keeps for its delegates, and removes one by its number.
+Lists the checkouts this session keeps for its delegates, brings the files written in one back into your working directory, and removes one by its number.
 
 ```
 /checkouts            # each kept checkout, numbered, with what was written in it
+/checkouts apply 2    # bring back the files written in checkout c2, one question each
 /checkouts remove 2   # delete checkout c2, and its entry in your repository's .git
 ```
 
@@ -494,8 +495,12 @@ there. The list names the paths the delegate typed for the files it wrote, twent
 the writes it made through a reference. Nothing reads a checkout's status, so a file a program
 changed there is not named.
 
-**Removing one something was done in asks first**, since nothing brings its work back into your tree
-yet and removing it deletes that work. `y` removes it; `n`, Esc and ctrl-c keep it. `2` and `c2` name
+**`/checkouts apply 2` asks about every file the driver recorded a write to in checkout c2**, one at a
+time, whatever your trust map would have said, and shows the difference between your file as it is
+now and the checkout's. It is the same operation as the `apply_checkout` tool and asks the same
+questions. A file a program wrote there, or wrote through a reference, is not among them.
+
+**Removing one something was done in asks first**, since removing it deletes that work. `y` removes it; `n`, Esc and ctrl-c keep it. `2` and `c2` name
 the same checkout. The rules copied for it go with it, except one marking a file there untrusted,
 which stays so that history showing the file keeps its label. A checkout that holds your working
 directory, or a directory added with `/add-dir`, is kept: `/cd` out of it first.
