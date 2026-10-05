@@ -250,6 +250,7 @@ is written for. This is a request that says otherwise.
 `verified-by: bravebot_agent::turn::the_summariser_asks_for_no_cache_of_the_exchange_it_gives_up`
 `verified-by: bravebot_aichat::protocol::a_request_giving_up_its_conversation_marks_the_prompt_alone`
 `verified-by: bravebot_bedrock::protocol::a_request_giving_up_its_conversation_keeps_the_prompts_breakpoint_alone`
+`verified-by: bravebot_bedrock::lib::a_request_giving_up_its_conversation_sends_no_breakpoint_on_the_end_of_it`
 
 <a id="COMPACT-12"></a>
 ### COMPACT-12: what a compaction costs the cache is the conversation
