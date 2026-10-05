@@ -959,8 +959,17 @@ The id has to be shaped like a session's name, letters, digits, `-` and `_` in o
 or the request is refused as a bad request before any path is built from it. An id that names no
 record is refused with `no_such_session`, never answered as a success. A session the bridge has
 open is refused: with `turn_in_flight` while a turn is running in it, and with `bad_request`
-otherwise, which asks the caller to close it first. A link standing where the record or the trail
-should be is removed as a link and never followed, so the file it points at is untouched.
+otherwise, which asks the caller to close it first. The id of a session is not readable while its
+turn runs, so while a turn runs in any session the bridge has open in the same project, a delete in
+that project is refused with `turn_in_flight`, and the message names the project's running turn
+rather than the session being deleted. The refusal covers the sessions this bridge has open and
+nothing else: a session another process has open is not seen, and that process's next save writes
+its record back. A link standing where the record or the trail should be is removed as a link and
+never followed, so the file it points at is untouched.
+
+The bridge deletes any session it is given, whether or not it is archived. The desktop app offers
+the delete on archived conversations only, and its main process forwards `session.delete` only for
+a `directory` it offered, as it does for `session.new` and `session.open`.
 
 A fork is a complete copy made when it was forked and shares no file with the session it came from,
 so deleting either leaves the other openable with its own history and trail. The trail goes before
@@ -982,6 +991,7 @@ deleted an open session would have the next save write the record back.
 `verified-by: bravebot_ui_bridge::deleting::a_name_that_could_leave_the_store_is_a_bad_request`
 `verified-by: bravebot_ui_bridge::deleting::a_session_a_window_has_open_is_not_deleted_from_under_it`
 `verified-by: bravebot_ui_bridge::deleting::a_session_with_a_turn_running_is_refused_as_such`
+`verified-by: bravebot_ui_bridge::deleting::a_turn_in_another_session_is_named_as_such_and_deletes_nothing`
 
 ## Known costs
 

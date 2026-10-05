@@ -553,7 +553,9 @@ app.whenReady().then(() => {
     }
     // A session's directory becomes the root the file helper is pinned to, so the renderer may
     // open one only in a folder it was given (TRUST-20), whatever shape the string it sends has.
-    if (method === 'session.new' || method === 'session.open') {
+    // A delete names a directory too, and is the one method here that cannot be undone, so it is
+    // held to the same folders.
+    if (method === 'session.new' || method === 'session.open' || method === 'session.delete') {
       if (!mayOpenSessionIn((params as { directory?: unknown } | null)?.directory)) {
         return { error: { code: 'bad_request', message: 'that is not a folder this app offered' } }
       }

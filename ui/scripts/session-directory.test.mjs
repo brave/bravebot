@@ -55,9 +55,9 @@ test('the request handler makes a bot home again for session.new and session.ope
   assert.ok(index.indexOf('bridge.request(method', remake.index) > remake.index, 'and the folder is made before the request is forwarded')
 })
 
-test('the request handler refuses session.new and session.open before forwarding them', () => {
+test('the request handler refuses session.new, session.open and session.delete before forwarding them', () => {
   const index = readFileSync('src/main/index.ts', 'utf8')
-  const gate = /method === 'session\.new' \|\| method === 'session\.open'\) \{\s*if \(!mayOpenSessionIn\([^\n]*\)\) \{\s*return \{ error/.exec(index)
+  const gate = /method === 'session\.new' \|\| method === 'session\.open' \|\| method === 'session\.delete'\) \{\s*if \(!mayOpenSessionIn\([^\n]*\)\) \{\s*return \{ error/.exec(index)
   assert.ok(gate, 'an unoffered folder is answered with an error, unconditionally')
   assert.ok(index.indexOf('bridge.request(method', gate.index) > gate.index, 'and the check comes before the request is forwarded')
 })

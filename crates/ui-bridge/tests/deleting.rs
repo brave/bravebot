@@ -446,3 +446,37 @@ fn a_session_with_a_turn_running_is_refused_as_such() {
     assert_eq!(refused["error"]["code"], "turn_in_flight", "{refused}");
     assert_eq!(stored(&home), before, "a running session was deleted");
 }
+
+/// A turn running in another session of the project refuses the delete, and says so.
+///
+/// The running session's id cannot be read while its turn holds the session, so a delete in the
+/// same project is refused whichever session it names. The refusal names the project's running
+/// turn and not the session being deleted, which is not the one running.
+#[test]
+fn a_turn_in_another_session_is_named_as_such_and_deletes_nothing() {
+    let scratch = Scratch::new("bridge-delete-neighbour-running");
+    let (endpoint, holding) = stub_service(Chat::Holds);
+    let home = scratch.home();
+    let project = scratch.project();
+    let stored_id = take_turn(&home, &project, &endpoint, None, "an earlier question");
+    let before = stored(&home);
+    let mut window = Window::open(&home, &project, &endpoint, None);
+
+    window.start(HELD);
+    holding
+        .recv_timeout(PATIENCE)
+        .expect("the service never received the held request");
+    let refused = delete(&mut window, &project, &stored_id);
+
+    assert_eq!(refused["error"]["code"], "turn_in_flight", "{refused}");
+    let message = refused["error"]["message"].as_str().expect("a message");
+    assert!(
+        message.contains("a session of this project"),
+        "the refusal should name the project's running turn: {message}"
+    );
+    assert!(
+        !message.contains("in the session being deleted"),
+        "the session being deleted is not the one running: {message}"
+    );
+    assert_eq!(stored(&home), before, "a stored session was deleted");
+}

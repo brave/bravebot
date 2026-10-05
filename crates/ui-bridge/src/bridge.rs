@@ -655,14 +655,24 @@ impl Bridge {
             self.reap(handle);
         }
         let key = bravebot_session::sessions::key_for(&directory);
-        let holder = self.open.values().find(|open| {
-            bravebot_session::sessions::key_for(&open.project) == key
-                && match open.state.try_lock() {
-                    Ok(state) => state.handle.as_ref().is_some_and(|held| held.id() == id),
-                    // A worker keeps the lock for the whole of its turn, so it cannot be ruled out.
-                    Err(_) => true,
+        // A worker keeps a session's lock for the whole of its turn, so the id of a session with a
+        // turn running cannot be read. It is set apart from a session known to hold `id`.
+        let mut holder = None;
+        let mut busy = None;
+        for open in self
+            .open
+            .values()
+            .filter(|open| bravebot_session::sessions::key_for(&open.project) == key)
+        {
+            match open.state.try_lock() {
+                Ok(state) if state.handle.as_ref().is_some_and(|held| held.id() == id) => {
+                    holder = Some(open);
+                    break;
                 }
-        });
+                Ok(_) => {}
+                Err(_) => busy = busy.or(Some(open)),
+            }
+        }
         if let Some(open) = holder {
             return Err(if open.running.is_some() {
                 Failure::new(
@@ -672,6 +682,18 @@ impl Bridge {
             } else {
                 Failure::bad_request(
                     "the session is open; close it with session.close before deleting it",
+                )
+            });
+        }
+        if let Some(open) = busy {
+            return Err(if open.running.is_some() {
+                Failure::new(
+                    ErrorCode::TurnInFlight,
+                    "a turn is running in a session of this project, so the session being deleted cannot be told apart from it; wait for the turn to end",
+                )
+            } else {
+                Failure::bad_request(
+                    "a session of this project is in use, so the session being deleted cannot be told apart from it; try again",
                 )
             });
         }
