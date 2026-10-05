@@ -16,6 +16,7 @@ use crate::rewind::CoverageTracker;
 pub use crate::rewind::{CoverageGap, RewindCoverage};
 use base64::Engine;
 use bravebot_core::capability::Capability;
+use bravebot_core::delegate::CheckoutRefusal;
 use bravebot_core::event::{Role, Sink};
 use bravebot_core::label::Label;
 use bravebot_core::policy::{Denial, Policy};
@@ -112,9 +113,11 @@ fn expand_home(named: &str, home: Option<&Path>) -> Result<Option<PathBuf>, &'st
     }
     let path = Path::new(named);
     let home = home.ok_or("`~` stands for the home directory and this user has none")?;
-    Ok(Some(
-        home.join(path.components().skip(1).collect::<PathBuf>()),
-    ))
+    let rest = path.components().skip(1).collect::<PathBuf>();
+    Ok(Some(match rest.as_os_str().is_empty() {
+        true => home.to_path_buf(),
+        false => home.join(rest),
+    }))
 }
 
 /// What a failed read says, where a missing file also says what a relative path was joined to.
@@ -482,6 +485,12 @@ pub struct Workspace {
     /// standing refusal to override, and a session whose own directory went unreachable would fail
     /// every read and write in it (TRUST-16).
     reads_stay_inside: bool,
+    /// The home directory a leading `~` stands for, read from the environment when the workspace
+    /// is built (TRUST-10).
+    ///
+    /// Held rather than read at each use, so every answer about one path (where it resolves, what
+    /// it is keyed under, what a rule and a watch are told it is) comes from one home.
+    home: Option<PathBuf>,
     /// What the files this turn has written held before it wrote to them.
     ///
     /// Behind a lock and a handle because a workspace is cloned into the turn that uses it, and a
@@ -923,6 +932,18 @@ enum CheckoutOverlap<'a> {
 }
 
 impl CheckoutOverlap<'_> {
+    fn cause(&self) -> CheckoutRefusal {
+        match self {
+            Self::InsideWorkingDirectory => CheckoutRefusal::InsideWorkingDirectory,
+            Self::AddedHoldsWorkingDirectory(dir) => {
+                CheckoutRefusal::OpenedHoldsWorkingDirectory(dir.display().to_string())
+            }
+            Self::AddedHoldsCheckouts(dir) => {
+                CheckoutRefusal::OpenedHoldsCheckouts(dir.display().to_string())
+            }
+        }
+    }
+
     fn describe(&self) -> String {
         let way_out = |dir: &Path| {
             format!(
@@ -1085,6 +1106,7 @@ impl Workspace {
             search_files: MAX_SEARCH_FILES,
             search_time: MAX_SEARCH_TIME,
             reads_stay_inside: false,
+            home: crate::home::profile(),
             backups: Arc::new(Mutex::new(Vec::new())),
             rewind: Arc::default(),
             checkout: None,
@@ -1495,7 +1517,30 @@ impl Workspace {
     /// lexical test that saw nothing wrong. What comes back is that destination, so a caller that
     /// needs the file rather than the name has it.
     pub(crate) fn resolve(&self, relative: &str) -> Result<PathBuf, WorkspaceError> {
-        self.resolve_with_home(relative, crate::home::profile().as_deref())
+        self.resolve_with_home(relative, self.home.as_deref())
+    }
+
+    /// `named` with a leading `~` spelled out as the home directory, and as given otherwise,
+    /// including where no home is known, which [`Workspace::resolve`] refuses.
+    ///
+    /// For a caller that hands a path to something that does not resolve it as the file tools do:
+    /// a `deny` rule is anchored at the home directory and never matches the spelling `~/x`, and
+    /// a watch is looked at later from a working directory that may have moved, where `~/x` reads
+    /// as relative and the watch is ended.
+    pub(crate) fn expanded(&self, named: &str) -> String {
+        match expand_home(named, self.home.as_deref()) {
+            Ok(Some(path)) => path.to_string_lossy().into_owned(),
+            _ => named.to_string(),
+        }
+    }
+
+    /// Stand in for the environment's home directory, so a test does not depend on whose machine
+    /// it runs on.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_home(mut self, home: Option<PathBuf>) -> Self {
+        self.home = home;
+        self
     }
 
     /// [`Workspace::resolve`] with the home directory a leading `~` stands for supplied, so the
@@ -3874,29 +3919,51 @@ impl Workspace {
         state: &Path,
         made_for: bravebot_core::delegate::DelegateId,
     ) -> Result<Workspace, String> {
-        let refused = |why: &str| format!("No checkout was made: {why}");
+        self.checkout_for_cause(policy, state, made_for)
+            .map_err(|(_, sentence)| sentence)
+    }
+
+    /// [`Workspace::checkout_for`], with the fixed category of a refusal beside its sentence, so
+    /// the caller can record which refusal it was (TRACE-1).
+    pub fn checkout_for_cause<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        state: &Path,
+        made_for: bravebot_core::delegate::DelegateId,
+    ) -> Result<Workspace, (CheckoutRefusal, String)> {
+        let refused =
+            |cause: CheckoutRefusal, why: &str| (cause, format!("No checkout was made: {why}"));
         if self.checkout.is_some() {
             return Err(refused(
+                CheckoutRefusal::AlreadyInCheckout,
                 "this delegate already works in a checkout, which the delegates it starts share",
             ));
         }
-        let unmade = || refused("the directory for checkouts could not be made");
+        let unmade = || {
+            refused(
+                CheckoutRefusal::DirectoryUnusable,
+                "the directory for checkouts could not be made",
+            )
+        };
         let directory = state
             .canonicalize()
             .map_err(|_| unmade())?
             .join("checkouts")
             .join(crate::home::key_for(&self.root));
         if let Some(overlap) = self.checkout_overlap(&directory) {
-            return Err(refused(&overlap.describe()));
+            return Err(refused(overlap.cause(), &overlap.describe()));
         }
         let made_directory = crate::home::create_directory(&directory)
             .and_then(|()| directory.canonicalize())
             .map_err(|_| unmade())?;
         if let Some(overlap) = self.checkout_overlap(&made_directory) {
-            return Err(refused(&overlap.describe()));
+            return Err(refused(overlap.cause(), &overlap.describe()));
         }
         if refuse_unkeyable(&made_directory, "checkouts", BACKSLASH_SEPARATES).is_err() {
-            return Err(refused("no trust rule can be keyed under its directory"));
+            return Err(refused(
+                CheckoutRefusal::DirectoryUnusable,
+                "no trust rule can be keyed under its directory",
+            ));
         }
         let mut tries = 0;
         let (id, target, made) = loop {
@@ -3910,14 +3977,23 @@ impl Workspace {
                     ..
                 }) if tries < 16 => tries += 1,
                 Err(WorkspaceError::Checkout { refused: why, .. }) => {
-                    return Err(why.describe("the working directory"));
+                    return Err((
+                        CheckoutRefusal::RepositoryRefused,
+                        why.describe("the working directory"),
+                    ));
                 }
                 Err(WorkspaceError::Denied(_)) => {
                     return Err(refused(
+                        CheckoutRefusal::RepositoryRefused,
                         "the policy did not allow the repository to be read",
                     ));
                 }
-                Err(_) => return Err(refused("the repository could not be read")),
+                Err(_) => {
+                    return Err(refused(
+                        CheckoutRefusal::RepositoryRefused,
+                        "the repository could not be read",
+                    ));
+                }
             }
         };
 
@@ -4211,11 +4287,7 @@ impl Workspace {
     /// landing in no open directory keeps a root of its own rather than being read under the
     /// project's ([`bravebot_core::spelling::to_key`]).
     pub(crate) fn trust_key(&self, named: &str) -> String {
-        self.keyed(
-            named,
-            BACKSLASH_SEPARATES,
-            crate::home::profile().as_deref(),
-        )
+        self.keyed(named, BACKSLASH_SEPARATES, self.home.as_deref())
     }
 
     /// The same with the host's answer and the home a leading `~` stands for supplied, for the
@@ -5143,6 +5215,30 @@ mod tests {
             home.canonicalize().expect("canonical home"),
             project.canonicalize().expect("canonical project"),
         )
+    }
+
+    /// A caller that cannot resolve a path spells it out: only a whole first segment is the home,
+    /// and with no home known the name is left as written for `resolve` to refuse.
+    #[test]
+    fn a_path_is_spelled_out_from_the_home_only_by_a_whole_leading_tilde() {
+        let (home, project) = home_and_project("tilde-spelled");
+        let workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_home(Some(home.clone()));
+
+        assert_eq!(
+            workspace.expanded("~/todo.txt"),
+            home.join("todo.txt").to_string_lossy()
+        );
+        assert_eq!(workspace.expanded("~"), home.to_string_lossy());
+        for unchanged in ["~notes/x", "./~/x", "notes/~", "todo.txt"] {
+            assert_eq!(workspace.expanded(unchanged), unchanged);
+        }
+        assert_eq!(
+            workspace.with_home(None).expanded("~/todo.txt"),
+            "~/todo.txt"
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
     }
 
     /// The planner writes `~/todo.txt` for a file in the person's home, and an opened home has to

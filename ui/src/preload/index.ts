@@ -142,9 +142,9 @@ const api = {
     /** The preview seed, used only when creating a bot. */
     avatar?: string
     model?: string | null
-    name: string
-    purpose: string
-    directory: string
+    /** Required for a new bot. An existing bot keeps what is left out. */
+    name?: string
+    purpose?: string
   }): Promise<Bot | null> {
     return ipcRenderer.invoke('bravebot:bots:write', bot) as Promise<Bot | null>
   },
@@ -176,17 +176,17 @@ const api = {
   /**
    * What a bot's memory currently says, or `null` if it has none to read yet.
    *
-   * The words, never the path — which is what keeps this side of the wall unable to name a file.
-   * The main process knows where a bot's memory lives because it put it there.
+   * The words, never the path. `directory` picks which of the bot's folders to read, and the main
+   * process refuses any folder it has not recorded for that bot.
    */
-  readBotMemory(slug: string): Promise<string | null> {
-    return ipcRenderer.invoke('bravebot:bots:memory', slug) as Promise<string | null>
+  readBotMemory(slug: string, directory: string): Promise<string | null> {
+    return ipcRenderer.invoke('bravebot:bots:memory', slug, directory) as Promise<string | null>
   },
-  readMemoryHistory(slug: string): Promise<{ at: number; text: string; source: 'agent' | 'user' }[]> {
-    return ipcRenderer.invoke('bravebot:bots:memory-history', slug) as Promise<{ at: number; text: string; source: 'agent' | 'user' }[]>
+  readMemoryHistory(slug: string, directory: string): Promise<{ at: number; text: string; source: 'agent' | 'user' }[]> {
+    return ipcRenderer.invoke('bravebot:bots:memory-history', slug, directory) as Promise<{ at: number; text: string; source: 'agent' | 'user' }[]>
   },
-  editBotMemory(slug: string, text: string, expected: string | null): Promise<string> {
-    return ipcRenderer.invoke('bravebot:bots:edit-memory', slug, text, expected) as Promise<string>
+  editBotMemory(slug: string, directory: string, text: string, expected: string | null): Promise<string> {
+    return ipcRenderer.invoke('bravebot:bots:edit-memory', slug, directory, text, expected) as Promise<string>
   },
 
   /**

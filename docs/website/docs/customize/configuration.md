@@ -454,6 +454,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `keybindings` | keys rebound to your own choice ([below](#keybindings)) |
 | `search` | how large a tree a search may walk ([below](#search)) |
 | `terminalTitle` | whether the terminal's title is set to the session's name ([below](#terminaltitle)) |
+| `updateCheck` | whether startup checks for a newer release ([below](#updatecheck)) |
 | `vetting` | whether quarantined content is checked without asking you ([below](#vetting)) |
 
 In `env`, only string values: a number or a boolean is skipped rather than coerced, so write `"1"` and
@@ -608,6 +609,19 @@ The terminal's title names the session, as `bravebot · dependency audit`
 terminal or multiplexer that manages titles itself. Only the boolean `false` turns it off: `"false"`
 in quotes, or any other value, leaves it on. An incognito session leaves the title alone whatever this
 says.
+
+### `updateCheck`
+
+```json
+{ "updateCheck": false }
+```
+
+At startup bravebot says when a newer release is out, from an answer it asks the npm registry or the
+GitHub releases API for at most once an hour. `false` turns that off: nothing is read, requested or
+recorded, and no line is said. Setting the environment variable `BRAVEBOT_UPDATE_CHECK=0` does the
+same, for a machine where updates are managed elsewhere, and either one is enough. Only the boolean
+`false` and the value `0` turn it off. It does not affect the installer's checksum and signature
+checks.
 
 ### `run.scrubEnv`
 

@@ -120,7 +120,7 @@ try {
   assert.ok(toolResults(rounds.at(-1)).includes(KEY))
 
   // ---- a new conversation, which asks again, and a no ------------------------------------------
-  await page.locator('.new-split .new').click()
+  await page.locator('[data-test="new-session"]').click()
   // The new conversation is on screen once the first one's rows are gone.
   await page.locator('.bubble').first().waitFor({ state: 'detached' })
   if (await trust.isVisible().catch(() => false)) await trustIt()

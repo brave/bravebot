@@ -46,8 +46,8 @@ export function Watches({ session, onClose }: { session: string; onClose: () => 
   return <Modal title="File watches" size="md" onClose={onClose} className="watch-settings"
     subtitle="A file change starts a turn in this conversation and may use model credits."
     actions={<>
-      <Button size="small" kind="plain-faint" className="modal-leading" isDisabled={busy || !listing?.watches.length} onClick={() => void request('watches.stop', { all: true })}>Stop all watches</Button>
-      <Button size="small" kind="filled" onClick={onClose} data-test="watches-done">Done</Button>
+      <Button kind="plain-faint" className="modal-leading" isDisabled={busy || !listing?.watches.length} onClick={() => void request('watches.stop', { all: true })}>Stop all watches</Button>
+      <Button kind="filled" onClick={onClose} data-test="watches-done">Done</Button>
     </>}>
     <p className="grant-lede">Normal read and approval rules still apply. Up to eight watches, for seven days each. They run while this conversation is open in the app; closing it ends the watches.</p>
     {problem && <Alert type="error" size="small" role="alert">{problem}</Alert>}{status && <Alert type="success" size="small" role="status">{status}</Alert>}

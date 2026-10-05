@@ -24,13 +24,18 @@ export type Side = keyof typeof SIDES
 const CENTER_MIN = 480
 
 /**
- * The two 1px dividers, which are part of the window even though nobody sizes them.
+ * What the grid holds besides the columns, which nobody sizes: the 1px seam beside the sidebar,
+ * the ground at the window's right edge, the gap before the context card while it is open, and the
+ * ground at the left edge while the sidebar is folded. Each piece of ground is `--card-gap` (8px)
+ * in `shell.css`.
  *
- * They sit in the same grid as the columns, so a window's worth of room is two pixels
- * short of what the columns may divide between them. Left out of the arithmetic, the
- * transcript's floor was quietly two pixels lower than [`CENTER_MIN`] claims.
+ * They sit in the same grid as the columns, so a window's worth of room is that much short of
+ * what the columns may divide between them. Left out of the arithmetic, the transcript's floor
+ * would be quietly lower than [`CENTER_MIN`] claims.
  */
-const DIVIDERS = 2
+const CARD_GAP = 8
+const chrome = (collapsed: Record<Side, boolean>): number =>
+  1 + CARD_GAP + (collapsed.right ? 0 : CARD_GAP) + (collapsed.left ? CARD_GAP : 0)
 
 export interface Widths {
   left: number
@@ -109,7 +114,7 @@ export function fit(widths: Widths, available: number, collapsed: Record<Side, b
     (collapsed.left ? 0 : left) +
     (collapsed.right ? 0 : right) +
     CENTER_MIN -
-    (available - DIVIDERS)
+    (available - chrome(collapsed))
   if (excess > 0 && !collapsed.right) {
     const fromRight = Math.min(excess, right - SIDES.right.min)
     right -= fromRight

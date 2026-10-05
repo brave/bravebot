@@ -13,33 +13,35 @@
 .context-head {
   flex: none;
   padding: 0 var(--leo-spacing-xl);
-  border-bottom: 1px solid var(--border-hairline);
+  border-bottom: 1px solid var(--border-subtle);
 }
-.inspector-title {
-  display: flex;
-  align-items: center;
-  gap: var(--leo-spacing-m);
-  min-height: var(--titlebar);
-  font: var(--type-body-strong);
-  color: var(--ink-primary);
-}
-.inspector-title strong { flex: 1; min-width: 0; font-weight: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.inspector-title .drawer-close { margin-right: calc(-1 * var(--leo-spacing-s)); }
 .inspector-tabs {
   display: block;
   margin-bottom: -1px;
   --leo-tab-item-font: var(--type-meta-strong);
 }
+/* The title row the bot details panel draws in place of the tabs. */
+.inspector-title {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-xl);
+  min-height: var(--titlebar);
+  font: var(--type-body-strong);
+  color: var(--ink-primary);
+}
+.inspector-title strong { flex: 1; min-width: 0; font-weight: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* ---------------------------------------------------------------- panels */
+/* ---------------------------------------------------------------- panels
 
-.panel { flex: none; border-bottom: 1px solid var(--border-hairline); }
+   A title with its count and a fold, then what it holds, 8px under it; a divider between them. */
+
+.panel { flex: none; border-bottom: 1px solid var(--border-subtle); }
 /* Turned off from the bar. `display: none` rather than a fold: this is not a movement somebody
    should watch, and it takes the panel out of the tab order and the accessibility tree with it. */
 .panel.off { display: none; }
 .panel-collapse {
-  --leo-collapse-summary-padding: var(--leo-spacing-m) var(--leo-spacing-xl);
-  --leo-collapse-summary-color: var(--ink-secondary);
+  --leo-collapse-summary-padding: var(--leo-spacing-l) var(--leo-spacing-xl) var(--leo-spacing-m);
+  --leo-collapse-summary-color: var(--ink-primary);
   --leo-collapse-summary-color-hover: var(--ink-primary);
 }
 .panel-title {
@@ -47,29 +49,20 @@
   align-items: center;
   gap: var(--leo-spacing-m);
   width: 100%;
-  font: var(--type-meta-strong);
+  font: var(--type-body-strong);
 }
-.panel-title .count {
-  margin-left: auto;
-  min-width: var(--icon-hero);
-  padding: 0 var(--leo-spacing-s);
-  border-radius: var(--radius-pill);
-  background: var(--surface-sunken);
-  color: var(--ink-tertiary);
-  font: var(--type-caption-strong);
-  text-align: center;
-}
-.panel-inner { padding: 0 var(--leo-spacing-m) var(--leo-spacing-m); }
+.panel-title .count { margin-left: auto; }
+.panel-inner { padding: 0 var(--leo-spacing-l) var(--leo-spacing-l); }
 
 .panel-empty {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: var(--leo-spacing-m);
   margin: 0;
-  padding: 0 var(--leo-spacing-m) var(--leo-spacing-s);
+  padding: 0 var(--leo-spacing-s);
   color: var(--ink-tertiary);
-  font: var(--type-caption);
-  --leo-icon-size: var(--icon-meta);
+  font: var(--type-meta);
+  --leo-icon-size: var(--icon-control);
 }
 .panel-empty leo-icon { flex: none; }
 
@@ -352,4 +345,43 @@
 @media (forced-colors: active) {
   .panel-title .count, .audit-dot { border: 1px solid CanvasText; }
   .tree-name mark { background: Highlight; color: HighlightText; }
+}
+
+/* ---------------------------------------------------------------- a bot's details
+
+   In place of the panels while a bot's own page is open: its face with a button for a new one, its
+   name and purpose, and the memory it keeps in one of its folders, 16px apart. */
+.bot-details { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.bot-details .context-head { padding: 0 var(--leo-spacing-l); }
+.bot-details-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-xl);
+  padding: var(--leo-spacing-xl);
+}
+.bot-details-face { position: relative; align-self: center; display: grid; place-items: center; }
+.bot-details-face .bot-avatar-refresh { position: absolute; right: calc(-1 * var(--leo-spacing-xs)); bottom: calc(-1 * var(--leo-spacing-xs)); }
+.bot-details .bot-memory-panel { gap: var(--leo-spacing-m); }
+.bot-field-label { font: var(--type-meta-strong); color: var(--ink-primary); }
+/* The top of the memory as the bot wrote it, in the outlined box a text field draws. The rest is in the dialog. */
+.bot-details .bot-memory {
+  margin: 0;
+  padding: var(--leo-spacing-m) var(--leo-spacing-l);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--surface-panel);
+  font: var(--type-body);
+  color: var(--ink-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.bot-details .memory-excerpt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  overflow: hidden;
 }

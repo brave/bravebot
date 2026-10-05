@@ -30,6 +30,7 @@ use crate::report::{Activity, Reporter};
 use bravebot_aichat::protocol::{Tool, ToolCall, Usage};
 use bravebot_core::ask::{self, Choice, Question, Series};
 use bravebot_core::credentials::Scanned;
+use bravebot_core::delegate::CheckoutRefusal;
 use bravebot_core::event::Sink;
 use bravebot_core::label::Label;
 use bravebot_core::policy::{Destination, Policy};
@@ -3939,6 +3940,13 @@ fn refuse_denied_path<S: Sink>(
         Purpose::Effect => policy.before_write(name),
     };
     ask(policy, path).map_err(|_| denied_by_rule(path))?;
+    // Spelled out as well, because a rule anchored at the home directory never matches `~/x`, and
+    // the landing below exists only once the home is opened, so until then the refusal would offer
+    // opening it for a file a rule refuses once it is.
+    let expanded = workspace.expanded(path);
+    if expanded != path {
+        ask(policy, &expanded).map_err(|_| denied_by_rule(path))?;
+    }
     match workspace.landing(path) {
         Some(landed) => ask(policy, &landed).map_err(|_| denied_by_rule(path)),
         None => Ok(()),
@@ -5454,7 +5462,9 @@ fn watch_file<S: Sink>(
     if let Err(denial) = policy.promote_confined_read("watch_file", "path", &found.path) {
         return Produced::problem(format!("refused: {denial}"));
     }
-    let path = found.released;
+    // The absolute path a `~` stands for: the session looks again from a working directory that
+    // may have moved, where `~/x` reads as a relative path and would end the watch.
+    let path = workspace.expanded(&found.released);
 
     // A directory is refused at the surface rather than watched and reported on. What changed
     // inside one is a file name the filesystem produced, and putting that in a fire's prompt is
@@ -7810,8 +7820,8 @@ fn spawn_agent<S: Sink, R: Reporter>(
             Ok(state) => state,
             // Approved by the gate and refused here, so it starts nothing and takes no place
             // under the turn's ceiling (DELEGATE-7).
-            Err(refusal) => {
-                policy.withdraw_delegate(spec);
+            Err((cause, refusal)) => {
+                policy.withdraw_delegate(spec, &cause, tasks.len() - started.len());
                 if started.is_empty() {
                     return Produced::problem(refusal);
                 }
@@ -7821,7 +7831,7 @@ fn spawn_agent<S: Sink, R: Reporter>(
         };
         let made = match state {
             None => None,
-            Some(state) => match tools.workspace.checkout_for(policy, state, id) {
+            Some(state) => match tools.workspace.checkout_for_cause(policy, state, id) {
                 Ok(made) => {
                     if let Some(checkout) = made.checkout() {
                         crate::workspace::record_checkout(
@@ -7832,7 +7842,7 @@ fn spawn_agent<S: Sink, R: Reporter>(
                     }
                     Some(made)
                 }
-                Err(refusal) => {
+                Err((cause, refusal)) => {
                     // Said as the definition's, since the call that met the refusal may not have
                     // asked.
                     let refusal = match spec.asks_for_checkout() {
@@ -7842,7 +7852,7 @@ fn spawn_agent<S: Sink, R: Reporter>(
                         ),
                         false => refusal,
                     };
-                    policy.withdraw_delegate(spec);
+                    policy.withdraw_delegate(spec, &cause, tasks.len() - started.len());
                     if started.is_empty() {
                         return Produced::problem(refusal);
                     }
@@ -7954,27 +7964,29 @@ fn wants_checkout<'a>(
     arguments: &Value,
     spec: &bravebot_core::delegate::DelegateSpec,
     tools: &Tools<'a>,
-) -> Result<Option<&'a std::path::Path>, String> {
+) -> Result<Option<&'a std::path::Path>, (CheckoutRefusal, String)> {
     let called = match arguments.get("isolation") {
         None | Some(Value::Null) => false,
         Some(Value::String(value)) if value == "checkout" => true,
         Some(_) => {
-            return Err(
+            return Err((
+                CheckoutRefusal::UnknownIsolation,
                 "error: 'isolation' may only be \"checkout\"; leave it out for a delegate that \
                  works in your working directory, unless its definition asks for one"
                     .to_string(),
-            );
+            ));
         }
     };
     if !called && !spec.asks_for_checkout() {
         return Ok(None);
     }
     if spec.kind() == bravebot_core::delegate::Kind::Reader {
-        return Err(
+        return Err((
+            CheckoutRefusal::Reader,
             "refused: a reader writes nothing, so a checkout separates it from nobody and would \
              show it the last commit in place of your working tree"
                 .to_string(),
-        );
+        ));
     }
     // Said as the definition's, since the call that met the refusal may not have asked.
     let whose = match spec.asks_for_checkout() {
@@ -7985,14 +7997,19 @@ fn wants_checkout<'a>(
         false => String::new(),
     };
     if tools.workspace.checkout().is_some() {
-        return Err(format!(
-            "refused: {whose}you already work in a checkout, which the delegates you start share"
+        return Err((
+            CheckoutRefusal::AlreadyInCheckout,
+            format!(
+                "refused: {whose}you already work in a checkout, which the delegates you start \
+                 share"
+            ),
         ));
     }
     match tools.home {
         Some(state) if !bravebot_core::incognito::engaged() => Ok(Some(state)),
-        _ => Err(format!(
-            "refused: {whose}this session keeps no state directory to make a checkout in"
+        _ => Err((
+            CheckoutRefusal::NoStateDirectory,
+            format!("refused: {whose}this session keeps no state directory to make a checkout in"),
         )),
     }
 }
@@ -12593,6 +12610,41 @@ mod tests {
             assert!(told.starts_with("watching: a.txt"), "{told}");
         }
 
+        /// A watch is looked at again from wherever the session is by then. Armed on `~/todo.txt`
+        /// it would read as a relative path and end at the first `/cd`, though it names the same
+        /// file as before, so it is armed on the path the `~` stands for.
+        #[test]
+        fn a_file_named_from_the_home_directory_is_armed_on_the_path_it_stands_for() {
+            let scratch = Scratch::new("home-file");
+            let home = scratch.path.join("home");
+            let project = scratch.path.join("project");
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::create_dir_all(&project).unwrap();
+            std::fs::write(home.join("todo.txt"), "milk\n").unwrap();
+            let home = home.canonicalize().unwrap();
+            let mut workspace = Workspace::new(&project)
+                .expect("workspace")
+                .with_home(Some(home.clone()));
+            workspace
+                .add_directory(home.to_str().expect("utf-8"))
+                .expect("home opened");
+
+            let mut count = 0;
+            let (produced, _) = armed(
+                &workspace,
+                Arming::Allowed { free: 8 },
+                &mut count,
+                json!({"path": "~/todo.txt"}),
+            );
+
+            let expected = home.join("todo.txt").to_string_lossy().into_owned();
+            assert_eq!(produced.watch.as_deref(), Some(expected.as_str()));
+            assert!(
+                crate::watch::names_the_same_file(&expected, &project, &home),
+                "the watch would end when the working directory moved"
+            );
+        }
+
         /// A session does one thing at a time that happens without anybody typing, and the
         /// planner is told which of the three reasons it is so that it can say so.
         #[test]
@@ -13383,6 +13435,51 @@ mod tests {
         use bravebot_core::capability::{Capability, CapabilitySet};
         use bravebot_core::event::{Event, RecordingSink};
         use bravebot_core::policy::{ReleasePlan, Routing};
+
+        /// A rule in the settings file is anchored at the home directory, so it never matches the
+        /// spelling `~/secret.txt`. Until the home is opened there is no landing to ask about
+        /// either, and the refusal would offer `/add-dir` for a file the rule refuses once it is.
+        #[test]
+        fn a_rule_over_a_home_file_refuses_a_path_spelled_from_the_home_directory() {
+            let scratch = Scratch::new("deny-home-file");
+            let home = scratch.path.join("home");
+            let project = scratch.path.join("project");
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::create_dir_all(&project).unwrap();
+            std::fs::write(home.join("secret.txt"), "hunter2\n").unwrap();
+            let home = home.canonicalize().unwrap();
+            let workspace = Workspace::new(&project)
+                .expect("workspace")
+                .with_home(Some(home.clone()));
+
+            let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+                &["Read(~/secret.txt)".to_string()],
+                &[],
+                &[],
+                &bravebot_core::permissions::Anchors {
+                    home: home.to_str().map(str::to_string),
+                    ..bravebot_core::permissions::Anchors::none()
+                },
+            );
+            assert!(rejected.is_empty(), "the rule did not parse: {rejected:?}");
+
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "read a file");
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_permissions(permissions);
+
+            let refusal =
+                refuse_denied_path(&mut policy, &workspace, Purpose::Read, "~/secret.txt")
+                    .expect_err("the rule covers the file");
+            assert_eq!(refusal, denied_by_rule("~/secret.txt"));
+        }
 
         /// What the planner was told, the trail's confinement refusals, and whether the turn
         /// would end as clean, for one call to `run`.

@@ -246,12 +246,29 @@ The Start menu entry carries `com.brave.bravebot` as its AppUserModelID. Windows
 under the entry with the ID the process sets, and the app sets none yet, which is part of
 [#767](https://github.com/brave/bravebot/issues/767).
 
+The arm64 installer's archive puts every file through the BCJ filter, which makes it about a
+tenth larger. Left to choose, electron-builder's 7-Zip puts each ARM64 executable through a filter
+the installer's own 7-Zip lacks, and the installer then skips all of them and reports success.
+
 Each installer carries an uninstaller that electron-builder writes during the build, so the job
 cannot sign it afterwards the way it signs the installer. electron-builder signs it in the same
 build when given a certificate there, and setting that up is
 [#770](https://github.com/brave/bravebot/issues/770).
 
-**What is not checked here.** Installing one. On Windows of each architecture, the installer has to
-install without an administrator prompt, start the app from its Start menu entry, start its agent,
-upgrade over the previous release, and uninstall cleanly. GitHub's hosted `windows-latest` and
-`windows-11-arm` runners can do that as a CI job once the app starts on Windows, which is #767.
+**What CI checks.** CI's `Windows installers` job builds both installers with
+`make app-release-windows` from the cross-built helpers, and `Install on Windows` installs each on a
+hosted runner of its own architecture, `windows-latest` and `windows-11-arm`, with
+`ui/scripts/check-windows-install.mjs`. The install is silent, its Apps list entry is the per-user
+key above and the only one, and the installed files are the bundle's, byte for byte. The Start menu
+entry starts the app, and the app starts its agent. Started with `ELECTRON_RUN_AS_NODE=1`, with a
+`--require` in `NODE_OPTIONS`, or with `--inspect`, the app ignores each and starts as usual. It
+uninstalls cleanly, upgrades over an older installer, and leaves the app's data and `~/.bravebot`
+in place through both.
+
+What that cannot show. A runner's account is an administrator, so no prompt could appear either way:
+that the installer needs none shows only in where it installs, a per-user Apps list key with no
+per-machine one, the files under `%LOCALAPPDATA%`, and a Start menu entry under `%APPDATA%`.
+The installers are unsigned, which is #770. And the older installer is this build's bundle under a
+lower version, since no release carries one yet, so an upgrade from a release that changed the
+names above would pass here; `ui/scripts/windows-installer.test.mjs` pins them instead, and once a
+release carries an installer the job can upgrade from that.

@@ -1,0 +1,251 @@
+/* ------------------------------------------------------------------ settings
+
+   Settings take the whole window while open: the pages on the app ground where the sidebar is,
+   and the page itself on a raised card, the same arrangement as the chat view. The chat view is
+   kept mounted underneath, made inert. */
+
+.app-main { display: contents; }
+.app.in-settings > .app-main > * { visibility: hidden; }
+
+.settings-view {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  grid-template-columns: var(--col-left-open) minmax(0, 1fr);
+  box-sizing: border-box;
+  padding: var(--card-gap) var(--card-gap) var(--card-gap) 0;
+  background: var(--surface-app);
+}
+
+.settings-nav { display: flex; flex-direction: column; min-height: 0; margin-top: calc(-1 * var(--card-gap)); }
+.settings-nav-titlebar { flex: none; height: var(--titlebar); -webkit-app-region: drag; }
+/* Leo's Navigation lays its items and the actions slot out as one column the height of the host. */
+.settings-navigation { display: block; flex: 1; min-height: 0; }
+.settings-nav-list { padding: var(--leo-spacing-m) 0; overflow-y: auto; }
+.settings-nav-foot { margin-top: auto; border-top: 1px solid var(--border-subtle); }
+
+.settings-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--surface-panel);
+  overflow: hidden;
+}
+.settings-head { position: relative; flex: none; height: var(--titlebar); border-bottom: 1px solid var(--border-hairline); }
+.settings-head .drag { position: absolute; inset: 0; -webkit-app-region: drag; }
+.settings-crumbs {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-s);
+  height: 100%;
+  padding: 0 var(--leo-spacing-l);
+  font: var(--type-meta);
+  color: var(--ink-tertiary);
+}
+.settings-crumbs leo-button { -webkit-app-region: no-drag; }
+.settings-crumb.current { color: var(--ink-primary); font: var(--type-meta-strong); }
+
+.settings-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.settings-page {
+  box-sizing: border-box;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: var(--leo-spacing-2xl) 0 var(--leo-spacing-5xl);
+  user-select: text;
+}
+.settings-page > h1 { margin: 0; padding: 0 var(--leo-spacing-2xl); font: var(--type-page-title); color: var(--ink-primary); text-wrap: balance; }
+.settings-subtitle { margin: var(--leo-spacing-xs) 0 0; padding: 0 var(--leo-spacing-2xl); font: var(--type-lede); color: var(--ink-secondary); }
+.settings-page > .settings-body { margin-top: var(--leo-spacing-5xl); }
+
+.settings-group + .settings-group { margin-top: var(--leo-spacing-5xl); }
+.settings-group-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--leo-spacing-m);
+  margin: 0 0 var(--leo-spacing-xl);
+  padding: 0 var(--leo-spacing-2xl);
+  font: var(--type-heading);
+  color: var(--ink-primary);
+}
+.settings-group-note { font: var(--type-caption); color: var(--status-warning); }
+.settings-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--surface-panel);
+  overflow: hidden;
+}
+
+/* One block of a card: a title, then what it says, 24px apart, with a divider between blocks. */
+.settings-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-2xl);
+  padding: var(--leo-spacing-2xl);
+}
+.settings-block + .settings-block,
+.settings-row + .settings-row { border-top: 1px solid var(--border-subtle); }
+.settings-card .settings-block > h3,
+.settings-row h3 { margin: 0; font: var(--type-title); color: var(--ink-primary); }
+.settings-card .settings-block > p,
+.settings-card .settings-block > div > p { margin: 0; font: var(--type-body); color: var(--ink-secondary); }
+.settings-card h4 { margin: 0 0 var(--leo-spacing-m); font: var(--type-body); color: var(--ink-primary); }
+
+/* Label and value pairs, as a bordered table with a divider between rows. */
+.settings-card dl {
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr);
+  margin: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  overflow: hidden;
+  font: var(--type-body);
+}
+.settings-card dl > .settings-dl-row { display: contents; }
+.settings-card dt,
+.settings-card dd { margin: 0; padding: var(--leo-spacing-l); border-top: 1px solid var(--border-subtle); }
+.settings-card dt { padding-right: 0; font: var(--type-body-strong); color: var(--ink-primary); overflow-wrap: anywhere; }
+.settings-card dd { padding-left: var(--leo-spacing-m); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.settings-card dl > dt:first-of-type,
+.settings-card dl > dt:first-of-type + dd { border-top: 0; }
+.settings-card dl.settings-limits-table { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
+
+/* A collapsible inside a card takes the same radius as the tables and boxes in it. */
+.settings-card leo-collapse { --leo-collapse-radius: var(--radius-control); }
+
+/* A path or a state shown as it is, in its own outlined box. */
+.settings-box {
+  display: flex;
+  flex-direction: column;
+  padding: var(--leo-spacing-l) var(--leo-spacing-xl);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+}
+.settings-box p { margin: 0; font: var(--type-body); color: var(--ink-secondary); }
+.settings-box .settings-path { font: var(--type-code); color: var(--ink-primary); }
+
+@media (forced-colors: active) {
+  .settings-card, .settings-main { border-color: CanvasText; }
+  .settings-card dl, .settings-box { border-color: CanvasText; }
+}
+
+.settings-body pre {
+  margin: 0;
+  padding: var(--leo-spacing-l);
+  border-radius: var(--radius-control);
+  background: var(--surface-sunken);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: var(--type-code);
+}
+.settings-body ol { margin: 0; padding-left: var(--leo-spacing-2xl); font: var(--type-body); }
+.setup-routes { display: flex; flex-direction: column; }
+.setup-routes section { padding: var(--leo-spacing-l); }
+.settings-path { overflow-wrap: anywhere; font: var(--type-code); color: var(--ink-primary); }
+.settings-caption { font: var(--type-caption); color: var(--ink-tertiary); }
+.settings-error { display: flex; flex-direction: column; align-items: flex-start; gap: var(--leo-spacing-m); margin-bottom: var(--leo-spacing-l); }
+.settings-busy { font: var(--type-meta); color: var(--ink-secondary); }
+
+/* Label and description on the left, the control on the right, the way a settings pane is read. */
+.settings-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--leo-spacing-2xl);
+  padding: var(--leo-spacing-2xl);
+}
+.settings-row-control leo-dropdown { min-width: 160px; }
+.settings-row-text p { margin: var(--leo-spacing-xs) 0 0; font: var(--type-body); color: var(--ink-secondary); }
+.settings-actions { display: flex; flex-wrap: wrap; gap: var(--leo-spacing-m); }
+
+.hook-editor {
+  margin: 0 0 var(--leo-spacing-l);
+  padding: var(--leo-spacing-l) var(--leo-spacing-xl);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-card);
+  background: var(--surface-panel);
+}
+.hook-editor legend { padding: 0 var(--leo-spacing-s); font: var(--type-meta-strong); color: var(--ink-secondary); }
+.hook-editor leo-input, .hook-editor leo-dropdown { display: block; margin: var(--leo-spacing-m) 0; }
+.hook-argument { display: flex; align-items: flex-end; gap: var(--leo-spacing-m); }
+.hook-argument leo-input { flex: 1; }
+
+/* ------------------------------------------------------------ connectors
+
+   The connectors page of the settings. A service or a connector is a row in a card; a page for one
+   is a card of its own. */
+
+.connectors-list, .connector-page { display: flex; flex-direction: column; gap: var(--leo-spacing-l); }
+.connectors-list { gap: 0; }
+.connectors-alerts { display: flex; flex-direction: column; gap: var(--leo-spacing-m); margin-bottom: var(--leo-spacing-xl); padding: 0 var(--leo-spacing-2xl); }
+.connectors-alerts p { margin: 0; }
+.connectors > .connector-page {
+  padding: var(--leo-spacing-2xl);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--surface-panel);
+}
+.connectors-list .settings-block > * { margin: 0; }
+.connectors-foot { padding: var(--leo-spacing-xl) var(--leo-spacing-2xl) 0; }
+.connector-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--leo-spacing-m); }
+.connector-card, .connector-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--leo-spacing-m);
+  width: 100%;
+  min-width: 0;
+  padding: var(--leo-spacing-l);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  color: var(--ink-primary);
+  font: var(--type-body);
+  text-align: left;
+  transition: background-color var(--motion-fast);
+}
+.connector-card:hover, .connector-row:hover { background: var(--surface-hover); }
+.connector-icon { flex: none; --leo-icon-size: var(--icon-control); --leo-icon-color: var(--ink-secondary); }
+/* Centred on the first line of the name, whatever height that line is. */
+.connector-card > .connector-icon, .connector-row > .connector-icon { font: var(--type-body-strong); margin-top: calc((1lh - var(--icon-control)) / 2); }
+.connector-card-text { display: flex; flex: 1; flex-direction: column; gap: var(--leo-spacing-xs); min-width: 0; }
+.connector-name { font: var(--type-body-strong); }
+.connector-summary { font: var(--type-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
+code.connector-summary { font: var(--type-code); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.connector-standing { flex: none; }
+.connector-rows { display: flex; flex-direction: column; gap: var(--leo-spacing-s); margin: 0; padding: 0; list-style: none; }
+.connectors-empty, .connectors-foot, .connector-before { margin: 0; font: var(--type-meta); color: var(--ink-secondary); }
+.connector-page-head { display: flex; align-items: center; gap: var(--leo-spacing-m); }
+.connector-page-head h3 { flex: 1; margin: 0; font: var(--type-title); color: var(--ink-primary); }
+.connector-page h4 { margin: var(--leo-spacing-s) 0 0; }
+.connector-page p { margin: 0; }
+.connector-page-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--leo-spacing-m); }
+.connector-declaration { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--leo-spacing-s) var(--leo-spacing-xl); margin: 0; font: var(--type-meta); }
+.connector-declaration dt { color: var(--ink-secondary); }
+.connector-declaration dd { margin: 0; min-width: 0; }
+.connector-declaration code { font: var(--type-code); overflow-wrap: anywhere; }
+.connector-form { display: flex; flex-direction: column; gap: var(--leo-spacing-l); }
+.connector-field { display: flex; flex-direction: column; gap: var(--leo-spacing-xs); }
+.connector-field small, .connector-variables small { font: var(--type-caption); color: var(--ink-tertiary); }
+.connector-variables {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--leo-spacing-m);
+  margin: 0;
+  padding: var(--leo-spacing-l) var(--leo-spacing-xl);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-card);
+}
+.connector-variables legend { padding: 0 var(--leo-spacing-s); font: var(--type-meta-strong); color: var(--ink-secondary); }
+.connector-variable { display: flex; align-items: flex-end; gap: var(--leo-spacing-m); width: 100%; }
+.connector-variable leo-input { flex: 1; }
+.connector-warnings { margin: 0 0 var(--leo-spacing-s); padding-left: var(--leo-spacing-xl); }
+
+@media (max-width: 640px) {
+  .settings-card dl, .settings-row { grid-template-columns: 1fr; }
+  .settings-card dd { border-top: 0; padding-top: 0; padding-left: var(--leo-spacing-l); }
+}

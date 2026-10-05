@@ -1,4 +1,4 @@
-// That the Connectors dialog declares, approves and turns on an MCP server only as it was shown,
+// That the Connectors page in the settings declares, approves and turns on an MCP server only as it was shown,
 // and turns one off (docs/specs/mcp-servers.md SERVERS-2, SERVERS-3, SERVERS-5).
 //
 // The real app and the real bridge, against a home of this script's own. Nothing is started and
@@ -40,7 +40,8 @@ try {
   page.on('pageerror', (error) => errors.push(error.message))
 
   // ---- the button and the list ---------------------------------------------------------------
-  await page.locator('[data-test="connectors"]').click()
+  await page.locator('[data-test="agent-settings"]').click()
+  await page.locator('[data-test="settings-page-connectors"]').click()
   const dialog = page.locator('.connectors')
   await dialog.locator('[data-test="connectors-list"]').waitFor()
   for (const alias of ['github', 'gmail', 'calendar', 'brave-search']) {
@@ -66,7 +67,7 @@ try {
   assert.equal((await dialog.locator('[data-test="connector-standing"]').first().innerText()).trim(), 'Connected')
 
   // ---- GitHub, from the catalog ------------------------------------------------------------------
-  await page.locator('[data-test="connectors-back"]').click()
+  await page.locator('[data-test="settings-inner-back"]').click()
   await dialog.locator('[data-test="connector-calc"]').waitFor()
   assert.equal((await dialog.locator('[data-test="connector-calc"] [data-test="connector-standing"]').innerText()).trim(), 'Connected')
   await dialog.locator('[data-test="connector-github"]').click()
@@ -90,12 +91,12 @@ try {
   await dialog.locator('[data-test="connectors-status"]').filter({ hasText: 'disconnected' }).waitFor()
   assert.deepEqual(JSON.parse(file('settings.json')).mcp.request, ['calc'])
   assert.match(file('mcp.json'), /github/, 'the setup is kept')
-  await page.locator('[data-test="connectors-back"]').click()
+  await page.locator('[data-test="settings-inner-back"]').click()
   assert.equal((await dialog.locator('[data-test="connector-github"] [data-test="connector-standing"]').innerText()).trim(), 'Not connected')
   await page.screenshot({ path: join(output, 'connectors-after.png') })
 
   assert.deepEqual(errors, [])
-  console.log(`PASS: the Connectors dialog adds a custom connector and a catalog one only as reviewed, keeps a token out of the window, and disconnects one while keeping its setup. Screenshots in ${output}/connectors-*.png`)
+  console.log(`PASS: the Connectors page adds a custom connector and a catalog one only as reviewed, keeps a token out of the window, and disconnects one while keeping its setup. Screenshots in ${output}/connectors-*.png`)
 } catch (error) {
   if (page) await page.screenshot({ path: join(output, 'connectors-failure.png') }).catch(() => undefined)
   throw error

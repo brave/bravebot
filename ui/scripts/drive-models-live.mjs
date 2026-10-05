@@ -20,7 +20,7 @@ try {
     ipcMain.removeHandler('bravebot:choose-directory')
     ipcMain.handle('bravebot:choose-directory', () => directory)
   }, project)
-  await page.getByRole('button', { name: /^New session$/ }).click()
+  await page.getByRole('button', { name: 'New project…', exact: true }).click()
   await page.getByRole('button', { name: "Don't trust", exact: true }).click()
   const trigger = page.locator('.model-trigger')
   await trigger.waitFor()

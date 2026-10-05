@@ -10,6 +10,7 @@ governs:
   - crates/cli/src/main.rs
   - crates/agent/src/aside.rs
   - crates/ui-bridge/src/store.rs
+  - crates/ui-bridge/src/bridge.rs
 documented-by: docs/website/docs/using/sessions.md
 ---
 
@@ -944,6 +945,53 @@ go stale independently: one build ships both surfaces, and every build ships the
 `verified-by: bravebot_session::sessions::a_record_says_which_front_end_wrote_it`
 `verified-by: bravebot_session::sessions::a_session_written_in_the_other_front_end_says_so`
 `verified-by: bravebot_ui_bridge::interop::opening_a_session_the_terminal_wrote_says_which_surface_drew_it`
+
+<a id="SESSION-30"></a>
+### SESSION-30: a stored session can be deleted, and nothing else goes with it
+
+The desktop app can delete a session from disk with `session.delete`, which takes the `directory`
+and `id` that `session.list` gave. It removes the record and the trail beside it, and nothing else:
+not another session in the same project, not a session in another project, and not anything a bot
+keeps in its memory. Deleting is keyed on those two strings alone. Nothing read out of a record
+decides whether or what to delete.
+
+The id has to be shaped like a session's name, letters, digits, `-` and `_` in one path segment,
+or the request is refused as a bad request before any path is built from it. An id that names no
+record is refused with `no_such_session`, never answered as a success. A session the bridge has
+open is refused: with `turn_in_flight` while a turn is running in it, and with `bad_request`
+otherwise, which asks the caller to close it first. The id of a session is not readable while its
+turn runs, so while a turn runs in any session the bridge has open in the same project, a delete in
+that project is refused with `turn_in_flight`, and the message names the project's running turn
+rather than the session being deleted. The refusal covers the sessions this bridge has open and
+nothing else: a session another process has open is not seen, and that process's next save writes
+its record back. A link standing where the record or the trail should be is removed as a link and
+never followed, so the file it points at is untouched.
+
+The bridge deletes any session it is given, whether or not it is archived. The desktop app offers
+the delete on archived conversations only, and its main process forwards `session.delete` only for
+a `directory` it offered, as it does for `session.new` and `session.open`.
+
+A fork is a complete copy made when it was forked and shares no file with the session it came from,
+so deleting either leaves the other openable with its own history and trail. The trail goes before
+the record, so a failure part way leaves a session that still opens.
+
+**Why.** A person who archives a conversation has not thereby asked for it to be gone, and until
+now nothing could remove a record: every prompt and answer ever held in a session stayed in
+`~/.bravebot` for as long as the directory did, with no way to take out one that should not have
+been written. Deleting is irreversible, so it is scoped to exactly what was named. A bridge that
+deleted an open session would have the next save write the record back.
+
+`verified-by: bravebot_session::sessions::deleting_a_session_removes_its_record_and_trail_and_only_those`
+`verified-by: bravebot_session::sessions::deleting_in_one_project_leaves_another_projects_session_alone`
+`verified-by: bravebot_session::sessions::a_manifest_run_can_be_deleted`
+`verified-by: bravebot_session::sessions::deleting_refuses_a_name_that_could_leave_the_directory_and_one_that_names_nothing`
+`verified-by: bravebot_session::sessions::deleting_does_not_follow_a_link_out_of_the_state_directory`
+`verified-by: bravebot_session::sessions::deleting_a_session_leaves_its_fork_openable_with_its_trail`
+`verified-by: bravebot_ui_bridge::deleting::a_deleted_session_is_gone_with_its_trail_and_its_neighbour_is_not`
+`verified-by: bravebot_ui_bridge::deleting::a_name_that_could_leave_the_store_is_a_bad_request`
+`verified-by: bravebot_ui_bridge::deleting::a_session_a_window_has_open_is_not_deleted_from_under_it`
+`verified-by: bravebot_ui_bridge::deleting::a_session_with_a_turn_running_is_refused_as_such`
+`verified-by: bravebot_ui_bridge::deleting::a_turn_in_another_session_is_named_as_such_and_deletes_nothing`
 
 ## Known costs
 

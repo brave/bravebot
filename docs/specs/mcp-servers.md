@@ -380,7 +380,7 @@ before anything is written. So is a settings file [SERVERS-2](#SERVERS-2) refuse
 the request would take past the size a settings file may be, which `add` reads before the
 declaration, so a refused request leaves no declaration behind it.
 
-The desktop application's Connectors dialog is the same split in a window. Filling in a form
+The desktop application's Connectors page in the settings is the same split in a window. Filling in a form
 writes nothing: the form is sent to the agent, which builds the declaration from it as `add` would,
 granting a read for each file a stored value or an argument names and giving `PATH` to a program
 found through it, and returns it drawn, with its digest, for the person to read. Only their

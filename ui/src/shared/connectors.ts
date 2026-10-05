@@ -142,7 +142,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     alias: 'gmail',
     name: 'Gmail',
-    icon: 'email',
+    icon: 'gmail-color',
     summary: 'Read and search your mail, with read access and nothing else.',
     guide: `${DOCS}/mcp/gmail`,
     before: 'Download Google’s Workspace MCP server into a directory of its own, and sign in once with node dist/headless-login.js, asking for Gmail read access only.',
@@ -155,7 +155,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     alias: 'calendar',
     name: 'Google Calendar',
-    icon: 'calendar',
+    icon: 'google-calendar-color',
     summary: 'Read your calendars and events, with read access and nothing else.',
     guide: `${DOCS}/mcp/calendar`,
     before: 'Download Google’s Workspace MCP server into a directory of its own, separate from Gmail’s, and sign in once asking for Calendar read access only.',
@@ -168,7 +168,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     alias: 'brave-search',
     name: 'Brave Search',
-    icon: 'brave-icon-search-color',
+    icon: 'social-brave-release-favicon-fullheight-color',
     summary: 'Search the web with the Brave Search API.',
     guide: `${DOCS}/mcp-servers`,
     before: 'Get a Brave Search API key, and save it in a file of its own. The server is fetched with npx each time it starts.',

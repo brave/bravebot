@@ -965,6 +965,59 @@ impl std::fmt::Debug for Tree {
     }
 }
 
+/// Why a delegate the gate approved was not started, because of the checkout it was to run in.
+///
+/// A fixed category chosen by the driver where it refuses, so the trail says which refusal it was
+/// without holding the sentence the planner was told. A directory a person opened is the only
+/// text carried, and a person typed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CheckoutRefusal {
+    /// `isolation` held something other than `"checkout"`.
+    UnknownIsolation,
+    /// A reader writes nothing, so a checkout separates it from nobody.
+    Reader,
+    /// The run already works in a checkout, which its delegates share.
+    AlreadyInCheckout,
+    /// The session keeps no state directory to make one in.
+    NoStateDirectory,
+    /// The directory for checkouts would sit inside the working directory.
+    InsideWorkingDirectory,
+    /// A directory opened beside the working directory holds the working directory.
+    OpenedHoldsWorkingDirectory(String),
+    /// A directory opened beside the working directory holds the directory for checkouts.
+    OpenedHoldsCheckouts(String),
+    /// The directory for checkouts could not be made, or no trust rule can be keyed under it.
+    DirectoryUnusable,
+    /// The working directory is not a repository a checkout can be made of, or the policy or the
+    /// repository itself would not have it read.
+    RepositoryRefused,
+}
+
+impl CheckoutRefusal {
+    /// The name a program reads this by, and the cause the trail records.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::UnknownIsolation => "unknown-isolation",
+            Self::Reader => "reader-has-no-checkout",
+            Self::AlreadyInCheckout => "already-in-a-checkout",
+            Self::NoStateDirectory => "no-state-directory",
+            Self::InsideWorkingDirectory => "inside-working-directory",
+            Self::OpenedHoldsWorkingDirectory(_) => "opened-directory-holds-working-directory",
+            Self::OpenedHoldsCheckouts(_) => "opened-directory-holds-checkouts",
+            Self::DirectoryUnusable => "checkout-directory-unusable",
+            Self::RepositoryRefused => "repository-refused",
+        }
+    }
+
+    /// The directory a person opened that caused the refusal, where one did.
+    pub fn directory(&self) -> Option<&str> {
+        match self {
+            Self::OpenedHoldsWorkingDirectory(dir) | Self::OpenedHoldsCheckouts(dir) => Some(dir),
+            _ => None,
+        }
+    }
+}
+
 /// What the driver fixed about one delegate before it ran.
 ///
 /// Only [`crate::policy::Policy::before_delegate`] constructs one, and nothing here can widen it

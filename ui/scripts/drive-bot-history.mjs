@@ -48,9 +48,9 @@ try {
   },{directory,idA,idB})
   const snap=async name=>{await page.waitForTimeout(400);await page.screenshot({path:join(output,name+'.png'),scale:'css'});console.log('VISUAL',name)}
   await page.reload();
-  await page.getByRole('button',{name:'Sessions',exact:true}).click();
+  await page.getByRole('button',{name:'Chats',exact:true}).click();
   // The filter is always there: no toggle to open it, and Escape clears it without taking it away.
-  const filter=page.getByRole('searchbox',{name:'Filter sessions',exact:true});
+  const filter=page.getByRole('searchbox',{name:'Search chats',exact:true});
   assert.equal(await filter.count(),1);
   await snap('00-sidebar-compact');
   await filter.fill('next iteration');
@@ -59,23 +59,39 @@ try {
   await filter.press('Escape');
   assert.equal(await filter.inputValue(),'');
   await page.waitForFunction(()=>document.querySelectorAll('.session-row').length>1);
+  // Switching to Bots opens the first bot's own page.
   await page.getByRole('button',{name:'Bots',exact:true}).click();
+  await page.locator('[data-test="bot-conversations"]').waitFor();
   const bots=page.getByRole('searchbox',{name:'Search bots',exact:true});
   await bots.fill('no-such-bot');
   await page.getByText('No bots match this search.',{exact:true}).waitFor();
   await bots.press('Escape');
-  const overview=async()=>{await page.locator('.bot').filter({hasText:'Review Bot'}).click();await page.getByRole('heading',{name:/Conversation history/}).waitFor()}
+  // A bot's page: its recent conversations, a composer that starts another, and its details.
+  const conversations=page.locator('[data-test="bot-conversations"] button.bot-history-row');
+  const overview=async()=>{
+    if(!(await page.locator('.bot-open').count())) await page.getByRole('button',{name:'Bots',exact:true}).click();
+    await page.locator('.bot').filter({hasText:'Review Bot'}).locator('.bot-open-button').click();
+    await page.getByRole('heading',{name:'Recent conversations'}).waitFor()
+  }
+  const searchHistory=async(text)=>{
+    const field=page.getByRole('searchbox',{name:'Search conversations'});
+    if(!(await field.count())) await page.getByRole('button',{name:'Search conversations',exact:true}).click();
+    await field.fill(text)
+  }
   await overview();
-  assert.equal(await page.locator('.bot-conversations button').count(),3);
-  assert.equal(await page.locator('.bot-history-unavailable').count(),1);
-  await page.locator('.bot-conversations .bot-history-row').filter({hasText:'Review the sample project'}).getByText(/Archived/).waitFor();
+  // Saved, archived and associated conversations, the unsent draft, and a record the list no longer
+  // has, which is said rather than dropped.
+  assert.equal(await conversations.count(),3);
+  assert.equal(await page.locator('[data-test="bot-conversations"] .bot-history-row.unavailable').count(),1);
+  await conversations.filter({hasText:'Review the sample project'}).getByText(/Archived/).waitFor();
+  assert.equal(await page.locator('[data-test="bot-details"]').count(),1,'the bot page shows its details beside the list');
   await snap('01-all-history');
-  await page.getByRole('searchbox',{name:'Search bot conversations'}).fill('next iteration');
-  assert.equal(await page.locator('.bot-conversations button').count(),1);
+  await searchHistory('next iteration');
+  assert.equal(await conversations.count(),1);
   await snap('02-filtered-history');
-  await page.locator('.bot-conversations button').click();
+  await conversations.click();
   await page.getByRole('textbox',{name:'Message the agent'}).waitFor();
-  await overview();await page.locator('.bot-conversations .bot-history-row').filter({hasText:'Review the sample project'}).click();
+  await overview();await conversations.filter({hasText:'Review the sample project'}).click();
   await page.getByText('Review the project and show a code example.',{exact:true}).waitFor();
   await snap('03-open-archived-conversation');
   if (!(await page.getByRole('tab',{name:'Files',exact:true}).isVisible())) {
@@ -99,18 +115,32 @@ try {
   assert.equal(await fileSearch.count(),0);
   assert.equal(await page.getByRole('button',{name:'Search files',exact:true}).evaluate(el => el === document.activeElement || el.getRootNode().host === document.activeElement),true);
 
-  await overview();await page.getByRole('button',{name:'New conversation',exact:true}).click();
+  // A new conversation is started from the bot's page by sending to it. With no project picked it
+  // runs in the bot's home folder, so there is no project chip and no context column.
+  await overview();
+  assert.equal((await page.locator('[data-test="project-trigger"]').textContent())?.trim(),'No project');
+  const sent=(await app.evaluate(()=>globalThis.ux.sent.length));
+  await page.getByRole('textbox',{name:'Message the agent'}).fill('Start a newer conversation');
+  await page.getByRole('button',{name:'Send',exact:true}).click();
   await page.getByRole('button',{name:"Don't trust",exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});
+  // The message waits in the queue for the trust question, then goes; polled, since it is sent on
+  // the main process's side.
+  let delivered=[];
+  for(let tries=0;tries<50&&!delivered.length;tries++){delivered=await app.evaluate((_,n)=>globalThis.ux.sent.slice(n),sent);if(!delivered.length)await page.waitForTimeout(100)}
+  assert.equal(delivered.at(-1)?.slug,'review-bot','the first message goes to the bot');
+  assert.equal(delivered.at(-1)?.prompt,'Start a newer conversation');
+  assert.equal(await page.locator('.app.no-context').count(),1,'a conversation with no project has no context column');
+  assert.equal(await page.locator('.transcript-head .where').count(),0,'and no project chip');
   await page.getByRole('textbox',{name:'Message the agent'}).fill('Keep this newer conversation draft');
-  await overview();assert.equal(await page.locator('.bot-conversations button').count(),4);await snap('04-history-after-new');
-  await page.keyboard.press('Escape');await page.reload();await overview();
-  await page.getByRole('searchbox',{name:'Search bot conversations'}).fill('Keep this newer');
-  await page.locator('.bot-conversations button').click();
+  await snap('04-history-after-new');
+  await page.reload();
+  await page.getByRole('button',{name:'Chats',exact:true}).click();
+  await page.locator('.session').filter({hasText:'Keep this newer'}).click();
   await page.getByRole('button',{name:"Don't trust",exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});
   assert.equal(await page.getByRole('textbox',{name:'Message the agent'}).inputValue(),'Keep this newer conversation draft');
   await snap('05-draft-restored-after-reload');
-  await overview();await page.getByRole('searchbox',{name:'Search bot conversations'}).fill('no-such-conversation');
-  await page.getByText(/No conversations match/).waitFor();await snap('06-no-results');
-  assert.deepEqual(errors,[]);console.log('PASS: full bot history, archived navigation, search, new conversation and restart.');
+  await overview();await searchHistory('no-such-conversation');
+  await page.getByText(/No conversation matches/).waitFor();await snap('06-no-results');
+  assert.deepEqual(errors,[]);console.log('PASS: full bot history on the bot page, archived navigation, search, a new no-project conversation and a draft kept across restart.');
 } catch(error) {if(page) await page.screenshot({path:join(output,'failure.png'),scale:'css'});throw error}
 finally {await app.close()}

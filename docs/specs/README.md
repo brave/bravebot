@@ -32,7 +32,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [shell-mode.md](shell-mode.md) | `SHELL` | 5 | the `!` prompt: a line the user typed, and why the planner can never reach it |
 | [skills.md](skills.md) | `SKILL` | 14 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for |
 | [instructions.md](instructions.md) | `INSTR` | 10 | which instruction files are looked for, where, in what order, and where what they say ends up |
-| [cli.md](cli.md) | `CLI` | 19 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth` |
+| [cli.md](cli.md) | `CLI` | 20 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth` |
 | [manifest.md](manifest.md) | `MANIFEST` | 11 | plan the whole run first, then execute it with no model in the control path |
 | [terminal-input.md](terminal-input.md) | `INPUT` | 38 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 12 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, what a slash word is offered, what `/copy` copies, and what `/caffeinate` holds awake |
@@ -53,7 +53,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [loop.md](loop.md) | `LOOP` | 15 | sending one prompt again and again until somebody stops it |
 | [goal.md](goal.md) | `GOAL` | 17 | one condition a person set, judged after every turn, until it holds |
 | [file-watches.md](file-watches.md) | `FSWATCH` | 12 | a standing watch on one path, firing with no turn running to notice it |
-| [sessions.md](sessions.md) | `SESSION` | 29 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |
+| [sessions.md](sessions.md) | `SESSION` | 30 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |
 | [info-panel.md](info-panel.md) | `PANEL` | 14 | telling many sessions apart: the terminal's title and the info panel |
 | [state-directory.md](state-directory.md) | `STATE` | 3 | `~/.bravebot`, and who on the machine may read what is written into it |
 | [incognito.md](incognito.md) | `INCOG` | 8 | a session that runs normally and adds nothing to `~/.bravebot` |
@@ -61,7 +61,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [localization.md](localization.md) | `LOCALE` | 7 | every word said to a person, and which of them change with the reader's language |
 | [layering.md](layering.md) | `LAYER` | 6 | which crate is allowed to do what |
 | [releases.md](releases.md) | `RELEASE` | 15 | what names a version, what starts a release, and what an installer trusts about what it fetched |
-| [updates.md](updates.md) | `UPDATE` | 10 | learning that a newer version is out, and the line that installs it |
+| [updates.md](updates.md) | `UPDATE` | 11 | learning that a newer version is out, and the line that installs it |
 
 ## The tools
 

@@ -402,6 +402,27 @@ behind.
 Errors with `not_a_directory` if the path is not one. Where there is no state directory the
 session still opens and its turns run, and nothing is written (SESSION-28).
 
+#### `session.delete`
+
+```json
+{ "id": 6, "method": "session.delete",
+  "params": { "directory": "…", "id": "…" } }
+```
+
+```json
+{ "id": 6, "ok": { "deleted": true } }
+```
+
+Removes a stored session from disk: its record and the trail beside it, and nothing else
+(SESSION-30). `directory` and `id` are the ones `session.list` gave. A fork is a complete copy and
+is unaffected.
+
+- `no_such_session` if no record of that id is stored for that directory.
+- `bad_request` if `id` is not shaped like a session name, and if the session is open in this
+  bridge and idle: close it with `session.close` first.
+- `turn_in_flight` while a turn is running in it.
+- `internal` if a file could not be removed. The trail goes first, so the session still opens.
+
 #### `session.fork`
 
 ```json

@@ -29,7 +29,7 @@ console.log(`sessions listed  : ${sessions}`)
 
 if (sessions > 0) {
   const titles = await page.locator('.session-title').allTextContents()
-  const where = await page.locator('.session-where').allTextContents()
+  const where = await page.locator('.session-project').allTextContents()
   titles.forEach((t, i) => console.log(`  - ${t.slice(0, 54)}  [${where[i]}]`))
 }
 
@@ -41,12 +41,12 @@ await page.screenshot({ path: `${shots}/01-launched.png`, fullPage: false })
 // The filter box. Driven before anything is opened, and left empty, because every other
 // driver clicks `.session` first and expects that to be the newest session.
 if (sessions > 0) {
-  const box = page.getByRole('searchbox', { name: 'Filter sessions', exact: true })
+  const box = page.getByRole('searchbox', { name: 'Search chats', exact: true })
   const first = (await page.locator('.session-title').first().textContent()) ?? ''
   // A word from the newest session's title, long enough not to be in every other one.
   const word = first.split(/\s+/).find((w) => w.length > 4) ?? first.slice(0, 6)
-  // Read before anything is filtered: the project is the first field of the secondary line.
-  const firstWhere = (await page.locator('.session-where').first().textContent()) ?? ''
+  // Read before anything is filtered: the project is the first line of the row.
+  const firstWhere = (await page.locator('.session-project').first().textContent()) ?? ''
 
   await box.fill(word)
   await page.waitForTimeout(200)
@@ -54,13 +54,13 @@ if (sessions > 0) {
   const kept = await page.locator('.session-title').first().textContent()
   console.log(`filter "${word}"`.padEnd(17) + `: ${byTitle}/${sessions} rows, first is ${kept === first ? 'the same' : 'DIFFERENT'}`)
 
-  // A project, which no title need contain: the secondary line has to be searchable too, or
-  // "which session was that, in bravebot?" has no answer here.
-  const project = firstWhere.split(' · ')[0] ?? ''
+  // A project, which no title need contain: the project line has to be searchable too, or
+  // "which chat was that, in bravebot?" has no answer here.
+  const project = firstWhere
   await box.fill(project)
   await page.waitForTimeout(200)
   const byProject = await page.locator('.session').count()
-  const lines = await page.locator('.session-where').allTextContents()
+  const lines = await page.locator('.session-project').allTextContents()
   const allInIt = lines.every((line) => line.startsWith(project))
   console.log(`filter "${project}"`.padEnd(17) + `: ${byProject}/${sessions} rows, all in that project: ${allInIt}`)
 

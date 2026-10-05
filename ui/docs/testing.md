@@ -216,8 +216,7 @@ npx electron-vite build && node scripts/drive-visual.mjs
 ```
 
 Screenshots go to `VISUAL_OUTPUT`, or `bravebot-visual/` under the system temp folder when it is
-unset, as `<scene>-light.png` and `<scene>-dark.png`, plus `<scene>-compact.png` for the scenes
-that vary by density. The scenes are numbered, and cover the welcome screen, a conversation with
+unset, as `<scene>-light.png` and `<scene>-dark.png`. The scenes are numbered, and cover the welcome screen, a conversation with
 markdown, tables and code, a running turn with tool calls, each decision card (trusted and
 untrusted), a command's output and the vouch question, a series of questions, a finished and a
 failed turn, the inspector's file tree, the model and export menus, the find bar, Permissions,
@@ -322,7 +321,10 @@ table above. Two jobs:
   Electron build and the walkthrough.
 
 The workflow does not run the other Electron drivers, packaged-app checks, or the
-upstream agent's full test suite. Run the applicable local checks above.
+upstream agent's full test suite. Run the applicable local checks above. The exception is the
+Windows installers, which `Install on Windows` installs and starts on a runner of each
+architecture; [releasing](../../docs/development/releasing.md#the-windows-installers) says what it
+checks.
 
 So Clippy *is* a lint step, on the Rust side; there is none on the TypeScript side, where `tsc`
 is the whole gate. `cargo fmt --all -- --check` is deliberately absent because the bridge is not

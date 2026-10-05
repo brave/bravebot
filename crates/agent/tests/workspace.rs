@@ -7123,6 +7123,52 @@ fn a_checkout_is_refused_where_it_would_overlap_a_tree_the_session_opened() {
     assert!(!scratch.path.join(".git/worktrees").exists());
 }
 
+/// TRACE-1. The refusal for an opened directory carries a fixed cause that names the directory a
+/// person opened, and a directory held by neither the working directory nor the checkouts gives
+/// the other cause.
+///
+/// The failure this rejects is a cause that is the same for both holders, which would leave the
+/// trail unable to say which directory to close.
+#[test]
+fn a_checkout_refusal_carries_which_opened_directory_held_what() {
+    use bravebot_core::delegate::CheckoutRefusal;
+    let holder = Scratch::new("checkout-cause-holder");
+    let project = holder.path.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let state = Scratch::new("checkout-cause-holder-state");
+    repository::commit_files(&project, &[("README", "hello\n")], "first");
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let opened = workspace
+        .add_directory(&holder.path.to_string_lossy())
+        .expect("the parent opens");
+    let (cause, _) = workspace
+        .checkout_for_cause(&policy, &state.path, d1())
+        .expect_err("an opened directory holds the working directory");
+    assert_eq!(
+        cause,
+        CheckoutRefusal::OpenedHoldsWorkingDirectory(opened.display().to_string())
+    );
+
+    let elsewhere = Scratch::new("checkout-cause-checkouts");
+    let state = Scratch::new("checkout-cause-checkouts-state");
+    repository::commit_files(&elsewhere.path, &[("README", "hello\n")], "first");
+    let mut workspace = Workspace::new(&elsewhere.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let opened = workspace
+        .add_directory(&state.path.to_string_lossy())
+        .expect("the state directory opens");
+    let (cause, _) = workspace
+        .checkout_for_cause(&policy, &state.path, d1())
+        .expect_err("an opened directory holds the checkouts");
+    assert_eq!(
+        cause,
+        CheckoutRefusal::OpenedHoldsCheckouts(opened.display().to_string())
+    );
+}
+
 /// CHECKOUT-7. A refusal because of an opened directory names that directory and a way to close
 /// it, whichever of the two it holds, so the planner can say what to change instead of reporting a
 /// refusal with no cause.

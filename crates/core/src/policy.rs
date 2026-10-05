@@ -3365,16 +3365,31 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// counted ([DELEGATE-7](../../../docs/specs/delegation.md#DELEGATE-7)) and the next one is
     /// numbered as the one after the last that did. Only the delegate this run approved last can
     /// be taken back, which is the only one a caller holds: it asks for one at a time.
-    pub fn withdraw_delegate(&mut self, spec: crate::delegate::DelegateSpec) {
+    ///
+    /// The refusal is recorded as one (TRACE-1), with its fixed `cause`, the directory a person
+    /// opened where that was the cause, and how many of the call's `unstarted` delegates this
+    /// left unstarted, this one included.
+    pub fn withdraw_delegate(
+        &mut self,
+        spec: crate::delegate::DelegateSpec,
+        cause: &crate::delegate::CheckoutRefusal,
+        unstarted: usize,
+    ) {
         debug_assert_eq!(self.spawned, spec.id().position());
         self.spawned = self.spawned.saturating_sub(1);
         self.tree.release();
-        self.allow(
+        let named = match cause.directory() {
+            Some(dir) => format!(" ('{dir}')"),
+            None => String::new(),
+        };
+        let _ = self.deny(
             "delegate",
+            Principle::Confinement,
             format!(
-                "{}: withdrawn before it started, so it holds no place in this turn's tree of \
-                 delegates and no number",
-                spec.id()
+                "{}: withdrawn before it started, refused for its checkout: {}{named}; \
+                 {unstarted} of this call's delegates were not started",
+                spec.id(),
+                cause.name()
             ),
         );
     }
@@ -15019,7 +15034,7 @@ five
                 let spec = turn
                     .before_delegate(&argument("reader"), &argument("look"), None)
                     .expect("a withdrawn request filled the tree");
-                turn.withdraw_delegate(spec);
+                turn.withdraw_delegate(spec, &crate::delegate::CheckoutRefusal::Reader, 1);
             }
             let spec = turn
                 .before_delegate(&argument("reader"), &argument("look"), None)
@@ -15029,10 +15044,47 @@ five
             assert!(
                 sink.events().iter().any(|event| matches!(
                     event,
-                    Event::GatePassed { detail, .. } if detail.contains("d1: withdrawn")
+                    Event::GateBlocked { reason, .. } if reason.contains("d1: withdrawn")
                 )),
                 "the trail did not say the approved delegate was withdrawn"
             );
+        }
+
+        /// TRACE-1: a delegate withdrawn for its checkout is a refusal in the trail, with the
+        /// fixed cause, the directory a person opened where that was it, and how many of the
+        /// call's delegates were not started.
+        #[test]
+        fn a_withdrawn_delegate_is_a_refusal_with_its_cause() {
+            use crate::delegate::CheckoutRefusal;
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            let spec = turn
+                .before_delegate(&argument("worker"), &argument("edit"), None)
+                .expect("a clean context may delegate");
+            turn.withdraw_delegate(
+                spec,
+                &CheckoutRefusal::OpenedHoldsWorkingDirectory("/home/me".to_string()),
+                4,
+            );
+            drop(turn);
+            let reasons: Vec<_> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GateBlocked { gate, reason, .. } if *gate == "delegate" => {
+                        Some(reason.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(reasons.len(), 1, "{reasons:?}");
+            assert!(
+                reasons[0].contains("opened-directory-holds-working-directory ('/home/me')")
+                    && reasons[0].contains("4 of this call's delegates were not started"),
+                "{}",
+                reasons[0]
+            );
+            assert!(sink.events().iter().any(Event::is_refusal));
         }
 
         /// TRACE-8: each way a delegate can end is its own record, with its time and its rounds
@@ -15117,7 +15169,7 @@ five
             let withdrawn = within
                 .before_delegate(&argument("reader"), &argument("look closer"), None)
                 .expect("a delegate above the bottom may delegate");
-            within.withdraw_delegate(withdrawn);
+            within.withdraw_delegate(withdrawn, &crate::delegate::CheckoutRefusal::Reader, 1);
             assert_eq!(started(&within), ["d1.1"]);
         }
 

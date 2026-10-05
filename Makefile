@@ -772,8 +772,9 @@ app-installers-windows:
 # version besides. That directory is also LD_LIBRARY_PATH, because rust-objcopy loads the
 # libLLVM beside it.
 #
-# Run by the publish job after `all-platforms`, and by nothing in this repository, so the
-# release carries stripped binaries while a local cross-build keeps its symbols.
+# Run by the publish job after `all-platforms`, and in this repository only by CI's
+# cross-build, on the helpers its Windows installers are built from, so a release carries
+# stripped binaries while a local cross-build keeps its symbols.
 .PHONY: strip
 strip:
 	@for f in dist/$(BINARY)-*; do \

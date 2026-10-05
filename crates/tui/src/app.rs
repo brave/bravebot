@@ -3422,7 +3422,7 @@ fn event_loop(
     // about a newer release does not come before it. Nothing is fetched here: the line is read off
     // what an earlier launch wrote down, and the ask that answers the next launch runs behind the
     // session rather than in front of it.
-    if let Some(newer) = crate::update::at_startup() {
+    if let Some(newer) = crate::update::at_startup(settings.update_check()) {
         session.note(newer);
     }
     // Why a server this checkout asked for is not in the session, said where the person starts

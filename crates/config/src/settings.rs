@@ -139,6 +139,7 @@ const READ_KEYS: &[&str] = &[
     "run",
     "search",
     "terminalTitle",
+    "updateCheck",
     VETTING_BLOCK,
 ];
 
@@ -223,6 +224,8 @@ pub struct Settings {
     editor_mode: Option<String>,
     /// What the top-level `terminalTitle` key said, if it said a boolean.
     terminal_title: Option<bool>,
+    /// What the top-level `updateCheck` key said, if it said a boolean.
+    update_check: Option<bool>,
     /// What `vetting.auto` said, where the layer that said it was entitled to.
     ///
     /// Read from the **home** layer and no other, which is why [`Settings::layered`] settles this
@@ -729,6 +732,10 @@ impl Settings {
                 Some(serde_json::Value::Bool(on)) => Some(*on),
                 _ => None,
             },
+            update_check: match root.get("updateCheck") {
+                Some(serde_json::Value::Bool(on)) => Some(*on),
+                _ => None,
+            },
             // Read here so one file's worth can be parsed on its own, and overwritten by
             // [`Settings::layered`], which is the only caller that knows which layer this came
             // from and so the only one entitled to answer.
@@ -829,6 +836,15 @@ impl Settings {
     /// somebody who wrote something else.
     pub fn terminal_title(&self) -> Option<bool> {
         self.terminal_title
+    }
+
+    /// Whether the settings in force let the startup screen check for a newer release, if they said.
+    ///
+    /// A boolean and nothing else, for the reason [`Settings::terminal_title`] gives: the key exists
+    /// to turn the check off, so a quoted `"false"` is absence and the check still runs. The value
+    /// comes from the person's own configuration and never from a response.
+    pub fn update_check(&self) -> Option<bool> {
+        self.update_check
     }
 
     /// What `vetting.auto` said in the home layer, if it said anything.
@@ -988,6 +1004,7 @@ impl Settings {
             && self.effort.is_none()
             && self.editor_mode.is_none()
             && self.terminal_title.is_none()
+            && self.update_check.is_none()
             && self.vetting.is_none()
             && self.narrowing.is_empty()
             // A key named as something other than a boolean said something too, and `doctor` names
@@ -1087,6 +1104,7 @@ impl Settings {
             .chain(self.effort.is_some().then_some("effort"))
             .chain(self.editor_mode.is_some().then_some("editorMode"))
             .chain(self.terminal_title.is_some().then_some("terminalTitle"))
+            .chain(self.update_check.is_some().then_some("updateCheck"))
             .chain(self.vetting.is_some().then_some("vetting.auto"))
             .chain(self.narrowing.named())
             .chain((!self.keybindings.is_empty()).then_some("keybindings"))
@@ -4264,6 +4282,37 @@ mod tests {
         let settings = Layers::new("title-read")
             .global(r#"{"terminalTitle": false}"#)
             .read();
+        assert_eq!(settings.unread_keys().count(), 0);
+    }
+
+    /// Only a real `false` turns the check off, and a file that sets only the key is not a file that
+    /// set nothing, nor one with a key nothing reads.
+    #[test]
+    fn only_a_boolean_turns_the_update_check_off() {
+        assert_eq!(
+            Settings::parse(r#"{"updateCheck": false}"#).update_check(),
+            Some(false)
+        );
+        assert_eq!(
+            Settings::parse(r#"{"updateCheck": true}"#).update_check(),
+            Some(true)
+        );
+        assert_eq!(
+            Settings::parse(r#"{"updateCheck": "false"}"#).update_check(),
+            None
+        );
+        assert_eq!(Settings::parse(r#"{"model": "m"}"#).update_check(), None);
+
+        let settings = Settings::parse(r#"{"updateCheck": false}"#);
+        let reported: Vec<&str> = settings.names().collect();
+        assert_eq!(reported, ["updateCheck"]);
+        assert!(!settings.is_empty());
+
+        let settings = Layers::new("update-check-layers")
+            .global(r#"{"updateCheck": true}"#)
+            .project(r#"{"updateCheck": false}"#)
+            .read();
+        assert_eq!(settings.update_check(), Some(false));
         assert_eq!(settings.unread_keys().count(), 0);
     }
 

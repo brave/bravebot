@@ -4,7 +4,7 @@ import { Button, Collapse } from '../nala'
 export function Unconfigured({ detail, onClose }: { detail: string; onClose: () => void }): React.JSX.Element {
   return <Modal title="Connect the agent backend" size="md" className="unconfigured" onClose={onClose}
     subtitle="This build cannot load its backend credentials. You can continue browsing conversations and writing drafts."
-    actions={<Button size="small" kind="filled" onClick={onClose} data-test="unconfigured-continue">Continue browsing</Button>}>
+    actions={<Button kind="filled" onClick={onClose} data-test="unconfigured-continue">Continue browsing</Button>}>
     <p>If you installed Brave Bot, obtain a configured build from its distributor. Credentials are currently provided when the agent is built.</p>
     <Collapse className="dialog-collapse" title="Development setup" isOpen={undefined} data-test="unconfigured-setup">
       <ol>

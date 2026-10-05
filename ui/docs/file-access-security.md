@@ -67,8 +67,9 @@ picker and a separate Send action.
 
 Drafts are stored locally in `experience.json` with mode 0600; clearing a draft removes
 its saved text. Memory history retains up to 30 revisions. Reset preserves revisions for
-recovery, as stated in its confirmation. Deleting a bot removes its app-owned revision
-history and cached briefing, but keeps project memory files and saved conversations.
+recovery, as stated in its confirmation, one history per folder the bot works in. Deleting a
+bot removes its app-owned revision histories and cached briefing, but keeps project memory files,
+its home folder and saved conversations.
 Deletion errors are surfaced, and deletion is refused while a bot's conversation is running.
 These are local files, not encrypted storage or a promise of secure erasure from backups.
 

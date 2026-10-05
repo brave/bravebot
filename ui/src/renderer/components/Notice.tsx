@@ -4,7 +4,7 @@ import { Button } from '../nala'
 export function Notice({ title, body, onClose }: { title: string; body: string; onClose: () => void }): React.JSX.Element {
   return (
     <Modal title={title} size="md" onClose={onClose} className="notice"
-      actions={<Button size="small" kind="filled" onClick={onClose} data-test="notice-done">Done</Button>}>
+      actions={<Button kind="filled" onClick={onClose} data-test="notice-done">Done</Button>}>
       <pre className="notice-body">{body}</pre>
     </Modal>
   )
