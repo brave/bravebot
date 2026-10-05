@@ -2087,7 +2087,12 @@ impl Session {
         // heard. Every further press finds the same word, which is its answer too: it asks for the
         // stop already underway.
         if self.stopping && self.a_turn_is_running() {
-            return Some(t!(indicator_stopping).to_string());
+            let running = self.delegates().iter().filter(|d| d.is_running()).count();
+            return Some(if running == 0 {
+                t!(indicator_stopping).to_string()
+            } else {
+                t!(indicator_stopping_delegates, count = running).to_string()
+            });
         }
 
         // A check next, and ahead of every phase: it is a whole model call inside the tool call
@@ -16596,6 +16601,33 @@ mod tests {
             s.submit().expect("submitted");
             s.set_phase(Phase::Planning);
             assert_eq!(s.indicator().expect("working").verb, "Planning");
+        }
+
+        /// The turn ends once the delegates it started have returned, so the count is of the ones
+        /// still running: a delegate that finished before the press is not being waited on, and one
+        /// that returns afterwards takes itself off the count.
+        #[test]
+        fn a_stopping_turn_says_how_many_delegates_it_waits_on() {
+            let delegate = |n| Delegation {
+                id: DelegateId::nth(n),
+                kind: "reader".into(),
+                task: format!("task {n}"),
+            };
+            let verb = |s: &Session| s.indicator().expect("working").verb;
+            let mut s = working();
+            s.set_phase(Phase::Planning);
+            for n in 1..=3 {
+                s.delegate_started(delegate(n));
+            }
+            s.delegate_finished(DelegateId::nth(1), "answered".into(), false, None);
+            assert_eq!(verb(&s), "Planning");
+
+            s.stop_asked();
+            assert_eq!(verb(&s), "Stopping, waiting on 2 delegates");
+            s.delegate_finished(DelegateId::nth(2), "stopped".into(), true, None);
+            assert_eq!(verb(&s), "Stopping, waiting on 1 delegate");
+            s.delegate_finished(DelegateId::nth(3), "stopped".into(), true, None);
+            assert_eq!(verb(&s), "Stopping");
         }
 
         /// A call the model is writing has no line of its own yet, and a service holding its

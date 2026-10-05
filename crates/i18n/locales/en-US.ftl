@@ -1731,6 +1731,12 @@ indicator-checking-pdf = Checking a PDF
 # ends once its worker and every delegate it started have returned, which can take seconds, and a
 # screen still saying what it said before the press reads as a press nobody heard.
 indicator-stopping = Stopping
+# The same, while delegates the turn started are still running, since the turn ends only when they
+# have returned. The count is the delegates that have not, which is what the wait is for.
+indicator-stopping-delegates = { $count ->
+    [one] Stopping, waiting on { $count } delegate
+   *[other] Stopping, waiting on { $count } delegates
+    }
 # Abbreviated counts, already rounded to one place.
 tokens-thousands = { $thousands }k
 tokens-millions = { $millions }M

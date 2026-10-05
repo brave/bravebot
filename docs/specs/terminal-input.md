@@ -162,8 +162,9 @@ and a byte written later are not the two halves of one gesture.
 
 **A turn asked to stop says so until it ends.** From the press that asks for the stop, the working
 indicator names the stop ahead of every other word it would use, and keeps naming it until the turn
-ends. A further press while the turn is stopping finds the same word, since it asks for the stop
-already underway. The ladder is unchanged: the mark is what the screen says, not a rung.
+ends. While delegates the turn started are still running, the word says how many, and the count
+falls as they return. A further press while the turn is stopping finds the same word, since it asks
+for the stop already underway. The ladder is unchanged: the mark is what the screen says, not a rung.
 
 **Why.** A turn ends once its worker and every delegate it started have returned, which can take
 seconds. An indicator still naming the work through that wait reads as a press nobody heard, and
@@ -263,6 +264,8 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_tui::app::a_withdrawn_question_is_declined_in_the_shape_of_its_own_kind`
 `verified-by: bravebot_tui::render::a_turn_asked_to_stop_says_so_until_it_ends`
 `verified-by: bravebot_tui::state::the_stopping_mark_ends_with_the_turn`
+`verified-by: bravebot_tui::state::a_stopping_turn_says_how_many_delegates_it_waits_on`
+`verified-by: bravebot_tui::render::a_stopping_turn_draws_the_delegates_it_waits_on`
 
 
 <a id="INPUT-5"></a>
