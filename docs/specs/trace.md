@@ -31,6 +31,15 @@ tool tells the planner that a path resolves outside the workspace, the trail rec
 as well, with the remedy offered and the path named as the planner was told it: `ref:N` for a
 reference, the path otherwise.
 
+A delegate the gate approved and its checkout then refused is recorded as a refusal under
+`delegate`, not as a permission. The entry gives the delegate's number, one fixed cause (the
+isolation argument was not `checkout`, a reader asked for one, the run already works in one, no
+state directory, the checkouts would sit inside the working directory, an opened directory holds
+the working directory, an opened directory holds the checkouts, the directory for checkouts is
+unusable, or the repository was refused), the directory a person opened where that was the cause,
+and how many of the call's delegates were not started, the withdrawn one included. The delegate
+still takes no number and no place under the ceiling ([DELEGATE-7](delegation.md#DELEGATE-7)).
+
 **Why.** A trail that logged only what happened would not answer "why did it not do the thing I
 asked", which is most of what anyone asks it.
 
@@ -38,6 +47,10 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_core::policy::promotion_appears_in_the_audit_trail`
 `verified-by: bravebot_core::policy::the_audit_trail_records_the_precommit_first`
 `verified-by: bravebot_core::policy::a_turn_cannot_begin_without_routing`
+`verified-by: bravebot_core::policy::a_withdrawn_delegate_is_a_refusal_with_its_cause`
+`verified-by: bravebot_core::policy::a_withdrawn_delegate_takes_neither_a_place_nor_a_number`
+`verified-by: bravebot_agent::turn::a_spawn_asking_for_a_checkout_it_may_not_have_starts_nothing`
+`verified-by: bravebot_agent::workspace::a_checkout_refusal_carries_which_opened_directory_held_what`
 `verified-by: bravebot_agent::turn::a_read_refused_for_leaving_the_workspace_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::turn::a_read_through_a_reference_refused_for_leaving_the_workspace_is_recorded_as_the_reference`
 `verified-by: bravebot_agent::turn::a_picture_refused_for_leaving_the_workspace_is_recorded_as_a_refusal`
