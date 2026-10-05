@@ -850,6 +850,39 @@ flight, which is aimed at something else entirely and costs the answer being wri
 `verified-by: bravebot_tui::state::there_is_nothing_to_take_back_when_nothing_is_waiting`
 `verified-by: bravebot_tui::render::the_waiting_rows_go_when_the_queue_is_taken_back`
 
+<a id="INPUT-38"></a>
+### INPUT-38: Ctrl-Y puts back what the last Ctrl-U, Ctrl-K, Ctrl-W or Alt-D took
+
+Ctrl-U, Ctrl-K, Ctrl-W and Alt-D (the word after the caret and the blanks before it) keep what they
+delete, and Ctrl-Y inserts it at the caret, leaving the caret after it. Kills that go the same way and
+follow each other join, as in readline: backward kills (Ctrl-U, Ctrl-W) put the later text first,
+forward kills (Ctrl-K, Alt-D) put it last. A kill the other way, or one after any edit or caret move,
+starts a new buffer. Ctrl-Y with nothing kept does nothing. Alt-Y does not cycle through earlier kills.
+
+The buffer is vi's register ([INPUT-28](#INPUT-28)), so Ctrl-Y puts back what `d` or `y` took, and `p`
+puts back what a kill took, as characters. A kill never changes what `p` does with text `d` or `y`
+took. Ctrl-Y inserts a register that holds whole lines as its characters, without the newline. A
+marker that was killed comes back as the marker, and names its attachment again for as long as that is
+still staged; once it is not, it is text like any other ([INPUT-3](#INPUT-3)). A chord moved onto
+`ctrl-y` ([INPUT-32](#INPUT-32)) is read first, and `yank` is not one of the nine movable actions.
+While `R` is typing over the line ([INPUT-37](#INPUT-37)), Ctrl-U and Ctrl-W are Backspace and keep
+nothing, and Alt-D does nothing.
+
+**Why.** The three delete keys threw their text away, so moving a clause with the readline keys was not
+possible; Claude Code and Codex keep it and paste it with Ctrl-Y. One buffer for removed text keeps vi
+and readline from disagreeing about what was last taken.
+
+`verified-by: bravebot_tui::app::ctrl_y_puts_back_what_ctrl_k_took_somewhere_else`
+`verified-by: bravebot_tui::app::every_delete_key_keeps_what_it_took`
+`verified-by: bravebot_tui::app::consecutive_kills_join_in_the_direction_they_went`
+`verified-by: bravebot_tui::app::ctrl_y_with_nothing_killed_does_nothing`
+`verified-by: bravebot_tui::app::alt_d_at_the_end_of_the_line_keeps_nothing`
+`verified-by: bravebot_tui::app::a_chord_on_ctrl_y_takes_precedence_over_the_yank`
+`verified-by: bravebot_tui::state::a_killed_marker_yanked_back_names_its_picture_again`
+`verified-by: bravebot_tui::state::vi_put_reads_what_a_kill_took`
+`verified-by: bravebot_tui::state::yank_reads_what_vi_deleted`
+`verified-by: bravebot_tui::state::a_kill_does_not_join_a_vi_yank`
+
 ## Known costs
 
 - **A stopped request leaves a thread and a socket behind.** The reply goes on being read by

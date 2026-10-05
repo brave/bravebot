@@ -28,6 +28,8 @@ growing further. It keeps growing while a turn runs.
 | Up / Down | walk back through prompts you have sent |
 | Ctrl-R | search every prompt you have sent |
 | Tab | complete a slash command or an `@path` |
+| Ctrl-U, Ctrl-K, Ctrl-W, Alt-D | delete to the line start, to the line end, the word before, the word after; the text is kept |
+| Ctrl-Y | put back the text the last of those deleted. Deletes in one direction in a row join, and vi's `p` puts back the same text |
 | Shift-Tab | choose how much the session asks before it acts |
 | `?` | on an empty line, list every key |
 

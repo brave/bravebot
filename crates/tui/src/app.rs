@@ -662,6 +662,9 @@ fn edit_line(session: &mut Session, key: KeyEvent) -> bool {
         KeyCode::Char('w') if ctrl => session.delete_word_before(),
         KeyCode::Char('u') if ctrl => session.delete_to_line_start(),
         KeyCode::Char('k') if ctrl => session.delete_to_line_end(),
+        // Alt only: Ctrl-D leaves (INPUT-4).
+        KeyCode::Char('d') if alt && !ctrl => session.delete_word_after(),
+        KeyCode::Char('y') if ctrl => session.yank(),
         _ => return false,
     }
     true
@@ -19500,6 +19503,122 @@ mod tests {
         }
         handle_key(&mut session, ctrl('k'));
         assert_eq!(session.input(), "keep this ");
+    }
+
+    fn alt(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT)
+    }
+
+    /// Ctrl-K then Ctrl-Y at another place moves the text.
+    #[test]
+    fn ctrl_y_puts_back_what_ctrl_k_took_somewhere_else() {
+        let mut session = typed_into("keep this drop that");
+        for _ in 0..2 {
+            handle_key(&mut session, ctrl_key(KeyCode::Left));
+        }
+        handle_key(&mut session, ctrl('k'));
+        assert_eq!(session.input(), "keep this ");
+        handle_key(&mut session, ctrl('a'));
+        handle_key(&mut session, ctrl('y'));
+        assert_eq!(session.input(), "drop thatkeep this ");
+        assert_eq!(session.caret(), "drop that".len());
+    }
+
+    /// Ctrl-U and Ctrl-W keep what they took as well, and Alt-D takes the word after the caret.
+    #[test]
+    fn every_delete_key_keeps_what_it_took() {
+        for (take, line, left, kept) in [
+            (ctrl('u'), "one two", 0, "one two"),
+            (ctrl('w'), "one two", 0, "two"),
+            (alt('d'), "one two", 7, "one"),
+        ] {
+            let mut session = typed_into(line);
+            for _ in 0..left {
+                handle_key(&mut session, ctrl_key(KeyCode::Left));
+            }
+            if left > 0 {
+                handle_key(&mut session, ctrl('a'));
+            }
+            handle_key(&mut session, take);
+            handle_key(&mut session, ctrl('y'));
+            assert!(
+                session.input().contains(kept),
+                "{take:?} kept nothing: {:?}",
+                session.input()
+            );
+        }
+    }
+
+    /// Kills in one direction join, and a change of direction starts a new buffer.
+    #[test]
+    fn consecutive_kills_join_in_the_direction_they_went() {
+        let mut session = typed_into("one two three");
+        handle_key(&mut session, ctrl('w'));
+        handle_key(&mut session, ctrl('w'));
+        assert_eq!(session.input(), "one ");
+        handle_key(&mut session, ctrl('y'));
+        assert_eq!(session.input(), "one two three");
+
+        let mut session = typed_into("one two three");
+        handle_key(&mut session, ctrl('a'));
+        handle_key(&mut session, alt('d'));
+        handle_key(&mut session, alt('d'));
+        assert_eq!(session.input(), " three");
+        handle_key(&mut session, ctrl('y'));
+        assert_eq!(session.input(), "one two three");
+
+        // A kill the other way starts a new buffer.
+        let mut session = typed_into("ab cd ef");
+        handle_key(&mut session, ctrl('a'));
+        handle_key(&mut session, ctrl_key(KeyCode::Right));
+        handle_key(&mut session, KeyEvent::from(KeyCode::Right));
+        handle_key(&mut session, alt('d'));
+        assert_eq!(session.input(), "ab  ef");
+        handle_key(&mut session, ctrl('w'));
+        handle_key(&mut session, ctrl('y'));
+        assert_eq!(session.input(), "ab  ef");
+
+        // A kill after typing replaces the buffer, and the ones after it join.
+        let mut session = typed_into("one two three");
+        handle_key(&mut session, ctrl('w'));
+        handle_key(&mut session, KeyEvent::from(KeyCode::Char('x')));
+        handle_key(&mut session, ctrl('w'));
+        handle_key(&mut session, ctrl('w'));
+        handle_key(&mut session, ctrl('y'));
+        assert_eq!(session.input(), "one two x");
+    }
+
+    /// Ctrl-Y with nothing killed does nothing, and the line is not a change to undo.
+    #[test]
+    fn ctrl_y_with_nothing_killed_does_nothing() {
+        let mut session = typed_into("abc");
+        assert_eq!(handle_key(&mut session, ctrl('y')), Action::Redraw);
+        assert_eq!(session.input(), "abc");
+        assert_eq!(session.caret(), 3);
+    }
+
+    /// Alt-D at the end of the line deletes nothing and keeps nothing.
+    #[test]
+    fn alt_d_at_the_end_of_the_line_keeps_nothing() {
+        let mut session = typed_into("abc");
+        handle_key(&mut session, ctrl('w'));
+        handle_key(&mut session, ctrl('y'));
+        handle_key(&mut session, alt('d'));
+        handle_key(&mut session, ctrl('y'));
+        assert_eq!(session.input(), "abcabc");
+    }
+
+    /// A chord moved onto ctrl-y still wins over the yank.
+    #[test]
+    fn a_chord_on_ctrl_y_takes_precedence_over_the_yank() {
+        let mut session = Session::new("none");
+        let mut custom = std::collections::BTreeMap::new();
+        custom.insert("stash".to_string(), "ctrl-y".to_string());
+        session.adopt_keybindings(&custom);
+        type_line(&mut session, "line to stash");
+        handle_key(&mut session, ctrl('y'));
+        assert_eq!(session.input(), "");
+        assert_eq!(session.stashed(), Some("line to stash"));
     }
 
     /// The keys that used to be typed as characters, and now must not be: Ctrl-A on an empty line
