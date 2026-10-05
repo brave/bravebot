@@ -273,8 +273,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
             }} />
           <div className="composer-toolbar">
             <IconButton icon="attachment" label="Attach files" className="attach-files" onClick={onAttach}
-              disabled={!canAttach || attachments.length >= 5}
-              tooltip={!canAttach ? 'Send a first message, then attach files' : attachments.length >= 5 ? 'Five files at most' : 'Attach files'} />
+              disabled={!canAttach} tooltip={!canAttach ? 'Send a first message, then attach files' : 'Attach files'} />
             <span className="toolbar-spacer" />
             <ContextMeter session={session} model={model} tokens={contextTokens} archived={archived} compacting={compacting} />
             {permissionMode && onMode && <PermissionModePicker key={`mode-${session}`} mode={permissionMode} running={running} onChoose={onMode} />}

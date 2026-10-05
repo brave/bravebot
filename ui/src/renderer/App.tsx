@@ -1562,7 +1562,7 @@ export function App(): React.JSX.Element {
           const handle = handleRef.current
           if (!handle) return
           void window.bravebot.chooseAttachments(handle).then((files) => {
-            updateSession(handle, (old) => old ? { ...old, attachments: [...(old.attachments ?? []), ...files].slice(0, 5) } : old)
+            updateSession(handle, (old) => old ? { ...old, attachments: [...(old.attachments ?? []), ...files] } : old)
           }).catch((error) => setProblem(String(error)))
         }}
         onRemoveAttachment={(id) => setLive((old) => old ? { ...old, attachments: old.attachments?.filter((file) => file.id !== id) } : old)}

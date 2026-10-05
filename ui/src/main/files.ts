@@ -1,4 +1,4 @@
-import { readProjectText } from './project-files'
+import { isAttachableProjectFile, readProjectText } from './project-files'
 /**
  * Looking at the folder a session is working in.
  *
@@ -77,11 +77,10 @@ export async function chooseAttachments(window: BrowserWindow, handle: string): 
     defaultPath: root, properties: ['openFile', 'multiSelections'],
   })
   if (selected.canceled) return []
-  if (selected.filePaths.length > 5) throw new Error('Attach up to five files at a time.')
   const chosen = selected.filePaths.map((file) => {
     const path = relative(realpathSync(root), realpathSync(file))
     const target = isSubpath(path) && path ? inside(handle, path) : null
-    if (!target || !validAttachment(root, path)) throw new Error('Choose text files inside this project, each under 256 KB.')
+    if (!target || !isAttachableProjectFile(root, path)) throw new Error(`Choose text files inside this project. ${path || 'That file'} is not one.`)
     return { id: randomUUID(), path }
   })
   const tokens = attachments.get(handle) ?? new Map<string, string>()
@@ -92,19 +91,13 @@ export async function chooseAttachments(window: BrowserWindow, handle: string): 
 
 export function attachmentPaths(handle: string, ids: unknown): string[] {
   if (ids === undefined) return []
-  if (!Array.isArray(ids) || ids.length > 5) throw new Error('Invalid attachments.')
+  if (!Array.isArray(ids)) throw new Error('Invalid attachments.')
   return ids.map((id) => {
     const path = typeof id === 'string' ? attachments.get(handle)?.get(id) : null
     const target = path ? inside(handle, path) : null
-    if (!path || !target || !validAttachment(roots.get(handle)!, path)) throw new Error('An attachment is no longer available. Choose it again.')
+    if (!path || !target || !isAttachableProjectFile(roots.get(handle)!, path)) throw new Error('An attachment is no longer available. Choose it again.')
     return path
   })
-}
-
-/** Revalidate text and size at selection and send, including files replaced since selection. */
-function validAttachment(root: string, path: string): boolean {
-  const file = readProjectText(root, path, 256 * 1024)
-  return file !== null && !file.truncated
 }
 
 /**
