@@ -182,6 +182,7 @@ exactly those characters have to arrive.
 
 `verified-by: bravebot_tui::app::the_rename_command_carries_the_whole_name`
 `verified-by: bravebot_tui::app::the_add_dir_command_carries_its_directory`
+`verified-by: bravebot_tui::app::the_add_dir_close_command_carries_the_directory_to_close`
 `verified-by: bravebot_tui::app::the_cd_command_carries_its_directory`
 `verified-by: bravebot_tui::app::the_btw_command_carries_its_question`
 `verified-by: bravebot_tui::app::a_session_can_ask_for_a_manifest_run`

@@ -2993,6 +2993,209 @@ fn closing_added_directories_makes_them_unreachable_again() {
     assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
 }
 
+/// TRUST-9: closing one directory by name refuses a file that only it reached, and leaves every
+/// other directory open. The name typed is resolved, so a spelling with `..` in it closes the
+/// directory it names, and what comes back is the name the directory was opened under.
+///
+/// The failures this rejects are a close that closes everything, which would refuse the other
+/// directory's file, and one that matches the spelling alone, which would find nothing to close.
+#[test]
+fn closing_one_added_directory_refuses_what_only_it_reached() {
+    let scratch = Scratch::new("closed-one");
+    let notes = outside("closed-one-notes");
+    let shared = outside("closed-one-shared");
+    std::fs::create_dir_all(notes.path.join("inner")).unwrap();
+    std::fs::write(notes.path.join("notes.md"), "a note").unwrap();
+    std::fs::write(shared.path.join("shared.md"), "shared").unwrap();
+
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let opened = workspace
+        .add_directory(notes.path.to_str().expect("utf-8 path"))
+        .expect("notes opens");
+    let other = workspace
+        .add_directory(shared.path.to_str().expect("utf-8 path"))
+        .expect("shared opens");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    let note = Labelled::trusted(opened.join("notes.md").display().to_string());
+    let kept = Labelled::trusted(other.join("shared.md").display().to_string());
+    workspace
+        .read(&mut policy, &note)
+        .expect("readable while open");
+
+    let spelled = notes.path.join("inner").join("..");
+    let closed = workspace
+        .close_added_directory(spelled.to_str().expect("utf-8 path"))
+        .expect("an open directory closes");
+
+    assert_eq!(closed, opened);
+    assert_eq!(workspace.added_directories(), [other]);
+    let error = workspace
+        .read(&mut policy, &note)
+        .expect_err("a file only the closed directory reached is refused again");
+    assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
+    workspace
+        .read(&mut policy, &kept)
+        .expect("the directory left open is still reachable");
+}
+
+/// TRUST-9: a directory beneath the one closed stays reachable where it was opened in its own
+/// right, and a name that is not open is refused rather than reported as closed.
+///
+/// The failures this rejects are a close that takes every overlapping directory with it, as moving
+/// the working directory does, and one that answers success for a name it did not find, which would
+/// tell the person a directory was closed while another spelling of it stayed open.
+#[test]
+fn closing_a_directory_leaves_one_opened_beneath_it_and_refuses_one_never_opened() {
+    let scratch = Scratch::new("closed-nested");
+    let notes = outside("closed-nested");
+    std::fs::create_dir_all(notes.path.join("inbox")).unwrap();
+    std::fs::write(notes.path.join("notes.md"), "a note").unwrap();
+    std::fs::write(notes.path.join("inbox/today.md"), "today").unwrap();
+
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let outer = workspace
+        .add_directory(notes.path.to_str().expect("utf-8 path"))
+        .expect("notes opens");
+    let inner = workspace
+        .add_directory(notes.path.join("inbox").to_str().expect("utf-8 path"))
+        .expect("the inbox opens");
+
+    let error = workspace
+        .close_added_directory(scratch.path.to_str().expect("utf-8 path"))
+        .expect_err("the working directory is not an added one");
+    assert!(
+        error.to_string().contains("is not a directory opened"),
+        "{error}"
+    );
+    let error = workspace
+        .close_added_directory("inbox")
+        .expect_err("a relative name names no added directory");
+    assert!(error.to_string().contains("absolute"), "{error}");
+    assert_eq!(
+        workspace.added_directories(),
+        [outer.clone(), inner.clone()]
+    );
+
+    workspace
+        .close_added_directory(&outer.to_string_lossy())
+        .expect("notes closes");
+    assert_eq!(workspace.added_directories(), std::slice::from_ref(&inner));
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    workspace
+        .read(
+            &mut policy,
+            &Labelled::trusted(inner.join("today.md").display().to_string()),
+        )
+        .expect("the inbox was opened in its own right");
+    workspace
+        .read(
+            &mut policy,
+            &Labelled::trusted(outer.join("notes.md").display().to_string()),
+        )
+        .expect_err("notes was closed");
+}
+
+/// TRUST-9: a directory deleted since it was opened still closes, by the name it was opened under.
+/// Otherwise it could not be closed at all, and a directory made again at that name would be
+/// reachable, and trusted, without anybody opening it.
+///
+/// The failure this rejects is matching only a name that canonicalises, which a deleted directory
+/// no longer does.
+#[test]
+fn a_directory_deleted_since_it_was_opened_still_closes() {
+    let scratch = Scratch::new("closed-gone");
+    let notes = outside("closed-gone");
+
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let opened = workspace
+        .add_directory(notes.path.to_str().expect("utf-8 path"))
+        .expect("notes opens");
+    std::fs::remove_dir_all(&opened).unwrap();
+
+    let closed = workspace
+        .close_added_directory(&opened.to_string_lossy())
+        .expect("the name it was opened under closes it");
+    assert_eq!(closed, opened);
+    assert!(workspace.added_directories().is_empty());
+}
+
+/// TRUST-9: a deleted directory also closes under a name that reached it through a link, the way
+/// `/tmp/notes` reaches `/private/tmp/notes` on macOS, since that is the name the person typed.
+///
+/// The failure this rejects is falling back to the spelling alone once the name no longer
+/// canonicalises, which the stored name never matches.
+#[cfg(unix)]
+#[test]
+fn a_deleted_directory_closes_under_a_name_through_a_linked_ancestor() {
+    let scratch = Scratch::new("closed-gone-linked");
+    let base = scratch.path.canonicalize().expect("canonical scratch");
+    let holder = base.join("holder");
+    std::fs::create_dir_all(holder.join("project")).unwrap();
+    std::fs::create_dir_all(holder.join("notes")).unwrap();
+    std::os::unix::fs::symlink(&holder, base.join("link")).unwrap();
+    let typed = base.join("link").join("notes");
+
+    let mut workspace = Workspace::new(holder.join("project")).expect("workspace");
+    let opened = workspace
+        .add_directory(typed.to_str().expect("utf-8 path"))
+        .expect("notes opens through the link");
+    assert_eq!(opened, holder.join("notes"));
+    std::fs::remove_dir_all(&opened).unwrap();
+
+    let closed = workspace
+        .close_added_directory(typed.to_str().expect("utf-8 path"))
+        .expect("the name typed through the link closes it");
+    assert_eq!(closed, opened);
+    assert!(workspace.added_directories().is_empty());
+}
+
+/// TRUST-9: a link put where an opened directory was closes that directory, not the one the link
+/// points at, since the name typed is the one `/status` lists it under.
+///
+/// The failure this rejects is resolving the name before matching its spelling, which closes the
+/// other directory and leaves the named one open.
+#[cfg(unix)]
+#[test]
+fn a_link_put_where_an_opened_directory_was_closes_that_directory() {
+    let scratch = Scratch::new("closed-replaced");
+    let base = scratch.path.canonicalize().expect("canonical scratch");
+    std::fs::create_dir_all(base.join("project")).unwrap();
+    std::fs::create_dir_all(base.join("a")).unwrap();
+    std::fs::create_dir_all(base.join("b")).unwrap();
+
+    let mut workspace = Workspace::new(base.join("project")).expect("workspace");
+    let a = workspace
+        .add_directory(base.join("a").to_str().expect("utf-8 path"))
+        .expect("a opens");
+    let b = workspace
+        .add_directory(base.join("b").to_str().expect("utf-8 path"))
+        .expect("b opens");
+    std::fs::remove_dir_all(&a).unwrap();
+    std::os::unix::fs::symlink(&b, &a).unwrap();
+
+    let closed = workspace
+        .close_added_directory(a.to_str().expect("utf-8 path"))
+        .expect("a closes");
+    assert_eq!(closed, a);
+    assert_eq!(workspace.added_directories(), [b]);
+}
+
 /// PERM-16: a settings layer asking for the file tools to stay inside the workspace refuses every
 /// directory by name, and it refuses it here rather than at the command that typed it, so
 /// `/add-dir`, `--add-dir` and a name a settings file asked about are all refused by one rule. The
@@ -6744,7 +6947,8 @@ fn a_checkout_is_refused_where_it_would_overlap_a_tree_the_session_opened() {
 /// refusal with no cause.
 ///
 /// The failure this rejects is the old sentence, which named no directory and no way out, so the
-/// person was told a checkout was refused and not that `/clear` or a restart would allow one.
+/// person was told a checkout was refused and not that closing the directory or a restart would
+/// allow one.
 #[test]
 fn a_checkout_refusal_names_the_added_directory_that_holds_the_working_directory() {
     let holder = Scratch::new("checkout-refusal-holder");
@@ -6767,7 +6971,10 @@ fn a_checkout_refusal_names_the_added_directory_that_holds_the_working_directory
         "the directory was not named: {refused}"
     );
     assert!(refused.contains("holds the working directory"), "{refused}");
-    assert!(refused.contains("/clear"), "no way out: {refused}");
+    assert!(
+        refused.contains(&format!("/add-dir close {}", opened.display())),
+        "no way out: {refused}"
+    );
     assert!(
         !state.path.join("checkouts").exists(),
         "a directory was made before the refusal"
@@ -6802,7 +7009,10 @@ fn a_checkout_refusal_names_the_added_directory_that_holds_the_checkouts() {
         !refused.contains("holds the working directory"),
         "the wrong cause was named: {refused}"
     );
-    assert!(refused.contains("/clear"), "no way out: {refused}");
+    assert!(
+        refused.contains(&format!("/add-dir close {}", opened.display())),
+        "no way out: {refused}"
+    );
 }
 
 /// CHECKOUT-7. A read refused for being outside the workspace warns, where opening its directory

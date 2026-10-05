@@ -883,21 +883,28 @@ enum CheckoutOverlap<'a> {
 
 impl CheckoutOverlap<'_> {
     fn describe(&self) -> String {
-        let way_out = "The person can close it with /clear in the terminal, which starts a new \
-                       conversation, or start bravebot again without opening it.";
+        let way_out = |dir: &Path| {
+            format!(
+                "The person can close it with /add-dir close {} in the terminal, or start \
+                 bravebot again without opening it.",
+                dir.display()
+            )
+        };
         match self {
             Self::InsideWorkingDirectory => "it would sit inside the working directory".to_string(),
             Self::AddedHoldsWorkingDirectory(dir) => format!(
                 "'{}', a directory opened beside the working directory, holds the working \
                  directory, so a delegate in a checkout would still reach the working directory \
-                 through it. {way_out}",
-                dir.display()
+                 through it. {}",
+                dir.display(),
+                way_out(dir)
             ),
             Self::AddedHoldsCheckouts(dir) => format!(
                 "'{}', a directory opened beside the working directory, holds the directory \
                  checkouts are made in, so every run that reaches it would reach the checkout. \
-                 {way_out}",
-                dir.display()
+                 {}",
+                dir.display(),
+                way_out(dir)
             ),
         }
     }
@@ -1387,6 +1394,40 @@ impl Workspace {
     /// leave a tree reachable that nobody had vouched for.
     pub fn close_added_directories(&mut self) {
         self.added.clear();
+    }
+
+    /// Close one directory added by name, and return the name it was open under (TRUST-9).
+    ///
+    /// The caller withdraws the rule it recorded under that name, which is why the name comes back
+    /// rather than the one typed: the rule is about the directory that was opened.
+    ///
+    /// `directory` is matched as it is spelled and, failing that, as it resolves now. The spelling
+    /// comes first because the name a directory was opened under is the one `/status` shows, and
+    /// a link put there since may resolve to another open directory. Resolving follows what
+    /// still exists of the path, so a directory deleted since it was opened can still be closed
+    /// under any name that reached it. A directory beneath another open one stays reachable
+    /// through that one.
+    pub fn close_added_directory(&mut self, directory: &str) -> Result<PathBuf, WorkspaceError> {
+        let candidate = Path::new(directory);
+        if !candidate.is_absolute() {
+            return Err(WorkspaceError::Invalid {
+                path: directory.to_string(),
+                reason: "must be an absolute path",
+            });
+        }
+        let open = self
+            .added
+            .iter()
+            .position(|open| open == candidate)
+            .or_else(|| {
+                let resolved = destination(candidate)?;
+                self.added.iter().position(|open| *open == resolved)
+            })
+            .ok_or_else(|| WorkspaceError::Invalid {
+                path: directory.to_string(),
+                reason: "is not a directory opened beside the working directory",
+            })?;
+        Ok(self.added.remove(open))
     }
 
     /// Resolve a path against the workspace.

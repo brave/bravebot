@@ -208,6 +208,15 @@ It lasts the session, `--resume` carries both halves, and `/clear` closes it. A 
 inside the project is refused. A directory a resume cannot open again, because it has moved or gone,
 says so rather than being passed over.
 
+```
+/add-dir close ~/notes
+```
+
+closes that one directory and takes both halves back, without ending the conversation. A file only
+it reached is refused again, and its trusted rule goes. Where a directory above it is trusted, the
+closed one is left undecided rather than trusted through that one. A rule there that distrusts a
+file stays, so closing never makes anything more trusted. A later resume does not reopen it.
+
 A directory that *holds* the project is **not** refused, and its rule covers the project's files as
 it covers everything else in that tree. Vouching for a directory is a standing statement about the
 place, and the project is in it, so there is nothing to except.

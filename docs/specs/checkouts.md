@@ -367,8 +367,8 @@ checkout is reachable from no run but that delegate and the delegates it starts.
 Where that cannot hold, a checkout is refused and no delegate starts: where a directory the parent
 opened ([TRUST-9](trust-map.md#TRUST-9)) holds the working directory or the checkout, or where the
 working directory holds the checkout, as it does for a session in the home directory. The
-refusal the planner is given names that directory and says the person can close it with `/clear`,
-which starts a new conversation, or start bravebot again without it.
+refusal the planner is given names that directory and says the person can close it with
+`/add-dir close` and its path, or start bravebot again without it.
 
 A read refused for being outside the workspace says, where opening the directory it is in would
 open one that holds the working directory, that no delegate is given a checkout while that
