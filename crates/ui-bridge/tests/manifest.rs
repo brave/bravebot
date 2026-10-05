@@ -129,7 +129,7 @@ fn answer(mut stream: std::net::TcpStream, asked: &Mutex<(usize, mpsc::Sender<St
             "model": "stub-model",
             "choices": [{"index": 0, "delta": {"role": "assistant", "content": content},
                 "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 1}});
+            "usage": {"prompt_tokens": if call == 1 {12} else {20}, "completion_tokens": if call == 1 {5} else {9}}});
         (
             "text/event-stream",
             format!("data: {chunk}\n\ndata: [DONE]\n\n"),
@@ -706,6 +706,7 @@ fn a_finished_run_is_read_back_with_what_it_did() {
     assert_eq!(read["record"]["id"], run.as_str(), "{read}");
     assert_eq!(read["record"]["title"], TASK, "{read}");
     assert_eq!(read["record"]["front"], "desktop", "{read}");
+    assert_eq!(read["record"]["tokens"], 46);
     assert_eq!(read["manifest"]["failure"], Value::Null, "{read}");
     assert!(
         read["manifest"]["plan"]
@@ -745,6 +746,7 @@ fn a_declined_run_is_read_back_with_the_plan_and_the_reason() {
     let read = read
         .get("ok")
         .unwrap_or_else(|| panic!("the run was not read: {read}"));
+    assert_eq!(read["record"]["tokens"], 46);
     assert!(
         read["manifest"]["plan"]
             .as_str()

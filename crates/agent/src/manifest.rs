@@ -65,7 +65,7 @@
 //! conversation to resume: the planner is never shown a result, so there is nothing for a second
 //! turn to continue. A manifest run is one run, start to finish.
 
-use bravebot_aichat::protocol::{Cached, ChatRequest, Effort, Message, Part};
+use bravebot_aichat::protocol::{ChatRequest, Effort, Message, Part};
 use bravebot_config::Config;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::capability::{Capability, CapabilitySet};
@@ -542,6 +542,60 @@ pub fn run_recording<S: Sink, C: Confirmer, R: Reporter>(
     trust: &mut TrustStore,
     cancel: &Cancel,
 ) -> Result<Outcome, TurnError> {
+    let mut accounting = Accounting::default();
+    let began = std::time::Instant::now();
+    let result = run_accounted(
+        config,
+        egress,
+        workspace,
+        task,
+        confirmer,
+        reporter,
+        sink,
+        trust,
+        cancel,
+        &mut accounting,
+    );
+    accounting.elapsed.wall = began.elapsed();
+    accounting.publish(reporter);
+    result.map(|mut done| {
+        done.timing = accounting.spent.timing;
+        done
+    })
+}
+
+#[derive(Default)]
+struct Accounting {
+    spent: crate::Spent,
+    elapsed: crate::timing::Elapsed,
+}
+
+impl Accounting {
+    fn add(&mut self, usage: bravebot_aichat::protocol::Usage) {
+        self.spent.tokens += usage.total();
+        self.spent.output_tokens += usage.completion_tokens;
+        self.spent.cached.add(usage.cached);
+    }
+
+    fn publish(&mut self, reporter: &mut impl Reporter) {
+        self.spent.timing = self.elapsed.finish();
+        reporter.spent(self.spent);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
+    config: &Config,
+    egress: &Egress,
+    workspace: &Workspace,
+    task: &Task,
+    confirmer: &mut C,
+    reporter: &mut R,
+    sink: &mut S,
+    trust: &mut TrustStore,
+    cancel: &Cancel,
+    accounting: &mut Accounting,
+) -> Result<Outcome, TurnError> {
     // A pipe is quarantined context in a turn. Here it would be dropped: the plan is frozen
     // before anything is observed, and there is no slot for bytes the planner never named.
     // Failing loudly is the alternative to `cat notes.md | bravebot --mode manifest -p`
@@ -553,10 +607,6 @@ pub fn run_recording<S: Sink, C: Confirmer, R: Reporter>(
                 .into(),
         ));
     }
-
-    // Taken here rather than in either half, because a run is planning plus execution and only
-    // this sees both. `execute` fills in the parts and cannot know when the run began.
-    let began = std::time::Instant::now();
 
     // As a turn's are, and for the same reason (MEMORY-5): a step can write a definition's
     // memory, and one an earlier session left untrusted is read back untrusted here too.
@@ -596,6 +646,7 @@ pub fn run_recording<S: Sink, C: Confirmer, R: Reporter>(
         subscription.as_mut(),
         cancel,
         &mut attempt,
+        accounting,
     ) {
         Ok(planned) => planned,
         Err(error) => return Err(stopped(attempt, error)),
@@ -648,11 +699,9 @@ pub fn run_recording<S: Sink, C: Confirmer, R: Reporter>(
         task.model.as_deref(),
         &task.prompt,
         &mut attempt,
+        accounting,
     ) {
-        Ok(mut outcome) => {
-            outcome.timing.wall_ms = began.elapsed().as_millis() as u64;
-            Ok(outcome)
-        }
+        Ok(outcome) => Ok(outcome),
         Err(error) => Err(stopped(attempt, error)),
     }
 }
@@ -677,14 +726,6 @@ struct Planned {
     /// The label the plan carries, which every field lifted out of it carries too.
     label: Label,
     model: String,
-    tokens: u64,
-    output_tokens: u64,
-    cached: Cached,
-    /// How long the two planning calls kept the run waiting.
-    ///
-    /// Planning is most of what a short manifest run spends, and a figure that started at
-    /// execution would report the cheap half.
-    inference: std::time::Duration,
     /// Whether the planning policy refused anything.
     clean: bool,
 }
@@ -769,6 +810,7 @@ fn plan<S: Sink, R: Reporter>(
     mut subscription: Option<&mut crate::ImportedSubscription>,
     cancel: &Cancel,
     attempt: &mut Attempt,
+    accounting: &mut Accounting,
 ) -> Result<Planned, TurnError> {
     if cancel.is_cancelled() {
         return Err(TurnError::Cancelled { attempts: Some(0) });
@@ -830,10 +872,6 @@ fn plan<S: Sink, R: Reporter>(
         }
     });
 
-    let mut tokens = 0u64;
-    let mut output_tokens = 0u64;
-    let mut cached = Cached::default();
-    let mut waited = std::time::Duration::ZERO;
     let mut model = String::new();
     let chosen = task.model.as_deref().unwrap_or(&config.default_model);
 
@@ -850,11 +888,8 @@ fn plan<S: Sink, R: Reporter>(
         "shape",
         SHAPE_PROMPT,
         &history,
-        &mut tokens,
-        &mut output_tokens,
-        &mut cached,
-        &mut waited,
         &mut model,
+        accounting,
     )?;
     // Packaging is not the goal. The record and the second call both see the words, not the
     // wrapper a model put around them.
@@ -880,11 +915,8 @@ fn plan<S: Sink, R: Reporter>(
         "fit",
         &format!("{FIT_PROMPT}\n\n{MANIFEST_PROMPT}\n\n{}", catalogue()),
         &history,
-        &mut tokens,
-        &mut output_tokens,
-        &mut cached,
-        &mut waited,
         &mut model,
+        accounting,
     )?;
 
     // Kept verbatim and kept first. A manifest that will not parse has no rendered form, so
@@ -910,10 +942,6 @@ fn plan<S: Sink, R: Reporter>(
         plan,
         label,
         model,
-        tokens,
-        output_tokens,
-        cached,
-        inference: waited,
         clean: policy.finish(),
     })
 }
@@ -939,11 +967,8 @@ fn ask<S: Sink, R: Reporter>(
     round: &'static str,
     system: &str,
     history: &Conversation,
-    tokens: &mut u64,
-    output_tokens: &mut u64,
-    cached: &mut Cached,
-    waited: &mut std::time::Duration,
     model: &mut String,
+    accounting: &mut Accounting,
 ) -> Result<String, TurnError> {
     if cancel.is_cancelled() {
         return Err(TurnError::Cancelled { attempts: Some(0) });
@@ -957,7 +982,7 @@ fn ask<S: Sink, R: Reporter>(
     // reply to be steered by.
     let request = ChatRequest::new(chosen, history.with_system(system)).with_effort(effort);
 
-    let written_before = *output_tokens;
+    let written_before = accounting.spent.output_tokens;
     let asked_at = std::time::Instant::now();
     let completion = {
         let mut client =
@@ -967,13 +992,20 @@ fn ask<S: Sink, R: Reporter>(
         }
         client.complete_streaming(policy, &request, |progress| {
             reporter.output_tokens(written_before + progress.output_tokens);
-        })?
+        })
     };
+    let took = asked_at.elapsed();
+    accounting.elapsed.inference += took;
+    let usage = match &completion {
+        Ok(done) => Some(done.usage),
+        Err(error) => error.completed_usage(),
+    };
+    if let Some(usage) = usage {
+        accounting.add(usage);
+    }
+    accounting.publish(reporter);
+    let completion = completion?;
 
-    *waited += asked_at.elapsed();
-    *tokens += completion.usage.total();
-    *output_tokens += completion.usage.completion_tokens;
-    cached.add(completion.usage.cached);
     *model = completion.model;
 
     let labelled = policy
@@ -1005,24 +1037,14 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     chosen_model: Option<&str>,
     task: &str,
     attempt: &mut Attempt,
+    accounting: &mut Accounting,
 ) -> Result<Outcome, TurnError> {
     let Planned {
         plan,
         label,
         model,
-        mut tokens,
-        mut output_tokens,
-        mut cached,
-        inference: planning_took,
         clean: planning_was_clean,
     } = planned;
-
-    // Seeded with what planning already spent, then added to by the steps. The run's wall clock is
-    // taken by the caller, which is the only place that saw the whole of it.
-    let mut spent = crate::timing::Elapsed {
-        inference: planning_took,
-        ..Default::default()
-    };
 
     // Noted before the subscription is lent to the steps below, which consume it.
     let premium = subscription.is_some();
@@ -1090,7 +1112,8 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     // spent working.
     let mut waiting = crate::confirm::Timed::new(confirmer);
     let verdict = waiting.confirm_manifest(&proposal);
-    spent.stalled += waiting.waited();
+    accounting.elapsed.stalled += waiting.waited();
+    accounting.publish(reporter);
     if verdict == Decision::Reject {
         let _ = policy.finish();
         return Err(TurnError::Precommit(
@@ -1130,6 +1153,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         // before any of them, but both go through the same trait so the same wrapper counts them.
         let mut asking = crate::confirm::Timed::new(confirmer);
         let ran_at = std::time::Instant::now();
+        let inference_before = accounting.elapsed.inference;
         let outcome = fill_before_acting(
             &mut policy,
             workspace,
@@ -1150,25 +1174,23 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
                 index,
                 step,
                 entry,
+                accounting,
+                reporter,
             )
         });
         let took = ran_at.elapsed();
         let stalled = asking.waited();
         // A step that failed still spent the time it spent, so this is recorded before the branch
         // below returns on failure: a run that stopped half way is exactly the one worth reading.
-        spent.stalled += stalled;
-        let thinking = outcome
-            .as_ref()
-            .map(|done| done.inference)
-            .unwrap_or_default();
-        spent.inference += thinking;
-        spent.tools += took.saturating_sub(stalled).saturating_sub(thinking);
-
+        accounting.elapsed.stalled += stalled;
+        let inference = accounting
+            .elapsed
+            .inference
+            .saturating_sub(inference_before);
+        accounting.elapsed.tools += took.saturating_sub(stalled).saturating_sub(inference);
+        accounting.publish(reporter);
         match outcome {
             Ok(done) => {
-                tokens += done.tokens;
-                output_tokens += done.output_tokens;
-                cached.add(done.cached);
                 if let Some(answered) = done.answer {
                     shown = answered.shown;
                     answer = Some(answered.value);
@@ -1223,9 +1245,9 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         programs,
         asked_about,
         exposed,
-        tokens,
-        output_tokens,
-        cached,
+        tokens: accounting.spent.tokens,
+        output_tokens: accounting.spent.output_tokens,
+        cached: accounting.spent.cached,
         context_tokens: 0,
         premium,
         // A manifest run has no loop to pace and is offered no way to ask for one.
@@ -1233,7 +1255,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         // Nor a session to hold a watch. The plan is frozen before anything is read, so a turn
         // that armed one would be adding to a run whose steps were settled without it.
         watches: Vec::new(),
-        timing: spent.finish(),
+        timing: accounting.elapsed.finish(),
         display: shown,
         notices: Vec::new(),
     })
@@ -1244,11 +1266,6 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
 struct Done {
     note: String,
     changes: Vec<crate::diff::Change>,
-    tokens: u64,
-    output_tokens: u64,
-    cached: Cached,
-    /// How long the step waited on the model. Only a transform waits.
-    inference: std::time::Duration,
     /// What this step answered the user with, where it was the one that answered.
     answer: Option<Answered>,
 }
@@ -1308,7 +1325,7 @@ fn slot_to_fill(step: &Step) -> Result<SlotId, String> {
 
 /// Run one step. Errors are fatal to the run and say why.
 #[allow(clippy::too_many_arguments)]
-fn run_step<S: Sink, C: Confirmer>(
+fn run_step<S: Sink, C: Confirmer, R: Reporter>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
     recording: crate::findings::Recording<'_>,
@@ -1318,6 +1335,8 @@ fn run_step<S: Sink, C: Confirmer>(
     index: usize,
     step: &Step,
     entry: &'static Advertised,
+    accounting: &mut Accounting,
+    reporter: &mut R,
 ) -> Result<Done, String> {
     if let Some(capability) = &entry.gate {
         policy
@@ -1447,9 +1466,19 @@ fn run_step<S: Sink, C: Confirmer>(
                 )
                 .map_err(|d| d.to_string())?;
             let asked_at = std::time::Instant::now();
-            let processed =
-                crate::processor::run(policy, chat, slots, &spec).map_err(|e| e.to_string())?;
+            let processed = crate::processor::run(policy, chat, slots, &spec);
             let waited = asked_at.elapsed();
+            accounting.elapsed.inference += waited;
+            let usage = match &processed {
+                Ok(done) => Some(done.usage),
+                Err(crate::processor::ProcessorError::Chat(error)) => error.completed_usage(),
+                Err(_) => None,
+            };
+            if let Some(usage) = usage {
+                accounting.add(usage);
+            }
+            accounting.publish(reporter);
+            let processed = processed.map_err(|e| e.to_string())?;
 
             // An answer that marked no document has nothing for the slot the plan named, and the
             // input is not a substitute for it: a plan reads that slot to write somewhere else,
@@ -1481,10 +1510,6 @@ fn run_step<S: Sink, C: Confirmer>(
             }
             Ok(Done {
                 note,
-                tokens: processed.usage.total(),
-                output_tokens: processed.usage.completion_tokens,
-                cached: processed.usage.cached,
-                inference: waited,
                 ..Done::default()
             })
         }

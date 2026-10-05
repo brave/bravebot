@@ -6404,6 +6404,7 @@ fn manifest_animated(
         (outcome, sink, worker_trust)
     });
 
+    let mut retained = None;
     loop {
         redraw(terminal, session)?;
 
@@ -6490,8 +6491,8 @@ fn manifest_animated(
             // Progress, with no reply to give. The goal as the planner understood it and the frozen
             // plan both arrive as narration, and each step as an activity, so the transcript of a
             // run reads the way the transcript of a turn does.
-            crate::remote_confirm::ToMain::Spent(_)
-            | crate::remote_confirm::ToMain::PromptRecorded(_) => {}
+            crate::remote_confirm::ToMain::Spent(spent) => retained = Some(spent),
+            crate::remote_confirm::ToMain::PromptRecorded(_) => {}
             crate::remote_confirm::ToMain::Written(written) => session.set_written(written),
             crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
             crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
@@ -6595,13 +6596,10 @@ fn manifest_animated(
         Err(_) => *trust = run_trust,
     }
 
-    // Only from a run that finished. A run that stopped comes back as an error carrying what it
-    // produced (MANIFEST-3) and no figures, so the tokens it did spend are not recoverable here,
-    // and the breakdown is absent rather than guessed.
-    let (tokens, spent) = match &outcome {
-        Ok(finished) => (finished.tokens, Some(finished.timing)),
-        Err(_) => (0, None),
-    };
+    // Progress is cumulative. A final outcome replaces it, never adds a second charge.
+    let usage = bravebot_session::sessions::manifest_usage(&outcome, retained);
+    let tokens = usage.map_or(0, |s| s.tokens);
+    let spent = usage.map(|s| s.timing);
     session.end_run(tokens, spent);
 
     // Nothing for a run the person stopped, which is what the command line does with one too: it
@@ -6614,6 +6612,7 @@ fn manifest_animated(
             workspace.root(),
             &asked,
             &outcome,
+            retained,
             bravebot_session::sessions::Front::Terminal,
             bravebot_stamp::BUILD,
         ),

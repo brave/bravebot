@@ -8605,9 +8605,8 @@ impl Session {
     /// spent reading a plan as minutes a model spent thinking, and the plan prompt is the longest
     /// wait this mode has.
     ///
-    /// `spent` is `None` from a run that stopped, which carries no breakdown back. Then only the
-    /// wall clock is charged and the breakdown is left absent, exactly as [`Session::fail`] does:
-    /// time nothing has claimed reads better than time claimed by the wrong thing.
+    /// `spent` is absent only when no timing report arrived. Failed and stopped runs retain the
+    /// latest measured breakdown. The session measures its own wall time.
     pub fn end_run(&mut self, tokens: u64, spent: Option<bravebot_agent::timing::Timing>) {
         self.status = Status::Idle;
         self.streaming.clear();
