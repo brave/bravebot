@@ -38,8 +38,12 @@ export function BotDetails({ bot, onSave, onArchive }: {
     if (!value.name) setName(bot.name)
     if (!value.purpose) setPurpose(bot.purpose)
     if (!value.name || !value.purpose) return
-    if (value.name === bot.name && value.purpose === bot.purpose) return
-    void onSave({ slug: bot.slug, ...value })
+    // Only what changed is sent, so this save cannot put back a field another one is changing.
+    const edit: BotFormValue = { slug: bot.slug }
+    if (value.name !== bot.name) edit.name = value.name
+    if (value.purpose !== bot.purpose) edit.purpose = value.purpose
+    if (edit.name === undefined && edit.purpose === undefined) return
+    void onSave(edit)
   }
 
   return (
@@ -59,7 +63,7 @@ export function BotDetails({ bot, onSave, onArchive }: {
           <BotAvatar seed={bot.avatar} size={80} doing="open" />
           <IconButton icon="refresh" label="New face" tooltip="Try a new face" kind="filled" size="tiny"
             className="bot-avatar-refresh"
-            onClick={() => void onSave({ slug: bot.slug, name: bot.name, purpose: bot.purpose, avatar: newAvatarSeed(crypto.randomUUID()) })} />
+            onClick={() => void onSave({ slug: bot.slug, avatar: newAvatarSeed(crypto.randomUUID()) })} />
         </div>
         <div className="bot-field">
           <Input value={name} onInput={({ value }) => setName(value)} onChange={({ value }) => { setName(value); commit({ name: value }) }}>

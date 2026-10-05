@@ -1226,12 +1226,14 @@ export function App(): React.JSX.Element {
    * Start a conversation with a bot from its page, in a project or in its home folder.
    *
    * The prompt is queued rather than sent, so it waits for the trust question a new folder asks,
-   * the same as any queued message.
+   * the same as any queued message. Whether a conversation was made is the answer, so the page
+   * that asked can take its guard off when one was not.
    */
-  const startBotChat = useCallback(async (bot: Bot, prompt: string, directory: string | null) => {
+  const startBotChat = useCallback(async (bot: Bot, prompt: string, directory: string | null): Promise<boolean> => {
     const handle = await create(directory ?? bot.home, { slug: bot.slug, model: bot.model })
-    if (!handle) return
+    if (!handle) return false
     updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt, attachments: [] }] } : old)
+    return true
   }, [create, updateSession])
 
   /** A new chat in the project used last, or the picker when there is none yet. */
@@ -1489,7 +1491,7 @@ export function App(): React.JSX.Element {
         onAnswer={answerQuestions}
         botView={botPage}
         onOpenBotConversation={(bot, summary) => void showSession(summary, undefined, { slug: bot.slug, model: bot.model })}
-        onStartBotChat={(bot, prompt, directory) => void startBotChat(bot, prompt, directory)}
+        onStartBotChat={startBotChat}
         onBotModel={(bot, model) => { void window.bravebot.writeBotModel(bot.slug, model).then(() => readBots()) }}
         footer={footer}
         noProject={noProject}

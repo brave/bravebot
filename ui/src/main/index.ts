@@ -22,7 +22,6 @@ import { isProjectPath } from '../shared/recents'
 import { forks, noteFork } from './forks'
 import {
   bot,
-  botFromForm,
   bots,
   ensureHome,
   worksIn,
@@ -36,7 +35,7 @@ import {
   releaseBotSession,
   retireBot,
   saveBotModel,
-  saveFormBot,
+  saveForm,
   migrateBot,
   consolidationPrompt,
   AFTER_COMPACTION,
@@ -556,8 +555,8 @@ app.whenReady().then(() => {
         return { error: { code: 'bad_request', message: 'that is not a folder this app offered' } }
       }
     }
-    // A bot's home is made when a conversation is started in it, not when the bots are listed.
-    if (method === 'session.new') {
+    // A bot's home is made when a conversation is started or reopened in it, not when the bots are listed.
+    if (method === 'session.new' || method === 'session.open') {
       const directory = (params as { directory?: unknown } | null)?.directory
       const owner = bots().find((each) => each.home === directory)
       if (owner && !ensureHome(owner)) {
@@ -732,12 +731,11 @@ app.whenReady().then(() => {
     // Composed in `bots.ts` and not here, because the folder a new bot is pinned to is the one
     // field on this channel that decides where files land, and the check that it is a folder
     // somebody opened belongs beside the code that writes there.
-    const form = botFromForm(value)
-    if (!form) return null
     // Making a bot writes its definition to `~/.bravebot/agents` (MEMORY-8), and editing one
     // rewrites the fields the form shows (MEMORY-9). This process writes nothing there itself; the
-    // agent does, and `saveFormBot` keeps the name it answers with.
-    const next = await saveFormBot(form, bridge ? (method, params) => bridge!.request(method, params) : null)
+    // agent does, and `saveFormBot` keeps the name it answers with. Saves run one at a time.
+    const next = await saveForm(value, bridge ? (method, params) => bridge!.request(method, params) : null)
+    if (!next) return null
     ensureHome(next)
     offerDirectories(botFolders(next))
     return next

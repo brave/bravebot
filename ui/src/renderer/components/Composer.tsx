@@ -23,6 +23,8 @@ export interface ComposerProps {
   archived?: number
   /** A card is waiting on the reader, which the placeholder says. */
   pending: boolean
+  /** The message is being sent and a conversation made for it, so it cannot be sent again yet. */
+  starting?: boolean
   scope: 'bot' | 'conversation'
   draft: string
   onDraft: (draft: string) => void
@@ -134,7 +136,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
     input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
     draft, onDraft, onCancel, onPlan, onModel, attachments, onAttach, onRemoveAttachment, onPreview,
     queued, queuePaused, onResumeQueued, onRemoveQueued, backendReady, onSetup, onCheckBackend, onDiagnostics,
-    canAttach = true, footer,
+    canAttach = true, footer, starting = false,
   } = props
   // Read by the key handler, which Leo may keep from the first render.
   const latest = useRef(props)
@@ -181,7 +183,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
     return () => cancelAnimationFrame(frame)
   }, [draft, session, input])
 
-  const blocked = askingTrust || backendReady === false
+  const blocked = askingTrust || backendReady === false || starting
   const canSend = !blocked && draft.trim().length > 0
 
   // Agent or Plan, for the next message only. Plan starts one manifest run and the menu goes back
@@ -258,7 +260,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                 event.preventDefault()
                 // The round button is Stop for the whole time a reply is generating. Enter still
                 // queues a follow-up, which is the path the button used to offer as "Queue message".
-                if (!event.repeat && !now.askingTrust && now.backendReady !== false && now.draft.trim()) {
+                if (!event.repeat && !now.askingTrust && !now.starting && now.backendReady !== false && now.draft.trim()) {
                   if (now.running) now.onQueue()
                   else submit()
                 }

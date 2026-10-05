@@ -118,6 +118,54 @@ test('making a bot saves nothing unless the agent names the definition it wrote'
   } finally { rmSync(profile, { recursive: true, force: true }) }
 })
 
+test('saves from a window run one at a time and an edit changes only the fields it names', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'bravebot-saves-'))
+  const source = buildSync({ entryPoints: ['src/main/bots.ts'], bundle: true, write: false, platform: 'node', format: 'cjs', external: ['electron'] }).outputFiles[0].text
+  const module = { exports: {} }
+  const mockedRequire = (id) => id === 'electron' ? { app: { getPath: () => profile } } : require(id)
+  new Function('require', 'module', 'exports', source)(mockedRequire, module, module.exports)
+  const storage = module.exports
+  try {
+    const made = await storage.saveForm({ name: 'Form bot', purpose: 'Fill in forms', avatar: 'seed-a' }, async () => ({ name: 'form-bot' }))
+    const { slug } = made
+    assert.equal(await storage.saveForm({ name: '   ', purpose: 'x' }, null), null, 'a new bot still needs a name')
+    assert.equal(await storage.saveForm({ purpose: 'no name' }, null), null, 'and a purpose, and a name')
+
+    // A rename is held in the agent while a new face is chosen. The face waits for it, then is
+    // applied to the row the rename left, and the rename does not bring the old face back.
+    const events = []
+    let release
+    const held = new Promise((resolve) => { release = resolve })
+    let started
+    const renaming = new Promise((resolve) => { started = resolve })
+    const rename = storage.saveForm({ slug, name: 'Renamed' }, async (method, params) => {
+      events.push(['rename', params.purpose]); started(); await held
+      // The row changes during the wait, as it does when a conversation is recorded.
+      storage.saveBot({ ...storage.bot(slug), session: 'session-1' })
+      return { name: 'form-bot' }
+    })
+    const face = storage.saveForm({ slug, avatar: 'seed-b' }, async (method, params) => { events.push(['face', params.purpose]); return { name: 'form-bot' } })
+    await renaming
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(events, [['rename', 'Fill in forms']], 'the second save has not reached the agent')
+    release()
+    await Promise.all([rename, face])
+
+    assert.deepEqual(events, [['rename', 'Fill in forms'], ['face', 'Fill in forms']])
+    const row = storage.bot(slug)
+    assert.equal(row.name, 'Renamed')
+    assert.equal(row.avatar, 'seed-b')
+    assert.equal(row.purpose, 'Fill in forms')
+    assert.equal(row.session, 'session-1', 'what changed during the wait is kept')
+
+    // A save the agent refuses does not stop the ones after it.
+    await assert.rejects(storage.saveForm({ slug, purpose: 'Refused' }, async () => { throw new Error('refused') }), /refused/)
+    const after = await storage.saveForm({ slug, purpose: 'Allowed' }, async () => ({ name: 'form-bot' }))
+    assert.equal(after.purpose, 'Allowed')
+    assert.equal(after.name, 'Renamed')
+  } finally { rmSync(profile, { recursive: true, force: true }) }
+})
+
 // `sanitised` lives in the Electron entry point, which no test can load, so this pins its source:
 // a window's `turn.send` loses the `definition` it claims, and the only place that parameter is set
 // is the send this process composes from a bot's row. Rejects the fault of forgetting the strip, which

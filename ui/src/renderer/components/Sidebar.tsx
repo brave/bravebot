@@ -29,7 +29,7 @@ import type { Bot } from '../../shared/bots'
 import type { Doing } from './BotAvatar'
 import type { Tab } from '../../shared/view'
 import { Sessions } from './Sessions'
-import { Bots } from './Bots'
+import { Bots, type BotFormValue } from './Bots'
 import { ControlItem, NavigationItem, SegmentedControl } from '../nala'
 
 interface Props {
@@ -49,7 +49,7 @@ interface Props {
   /** What that bot is doing, so its row's face can match the header's. */
   openDoing: Doing
   onOpenBot: (bot: Bot) => void
-  onSaveBot: (bot: { slug?: string; avatar?: string; model?: string | null; name: string; purpose: string }) => Promise<boolean>
+  onSaveBot: (bot: BotFormValue) => Promise<boolean>
   onRetireBot: (slug: string, retired: boolean) => void
   onRemoveBot: (slug: string) => void
   onSettings: () => void

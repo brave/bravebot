@@ -168,15 +168,19 @@ export function bot(slug: unknown): Bot | null {
  */
 export function botFromForm(value: unknown): Bot | null {
   if (typeof value !== 'object' || value === null) return null
-  const { slug, avatar, model, name, purpose } = value as Record<string, unknown>
+  const sent = value as Record<string, unknown>
+  const { slug, avatar, model } = sent
   if (model !== undefined && !isBotModel(model)) return null
+  const held = isSlug(slug) ? bot(slug) : null
+  // An edit of a bot that is kept names only what it changes. A new bot needs both.
+  const name = sent.name === undefined && held ? held.name : sent.name
+  const purpose = sent.purpose === undefined && held ? held.purpose : sent.purpose
   if (typeof name !== 'string' || typeof purpose !== 'string') return null
   if (!name.trim() || !purpose.trim()) return null
   if (avatar !== undefined && (typeof avatar !== 'string' || !avatar.trim() || avatar.length > 128)) {
     return null
   }
 
-  const held = isSlug(slug) ? bot(slug) : null
   // A new face is kept only when the window asks for one; a rename leaves the face as it was.
   if (held) return { ...held, name, purpose, model: model === undefined ? held.model : model, avatar: typeof avatar === 'string' ? avatar : held.avatar }
   const made = slugFor(name, new Set(bots().map((each) => each.slug)))
@@ -230,10 +234,31 @@ export async function saveFormBot(next: Bot, define: DefineRequest | null): Prom
   } else if (stored.definition !== null) {
     if (!define) throw new Error('The agent is not running, so a bot cannot be edited.')
     await redefine(stored.definition, next, define)
-    kept = { ...next, definition: stored.definition }
+    // The agent call took time, and the row may have moved on meanwhile: a conversation recorded,
+    // a session released. Only the fields the form carries are laid over it.
+    kept = { ...(bot(next.slug) ?? stored), name: next.name, purpose: next.purpose, model: next.model, avatar: next.avatar }
+  } else {
+    kept = { ...stored, name: next.name, purpose: next.purpose, model: next.model, avatar: next.avatar }
   }
   saveBot(kept)
   return kept
+}
+
+let saving: Promise<unknown> = Promise.resolve()
+
+/**
+ * Save what a window's form sent, one save at a time.
+ *
+ * Each save reads the bot as the one before left it, so a face chosen while a rename is being
+ * written to the agent is not undone by the rename finishing, nor the rename by the face.
+ */
+export function saveForm(value: unknown, define: DefineRequest | null): Promise<Bot | null> {
+  const run = saving.then(async () => {
+    const form = botFromForm(value)
+    return form ? saveFormBot(form, define) : null
+  })
+  saving = run.catch(() => undefined)
+  return run
 }
 
 /**
@@ -372,6 +397,19 @@ export function releaseBotSession(slug: unknown): void {
   const held = bot(slug)
   if (!held || held.session === null) return
   saveBot({ ...held, session: null, archived: 0 })
+}
+
+/**
+ * Forget a conversation that was deleted, in every bot that listed it. A bot whose continuation
+ * pointer was that conversation starts a new one on its next turn.
+ */
+export function forgetBotConversation(directory: string, id: string): void {
+  for (const held of bots()) {
+    const conversations = held.conversations.filter((each) => !(each.id === id && each.directory === directory))
+    const pointed = held.session === id
+    if (conversations.length === held.conversations.length && !pointed) continue
+    saveBot({ ...held, conversations, session: pointed ? null : held.session, archived: pointed ? 0 : held.archived })
+  }
 }
 
 /**

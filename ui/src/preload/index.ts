@@ -142,8 +142,9 @@ const api = {
     /** The preview seed, used only when creating a bot. */
     avatar?: string
     model?: string | null
-    name: string
-    purpose: string
+    /** Required for a new bot. An existing bot keeps what is left out. */
+    name?: string
+    purpose?: string
   }): Promise<Bot | null> {
     return ipcRenderer.invoke('bravebot:bots:write', bot) as Promise<Bot | null>
   },

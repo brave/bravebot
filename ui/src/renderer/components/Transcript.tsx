@@ -130,7 +130,7 @@ interface Props {
   /** A bot's own page, shown when no conversation is open. */
   botView?: { bot: Bot; history: BotConversation[] } | null
   onOpenBotConversation: (bot: Bot, summary: SessionSummary) => void
-  onStartBotChat: (bot: Bot, prompt: string, directory: string | null) => void
+  onStartBotChat: (bot: Bot, prompt: string, directory: string | null) => Promise<boolean>
   onBotModel: (bot: Bot, model: string) => void
   /** The composer's footer for the open conversation: its project and branch. */
   footer?: ComposerFooterProps

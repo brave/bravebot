@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { botProjects, type Bot } from '../../shared/bots'
 import type { BotConversation } from '../../shared/bot-history'
 import type { SessionSummary } from '../../shared/protocol'
@@ -9,6 +10,77 @@ import { BotAvatar } from './BotAvatar'
 import { Composer, type ComposerFooterProps, type ProjectChoice } from './Composer'
 
 const noop = () => {}
+
+/**
+ * How many conversations are drawn before the list asks to draw more. Each row is a button with
+ * several spans, and a bot talked to for a year has more of them than a window needs at once. The
+ * search still runs over all of them; this limits what is drawn of the result.
+ */
+const PAGE = 100
+
+type Row = BotConversation
+
+/**
+ * The bot's recent conversations.
+ *
+ * Its own memoized component, so typing in the composer above it, which re-renders the page on
+ * every key, does not redraw the rows: they change only with the list, the search, or the page.
+ */
+const BotHistory = memo(function BotHistory({ rows, home, name, query, onOpen }: {
+  rows: Row[]
+  home: string
+  name: string
+  query: string
+  onOpen: (summary: SessionSummary) => void
+}): React.JSX.Element {
+  const [limit, setLimit] = useState(PAGE)
+  useEffect(() => { setLimit(PAGE) }, [rows])
+  const drawn = rows.slice(0, limit)
+  const hidden = rows.length - drawn.length
+  const list = useRef<HTMLDivElement>(null)
+  const more = (): void => {
+    flushSync(() => setLimit((old) => old + PAGE))
+    list.current?.querySelectorAll<HTMLElement>(':scope > .bot-history-row')[drawn.length]?.focus()
+  }
+  return (
+    <div ref={list} className="bot-conversations" aria-label={`${name}’s conversations`} data-test="bot-conversations">
+      {drawn.map(({ id, directory, session, archived }) => {
+        const where = directory === home ? 'No project' : projectLabel(directory)
+        // A conversation the bot recorded that the chat list no longer holds: said, not hidden.
+        if (!session) return (
+          <div key={`${directory}/${id}`} className="bot-history-row unavailable">
+            <span className="session-meta"><span className="session-project">{where}</span></span>
+            <span className="session-title"><span className="session-name">Unavailable conversation</span></span>
+            <span className="session-where">Not in the chat list now · <code>{id}</code></span>
+          </div>
+        )
+        return (
+          <button type="button" key={`${directory}/${id}`} className="bot-history-row" onClick={() => onOpen(session)}>
+            <span className="session-meta">
+              <span className="session-project">{where}</span>
+              {archived && <span className="bot-history-archived">Archived</span>}
+              <time className="session-time num" dateTime={new Date(session.updated * 1000).toISOString()}>{shortAgo(session.updated)}</time>
+            </span>
+            <span className="session-title"><span className="session-name">{session.title}</span></span>
+            {session.branch && <span className="session-where"><span className="branch">{session.branch}</span></span>}
+          </button>
+        )
+      })}
+      {hidden > 0 && (
+        <button type="button" className="session-show-more" data-test="show-more-conversations" onClick={more}>
+          <Icon name="carat-down" />
+          <span className="session-show-more-label num">{Math.min(PAGE, hidden) === hidden ? `Show ${hidden} more` : `Show ${Math.min(PAGE, hidden)} more of ${hidden}`}</span>
+        </button>
+      )}
+      {rows.length === 0 && (
+        <p className="bot-history-empty">
+          <Icon name="message-bubble" />
+          {query.trim() ? `No conversation matches “${query}”.` : 'No conversations yet. Send a message below to start one.'}
+        </p>
+      )}
+    </div>
+  )
+})
 
 /**
  * A bot's own page, before any one conversation is open: its recent conversations, and a composer
@@ -27,7 +99,8 @@ export function BotView({ notices, bot, history, filtering, backendReady, onOpen
   filtering: boolean
   backendReady: boolean | null
   onOpen: (summary: SessionSummary) => void
-  onStart: (prompt: string, directory: string | null) => void
+  /** Whether a conversation was made. Resolves once the attempt is over, so the page knows when to allow another. */
+  onStart: (prompt: string, directory: string | null) => Promise<boolean>
   onModel: (model: string) => void
   onSetup: () => void
   onCheckBackend: () => void
@@ -47,13 +120,26 @@ export function BotView({ notices, bot, history, filtering, backendReady, onOpen
       `${row.session?.title ?? row.id} ${row.directory === bot.home ? 'No project' : projectLabel(row.directory)}`.toLowerCase().includes(term)))
   }, [history, query, bot.home])
 
+  // Set on the first send and read by the next, which can come before a render shows `starting`.
+  const startingNow = useRef(false)
+  const [starting, setStarting] = useState(false)
   const start = () => {
     const prompt = draft.trim()
-    if (!prompt || backendReady === false) return
+    if (!prompt || backendReady === false || startingNow.current) return
+    startingNow.current = true
+    setStarting(true)
     // The draft stays: a conversation that opens replaces this page, and one that fails to open
     // leaves the message here to send again.
-    onStart(prompt, project)
+    void onStart(prompt, project).catch(() => false).finally(() => {
+      startingNow.current = false
+      setStarting(false)
+    })
   }
+  // The list is given one function for as long as this page is open, so a new `onOpen` from above
+  // does not redraw it.
+  const open = useRef(onOpen)
+  open.current = onOpen
+  const openConversation = useCallback((summary: SessionSummary) => open.current(summary), [])
   const footer: ComposerFooterProps = {
     directory: project,
     branch: null,
@@ -78,6 +164,7 @@ export function BotView({ notices, bot, history, filtering, backendReady, onOpen
       askingTrust={false}
       compacting={false}
       pending={false}
+      starting={starting}
       scope="bot"
       draft={draft}
       onDraft={setDraft}
@@ -129,36 +216,7 @@ export function BotView({ notices, bot, history, filtering, backendReady, onOpen
             </Input>
           )}
           <h2 className="bot-view-title">Recent conversations</h2>
-          <div className="bot-conversations" aria-label={`${bot.name}’s conversations`} data-test="bot-conversations">
-            {shown.map(({ id, directory, session, archived }) => {
-              const where = directory === bot.home ? 'No project' : projectLabel(directory)
-              // A conversation the bot recorded that the chat list no longer holds: said, not hidden.
-              if (!session) return (
-                <div key={`${directory}/${id}`} className="bot-history-row unavailable">
-                  <span className="session-meta"><span className="session-project">{where}</span></span>
-                  <span className="session-title"><span className="session-name">Unavailable conversation</span></span>
-                  <span className="session-where">Not in the chat list now · <code>{id}</code></span>
-                </div>
-              )
-              return (
-                <button type="button" key={`${directory}/${id}`} className="bot-history-row" onClick={() => onOpen(session)}>
-                  <span className="session-meta">
-                    <span className="session-project">{where}</span>
-                    {archived && <span className="bot-history-archived">Archived</span>}
-                    <time className="session-time num" dateTime={new Date(session.updated * 1000).toISOString()}>{shortAgo(session.updated)}</time>
-                  </span>
-                  <span className="session-title"><span className="session-name">{session.title}</span></span>
-                  {session.branch && <span className="session-where"><span className="branch">{session.branch}</span></span>}
-                </button>
-              )
-            })}
-            {shown.length === 0 && (
-              <p className="bot-history-empty">
-                <Icon name="message-bubble" />
-                {query.trim() ? `No conversation matches “${query}”.` : 'No conversations yet. Send a message below to start one.'}
-              </p>
-            )}
-          </div>
+          <BotHistory rows={shown} home={bot.home} name={bot.name} query={query} onOpen={openConversation} />
         </div>
       </div>
       <div className="composer-dock"><div className="dock-float">{notices}</div>{composer}</div>

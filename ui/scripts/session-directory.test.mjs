@@ -48,6 +48,13 @@ test('offering a folder does not make it one a bot may be pinned to', () => {
   assert.equal(main.isOpenedDirectory('/work/listed'), false)
 })
 
+test('the request handler makes a bot home again for session.new and session.open, before forwarding them', () => {
+  const index = readFileSync('src/main/index.ts', 'utf8')
+  const remake = /if \(method === 'session\.new' \|\| method === 'session\.open'\) \{\s*const directory[^\n]*\n\s*const owner = bots\(\)\.find\(\(each\) => each\.home === directory\)\s*if \(owner && !ensureHome\(owner\)\)/.exec(index)
+  assert.ok(remake, 'a saved conversation reopened in a deleted home has the folder back before it opens')
+  assert.ok(index.indexOf('bridge.request(method', remake.index) > remake.index, 'and the folder is made before the request is forwarded')
+})
+
 test('the request handler refuses session.new and session.open before forwarding them', () => {
   const index = readFileSync('src/main/index.ts', 'utf8')
   const gate = /method === 'session\.new' \|\| method === 'session\.open'\) \{\s*if \(!mayOpenSessionIn\([^\n]*\)\) \{\s*return \{ error/.exec(index)
