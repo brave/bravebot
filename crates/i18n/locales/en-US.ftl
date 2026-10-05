@@ -35,6 +35,7 @@ cli-usage-import-providers = Import a model service Claude Code or opencode conf
 cli-usage-auth-login = Sign in to a model service, listing every way when none is named
 cli-usage-auth-logout = Forget an imported Leo Premium subscription or a stored gateway key
 cli-usage-mcp = Declare, list and approve MCP servers
+cli-usage-completion = Print a shell completion script
 
 cli-keys-heading = Interactive keys:
 cli-key-send = Send
@@ -112,6 +113,7 @@ cli-option-version = Show the version
 ## What a command-line run says when it cannot start
 
 cli-unknown-option = unknown option: { $flag }
+cli-completion-needs-a-shell = completion takes one of bash, zsh or fish
 cli-file-needs-a-path = --file requires a path
 cli-add-dir-needs-a-path = --add-dir requires an absolute path to a directory
 cli-directory-ends-checkouts = { $directory } holds the working directory, so no delegate is given a checkout while it is open; start again without --add-dir { $directory } to have one

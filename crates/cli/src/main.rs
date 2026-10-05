@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod auth;
+mod completion;
 mod exit;
 mod import;
 mod json;
@@ -208,6 +209,12 @@ fn main() -> ExitCode {
         Some("doctor") => doctor(),
         Some("auth") => auth::command(&args[1..]),
         Some("mcp") => mcp::command(&args[1..]),
+        Some("completion") => match completion::command(&args[1..]) {
+            Some(()) => ExitCode::SUCCESS,
+            None => {
+                stopped_before_the_turn(as_json, Ending::Argument, t!(cli_completion_needs_a_shell))
+            }
+        },
         Some("import-leo-creds") => import_leo_creds(&args[1..]),
         Some("import-providers") => import::providers(&args[1..]),
         Some(flag) if flag.starts_with('-') => {
@@ -261,9 +268,8 @@ fn without_a_definition(first: Option<&str>) -> Option<String> {
         flag @ ("--resume" | "-r" | "--continue" | "-c" | "--fork" | "-f") => {
             Some(t!(cli_agent_not_with_a_recorded_session, flag = flag).to_string())
         }
-        command @ ("doctor" | "auth" | "mcp" | "import-leo-creds" | "import-providers") => {
-            Some(t!(cli_agent_not_for_a_command, command = command).to_string())
-        }
+        command @ ("doctor" | "auth" | "mcp" | "import-leo-creds" | "import-providers"
+        | "completion") => Some(t!(cli_agent_not_for_a_command, command = command).to_string()),
         _ => None,
     }
 }
@@ -323,7 +329,8 @@ fn flag_named(prompts: &SystemPrompts) -> Option<&'static str> {
 /// rather than ignored, for the reason CLI-13 gives about a settings file.
 fn without_a_prompt_to_give(flag: &str, first: Option<&str>) -> Option<String> {
     match first? {
-        command @ ("doctor" | "auth" | "mcp" | "import-leo-creds" | "import-providers") => Some(
+        command @ ("doctor" | "auth" | "mcp" | "import-leo-creds" | "import-providers"
+        | "completion") => Some(
             t!(
                 cli_system_prompt_not_for_a_command,
                 flag = flag,
@@ -445,6 +452,10 @@ fn print_help() {
         ("bravebot import-leo-creds [channel]", t!(cli_usage_import)),
         ("bravebot import-providers", t!(cli_usage_import_providers)),
         ("bravebot mcp <command>", t!(cli_usage_mcp)),
+        (
+            "bravebot completion <bash|zsh|fish>",
+            t!(cli_usage_completion),
+        ),
     ] {
         println!("  {form:<FORM$}{description}");
     }
@@ -5568,6 +5579,7 @@ mod tests {
             "mcp",
             "import-leo-creds",
             "import-providers",
+            "completion",
         ] {
             assert!(
                 without_a_definition(Some(first)).is_some(),
@@ -5679,6 +5691,7 @@ mod tests {
             "mcp",
             "import-leo-creds",
             "import-providers",
+            "completion",
         ] {
             let refused = without_a_prompt_to_give("--system-prompt", Some(first))
                 .unwrap_or_else(|| panic!("{first} took the words"));

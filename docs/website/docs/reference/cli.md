@@ -23,6 +23,7 @@ Usage:
   bravebot import-leo-creds [channel]    Import a Leo Premium subscription
   bravebot import-providers              Import a model service Claude Code or opencode configured
   bravebot mcp <command>                 Declare, list and approve MCP servers
+  bravebot completion <bash|zsh|fish>    Print a shell completion script
 ```
 
 ## Commands
@@ -43,6 +44,7 @@ Usage:
 | `bravebot import-leo-creds [channel]` | import a Leo Premium subscription |
 | `bravebot import-providers` | import a model service Claude Code or opencode configured, asking first |
 | `bravebot mcp <command>` | declare, list, approve and remove MCP servers ([below](#mcp)) |
+| `bravebot completion <shell>` | print a completion script for `bash`, `zsh` or `fish` ([below](#completion)) |
 | `bravebot --version`, `-V` | print the build |
 | `bravebot --help`, `-h` | print this |
 
@@ -262,7 +264,7 @@ standing is better piped in, where it is quarantined.
 A flag with no words after it, a blank one, or one whose words open with `-` and hold no space is
 refused with status 2. A sentence opening with `-` is words. If a flag is given twice, the last is
 used. Both are refused with `--mode manifest`, and with `doctor`, `auth`, `mcp`,
-`import-leo-creds` and `import-providers`. There is no settings key for them: words a checkout
+`import-leo-creds`, `import-providers` and `completion`. There is no settings key for them: words a checkout
 always wants belong in its `AGENTS.md`.
 
 ## `--json`
@@ -482,6 +484,30 @@ machine-level file beside a server it
 standing answers recorded for a project, the current directory unless a path is given, so its
 servers and tools are asked about again. `add`, `approve`, `enable`, `disable`, `remove` and
 `forget` are refused in an incognito session. See [MCP servers](../customize/mcp-servers.md).
+
+## `completion`
+
+```sh
+bravebot completion <bash|zsh|fish>
+```
+
+Prints a script that completes bravebot's subcommands and flags when you press Tab. It makes no
+request and reads nothing from `~/.bravebot`, so it completes the names bravebot defines and file
+paths, and not session ids.
+
+```sh
+# bash: add to ~/.bashrc
+eval "$(bravebot completion bash)"
+
+# zsh: add to ~/.zshrc, after compinit
+eval "$(bravebot completion zsh)"
+
+# fish
+bravebot completion fish > ~/.config/fish/completions/bravebot.fish
+```
+
+Then type `bravebot ` and press Tab, or `bravebot --` and Tab. The command takes exactly one shell
+name and exits with status 2 for anything else.
 
 ## Interactive keys
 

@@ -5595,3 +5595,223 @@ fn manifest_usage_controls_survive_storage() {
         );
     }
 }
+
+/// The commands and flags `--help` lists, read off the two tables a person reads: the first column
+/// of the usage lines and of the options lines. Prose in a description that happens to name a flag
+/// is not a row of either table, so it is not read.
+fn the_usage_tables() -> (Vec<String>, Vec<String>) {
+    let scratch = Scratch::new("cli-running-completion-usage");
+    let output = bravebot(&scratch.path, &[], &["--help"]);
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+
+    let mut commands = Vec::new();
+    let mut flags = Vec::new();
+    let mut section = "";
+    for line in stdout.lines() {
+        if !line.starts_with("  ") {
+            section = line;
+            continue;
+        }
+        let Some(form) = line.trim_start().split("  ").next() else {
+            continue;
+        };
+        if section == "Usage:" {
+            if let Some(word) = form.strip_prefix("bravebot ")
+                && let Some(word) = word.split(' ').next()
+                && word.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+                && !word.starts_with('-')
+            {
+                commands.push(word.to_string());
+            }
+            flags.extend(
+                form.split(' ')
+                    .filter(|word| word.starts_with("--"))
+                    .map(str::to_string),
+            );
+        } else if section == "Options:" {
+            flags.extend(
+                form.split([' ', ','])
+                    .filter(|word| word.starts_with('-'))
+                    .map(str::to_string),
+            );
+        }
+    }
+    commands.sort();
+    commands.dedup();
+    flags.sort();
+    flags.dedup();
+    assert!(
+        commands.len() >= 6 && flags.len() >= 15,
+        "the usage tables were not read: {commands:?} {flags:?}"
+    );
+    (commands, flags)
+}
+
+/// The script `bravebot completion <shell>` prints.
+fn a_completion_script(home: &Path, shell: &str) -> String {
+    let output = bravebot(home, &[], &["completion", shell]);
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{shell}: {stderr}");
+    assert_eq!(stderr, "", "{shell} wrote to stderr");
+    stdout
+}
+
+/// The words of a script that name a flag, in the spelling that shell uses: `--name` for bash and
+/// zsh, and the word after `-l` for fish.
+fn flags_a_script_completes(shell: &str, script: &str) -> Vec<String> {
+    let words: Vec<&str> = script
+        .split(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+        .collect();
+    let mut flags: Vec<String> = if shell == "fish" {
+        words
+            .windows(2)
+            .filter(|pair| pair[0] == "-l")
+            .map(|pair| format!("--{}", pair[1]))
+            .collect()
+    } else {
+        words
+            .iter()
+            .filter(|word| word.starts_with("--") && word.len() > 2)
+            .map(|word| word.to_string())
+            .collect()
+    };
+    flags.sort();
+    flags.dedup();
+    flags
+}
+
+/// CLI-20. A flag added to the usage table and not to the script is one the person cannot tab to,
+/// and one left in the script after the usage dropped it is offered and refused. Read off `--help`
+/// rather than off the lists the scripts are built from, so a script and the usage that drifted
+/// apart fail here whichever of them was edited.
+#[test]
+fn a_completion_script_names_every_command_and_flag_the_usage_table_lists() {
+    let scratch = Scratch::new("cli-running-completion-names");
+    let (commands, flags) = the_usage_tables();
+
+    for shell in ["bash", "zsh", "fish"] {
+        let script = a_completion_script(&scratch.path, shell);
+        for command in &commands {
+            assert!(
+                script.contains(command.as_str()),
+                "the {shell} script does not name {command}"
+            );
+        }
+        let completed = flags_a_script_completes(shell, &script);
+        for flag in flags.iter().filter(|flag| flag.starts_with("--")) {
+            assert!(
+                completed.contains(flag),
+                "the {shell} script does not complete {flag}"
+            );
+        }
+        for flag in &completed {
+            assert!(
+                flags.contains(flag),
+                "the {shell} script completes {flag}, which the usage table does not list"
+            );
+        }
+    }
+}
+
+/// CLI-20. The script is the same wherever it is asked for and whatever the home holds, and asking
+/// leaves the home as empty as it was. A completer that listed agent definitions or session ids
+/// would read the state directory, so its output would differ between these two homes.
+#[test]
+fn a_completion_script_reads_and_writes_nothing_under_the_home() {
+    let bare = Scratch::new("cli-running-completion-bare");
+    let busy = Scratch::new("cli-running-completion-busy")
+        .with_state(
+            "agents/unique-definition-name.md",
+            "---\nname: unique-definition-name\n---\nbody\n",
+        )
+        .with_state("sessions/unique-session-id.json", "{}\n")
+        .with_settings(r#"{"model": "unique-model-name"}"#);
+
+    for shell in ["bash", "zsh", "fish"] {
+        let from_bare = a_completion_script(&bare.path, shell);
+        let from_busy = a_completion_script(&busy.path, shell);
+        assert!(!from_bare.is_empty(), "{shell} printed nothing");
+        assert_eq!(from_bare, from_busy, "{shell} depends on the home");
+        for name in [
+            "unique-definition-name",
+            "unique-session-id",
+            "unique-model-name",
+        ] {
+            assert!(!from_busy.contains(name), "{shell} offers {name}");
+        }
+    }
+    assert_eq!(
+        std::fs::read_dir(&bare.path).expect("read home").count(),
+        0,
+        "asking for a script left something in the home"
+    );
+}
+
+/// CLI-20. No shell, a shell with no script, and a word after the shell are all an argument the
+/// run refused: status 2, nothing on stdout for a script to be mistaken for, and the usage not
+/// printed in its place.
+#[test]
+fn a_completion_with_no_script_to_print_is_refused_with_the_argument_status() {
+    let scratch = Scratch::new("cli-running-completion-refused");
+    for arguments in [
+        &["completion"][..],
+        &["completion", "powershell"][..],
+        &["completion", "bash", "zsh"][..],
+        &["completion", "BASH"][..],
+    ] {
+        let output = bravebot(&scratch.path, &[], arguments);
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+        assert_eq!(stdout, "", "{arguments:?} printed on stdout");
+        assert!(stderr.contains("BB1002"), "{arguments:?}: {stderr}");
+    }
+}
+
+/// CLI-20. The bash script is run rather than read: sourced into a shell that is then asked what
+/// it would complete, at a command, after `auth` and `completion`, and at a flag. A script that
+/// names the right words and wires them to the wrong position fails here and passes the test that
+/// only searches the text.
+#[cfg(unix)]
+#[test]
+fn the_bash_script_completes_commands_subcommands_and_flags_by_position() {
+    let scratch = Scratch::new("cli-running-completion-bash");
+    let script = a_completion_script(&scratch.path, "bash");
+    let path = scratch.path.join("bravebot.bash");
+    std::fs::write(&path, script).expect("write the script");
+
+    let completes = |words: &[&str]| -> Vec<String> {
+        let line = words
+            .iter()
+            .map(|word| format!("'{word}'"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let at = words.len() - 1;
+        let program = format!(
+            "source '{}'; COMP_WORDS=({line}); COMP_CWORD={at}; _bravebot; printf '%s\\n' \"${{COMPREPLY[@]}}\"",
+            path.display()
+        );
+        let output = Command::new("bash")
+            .args(["-c", &program])
+            .output()
+            .expect("bash runs");
+        assert!(output.status.success(), "{}", said(&output).1);
+        said(&output)
+            .0
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+
+    assert_eq!(completes(&["bravebot", "au"]), ["auth"]);
+    assert_eq!(completes(&["bravebot", "auth", "lo"]), ["login", "logout"]);
+    assert_eq!(
+        completes(&["bravebot", "completion", ""]),
+        ["bash", "zsh", "fish"]
+    );
+    assert_eq!(completes(&["bravebot", "--pla"]), ["--plain"]);
+    // A word after the task is a path, which bash completes itself when this offers nothing.
+    assert_eq!(completes(&["bravebot", "do a thing", "--fi"]), ["--file"]);
+    assert!(completes(&["bravebot", "do a thing", "pa"]).is_empty());
+}
