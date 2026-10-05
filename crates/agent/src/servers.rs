@@ -1413,6 +1413,29 @@ fn start(
     notes: &mut Vec<String>,
     hops: &mut Vec<Hop>,
 ) -> Vec<crate::mcp::Reached> {
+    start_under(None, plans, home, diagnostics, notes, hops)
+}
+
+/// [`start`], resolving each policy against `granting` rather than against what this machine's
+/// backend reports.
+///
+/// The same split [`confinement`] has from [`confinement_here`], and for the same reason: which
+/// paths a backend may name is a fact about the host, and a test that read it off this one could
+/// only check the answer this machine gives. Whether a path missing from disk may be named is
+/// `false` on Linux and `true` on macOS, so the dropping, and the note saying what was dropped,
+/// are reachable on one and unreachable on the other.
+///
+/// The backend still spawns. Only the capabilities the policy is resolved against are the
+/// caller's, so a narrower policy than this machine demanded is installed by the real sandbox,
+/// which every backend can do: a profile naming fewer paths is one any of them accepts.
+fn start_under(
+    granting: Option<Capabilities>,
+    plans: Vec<(String, Plan)>,
+    home: &Home,
+    diagnostics: Stream,
+    notes: &mut Vec<String>,
+    hops: &mut Vec<Hop>,
+) -> Vec<crate::mcp::Reached> {
     if plans.is_empty() {
         return Vec::new();
     }
@@ -1478,7 +1501,8 @@ fn start(
                     notes.push(t!(servers_no_confinement_here, alias = alias).to_string());
                     continue;
                 };
-                let (policy, left_out) = nameable(&alias, policy, &sandbox.capabilities());
+                let granted = granting.clone().unwrap_or_else(|| sandbox.capabilities());
+                let (policy, left_out) = nameable(&alias, policy, &granted);
                 notes.extend(left_out);
                 let launched = StdioServer::launch(
                     alias.as_str(),
@@ -3545,6 +3569,75 @@ done
             vec![t!(mcp_move_moved, alias = "weather").to_string()]
         );
         assert_eq!(declared_in(&redirected.home), redirected.declared);
+    }
+
+    /// SANDBOX-9: a launch under a backend that cannot name a path missing from disk leaves the
+    /// note saying which granted paths it was started without, and the launch is where that note
+    /// has to come from.
+    ///
+    /// The capabilities are the test's rather than this machine's, so the dropping is reached on
+    /// every platform that runs the suite. Read off the host instead, this would check nothing on
+    /// macOS, where a backend names a path that is not there and so leaves nothing out: the note
+    /// would be absent, an expectation built the same way would be absent too, and the two would
+    /// agree with the reporting taken out of [`start`] altogether.
+    #[cfg(unix)]
+    #[test]
+    fn a_launch_under_a_backend_that_cannot_name_an_absent_path_leaves_the_note() {
+        let root = scratch("cli-servers-launch-left-out")
+            .canonicalize()
+            .expect("the scratch directory resolves");
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        }
+        // A declared PATH directory, which `confinement` grants as written: a read of a named file
+        // is dropped where the file is not there, so a row that is absent has to come from here.
+        // Outside the home directory, which is the other thing that decides whether it is granted.
+        let absent = temporary_directory().join("bravebot-absent-path-directory");
+        assert!(!absent.exists(), "{} is on disk", absent.display());
+        let program = installed(&root.join("bin"), "weather-mcp");
+        std::fs::write(&program, HOME_WRITING_SERVER).expect("write the server");
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).expect("work");
+        let state = root.join("state");
+        std::fs::create_dir_all(&state).expect("state");
+        let home = Home {
+            directory: Some(state.clone()),
+            writable: true,
+        };
+        let plan = Plan::Stdio {
+            program,
+            arguments: Vec::new(),
+            variables: Variables::new(),
+            searched: vec![absent.clone()],
+            reads: Vec::new(),
+            directory: Some(work.clone()),
+            declared: digested(&["weather-mcp"]),
+        };
+        let mut notes = Vec::new();
+
+        let started = start_under(
+            Some(a_backend_naming_an_absent_path(false)),
+            vec![("weather".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+
+        assert_eq!(started.len(), 1, "the server did not start: {notes:?}");
+        assert_eq!(
+            notes,
+            vec![
+                t!(
+                    servers_paths_left_out,
+                    alias = "weather",
+                    paths = absent.display().to_string()
+                )
+                .to_string()
+            ],
+            "the launch did not say which granted path it was started without"
+        );
     }
 
     /// SERVERS-10: a started server reads the files its declaration says it may, a key file a

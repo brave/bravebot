@@ -318,6 +318,7 @@ decided on and the grant a program got is visible where it can be acted on.
 `verified-by: bravebot_sandbox::policy::a_path_wanted_for_reading_and_for_writing_is_named_once_when_it_is_left_out`
 `verified-by: bravebot_sandbox::linux::a_policy_refused_over_an_absent_path_is_one_this_backend_installs_once_it_is_resolved`
 `verified-by: bravebot_agent::servers::a_server_started_without_paths_its_backend_cannot_name_has_a_note_naming_each_one`
+`verified-by: bravebot_agent::servers::a_launch_under_a_backend_that_cannot_name_an_absent_path_leaves_the_note`
 
 <a id="SANDBOX-10"></a>
 ### SANDBOX-10: a session reports the confinement this platform offers, not one it is under
