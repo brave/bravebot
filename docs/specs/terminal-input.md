@@ -707,6 +707,7 @@ editor mid-turn would take the screen from the turn drawing on it.
 `verified-by: bravebot_tui::editor::quitting_without_saving_leaves_the_line_as_it_was`
 `verified-by: bravebot_tui::editor::an_editor_that_failed_does_not_produce_a_line`
 `verified-by: bravebot_tui::editor::the_newline_an_editor_leaves_at_the_end_is_dropped`
+`verified-by: bravebot_tui::editor::the_file_the_editor_opens_is_readable_by_nobody_else`
 `verified-by: bravebot_tui::editor::only_the_last_newline_goes`
 `verified-by: bravebot_tui::editor::line_endings_come_back_the_way_a_paste_does`
 `verified-by: bravebot_tui::editor::the_file_does_not_outlive_the_edit`

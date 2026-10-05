@@ -107,6 +107,7 @@ exceptions, and a matching ask rule prompts even where a more specific allow rul
 list where the narrowest rule won could not be checked by reading it.
 
 `verified-by: bravebot_core::permissions::deny_beats_ask_and_ask_beats_allow_however_specific_the_loser`
+`verified-by: bravebot_core::permissions::deny_beats_ask_for_the_same_subject`
 
 <a id="PERM-3"></a>
 ### PERM-3: a path specifier is gitignore-shaped, and says where it starts

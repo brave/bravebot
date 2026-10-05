@@ -113,8 +113,14 @@ impl std::error::Error for ShellError {}
 /// expectation shell mode sets: their aliases are not loaded, but their syntax is theirs. `/bin/sh`
 /// where the variable is unset or empty, which is the one shell a POSIX system is required to have.
 pub fn shell() -> String {
-    match std::env::var("SHELL") {
-        Ok(shell) if !shell.trim().is_empty() => shell,
+    shell_named(std::env::var("SHELL").ok())
+}
+
+/// [`shell`] given the value of `$SHELL`, so the fallback can be reached without changing the
+/// environment of a process that runs other tests.
+pub fn shell_named(variable: Option<String>) -> String {
+    match variable {
+        Some(shell) if !shell.trim().is_empty() => shell,
         _ => "/bin/sh".to_string(),
     }
 }
