@@ -193,6 +193,25 @@ while a copy the record does not name is one this program will not offer a comma
 
 `verified-by: by-construction (the script writes the destination path into the record after moving the binary, and takes the directory from that record when none is given)`
 
+<a id="UPDATE-11"></a>
+### UPDATE-11: a person can turn the check off, and then nothing about it happens
+
+The `updateCheck` setting set to `false`, or `BRAVEBOT_UPDATE_CHECK` set to `0`, stops the startup
+check. Either one is enough. With the check off no record is read, no request is made, no record is
+written and no line is said.
+
+**Why.** On a managed, offline or policy-restricted machine the request is unwanted and the line
+points at a command the person may not run, and incognito (UPDATE-8) stops the request only by also
+keeping nothing, which is more than a person who wants no check asked for. The value comes from the person's own configuration and never from a response, so it does
+not touch UPDATE-5. It governs only this check: the installer's checksum and signature checks
+([releases.md](releases.md)) are separate and unchanged. Only a boolean `false` and the exact value
+`0` turn it off, so a misspelled value leaves the check on, as `terminalTitle` does for the title.
+
+`verified-by: bravebot_tui::update::either_switch_turns_the_check_off`
+`verified-by: bravebot_tui::incognito::a_check_turned_off_says_nothing_though_a_newer_version_is_recorded`
+`verified-by: bravebot_tui::persist::a_check_turned_off_leaves_the_record_as_it_was`
+`verified-by: bravebot_config::settings::only_a_boolean_turns_the_update_check_off`
+
 ## Known costs
 
 - **A first run says nothing.** With no answer on disk yet, the earliest a fresh install can be
