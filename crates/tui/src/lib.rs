@@ -34,6 +34,7 @@ pub mod jobs_command;
 pub mod keybindings;
 pub mod logo;
 pub mod loops;
+pub mod manifest_run;
 pub mod markdown;
 pub mod model_prompt;
 pub mod panel;

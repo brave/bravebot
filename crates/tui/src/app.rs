@@ -3982,33 +3982,30 @@ fn event_loop(
                     // the change, and a session that started one and then slept should resume
                     // with the note saying where it went still in the transcript. The run's own
                     // record is a separate file that `manifest_animated` already wrote.
-                    if session.turns > 0 {
-                        let title = stored.title().to_string();
-                        stored.save(
-                            &title,
-                            bravebot_session::sessions::Standing {
-                                history: Some(session.turn_history()),
-                                conversation: &conversation.snapshot(),
-                                turns: session.turns,
-                                tokens: session.tokens,
-                                spend: session.spend_by_turn(),
-                                timing: session.timing_by_turn(),
-                                model: session.served_model(),
-                                todos: &session.todos_by_turn(),
-                                asides: session.asides(),
-                                trust: &answers.trust,
-                                programs: &answers.programs,
-                                directories: workspace.added_directories(),
-                                // None, and it stays none however many runs this session starts.
-                                // Its presence is what makes a record a manifest run, and this
-                                // record is a conversation that can be resumed; the run has a
-                                // record of its own where that field is filled.
-                                manifest: None,
-                                rewind: session.rewind_points(),
-                            },
-                        );
-                        stored.append_audit(session.turns, &events);
-                    }
+                    crate::manifest_run::save_session(
+                        &mut stored,
+                        bravebot_session::sessions::Standing {
+                            history: Some(session.turn_history()),
+                            conversation: &conversation.snapshot(),
+                            turns: session.turns,
+                            tokens: session.tokens,
+                            spend: session.spend_by_turn(),
+                            timing: session.timing_by_turn(),
+                            model: session.served_model(),
+                            todos: &session.todos_by_turn(),
+                            asides: session.asides(),
+                            trust: &answers.trust,
+                            programs: &answers.programs,
+                            directories: workspace.added_directories(),
+                            // None, and it stays none however many runs this session starts.
+                            // Its presence is what makes a record a manifest run, and this
+                            // record is a conversation that can be resumed; the run has a
+                            // record of its own where that field is filled.
+                            manifest: None,
+                            rewind: session.rewind_points(),
+                        },
+                        &events,
+                    );
                 }
                 needs_draw = true;
             }
@@ -6404,7 +6401,7 @@ fn manifest_animated(
         (outcome, sink, worker_trust)
     });
 
-    let mut retained = None;
+    let mut run = crate::manifest_run::Run::default();
     loop {
         redraw(terminal, session)?;
 
@@ -6442,121 +6439,113 @@ fn manifest_animated(
             }
         }
 
-        let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| match message {
-            // The one question this mode asks that a turn does not, and the reason the session
-            // prompt is worth reaching: it is drawn and scrolled rather than printed and read off
-            // a line, so a plan longer than the window can be walked back through before it is
-            // answered.
-            crate::remote_confirm::ToMain::Manifest(request) => {
-                let answer = crate::confirm::ask_manifest(terminal, &request);
-                if answer == crate::confirm::Answer::Interrupt {
-                    stop_what_is_running(session, &cancel);
+        let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| {
+            let Some(message) = run.progress(session, message) else {
+                return;
+            };
+            match message {
+                // The one question this mode asks that a turn does not, and the reason the session
+                // prompt is worth reaching: it is drawn and scrolled rather than printed and read off
+                // a line, so a plan longer than the window can be walked back through before it is
+                // answered.
+                crate::remote_confirm::ToMain::Manifest(request) => {
+                    let answer = crate::confirm::ask_manifest(terminal, &request);
+                    if answer == crate::confirm::Answer::Interrupt {
+                        stop_what_is_running(session, &cancel);
+                    }
+                    // Nothing is noted on the transcript, for the reason a turn notes nothing: the
+                    // answer covers this plan and no other, so there is no standing decision to
+                    // record, and the plan is about to be walked in the open where the transcript
+                    // shows every step of it.
+                    let _ =
+                        answer_tx.send(crate::remote_confirm::Reply::Manifest(answer.decision()));
                 }
-                // Nothing is noted on the transcript, for the reason a turn notes nothing: the
-                // answer covers this plan and no other, so there is no standing decision to
-                // record, and the plan is about to be walked in the open where the transcript
-                // shows every step of it.
-                let _ = answer_tx.send(crate::remote_confirm::Reply::Manifest(answer.decision()));
-            }
-            // Approving the plan was not approving its writes, so each one is still put to the
-            // person as its step reaches it.
-            crate::remote_confirm::ToMain::Write(request) => {
-                let answer = crate::confirm::ask(terminal, &request);
-                if answer.stops_the_turn() {
-                    stop_what_is_running(session, &cancel);
+                // Approving the plan was not approving its writes, so each one is still put to the
+                // person as its step reaches it.
+                crate::remote_confirm::ToMain::Write(request) => {
+                    let answer = crate::confirm::ask(terminal, &request);
+                    if answer.stops_the_turn() {
+                        stop_what_is_running(session, &cancel);
+                    }
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Write(answer.decision()));
                 }
-                let _ = answer_tx.send(crate::remote_confirm::Reply::Write(answer.decision()));
-            }
-            crate::remote_confirm::ToMain::Fetch(request) => {
-                let answer = crate::confirm::ask_fetch(terminal, &request);
-                if answer == crate::confirm::Answer::Interrupt {
-                    stop_what_is_running(session, &cancel);
+                crate::remote_confirm::ToMain::Fetch(request) => {
+                    let answer = crate::confirm::ask_fetch(terminal, &request);
+                    if answer == crate::confirm::Answer::Interrupt {
+                        stop_what_is_running(session, &cancel);
+                    }
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Fetch(answer.decision()));
                 }
-                let _ = answer_tx.send(crate::remote_confirm::Reply::Fetch(answer.decision()));
-            }
-            crate::remote_confirm::ToMain::Vouch(request) => {
-                let answer = crate::confirm::ask_vouch(terminal, &request);
-                if answer == crate::confirm::Answer::Interrupt {
-                    stop_what_is_running(session, &cancel);
+                crate::remote_confirm::ToMain::Vouch(request) => {
+                    let answer = crate::confirm::ask_vouch(terminal, &request);
+                    if answer == crate::confirm::Answer::Interrupt {
+                        stop_what_is_running(session, &cancel);
+                    }
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Vouch(answer.decision()));
                 }
-                let _ = answer_tx.send(crate::remote_confirm::Reply::Vouch(answer.decision()));
-            }
-            crate::remote_confirm::ToMain::Exposure(request) => {
-                let answer = crate::confirm::ask_exposure(terminal, &request);
-                if answer == crate::confirm::Answer::Interrupt {
-                    stop_what_is_running(session, &cancel);
+                crate::remote_confirm::ToMain::Exposure(request) => {
+                    let answer = crate::confirm::ask_exposure(terminal, &request);
+                    if answer == crate::confirm::Answer::Interrupt {
+                        stop_what_is_running(session, &cancel);
+                    }
+                    let _ =
+                        answer_tx.send(crate::remote_confirm::Reply::Exposure(answer.decision()));
                 }
-                let _ = answer_tx.send(crate::remote_confirm::Reply::Exposure(answer.decision()));
+                // Progress, with no reply to give. The goal as the planner understood it and the frozen
+                // plan both arrive as narration, and each step as an activity, so the transcript of a
+                // run reads the way the transcript of a turn does.
+                // The questions a turn asks that this mode cannot. There is no shell and no `run` in
+                // the schema (MANIFEST-5), so no pipeline is proposed and no output is read back;
+                // there is no step that asks to be shown a slot; and there is no planner left to pose
+                // a question. None of the four can arrive, and each
+                // of them is a question the worker is *blocked* on, so silence here would be a hang
+                // nothing can break: the loop would go round forever with the worker waiting on a
+                // reply and the cancel token never looked at. Answered the way every other failure to
+                // carry a question is answered, with the negative one.
+                crate::remote_confirm::ToMain::Run(_) => {
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Run(
+                        bravebot_agent::confirm::RunDecision::reject(),
+                    ));
+                }
+                crate::remote_confirm::ToMain::ReadOutput(_) => {
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::ReadOutput(
+                        bravebot_agent::confirm::Decision::Reject,
+                    ));
+                }
+                crate::remote_confirm::ToMain::Vet(_) => {
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Vet(
+                        bravebot_agent::confirm::Decision::Reject,
+                    ));
+                }
+                crate::remote_confirm::ToMain::Server(_) => {
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Server(
+                        bravebot_agent::confirm::Decision::Reject,
+                    ));
+                }
+                crate::remote_confirm::ToMain::Ask(_) => {
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Ask(Vec::new()));
+                }
+                // A plan names no server tool, so a run neither settles a server's list nor calls one.
+                crate::remote_confirm::ToMain::ToolList(_) => {
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::ToolList(
+                        bravebot_agent::confirm::Decision::Reject,
+                    ));
+                }
+                crate::remote_confirm::ToMain::McpCall(_) => {
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::McpCall(
+                        bravebot_agent::confirm::CallDecision::reject(),
+                    ));
+                }
+                crate::remote_confirm::ToMain::Move(_) => {
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Move(
+                        bravebot_agent::confirm::Decision::Reject,
+                    ));
+                }
+                // What is left announces rather than asks, so nothing waits on it. The manifest is the
+                // task list, so no list changes; there is no planner to delegate or to be interjected
+                // at; and a run's steps report through `Started` and `Finished` above.
+                _ => {}
             }
-            // Progress, with no reply to give. The goal as the planner understood it and the frozen
-            // plan both arrive as narration, and each step as an activity, so the transcript of a
-            // run reads the way the transcript of a turn does.
-            crate::remote_confirm::ToMain::Spent(spent) => retained = Some(spent),
-            crate::remote_confirm::ToMain::PromptRecorded(_) => {}
-            crate::remote_confirm::ToMain::Written(written) => session.set_written(written),
-            crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
-            crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
-            crate::remote_confirm::ToMain::Notice(text) => session.note_once(text),
-            crate::remote_confirm::ToMain::Streaming(text) => session.streaming(&text),
-            crate::remote_confirm::ToMain::Composing(call) => session.composing(call),
-            crate::remote_confirm::ToMain::Started(activity) => session.start_activity(activity),
-            crate::remote_confirm::ToMain::Finished(activity) => session.finish_activity(activity),
-            crate::remote_confirm::ToMain::CheckStarted(checking) => session.checking(checking),
-            crate::remote_confirm::ToMain::CheckFinished => session.checked(),
-            crate::remote_confirm::ToMain::Quarantined(shown) => session.show(shown),
-            crate::remote_confirm::ToMain::Returned(returned) => session.returned(returned),
-            crate::remote_confirm::ToMain::Landed(landing) => session.landed(landing),
-            // The questions a turn asks that this mode cannot. There is no shell and no `run` in
-            // the schema (MANIFEST-5), so no pipeline is proposed and no output is read back;
-            // there is no step that asks to be shown a slot; and there is no planner left to pose
-            // a question. None of the four can arrive, and each
-            // of them is a question the worker is *blocked* on, so silence here would be a hang
-            // nothing can break: the loop would go round forever with the worker waiting on a
-            // reply and the cancel token never looked at. Answered the way every other failure to
-            // carry a question is answered, with the negative one.
-            crate::remote_confirm::ToMain::Run(_) => {
-                let _ = answer_tx.send(crate::remote_confirm::Reply::Run(
-                    bravebot_agent::confirm::RunDecision::reject(),
-                ));
-            }
-            crate::remote_confirm::ToMain::ReadOutput(_) => {
-                let _ = answer_tx.send(crate::remote_confirm::Reply::ReadOutput(
-                    bravebot_agent::confirm::Decision::Reject,
-                ));
-            }
-            crate::remote_confirm::ToMain::Vet(_) => {
-                let _ = answer_tx.send(crate::remote_confirm::Reply::Vet(
-                    bravebot_agent::confirm::Decision::Reject,
-                ));
-            }
-            crate::remote_confirm::ToMain::Server(_) => {
-                let _ = answer_tx.send(crate::remote_confirm::Reply::Server(
-                    bravebot_agent::confirm::Decision::Reject,
-                ));
-            }
-            crate::remote_confirm::ToMain::Ask(_) => {
-                let _ = answer_tx.send(crate::remote_confirm::Reply::Ask(Vec::new()));
-            }
-            // A plan names no server tool, so a run neither settles a server's list nor calls one.
-            crate::remote_confirm::ToMain::ToolList(_) => {
-                let _ = answer_tx.send(crate::remote_confirm::Reply::ToolList(
-                    bravebot_agent::confirm::Decision::Reject,
-                ));
-            }
-            crate::remote_confirm::ToMain::McpCall(_) => {
-                let _ = answer_tx.send(crate::remote_confirm::Reply::McpCall(
-                    bravebot_agent::confirm::CallDecision::reject(),
-                ));
-            }
-            crate::remote_confirm::ToMain::Move(_) => {
-                let _ = answer_tx.send(crate::remote_confirm::Reply::Move(
-                    bravebot_agent::confirm::Decision::Reject,
-                ));
-            }
-            // What is left announces rather than asks, so nothing waits on it. The manifest is the
-            // task list, so no list changes; there is no planner to delegate or to be interjected
-            // at; and a run's steps report through `Started` and `Finished` above.
-            _ => {}
         });
 
         if !carrying_on {
@@ -6596,27 +6585,7 @@ fn manifest_animated(
         Err(_) => *trust = run_trust,
     }
 
-    // Progress is cumulative. A final outcome replaces it, never adds a second charge.
-    let usage = bravebot_session::sessions::manifest_usage(&outcome, retained);
-    let tokens = usage.map_or(0, |s| s.tokens);
-    let spent = usage.map(|s| s.timing);
-    session.end_run(tokens, spent);
-
-    // Nothing for a run the person stopped, which is what the command line does with one too: it
-    // has nothing in it anybody needs to read, and a record per interrupted run would fill the
-    // picker with rows whose whole content is that somebody changed their mind. Every other
-    // outcome is written before anything is said, so the note can name it.
-    let recorded = match stopped_by_the_person {
-        true => None,
-        false => bravebot_session::sessions::record_manifest_run(
-            workspace.root(),
-            &asked,
-            &outcome,
-            retained,
-            bravebot_session::sessions::Front::Terminal,
-            bravebot_stamp::BUILD,
-        ),
-    };
+    let recorded = run.complete(session, workspace.root(), &asked, &outcome, &cancel);
 
     match &outcome {
         Ok(finished) => {
