@@ -90,6 +90,9 @@ here. What it rests on is an endorsement of one slot, recorded as that, and the 
 the person's own message. This gate still admits a paste and nothing else.
 
 `verified-by: bravebot_tui::app::a_picture_off_the_clipboard_becomes_a_marker_in_the_line`
+`verified-by: bravebot_agent::turn::a_picture_is_never_shown_to_the_planner`
+`verified-by: bravebot_agent::turn::a_processor_is_given_a_picture_as_a_picture`
+`verified-by: bravebot_agent::turn::a_picture_a_person_opens_and_lets_through_is_attached_after_the_results`
 
 
 <a id="PASTE-3"></a>

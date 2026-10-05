@@ -355,7 +355,9 @@ fn a_pasted_image_is_named_in_the_audit_trail() {
         sink.events().iter().any(|event| matches!(
             event,
             Event::GatePassed { gate: "provenance", detail }
-                if detail.contains("image/png") && detail.contains("pasted by the user")
+                if detail.contains("image/png")
+                    && detail.contains("of 6 bytes")
+                    && detail.contains("pasted by the user")
         )),
         "the paste left no trace: {:?}",
         sink.events()
@@ -15775,6 +15777,156 @@ fn content_a_person_reads_after_a_check_reaches_the_planner() {
     );
 }
 
+/// The one check among the requests in `sent`, parsed. The one place the body of a check is read
+/// as a structure, so a test about its shape asks a field rather than searching the text.
+fn the_check_sent(sent: &[String]) -> serde_json::Value {
+    let mut checks = sent.iter().filter(|body| body.contains(A_CHECK_ASKING));
+    let check = checks.next().expect("no check was made");
+    assert!(checks.next().is_none(), "more than one check was made");
+    serde_json::from_str(check).expect("the check's request is json")
+}
+
+/// The words of a message's content, whether the request wrote it as a string or as parts, which
+/// a service that caches the rules turns a system message into.
+fn words_of(content: &serde_json::Value) -> String {
+    match content.as_array() {
+        None => content.as_str().expect("words").to_string(),
+        Some(parts) => parts
+            .iter()
+            .filter_map(|part| part["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
+/// The messages of a parsed request as (role, content) pairs, content as it was written.
+fn roles_and_contents(request: &serde_json::Value) -> Vec<(&str, &serde_json::Value)> {
+    request["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .map(|message| {
+            (
+                message["role"].as_str().expect("a role"),
+                &message["content"],
+            )
+        })
+        .collect()
+}
+
+/// CHECK-1 and CHECK-2 at the request that goes out: one piece of content, in three messages, with
+/// no tool list and nothing of the planner's conversation, and the driver's words last. The
+/// tests on the constants cannot see which order `vet::run` sends them in, or that nothing else
+/// was added, so a check that was given tools or the task, or whose closing words moved ahead of
+/// the content, would pass every one of them.
+#[test]
+fn a_check_is_sent_as_three_messages_with_no_tools_and_the_drivers_words_last() {
+    const TRUSTED_METADATA_BEGINS: &str = "======== BEGIN TRUSTED METADATA ========";
+    const TRUSTED_METADATA_ENDS: &str = "======== END TRUSTED METADATA ========";
+    const UNTRUSTED_CONTENT_BEGINS: &str = "======== BEGIN UNTRUSTED CONTENT ========";
+    const UNTRUSTED_CONTENT_ENDS: &str = "======== END UNTRUSTED CONTENT ========";
+
+    let scratch = Scratch::new("vet-request-shape");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(
+        scratch.path.join("where.txt"),
+        "SENTINEL-XYZZY\nSECOND-LINE-UVWXY\n",
+    )
+    .unwrap();
+
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("the planner's task is PLANNER-TASK-WORDS"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut ShownAfterAVet::new(true),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let check = the_check_sent(&sent);
+
+    assert!(
+        check.get("tools").is_none() && check.get("tool_choice").is_none(),
+        "the check's request carried a tool list: {check}"
+    );
+    let messages = roles_and_contents(&check);
+    assert_eq!(
+        messages.iter().map(|(role, _)| *role).collect::<Vec<_>>(),
+        ["system", "user", "user"],
+        "the check is not a rule set, the content and the closing words: {check}"
+    );
+    let facts_and_content = words_of(messages[1].1);
+    let closing = words_of(messages[2].1);
+    let rules = words_of(messages[0].1);
+    assert!(
+        rules.contains("single JSON string") && !rules.contains("a part of its own"),
+        "a check over text was not told its content is a string in a block: {rules}"
+    );
+
+    assert!(
+        !check.to_string().contains("PLANNER-TASK-WORDS"),
+        "the planner's conversation reached the check: {check}"
+    );
+
+    let facts_end = facts_and_content
+        .find(TRUSTED_METADATA_ENDS)
+        .expect("the driver's facts are closed");
+    let content_begins = facts_and_content
+        .find(UNTRUSTED_CONTENT_BEGINS)
+        .expect("the content block is opened");
+    assert!(
+        facts_and_content.starts_with(TRUSTED_METADATA_BEGINS)
+            && facts_end < content_begins
+            && facts_and_content
+                .trim_end()
+                .ends_with(UNTRUSTED_CONTENT_ENDS),
+        "the facts do not come first and the content second: {facts_and_content}"
+    );
+    let lines_with_the_second_line: Vec<&str> = facts_and_content
+        .lines()
+        .filter(|line| line.contains("SECOND-LINE-UVWXY"))
+        .collect();
+    assert!(
+        matches!(lines_with_the_second_line.as_slice(), [line] if line.contains("SENTINEL-XYZZY")),
+        "a newline in the content started a line of its own: {facts_and_content}"
+    );
+
+    assert!(
+        closing.contains("end of the content") && closing.contains("\"verdict\""),
+        "the last message is not the driver's closing words: {closing}"
+    );
+    assert!(
+        !closing.contains("SENTINEL-XYZZY"),
+        "the content was put after the driver's closing words: {closing}"
+    );
+}
+
 /// A reference name means nothing to the person being asked. What the prompt has to say is where
 /// the bytes came from, which the kernel records when it quarantines them, and which the driver
 /// asks for rather than reading off the spec a check happened to leave behind.
@@ -16530,6 +16682,7 @@ fn a_picture_a_person_opens_and_lets_through_is_attached_after_the_results() {
         "the copy left no record in the trail: {:#?}",
         sink.events()
     );
+    assert_no_paste_was_recorded(&sink);
 }
 
 /// VET-2: a reference to a file nothing has read yet is opened rather than refused, and a picture
@@ -16573,6 +16726,76 @@ fn an_unread_reference_to_a_picture_is_opened_as_a_picture() {
         check.contains("data:image/png;base64,iVBORw0KGgo"),
         "the check was not shown the picture: {check}"
     );
+}
+
+/// CHECK-15 at the request that goes out: a check over a picture or a PDF is given the file in a
+/// part of its own, after the driver's facts and before the driver's closing words, and never as
+/// text. The tests on the prompts say what the checker is told, and the ones above say a check
+/// saw the bytes somewhere; none says where in the request they sit, so a file put ahead of the
+/// facts, after the closing words or into the facts as text would pass all of them.
+#[test]
+fn a_check_over_a_file_carries_it_in_a_part_between_the_facts_and_the_closing_words() {
+    for (name, file, data_uri) in [
+        ("shot.png", a_png(), "data:image/png;base64,iVBORw0KGgo"),
+        ("notes.pdf", a_pdf(), "data:application/pdf;base64,JVBERi"),
+    ] {
+        let (sent, _sink, _conversation) = vet_a_picture(
+            &format!("vet-file-part-{name}"),
+            (name, file),
+            A_SAFE_VERDICT,
+            Task::new("look at the file"),
+            None,
+            &mut ShownAfterAVet::new(false),
+            |_| {},
+        );
+        let check = the_check_sent(&sent);
+
+        assert!(
+            check.get("tools").is_none(),
+            "{name}: the check's request carried a tool list: {check}"
+        );
+        let messages = roles_and_contents(&check);
+        assert_eq!(
+            messages.iter().map(|(role, _)| *role).collect::<Vec<_>>(),
+            ["system", "user", "user"],
+            "{name}: {check}"
+        );
+
+        let parts = messages[1].1.as_array().unwrap_or_else(|| {
+            panic!("{name}: the file and the facts are not a message of parts: {check}")
+        });
+        assert_eq!(
+            parts
+                .iter()
+                .map(|part| part["type"].as_str())
+                .collect::<Vec<_>>(),
+            [Some("text"), Some("image_url")],
+            "{name}: the facts come first and the file second: {check}"
+        );
+        assert!(
+            parts[0]["text"].as_str().is_some_and(
+                |facts| facts.contains("TRUSTED METADATA") && !facts.contains("base64")
+            ),
+            "{name}: the facts are missing, or carry the file as text: {check}"
+        );
+        assert!(
+            parts[1]["image_url"]["url"]
+                .as_str()
+                .is_some_and(|url| url.starts_with(data_uri)),
+            "{name}: the second part is not the file: {check}"
+        );
+
+        let closing = messages[2].1.as_str().expect("the closing words are words");
+        assert!(
+            closing.contains("end of the content") && !closing.contains("base64"),
+            "{name}: the last message is not the driver's closing words: {closing}"
+        );
+        let rules = words_of(messages[0].1);
+        assert!(
+            rules.contains("a part of its own") && !rules.contains("single JSON string"),
+            "{name}: a check over a file was told the content is a string in a block: {rules}"
+        );
+    }
 }
 
 /// VET-2: a delegate is not offered `vet_content` and is not answered when it names it anyway. The
@@ -21157,7 +21380,9 @@ fn a_picture_pasted_into_a_question_is_named_in_the_audit_trail() {
         sink.events().iter().any(|event| matches!(
             event,
             Event::GatePassed { gate: "provenance", detail }
-                if detail.contains("image/png") && detail.contains("pasted by the user")
+                if detail.contains("image/png")
+                    && detail.contains("of 6 bytes")
+                    && detail.contains("pasted by the user")
         )),
         "the paste left no trace: {:?}",
         sink.events()
@@ -30546,6 +30771,19 @@ fn a_png() -> Vec<u8> {
         .expect("the fixture decodes")
 }
 
+/// PASTE-2: the provenance entry a paste leaves. A picture that reached a turn any other way must
+/// not leave it, because the entry says a person pasted the picture at their own keyboard.
+fn assert_no_paste_was_recorded(sink: &RecordingSink) {
+    assert!(
+        !sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "provenance", detail } if detail.contains("pasted by the user")
+        )),
+        "a picture nobody pasted was recorded as a paste: {:#?}",
+        sink.events()
+    );
+}
+
 /// The property images rest on. A screenshot carries whatever words are in it, so a planner that
 /// could look at one could be instructed by one: the bytes go to a slot and the planner is handed a
 /// reference, exactly as an untrusted file's text is. What lets one through is `vet_content`, one
@@ -30591,6 +30829,7 @@ fn a_picture_is_never_shown_to_the_planner() {
         second.contains("image/png"),
         "the planner was not told what kind of thing it has: {second}"
     );
+    assert_no_paste_was_recorded(&sink);
 }
 
 /// The reference is usable, which is the whole point: a processor is handed the picture as a picture
@@ -30643,6 +30882,7 @@ fn a_processor_is_given_a_picture_as_a_picture() {
         !carrying.contains("read_file"),
         "the request carrying the picture was offered tools, so it was not a processor"
     );
+    assert_no_paste_was_recorded(&sink);
 }
 
 /// Runs one `run` call and hands back how the command ended. A deadline is only observable in the
@@ -37362,6 +37602,66 @@ fn read_git_shows_the_planner_the_history_of_a_trusted_repository() {
     assert!(
         answered.contains(&format!("2023-11-14 A U Thor {SUBJECT}")),
         "the log of a trusted repository did not reach the planner: {answered}"
+    );
+}
+
+/// GIT-9. A log asked for no count lists 20 commits, and one asked for more than 200 lists 200,
+/// each with the note that commits were left out. The repository holds 205 commits, so a default
+/// that was higher, or a maximum that was not applied, lists a different number of them.
+#[test]
+fn a_log_lists_twenty_commits_unasked_and_never_more_than_two_hundred() {
+    let scratch = Scratch::new("read-git-counts");
+    for number in 0..205 {
+        repository::commit_files(
+            &scratch.path,
+            &[("README", "hello\n")],
+            &format!("SUBJECT-{number:03}"),
+        );
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"log"}"#),
+        tool_request_2("read_git", r#"{"query":"log","count":100000}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let _second = received.recv().expect("second request");
+    let third = received.recv().expect("third request");
+    let parsed: serde_json::Value = serde_json::from_str(&third).expect("a request");
+    let answers: Vec<String> = parsed["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .filter(|message| message["role"] == "tool")
+        .map(|message| message["content"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(answers.len(), 2, "{answers:?}");
+    let listed = |answer: &str| answer.matches("SUBJECT-").count();
+    assert_eq!(listed(&answers[0]), 20, "{}", answers[0]);
+    assert!(answers[0].contains("SUBJECT-204"), "{}", answers[0]);
+    assert!(
+        answers[0].contains("more commits to list"),
+        "{}",
+        answers[0]
+    );
+    assert_eq!(listed(&answers[1]), 200, "{}", answers[1]);
+    assert!(answers[1].contains("SUBJECT-204"), "{}", answers[1]);
+    assert!(
+        answers[1].contains("more commits to list"),
+        "{}",
+        answers[1]
     );
 }
 
