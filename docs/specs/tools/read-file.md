@@ -223,6 +223,8 @@ is the one component that has to compare one look with another.
 
 `verified-by: bravebot_agent::workspace::two_reads_of_an_untouched_file_carry_the_same_change_token`
 `verified-by: bravebot_agent::workspace::a_written_file_carries_a_different_change_token`
+`verified-by: bravebot_agent::workspace::a_change_token_moves_with_the_modification_time_when_the_size_does_not`
+`verified-by: bravebot_agent::workspace::a_change_token_is_the_same_for_different_bytes_of_the_same_size_and_time`
 `verified-by: bravebot_agent::workspace::the_change_token_carries_no_time_the_planner_could_read`
 `verified-by: bravebot_agent::turn::a_read_hands_the_planner_a_token_that_moves_when_the_file_does`
 `verified-by: bravebot_agent::turn::a_read_of_an_empty_file_still_carries_a_token`

@@ -1797,6 +1797,58 @@ fn a_written_file_carries_a_different_change_token() {
     );
 }
 
+/// Set a file's modification time to `seconds` after the epoch, leaving its bytes alone.
+fn stamp(path: &std::path::Path, seconds: u64) {
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .expect("open to stamp");
+    file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
+        .expect("set the modification time");
+}
+
+/// A rewrite that keeps the size is the case the size alone cannot see, and a filesystem with
+/// coarse timestamps makes it the common one. The token has to move on the modification time by
+/// itself.
+#[test]
+fn a_change_token_moves_with_the_modification_time_when_the_size_does_not() {
+    let scratch = Scratch::new("token-mtime");
+    let path = scratch.path.join("a.txt");
+    std::fs::write(&path, "one\n").unwrap();
+    stamp(&path, 1_700_000_000);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let before = workspace.page("a.txt", 1, usize::MAX).expect("first read");
+
+    stamp(&path, 1_700_000_100);
+    let after = workspace.page("a.txt", 1, usize::MAX).expect("second read");
+
+    assert_ne!(
+        before.change_token, after.change_token,
+        "a file the clock says was written kept its token because its bytes and size did not move"
+    );
+}
+
+/// Shape rather than content: nothing derived from the bytes goes into the token, so two files of
+/// one size and one modification time carry the same token whatever they say.
+#[test]
+fn a_change_token_is_the_same_for_different_bytes_of_the_same_size_and_time() {
+    let scratch = Scratch::new("token-shape");
+    let path = scratch.path.join("a.txt");
+    std::fs::write(&path, "one\n").unwrap();
+    stamp(&path, 1_700_000_000);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let before = workspace.page("a.txt", 1, usize::MAX).expect("first read");
+
+    std::fs::write(&path, "two\n").unwrap();
+    stamp(&path, 1_700_000_000);
+    let after = workspace.page("a.txt", 1, usize::MAX).expect("second read");
+
+    assert_eq!(
+        before.change_token, after.change_token,
+        "the token followed the bytes of the file"
+    );
+}
+
 /// The planner has no clock: it is given today's date and told not to ask a program for the time,
 /// so a token it could read a time out of is an invitation to date a sample it cannot date. Hex of
 /// a fixed width, and nothing a modification time can be recovered from.
