@@ -13,7 +13,6 @@ function start() {
   started = true
   void window.bravebot.readExperience().then((saved) => {
     state = { ...saved, conversations: { ...saved.conversations, ...state.conversations },
-      density: changed.has('density') ? state.density : saved.density,
       recentModels: changed.has('recentModels') ? state.recentModels : saved.recentModels }
     emit()
   }).catch(() => { saveError = 'Saved preferences could not be loaded.'; emit() })
@@ -44,7 +43,14 @@ export function setConversation(key: string, patch: Partial<ConversationPreferen
   persist(key, next)
 }
 
-export function setExperience<K extends 'density' | 'recentModels'>(key: K, value: Experience[K]) {
+/** Forget a deleted conversation here. The main process has already removed it from disk. */
+export function dropConversation(key: string) {
+  const { [key]: _gone, ...rest } = state.conversations
+  state = { ...state, conversations: rest }
+  emit()
+}
+
+export function setExperience(key: 'recentModels', value: Experience['recentModels']) {
   state = { ...state, [key]: value }
   persist(key, value)
 }

@@ -1387,6 +1387,13 @@ mod tests {
             format!("{failure}").contains("openrouter"),
             "the failure does not say which gateway: {failure}"
         );
+        // The remedy, not only the diagnosis: both places a credential can be named.
+        let said = format!("{failure}");
+        assert!(
+            said.contains("set one of the variables"),
+            "no remedy: {said}"
+        );
+        assert!(said.contains("options.apiKey"), "no remedy: {said}");
     }
 
     /// A block naming nowhere for a credential to live is somebody saying the gateway wants none,

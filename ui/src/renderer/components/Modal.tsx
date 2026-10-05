@@ -38,6 +38,24 @@ function returnTarget(): HTMLElement | null {
   return anchor && active.closest('leo-menu-item, [role="menuitem"]') ? anchor : active
 }
 
+/**
+ * Leo pads the head, the body and the footer by the full dialog padding each, and its rule that
+ * drops the body's bottom padding above a footer does not match inside the shadow root. A short
+ * dialog of one or two lines ends up with more empty space than text.
+ */
+let compactSheet: CSSStyleSheet | null = null
+const compactStyles = (): CSSStyleSheet => {
+  if (!compactSheet) {
+    compactSheet = new CSSStyleSheet()
+    compactSheet.replaceSync(`
+      .leo-dialog header { padding-bottom: var(--leo-spacing-l); }
+      .leo-dialog .body { padding-bottom: 0; }
+      .leo-dialog .actions { padding-top: var(--leo-spacing-2xl); }
+    `)
+  }
+  return compactSheet
+}
+
 /** The four widths a dialog comes in: 440, 560, 760 and 1080, each short of the window's edge. */
 export type ModalSize = 'sm' | 'md' | 'lg' | 'xl'
 
@@ -57,6 +75,7 @@ export function Modal({
   subtitleId,
   headerAction,
   size = 'md',
+  compact = false,
   onClose,
   children,
   actions,
@@ -70,6 +89,8 @@ export function Modal({
   /** One icon control beside the title, for something about the whole dialog (Refresh). */
   headerAction?: React.ReactNode
   size?: ModalSize
+  /** Tighter vertical spacing, for a dialog of a sentence or two. */
+  compact?: boolean
   onClose?: () => void
   children: React.ReactNode
   /** Footer buttons, in Leo's actions slot: pinned under the body, which scrolls on its own. */
@@ -107,6 +128,13 @@ export function Modal({
   // not text inside the element Playwright names. The host is the dialog the
   // page queries, and the inner element gives up that role. A slot change
   // rebuilds the inner element, which drops the role until it is set again.
+  useLayoutEffect(() => {
+    const shadow = host.current?.shadowRoot
+    if (!compact || !shadow) return
+    const sheet = compactStyles()
+    if (!shadow.adoptedStyleSheets.includes(sheet)) shadow.adoptedStyleSheets = [...shadow.adoptedStyleSheets, sheet]
+  }, [compact])
+
   useLayoutEffect(() => {
     const root = host.current
     if (!root) return

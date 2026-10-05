@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { Tooltip } from '../nala'
 
 /** How long the pointer rests before the first tooltip, and how long after one closes the next opens at once. */
-const FIRST_DELAY = 500
+const FIRST_DELAY = 1000
 const WARM_FOR = 800
 
 /** Leo's visible bubble takes the pointer, which would leave whatever lies under it unclickable. */
@@ -44,7 +44,7 @@ export function TooltipLayer(): React.JSX.Element | null {
     const clear = () => { if (timer.current) clearTimeout(timer.current); timer.current = null }
     const hide = () => {
       clear()
-      if (current.current) closedAt.current = Date.now()
+      if (shown !== null) closedAt.current = Date.now()
       current.current = null
       setShown(null)
     }

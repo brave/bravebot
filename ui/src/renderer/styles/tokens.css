@@ -43,7 +43,9 @@
   --status-info-bg: var(--leo-color-systemfeedback-info-background);
 
   /* Type roles, as font shorthands. */
+  --type-page-title: var(--leo-font-heading-h1);
   --type-heading: var(--leo-font-heading-h3);
+  --type-lede: var(--leo-font-large-regular);
   --type-title: var(--leo-font-heading-h4);
   --type-body: var(--leo-font-default-regular);
   --type-body-strong: var(--leo-font-default-semibold);
@@ -60,6 +62,7 @@
   --radius-control: var(--leo-radius-m);
   --radius-card: var(--leo-radius-l);
   --radius-field: var(--leo-radius-xl);
+  --radius-bubble: var(--leo-radius-xxl);
   --radius-pill: var(--leo-radius-full);
 
   /* Elevation. The only shadows in the app; check-nala fails on any other. */
@@ -75,9 +78,9 @@
   --card-gap: 8px;
   --session-row-h: 44px;
   /* Between turns, and between the parts of one: prompt, reply, activity, footer. */
-  --turn-gap: calc(var(--leo-spacing-xl) + var(--leo-spacing-s));
+  --turn-gap: var(--leo-spacing-2xl);
   --part-gap: var(--leo-spacing-m);
-  --reading-width: 760px;
+  --reading-width: 720px;
   --row-h: 32px;
   --hit: 28px;
   --icon-caption: 12px;
@@ -123,13 +126,6 @@
 
 :root[data-theme='light'] { color-scheme: light; }
 :root[data-theme='dark'] { color-scheme: dark; }
-
-.app.compact {
-  --row-h: 28px;
-  --session-row-h: 36px;
-  --turn-gap: var(--leo-spacing-l);
-  --part-gap: var(--leo-spacing-s);
-}
 
 @media (prefers-reduced-motion: reduce) {
   :root {

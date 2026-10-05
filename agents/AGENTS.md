@@ -61,14 +61,19 @@ alone. If they could not, it does not get built.
 
 ## Working here
 
+Before adding a client, adapter, or behavior that multiple clients need, use
+[shared-implementation-preflight](agents/skills/shared-implementation-preflight/SKILL.md).
+Check where the behavior belongs before editing and verify reuse against the final diff.
+
 Before changing behaviour or adding, removing, or weakening test assertions, use
 [testing-preflight](agents/skills/testing-preflight/SKILL.md). Apply it before choosing the
 test approach, and use its evidence requirements when reporting the result.
 
 Before adding or changing anything in `ui/` that a person sees or interacts with (components,
 layout, styles, icons, copy, dialogs, menus, cards), use
-[nala-ui-quality](agents/skills/nala-ui-quality/SKILL.md). Its quality bar applies to every new
-UI surface and is checked against the final diff before the work is called done.
+[design](agents/skills/design/SKILL.md). It describes the current look of the application, and new
+work matches it. Its quality bar applies to every new UI surface and is checked against the final
+diff before the work is called done.
 
 [docs/development/](docs/development/README.md) is how this repository is worked on: what to run
 before a commit and before a push, what one commit contains, the specs the code is developed

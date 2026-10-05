@@ -277,6 +277,24 @@ fn no_audit_trail_is_written() {
     );
 }
 
+/// UPDATE-11: with the check off the recorded answer is not read, so no line is said.
+///
+/// The same seeded record as the test below says a line with the check left on, which is what
+/// shows the silence is the setting and not an absent record.
+#[test]
+fn a_check_turned_off_says_nothing_though_a_newer_version_is_recorded() {
+    let scratch = Scratch::incognito("updates-off");
+    let running = std::env::current_exe().expect("the test binary");
+    scratch.seed("installed-by", &format!("{}\n", running.display()));
+    scratch.seed("update-check", "1700000000\treleases\t99.0.0\n");
+
+    assert!(bravebot_tui::update::at_startup(Some(false)).is_none());
+    assert!(
+        bravebot_tui::update::at_startup(Some(true)).is_some(),
+        "the seeded record does not say a line, so the silence above proves nothing"
+    );
+}
+
 /// UPDATE-8: an incognito session still reads what an ordinary one wrote down about updating.
 ///
 /// The mode is about what survives a session rather than about what it may know, and a private
@@ -294,7 +312,7 @@ fn the_answer_about_updating_is_still_read() {
 
     // A line is said only once a record is read, since without one there is no version to be behind.
     assert!(
-        bravebot_tui::update::at_startup().is_some(),
+        bravebot_tui::update::at_startup(None).is_some(),
         "the recorded answer was not read back, so a version this far ahead went unannounced"
     );
 

@@ -45,6 +45,7 @@ cli-usage-import-providers = Importer un service de modèle configuré par Claud
 cli-usage-auth-login = Se connecter à un service de modèle, en listant chaque façon si aucune n'est nommée
 cli-usage-auth-logout = Oublier un abonnement Leo Premium importé ou une clé de passerelle enregistrée
 cli-usage-mcp = Déclarer, lister et approuver des serveurs MCP
+cli-usage-completion = Afficher un script de complétion pour le shell
 
 cli-keys-heading = Touches interactives :
 cli-key-send = Envoyer
@@ -117,6 +118,7 @@ cli-option-version = Afficher la version
 ## Ce qu'une exécution en ligne de commande dit quand elle ne peut pas démarrer
 
 cli-unknown-option = option inconnue : { $flag }
+cli-completion-needs-a-shell = completion attend l'un de bash, zsh ou fish
 cli-file-needs-a-path = --file demande un chemin
 cli-add-dir-needs-a-path = --add-dir demande le chemin absolu d'un répertoire
 cli-directory-ends-checkouts = { $directory } contient le répertoire de travail, donc aucun délégué n'obtient de copie de travail tant qu'il est ouvert ; relancez sans --add-dir { $directory } pour en avoir une

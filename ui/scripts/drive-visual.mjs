@@ -1,4 +1,4 @@
-// The visual gallery: every surface, in light and dark, comfortable and compact, at the default
+// The visual gallery: every surface, in light and dark, at the default
 // and the minimum window size, plus forced-colours captures of the security markings.
 //
 // Real Electron renderer, isolated profile, and a mocked bridge: no provider requests and no
@@ -102,7 +102,7 @@ try {
     })
     for (const item of found) small.set(item, [...(small.get(item) ?? []), name])
   }
-  const variants = async (name, { dark = true, compact = false } = {}) => {
+  const variants = async (name, { dark = true } = {}) => {
     await settle()
     await audit(name)
     await page.screenshot({ path: join(output, `${name}-light.png`) })
@@ -111,12 +111,6 @@ try {
       await settle()
       await page.screenshot({ path: join(output, `${name}-dark.png`) })
       await page.evaluate(() => document.documentElement.removeAttribute('data-theme'))
-    }
-    if (compact) {
-      await page.evaluate(() => { const app = document.querySelector('.app'); app?.classList.replace('comfortable', 'compact') })
-      await settle()
-      await page.screenshot({ path: join(output, `${name}-compact.png`) })
-      await page.evaluate(() => { const app = document.querySelector('.app'); app?.classList.replace('compact', 'comfortable') })
     }
     console.log('VISUAL', name)
   }
@@ -136,7 +130,7 @@ try {
   await scene('02-conversation', async () => {
     await open('Refactor the session store')
     await page.locator('.bubble.assistant').first().waitFor()
-    await variants('02-conversation', { compact: true })
+    await variants('02-conversation')
   })
 
   // For layout work: VISUAL_PROBE is an expression evaluated in the page with the conversation
@@ -157,7 +151,7 @@ try {
     await emit('tool.started', tool('Search', 'lock', 'Find other lock users', null))
     await emit('todos', { rows: [{ content: 'Split the lock', status: 'done' }, { content: 'Move the migration', status: 'active' }, { content: 'Write migration tests', status: 'pending' }] })
     await emit('tokens', { written: 1834 })
-    await variants('03-running', { compact: true })
+    await variants('03-running')
   })
 
   await scene('04-confirm', async () => {
@@ -255,8 +249,9 @@ try {
   })
 
   await scene('17-appearance', async () => {
+    // View ▸ Appearance… opens the General settings page rather than a dialog.
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('bravebot:command', 'view.theme'))
-    await page.getByRole('dialog').waitFor()
+    await page.locator('[data-test="settings-view"] [data-test="appearance-control"]').waitFor()
     await variants('17-appearance', { dark: false })
     await escape()
   })
@@ -269,8 +264,9 @@ try {
   })
 
   await scene('19-agent-settings', async () => {
-    await page.locator('[data-test="agent-settings"], .sidebar-footer leo-button').first().click()
-    await page.getByRole('dialog').waitFor()
+    await page.locator('[data-test="agent-settings"]').click()
+    await page.locator('[data-test="settings-page-agent"]').click()
+    await page.locator('[data-test="settings-view"] [data-test="settings-body"]').waitFor()
     await variants('19-agent-settings')
     await escape()
   })
@@ -278,7 +274,7 @@ try {
   await scene('20-bots', async () => {
     await page.getByText('Bots', { exact: true }).first().click()
     await variants('20-bots')
-    await page.getByText('Sessions', { exact: true }).first().click()
+    await page.getByText('Chats', { exact: true }).first().click()
   })
 
   await scene('21-minimum-window', async () => {
@@ -329,7 +325,7 @@ try {
     await page.setViewportSize({ width: 900, height: 560 })
     await page.reload()
     await page.locator('.session').first().waitFor()
-    await variants('24-stress-list', { compact: true })
+    await variants('24-stress-list')
     await page.locator('[data-test="view-options"]').click()
     await page.getByRole('menuitemcheckbox', { name: /Group by project/ }).click()
     await escape()

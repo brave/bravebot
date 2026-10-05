@@ -19,11 +19,12 @@ import { installMenu, popupContext, rebuildMenu, refreshMenu } from './menu'
 import { noteProject, recents } from './recents'
 import { putBots, putLayout, putTheme, putView, readState } from './state'
 import { isProjectPath } from '../shared/recents'
-import { forks, noteFork } from './forks'
+import { forgetFork, forks, noteFork } from './forks'
 import {
   bot,
-  botFromForm,
   bots,
+  ensureHome,
+  worksIn,
   ground,
   memory,
   noteBotArchived,
@@ -33,14 +34,16 @@ import {
   nudgeDue,
   releaseBotSession,
   retireBot,
+  forgetBotConversation,
   saveBotModel,
-  saveFormBot,
+  saveForm,
   migrateBot,
   consolidationPrompt,
   AFTER_COMPACTION,
 } from './bots'
-import { isBotModel, withoutBot, type Bot } from '../shared/bots'
+import { botFolders, isBotModel, withoutBot, type Bot } from '../shared/bots'
 import { isSessionId, parseForkResult } from '../shared/forks'
+import { conversationKey } from '../shared/experience'
 import { rootForSession, forgetRoot, list, noteRoot, open as openInApp, preview, search, chooseAttachments, attachmentPaths } from './files'
 import { isSubpath } from '../shared/files'
 import { chooseDirectory, mayOpenSessionIn, offerDirectories } from './opened'
@@ -56,8 +59,8 @@ import {
 import { printToPdf } from './export'
 import { applyNativeAppearance } from './theme'
 import { parseAppearance } from '../shared/theme'
-import { readExperience, writeExperience } from './experience'
-import { editMemory, memoryHistory, snapshotMemory, removeMemoryHistory } from './memory'
+import { readExperience, removeConversation, writeExperience } from './experience'
+import { editMemory, memoryHistory, snapshotMemory, removeMemoryHistory, tidyMemory } from './memory'
 
 /**
  * Which live session belongs to which bot, for the length of this run.
@@ -172,6 +175,13 @@ async function sendBotTurn(
 ): Promise<{ ok?: unknown; error?: BotFailure }> {
   if (!bridge) return { error: { code: 'no_bridge', message: 'the agent is not running' } }
 
+  // The folder the agent confirmed this session runs in, never one the window named. A bot only
+  // works where `worksIn` allows, because grounding seeds a file there.
+  const folder = rootForSession(session)
+  if (!worksIn(held, folder)) {
+    return { error: { code: 'not_this_bots_folder', message: `${held.name} has not been given this folder` } }
+  }
+
   // A bot made before definitions is given one first, and its old memory is recorded as untrusted
   // (MEMORY-11). Nothing is sent until that has happened, so a briefing never names the old path
   // of a bot whose notes are not yet recorded.
@@ -203,12 +213,12 @@ async function sendBotTurn(
     // turn names and cannot read is not a smaller turn, it is a failed one — so a memory deleted
     // by a `git clean`, or a branch switched to one that never had it, is repaired here instead of
     // ending the turn inside the agent with a message about a path.
-    const paths = ground(held, nudge)
+    const paths = ground(held, folder, nudge)
     if (!paths) {
       return {
         error: {
           code: 'no_checkout',
-          message: `${held.name} works in ${held.directory}, which cannot be written to`,
+          message: `${held.name} works in ${folder}, which cannot be written to`,
         },
       }
     }
@@ -336,8 +346,9 @@ function createWindow(): void {
     if (message.event === 'turn.done' && typeof message.session === 'string') {
       const handle = message.session
       const slug = botHandles.get(handle)
-      if (slug) {
-        if (message.data.id) noteBotSession(slug, message.data.id)
+      const folder = rootForSession(handle)
+      if (slug && folder) {
+        if (message.data.id) noteBotSession(slug, message.data.id, folder)
         // Read before `noteBotArchived` moves it, because the comparison *is* the signal: the
         // archive rises exactly once per compaction that actually happened, which is the only
         // reliable way to learn that one did. See the note on `Bot.archived`.
@@ -346,8 +357,8 @@ function createWindow(): void {
         // Whether the bot wrote anything down during the turn that has just ended. Asked of every
         // turn including a consolidation's own, so a consolidation that worked is what resets the
         // count that would otherwise have nudged.
-        noteBotMemory(slug)
-        try { snapshotMemory(slug) } catch { /* Memory itself remains available if history storage fails. */ }
+        noteBotMemory(slug, folder)
+        try { snapshotMemory(slug, folder) } catch { /* Memory itself remains available if history storage fails. */ }
 
         // A consolidation ending is the end of it. Answering it with another would be a loop.
         if (consolidating.delete(handle)) {
@@ -367,7 +378,8 @@ function createWindow(): void {
     if (message.event === 'turn.error' && typeof message.session === 'string') {
       const handle = message.session
       const slug = botHandles.get(handle)
-      if (slug && message.data.id) noteBotSession(slug, message.data.id)
+      const folder = rootForSession(handle)
+      if (slug && folder && message.data.id) noteBotSession(slug, message.data.id, folder)
       if (consolidating.delete(handle)) {
         after = () => ended(handle, botHandles.get(handle) ?? null, true)
       }
@@ -426,6 +438,7 @@ const ALLOWED = new Set([
   'session.open',
   'session.new',
   'session.fork',
+  'session.delete',
   'session.close',
   'turn.send',
   'turn.cancel',
@@ -540,9 +553,19 @@ app.whenReady().then(() => {
     }
     // A session's directory becomes the root the file helper is pinned to, so the renderer may
     // open one only in a folder it was given (TRUST-20), whatever shape the string it sends has.
-    if (method === 'session.new' || method === 'session.open') {
+    // A delete names a directory too, and is the one method here that cannot be undone, so it is
+    // held to the same folders.
+    if (method === 'session.new' || method === 'session.open' || method === 'session.delete') {
       if (!mayOpenSessionIn((params as { directory?: unknown } | null)?.directory)) {
         return { error: { code: 'bad_request', message: 'that is not a folder this app offered' } }
+      }
+    }
+    // A bot's home is made when a conversation is started or reopened in it, not when the bots are listed.
+    if (method === 'session.new' || method === 'session.open') {
+      const directory = (params as { directory?: unknown } | null)?.directory
+      const owner = bots().find((each) => each.home === directory)
+      if (owner && !ensureHome(owner)) {
+        return { error: { code: 'bad_request', message: `could not make the folder for ${owner.name}` } }
       }
     }
     try {
@@ -559,9 +582,10 @@ app.whenReady().then(() => {
       // Opening a session is the other way a project becomes recent, and this handler is
       // already the choke point that sees it. Reading one field it is forwarding anyway is
       // a smaller thing than a channel that would let the renderer write the list itself.
+      // A bot's home folder is not a project, so it is kept off the list.
       if (method === 'session.open' || method === 'session.new') {
         const directory = (params as { directory?: unknown } | null)?.directory
-        if (isProjectPath(directory) && noteProject(directory)) rebuildMenu()
+        if (isProjectPath(directory) && !bots().some((each) => each.home === directory) && noteProject(directory)) rebuildMenu()
       }
       // A fork is the one call whose *answer* is worth writing down: which session it made and
       // which one it came out of. Read off the agent's reply and never off `params`, so the
@@ -580,6 +604,16 @@ app.whenReady().then(() => {
       // always, the directory for an opened or forked session — so a root the tree can browse is
       // one the agent confirmed rather than one the renderer asserted. See `files.ts`.
       noteOpenedRoot(method, params, ok)
+      // The agent has removed the record, so what this app kept about it goes too. The coordinate
+      // is the one the agent confirmed deleting, which is the one the window named.
+      if (method === 'session.delete' && (ok as { deleted?: unknown } | null)?.deleted === true) {
+        const { directory, id } = (params ?? {}) as { directory?: unknown; id?: unknown }
+        if (typeof directory === 'string' && isSessionId(id)) {
+          removeConversation(conversationKey(directory, id))
+          forgetFork({ directory, id })
+          forgetBotConversation(directory, id)
+        }
+      }
       if (method === 'session.close') {
         const closing = (params as { session?: unknown } | null)?.session
         if (isSessionId(closing)) {
@@ -693,7 +727,14 @@ app.whenReady().then(() => {
   // two figures that decide when a bot is reminded to write are reports of what the agent did, are
   // taken off its answers and off the filesystem below, and have no way in from here.
 
-  ipcMain.handle('bravebot:bots:read', () => bots())
+  // A bot's home and the folders it has worked in are offered as the recents are: this process
+  // composed them, so a window may open a session there. Whether a bot's turn may run there is
+  // still `worksIn`'s, in `sendBotTurn`.
+  ipcMain.handle('bravebot:bots:read', () => {
+    const all = bots()
+    for (const each of all) offerDirectories(botFolders(each))
+    return all
+  })
 
   ipcMain.handle('bravebot:bots:model', async (_event, slug: unknown, model: unknown) => {
     const held = bot(slug)
@@ -705,13 +746,13 @@ app.whenReady().then(() => {
     // Composed in `bots.ts` and not here, because the folder a new bot is pinned to is the one
     // field on this channel that decides where files land, and the check that it is a folder
     // somebody opened belongs beside the code that writes there.
-    const form = botFromForm(value)
-    if (!form) return null
     // Making a bot writes its definition to `~/.bravebot/agents` (MEMORY-8), and editing one
     // rewrites the fields the form shows (MEMORY-9). This process writes nothing there itself; the
-    // agent does, and `saveFormBot` keeps the name it answers with.
-    const next = await saveFormBot(form, bridge ? (method, params) => bridge!.request(method, params) : null)
-    if (noteProject(next.directory)) rebuildMenu()
+    // agent does, and `saveFormBot` keeps the name it answers with. Saves run one at a time.
+    const next = await saveForm(value, bridge ? (method, params) => bridge!.request(method, params) : null)
+    if (!next) return null
+    ensureHome(next)
+    offerDirectories(botFolders(next))
     return next
   })
 
@@ -743,11 +784,16 @@ app.whenReady().then(() => {
     return held.slug
   })
 
-  ipcMain.handle('bravebot:bots:memory', (_event, slug: unknown) => memory(slug))
-  ipcMain.handle('bravebot:bots:memory-history', (_event, slug: unknown) => memoryHistory(slug))
-  ipcMain.handle('bravebot:bots:edit-memory', (_event, slug: unknown, text: unknown, expected: unknown) => {
-    if ([...botHandles].some(([handle, owner]) => owner === slug && runningHandles.has(handle))) throw new Error('Stop this bot’s running conversations before editing its memory.')
-    return editMemory(slug, text, expected)
+  // Each names a folder, which is checked against the folders this process recorded for the bot.
+  const botRunning = (slug: unknown) => [...botHandles].some(([handle, owner]) => owner === slug && runningHandles.has(handle))
+  ipcMain.handle('bravebot:bots:memory', (_event, slug: unknown, directory: unknown) => {
+    if (!botRunning(slug)) tidyMemory(slug, directory)
+    return memory(slug, directory)
+  })
+  ipcMain.handle('bravebot:bots:memory-history', (_event, slug: unknown, directory: unknown) => memoryHistory(slug, directory))
+  ipcMain.handle('bravebot:bots:edit-memory', (_event, slug: unknown, directory: unknown, text: unknown, expected: unknown) => {
+    if (botRunning(slug)) throw new Error('Stop this bot’s running conversations before editing its memory.')
+    return editMemory(slug, directory, text, expected)
   })
 
   // Asked for when the window finds a bot pointing at a session the agent no longer lists. What it

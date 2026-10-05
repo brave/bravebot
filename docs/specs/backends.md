@@ -255,6 +255,8 @@ rather than a way to get stuck.
 `verified-by: bravebot_bedrock::credentials::an_expiry_that_is_not_the_expected_shape_is_not_guessed_at`
 `verified-by: bravebot_bedrock::credentials::a_session_shown_to_be_bad_is_no_longer_remembered_as_good`
 `verified-by: bravebot_bedrock::credentials::forgetting_one_profile_leaves_the_others_alone`
+`verified-by: bravebot_bedrock::credentials::a_refused_export_drops_the_kept_answer_before_the_sign_in`
+`verified-by: bravebot_bedrock::credentials::a_good_export_and_another_profiles_refusal_leave_a_kept_answer_alone`
 
 <a id="BACKEND-11"></a>
 ### BACKEND-11: a settings file names the model above the build, and a pick above a checkout's
@@ -2133,6 +2135,8 @@ exactly what is offered, as for any other gateway.
 `verified-by: bravebot_config::provider::a_google_vertex_entry_in_a_region_is_reached_at_that_regions_host`
 `verified-by: bravebot_config::provider::a_google_vertex_entry_without_a_project_configures_nothing`
 `verified-by: bravebot_config::provider::a_project_or_location_that_would_move_the_request_configures_nothing`
+`verified-by: bravebot_config::provider::the_compiled_vertex_list_is_the_four_answered_ids_and_no_preview`
+`verified-by: bravebot_config::provider::a_project_and_location_holding_only_allowed_characters_are_accepted`
 `verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_google_vertex_host`
 `verified-by: bravebot_aichat::client::a_google_vertex_entry_offers_the_compiled_models_without_asking`
 `verified-by: bravebot_tui::app::the_picker_offers_the_compiled_models_for_a_google_vertex_service_naming_none`

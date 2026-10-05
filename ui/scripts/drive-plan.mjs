@@ -79,21 +79,30 @@ try {
   await trust.waitFor({ state: 'hidden' })
 
   const composer = page.locator('.composer textarea')
-  const planFirst = page.locator('.composer .plan-first button')
+  const mode = page.locator('[data-test="composer-mode"]')
+  const send = page.locator('[data-test="send-message"]')
+  // Plan is chosen for the next message from the mode menu, and Send starts the run.
+  const plan = async () => {
+    await mode.click()
+    await page.locator('[data-test="mode-plan"]').click()
+    assert.match(await mode.innerText(), /Plan/)
+    await send.click()
+  }
   const stop = page.locator('.composer .stop')
   const cards = page.locator('.confirm.manifest')
   const ended = () => stop.waitFor({ state: 'hidden' })
 
   // ---- the button ----------------------------------------------------------------------------
-  assert.ok(await planFirst.isDisabled(), 'there is nothing to plan until a task is typed')
+  assert.match(await mode.innerText(), /Agent/, 'Agent is the default')
+  assert.ok(await send.isDisabled(), 'there is nothing to plan until a task is typed')
   await composer.fill(TASK)
-  assert.ok(await planFirst.isEnabled())
+  assert.ok(await send.isEnabled())
 
   // ---- a plan that is approved ---------------------------------------------------------------
-  await planFirst.click()
+  await plan()
   const card = cards.first()
   await card.waitFor()
-  assert.match(await page.locator('.plan-task').innerText(), /Plan first/i)
+  assert.match(await page.locator('.plan-task').innerText(), /Plan/)
   assert.ok((await page.locator('.plan-task').innerText()).includes(TASK), 'the task is drawn as a run’s task')
   assert.equal(await page.locator('.bubble.user:not(.plan-task)').count(), 0, 'and not as a prompt')
   assert.ok((await card.innerText()).includes(TASK), 'the card says what was asked')
@@ -106,7 +115,7 @@ try {
   assert.deepEqual(await card.locator('.confirm-actions button').allInnerTexts(), ['Don’t run', 'Run this plan'])
   assert.match(await page.locator('.pending-jump').innerText(), /Approval needed/)
   assert.equal(await page.locator('.pending-jump').getAttribute('data-tooltip'), 'Answer the plan')
-  assert.equal(await planFirst.count(), 0, 'a second run cannot be started while one is waiting')
+  assert.ok(await mode.locator('button').isDisabled(), 'a second run cannot be started while one is waiting')
   assert.ok(!existsSync(notes), 'nothing was written before the plan was answered')
   await page.screenshot({ path: join(output, 'plan-asked.png') })
 
@@ -129,7 +138,7 @@ try {
   await page.screenshot({ path: join(output, 'plan-ran.png') })
 
   // ---- an ordinary message afterwards, which is a turn and knows nothing of the run ------------
-  assert.ok(await planFirst.isDisabled(), 'the button goes back to waiting for a task: no mode is held')
+  assert.match(await mode.innerText(), /Agent/, 'the menu is back on Agent: no mode is held')
   await composer.fill('Say done.')
   await page.locator('.composer .send button').click()
   await page.locator('.bubble.assistant').first().waitFor()
@@ -142,7 +151,7 @@ try {
   // ---- a plan that is declined ------------------------------------------------------------------
   rmSync(notes)
   await composer.fill(TASK)
-  await planFirst.click()
+  await plan()
   const second = cards.nth(1)
   await second.waitFor()
   await second.getByRole('button', { name: 'Don’t run', exact: true }).click()
@@ -198,9 +207,9 @@ try {
   assert.equal(await page.locator('.bubble.assistant').count(), 1)
   assert.equal(await cards.count(), 2, 'with both plans it was asked about')
 
-  // Starting again from a record makes a session in the record's project.
+  // Starting again from a record makes a chat in the record's project.
   await runs.first().locator('.session').click()
-  await record.getByRole('button', { name: 'New session here', exact: true }).click()
+  await record.getByRole('button', { name: 'New chat here', exact: true }).click()
   await composer.waitFor()
   if (await trust.isVisible().catch(() => false)) {
     await trust.getByRole('button', { name: 'Trust this directory' }).click()

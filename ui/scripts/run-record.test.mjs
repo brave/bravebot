@@ -60,7 +60,7 @@ test('a saved run says it is read only and offers nothing to type into', () => {
   for (const control of ['<textarea', '<input', 'contenteditable']) {
     assert.ok(!markup.includes(control), `drew ${control}: ${markup}`)
   }
-  assert.deepEqual(buttons(markup), ['New session here'])
+  assert.deepEqual(buttons(markup), ['New chat here'])
 })
 
 test('a saved run shows the task, the goal, the plan and the steps that ran', () => {

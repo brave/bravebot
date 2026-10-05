@@ -135,6 +135,16 @@ pub const SCRUBBED: [&str; 2] = [SIGNING_KEY, KEY_ID];
 /// Absent from ALL: it describes one installation rather than the build.
 pub const INSTALLED_VIA: &str = "BRAVEBOT_INSTALLED_VIA";
 
+/// Set to `0` to stop the startup screen checking for a newer release.
+///
+/// With it set, no record is read, no request is made, no record is written and no line is said. The
+/// `updateCheck` settings key turns the same check off, and either one does: this exists for a
+/// machine where updates are managed from outside, and one that wants the check on has nothing to
+/// set. Any value other than `0`, or none, leaves the check as the settings say.
+///
+/// Absent from ALL: it describes one person's machine rather than the build.
+pub const UPDATE_CHECK: &str = "BRAVEBOT_UPDATE_CHECK";
+
 /// Where the directory this session has to itself is, set on every program the agent runs.
 ///
 /// Written by this process rather than read by it: a line that wants somewhere to put an

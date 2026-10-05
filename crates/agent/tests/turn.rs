@@ -26519,14 +26519,25 @@ fn a_spawn_asking_for_a_checkout_it_may_not_have_starts_nothing() {
             "other",
             r#"{"kind":"worker","task":"NEVER-RUNS","isolation":"copy"}"#,
             "works in your working directory, unless its definition asks for one",
+            "unknown-isolation",
+            1,
         ),
         (
             "reader",
             r#"{"kind":"reader","task":"NEVER-RUNS","isolation":"checkout"}"#,
             "a reader writes nothing",
+            "reader-has-no-checkout",
+            1,
+        ),
+        (
+            "fan-out",
+            r#"{"kind":"reader","task":"NEVER-RUNS","each":["ONE","TWO","THREE"],"isolation":"checkout"}"#,
+            "a reader writes nothing",
+            "reader-has-no-checkout",
+            3,
         ),
     ];
-    for (name, arguments, said) in cases {
+    for (name, arguments, said, cause, unstarted) in cases {
         let scratch = Scratch::new(&format!("checkout-refused-{name}"));
         let home = Scratch::new(&format!("checkout-refused-{name}-home"));
         repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
@@ -26543,7 +26554,7 @@ fn a_spawn_asking_for_a_checkout_it_may_not_have_starts_nothing() {
             ),
             ("NEVER-RUNS", vec![reply_with("ran")]),
         ]);
-        let (asked, _) = run_in_a_repository(
+        let (asked, _, trail) = run_in_a_repository_recording(
             &workspace,
             &home.path,
             &endpoint,
@@ -26564,6 +26575,34 @@ fn a_spawn_asking_for_a_checkout_it_may_not_have_starts_nothing() {
         assert!(
             checkouts_under(&home.path).is_empty(),
             "{name}: a checkout was made"
+        );
+
+        // TRACE-1: the refusal is in the trail as one, with its cause and how many of the call's
+        // delegates it left unstarted, where it was a permission with neither.
+        let withdrawn: Vec<_> = trail
+            .recorded()
+            .filter_map(|(_, event)| match event {
+                Event::GateBlocked {
+                    gate: "delegate",
+                    reason,
+                    ..
+                } if reason.contains("withdrawn before it started") => Some(reason.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(withdrawn.len(), 1, "{name}: {withdrawn:?}");
+        assert!(
+            withdrawn[0].contains(&format!("refused for its checkout: {cause};"))
+                && withdrawn[0].contains(&format!("{unstarted} of this call's delegates")),
+            "{name}: {}",
+            withdrawn[0]
+        );
+        assert!(
+            !trail.recorded().any(|(_, event)| matches!(
+                event,
+                Event::GatePassed { detail, .. } if detail.contains("withdrawn before it started")
+            )),
+            "{name}: the withdrawal was also recorded as a permission"
         );
     }
 }

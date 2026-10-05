@@ -283,8 +283,10 @@ The file a name lands on is judged as well as the name. A call is checked agains
 the name it gave and again under the name it reaches once every symbolic link on the way is followed
 and the volume has given the stored spelling, so a link to a denied file is refused, a case variant
 of a denied directory is refused whether or not the volume's case handling could be probed, and an
-`ask` rule still asks for a write that comes through a link. The second name can add a refusal or a
-question and never removes one. On Windows a name that reads as something other than the file it
+`ask` rule still asks for a write that comes through a link. A file tool's path that starts with `~`
+is also judged under the absolute path it stands for ([READ-4](tools/read-file.md#READ-4)), since a
+rule anchored at the home directory never matches the spelling `~/x`, and that name is reachable only
+once the home is opened. The second name can add a refusal or a question and never removes one. On Windows a name that reads as something other than the file it
 spells (a stream, a device, a trailing dot or space, an 8.3 short name) is refused outright, since
 the rules cannot be matched against a spelling that is not the file's.
 
@@ -335,6 +337,7 @@ writing: saying yes at startup trusts the whole tree, and a rule is how one file
 answer without declining the rest of it. It holds against a mode that answers every prompt for the
 same reason: the refusal comes before there is a prompt, so there is nothing for a mode to answer.
 
+`verified-by: bravebot_agent::tools::a_rule_over_a_home_file_refuses_a_path_spelled_from_the_home_directory`
 `verified-by: bravebot_core::policy::a_denied_step_refuses_the_whole_line`
 `verified-by: bravebot_agent::cmdline::a_rule_refuses_a_line_before_its_program_is_looked_for`
 `verified-by: bravebot_agent::turn::a_denied_program_is_refused_by_the_rule_and_not_for_being_absent`

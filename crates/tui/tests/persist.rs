@@ -639,3 +639,35 @@ fn a_recorded_answer_about_vetting_outlives_the_session_that_gave_it() {
         );
     });
 }
+
+/// UPDATE-11: with the check off, an ordinary session neither asks nor writes the record.
+///
+/// The seeded stamp is old enough that a session with the check on would stamp it again before
+/// asking, so an untouched file is what the setting did and not what the clock allowed. Incognito
+/// never writes it either way, which is why this is not in `incognito.rs`.
+#[test]
+fn a_check_turned_off_leaves_the_record_as_it_was() {
+    with_temp_home("update-off", || {
+        let directory = store::directory().expect("a home");
+        std::fs::create_dir_all(&directory).expect("the directory");
+        let running = std::env::current_exe().expect("the test binary");
+        let record = directory.join("update-check");
+        let seeded = "1700000000\treleases\t99.0.0\n";
+        std::fs::write(
+            directory.join("installed-by"),
+            format!("{}\n", running.display()),
+        )
+        .expect("seed the installation");
+        std::fs::write(&record, seeded).expect("seed the record");
+
+        assert!(bravebot_tui::update::at_startup(Some(false)).is_none());
+
+        // The stamp is written by a spawned thread, so give one that was wrongly started time to land.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        assert_eq!(
+            std::fs::read_to_string(&record).expect("the record"),
+            seeded,
+            "a session with the check off rewrote the record"
+        );
+    });
+}

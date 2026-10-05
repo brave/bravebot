@@ -181,7 +181,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
       }}
     >
       <Button ref={trigger} slot="anchor-content" kind={scope === 'bot' ? 'plain' : 'plain-faint'} size={compact ? 'tiny' : 'medium'} className="model-trigger" isDisabled={disabled}
-        title={`Choose model · ${model ?? label}`} aria-label={`Choose model: ${label}`}
+        data-tooltip={`Choose model · ${model ?? label}`} aria-label={`Choose model: ${label}`}
         aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined}
         data-test="model-trigger">
         {compact ? null : <Icon name="layers" slot="icon-before" />}
@@ -228,7 +228,6 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
           onMouseDown={(event) => event.preventDefault()}
           onMouseEnter={() => setActive(index)}
           onClick={() => choose(row)}>
-          <span className="model-check" aria-hidden="true">{row.id === model ? <Icon name="check-normal" /> : null}</span>
           <span className="model-description">
             <span className="model-name">{row.name}</span>
             <span className="model-detail">{[row.premium ? 'Premium' : null, row.contextWindow ? `${row.contextWindow.toLocaleString()} context tokens` : null, preferences.recentModels.includes(row.id) ? 'Recent' : null].filter(Boolean).join(' · ')}</span>
@@ -244,6 +243,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
             })}
           </span>}
           {row.id === catalogue?.defaultModel && <Label className="model-default" mode="outline" color="neutral">Default</Label>}
+          <span className="model-check" aria-hidden="true">{row.id === model ? <Icon name="check-normal" /> : null}</span>
         </leo-option></Fragment>)}
       </leo-menu-section>
       <Hr />

@@ -124,3 +124,8 @@ pub fn list_project(project: &Path) -> Vec<Listed> {
 pub fn load(project: &Path, id: &str) -> Option<Record> {
     sessions::load(project, id)
 }
+
+/// Remove one session, its record and its trail.
+pub fn delete(project: &Path, id: &str) -> Result<(), sessions::Deletion> {
+    sessions::delete(project, id)
+}

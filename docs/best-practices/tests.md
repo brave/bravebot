@@ -46,3 +46,18 @@ or a reviewer's agreement do not remove that limit.
 In the pull request, name the test, the fault it rejects, and whether failure was demonstrated.
 The [testing-preflight skill](../../agents/skills/testing-preflight/SKILL.md) describes how to
 run and report the experiment without discarding unrelated work.
+
+---
+
+<a id="TS-004"></a>
+
+## Changed shared behavior has evidence through its affected callers
+
+**A change to shared behavior identifies affected callers and supplies integration evidence for
+each materially different changed path.** Tests of the shared implementation alone do not show
+that a caller handles its results, errors, cancellation, or saved state correctly. Include rendering
+and interaction evidence when they form part of the requirement.
+
+Reuse existing tests where they cover the changed behavior. In the pull request, name any affected
+path without coverage and explain the gap. Use [testing-preflight](../../agents/skills/testing-preflight/SKILL.md)
+to choose the checks and distinguish demonstrated failures from reasoned coverage or checks not run.

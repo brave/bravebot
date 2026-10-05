@@ -1,5 +1,5 @@
-// The left column: everything under `~/.bravebot/sessions`, and the three things you can do
-// to that list — search it, group it by checkout, and start a session from a heading.
+// The left column: every chat under `~/.bravebot/sessions`, and the three things you can do
+// to that list, search it, group it by checkout, and start a chat from a heading.
 //
 // The `+` on a heading is pressed and then *declined* at the trust prompt, as `drive.mjs`
 // does. The point of the shot is the question, not the answer: saying yes on camera would be
@@ -9,29 +9,28 @@ import { existsSync } from 'node:fs'
 
 export default {
   id: '01-sessions',
-  title: 'Sessions',
+  title: 'Chats',
 
   async run(s) {
     const { page } = s
     const rows = page.locator('.session')
     const total = await rows.count()
-    if (total === 0) s.skip('no sessions are stored — nothing to list')
+    if (total === 0) s.skip('no chats are stored, nothing to list')
 
-    await s.say('Sessions', `Every session under ~/.bravebot, newest first — ${total} here.`, 1.6)
+    await s.say('Chats', `Every chat under ~/.bravebot, newest first, ${total} here.`, 1.6)
     await s.spotlight('.session-list', 1.4)
     await s.unspot()
 
     // A word out of the newest session's own title, so the filter visibly narrows to it.
     const first = (await page.locator('.session-title').first().textContent()) ?? ''
-    const where = (await page.locator('.session-where').first().textContent()) ?? ''
+    const project = (await page.locator('.session-project').first().textContent())?.trim() ?? ''
     const word = first.split(/\s+/).find((w) => w.length > 4) ?? first.slice(0, 6)
-    const project = where.split(' · ')[0] ?? ''
 
     await s.say('Find one', 'The box above the list filters as you type.')
     await s.slowType('.sidebar-search input', word)
     await s.say('Find one', `"${word}" — ${await rows.count()} of ${total} left.`, 1.6)
 
-    // The same box against the second line: a session you remember by *where* it was, not by
+    // The same box against the project line: a chat you remember by *where* it was, not by
     // what it was called, still has to be findable.
     if (project) {
       await page.locator('.sidebar-search input').fill('')
@@ -49,7 +48,7 @@ export default {
       await s.click('[data-test="view-options"]')
       await s.click(page.getByRole('menuitemcheckbox', { name: 'Group by project' }))
     }
-    await s.say('Group by checkout', 'View options beside the box can gather sessions by project.')
+    await s.say('Group by checkout', 'View options beside the box can gather chats by project.')
     await groupByProject()
     await s.beat(0.8)
     const heads = page.locator('.session-group-head')
@@ -63,7 +62,7 @@ export default {
     const biggest = tallies.reduce((best, n, i) => (n > (tallies[best] ?? 0) ? i : best), 0)
     const head = heads.nth(biggest)
 
-    await s.say('Fold a group', 'Click a heading and its sessions fold away.')
+    await s.say('Fold a group', 'Click a heading and its chats fold away.')
     await s.click(head)
     await s.beat(1)
     await s.say('Fold a group', 'Click it again and they come back.')
@@ -80,7 +79,7 @@ export default {
       const owner = page
         .locator('.session-group-head')
         .filter({ has: page.locator(`.session-group-fold[data-tooltip="${live}"]`) })
-      await s.say('Start one here', 'The + beside a heading opens a session in that checkout.')
+      await s.say('Start one here', 'The + beside a heading opens a chat in that checkout.')
       await s.click(owner.locator('.session-group-new'))
       await s.beat(1.2)
       if (await page.locator('.trust').isVisible().catch(() => false)) {

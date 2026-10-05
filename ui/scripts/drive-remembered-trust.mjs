@@ -56,7 +56,7 @@ try {
     await openProject(page)
     const shown = banner(page)
     await shown.waitFor()
-    assert.match(await shown.innerText(), /sessions started here are not asked/)
+    assert.match(await shown.innerText(), /chats started here are not asked/)
     assert.equal(await trust(page).count(), 0, 'a remembered yes asks nothing')
     await page.screenshot({ path: `${shots}/remembered-3-not-asked.png` })
 
@@ -70,7 +70,7 @@ try {
     assert.equal(await shown.count(), 0, 'the banner went with the answer')
     await page.getByRole('button', { name: 'Done', exact: true }).click()
 
-    await page.getByRole('button', { name: 'New session', exact: true }).click()
+    await page.getByRole('button', { name: 'New chat', exact: true }).click()
     await trust(page).waitFor()
     await page.screenshot({ path: `${shots}/remembered-5-asked-again.png` })
   })
