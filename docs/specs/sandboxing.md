@@ -625,6 +625,9 @@ stage's behalf. A `cat ~/notes.txt` that worked before fails, and a person adds 
 `verified-by: bravebot_agent::confine::a_confined_program_reads_and_writes_inside_the_session`
 `verified-by: bravebot_agent::confine::a_confined_program_cannot_write_outside_the_session`
 `verified-by: bravebot_agent::confine::a_program_left_running_is_confined_as_well`
+`verified-by: bravebot_agent::confine::a_stage_that_cannot_be_confined_is_refused_with_no_stage_left_running`
+`verified-by: bravebot_agent::confine::a_job_with_a_stage_that_cannot_be_confined_is_refused_with_no_stage_left_running`
+`verified-by: bravebot_agent::turn::a_delegate_of_a_confining_turn_cannot_write_outside_the_session`
 `verified-by: bravebot_agent::tools::a_turn_that_confines_runs_is_confined_to_its_workspace_and_a_turn_that_does_not_is_not`
 `verified-by: bravebot_sandbox::linux::a_command_handed_back_is_confined_when_the_caller_spawns_it`
 `verified-by: bravebot_sandbox::macos::a_command_handed_back_is_confined_when_the_caller_spawns_it`
