@@ -4393,6 +4393,26 @@ mod tests {
         assert_eq!(settings.search().time, Some(Duration::from_secs(60)));
     }
 
+    /// A nearer layer that writes zero or a value that is no whole count has still spoken, and what
+    /// it said is absence. The built-in cap stands, not the number a weaker layer named.
+    #[test]
+    fn a_layer_naming_no_usable_cap_leaves_the_built_in_one_over_a_weaker_layers_number() {
+        for (name, project) in [
+            ("zero", r#"{"search": {"maxFiles": 0, "maxSeconds": 0}}"#),
+            (
+                "not-a-count",
+                r#"{"search": {"maxFiles": "many", "maxSeconds": 1.5}}"#,
+            ),
+        ] {
+            let settings = Layers::new(&format!("search-unusable-{name}"))
+                .global(r#"{"search": {"maxFiles": 500000, "maxSeconds": 60}}"#)
+                .project(project)
+                .read();
+            assert_eq!(settings.search().files, None, "{name}: files");
+            assert_eq!(settings.search().time, None, "{name}: time");
+        }
+    }
+
     /// A model is a backend pick, so a checkout cannot name one: the file that arrives with a
     /// clone is a weaker claim than a home directory, and the person's own choice stands.
     #[test]
