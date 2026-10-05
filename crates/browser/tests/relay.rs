@@ -194,15 +194,25 @@ fn idle(directory: &Path) -> UnixStream {
 /// signals around the fork, which queues the exit's SIGCHLD, and the thread it then wakes is the
 /// one reading here. The read is repeated for the time that is left.
 fn closed_within(stream: &mut UnixStream, within: Duration) -> bool {
+    closed_by(within, |left| {
+        stream.set_read_timeout(Some(left)).unwrap();
+        stream.read(&mut [0u8; 1])
+    })
+}
+
+/// Whether `read` reports a close within `within`, given how much of that time is left to wait.
+///
+/// Linux can interrupt a read that has a receive timeout without any signal of ours, so an
+/// interrupted read is retried against the same deadline rather than taken for a connection the
+/// host kept open.
+fn closed_by(within: Duration, mut read: impl FnMut(Duration) -> std::io::Result<usize>) -> bool {
     let deadline = Instant::now() + within;
-    let mut byte = [0u8; 1];
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
             return false;
         }
-        stream.set_read_timeout(Some(left)).unwrap();
-        match stream.read(&mut byte) {
+        match read(left) {
             Ok(0) => return true,
             Ok(_) => panic!("the host wrote to a connection that sent nothing"),
             Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => return true,
@@ -210,6 +220,38 @@ fn closed_within(stream: &mut UnixStream, within: Duration) -> bool {
             Err(_) => return false,
         }
     }
+}
+
+/// A read the kernel interrupted says nothing about the connection, so a close that arrives after
+/// it still counts, and the wait is not restarted by it.
+#[test]
+fn an_interrupted_read_does_not_hide_a_close_that_follows_it() {
+    let mut reads = 0;
+    let closed = closed_by(WAIT, |_| {
+        reads += 1;
+        match reads {
+            1 | 2 => Err(std::io::ErrorKind::Interrupted.into()),
+            _ => Ok(0),
+        }
+    });
+    assert!(closed, "a close after interrupted reads was not seen");
+    assert_eq!(reads, 3);
+}
+
+/// Reads that keep being interrupted end at the deadline, so a connection that stays open fails
+/// the test it is in rather than hanging it.
+#[test]
+fn reads_that_keep_being_interrupted_stop_at_the_deadline() {
+    let started = Instant::now();
+    let mut reads = 0;
+    let closed = closed_by(Duration::from_millis(100), |_| {
+        reads += 1;
+        assert!(reads < 1000, "the wait went on past its deadline");
+        std::thread::sleep(Duration::from_millis(5));
+        Err(std::io::ErrorKind::Interrupted.into())
+    });
+    assert!(!closed);
+    assert!(started.elapsed() >= Duration::from_millis(100));
 }
 
 /// The MCP server as BraveBot starts it, in `directory`, answering each line of `requests`.
