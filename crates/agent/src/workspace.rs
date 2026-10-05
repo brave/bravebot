@@ -16,6 +16,7 @@ use crate::rewind::CoverageTracker;
 pub use crate::rewind::{CoverageGap, RewindCoverage};
 use base64::Engine;
 use bravebot_core::capability::Capability;
+use bravebot_core::delegate::CheckoutRefusal;
 use bravebot_core::event::{Role, Sink};
 use bravebot_core::label::Label;
 use bravebot_core::policy::{Denial, Policy};
@@ -923,6 +924,18 @@ enum CheckoutOverlap<'a> {
 }
 
 impl CheckoutOverlap<'_> {
+    fn cause(&self) -> CheckoutRefusal {
+        match self {
+            Self::InsideWorkingDirectory => CheckoutRefusal::InsideWorkingDirectory,
+            Self::AddedHoldsWorkingDirectory(dir) => {
+                CheckoutRefusal::OpenedHoldsWorkingDirectory(dir.display().to_string())
+            }
+            Self::AddedHoldsCheckouts(dir) => {
+                CheckoutRefusal::OpenedHoldsCheckouts(dir.display().to_string())
+            }
+        }
+    }
+
     fn describe(&self) -> String {
         let way_out = |dir: &Path| {
             format!(
@@ -3874,29 +3887,51 @@ impl Workspace {
         state: &Path,
         made_for: bravebot_core::delegate::DelegateId,
     ) -> Result<Workspace, String> {
-        let refused = |why: &str| format!("No checkout was made: {why}");
+        self.checkout_for_cause(policy, state, made_for)
+            .map_err(|(_, sentence)| sentence)
+    }
+
+    /// [`Workspace::checkout_for`], with the fixed category of a refusal beside its sentence, so
+    /// the caller can record which refusal it was (TRACE-1).
+    pub fn checkout_for_cause<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        state: &Path,
+        made_for: bravebot_core::delegate::DelegateId,
+    ) -> Result<Workspace, (CheckoutRefusal, String)> {
+        let refused =
+            |cause: CheckoutRefusal, why: &str| (cause, format!("No checkout was made: {why}"));
         if self.checkout.is_some() {
             return Err(refused(
+                CheckoutRefusal::AlreadyInCheckout,
                 "this delegate already works in a checkout, which the delegates it starts share",
             ));
         }
-        let unmade = || refused("the directory for checkouts could not be made");
+        let unmade = || {
+            refused(
+                CheckoutRefusal::DirectoryUnusable,
+                "the directory for checkouts could not be made",
+            )
+        };
         let directory = state
             .canonicalize()
             .map_err(|_| unmade())?
             .join("checkouts")
             .join(crate::home::key_for(&self.root));
         if let Some(overlap) = self.checkout_overlap(&directory) {
-            return Err(refused(&overlap.describe()));
+            return Err(refused(overlap.cause(), &overlap.describe()));
         }
         let made_directory = crate::home::create_directory(&directory)
             .and_then(|()| directory.canonicalize())
             .map_err(|_| unmade())?;
         if let Some(overlap) = self.checkout_overlap(&made_directory) {
-            return Err(refused(&overlap.describe()));
+            return Err(refused(overlap.cause(), &overlap.describe()));
         }
         if refuse_unkeyable(&made_directory, "checkouts", BACKSLASH_SEPARATES).is_err() {
-            return Err(refused("no trust rule can be keyed under its directory"));
+            return Err(refused(
+                CheckoutRefusal::DirectoryUnusable,
+                "no trust rule can be keyed under its directory",
+            ));
         }
         let mut tries = 0;
         let (id, target, made) = loop {
@@ -3910,14 +3945,23 @@ impl Workspace {
                     ..
                 }) if tries < 16 => tries += 1,
                 Err(WorkspaceError::Checkout { refused: why, .. }) => {
-                    return Err(why.describe("the working directory"));
+                    return Err((
+                        CheckoutRefusal::RepositoryRefused,
+                        why.describe("the working directory"),
+                    ));
                 }
                 Err(WorkspaceError::Denied(_)) => {
                     return Err(refused(
+                        CheckoutRefusal::RepositoryRefused,
                         "the policy did not allow the repository to be read",
                     ));
                 }
-                Err(_) => return Err(refused("the repository could not be read")),
+                Err(_) => {
+                    return Err(refused(
+                        CheckoutRefusal::RepositoryRefused,
+                        "the repository could not be read",
+                    ));
+                }
             }
         };
 

@@ -30,6 +30,7 @@ use crate::report::{Activity, Reporter};
 use bravebot_aichat::protocol::{Tool, ToolCall, Usage};
 use bravebot_core::ask::{self, Choice, Question, Series};
 use bravebot_core::credentials::Scanned;
+use bravebot_core::delegate::CheckoutRefusal;
 use bravebot_core::event::Sink;
 use bravebot_core::label::Label;
 use bravebot_core::policy::{Destination, Policy};
@@ -7810,8 +7811,8 @@ fn spawn_agent<S: Sink, R: Reporter>(
             Ok(state) => state,
             // Approved by the gate and refused here, so it starts nothing and takes no place
             // under the turn's ceiling (DELEGATE-7).
-            Err(refusal) => {
-                policy.withdraw_delegate(spec);
+            Err((cause, refusal)) => {
+                policy.withdraw_delegate(spec, &cause, tasks.len() - started.len());
                 if started.is_empty() {
                     return Produced::problem(refusal);
                 }
@@ -7821,7 +7822,7 @@ fn spawn_agent<S: Sink, R: Reporter>(
         };
         let made = match state {
             None => None,
-            Some(state) => match tools.workspace.checkout_for(policy, state, id) {
+            Some(state) => match tools.workspace.checkout_for_cause(policy, state, id) {
                 Ok(made) => {
                     if let Some(checkout) = made.checkout() {
                         crate::workspace::record_checkout(
@@ -7832,7 +7833,7 @@ fn spawn_agent<S: Sink, R: Reporter>(
                     }
                     Some(made)
                 }
-                Err(refusal) => {
+                Err((cause, refusal)) => {
                     // Said as the definition's, since the call that met the refusal may not have
                     // asked.
                     let refusal = match spec.asks_for_checkout() {
@@ -7842,7 +7843,7 @@ fn spawn_agent<S: Sink, R: Reporter>(
                         ),
                         false => refusal,
                     };
-                    policy.withdraw_delegate(spec);
+                    policy.withdraw_delegate(spec, &cause, tasks.len() - started.len());
                     if started.is_empty() {
                         return Produced::problem(refusal);
                     }
@@ -7954,27 +7955,29 @@ fn wants_checkout<'a>(
     arguments: &Value,
     spec: &bravebot_core::delegate::DelegateSpec,
     tools: &Tools<'a>,
-) -> Result<Option<&'a std::path::Path>, String> {
+) -> Result<Option<&'a std::path::Path>, (CheckoutRefusal, String)> {
     let called = match arguments.get("isolation") {
         None | Some(Value::Null) => false,
         Some(Value::String(value)) if value == "checkout" => true,
         Some(_) => {
-            return Err(
+            return Err((
+                CheckoutRefusal::UnknownIsolation,
                 "error: 'isolation' may only be \"checkout\"; leave it out for a delegate that \
                  works in your working directory, unless its definition asks for one"
                     .to_string(),
-            );
+            ));
         }
     };
     if !called && !spec.asks_for_checkout() {
         return Ok(None);
     }
     if spec.kind() == bravebot_core::delegate::Kind::Reader {
-        return Err(
+        return Err((
+            CheckoutRefusal::Reader,
             "refused: a reader writes nothing, so a checkout separates it from nobody and would \
              show it the last commit in place of your working tree"
                 .to_string(),
-        );
+        ));
     }
     // Said as the definition's, since the call that met the refusal may not have asked.
     let whose = match spec.asks_for_checkout() {
@@ -7985,14 +7988,19 @@ fn wants_checkout<'a>(
         false => String::new(),
     };
     if tools.workspace.checkout().is_some() {
-        return Err(format!(
-            "refused: {whose}you already work in a checkout, which the delegates you start share"
+        return Err((
+            CheckoutRefusal::AlreadyInCheckout,
+            format!(
+                "refused: {whose}you already work in a checkout, which the delegates you start \
+                 share"
+            ),
         ));
     }
     match tools.home {
         Some(state) if !bravebot_core::incognito::engaged() => Ok(Some(state)),
-        _ => Err(format!(
-            "refused: {whose}this session keeps no state directory to make a checkout in"
+        _ => Err((
+            CheckoutRefusal::NoStateDirectory,
+            format!("refused: {whose}this session keeps no state directory to make a checkout in"),
         )),
     }
 }
