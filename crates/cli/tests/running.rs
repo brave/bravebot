@@ -5365,3 +5365,94 @@ fn doctor_names_a_refusing_key_that_is_not_a_boolean() {
         "the file holding them was not named: {stdout}"
     );
 }
+
+/// Paid requests remain in failed JSON; an unfinished request adds no guessed cost.
+#[test]
+fn failed_json_retains_planner_and_vetting_usage() {
+    let count = Arc::new(AtomicUsize::new(0));
+    let requests = count.clone();
+    let gateway = a_gateway("[]", move |_| {
+        match requests.fetch_add(1, Ordering::SeqCst) {
+            0 => usage_reply(Some("read_file"), "", 12, 5),
+            1 => usage_reply(None, "{}", 20, 9),
+            _ => http(401, r#"{"error":{"message":"denied"}}"#),
+        }
+    });
+    let scratch = Scratch::new("failed-json-usage")
+        .with_settings(&settings_for(&gateway))
+        .with_file("a.md", "hello")
+        .with_file("b.md", "second");
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--json", "-p", "read a.md"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert!(!output.status.success(), "{stderr}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).expect("one JSON report");
+    assert_eq!(report["tokens"]["total"], 46, "{stderr}");
+    assert_eq!(report["tokens"]["output"], 14);
+    // Vetting costs tokens but does not replace planner occupancy.
+    assert_eq!(report["tokens"]["context"], 12);
+    assert_eq!(count.load(Ordering::SeqCst), 3);
+}
+
+fn usage_reply(tool: Option<&str>, text: &str, prompt: u64, output: u64) -> String {
+    let delta = match tool {
+        Some(name) => serde_json::json!({"role":"assistant", "tool_calls":[{
+            "index":0,"id":format!("call-{prompt}"),"type":"function","function":{
+                "name":name,"arguments":if prompt == 12 {"{\"path\":\"a.md\"}"} else {"{\"path\":\"b.md\"}"}}}]}),
+        None => serde_json::json!({"role":"assistant","content":text}),
+    };
+    let frame = serde_json::json!({"model":"reasons-only","choices":[{
+        "index":0,"delta":delta,"finish_reason":if tool.is_some() {"tool_calls"} else {"stop"}}],
+        "usage":{"prompt_tokens":prompt,"completion_tokens":output}});
+    let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+    format!(
+        "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// Success replaces progress, unusable completed replies still cost tokens, and zero stays zero.
+#[test]
+fn json_usage_controls_do_not_double_charge_or_guess() {
+    for (case, prompt, written, succeeds) in [
+        ("success", 12, 5, true),
+        ("unusable", 12, 5, false),
+        ("zero", 0, 0, false),
+    ] {
+        let count = Arc::new(AtomicUsize::new(0));
+        let requests = count.clone();
+        let gateway = a_gateway("[]", move |_| {
+            let index = requests.fetch_add(1, Ordering::SeqCst);
+            if case == "zero" || index > 0 {
+                http(401, r#"{"error":{"message":"denied"}}"#)
+            } else {
+                usage_reply(None, if succeeds { "done" } else { "" }, prompt, written)
+            }
+        });
+        let scratch =
+            Scratch::new(&format!("json-usage-{case}")).with_settings(&settings_for(&gateway));
+        let output = bravebot_started_in(
+            &scratch.path,
+            &scratch.path,
+            AT_A_GATEWAY,
+            &["--json", "-p", "answer"],
+        );
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.success(), succeeds, "{stderr}");
+        let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(
+            report["tokens"]["total"],
+            prompt + written,
+            "{case}: {stderr}"
+        );
+        assert_eq!(report["tokens"]["output"], written);
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            if case == "unusable" { 2 } else { 1 }
+        );
+    }
+}

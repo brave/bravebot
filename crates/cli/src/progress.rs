@@ -92,6 +92,7 @@ fn marked(margin: &str, line: &str) -> Vec<String> {
 /// Generic over the sink so a test can read back exactly what a run would have printed.
 pub struct Progress<W: Write> {
     out: W,
+    spent: bravebot_agent::Spent,
     /// Every call the run made, in order, for a result object that has to list them.
     ///
     /// Kept here because this is the one thing told about every call, start and finish, and a
@@ -109,9 +110,14 @@ impl<W: Write> Progress<W> {
     pub fn new(out: W) -> Self {
         Self {
             out,
+            spent: Default::default(),
             calls: Vec::new(),
             notices: Vec::new(),
         }
+    }
+
+    pub fn spent(&self) -> bravebot_agent::Spent {
+        self.spent
     }
 
     /// What the run called, in the order it called it.
@@ -142,6 +148,10 @@ impl<W: Write> Progress<W> {
 }
 
 impl<W: Write> Reporter for Progress<W> {
+    fn spent(&mut self, spent: bravebot_agent::Spent) {
+        self.spent = spent;
+    }
+
     /// Left to the per-call lines. A task list redrawn in place is legible; the same list
     /// reprinted in full after every step is a wall of repetition.
     fn todos(&mut self, _rows: Vec<Row>) {}

@@ -23,3 +23,6 @@ bravebot-session = { path = "../session" }
 bravebot-skus = { path = "../skus" }
 bravebot-stamp = { path = "../stamp" }
 bravebot-tui = { path = "../tui" }
+
+[dev-dependencies]
+serde_json.workspace = true
