@@ -284,7 +284,8 @@ A number outside those becomes the nearer bound, and you are told what it became
 believing you are watching something ten times more closely than you are. A turn's number is held far
 more tightly than yours because a turn that wants longer than an hour can say so in its answer, where
 somebody reads it. Where you gave an interval, no turn can change it; a self-paced tick that says
-nothing is woken once more twenty minutes later, and a second silence ends the loop.
+nothing is woken once more twenty minutes later, and a second silence ends the loop. A tick that has
+finished says so with `stop` and is not woken again.
 
 Each tick is announced with its number, and with how many in a row have reported finding nothing.
 That count is the difference between a loop that is working and a loop with nothing to do. Between
@@ -293,13 +294,14 @@ tick scrolls away and a loop spending a turn every five minutes is otherwise inv
 too narrow for everything that row carries, the loop is the last part given up before the permission
 mode. `/loop` and `/status` both answer for it whenever you ask.
 
-Five things end a loop, and each says so:
+Six things end a loop, and each says so:
 
 | What | When |
 |---|---|
 | you ask | `/loop stop`, which ends the loop and leaves the turn in flight running |
 | you interrupt | Ctrl-C, reached after the turn in flight and the half-typed line, and before leaving |
 | a turn is stopped | any turn cancelled while a loop runs, tick or not |
+| the turn says it is finished | a self-paced tick that calls `schedule_next` with `stop`, which ends the loop with no further tick |
 | the session moves on | `/clear`, and leaving |
 | age | seven days after it started |
 

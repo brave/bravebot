@@ -517,6 +517,9 @@ impl Running {
         }
 
         match wakeup {
+            // A turn that said it is finished is a deliberate ending, not a silence, so the
+            // keepalive is not spent on it.
+            Some(wakeup) if wakeup.stop => false,
             Some(wakeup) => {
                 self.quiet = if wakeup.quiet { self.quiet + 1 } else { 0 };
                 self.due = now.checked_add(wakeup.after);
@@ -902,6 +905,17 @@ mod tests {
 
         running.dispatching();
         assert!(!running.ended(None, now));
+    }
+
+    /// A deliberate stop is not a silence: the loop ends on the turn that said it, with the
+    /// fallback wake still unspent.
+    #[test]
+    fn a_turn_that_says_the_loop_is_finished_ends_it_without_a_keepalive() {
+        let mut running = Running::begin(request("watch"));
+        let now = Instant::now();
+
+        running.dispatching();
+        assert!(!running.ended(Some(Wakeup::finished(true)), now));
     }
 
     /// The budget is for turns that stopped saying when to wake, not for the one that did.

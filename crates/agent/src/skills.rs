@@ -520,7 +520,7 @@ it and no tool for it, so do not go looking for one and do not tell the user a t
 the interval is already keeping time. Work the tick and answer.
 
 Where they gave none, you are offered schedule_next, and the loop runs for exactly as long as \
-you keep calling it. Call it once, at the end of the turn, after the work is done:
+you keep calling it with a wait. Call it once, at the end of the turn, after the work is done:
 
 - delay_seconds from what you are actually waiting on rather than from a round number. Something \
   that takes ten minutes to change is not worth looking at in sixty seconds, and something that \
@@ -532,8 +532,9 @@ you keep calling it. Call it once, at the end of the turn, after the work is don
   shown to the user as a single line, so an honest noop is what keeps a long watch readable.
 - reason in a few words, saying what you are waiting on. The user reads it.
 
-Not calling it ends the loop, and that is the right answer once there is nothing left to watch. \
-Say so in your answer rather than scheduling a tick to say it again.
+Once there is nothing left to watch, call it with stop true instead of a delay_seconds, which \
+ends the loop now. Say so in your answer rather than scheduling a tick to say it again. A turn \
+that calls it with neither is woken once more after twenty minutes before the loop ends.
 
 A turn that says no tool sets the pace is not offered schedule_next: work the tick and answer, and \
 the loop ends with it.

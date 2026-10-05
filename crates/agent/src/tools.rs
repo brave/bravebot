@@ -1195,8 +1195,9 @@ fn table(
                  user's own line and it is sent again unchanged, so there is nothing here to say \
                  what the next turn asks. Pick the wait from what you are actually waiting on, not \
                  from a round number: something that takes ten minutes to change is not worth \
-                 looking at in one. Not calling it ends the loop, which is the right answer once \
-                 there is nothing left to watch."
+                 looking at in one. Once there is nothing left to watch, call it with stop true \
+                 instead of a wait, which ends the loop now. A turn that calls neither is woken \
+                 once more after twenty minutes before the loop ends."
         } else {
             "Arrange the next look at something, when one turn cannot answer what was asked. \
                  A request to be told when something changes is the case this exists for: take the \
@@ -1208,7 +1209,8 @@ fn table(
                  where this turn has already answered the question: looking again at something \
                  settled is a loop somebody has to notice and stop."
         },
-        json!({
+        {
+            let mut parameters = json!({
             "type": "object",
             "properties": {
                 "delay_seconds": {
@@ -1235,7 +1237,21 @@ fn table(
                 }
             },
             "required": ["delay_seconds", "noop"]
-        }),
+            });
+            // Only a tick of a self-paced loop can end the loop it belongs to, and it ends it
+            // without a wait, so the wait stops being required beside it (SCHED-4).
+            if !arranging {
+                parameters["properties"]["stop"] = json!({
+                    "type": "boolean",
+                    "description": "True when the work this loop watches is finished and there \
+                                    is nothing left to look at: the loop ends now, with no \
+                                    further tick. delay_seconds is not needed with it. It can \
+                                    only end this loop, never start or change one."
+                });
+                parameters["required"] = json!(["noop"]);
+            }
+            parameters
+        },
     ));
     tools
 }
@@ -5205,11 +5221,16 @@ fn schedule_next<S: Sink>(
     scheduling: Scheduling,
     arguments: &Value,
 ) -> Produced {
-    let Some(seconds) = arguments.get("delay_seconds").and_then(Value::as_u64) else {
+    // Only a tick of a self-paced loop can end the loop it belongs to. Anywhere else `stop` is
+    // not read, and the call is held to the requirements of any other (SCHED-6).
+    let stopping = scheduling == Scheduling::PacingALoop
+        && arguments.get("stop").and_then(Value::as_bool) == Some(true);
+    let seconds = arguments.get("delay_seconds").and_then(Value::as_u64);
+    if seconds.is_none() && !stopping {
         return Produced::problem(
             "error: 'delay_seconds' is required, as a whole number of seconds",
         );
-    };
+    }
     let Some(quiet) = arguments.get("noop").and_then(Value::as_bool) else {
         return Produced::problem(
             "error: 'noop' is required: true where this run found nothing to do, false where \
@@ -5217,7 +5238,10 @@ fn schedule_next<S: Sink>(
         );
     };
 
-    let wakeup = crate::turn::Wakeup::asked(seconds, quiet);
+    let wakeup = match seconds {
+        Some(seconds) if !stopping => crate::turn::Wakeup::asked(seconds, quiet),
+        _ => crate::turn::Wakeup::finished(quiet),
+    };
     let held = wakeup.after.as_secs();
 
     // The planner's own words about what it is waiting on, at the integrity of the context they
@@ -5233,7 +5257,13 @@ fn schedule_next<S: Sink>(
     );
     let note = note_for(policy, "schedule_next", &reason, move |reason| {
         let reason = reason.trim().to_string();
-        if reason.is_empty() {
+        if stopping {
+            if reason.is_empty() {
+                "loop finished".to_string()
+            } else {
+                format!("loop finished: {reason}")
+            }
+        } else if reason.is_empty() {
             format!("next in {held}s")
         } else {
             format!("next in {held}s: {reason}")
@@ -5246,6 +5276,7 @@ fn schedule_next<S: Sink>(
     // The two withheld cases do not reach here: dispatch answers a call from either as an unknown
     // name, for want of anything a confirmation could truthfully say about a wait nothing keeps.
     let confirmation = match scheduling {
+        _ if stopping => "scheduled: this loop has ended and no further tick will run".to_string(),
         Scheduling::PacingALoop | Scheduling::TheirInterval | Scheduling::NoLaterLook => format!(
             "scheduled: this loop runs again in {held} seconds, sending the user's own prompt \
              unchanged"
@@ -11769,7 +11800,12 @@ mod tests {
                     .expect("properties");
                 let mut fields: Vec<&str> = properties.keys().map(String::as_str).collect();
                 fields.sort_unstable();
-                assert_eq!(fields, ["delay_seconds", "noop", "reason", "why"]);
+                // `stop` only ends the loop the person started and says nothing about what runs.
+                let expected: &[&str] = match scheduling {
+                    Scheduling::PacingALoop => &["delay_seconds", "noop", "reason", "stop", "why"],
+                    _ => &["delay_seconds", "noop", "reason", "why"],
+                };
+                assert_eq!(fields, expected);
             }
         }
 
@@ -11985,6 +12021,71 @@ mod tests {
                 assert!(produced.failed, "{arguments} was accepted");
                 assert!(produced.wakeup.is_none(), "{arguments} still scheduled one");
             }
+        }
+
+        /// SCHED-4: a tick that says the loop is finished needs no wait, and the wait it might
+        /// also send is not used to arm one.
+        #[test]
+        fn a_finished_loop_is_ended_rather_than_given_another_wait() {
+            for arguments in [
+                json!({"noop": true, "stop": true}),
+                json!({"delay_seconds": 600, "noop": true, "stop": true}),
+            ] {
+                let produced = call(arguments.clone());
+                assert!(!produced.failed, "{arguments} was refused");
+                let wakeup = produced.wakeup.expect("the ending is carried to the loop");
+                assert!(wakeup.stop, "{arguments} did not end the loop");
+                let told = released(&produced.text);
+                assert!(told.contains("has ended"), "told: {told}");
+                assert!(!told.contains("runs again"), "told: {told}");
+            }
+            // `stop: false` is an ordinary call and still needs its wait.
+            assert!(call(json!({"noop": true, "stop": false})).failed);
+            assert!(call(json!({"stop": true})).failed, "noop is still required");
+            let ordinary = call(json!({"delay_seconds": 600, "noop": true, "stop": false}));
+            assert!(!ordinary.wakeup.expect("a wait").stop);
+        }
+
+        /// SCHED-6: the turn that arranges a look cannot end a loop, so `stop` there is not read
+        /// and the call keeps the requirements of any other.
+        #[test]
+        fn stop_from_a_turn_arranging_a_look_is_not_read() {
+            let refused = scheduled(
+                Scheduling::ArrangingALook,
+                json!({"noop": true, "stop": true}),
+            );
+            assert!(refused.failed);
+            let kept = scheduled(
+                Scheduling::ArrangingALook,
+                json!({"delay_seconds": 600, "noop": true, "stop": true}),
+            );
+            assert!(!kept.wakeup.expect("the wait is kept").stop);
+        }
+
+        /// `stop` is offered to a tick of a self-paced loop and to no other turn.
+        #[test]
+        fn stop_is_offered_only_to_a_tick_of_a_self_paced_loop() {
+            let schema = |scheduling| {
+                available(
+                    scheduling,
+                    Arming::Allowed { free: 1 },
+                    Deadlines::BUILT_IN,
+                    Running::Offered,
+                )
+                .into_iter()
+                .find(|t| t.function.name == "schedule_next")
+                .expect("schedule_next is offered")
+                .function
+                .parameters
+            };
+            let pacing = schema(Scheduling::PacingALoop);
+            assert!(pacing["properties"].get("stop").is_some());
+            let required = |schema: &Value| schema["required"].to_string();
+            assert!(!required(&pacing).contains("delay_seconds"));
+            assert!(required(&pacing).contains("noop"));
+            let arranging = schema(Scheduling::ArrangingALook);
+            assert!(arranging["properties"].get("stop").is_none());
+            assert!(required(&arranging).contains("delay_seconds"));
         }
     }
 

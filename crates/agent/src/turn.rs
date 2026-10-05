@@ -1345,6 +1345,11 @@ pub struct Wakeup {
     pub after: std::time::Duration,
     /// Whether the turn found nothing to do, as it reported.
     pub quiet: bool,
+    /// Whether the turn said the loop is finished, so no further tick is wanted.
+    ///
+    /// One routing boolean that can only end the loop the person started: it cannot start,
+    /// lengthen or change what runs.
+    pub stop: bool,
 }
 
 impl Wakeup {
@@ -1371,6 +1376,18 @@ impl Wakeup {
         Self {
             after: std::time::Duration::from_secs(seconds).clamp(Self::FLOOR, Self::CEILING),
             quiet,
+            stop: false,
+        }
+    }
+
+    /// A turn saying the loop is finished.
+    ///
+    /// The wait is the floor and is never used: the loop that reads this ends instead of arming a
+    /// tick.
+    pub fn finished(quiet: bool) -> Self {
+        Self {
+            stop: true,
+            ..Self::asked(0, quiet)
         }
     }
 }
