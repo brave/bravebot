@@ -295,7 +295,7 @@ impl Claim {
                 });
             }
             if abandoned(&path) {
-                let _ = std::fs::remove_file(&path);
+                break_abandoned(&path);
             }
             std::thread::sleep(LOOK_AGAIN_IN);
         }
@@ -339,6 +339,37 @@ fn abandoned(path: &Path) -> bool {
         .ok()
         .and_then(|written| written.elapsed().ok())
         .is_some_and(|age| age >= ABANDONED_AFTER)
+}
+
+/// Remove the claim at `path` if what is there is abandoned, and leave a live one in place.
+///
+/// Judging a claim abandoned and removing it are two steps, and the claim can change between them:
+/// another process that judged the same one abandoned breaks it and takes a claim of its own. A
+/// removal by name would then delete that live claim and let a third process in beside its holder.
+/// So the claim is moved aside first, which only one process can do to a given file, and judged
+/// there, where nothing can replace it. A live claim found that way is put back as a new file, which
+/// can only make it look younger.
+///
+/// The name is free between the move and the put-back. A third process that takes it in that gap
+/// holds beside the claim's owner, which needs that process to arrive within those two calls of a
+/// claim being broken. An owner that finishes in the gap removes nothing, and the claim put back
+/// is then nobody's until it ages out after [`ABANDONED_AFTER`].
+fn break_abandoned(path: &Path) {
+    static MOVED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    let aside = path.with_file_name(format!(
+        "{CLAIM}.{}.{}",
+        std::process::id(),
+        MOVED.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    if std::fs::rename(path, &aside).is_err() {
+        return;
+    }
+    let was_abandoned = abandoned(&aside);
+    let _ = std::fs::remove_file(&aside);
+    if !was_abandoned {
+        let _ = create_claim(path);
+    }
 }
 
 impl Drop for Claim {
@@ -1906,6 +1937,56 @@ mod tests {
                 abandoned(&claim),
                 "a claim this old belongs to a process that died holding it"
             );
+        });
+    }
+
+    /// A claim that is not abandoned stays where it is when a process that judged it abandoned
+    /// earlier gets to removing it.
+    ///
+    /// Two processes can both see the same dead claim, and the slower one reaches the removal after
+    /// the faster has broken it and taken a claim of its own. Removing what is at the path by then
+    /// deletes that live claim, so the next process to arrive is let in beside its holder.
+    #[test]
+    fn breaking_a_claim_that_is_no_longer_abandoned_leaves_it_in_place() {
+        with_temp_home("live-claim-break", || {
+            let path = path().expect("a path");
+            prepare_directory(&path).expect("the directory");
+            let claim = path.with_file_name(CLAIM);
+            create_claim(&claim).expect("a claim just taken by another process");
+
+            break_abandoned(&claim);
+
+            let third = create_claim(&claim);
+            assert_eq!(
+                third.err().map(|e| e.kind()),
+                Some(std::io::ErrorKind::AlreadyExists),
+                "a third process could take the claim while its holder was still working"
+            );
+        });
+    }
+
+    /// An abandoned claim is gone once it is broken, and nothing is left beside it.
+    ///
+    /// The claim is moved aside to be judged, and that file is the thing a crash in the middle of
+    /// breaking would leave for ever, so the ordinary path has to remove it.
+    #[test]
+    fn breaking_an_abandoned_claim_removes_it_and_leaves_nothing_beside_it() {
+        with_temp_home("dead-claim-break", || {
+            let path = path().expect("a path");
+            prepare_directory(&path).expect("the directory");
+            let claim = path.with_file_name(CLAIM);
+            std::fs::File::create(&claim)
+                .expect("a claim")
+                .set_modified(std::time::SystemTime::now() - ABANDONED_AFTER * 2)
+                .expect("a claim as old as a dead process leaves");
+
+            break_abandoned(&claim);
+
+            let left: Vec<_> = std::fs::read_dir(path.parent().expect("a directory"))
+                .expect("a listing")
+                .map(|entry| entry.expect("an entry").file_name())
+                .collect();
+            assert!(left.is_empty(), "left behind: {left:?}");
         });
     }
 
