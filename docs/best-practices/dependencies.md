@@ -2,12 +2,9 @@
 
 <!-- applicability: always -->
 
-A new crate widens the supply-chain surface of a binary people install.
-`deny.toml` decides the half of that a tool can: an advisory out against it, the
-licence it carries, a second version of something already in the tree, whether
-it came from crates.io, a regex engine, and an exception written down without a
-reason. Whether the trade is worth making is the half left, and it is this
-document.
+A dependency adds code to the build or shipped application. Automated checks enforce configured
+advisory, licence, and source rules; reviewers decide whether the dependency and its transitive
+cost are justified. Rust checks do not establish coverage for other package managers.
 
 ---
 
@@ -15,10 +12,11 @@ document.
 
 ## No new dependency without a reason that survives scrutiny
 
-**A diff that touches `Cargo.toml` or `package.json` says in the pull request
-what the dependency buys and what writing it by hand would cost.** Convenience
-is not an argument on its own. Depth counts: a crate that pulls in twenty others
-is twenty decisions, not one.
+**A diff that adds or changes a dependency says in the pull request what it buys and what using
+existing code or implementing the needed behavior would cost.** This applies to Rust, npm, and
+native-platform dependencies, including CocoaPods, Gradle, and Swift Package Manager, whether
+declared in a manifest or a build file. Review transitive dependencies, build scripts, and native
+code as part of that cost. Convenience alone does not justify the addition.
 
 A diff that adds an entry to `[advisories] ignore` or `[bans] skip` in
 `deny.toml` is read for what its `reason` says: what ships anyway, and why that
