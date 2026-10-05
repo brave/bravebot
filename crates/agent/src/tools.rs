@@ -4761,6 +4761,66 @@ fn apply_checkout<S: Sink, C: Confirmer>(
         }
         Some(_) => return Produced::problem("error: 'paths' is a list of paths"),
     };
+    bring_back(policy, tools, confirmer, &id, &kept, paths)
+}
+
+/// What `/checkouts apply` brought back: the driver's own account of each file, and whether any
+/// file was written.
+pub(crate) struct Brought {
+    /// One line a file, after the summary line `apply_checkout` leads with.
+    pub text: String,
+    pub applied: bool,
+}
+
+/// Bring back every candidate of the session's kept checkout `id`, on a person's typed request
+/// rather than a planner's call (CHECKOUT-14).
+///
+/// The number is the person's own, so no argument gate stands in front of it: what follows is
+/// `apply_checkout`'s own loop, which puts each file to the person whatever the trust map says.
+pub(crate) fn apply_kept_checkout<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    confirmer: &mut C,
+    id: &str,
+) -> Result<Brought, String> {
+    let Some(kept) = tools
+        .workspace
+        .session_checkouts()
+        .into_iter()
+        .find(|kept| kept.id == id)
+    else {
+        return Err(format!("the session keeps no checkout {id}"));
+    };
+    let paths = kept.candidates.named.iter().cloned().collect();
+    let produced = bring_back(policy, tools, confirmer, id, &kept, paths);
+    let applied = produced.changed_a_file;
+    // The driver's own sentences, which carry no byte of any file.
+    let text = produced
+        .text
+        .into_trusted()
+        .unwrap_or_else(|_| "see the note beside this call".to_string());
+    // A refusal is one line and is all there is to say; a run is a summary line and then a line a
+    // file, and the summary is the heading the caller words for itself.
+    let text = match text.split_once('\n') {
+        Some((_summary, files)) => files.to_string(),
+        None => text,
+    };
+    Ok(Brought { text, applied })
+}
+
+/// Put each of `paths`, which are candidates of the kept checkout `id`, through the write gate.
+///
+/// The half of [`apply_checkout`] that does not care who named the checkout: the planner's call
+/// and the person's `/checkouts apply` both end here, and ask the same questions (CHECKOUT-14).
+fn bring_back<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    confirmer: &mut C,
+    id: &str,
+    kept: &crate::workspace::SessionCheckout,
+    paths: Vec<String>,
+) -> Produced {
+    let workspace = tools.workspace;
     if paths.is_empty() {
         return Produced::problem(format!(
             "error: the driver recorded no write by name in checkout {id}, so there is nothing \
@@ -4791,7 +4851,7 @@ fn apply_checkout<S: Sink, C: Confirmer>(
                 continue;
             }
         };
-        let body = match workspace.read_checkout_file(policy, &id, relative) {
+        let body = match workspace.read_checkout_file(policy, id, relative) {
             Ok(body) => body,
             Err(why) => {
                 said.push(format!(
@@ -4821,7 +4881,7 @@ fn apply_checkout<S: Sink, C: Confirmer>(
                 changes_anything: true,
                 remark: None,
                 body_from: format!("checkout {id}"),
-                written_since_checkout: workspace.written_since_checkout(&id, relative),
+                written_since_checkout: workspace.written_since_checkout(id, relative),
             },
             true,
         );

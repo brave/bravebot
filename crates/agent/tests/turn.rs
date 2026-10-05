@@ -25228,6 +25228,139 @@ fn a_kept_checkouts_file_comes_back_through_a_question_the_table_would_not_ask()
     );
 }
 
+/// A worker given a checkout writes `out.txt` there and the turn ends. Returns the workspace that
+/// keeps the checkout, the working directory, the home and the trust map the turn handed back,
+/// which holds the rules copied for the checkout.
+fn a_checkout_kept_after_a_worker_wrote(
+    tag: &str,
+) -> (
+    Workspace,
+    Scratch,
+    Scratch,
+    bravebot_core::trust::TrustStore,
+) {
+    let scratch = Scratch::new(tag);
+    let home = Scratch::new(&format!("{tag}-home"));
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "HAVE-A-DELEGATE-WRITE-TO-APPLY",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"WRITE-OUT-TO-APPLY","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "WRITE-OUT-TO-APPLY",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"out.txt","contents":"from the delegate"}"#,
+                ),
+                reply_with("wrote it"),
+            ],
+        ),
+    ]);
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    let outcome = turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("HAVE-A-DELEGATE-WRITE-TO-APPLY").with_home(Some(home.path.clone())),
+        &mut RecordingConfirmer::approving(),
+        &mut RecordingSink::new(),
+        trust,
+    )
+    .expect("turn runs");
+    (workspace, scratch, home, outcome.trust)
+}
+
+/// CHECKOUT-14. `/checkouts apply` is the same operation typed by a person: every recorded file
+/// of the kept checkout is put to them as a write the table would not ask about, an approved one
+/// lands in the working directory and the trail records it, a declined one leaves it as it was,
+/// and a checkout the session does not keep asks nobody.
+#[test]
+fn a_typed_checkouts_apply_asks_about_each_recorded_file() {
+    let (workspace, scratch, home, trust) =
+        a_checkout_kept_after_a_worker_wrote("checkout-typed-apply");
+    let config = config_for("http://127.0.0.1:1");
+    let egress = bravebot_net::Egress::new();
+    let task = Task::new("/checkouts apply c1").with_home(Some(home.path.clone()));
+
+    let mut declining = RecordingConfirmer::rejecting();
+    let mut sink = RecordingSink::new();
+    let declined = turn::apply_checkout_asked_for(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        "c1",
+        &mut declining,
+        &mut sink,
+        trust.clone(),
+    )
+    .expect("a kept checkout is applied");
+    assert_eq!(declining.seen.len(), 1, "the person was not asked");
+    assert!(!declined.applied, "a declined write was counted");
+    assert!(
+        !scratch.path.join("out.txt").exists(),
+        "a declined write landed in the working directory"
+    );
+    assert!(
+        !checkout_events(&sink)
+            .iter()
+            .any(|(_, detail)| detail.starts_with("applied from ")),
+        "the trail records an apply the person declined"
+    );
+
+    let mut approving = RecordingConfirmer::approving();
+    let mut sink = RecordingSink::new();
+    let approved = turn::apply_checkout_asked_for(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        "c1",
+        &mut approving,
+        &mut sink,
+        trust.clone(),
+    )
+    .expect("a kept checkout is applied");
+    assert_eq!(approving.seen.len(), 1, "{:#?}", approving.seen.len());
+    assert_eq!(approving.seen[0].path, "out.txt");
+    assert!(approved.applied);
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("out.txt")).expect("brought back"),
+        "from the delegate"
+    );
+    assert!(
+        checkout_events(&sink)
+            .iter()
+            .any(|(_, detail)| detail.starts_with("applied from ") && detail.contains("/c1")),
+        "the trail does not record the apply"
+    );
+
+    let mut asked_nobody = RecordingConfirmer::approving();
+    let missing = turn::apply_checkout_asked_for(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        "c7",
+        &mut asked_nobody,
+        &mut RecordingSink::new(),
+        trust,
+    );
+    assert!(missing.is_err(), "a checkout the session does not keep");
+    assert!(asked_nobody.seen.is_empty());
+}
+
 /// CHECKOUT-14. A person who declines the question leaves the working directory as it was, and the
 /// planner is told so rather than that it came back.
 #[test]

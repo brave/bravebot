@@ -616,7 +616,8 @@ that is a comparison of bytes.
 
 A path the status lists as removed is named in the result, and is not removed.
 
-`/checkouts apply` is the same operation, typed by a person, and asks the same questions.
+`/checkouts apply` is the same operation, typed by a person, and asks the same questions. The
+number is the person's own typing, so no planner and no turn is involved.
 
 **Why not a merge.** A git merge would put bytes in the person's tree with nothing recorded in the
 map. That is the cost the map already carries for a file another process drops into a trusted
@@ -641,9 +642,13 @@ when it was made. The question says so where a later write names the path. That 
 shares the working directory. A write through a reference is not named, and a program's own write
 is not seen, so the note is absent for those and says nothing about the bytes.
 
+`/checkouts apply <n>` takes every named candidate of the checkout through the same loop, from the
+person's typing, with the session's trust map, permission rules and mode, and a fresh policy whose
+only context is that request. The trust map comes back changed where a file landed untrusted.
+
 Not built: a path a status lists as removed (no status is read in a checkout,
-[CHECKOUT-13](#CHECKOUT-13)), a file written through a reference, and `/checkouts apply`. A file
-over 16 MiB, or that is not text, is named and left.
+[CHECKOUT-13](#CHECKOUT-13)), a file written through a reference, and `/checkouts apply` naming
+paths. A file over 16 MiB, or that is not text, is named and left.
 
 `verified-by: bravebot_agent::turn::the_question_says_the_working_directory_was_written_since_the_checkout`
 `verified-by: bravebot_tui::confirm::a_write_since_the_checkout_is_said_in_the_question`
@@ -652,6 +657,8 @@ over 16 MiB, or that is not text, is named and left.
 `verified-by: bravebot_agent::turn::declining_the_question_brings_nothing_back`
 `verified-by: bravebot_agent::turn::only_a_recorded_path_of_a_kept_checkout_is_brought_back`
 `verified-by: bravebot_agent::workspace::a_checkouts_candidate_is_read_with_its_paths_label_and_nothing_else_is_read`
+`verified-by: bravebot_agent::turn::a_typed_checkouts_apply_asks_about_each_recorded_file`
+`verified-by: bravebot_tui::app::the_checkouts_command_lists_and_removes_by_number`
 
 ## How long one lasts
 

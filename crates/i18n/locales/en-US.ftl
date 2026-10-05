@@ -1963,7 +1963,7 @@ command-watch = List the files this session is watching, and stop one by its num
 command-jobs = List this turn's background jobs, and stop one by its name
 command-panel = Show or hide the info panel beside the transcript
 command-caffeinate = Keep the computer awake while a turn or loop is pending
-command-checkouts = List the checkouts delegates kept, and remove one by its number
+command-checkouts = List kept checkouts, bring their files back, or remove one
 command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
 command-agent = Run one of your definitions on a task, by its name
 command-export = Export the session transcript to a markdown file
@@ -2349,8 +2349,11 @@ checkouts-none =
     this session keeps no checkout. A delegate given one keeps it when something was done in it
 checkouts-no-such = this session keeps no checkout { $id }. /checkouts lists the ones it keeps
 checkouts-command-takes =
-    /checkouts lists the checkouts this session keeps, and /checkouts remove <n> removes the one
-    with that number
+    /checkouts lists the checkouts this session keeps, /checkouts apply <n> brings back the files
+    written in the one with that number, and /checkouts remove <n> removes it
+# Followed by a line for each file, as the write gate worded it.
+checkouts-applied = files from checkout { $id } were brought back:
+checkouts-not-applied = nothing from checkout { $id } was brought back:
 checkouts-removed = checkout { $id } at { $path } is removed
 checkouts-not-removed = checkout { $id } at { $path } could not be removed, and is still kept
 checkouts-worked-from =

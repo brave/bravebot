@@ -1630,7 +1630,7 @@ command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fix
 command-watch = Lister les fichiers que cette session surveille, et en arrêter un par son numéro
 command-jobs = Lister les tâches en arrière-plan de ce tour, et en arrêter une par son nom
 command-panel = Afficher ou masquer le panneau d'informations à côté de la transcription
-command-checkouts = Lister les copies de travail gardées par les délégués, et en supprimer une par son numéro
+command-checkouts = Lister les copies gardées, en rapporter les fichiers, ou en supprimer une
 command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
 command-agent = Exécuter l'une de vos définitions sur une tâche, par son nom
 command-export = Exporter la transcription de la session vers un fichier markdown
@@ -1972,8 +1972,11 @@ checkouts-none =
 checkouts-no-such =
     cette session ne garde pas de copie de travail { $id }. /checkouts liste celles qu'elle garde
 checkouts-command-takes =
-    /checkouts liste les copies de travail que cette session garde, et /checkouts remove <n>
-    supprime celle qui porte ce numéro
+    /checkouts liste les copies de travail que cette session garde, /checkouts apply <n> rapporte
+    les fichiers écrits dans celle qui porte ce numéro, et /checkouts remove <n> la supprime
+# Suivi d'une ligne par fichier, telle que la porte d'écriture l'a formulée.
+checkouts-applied = des fichiers de la copie de travail { $id } ont été rapportés :
+checkouts-not-applied = rien de la copie de travail { $id } n'a été rapporté :
 checkouts-removed = la copie de travail { $id } dans { $path } est supprimée
 checkouts-not-removed =
     la copie de travail { $id } dans { $path } n'a pas pu être supprimée, et reste gardée

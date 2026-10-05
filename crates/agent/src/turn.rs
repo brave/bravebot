@@ -1840,6 +1840,98 @@ pub fn compact<S: Sink, R: Reporter>(
     done
 }
 
+/// What `/checkouts apply` did.
+pub struct CheckoutApplied {
+    /// The driver's account of each file, one line a file after a summary line.
+    pub text: String,
+    /// Whether any file was written.
+    pub applied: bool,
+    /// The trust map afterwards: a file written untrusted into a trusted path distrusts it.
+    pub trust: TrustStore,
+}
+
+/// Bring back what the session's kept checkout `id` holds, outside any turn (CHECKOUT-14).
+///
+/// What `/checkouts apply` runs. Its routing is the number the person typed, their own words in
+/// the sense a prompt is, so there is no planner here and no conversation: the policy is a fresh
+/// one whose only context is that request. The bytes brought back keep the label the checkout's
+/// path gives them, which is carried with them and not read, so a file a program in the checkout
+/// wrote untrusted is untrusted once it is in the working directory. Each file is put to the
+/// person through `confirmer` whatever the trust map would have said.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
+    config: &Config,
+    egress: &Egress,
+    workspace: &Workspace,
+    task: &Task,
+    id: &str,
+    confirmer: &mut C,
+    sink: &mut S,
+    trust: TrustStore,
+) -> Result<CheckoutApplied, String> {
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", format!("bring back checkout {id}"));
+    let capabilities = CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]);
+    let mut policy = Policy::begin(routing, ReleasePlan::new(), capabilities, sink)
+        .map_err(|d| d.to_string())?
+        .with_trust(trust.clone())
+        .with_root(workspace.root())
+        .with_scratch(workspace.scratch())
+        .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES)
+        .with_permissions(task.permissions.clone())
+        .with_file_authority(bravebot_core::file_authority::FileAuthority::new(trust));
+
+    let skills = crate::skills::Catalogue::default();
+    let mut slots = bravebot_core::SlotStore::new();
+    let cancel = Cancel::new();
+    let mut armed = 0usize;
+    let mut jobs = tools::Jobs::default();
+    let mut run_directory = workspace.root().to_path_buf();
+    let done = tools::apply_kept_checkout(
+        &mut policy,
+        &mut tools::Tools {
+            workspace,
+            output_cap: tools::OUTPUT_CAP,
+            deadlines: task.deadlines,
+            skills: &skills,
+            slots: &mut slots,
+            chat: crate::processor::Chat {
+                config,
+                egress,
+                subscription: None,
+                model: None,
+                cancel: None,
+            },
+            cancel: &cancel,
+            scheduling: tools::Scheduling::NoLaterLook,
+            arming: crate::watch::Arming::Unavailable,
+            running: tools::Running::Offered,
+            armed: &mut armed,
+            home: task.home.as_deref(),
+            profile: task.profile.as_deref(),
+            cache: task.cache.as_deref(),
+            remembering: task.remembering.as_deref(),
+            delegated: false,
+            confined_to: None,
+            servers: None,
+            mcp: None,
+            jobs: &mut jobs,
+            permission_mode: task.permission_mode,
+            auto_vetting: task.auto_vetting,
+            run_directory: &mut run_directory,
+        },
+        confirmer,
+        id,
+    );
+    let trust = policy.trust();
+    policy.finish();
+    done.map(|brought| CheckoutApplied {
+        text: brought.text,
+        applied: brought.applied,
+        trust,
+    })
+}
+
 /// Answer one question asked beside the work, outside any turn.
 ///
 /// What `/btw` runs. No conversation reaches here at all: [`crate::aside::Question`] is the
