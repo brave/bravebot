@@ -81,6 +81,22 @@ the fact that you are summarising: begin with the work itself.";
 /// system prompt beside them.
 const INSTRUCTION: &str = "Summarise everything above, as your instructions describe.";
 
+/// The instruction as the summariser reads it: the driver's own, and after it, where the person
+/// gave one, what they said the summary must keep.
+///
+/// Appended to the closing message rather than the system prompt, which is the one marked for
+/// caching and so has to stay the same bytes every time (COMPACT-11). The focus is typed by the
+/// person, so it is trusted text and carries no label beyond their own, the way a prompt does.
+fn instruction(focus: Option<&str>) -> String {
+    match focus {
+        Some(focus) => format!(
+            "{INSTRUCTION}\n\nThe user asked that the summary pay particular attention to this, \
+             in their words: {focus}"
+        ),
+        None => INSTRUCTION.to_string(),
+    }
+}
+
 /// What one compaction did.
 pub struct Compacted {
     /// How many messages stopped being sent.
@@ -162,18 +178,22 @@ impl From<ChatError> for CompactError {
 /// middle of a turn's work, and where it landed is most of what a reader afterwards wants: it is
 /// the point the turn stopped being able to remember what it had done. `/compact` passes zero,
 /// having no round to be in the middle of.
+///
+/// `focus` is what the person typed after `/compact`, and only that: a budget-forced compaction
+/// has no one to ask and passes `None`.
 pub fn compact<S: Sink>(
     policy: &mut Policy<'_, S>,
     chat: &mut Chat<'_>,
     conversation: &mut Conversation,
     round: usize,
+    focus: Option<&str>,
 ) -> Result<Option<Compacted>, CompactError> {
     let Some(boundary) = conversation.compaction_boundary() else {
         return Ok(None);
     };
 
     let mut messages = conversation.to_summarise(boundary, SYSTEM_PROMPT);
-    messages.push(Message::user(INSTRUCTION));
+    messages.push(Message::user(instruction(focus)));
 
     // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty and nothing
     // below adds to it. A summariser with a tool would be a second planner, and a second planner
@@ -205,7 +225,13 @@ pub fn compact<S: Sink>(
     // After the conversation is shortened, so the figures describe what actually happened rather
     // than what was about to be attempted: a summary refused above leaves no line saying it
     // worked.
-    policy.record_compaction(boundary, kept, round, completion.usage.total());
+    policy.record_compaction(
+        boundary,
+        kept,
+        round,
+        completion.usage.total(),
+        focus.map(|focus| focus.chars().count()),
+    );
 
     Ok(Some(Compacted {
         summarised: boundary,

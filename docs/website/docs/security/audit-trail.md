@@ -76,7 +76,8 @@ through one.
 
 Every compaction gets a line: how many messages were summarised, how many were kept word for word,
 what the summary cost, and which tool-calling round it landed on. A `/compact` you asked for between
-rounds reports round zero, having interrupted nothing.
+rounds reports round zero, having interrupted nothing. One given a focus (`/compact [focus]`) says
+so by the focus's length in characters, and never repeats it.
 
 It is recorded *after* the conversation is shortened, so a summary refused on the way back in leaves
 no line claiming one was made. Counts and nothing else, so this carries no more content than the

@@ -369,7 +369,8 @@ messages go to an archive that both still read.
 /compact
 ```
 
-asks for that work on demand, at any size, without consulting the budget.
+asks for that work on demand, at any size, without consulting the budget. `/compact keep the lexer
+benchmarks` says what the summary must keep.
 
 The budget is the window the endpoint advertises for **whichever model is in force**, where it
 advertises one, so a one-shot run and a session both get the window of the model they are asking for.

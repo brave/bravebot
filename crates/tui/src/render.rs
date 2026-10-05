@@ -8276,6 +8276,15 @@ mod tests {
         assert_eq!(recognised_in_the_box(&command), "/loop");
     }
 
+    /// `/compact` takes an optional focus, so the table names it and the box says so once the word
+    /// is typed. A bare word with no space after it is not yet asking for an argument.
+    #[test]
+    fn the_compact_command_offers_a_focus_after_its_word() {
+        let row = input_row(&typed("/compact "), 90);
+        assert!(row.ends_with("/compact  [focus]"), "{row}");
+        assert!(!input_row(&typed("/compact"), 90).contains("[focus]"));
+    }
+
     /// The hint is one row however narrow the terminal is, cut where it reaches the edge with an
     /// ellipsis, and a file's own escape in it is drawn as a glyph.
     #[test]

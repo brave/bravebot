@@ -19,7 +19,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/add-dir` | `<path> \| close <path>` | Open another directory and trust it for this session, or close one |
 | `/cd` | `<path>` | Work in another directory from now on, and trust it for this session |
 | `/rename` | `<name>` | Call this conversation something else |
-| `/compact` | | Summarise the conversation so far, keeping the recent part |
+| `/compact` | `[focus]` | Summarise the conversation so far, keeping the recent part |
 | `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
 | `/clear` | | Start a new session here, keeping this one resumable |
 | `/forget-trust` | | Stop remembering that this directory is trusted, so later sessions here ask |
@@ -602,10 +602,13 @@ another scheme sets nothing and is not repeated back. Alone, each says what is s
 rewritten at once, so a resume brings the links back, and nothing a turn reads includes them. Typed
 while a turn runs with nothing waiting, each is carried out at once, as `/rename` is.
 
-## `/compact`
+## `/compact [focus]`
 
 Summarises the conversation so far and keeps the recent part, on demand, at any size, without
-consulting the budget. The **request** is shortened, never the record: the replaced messages go to an
+consulting the budget. Anything after the word is taken as typed and tells the summariser what the
+summary must keep: `/compact keep the lexer benchmarks and every path touched`. It is added to the
+summariser's closing instruction and goes nowhere else, and the audit trail records that a focus was
+given and its length, not the words. The **request** is shortened, never the record: the replaced messages go to an
 archive that the transcript still reads and the session record still stores. See
 [Sessions](../using/sessions.md#long-conversations).
 

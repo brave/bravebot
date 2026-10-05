@@ -2255,12 +2255,27 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// happened and whether it helped. A record saying only that a summary was adopted answers
     /// neither: a compaction that dropped ninety messages and one that dropped three look the
     /// same, and so do one that halved the request and one that barely moved it.
-    pub fn record_compaction(&mut self, summarised: usize, kept: usize, round: usize, cost: u64) {
+    ///
+    /// `focus` is the length in characters of what the person asked the summary to keep, where
+    /// they asked: that one was given and how long it was, and none of the words, so the trail
+    /// carries no more content than it did.
+    pub fn record_compaction(
+        &mut self,
+        summarised: usize,
+        kept: usize,
+        round: usize,
+        cost: u64,
+        focus: Option<usize>,
+    ) {
+        let focus = match focus {
+            Some(length) => format!(", with a focus of {length} character(s)"),
+            None => String::new(),
+        };
         self.allow(
             "compact",
             format!(
                 "round {round}: {summarised} message(s) summarised, {kept} kept word for word, \
-                 costing {cost} tokens"
+                 costing {cost} tokens{focus}"
             ),
         );
     }
