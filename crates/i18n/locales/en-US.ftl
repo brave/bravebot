@@ -1962,6 +1962,7 @@ command-config = Choose how the input box edits text
 command-add-dir = Open another directory and trust it for this session, or close one
 command-cd = Work in another directory from now on, and trust it for this session
 command-rename = Call this conversation something else
+command-branch = Copy this session and carry on in the copy, keeping the original to return to
 command-issue = Say which issue this session is for, show it, or clear it
 command-pr = Say which pull request this session is for, show it, or clear it
 command-compact = Summarise the conversation so far, keeping the recent part
@@ -2014,6 +2015,20 @@ session-pull-request-refused =
     /pr takes one http or https link on one line, in ASCII with no spaces, as in
     /pr https://github.com/brave/bravebot/pull/1. Nothing was set
 session-cleared = cleared: a new session, with the previous one still resumable
+# Left in the transcript by /branch, which has moved the session onto a copy of itself.
+session-branched =
+    branched: this session is now a copy, { $title }. The original is as it was. To return to it,
+    run `bravebot --resume { $id }` in { $directory }
+# Left in the transcript when /branch is typed before the session has a record to copy.
+session-branch-nothing-written = nothing to branch yet: the session has no record until its first turn ends
+# Left in the transcript when /branch is typed where session records are not written.
+session-branch-unwritable = /branch needs a session record to copy, and this session does not write one
+# Left in the transcript when /branch is typed in a session that cannot be forked.
+session-branch-refused = this session cannot be branched
+session-branch-keeps-checkouts = { $count ->
+    [one] the session keeps checkout { $ids }, which a copy would not carry, so remove it with /checkouts remove before /branch
+   *[other] the session keeps checkouts { $ids }, which a copy would not carry, so remove them with /checkouts remove before /branch
+    }
 session-rewound = rewound the session to before turn { $turn }
 session-rewound-partly =
     rewound the session to before turn { $turn }, but these files still hold what was

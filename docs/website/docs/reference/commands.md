@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Slash commands
-description: The twenty-nine commands the interface acts on itself, and the rules every one of them shares.
+description: The thirty commands the interface acts on itself, and the rules every one of them shares.
 ---
 
 # Slash commands
@@ -22,6 +22,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/compact` | `[focus]` | Summarise the conversation so far, keeping the recent part |
 | `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
 | `/clear` | | Start a new session here, keeping this one resumable |
+| `/branch` | `[<name>]` | Copy this session and carry on in the copy, keeping the original to return to |
 | `/forget-trust` | | Stop remembering that this directory is trusted, so later sessions here ask |
 | `/loop` | `[[interval] <prompt> \| stop]` | Send a prompt again and again, say what is repeating, or stop it |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
@@ -646,6 +647,27 @@ session it asks the trust question again, restores no standing permissions, and 
 the old session, and says so. With neither running it says nothing about them. The session's pull
 request and issue are not carried over.
 
+## `/branch [name]`
+
+Copies this session as `bravebot --fork` does and moves you onto the copy, so you can try a second
+approach without leaving. The copy has an id of its own and the conversation, spend history and audit
+trail so far, and its title is marked `(fork)`, or is the name you give. The original is left exactly
+as it was, and the transcript says its id and the directory it is in, so `bravebot --resume <id>`
+returns to it.
+
+A running [loop](#loop-interval-prompt), [goal](#goal-condition) or live watch is not written down
+and ends, saying so. The copy starts with no turns for `/undo` to rewind. Nothing on disk is
+rewound.
+
+The copy holds what `--resume` of it would. The folders and programs you trusted stay trusted, and
+you are asked again about language servers, run prompts already shown and files you agreed to show
+despite the credential scan. The copy gets a scratch directory of its own.
+
+It needs a record to copy, so it says there is nothing to branch until the first turn has ended. It
+is refused in an incognito session, which writes none, and while the session keeps a checkout, which
+a copy does not carry: remove it with `/checkouts remove` first. Typed while a turn runs it waits
+for the turn to end.
+
 ## `/export [path]`
 
 Writes the transcript out as a markdown file under the working directory, at the path you name or at
@@ -713,7 +735,7 @@ would not go back rather than as a file that was never there.
 conversation, so `/undo` and `/rewind` after a `--resume` reach the same turns they reached before.
 
 **These changes outside a turn give up every point at once**: `/clear`, `/compact`, `/btw`,
-`/rename`, `/add-dir`, and `/cd`. Every point goes rather than the most recent alone, since such a
+`/rename`, `/branch`, `/add-dir`, and `/cd`. Every point goes rather than the most recent alone, since such a
 change lands after the most recent point and so before none of them. After that `/undo` says there is nothing left to undo
 rather than rewinding to a point describing a different session.
 
