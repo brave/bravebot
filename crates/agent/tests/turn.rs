@@ -28196,10 +28196,7 @@ fn a_fetched_page_can_be_processed_and_written_without_being_read() {
 /// which lines the guarded-symbol counts in `docs/specs/labels.md` are measured over, in a file
 /// whose counts have nothing to do with a fetch.
 fn expected_accept() -> String {
-    format!(
-        "accept: text/markdown, text/html;q=0.9, text/plain;q=0.8, {}/{};q=0.1\r\n",
-        "*", "*"
-    )
+    format!("accept: text/markdown, {}/{};q=0.9\r\n", "*", "*")
 }
 
 /// FETCH-7. Every fetch asks for Markdown first, with a fixed header this program's own source
@@ -28236,8 +28233,8 @@ fn a_fetch_asks_for_markdown_ahead_of_html() {
     let head = requests
         .recv_timeout(std::time::Duration::from_secs(5))
         .expect("the request went out");
-    // The whole value, in order: a header naming the types in any other order, or dropping a
-    // quality, asks a server for something else.
+    // The whole value: ranking Markdown below the wildcard, or ranking a second type alongside
+    // it, asks a server for something else.
     assert!(
         head.to_lowercase().contains(&expected_accept()),
         "the fetch did not ask for Markdown ahead of HTML: {head:?}"

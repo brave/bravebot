@@ -7182,9 +7182,14 @@ fn runs_git(step: &bravebot_core::command::Step) -> bool {
 ///
 /// Markdown first because the body is read by a processor and nothing else: the same page as
 /// Markdown is a fraction of the tokens its HTML is, and a server that can serve both otherwise
-/// serves HTML. `*/*` last so a server holding none of the named types answers with what it has
-/// rather than refusing.
-const FETCH_ACCEPT: &str = "text/markdown, text/html;q=0.9, text/plain;q=0.8, */*;q=0.1";
+/// serves HTML.
+///
+/// Nothing else is ranked. `*/*` carries one weight below Markdown, so a server holding no
+/// Markdown answers with whatever it would have answered before this header existed. Naming
+/// `text/html` above `*/*` would rank the rest, and an endpoint that negotiates would then read
+/// this as a request for its HTML page where it used to answer with the compact JSON a processor
+/// reads for fewer tokens.
+const FETCH_ACCEPT: &str = "text/markdown, */*;q=0.9";
 
 fn fetch_url<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,

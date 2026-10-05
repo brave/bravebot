@@ -207,11 +207,15 @@ followed it is what makes this a property of the code rather than of whoever wro
 Every request a fetch sends carries one `Accept` header, fixed in this program's source:
 
 ```
-Accept: text/markdown, text/html;q=0.9, text/plain;q=0.8, */*;q=0.1
+Accept: text/markdown, */*;q=0.9
 ```
 
 The driver sets it before the request goes out. The planner's `url` argument takes no part in it,
 no reply can change it, and every hop of a redirect chain sends the same bytes.
+
+Markdown is the only type ranked. A server holding no Markdown answers with whatever it would
+have answered for `*/*`, so this header changes which type a fetch gets only where Markdown is
+one of the choices.
 
 This changes nothing else. The label is still fixed by `Capability::WebFetch` before the request
 goes out ([FETCH-1](#FETCH-1)), so a `text/markdown` body is untrusted and public exactly as an
@@ -222,8 +226,13 @@ never the bytes.
 **Why.** The body is read by a processor and by nothing else, and the same page as Markdown costs
 a fraction of the tokens its HTML costs. A server able to answer with either answers with HTML
 unless asked otherwise, so without this the whole HTML body, up to the cap, is what a processor
-has to read. `*/*` last so a server holding none of the named types answers with what it has
-rather than refusing.
+has to read.
+
+**Why nothing but Markdown is ranked.** Ranking the rest would state a preference this program
+does not hold. An endpoint that negotiates answers `*/*` with a compact form and `text/html` with
+a full page, so naming HTML above `*/*` would cost a processor more tokens than sending no header
+at all, which is the opposite of the reason for sending one. `*/*` also keeps a server holding
+none of the named types answering with what it has rather than refusing.
 
 **Why no conversion here.** Asking is all the driver does. Turning HTML into Markdown means
 reading the bytes, and [processors.md](../processors.md) makes a processor the one component that
