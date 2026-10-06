@@ -1444,6 +1444,11 @@ pub struct Summary {
     pub id: String,
     pub title: String,
     pub branch: Option<String>,
+    /// The issue the person said the session is for ([PANEL-12](info-panel.md#PANEL-12)), which
+    /// the picker searches.
+    pub issue: Option<String>,
+    /// The pull request the person said the session is for, which the picker searches.
+    pub pull_request: Option<String>,
     pub updated: u64,
     /// What the session takes up, record and audit together.
     pub bytes: u64,
@@ -1993,6 +1998,8 @@ pub fn list(project: &Path) -> Vec<Summary> {
                 id: listed.id,
                 title: listed.title,
                 branch: listed.branch,
+                issue: listed.issue,
+                pull_request: listed.pull_request,
                 updated: listed.updated,
                 bytes,
                 manifest: listed.manifest.is_some(),
@@ -2321,7 +2328,7 @@ fn read(path: &Path) -> Option<Record> {
     serde_json::from_str(&contents).ok()
 }
 
-/// The five fields a row of the picker needs, and nothing else.
+/// The fields a row of the picker needs or searches, and nothing else.
 ///
 /// Its own shape rather than [`Record`], because a record holds the conversation, what compaction
 /// archived out of it, and the turns a rewind can go back to, each of which carries a copy of the
@@ -2334,6 +2341,11 @@ struct Listed {
     title: String,
     #[serde(default)]
     branch: Option<String>,
+    /// Absent from a record written before the links were kept.
+    #[serde(default)]
+    issue: Option<String>,
+    #[serde(default)]
+    pull_request: Option<String>,
     updated: u64,
     /// Whether the record has one, which is what makes it a manifest run. What is in it is not
     /// read: the row says only that the session cannot be continued.
@@ -3387,6 +3399,8 @@ mod tests {
             id: format!("s-{updated}"),
             title: "a session".to_string(),
             branch: None,
+            issue: None,
+            pull_request: None,
             updated,
             bytes: 0,
             manifest: false,
@@ -3492,6 +3506,50 @@ mod tests {
         let record: Record = serde_json::from_value(written).expect("an older record reads");
         assert_eq!(record.issue, None);
         assert_eq!(record.pull_request, None);
+    }
+
+    /// The picker searches the links, so the list has to carry them, and a record that holds
+    /// neither (one written before they were kept) still has to be listed.
+    #[test]
+    fn the_list_carries_the_links_and_lists_a_record_without_them() {
+        const ISSUE: &str = "https://github.com/brave/bravebot/issues/1267";
+        const PULL: &str = "https://github.com/brave/bravebot/pull/1270";
+
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-list-links");
+
+        let mut linked = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut linked);
+        linked.set_link(Link::Issue, Url::read(ISSUE));
+        linked.set_link(Link::PullRequest, Url::read(PULL));
+
+        let mut plain = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut plain);
+
+        let mut older = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut older);
+        let path = project_directory(&root)
+            .expect("a directory")
+            .join(format!("{}.json", older.id()));
+        let mut written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("json");
+        let fields = written.as_object_mut().expect("an object");
+        fields.remove("issue").expect("the issue is written");
+        fields
+            .remove("pull_request")
+            .expect("the pull request is written");
+        std::fs::write(&path, written.to_string()).expect("rewrite");
+
+        let listed = list(&root);
+        let row = |id: &str| listed.iter().find(|s| s.id == id).expect("listed");
+        assert_eq!(row(linked.id()).issue.as_deref(), Some(ISSUE));
+        assert_eq!(row(linked.id()).pull_request.as_deref(), Some(PULL));
+        assert_eq!(row(plain.id()).issue, None);
+        assert_eq!(row(plain.id()).pull_request, None);
+        assert_eq!(row(older.id()).issue, None);
+        assert_eq!(row(older.id()).pull_request, None);
     }
 
     /// The panel draws a link on every frame, so a value that could end its row, start an escape
