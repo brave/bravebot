@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { SettingsGroup } from './SettingsGroup'
 import type { AgentSettings as Report, Hook, HooksDocument, Limits, Refusal } from '../../shared/agent-settings'
-import { composeHooks } from '../../shared/agent-settings'
+import { composeHooks, unusableTimeout } from '../../shared/agent-settings'
 import { Alert, Button, Collapse, Dropdown, Icon, Input, ProgressRing } from '../nala'
 const fieldText = (event: { value?: unknown; target?: EventTarget | null }): string | null => {
   if (typeof event.value === 'string') return event.value
@@ -67,7 +67,7 @@ export function AgentSettings({ session, onChanged, onDirty }: {
   const inspectHooks = async (): Promise<HooksDocument> => {
     const result = await window.bravebot.request<HooksDocument>('hooks.inspect')
     if (result.error) throw new Error(result.error.message)
-    if (!result.ok || !Array.isArray(result.ok.hooks) || typeof result.ok.entire !== 'boolean') throw new Error('This agent did not return its hooks file. Rebuild or reinstall the app, then retry.')
+    if (!result.ok || !Array.isArray(result.ok.hooks) || typeof result.ok.entire !== 'boolean' || typeof result.ok.timeoutSeconds?.min !== 'number' || typeof result.ok.timeoutSeconds?.max !== 'number') throw new Error('This agent did not return its hooks file. Rebuild or reinstall the app, then retry.')
     return result.ok
   }
   const loadHooks = async () => {
@@ -83,6 +83,9 @@ export function AgentSettings({ session, onChanged, onDirty }: {
     // panel then refuses to edit. The agent still decides what a hook is; the form declines to
     // send a field somebody left empty.
     if (hooks.some(hook => !hook.run[0]?.trim())) { setProblem('Enter a program for every hook, or remove the hook.'); return }
+    // Likewise a timeout the agent would drop the entry for. The range is the one the agent reported.
+    const unusable = unusableTimeout(hooks, document.timeoutSeconds)
+    if (unusable !== null) { setProblem(`Hook ${unusable + 1}: enter a whole number of seconds from ${document.timeoutSeconds.min} to ${document.timeoutSeconds.max} for the timeout, or leave it empty.`); return }
     setBusy(true); setProblem('')
     const text = composeHooks(hooks)
     try {
@@ -165,8 +168,8 @@ export function AgentSettings({ session, onChanged, onDirty }: {
           {!dirty && document?.hooks[index]?.firesForNothing && <Alert type="warning" role="alert">This hook fires for nothing: only a finished tool call carries a tool name. Clear the filter, or choose Tool finishes.</Alert>}
           <Input value={hook.run[0]} placeholder="/path/to/program" disabled={busy || !editable} data-test={`hook-program-${index}`}
             onInput={(event) => { const value = fieldText(event); if (value !== null) change(index, { ...hook, run: [value, ...hook.run.slice(1)] }) }}>Program</Input>
-          <Input type="number" min={1} max={600} step={1} value={hook.timeout === null || hook.timeout === undefined ? '' : String(hook.timeout)} placeholder="30" disabled={busy || !editable} data-test={`hook-timeout-${index}`}
-            onInput={(event) => { const value = fieldText(event); if (value !== null) change(index, { ...hook, timeout: value.trim() === '' ? null : Number(value) }) }}>Timeout in seconds (optional, 1 to 600)</Input>
+          <Input type="number" min={document?.timeoutSeconds.min} max={document?.timeoutSeconds.max} step={1} value={hook.timeout === null || hook.timeout === undefined ? '' : String(hook.timeout)} placeholder="30" disabled={busy || !editable} data-test={`hook-timeout-${index}`}
+            onInput={(event) => { const value = fieldText(event); if (value !== null) change(index, { ...hook, timeout: value.trim() === '' ? null : Number(value) }) }}>{document ? `Timeout in seconds (optional, ${document.timeoutSeconds.min} to ${document.timeoutSeconds.max})` : 'Timeout in seconds (optional)'}</Input>
           {hook.run.slice(1).map((argument, i) => <div key={i} className="hook-argument">
             <Input value={argument} disabled={busy || !editable} onInput={(event) => { const value = fieldText(event); if (value !== null) change(index, { ...hook, run: hook.run.map((word, j) => j === i + 1 ? value : word) }) }}>{`Argument ${i + 1}`}</Input>
           <Button size="small" kind="plain-faint" isDisabled={busy || !editable} onClick={() => change(index, { ...hook, run: hook.run.filter((_, j) => j !== i + 1) })} aria-label={`Remove argument ${i + 1} from hook ${index + 1}`}>Remove</Button></div>)}

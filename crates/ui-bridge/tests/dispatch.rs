@@ -69,6 +69,10 @@ fn the_hooks_file_is_read_through_the_bridge() {
             );
             assert!(read["hooks"].is_array(), "what the agent read");
             assert!(read["entire"].is_boolean(), "whether it read all of it");
+            assert!(
+                read["timeoutSeconds"]["max"].is_u64(),
+                "what a timeout may be"
+            );
         }
         // A machine naming no state directory declares no hooks, and is told which of the two
         // this is rather than being handed an empty file to edit.

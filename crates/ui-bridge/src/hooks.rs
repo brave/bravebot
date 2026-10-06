@@ -6,7 +6,7 @@
 //! two parsers being kept in step.
 
 use crate::protocol::{ErrorCode, Failure};
-use bravebot_config::hooks::{self, Declarations};
+use bravebot_config::hooks::{self, Declarations, MAX_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -30,6 +30,9 @@ fn report(path: &Path, read: &Declarations) -> Value {
         "path": path.display().to_string(),
         "text": read.text(),
         "entire": read.entire(),
+        // The range the reader accepts for a `timeout`, so a form refuses what the reader would
+        // drop without holding a second copy of the bounds.
+        "timeoutSeconds": {"min": MIN_TIMEOUT_SECONDS, "max": MAX_TIMEOUT_SECONDS},
         "hooks": read.hooks().declared().iter().map(|hook| json!({
             "on": hook.moment().as_str(),
             "tool": hook.tool(),
@@ -73,6 +76,10 @@ mod tests {
             json!(hooks::hooks_file(home.path()).display().to_string())
         );
         assert_eq!(report["entire"], json!(true));
+        assert_eq!(
+            report["timeoutSeconds"],
+            json!({"min": MIN_TIMEOUT_SECONDS, "max": MAX_TIMEOUT_SECONDS})
+        );
         assert_eq!(
             report["hooks"],
             json!([

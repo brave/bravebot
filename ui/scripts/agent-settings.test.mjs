@@ -12,7 +12,7 @@ function load(path) {
   new Function('require', 'module', 'exports', source)(id => id === 'electron' ? { app: { getAppPath: () => process.cwd(), isPackaged: false } } : require(id), module, module.exports)
   return module.exports
 }
-const { composeHooks } = load('src/shared/agent-settings.ts')
+const { composeHooks, unusableTimeout } = load('src/shared/agent-settings.ts')
 const { saveHooks } = load('src/main/agent-settings.ts')
 const t = load('src/renderer/transcript.ts')
 
@@ -28,6 +28,16 @@ test('an edit writes the words as typed and carries nothing the agent does not r
       { on: 'turn-started', run: ['begin'] },
     ],
   })
+})
+
+test('a timeout the agent would drop the entry for is found before anything is written', () => {
+  const range = { min: 1, max: 600 }
+  const hook = timeout => ({ on: 'turn-finished', tool: null, run: ['echo'], timeout, firesForNothing: false })
+  for (const bad of [0, 601, 1.5, -1, Number.NaN]) assert.equal(unusableTimeout([hook(null), hook(bad)], range), 1, `timeout ${bad}`)
+  for (const good of [null, undefined, 1, 30, 600]) assert.equal(unusableTimeout([hook(good)], range), null, `timeout ${good}`)
+  // The bounds are the ones the agent reported and not a copy held here.
+  assert.equal(unusableTimeout([hook(700)], { min: 1, max: 900 }), null)
+  assert.equal(unusableTimeout([hook(5)], { min: 10, max: 900 }), 0)
 })
 
 test('hook saves are explicit, reject conflicts and refuse symlinks', () => {

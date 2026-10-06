@@ -1204,8 +1204,10 @@ Still open:
   turn the output ceiling ended; raw backend
   diagnostic text is not sent as a turn error.
 - `hooks.inspect` reports the hooks file as the agent reads it: `path`, its `text` (null for a
-  file this could not read at all), the `hooks` it declares as `{ on, tool, run, firesForNothing }`,
-  and `entire`, false where the reader passed over part of the file, so that composing it back
+  file this could not read at all), the `hooks` it declares as `{ on, tool, run, timeout, firesForNothing }`,
+  `timeoutSeconds` as `{ min, max }`, the whole numbers of seconds the reader accepts for an
+  entry's `timeout` (an entry with any other `timeout` is dropped), and `entire`, false where the
+  reader passed over part of the file, so that composing it back
   from `hooks` alone would drop what it did not read. An editor that offers a form refuses one for
   such a file. `no_home` where the platform names no state directory. Nothing else parses the
   file: which entries this build can use, and which name a tool on a moment that has none, are the

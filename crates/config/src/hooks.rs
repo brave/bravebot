@@ -46,6 +46,9 @@ const HOOKS_FILE: &str = "hooks.json";
 /// was replaced by something else entirely, is passed over rather than parsed.
 const MAX_BYTES: u64 = 64 * 1024;
 
+/// The least a hook may declare for `timeout`, in seconds.
+pub const MIN_TIMEOUT_SECONDS: u64 = 1;
+
 /// The most a hook may declare for `timeout`, in seconds.
 ///
 /// Every hook holds the turn open while it runs, so there is a ceiling: a typo of an extra zero
@@ -362,7 +365,9 @@ fn entry(value: &serde_json::Value) -> Option<Hook> {
     let timeout = match object.get("timeout") {
         None => None,
         Some(value) => match value.as_u64() {
-            Some(seconds) if (1..=MAX_TIMEOUT_SECONDS).contains(&seconds) => Some(seconds),
+            Some(seconds) if (MIN_TIMEOUT_SECONDS..=MAX_TIMEOUT_SECONDS).contains(&seconds) => {
+                Some(seconds)
+            }
             _ => return None,
         },
     };
