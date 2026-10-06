@@ -41,8 +41,36 @@ not reopened by a later review, which is how a `declined` gap stays declined.
   ledger says.
 - **`dry-run`**: review and draft, post nothing and record nothing.
 
-The tools compared are the ones `peer-advisories.py` lists in `REPOSITORIES` and `PACKAGES`. Adding a
-tool there adds it here.
+## The tools compared
+
+The tools are the union of two lists. `peer-advisories.py` lists the ones that publish security
+advisories in `REPOSITORIES` and `PACKAGES`. [`peers.tsv`](peers.tsv) lists the ones this skill reviews
+from their documentation: 25 tools, including those with no advisory feed (Crush, Amp, Factory, Augment
+Code, Warp, Windsurf, Continue, Kiro, Junie, Devin and Jules). A tool in either list is reviewed. Where
+both name it, the row's repository replaces the advisory skill's.
+
+A tool review is given the tool's documentation site, changelog, repository and kind. It lists every
+capability from the site's navigation, `llms.txt` or sitemap and about six months of changelog before
+comparing, orders its gaps (a topic no spec governs first, then the larger capability, then `parity`
+before `beyond`) and keeps at most 8, against 5 for a spec. A gap on a topic no spec governs sets
+`spec_home`, which the issue shows under `## Where it lands`.
+
+### Adding a tool
+
+Add one line to `peers.tsv`, six fields separated by tabs:
+
+| Field | Holds |
+| --- | --- |
+| `slug` | lowercase words joined by hyphens; the unit is `peer:<slug>`. Use the tool's name in lowercase, as `peer-advisories.py` does, so the two lists meet on one tool |
+| `name` | the name a person uses |
+| `kind` | `terminal`, `ide` or `cloud` |
+| `docs` | the https address of the documentation site |
+| `changelog` | the https address of the changelog or release notes, or `-` |
+| `repo` | `owner/name` on GitHub, or `-` |
+
+`read_peers` refuses a row with another field count, a slug used twice, an unknown kind, a docs address
+that is not https or a repository that is not `owner/name`, and the self-test fails for a tool in the
+advisory lists that has no row. A tool added to the advisory lists needs a row here too.
 
 ---
 

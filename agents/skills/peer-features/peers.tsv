@@ -1,0 +1,31 @@
+# Other coding agents the peer-features skill reviews, one per line, tab separated:
+#
+#   slug  name  kind  docs  changelog  repo
+#
+# kind is terminal, ide or cloud. docs and changelog are https urls. repo is owner/name, and - means
+# none. A "-" in changelog means the tool publishes none. See SKILL.md, "Adding a tool".
+claude-code	Claude Code	terminal	https://code.claude.com/docs/en/overview	https://code.claude.com/docs/en/changelog	anthropics/claude-code
+codex	Codex	terminal	https://developers.openai.com/codex	https://developers.openai.com/codex/changelog	openai/codex
+gemini-cli	Gemini CLI	terminal	https://geminicli.com/docs/	https://geminicli.com/docs/changelogs/	google-gemini/gemini-cli
+qwen-code	Qwen Code	terminal	https://qwenlm.github.io/qwen-code-docs/en/	https://github.com/QwenLM/qwen-code/releases	QwenLM/qwen-code
+github-copilot-cli	GitHub Copilot CLI	terminal	https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli	https://github.com/github/copilot-cli/releases	github/copilot-cli
+opencode	OpenCode	terminal	https://opencode.ai/docs/	https://opencode.ai/changelog	sst/opencode
+crush	Crush	terminal	https://github.com/charmbracelet/crush	https://github.com/charmbracelet/crush/releases	charmbracelet/crush
+goose	Goose	terminal	https://goose-docs.ai/docs/quickstart/	https://github.com/block/goose/releases	block/goose
+aider	Aider	terminal	https://aider.chat/docs/	https://aider.chat/HISTORY.html	Aider-AI/aider
+openhands	OpenHands	cloud	https://docs.openhands.dev/	https://github.com/OpenHands/OpenHands/releases	OpenHands/OpenHands
+amp	Amp	terminal	https://ampcode.com/manual	https://ampcode.com/news	-
+factory	Factory	cloud	https://docs.factory.com/	https://docs.factory.com/changelog/release-notes	-
+augment-code	Augment Code	ide	https://docs.augmentcode.com/	https://www.augmentcode.com/changelog	-
+warp	Warp	terminal	https://docs.warp.dev/	https://docs.warp.dev/getting-started/changelog	-
+cursor	Cursor	ide	https://cursor.com/docs	https://cursor.com/changelog	cursor/cursor
+windsurf	Windsurf	ide	https://docs.windsurf.com/	https://windsurf.com/changelog	-
+zed	Zed	ide	https://zed.dev/docs	https://zed.dev/releases	zed-industries/zed
+cline	Cline	ide	https://docs.cline.bot/	https://github.com/cline/cline/blob/main/CHANGELOG.md	cline/cline
+roo-code	Roo Code	ide	https://docs.roocode.com/	https://docs.roocode.com/update-notes/	RooCodeInc/Roo-Code
+kilo-code	Kilo Code	ide	https://kilo.ai/docs	https://github.com/Kilo-Org/kilocode/releases	Kilo-Org/kilocode
+continue	Continue	ide	https://docs.continue.dev/	https://github.com/continuedev/continue/releases	continuedev/continue
+kiro	Kiro	ide	https://kiro.dev/docs/	https://kiro.dev/changelog/	-
+junie	Junie	ide	https://www.jetbrains.com/help/junie/	https://www.jetbrains.com/junie/	-
+devin	Devin	cloud	https://docs.devin.ai/	https://docs.devin.ai/release-notes/overview	-
+jules	Jules	cloud	https://jules.google/docs	https://jules.google/docs/changelog	-
