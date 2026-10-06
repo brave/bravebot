@@ -104,7 +104,8 @@ having seen part of.
 Progress, errors and the audit trail go to stderr, so a one-shot run is pipeable. `--trace` puts
 the trail on stderr beside it: which gate checked what, the label every value carried, and what
 was released. The one thing that may take the reply's place on that stream is the result object in
-CLI-12, and it is still the only thing on it.
+CLI-12, and it is still the only thing on it. The events of CLI-24 are the second exception: a run
+given `--json-stream` writes them ahead of that object, and nothing else is on the stream.
 
 **Why.** A progress line mixed into stdout would corrupt whatever the user piped the reply into.
 
@@ -1212,3 +1213,43 @@ start and one that wants to know whether a particular sign-in worked.
 `verified-by: bravebot_cli::auth::the_verdict_asks_all_of_a_named_way_and_any_of_the_rest`
 `verified-by: bravebot_cli::auth::a_lapsed_aws_session_is_not_signed_in_and_a_missing_cli_is_unusable`
 `verified-by: bravebot_cli::auth::nothing_imported_is_told_from_a_store_that_could_not_be_read`
+
+<a id="CLI-24"></a>
+### CLI-24: `--json-stream` writes one event per line as the run goes, then the result object
+
+A one-shot run given `--json-stream` is a `--json` run (CLI-12) that also writes an object, on one
+line, to stdout as each of these happens, in the order they happen:
+
+- a tool call finishes: `event` is `call`, with `tool`, `target` and `refused` as CLI-12 gives them
+  for each entry of `calls`;
+- a gate refuses something: `event` is `refusal`, with `gate`, `principle` and `reason` as CLI-12
+  gives them for each entry of `refusals`;
+- the run's cumulative token usage changes, which is when a model request finishes: `event` is
+  `usage`, with `tokens` holding the counts CLI-12 gives under that name. A report that leaves the
+  counts as they were is not an event.
+
+The last line is the result object of CLI-12, byte for byte what `--json` writes for the same run.
+It has no `event` field, so a caller tells it from an event by that. Every event carries the
+`schema` number of CLI-12 and its add-only rule: within one number a field may be added to an event,
+and an event kind may be added, and neither is removed, renamed or given a different meaning.
+
+An event holds only fields the result object already holds, so none carries content the driver has
+not already released to that object: a tool is named as the driver matched it, and what a call acted
+on is the name it was given. A run that stops before any of those happens writes the result object
+alone. Stdout holds nothing but these lines, and progress, the message and the trail stay on stderr
+as CLI-5 and CLI-12 say. A failed write to stdout is dropped, so a caller that stopped reading does
+not stop the run.
+
+**Why.** The result object exists only when the run ends, so a CI wrapper or an editor cannot show
+progress, cannot tell a hung run from a slow one, and learns nothing of a run that is killed. The
+events are the same facts the object lists, written when they are known, so a caller that follows
+the stream and a caller that waits for the last line read the same fields.
+
+A separate flag rather than a change to `--json`, because a caller written against one object per run
+would otherwise receive several lines it never expected.
+
+`verified-by: bravebot_cli::running::a_stream_writes_each_event_as_it_happens_and_ends_on_the_result_object`
+`verified-by: bravebot_cli::running::a_streamed_run_that_stops_before_the_turn_writes_only_the_result_object`
+`verified-by: bravebot_cli::json::an_event_carries_the_fields_the_result_object_carries_for_the_same_thing`
+`verified-by: bravebot_cli::json::a_refusal_is_streamed_when_the_gate_takes_it`
+`verified-by: bravebot_cli::json::a_run_without_a_stream_writes_no_events`

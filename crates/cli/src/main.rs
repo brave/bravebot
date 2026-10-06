@@ -236,7 +236,7 @@ fn main() -> ExitCode {
         // would otherwise be caught below as unknown options.
         Some(
             "-p" | "--print" | "--mode" | "--model" | "--advisor" | "--effort" | "--file"
-            | "--add-dir" | "--trace" | "--json",
+            | "--add-dir" | "--trace" | "--json" | "--json-stream",
         ) => run_task(&args, skip_permissions, agent, prompts),
         Some("doctor") => doctor(),
         Some("auth") => auth::command(&args[1..]),
@@ -588,6 +588,7 @@ fn print_help() {
         ("-p, --print", t!(cli_option_print)),
         ("--trace", t!(cli_option_trace)),
         ("--json", t!(cli_option_json)),
+        ("--json-stream", t!(cli_option_json_stream)),
         ("--incognito", t!(cli_option_incognito)),
         ("--safe", t!(cli_option_safe)),
         ("--vet", t!(cli_option_vet)),
@@ -739,6 +740,9 @@ struct Invocation {
     print: bool,
     /// Whether stdout carries the result object rather than the prose reply.
     json: bool,
+    /// Whether stdout also carries an event line for each call, refusal and request as it
+    /// finishes, ahead of the result object (CLI-24).
+    stream: bool,
 }
 
 /// Parse `<prompt> [--file path]... [--add-dir path]... [--mode name] [--model name]
@@ -754,6 +758,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     let mut trace = false;
     let mut print = false;
     let mut json = false;
+    let mut stream = false;
     let mut index = 0;
 
     while index < args.len() {
@@ -831,6 +836,12 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 json = true;
                 index += 1;
             }
+            // The result object is still the last line, so the stream is a form of `--json`.
+            "--json-stream" => {
+                json = true;
+                stream = true;
+                index += 1;
+            }
             "-p" | "--print" => {
                 print = true;
                 index += 1;
@@ -854,6 +865,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
         trace,
         print,
         json,
+        stream,
     })
 }
 
@@ -881,6 +893,7 @@ fn run_task(
         trace,
         print,
         json: as_json,
+        stream: as_stream,
     } = invocation;
 
     // Read before the emptiness check below, since `cat notes.md | bravebot -p` is a complete
@@ -1031,7 +1044,7 @@ fn run_task(
     let _scratch = scratch_for_this_run(&mut workspace);
 
     let egress = bravebot_net::Egress::new();
-    let mut sink = RecordingSink::new();
+    let mut sink = json::Streaming::new(as_stream.then(|| json::Stream::new(std::io::stdout())));
 
     for problem in &rejected {
         eprintln!(
@@ -1173,7 +1186,8 @@ fn run_task(
 
     // Progress goes to stderr so stdout stays the reply and nothing else, which is what makes
     // the command pipeable. Without it a long turn prints nothing until it is over.
-    let mut reporter = progress::Progress::new(std::io::stderr());
+    let mut reporter = progress::Progress::new(std::io::stderr())
+        .streaming(as_stream.then(|| json::Stream::new(std::io::stdout())));
 
     // Before the turn, so the sign-in's own output is not interleaved with progress lines and a
     // browser opening is accounted for. Nothing happens where no sign-in is wanted, which includes
@@ -1329,7 +1343,7 @@ fn run_task(
                         cache_written: outcome.cached.written_tokens,
                     },
                     calls: reporter.calls(),
-                    refusals: &refusals(&sink),
+                    refusals: &refusals(sink.recorded()),
                     notices: &outcome.notices,
                 })
             });
@@ -1338,7 +1352,7 @@ fn run_task(
                 reply: rendered.as_deref().unwrap_or(outcome.reply_for_display()),
                 notices: &outcome.notices,
                 attempt: attempt.as_deref(),
-                trail: trace.then_some((&sink, outcome.model.as_str())),
+                trail: trace.then_some((sink.recorded(), outcome.model.as_str())),
                 clean: outcome.clean,
                 ending,
                 not_served: not_served.as_deref(),
@@ -1364,7 +1378,7 @@ fn run_task(
             }
             if trace {
                 eprintln!();
-                print_trace(&mut std::io::stderr().lock(), &sink);
+                print_trace(&mut std::io::stderr().lock(), sink.recorded());
             }
             if as_json {
                 say_the_result(&what_ran(
@@ -1372,7 +1386,7 @@ fn run_task(
                     &cause.to_string(),
                     reporter.spent(),
                     reporter.calls(),
-                    &refusals(&sink),
+                    &refusals(sink.recorded()),
                     reporter.notices(),
                 ));
             }
@@ -1384,7 +1398,7 @@ fn run_task(
             say_notices(&mut std::io::stderr().lock(), reporter.notices());
             if trace {
                 eprintln!();
-                print_trace(&mut std::io::stderr().lock(), &sink);
+                print_trace(&mut std::io::stderr().lock(), sink.recorded());
             }
             if as_json {
                 say_the_result(&what_ran(
@@ -1392,7 +1406,7 @@ fn run_task(
                     &err.to_string(),
                     reporter.spent(),
                     reporter.calls(),
-                    &refusals(&sink),
+                    &refusals(sink.recorded()),
                     reporter.notices(),
                 ));
             }
@@ -1406,7 +1420,8 @@ fn run_task(
 /// Only for the case where the parse failed, which is the one moment the parsed invocation cannot
 /// answer.
 fn wants_json(args: &[String]) -> bool {
-    args.iter().any(|arg| arg == "--json")
+    args.iter()
+        .any(|arg| arg == "--json" || arg == "--json-stream")
 }
 
 /// Stop before the turn: the identifier and the message on stderr, and a result object on stdout

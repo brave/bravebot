@@ -62,6 +62,7 @@ const FLAGS: [Flag; 25] = [
     flag("print", Some('p'), false),
     flag("trace", None, false),
     flag("json", None, false),
+    flag("json-stream", None, false),
     flag("incognito", None, false),
     flag("safe", None, false),
     flag("vet", None, false),

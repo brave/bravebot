@@ -71,6 +71,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--system-prompt <prompt>` | replace the opening of the system prompt for this run; the rest of it stays ([below](#--system-prompt-prompt-and---append-system-prompt-prompt)) |
 | `--append-system-prompt <prompt>` | add your own words to the system prompt for this run, after the project's `AGENTS.md` ([below](#--system-prompt-prompt-and---append-system-prompt-prompt)) |
 | `--json` | put one result object on stdout in the reply's place ([below](#--json)) |
+| `--json-stream` | write one event per line as the run goes, then the result object ([below](#--json-stream)) |
 | `--trace` | print the audit trail to stderr |
 | `--vet` | let a check answer about a quarantined slot, for this run: it releases what it finds nothing in, and where nobody can be asked it keeps back everything else ([below](#--vet)) |
 | `--safe` | load none of your hooks, skills, definitions, MCP server requests or `AGENTS.md`, and say so once; sign-in, model and permissions still apply |
@@ -316,6 +317,27 @@ Progress, the message and the audit trail stay on stderr, exactly as they do wit
 
 **It carries a schema number.** Within one number a field may be added and never removed, renamed or
 given a different meaning, so a caller reading the fields it knows keeps working.
+
+## `--json-stream`
+
+```sh
+bravebot --json-stream -p "fix the failing test" | jq -c 'select(.event == "refusal")'
+```
+
+A `--json` run that also writes **one object per line on stdout as the run goes**, so a script can
+show progress, tell a hung run from a slow one, and keep what happened if the process is killed.
+Three kinds of event are written, each with `schema` and `event`:
+
+| `event` | written when | other fields |
+|---|---|---|
+| `call` | a tool call finishes | `tool`, `target`, `refused`, as in the result object's `calls` |
+| `refusal` | a gate refuses something | `gate`, `principle`, `reason`, as in the result object's `refusals` |
+| `usage` | the run's token usage changes, which is when a model request finishes | `tokens`, the cumulative counts |
+
+The last line is the result object, exactly what `--json` writes for the same run. It has no `event`
+field. Nothing else is on stdout, and progress, the message and the audit trail stay on stderr. The
+schema rule of `--json` applies to each event: fields and event kinds may be added within one number,
+and none is removed or renamed.
 
 ## `--plain`
 
