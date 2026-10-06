@@ -165,6 +165,9 @@ leaves the box as it was.
 `verified-by: bravebot_tui::app::a_picture_too_large_to_send_says_so_with_its_size`
 `verified-by: bravebot_tui::clipboard::a_picture_over_the_cap_is_scaled_down_and_sent`
 `verified-by: bravebot_tui::clipboard::a_picture_over_the_cap_that_will_not_decode_is_refused_rather_than_swapped_for_the_text`
+`verified-by: bravebot_tui::clipboard::a_picture_over_the_cap_declaring_too_wide_a_canvas_is_refused_unread`
+`verified-by: bravebot_tui::clipboard::a_picture_over_the_cap_that_would_decode_past_the_allocation_limit_is_refused_unread`
+`verified-by: bravebot_tui::clipboard::a_picture_still_over_the_cap_after_scaling_is_refused_with_its_pasted_size`
 `verified-by: bravebot_tui::state::the_first_tick_of_a_loop_carries_the_picture_pasted_into_it`
 `verified-by: bravebot_tui::state::a_later_tick_of_a_loop_says_the_picture_went_with_the_first`
 `verified-by: bravebot_tui::loops::a_pasted_picture_goes_to_one_tick_and_the_settled_line_to_every_other`

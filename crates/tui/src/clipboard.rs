@@ -455,6 +455,130 @@ mod tests {
         out
     }
 
+    /// A PNG declaring `width` by `height` one-bit paletted pixels, all of them the first palette
+    /// entry. The pixel data is stored rather than compressed, so the file is over the cap while
+    /// the picture it declares decodes to three bytes a pixel.
+    fn declared_png(width: u32, height: u32) -> Vec<u8> {
+        fn crc32(parts: &[&[u8]]) -> u32 {
+            let mut crc = u32::MAX;
+            for byte in parts.iter().flat_map(|part| part.iter()) {
+                crc ^= u32::from(*byte);
+                for _ in 0..8 {
+                    crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
+                }
+            }
+            !crc
+        }
+        fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+            out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            out.extend_from_slice(kind);
+            out.extend_from_slice(data);
+            out.extend_from_slice(&crc32(&[kind, data]).to_be_bytes());
+        }
+
+        let row = 1 + width.div_ceil(8) as usize;
+        let raw = vec![0u8; row * height as usize];
+        let (mut a, mut b) = (1u32, 0u32);
+        let mut zlib = vec![0x78, 0x01];
+        let blocks: Vec<&[u8]> = raw.chunks(u16::MAX as usize).collect();
+        for (n, block) in blocks.iter().enumerate() {
+            zlib.push(u8::from(n + 1 == blocks.len()));
+            zlib.extend_from_slice(&(block.len() as u16).to_le_bytes());
+            zlib.extend_from_slice(&(!(block.len() as u16)).to_le_bytes());
+            zlib.extend_from_slice(block);
+            for byte in *block {
+                a = (a + u32::from(*byte)) % 65521;
+                b = (b + a) % 65521;
+            }
+        }
+        zlib.extend_from_slice(&((b << 16) | a).to_be_bytes());
+
+        let mut header = Vec::new();
+        header.extend_from_slice(&width.to_be_bytes());
+        header.extend_from_slice(&height.to_be_bytes());
+        header.extend_from_slice(&[1, 3, 0, 0, 0]);
+        let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+        chunk(&mut out, b"IHDR", &header);
+        chunk(&mut out, b"PLTE", &[0, 0, 0, 255, 255, 255]);
+        chunk(&mut out, b"IDAT", &zlib);
+        chunk(&mut out, b"IEND", &[]);
+        assert!(
+            out.len() > MAX_IMAGE_BYTES,
+            "the fixture must be over the cap"
+        );
+        out
+    }
+
+    /// Random pixels in every bit of every channel, so the file does not compress and a scaled
+    /// copy still has the noise in it.
+    fn incompressible_png(side: u32) -> Vec<u8> {
+        let mut state = 0x9e37_79b9_u32;
+        let noise = image::RgbaImage::from_fn(side, side, |_, _| {
+            let mut next = || {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (state >> 16) as u8
+            };
+            image::Rgba([next(), next(), next(), next()])
+        });
+        let mut out = Vec::new();
+        noise
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .expect("a PNG encodes");
+        assert!(
+            out.len() > MAX_IMAGE_BYTES,
+            "the fixture must be over the cap"
+        );
+        out
+    }
+
+    /// A picture that declares a canvas wider than the decoder is allowed to open is refused with
+    /// the size it was pasted at. Decoding it anyway lets one clipboard entry claim memory the
+    /// size of its declared canvas rather than of its file.
+    #[test]
+    fn a_picture_over_the_cap_declaring_too_wide_a_canvas_is_refused_unread() {
+        let wide = declared_png(MAX_DECODED_SIDE + 1, 8192);
+        let size = wide.len();
+
+        let pasted = chosen(Some(("image/png", wide)), || None);
+        assert!(
+            matches!(pasted, Pasted::TooLarge(pasted_size) if pasted_size == size),
+            "the picture was not refused at its pasted size"
+        );
+    }
+
+    /// A picture whose canvas is within the side limit but would decode to more than the allocation
+    /// limit is refused with the size it was pasted at.
+    #[test]
+    fn a_picture_over_the_cap_that_would_decode_past_the_allocation_limit_is_refused_unread() {
+        let heavy = declared_png(MAX_DECODED_SIDE, MAX_DECODED_SIDE);
+        let size = heavy.len();
+
+        let pasted = chosen(Some(("image/png", heavy)), || None);
+        assert!(
+            matches!(pasted, Pasted::TooLarge(pasted_size) if pasted_size == size),
+            "the picture was not refused at its pasted size"
+        );
+    }
+
+    /// A picture that is still over the cap once it is scaled is refused with the size it was
+    /// pasted at, and the over-cap copy is not sent in its place.
+    #[test]
+    fn a_picture_still_over_the_cap_after_scaling_is_refused_with_its_pasted_size() {
+        let noisy = incompressible_png(2400);
+        let size = noisy.len();
+        let scaled = downscaled(&noisy).expect("the fixture decodes");
+        assert!(
+            scaled.len() > MAX_IMAGE_BYTES,
+            "the scaled fixture must still be over the cap"
+        );
+
+        let pasted = chosen(Some(("image/png", noisy)), || None);
+        assert!(
+            matches!(pasted, Pasted::TooLarge(pasted_size) if pasted_size == size),
+            "the picture was not refused at its pasted size"
+        );
+    }
+
     /// A screenshot over the cap goes through scaled down rather than making the person shrink it
     /// by hand. The result has to be a picture that decodes, under the cap, whose longest side was
     /// brought to the fixed size, and whose type is the reader's own literal.
