@@ -813,10 +813,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Install from the lockfile
-        run: npm ci --ignore-scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Lint the lockfile
-        run: npm run lint:lockfile
+      - name: Test the installer
+        run: pnpm test
 
       - name: Publish
         run: npm publish --access public --provenance --ignore-scripts
@@ -831,10 +831,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Install from the lockfile
-        run: npm ci --ignore-scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Lint the lockfile
-        run: npm run lint:lockfile
+      - name: Test the installer
+        run: pnpm test
 
   publish:
     needs: lint
@@ -845,7 +845,7 @@ jobs:
     steps:
       - name: Publish
         run: |
-          # No npm ci here: the lint job installed and linted the lockfile already.
+          # No pnpm install here: the lint job installed from the lockfile already.
           npm publish --access public --provenance --ignore-scripts
 """
 
@@ -857,8 +857,8 @@ def test_privileged_job_runs_only_its_own_code():
     check(
         "a grant declared for a whole workflow reaches the job that installs and runs the lockfile",
         kinds(found) == ["privileged-job-runs-dependencies"]
-        and "installs a dependency: npm ci" in evidence
-        and "runs a dependency: npm run lint:lockfile" in evidence,
+        and "installs a dependency: pnpm install" in evidence
+        and "runs a dependency: pnpm test" in evidence,
         f"{kinds(found)}: {evidence}",
     )
     check(
@@ -1025,7 +1025,8 @@ def test_privileged_job_runs_only_its_own_code():
     # The other spellings of running what was installed. `npm run` is one of several, and a lockfile
     # is installed by more than one program.
     for name, command in (
-        ("npm exec", "npm exec -- lockfile-lint"),
+        ("npm exec", "npm exec -- tsc --noEmit"),
+        ("pnpm install", "pnpm install --frozen-lockfile --ignore-scripts"),
         ("yarn install", "yarn install --frozen-lockfile"),
     ):
         other = in_tree(

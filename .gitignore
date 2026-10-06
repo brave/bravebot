@@ -15,8 +15,10 @@
 # Build output
 /dist/
 
-# Node (npm distribution wrapper)
+# Node (npm distribution wrapper, pnpm stores and logs)
 node_modules/
+.pnpm-store/
+pnpm-debug.log*
 npm/bin/*-bin
 npm/bin/*-bin.exe
 

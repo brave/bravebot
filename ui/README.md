@@ -10,14 +10,15 @@ and persistent bots with conversation histories and project memory.
 
 ## Quick start
 
-Install your platform's development tools, current stable Rust, and Node 22.12+ with npm
-(Node 24 is used in CI). See [setup](docs/setup.md) for prerequisites and credentials.
+Install your platform's development tools, current stable Rust, and Node 22.12+ with
+pnpm (`corepack enable` activates the pnpm version pinned in `packageManager`; Node 24 is
+used in CI). See [setup](docs/setup.md) for prerequisites and credentials.
 
 ```bash
 git clone https://github.com/brave/bravebot.git
 cd bravebot/ui
-npm ci
-npm run dev
+pnpm install --frozen-lockfile
+pnpm run dev
 ```
 
 The app can build and open without backend credentials. Sending prompts requires

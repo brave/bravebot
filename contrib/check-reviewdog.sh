@@ -197,7 +197,7 @@ if [ -z "$RUNNERS" ]; then
             || die "cannot list script files to scan"
         [ -z "$script_files" ] || RUNNERS="$RUNNERS sveltegrep"
     fi
-    has 'package-lock.json' '*/package-lock.json' && RUNNERS="$RUNNERS npm-audit"
+    has 'pnpm-lock.yaml' '*/pnpm-lock.yaml' && RUNNERS="$RUNNERS npm-audit"
     has 'pyproject.toml' '*/pyproject.toml' 'requirements*.txt' '*/requirements*.txt' \
         && RUNNERS="$RUNNERS pip-audit"
 fi

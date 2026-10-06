@@ -20,15 +20,17 @@ permissions:
   contents: read
 
 jobs:
-  # lockfile-lint and the packages under it are code nobody here wrote, and the step
-  # below runs them by design. They run in this job, which can read nothing but the
-  # tree, rather than beside the token the publish job mints.
+  # The frozen install is the gate the lockfile answers to, and the installer test is
+  # code nobody here wrote that runs by design: they run in this job, which can read
+  # nothing but the tree, rather than beside the token the publish job mints. pnpm
+  # also verifies every lockfile entry's integrity and registry metadata against the
+  # registry's own before installing it.
   #
-  # Not left to ci.yml's npm-lockfile job, which runs the same two commands: nothing
+  # Not left to ci.yml's pnpm-lockfile job, which runs the same two things: nothing
   # here requires that job to have passed, so a tag moved after it ran would be
-  # linted nowhere.
+  # checked nowhere.
   lint:
-    name: Lint the lockfile
+    name: Install and test from the lockfile
     if: github.repository == 'brave/bravebot'
     runs-on: ubuntu-latest
     steps:
@@ -40,16 +42,19 @@ jobs:
         with:
           ref: refs/tags/${{ inputs.tag }}
 
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      # pnpm plus the Node runtime it installs; the action's automatic install is
+      # declined because the install here is frozen and runs no scripts.
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
-          node-version: "24"
-          package-manager-cache: false
+          runtime: node@24
+          install: false
 
       - name: Install from the lockfile
-        run: npm ci --ignore-scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Lint the lockfile
-        run: npm run lint:lockfile
+      - name: Test the installer
+        run: |
+          ls npm/tests/*.test.mjs >/dev/null && node --test npm/tests/*.test.mjs
 
   # The trusted publisher on npmjs.com keys on this repository and this filename, not
   # on a job name, so publishing is unaffected by which job here holds the grant.
@@ -151,6 +156,9 @@ jobs:
             fi
           done
 
+      # setup-node, not pnpm/setup: npm publish is npm's, and the runtime pnpm/setup
+      # installs ships no npm beside the node binary. Nothing installs here, so there
+      # is no package-manager cache to decline.
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "24"

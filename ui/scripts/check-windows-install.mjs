@@ -12,7 +12,7 @@
 // is watched from outside. The sign that the app got as far as running its own code is its agent:
 // the app spawns `bravebot-rpc` from the install's resources for the first thing its window asks.
 //
-// Node's own modules only, so it runs without `npm ci`.
+// Node's own modules only, so it runs without `pnpm install --frozen-lockfile`.
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'

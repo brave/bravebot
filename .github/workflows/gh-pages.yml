@@ -27,20 +27,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Setup Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      - name: Set up pnpm and Node.js
+        # pnpm and Node in one step, and the install with it: require-lockfile runs a
+        # frozen install, and the store rides the cache. No dependency there runs a
+        # build script: pnpm refuses them all unless the project allow-lists one,
+        # and docs/website lists none, which is what --ignore-scripts bought when
+        # npm installed the site.
+        uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: docs/website/package-lock.json
-
-      - name: Install dependencies
-        run: npm --prefix docs/website ci --ignore-scripts
+          working-directory: docs/website
+          runtime: node@24
+          require-lockfile: true
+          cache: true
 
       # docusaurus.config.js throws on a broken link or anchor, so this step is the whole
       # of the site's correctness check as well as its build.
       - name: Build website
-        run: npm --prefix docs/website run build
+        run: pnpm --dir docs/website run build
 
       # include-hidden-files is off by default from v4 on, and static/.nojekyll is a
       # dotfile: without this the artifact ships without it and Pages goes back to hiding

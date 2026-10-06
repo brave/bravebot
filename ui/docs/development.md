@@ -1,25 +1,25 @@
 # Development and packaging
 
-Start with [setup](setup.md). Run the `npm` commands from `ui/`; this is not an npm
+Start with [setup](setup.md). Run the `pnpm` commands from `ui/`; this is not a pnpm
 workspace of the package at the repository root, so nothing there reaches these scripts.
 Run the `cargo` commands from the root, where the workspace the two front-end crates are
 members of lives.
 
 The UI depends on [Brave's Leo (Nala)](https://github.com/brave/leo) design system as a
 git dependency. Installing it runs Leo's `prepare` script, which needs `pnpm`. Enable it
-once with `corepack enable` (ships with Node 18+); `npm ci` and `npm install` then work.
+once with `corepack enable` (ships with Node 18+); `pnpm install` then works.
 
 | Command | What it does |
 | --- | --- |
-| `npm ci` | Install locked npm dependencies and set up Electron |
-| `npm run dev` | Set up Electron, build both Rust executables, start hot reload |
-| `npm run bridge` | Build `bravebot-rpc` and `bravebot-ui-files`, loading credentials where configured |
-| `npm run setup:electron` | Install the Electron runtime if needed and name the development app |
-| `npm run name-dev-app` | Restore “Brave Bot” as the development app's menu-bar name |
-| `npm run typecheck` | Run `tsc --noEmit` |
-| `npm run build` | Build both Rust executables, typecheck, bundle into `out/` |
-| `npm start` | Set up Electron and preview the existing bundle; does not rebuild it |
-| `npm run package` | Build both Rust executables, bundle, package for macOS or Linux; does not typecheck |
+| `pnpm install --frozen-lockfile` | Install the dependencies the lockfile pins and set up Electron |
+| `pnpm run dev` | Set up Electron, build both Rust executables, start hot reload |
+| `pnpm run bridge` | Build `bravebot-rpc` and `bravebot-ui-files`, loading credentials where configured |
+| `pnpm run setup:electron` | Install the Electron runtime if needed and name the development app |
+| `pnpm run name-dev-app` | Restore “Brave Bot” as the development app's menu-bar name |
+| `pnpm run typecheck` | Run `tsc --noEmit` |
+| `pnpm run build` | Build both Rust executables, typecheck, bundle into `out/` |
+| `pnpm start` | Set up Electron and preview the existing bundle; does not rebuild it |
+| `pnpm run package` | Build both Rust executables, bundle, package for macOS or Linux; does not typecheck |
 | `make app-bundle` (from the root) | The same bundle, carrying release executables built with credentials required, fused |
 | `make app-release` (from the root) | A disk image per Mac architecture, from the cross-built executables in `dist/`; see [releasing](../../docs/development/releasing.md#the-desktop-application) |
 | `make app-release-linux` (from the root) | A `.deb` and an `.rpm` per Linux architecture, from the same; see [releasing](../../docs/development/releasing.md#the-linux-packages) |
@@ -28,8 +28,8 @@ once with `corepack enable` (ships with Node 18+); `npm ci` and `npm install` th
 | `cargo test -p bravebot-ui-bridge -p bravebot-ui-files` | Test the two front-end crates |
 | `cargo test --all` | Test the whole workspace, agent crates included |
 | `cargo clippy --all-targets --all-features -- -D warnings` | Lint the whole workspace |
-| `npm run drive` / `npm run drive:<name>` | Run a named Electron driver; see [testing](testing.md) |
-| `npm run demo -- --record` | Record a walkthrough; see [demo costs and setup](demo.md) |
+| `pnpm run drive` / `pnpm run drive:<name>` | Run a named Electron driver; see [testing](testing.md) |
+| `pnpm run demo -- --record` | Record a walkthrough; see [demo costs and setup](demo.md) |
 
 ## Working with Leo (Nala) components
 
@@ -153,7 +153,7 @@ The transcript can hold hundreds of entries, so typing must not re-render them. 
 
 ### The Nala checks
 
-`npm run typecheck` runs `scripts/check-nala.mjs` before `tsc`. It reads every `.css` file under
+`pnpm run typecheck` runs `scripts/check-nala.mjs` before `tsc`. It reads every `.css` file under
 `src/renderer/` and every `.ts` and `.tsx` file, and fails on:
 
 - a hard-coded colour (hex or `rgb()`/`rgba()`) or a `px` font size, including in the `font`
@@ -251,14 +251,14 @@ See [testing](testing.md#what-ci-runs) for exactly what CI checks and what must 
 ## Build and preview
 
 ```bash
-npm run build
-npm start
+pnpm run build
+pnpm start
 ```
 
-With a desktop display available, `npm run drive:smoke` checks that the window and
+With a desktop display available, `pnpm run drive:smoke` checks that the window and
 main UI are visible and the Rust bridge responds, then saves a screenshot under
 `/tmp/bravebot-ui/`. To check a Linux package, run
-`npm run drive:smoke -- "./dist/Brave Bot-linux-x64/Brave Bot"`.
+`pnpm run drive:smoke -- "./dist/Brave Bot-linux-x64/Brave Bot"`.
 
 `scripts/build-bridge.sh` builds the Rust bridge and secure-file helper. TypeScript
 then checks the code and electron-vite bundles the main process, preload and React
@@ -271,11 +271,11 @@ not drive a terminal. See the [protocol design](phase-0-rpc-protocol.md) and
 ## Packaging
 
 ```bash
-npm run typecheck
-npm run package
+pnpm run typecheck
+pnpm run package
 ```
 
-`npm run package` does not typecheck. It builds the Rust executables and Electron
+`pnpm run package` does not typecheck. It builds the Rust executables and Electron
 bundles, then `scripts/package.mjs` uses `@electron/packager` to create
 `dist/Brave Bot-darwin-<arch>/Brave Bot.app` on macOS or
 `dist/Brave Bot-linux-<arch>/` on Linux. Launch the Linux package with
@@ -295,7 +295,7 @@ that is not a Windows executable for the architecture asked for.
 
 Which Rust build the bundle carries is the one thing the finished bundle does not record: it is
 named, versioned and laid out identically either way, and the two overwrite each other in
-`dist/`. `npm run package` carries the debug executables, which is what a checkout has already
+`dist/`. `pnpm run package` carries the debug executables, which is what a checkout has already
 built and what makes it the right command for testing the bundle itself. The last line it prints
 says which it took:
 
@@ -321,15 +321,15 @@ result, so what comes out is installable and not distributable, and how a releas
 is [releasing](../../docs/development/releasing.md#the-desktop-application). Git commit
 signatures are separate from macOS app signing.
 
-Those two are fused and `npm run package` is not. `scripts/fuses.mjs` turns off the Electron
+Those two are fused and `pnpm run package` is not. `scripts/fuses.mjs` turns off the Electron
 fuses that let the binary run code that is not the app's: `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`
 and the `--inspect` arguments. It turns on asar integrity validation and loading only from the
 asar. A fused app cannot be driven, because Playwright attaches through `--inspect`, so
-`npm run drive:packaged` and `SECURE_FILES_APP` take the unfused bundle `npm run package` writes.
+`pnpm run drive:packaged` and `SECURE_FILES_APP` take the unfused bundle `pnpm run package` writes.
 All three write to the same `dist/` path, and `drive:packaged` refuses a fused bundle there rather
 than wait out its launch timeout.
 
-What `npm run package` writes on Linux is a directory somebody has to unpack and run themselves,
+What `pnpm run package` writes on Linux is a directory somebody has to unpack and run themselves,
 which is why it is not what a release ships. `scripts/linux-package.mjs` lays that bundle out as
 an install under `/opt/brave-bot`, with a launcher entry, the icon in the theme at every size in
 `build/icons/` and again as the drawing, and `chrome-sandbox` setuid root, and writes the `.deb`

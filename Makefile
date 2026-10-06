@@ -33,8 +33,8 @@ RPM_IMAGE = fedora:42@sha256:99e203b80b1c3d8f7e161ec10a68fd02b081ef83a3963553e51
 # Every file that states the version, which is what a bump rewrites and commits. The two under
 # ui/ are the desktop application's: it is packaged from its own manifest, so a version left
 # behind there is an app bundle naming a release that does not exist.
-VERSION_FILES = Cargo.toml Cargo.lock package.json package-lock.json \
-                ui/package.json ui/package-lock.json
+VERSION_FILES = Cargo.toml Cargo.lock package.json \
+                ui/package.json
 
 # Forwarded into the cross-build container, which does not inherit the host environment.
 BUILD_ENV = SERVICES_KEY_AICHAT BRAVE_SERVICES_KEY_ID BRAVE_AI_CHAT_ENDPOINT \
@@ -66,7 +66,7 @@ help:
 	@echo "  make write-untranslated    Write contrib/untranslated-messages.txt, which check-locales holds it to"
 	@echo "  make check-reviewdog       The PR security scan, on this branch's changes [BASE=ref]"
 	@echo "  make check-reviewdog-full  The same scan, over the whole tree"
-	@echo "  make check-npm             The installer test, the lockfile install and its lint"
+	@echo "  make check-npm             The installer test and the four frozen lockfile installs"
 	@echo "  make check-deps            Advisories, licences, duplicate versions, and sources"
 	@echo "  make check-msrv            Build against the declared minimum toolchain ($(MSRV))"
 	@echo "  make check-windows         Lint the Windows target that ships, cross-compiled"
@@ -251,10 +251,15 @@ check-reviewdog: check-reviewdog-selftest
 check-reviewdog-full: check-reviewdog-selftest
 	@contrib/check-reviewdog.sh --full
 
-# The npm-lockfile job. The published package is a thin wrapper that downloads the
+# The pnpm-lockfile job. The published package is a thin wrapper that downloads the
 # release binary, so the lockfile and that download are the whole supply chain surface it has.
-# The front end under ui/ has a lockfile of its own, holding Electron's tree, and it gets the
-# same lint: it is not an npm workspace of this package deliberately, so nothing else reaches it.
+# The front end under ui/ has a lockfile of its own, holding Electron's tree, the website
+# one beside it, and the session client's a fourth: none is a pnpm workspace of another
+# deliberately, so nothing else reaches any of them. pnpm refuses a dependency's lifecycle
+# scripts unless the project allow-lists it, and a frozen install refuses a lockfile the
+# manifest has moved away from, so `--frozen-lockfile` is the sync gate the four installs
+# run and --ignore-scripts keeps them from fetching anything the install itself does not
+# pin. The allowlists live in the pnpm-workspace.yaml files.
 #
 # The installer test is the download's half, and the only thing in this tree that runs any
 # of docs/specs/releases.md as code: it calls the origin the installer composes with an
@@ -266,11 +271,10 @@ check-reviewdog-full: check-reviewdog-selftest
 .PHONY: check-npm
 check-npm:
 	ls npm/tests/*.test.mjs >/dev/null && node --test npm/tests/*.test.mjs
-	npm ci --ignore-scripts
-	npm run lint:lockfile
-	npm run lint:lockfile:website
-	npm run lint:lockfile:agent-client
-	npm run lint:lockfile:ui
+	pnpm install --frozen-lockfile --ignore-scripts
+	pnpm --dir docs/website install --frozen-lockfile --ignore-scripts
+	pnpm --dir ui install --frozen-lockfile --ignore-scripts
+	pnpm --dir packages/agent-client install --frozen-lockfile --ignore-scripts
 
 # The dependency policy in deny.toml. CI runs this target rather than cargo-deny's action,
 # so the version below is the only one anywhere and a pass here means what it means there.
@@ -330,12 +334,14 @@ check-windows:
 			-- -D warnings'
 
 # docusaurus.config.js throws on a broken link or anchor, so building the site is the whole
-# of its correctness check. --ignore-scripts because the site's dependency tree is a
-# thousand packages deep and none of them needs an install hook to build.
+# of its correctness check. The one dependency there with a build script has it declined on
+# purpose: pnpm refuses them all unless the project says otherwise, and docs/website's
+# allowBuilds marks core-js's funding-notice postinstall as not run, which is what
+# --ignore-scripts bought before.
 .PHONY: check-docs
 check-docs:
-	npm --prefix docs/website ci --ignore-scripts
-	npm --prefix docs/website run build
+	pnpm --dir docs/website install --frozen-lockfile --ignore-scripts
+	pnpm --dir docs/website run build
 
 # How far the site has fallen behind the specs it describes. docs/docs-updated-to-sha records how
 # far reading got; these two report against it. Neither is a gate and no CI job runs them:
@@ -408,7 +414,7 @@ check-pr-fix-selftest:
 # test can cite them and `make check` never ran them. `ls` precedes the run because `node --test`
 # given a pattern matching nothing exits 0 having run nothing, which would make a renamed-away pin
 # a passing gate. The helper six of them spawn for real is built by the bridge script that
-# `npm run build` calls, so it needs no step of its own here.
+# `pnpm run build` calls, so it needs no step of its own here.
 .PHONY: check-ui check-ui-build check-ui-walkthrough
 check-ui: check-ui-build
 	$(MAKE) check-ui-walkthrough
@@ -422,22 +428,22 @@ check-extension:
 
 # The TypeScript session client under packages/agent-client: its types, its build, and its tests,
 # which drive a real bravebot-rpc against a model service of their own. The bridge is built here
-# because the tests never build it themselves. The package has its own lockfile and is not an npm
-# workspace. `ls` first for the reason check-extension gives.
+# because the tests never build it themselves. The package has its own lockfile and is not a
+# pnpm workspace of another. `ls` first for the reason check-extension gives.
 .PHONY: check-agent-client
 check-agent-client:
 	ls packages/agent-client/test-fixtures/scenarios/*.json >/dev/null
 	BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo build -p bravebot-ui-bridge --bin bravebot-rpc
-	npm --prefix packages/agent-client ci --ignore-scripts
-	npm --prefix packages/agent-client run check
+	pnpm --dir packages/agent-client install --frozen-lockfile --ignore-scripts
+	pnpm --dir packages/agent-client run check
 
 # CI sets UI_INSTALL to ui/scripts/ci-install.sh, which reuses a cached build of Leo, here and for
 # the two Windows packaging steps below.
-UI_INSTALL ?= npm --prefix ui ci
+UI_INSTALL ?= pnpm --dir ui install --frozen-lockfile
 check-ui-build: check-extension
 	$(UI_INSTALL)
-	npm --prefix ui run typecheck
-	BRAVEBOT_BUILD_UNCONFIGURED=1 npm --prefix ui run build
+	pnpm --dir ui run typecheck
+	BRAVEBOT_BUILD_UNCONFIGURED=1 pnpm --dir ui run build
 	cd ui && ls scripts/*.test.mjs >/dev/null && node --test scripts/*.test.mjs
 
 check-ui-walkthrough:
@@ -553,20 +559,21 @@ all-platforms: darwin-arm64 darwin-amd64 linux-amd64 linux-arm64 windows-amd64 w
 # Credentials come from the environment, as they do for every other release build: direnv at the
 # root of this repository, or a release job's own secrets.
 #
-# `npm ci`, never `install`: the lockfile is what CI lints and a resolve on the spot is a
-# dependency change. Its install hooks run, and have to: the packager copies the Electron runtime
-# into the bundle, and that runtime is what the hook fetches. electron-vite is then run directly
-# rather than through `npm run build`, which would build the debug pair again on the way past.
+# `pnpm install --frozen-lockfile`, never plain `install`: the lockfile is what CI holds the
+# manifest to and a resolve on the spot is a dependency change. Its dependency scripts run
+# where the allowlist permits, and have to: the packager copies the Electron runtime into the
+# bundle, and that runtime is what the hook fetches. electron-vite is then run directly
+# rather than through `pnpm run build`, which would build the debug pair again on the way past.
 #
 # Nothing here signs or notarises the result, so the bundle is installable and not distributable;
 # the job that signs the binaries is where that belongs, and issue #394 is where it is decided.
 # It is fused, as a release is, so it runs no Node program it is handed and Playwright cannot
-# drive it: `npm run package` in ui/ is the bundle the drivers attach to.
+# drive it: `pnpm run package` in ui/ is the bundle the drivers attach to.
 .PHONY: app-bundle
 app-bundle:
 	BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=0 cargo build --release --locked \
 		-p bravebot-ui-bridge -p bravebot-ui-files
-	cd ui && npm ci && npm run typecheck && npm exec -- electron-vite build && \
+	cd ui && pnpm install --frozen-lockfile && pnpm run typecheck && pnpm exec electron-vite build && \
 		node scripts/package.mjs --release
 
 # The desktop application's release assets, built on a Mac from what the cross-build left in
@@ -609,7 +616,7 @@ app-bundles:
 		echo "missing from dist/:$$missing" >&2; \
 		echo "run \`make$$builds strip\` first" >&2; exit 1; \
 	fi
-	cd ui && npm ci && npm run typecheck && npm exec -- electron-vite build
+	cd ui && pnpm install --frozen-lockfile && pnpm run typecheck && pnpm exec electron-vite build
 	@set -e; stage=$$(mktemp -d); trap 'rm -rf "$$stage"' EXIT; \
 	for pair in $(APP_ARCHES); do \
 		arch=$${pair%%:*}; electron=$${pair#*:}; \
@@ -675,7 +682,7 @@ app-bundles-linux:
 		echo "missing from dist/:$$missing" >&2; \
 		echo "run \`make$$builds strip\` first" >&2; exit 1; \
 	fi
-	cd ui && npm ci && npm run typecheck && npm exec -- electron-vite build
+	cd ui && pnpm install --frozen-lockfile && pnpm run typecheck && pnpm exec electron-vite build
 	@set -e; stage=$$(mktemp -d); trap 'rm -rf "$$stage"' EXIT; \
 	for pair in $(APP_ARCHES); do \
 		arch=$${pair%%:*}; electron=$${pair#*:}; \
@@ -755,7 +762,7 @@ app-bundles-windows:
 		echo "run \`make$$builds strip\` first" >&2; exit 1; \
 	fi
 	$(UI_INSTALL)
-	cd ui && npm run typecheck && npm exec -- electron-vite build
+	cd ui && pnpm run typecheck && pnpm exec electron-vite build
 	@set -e; stage=$$(mktemp -d); trap 'rm -rf "$$stage"' EXIT; \
 	for pair in $(APP_ARCHES); do \
 		arch=$${pair%%:*}; electron=$${pair#*:}; \
@@ -827,17 +834,17 @@ checksums:
 	done
 	@echo "wrote dist/SHA256SUMS"
 
-# Edits the six files that state the version and commits exactly those, so no lockfile is
+# Edits the four files that state the version and commits exactly those, so nothing is
 # left behind still naming the old one. It stops there: nothing is pushed and nothing is
 # tagged, and the commit is still reviewed before `github-release` will tag it.
 #
-# The four JSON files are written by contrib/check-versions.py, which is also what reads them, so
-# the bump and the check cannot disagree about where a version is stated. It replaced a node
-# program embedded in this recipe that could not run at all: a recipe's line continuations are
-# literal backslashes inside the single quotes holding the program, so node was handed a source
-# beginning with one and refused it. The npm install after it re-derives the wrapper's lockfile
-# from the manifest, as it did before. Nothing runs npm under ui/: an install there re-resolves
-# Electron's tree against the registry, which is a dependency change and not a version stamp.
+# The two JSON manifests are written by contrib/check-versions.py, which is also what reads
+# them, so the bump and the check cannot disagree about where a version is stated. It replaced
+# a node program embedded in this recipe that could not run at all: a recipe's line
+# continuations are literal backslashes inside the single quotes holding the program, so node
+# was handed a source beginning with one and refused it. Nothing else needs touching: the
+# pnpm lockfiles record no version of the packages they lock, and the npm install that used
+# to re-derive the wrapper's lockfile from the manifest has nothing left to do.
 #
 # check-versions then runs as a check, so a bump that missed a file fails here rather than at the
 # tag.
@@ -879,7 +886,6 @@ bump-version:
 	fi; \
 	cargo update --workspace --offline >/dev/null 2>&1 || cargo update --workspace >/dev/null; \
 	python3 contrib/check-versions.py --set "$$next"; \
-	BRAVEBOT_INSTALL_SKIP_DOWNLOAD=1 npm install --package-lock-only --ignore-scripts >/dev/null; \
 	python3 contrib/check-versions.py; \
 	git commit -q -m "Bump version to $$next" -- $(VERSION_FILES); \
 	echo "committed: bumped $$current -> $$next ($(VERSION_FILES))"; \

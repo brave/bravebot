@@ -10,9 +10,9 @@ governs:
   - npm/tests/postinstall.test.mjs
   - install.sh
   - package.json
-  - package-lock.json
+  - pnpm-lock.yaml
   - ui/package.json
-  - ui/package-lock.json
+  - ui/pnpm-lock.yaml
   - contrib/check-versions.py
 documented-by: docs/website/docs/quickstart.md
 ---
@@ -38,7 +38,7 @@ once that release exists.
 Most of this is not pinned by a Rust test. Those rules are enforced by a refusal in the tagging
 path, the Jenkins publish path, or the npm publish workflow rather than by anything the test
 suite can execute, so each of those clauses says in brackets what makes it hold. Two of them are
-the exception. What the npm installer downloads from is pinned by a Node test that the npm
+the exception. What the npm installer downloads from is pinned by a Node test that the pnpm
 lockfile job runs and `cargo test` does not reach, and what the installers do with a Linux
 signature is pinned by a Rust test that runs both of them against a release it made.
 
@@ -198,14 +198,14 @@ an unreviewed version on the registry.
 The publish job proves itself with a short-lived OIDC identity for this workflow in this
 repository, and sets no long-lived npm credential. The package it publishes carries provenance
 for that run. No dependency of this repository is installed or run in the job that holds the grant:
-the grant is declared on that job rather than for the whole workflow, and the lockfile install and
-the lint it feeds are a job of their own that holds only `contents: read`.
+the grant is declared on that job rather than for the whole workflow, and the frozen lockfile
+install and the installer test it feeds are a job of their own that holds only `contents: read`.
 
 **Why.** A token in GitHub secrets is a credential that publishes if it leaks, and it outlives
 the run that needed it. OIDC binds the publish to this file on this repository, so a different
 workflow, or the same workflow in a fork, cannot use it. The grant is a permission to request a
 token, and every step of the job holding it can exercise that permission, so a job is the smallest
-boundary it has: the lint runs lockfile-lint and the packages beneath it by design, and in the
+boundary it has: the install runs pnpm and the installer test beside it by design, and in the
 publishing job those bytes could mint the credential and publish a tarball with this repository's
 provenance on it. Under `contents: read` the identical compromise reaches a green check and nothing
 else. The trusted publisher on npmjs.com keys on the repository and the workflow filename rather
@@ -214,16 +214,21 @@ than a job name, so which job publishes is this repository's to choose.
 `verified-by: by-construction (the publish job grants id-token: write, sets no NPM_TOKEN or NODE_AUTH_TOKEN, and calls npm publish --access public --provenance; make check-security faults a step that installs or runs an npm dependency in a job holding the grant)`
 
 <a id="RELEASE-12"></a>
-### RELEASE-12: the npm lockfile is committed, CI installs from it, and it is linted
+### RELEASE-12: the lockfiles are committed, and CI installs from them frozen
 
-An install in CI uses the committed lockfile rather than resolving anew, and a lockfile that
-pulls from somewhere other than the npm registry, or over http, fails that job.
+An install in CI uses the committed lockfile rather than resolving anew: every install is
+frozen, so a manifest the lockfile does not describe fails. A dependency whose tarball is not
+the one the registry pinned, or whose integrity hash does not match, fails the install; and no
+dependency's lifecycle script runs unless the project allow-lists it, so an install hook is a
+reviewed entry in a `pnpm-workspace.yaml` rather than code that runs because it shipped.
 
 **Why.** The published tarball is this repository's wrapper scripts. A dependency that appeared
 only at install time would be bytes nobody reviewed, and the first place that would show up is
-the pipeline that publishes.
+the pipeline that publishes. The registry-side checks lockfile-lint made on an npm lockfile are
+pnpm's own install checks here: every entry's integrity and pinned registry metadata is
+verified against the registry before it is installed.
 
-`verified-by: by-construction (package-lock.json is in the tree, both workflows run npm ci --ignore-scripts, and lockfile-lint refuses hosts other than npm and non-https URLs)`
+`verified-by: by-construction (pnpm-lock.yaml, ui/pnpm-lock.yaml and docs/website/pnpm-lock.yaml are in the tree, every install in CI is pnpm install --frozen-lockfile, and pnpm verifies each entry's integrity and pinned tarball metadata against the registry's own while refusing any dependency build script its pnpm-workspace.yaml allowBuilds does not list)`
 
 <a id="RELEASE-13"></a>
 ### RELEASE-13: each installer's release origin is composed from nothing
@@ -335,7 +340,7 @@ install may be refused.
   push would have to publish something to prove anything. Three checks hold part of it from outside
   the suite. `make check-security` holds the shape of the publish workflow rather than any of these
   refusals: that no job beside the credential installs a dependency, and that the checkout names a
-  kind of ref. `make check-versions` holds [RELEASE-1](#RELEASE-1) itself, over the six files that
+  kind of ref. `make check-versions` holds [RELEASE-1](#RELEASE-1) itself, over the four files that
   state a version, and carries its own selftest because a version check that is quietly partial
   reports success forever. Both of those are read off files, so a refusal deleted from a `run:`
   block passes them. `make check-npm` is the one that runs something: it calls the npm installer's
@@ -389,8 +394,8 @@ install may be refused.
 - **Two third party actions still run in the job holding the grant.** Checking out the tag and
   pointing npm at the registry is what that job is, so `actions/checkout` and `actions/setup-node`
   cannot be moved out of it. Both are pinned to a commit, which is the whole of what is held
-  against them, so what remains is whoever owns those two commits rather than whoever owns any of
-  the packages under `lockfile-lint`.
+  against them, so what remains is whoever owns those two commits; the wrapper installs nothing
+  at all, so there is no dependency whose owner sits beside the grant.
 
 - **A second npm publish of the same version fails at the registry.** Dispatching before Jenkins
   has created the GitHub release fails the asset check instead. A delayed Jenkins run does not

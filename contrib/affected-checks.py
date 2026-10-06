@@ -127,14 +127,14 @@ def classify(path, desktop):
         found = {"ui"}
         if name == "test-fixtures/wire-contract.json":
             found.add("rust")
-        if name in ("package.json", "package-lock.json"):
+        if name in ("package.json", "pnpm-lock.yaml"):
             found.add("npm")
         return frozenset(found)
     for under, area in (("docs/website/", "docs"), ("ui/", "ui")):
         if path.startswith(under):
-            lockfile = path[len(under):] in ("package.json", "package-lock.json")
+            lockfile = path[len(under):] in ("package.json", "pnpm-lock.yaml")
             return frozenset({area, "npm"} if lockfile else {area})
-    if path in ("package.json", "package-lock.json") or path.startswith("npm/"):
+    if path in ("package.json", "pnpm-lock.yaml") or path.startswith("npm/"):
         return frozenset({"npm"})
     if path in QUIET or path.startswith(QUIET_UNDER):
         return NOTHING
@@ -298,7 +298,7 @@ CASES = (
     ("docs/specs/layering.md", {"rust"}),
     ("docs/specs/routing.md", NOTHING),
     ("docs/website/docs/intro.md", {"docs"}),
-    ("docs/website/package-lock.json", {"docs", "npm"}),
+    ("docs/website/pnpm-lock.yaml", {"docs", "npm"}),
     ("ui/src/App.tsx", {"ui"}),
     ("ui/package.json", {"ui", "npm"}),
     ("ui/scripts/windows-installer.mjs", {"ui", "build"}),
@@ -308,12 +308,12 @@ CASES = (
     ("ui/scripts/windows-installer.test.mjs", {"ui"}),
     ("packages/agent-client/src/common/client.ts", {"ui"}),
     ("packages/agent-client/test-fixtures/wire-contract.json", {"rust", "ui"}),
-    ("packages/agent-client/package-lock.json", {"ui", "npm"}),
+    ("packages/agent-client/pnpm-lock.yaml", {"ui", "npm"}),
     ("extension/tools.js", {"rust", "ui"}),
     ("extension/tests/tools.test.mjs", {"rust", "ui"}),
     ("npm/scripts/postinstall.js", {"npm", "rust"}),
     ("install.sh", {"rust"}),
-    ("package-lock.json", {"npm"}),
+    ("pnpm-lock.yaml", {"npm"}),
     ("agents/skills/rebase/SKILL.md", NOTHING),
     ("contrib/check-locales.py", NOTHING),
     ("README.md", NOTHING),

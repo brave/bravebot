@@ -51,7 +51,8 @@ PHRASES = (
 
 # This file lists the phrases above, so it would report itself. Lockfiles are generated.
 OWN_FILE = "contrib/check-narration.py"
-LOCKFILES = ("Cargo.lock", "package-lock.json")
+# pnpm-lock.yaml files are generated, and every one of them, under any directory.
+LOCKFILES = ("Cargo.lock", "pnpm-lock.yaml")
 PATHSPECS = (f":(exclude){OWN_FILE}", *(f":(exclude,glob)**/{name}" for name in LOCKFILES))
 
 WORD = re.compile(r"[a-z0-9']+")

@@ -27,7 +27,8 @@
 /install.sh @bbondy
 /npm/scripts/ @bbondy
 /ui/package.json @bbondy
-/package-lock.json @bbondy
-/ui/package-lock.json @bbondy
+/pnpm-lock.yaml @bbondy
+/ui/pnpm-lock.yaml @bbondy
+/docs/website/pnpm-lock.yaml @bbondy
 /Cargo.lock @bbondy
 /contrib/required-checks.txt @bbondy

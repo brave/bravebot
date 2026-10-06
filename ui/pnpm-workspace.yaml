@@ -1,0 +1,12 @@
+# pnpm's allowlist of dependency lifecycle scripts. pnpm refuses to run any
+# dependency's scripts unless it is named here, so each entry is deliberate.
+allowBuilds:
+  # Leo is a git-hosted dependency whose prepare builds it from source.
+  "@brave/leo@https://codeload.github.com/brave/leo/tar.gz/3f491c2c44b3fd4bd29ae2aa843b226ec1f9fa0d": true
+  # Downloads the Electron runtime, which packaging and local dev both need.
+  electron: true
+  # Downloads the code-signing and NSIS vendor binaries the Windows installers need.
+  electron-winstaller: true
+  # Validates the platform binary, which ships as an optional dependency.
+  esbuild: true
+  svelte-preprocess: true

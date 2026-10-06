@@ -43,11 +43,11 @@ class CheckTargets(unittest.TestCase):
         self.log = self.root / "calls"
         self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
                         CALL_LOG=str(self.log), FAIL_COMMAND="", TEST_PLATFORM="Darwin")
-        for name in ("npm", "node", "xvfb-run", "python3", "cargo"):
+        for name in ("pnpm", "node", "xvfb-run", "python3", "cargo"):
             tool = self.bin / name
             tool.write_text('#!/bin/sh\ncommand="$(basename "$0") $*"\n'
                             'printf "%s\\n" "$command" >> "$CALL_LOG"\n'
-                            'if [ "$command" = "npm --prefix ui run build" ]; then\n'
+                            'if [ "$command" = "pnpm --dir ui run build" ]; then\n'
                             '  [ "$BRAVEBOT_BUILD_UNCONFIGURED" = 1 ] || exit 9\nfi\n'
                             '[ "$command" != "$FAIL_COMMAND" ]\n')
             tool.chmod(0o755)
@@ -158,8 +158,8 @@ class CheckTargets(unittest.TestCase):
         """An app that cannot build or complete its walkthrough must fail the UI gate, and so must
         the extension's tests, which the UI gate runs first."""
         commands = ["node --test extension/tests/fixture.test.mjs",
-                    "npm --prefix ui ci", "npm --prefix ui run typecheck",
-                    "npm --prefix ui run build", "node --test scripts/fixture.test.mjs",
+                    "pnpm --dir ui install --frozen-lockfile", "pnpm --dir ui run typecheck",
+                    "pnpm --dir ui run build", "node --test scripts/fixture.test.mjs",
                     "node scripts/drive-manual-walkthrough.mjs"]
         for failing in ("", *commands):
             with self.subTest(failing=failing):
@@ -172,8 +172,8 @@ class CheckTargets(unittest.TestCase):
         """The client's tests drive a built bravebot-rpc and never build it, so a bridge that
         fails to build must stop the gate before they run."""
         commands = ["cargo build -p bravebot-ui-bridge --bin bravebot-rpc",
-                    "npm --prefix packages/agent-client ci --ignore-scripts",
-                    "npm --prefix packages/agent-client run check"]
+                    "pnpm --dir packages/agent-client install --frozen-lockfile --ignore-scripts",
+                    "pnpm --dir packages/agent-client run check"]
         for failing in ("", *commands):
             with self.subTest(failing=failing):
                 result = self.run_make("check-agent-client", FAIL_COMMAND=failing)
@@ -205,11 +205,12 @@ class CheckTargets(unittest.TestCase):
                 self.assertEqual(self.log.read_text().splitlines(), [command])
 
     def test_the_installer_test_precedes_the_install_and_each_failure_stops_the_gate(self):
-        """The website lockfile needs the same gate as the wrapper and UI lockfiles, and the
+        """The website and UI lockfile installs need the same gate as the wrapper's, and the
         installer test must run before anything installs a dependency for it to depend on."""
-        commands = ["node --test npm/tests/fixture.test.mjs", "npm ci --ignore-scripts",
-                    "npm run lint:lockfile", "npm run lint:lockfile:website",
-                    "npm run lint:lockfile:agent-client", "npm run lint:lockfile:ui"]
+        commands = ["node --test npm/tests/fixture.test.mjs", "pnpm install --frozen-lockfile --ignore-scripts",
+                    "pnpm --dir docs/website install --frozen-lockfile --ignore-scripts",
+                    "pnpm --dir ui install --frozen-lockfile --ignore-scripts",
+                    "pnpm --dir packages/agent-client install --frozen-lockfile --ignore-scripts"]
         for failing in ("", *commands):
             with self.subTest(failing=failing):
                 result = self.run_make("check-npm", FAIL_COMMAND=failing)

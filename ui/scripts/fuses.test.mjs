@@ -90,7 +90,7 @@ test('the Electron this lockfile installs has a wire every release fuse can be s
   const path = process.platform === 'darwin'
     ? `${dist}Electron.app/Contents/Frameworks/Electron Framework.framework/Electron Framework`
     : `${dist}electron`
-  if (!existsSync(path)) return t.skip(`no Electron at ${path}: npm ci runs its install script`)
+  if (!existsSync(path)) return t.skip(`no Electron at ${path}: pnpm install runs its install script`)
   const bytes = readFileSync(path)
   setFuses(bytes, RELEASE_FUSES)
   // Positions 0, 2 and 3 off, 4 and 5 on; 1 is cookie encryption, which a release leaves alone.

@@ -12,12 +12,49 @@ function fixture(t, { installed }) {
     dependencies: { react: '^19.0.0' },
     devDependencies: { typescript: '^5.7.2' },
   }))
-  writeFileSync(join(root, 'package-lock.json'), JSON.stringify({
-    packages: {
-      'node_modules/react': { version: '19.1.0' },
-      'node_modules/typescript': { version: '5.9.2' },
-    },
-  }))
+  writeFileSync(join(root, 'pnpm-lock.yaml'), [
+    // The two documents pnpm 12 writes: the first holds pnpm's own packageManagerDependencies,
+    // the second the project's importers, each followed by a `packages:` section.
+    '---',
+    'lockfileVersion: \'9.0\'',
+    '',
+    'importers:',
+    '',
+    '  .:',
+    '    configDependencies: {}',
+    '    packageManagerDependencies:',
+    '      pnpm:',
+    '        specifier: 12.9.1',
+    '        version: 12.9.1',
+    '',
+    'packages:',
+    '',
+    "  '@pnpm/exe@12.9.1':",
+    '    resolution: {integrity: sha512-AAA}',
+    '',
+    '---',
+    'lockfileVersion: \'9.0\'',
+    '',
+    'settings:',
+    '  autoInstallPeers: true',
+    '',
+    'importers:',
+    '',
+    '  .:',
+    '    dependencies:',
+    '      react:',
+    '        specifier: ^19.0.0',
+    '        version: 19.1.0',
+    '    devDependencies:',
+    '      typescript:',
+    '        specifier: ^5.7.2',
+    '        version: 5.9.2',
+    '',
+    'packages:',
+    '',
+    '  react@19.1.0:',
+    '    resolution: {integrity: sha512-AAA}',
+  ].join('\n'))
   if (installed) {
     for (const [name, version] of Object.entries(installed)) {
       mkdirSync(join(root, 'node_modules', name), { recursive: true })

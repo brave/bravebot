@@ -30,7 +30,7 @@ Choose how much to run:
 
 | Command | Coverage |
 |---|---|
-| `make check-all-local` | Script selftests, host formatting, Clippy and Rust tests, specs, security rules, locales, versions, narration, toolchain age, docs, npm lockfiles, dependency policy, desktop UI, the TypeScript session client and reviewdog. No Docker. |
+| `make check-all-local` | Script selftests, host formatting, Clippy and Rust tests, specs, security rules, locales, versions, narration, toolchain age, docs, pnpm lockfiles, dependency policy, desktop UI, the TypeScript session client and reviewdog. No Docker. |
 | `make check-all` | Everything in `check-all-local`, plus Docker checks for minimum Rust, Windows Clippy and Linux. |
 | `make check-affected` | Script selftests, specs, security rules, locales, versions, narration and reviewdog, plus each host check this branch's changes need, chosen the way CI chooses its jobs. No Docker. |
 | `make check-affected-containers` | The Docker checks this branch's changes need: minimum Rust, Windows Clippy and Linux for a change to Rust, and none otherwise. |
@@ -47,7 +47,7 @@ the Rust build.
 
 CI runs its heavier jobs only where a change could fail them.
 [contrib/affected-checks.py](../../contrib/affected-checks.py) reads the paths a pull request
-touches and says which of Rust, the desktop app, the cross-builds, the website, the npm lockfiles
+touches and says which of Rust, the desktop app, the cross-builds, the website, the pnpm lockfiles
 and the dependency policy they could affect. The specs, security, locales, versions and narration
 jobs take seconds and run on every change. A change to a crate needs the desktop jobs when the desktop app
 builds that crate, which is any crate the two bridge crates name, however far down. A job skipped
@@ -89,7 +89,7 @@ installs `xvfb`, `libgtk-3-0`, `libnss3` and `libasound2t64`. CI uses the same b
 and walkthrough targets, with a separate timeout for the walkthrough.
 The check build leaves out backend credentials, even when your development build has
 them, so the walkthrough can test the unconfigured app without using your account.
-Run `npm --prefix ui run build` afterwards to restore a configured development build.
+Run `pnpm --dir ui run build` afterwards to restore a configured development build.
 
 `make check-agent-client` builds `bravebot-rpc`, then installs, type-checks, builds and tests
 `packages/agent-client`. Its tests start that binary against a model service of their own, an empty
@@ -214,7 +214,7 @@ base with `upstream/main`, or `origin/main` without one, or `BASE=<ref>`, and re
 only where `PR_TITLE` and `PR_BODY` are set. It carries a `--selftest`, which `make check-narration`
 runs first.
 
-`make check-npm` installs from the lockfile and lints it, as CI does, and runs the installer test
+`make check-npm` installs from the lockfiles, frozen, as CI does, and runs the installer test
 under `npm/tests`, which holds the release origin the published package downloads from to this
 repository whatever the environment says. That test is the one thing in the tree that runs a
 clause of [../specs/releases.md](../specs/releases.md) as code, so run this target for a change to

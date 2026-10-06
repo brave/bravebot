@@ -1,0 +1,16 @@
+# pnpm's equivalents of the npm overrides in package.json, each pinned to the
+# version the npm lockfile resolved, so the tree stays byte-for-byte the same.
+# npm's alias syntax (`npm:`) works in pnpm overrides too.
+overrides:
+  gray-matter: "npm:@11ty/gray-matter@1.0.0"
+  image-size: "npm:image-size-next@2.1.1"
+  js-yaml: 5.4.1
+  qs: 6.16.0
+  serialize-javascript: 7.1.1
+  uuid: 14.0.2
+
+# The one dependency here with lifecycle scripts, declined deliberately: core-js's
+# postinstall prints a funding notice and nothing else, which is what npm's
+# --ignore-scripts skipped when npm installed the site.
+allowBuilds:
+  core-js: false

@@ -27,7 +27,7 @@
 
 Format, lint, and test
 Minimum supported Rust
-npm lockfile
+pnpm lockfile
 Front end
 Desktop on Windows
 Specs

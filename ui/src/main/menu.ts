@@ -26,7 +26,7 @@
  * set instead by `scripts/name-dev-app.mjs`, which renames Electron's own bundle in
  * `node_modules` — the only lever there is until there is a packaging step with a
  * `productName`. If the menu bar ever says "Electron" again, that script has been undone by
- * an `npm install` and `npm run name-dev-app` puts it back.
+ * a `pnpm install` and `pnpm run name-dev-app` puts it back.
  *
  * ## The roles are load-bearing
  *

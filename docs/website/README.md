@@ -16,8 +16,8 @@ make install  # install dependencies
 make start    # serve locally with live reload
 ```
 
-`make` on its own lists every target. The npm scripts still work if you prefer them:
-`npm install`, `npm start`, `npm run build`.
+`make` on its own lists every target. The pnpm scripts still work if you prefer them:
+`pnpm install --frozen-lockfile`, `pnpm start`, `pnpm run build`.
 
 ### Build
 

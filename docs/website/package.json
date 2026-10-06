@@ -43,14 +43,6 @@
       "last 1 safari version"
     ]
   },
-  "overrides": {
-    "serialize-javascript": "7.1.1",
-    "uuid": "^14.0.0",
-    "js-yaml": "^5.0.0",
-    "qs": "^6.16.0",
-    "gray-matter": "npm:@11ty/gray-matter@^3.0.0",
-    "image-size": "npm:image-size-next@2.1.1"
-  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/brave/bravebot.git"
@@ -59,5 +51,6 @@
   "license": "MPL-2.0",
   "bugs": {
     "url": "https://github.com/brave/bravebot/issues"
-  }
+  },
+  "packageManager": "pnpm@12.9.1"
 }
