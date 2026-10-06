@@ -192,10 +192,10 @@ session opens and cannot change while it runs. It is stated once at startup, and
 ## Choosing how much the session asks
 
 **Shift-Tab** cycles the session through asking about everything, accepting edits, plan mode, and
-(only where the command line asked for it) bypassing every check. It types nothing, is read before
-Tab so it never completes a half-typed line, and works while a turn runs. A turn in flight keeps the
-mode it began with, so what you press describes the next one. Both spellings of the chord are
-answered, since which one arrives is the terminal's choice rather than yours.
+bypassing every check. It types nothing, is read before Tab so it never completes a half-typed line,
+and works while a turn runs. A turn in flight keeps the mode it began with, so what you press
+describes the next one. Both spellings of the chord are answered, since which one arrives is the
+terminal's choice rather than yours.
 
 The mode leads the row beneath the box and is the only part of it drawn in a colour. Asking about
 everything takes no room at all: what is drawn is a mode somebody chose. When the terminal is too

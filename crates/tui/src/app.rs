@@ -885,7 +885,7 @@ fn status_report(
         confinement: &session.confinement,
         servers: &session.servers,
         permission_mode: session.permission_mode(),
-        bypass_available: session.bypass_available(),
+        began_in_bypass: session.began_in_bypass(),
         auto_vetting: session.auto_vetting(),
         turns: session.turns,
         tokens: session.tokens,
@@ -3315,9 +3315,13 @@ fn event_loop(
     // Windows reports modifiers on every key without being asked, and crossterm says it cannot be
     // asked there, so the question only settles it elsewhere.
     session.ctrl_enter_arrives = cfg!(windows) || enhanced_keys();
-    // The flag both opens the session in bypass and puts that rung on the ladder the key walks.
+    // The flag opens the session in bypass. The rung is on the ladder the key walks either way,
+    // unless a settings layer took it off (MODE-5).
     if skip_permissions {
-        session = session.allowing_bypass();
+        session = session.starting_in_bypass();
+    }
+    if bypass_is_unreachable(&settings) {
+        session.make_bypass_unreachable();
     }
     // Before the first turn, and kept until the session ends: a resumed record stores none, so
     // these are the words of the turns this process sends (CLI-19).
@@ -5611,6 +5615,15 @@ impl RuleSources {
     }
 }
 
+/// Whether a layer in force, or the administrator's pinned file, wrote
+/// `permissions.bypassUnreachable` (PERM-17).
+fn bypass_is_unreachable(settings: &bravebot_config::Settings) -> bool {
+    settings
+        .narrowing()
+        .strictest(bravebot_config::Managed::load().narrowing())
+        .makes_bypass_unreachable()
+}
+
 /// The rules every turn is given, built from the settings of the workspace the session is in.
 struct Rules {
     sources: RuleSources,
@@ -5629,6 +5642,11 @@ impl Rules {
         ask: impl FnOnce(&[bravebot_agent::granted::Proposed], &mut String) -> Option<bool>,
     ) -> bool {
         let settings = self.sources.settings(root);
+        // Before the person is asked anything, so a checkout that forbids bypassing holds whatever
+        // they answer about its rules.
+        if bypass_is_unreachable(&settings) {
+            session.make_bypass_unreachable();
+        }
         let grants = self.sources.grants(root);
         let Some(permissions) =
             rules_from(session, &settings, root, grants.as_ref(), whence, id, ask)
@@ -20156,6 +20174,7 @@ mod tests {
         for expected in [
             PermissionMode::AcceptEdits,
             PermissionMode::Plan,
+            PermissionMode::Bypass,
             PermissionMode::Ask,
         ] {
             handle_key(&mut session, shift(KeyCode::Tab));
@@ -20193,24 +20212,95 @@ mod tests {
         );
     }
 
-    /// Bypass is reachable only where `--dangerously-skip-permissions` was given. Without it the
-    /// rung does not exist, however many times the key is pressed, or the flag would be decorative.
+    /// Bypass is on the ladder of a session that did not start in it, and reaching it that way does
+    /// not make the line under the box name asking once the key leaves it: that is said only of a
+    /// session the flag opened in bypass.
     #[test]
-    fn the_key_cannot_reach_bypass_without_the_flag() {
+    fn the_key_reaches_bypass_without_the_flag() {
         use bravebot_agent::PermissionMode;
         let mut session = Session::new("none");
+        assert!(!session.began_in_bypass());
+        let mut reached = false;
+        for _ in 0..4 {
+            handle_key(&mut session, shift(KeyCode::Tab));
+            reached |= session.permission_mode() == PermissionMode::Bypass;
+        }
+        assert!(reached, "four presses never reached bypass");
+        assert_eq!(session.permission_mode(), PermissionMode::Ask);
+        assert!(!session.began_in_bypass());
+    }
+
+    /// PERM-17: where a layer wrote `permissions.bypassUnreachable` the rung is off the ladder, and
+    /// the key cannot reach it however many times it is pressed.
+    #[test]
+    fn the_key_cannot_reach_bypass_where_a_layer_made_it_unreachable() {
+        use bravebot_agent::PermissionMode;
+        let mut session = Session::new("none");
+        session.make_bypass_unreachable();
         for _ in 0..12 {
             handle_key(&mut session, shift(KeyCode::Tab));
             assert_ne!(session.permission_mode(), PermissionMode::Bypass);
         }
     }
 
-    /// The flag opens the session in bypass and puts that rung on the ladder. Honouring only the
-    /// second would make the flag do nothing a person could see.
+    /// A session already in bypass when a layer takes it away goes back to asking, is told so, and
+    /// does not get the rung back.
+    #[test]
+    fn a_session_in_bypass_is_put_back_to_asking_when_a_layer_takes_bypass_away() {
+        use bravebot_agent::PermissionMode;
+        let mut session = Session::new("none").starting_in_bypass();
+        let notes = session.transcript.len();
+        session.make_bypass_unreachable();
+        assert_eq!(session.permission_mode(), PermissionMode::Ask);
+        assert!(session.transcript.len() > notes, "the person was not told");
+        for _ in 0..12 {
+            handle_key(&mut session, shift(KeyCode::Tab));
+            assert_ne!(session.permission_mode(), PermissionMode::Bypass);
+        }
+    }
+
+    /// `/cd` reads the destination's layers, and a checkout that forbids bypassing holds in a session
+    /// that was in bypass when it moved there, whatever the person answers about its rules.
+    #[test]
+    fn reading_the_rules_of_a_checkout_that_forbids_bypassing_takes_bypass_away() {
+        use bravebot_agent::PermissionMode;
+        let root = crate::testutil::scratch_dir("bravebot-bypass-unreachable-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let a = root.join("a");
+        let b = root.join("b");
+        checkout_with_settings(&a, r#"{"permissions": {}}"#);
+        checkout_with_settings(&b, r#"{"permissions": {"bypassUnreachable": true}}"#);
+
+        let workspace = Workspace::new(&a).expect("workspace");
+        let mut session = Session::new("none");
+        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        session.cycle_permission_mode();
+        session.cycle_permission_mode();
+        session.cycle_permission_mode();
+        assert_eq!(session.permission_mode(), PermissionMode::Bypass);
+
+        rules.read_for(
+            &mut session,
+            &b,
+            Whence::Asked,
+            "the-next-session",
+            never_asked,
+        );
+
+        assert_eq!(session.permission_mode(), PermissionMode::Ask);
+        session.cycle_permission_mode();
+        session.cycle_permission_mode();
+        session.cycle_permission_mode();
+        assert_eq!(session.permission_mode(), PermissionMode::Ask);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The flag opens the session in bypass, and the key walks out of it and back round.
     #[test]
     fn the_flag_opens_the_session_in_bypass_and_can_be_cycled_out_of() {
         use bravebot_agent::PermissionMode;
-        let mut session = Session::new("none").allowing_bypass();
+        let mut session = Session::new("none").starting_in_bypass();
         assert_eq!(session.permission_mode(), PermissionMode::Bypass);
 
         // Out of it, round the ladder, and back: the key means the same thing wherever it started.
@@ -22133,7 +22223,7 @@ mod tests {
         checkout_with_settings(&b, CHECK);
 
         let mut workspace = Workspace::new(&a).expect("workspace");
-        let mut session = Session::new("none").allowing_bypass();
+        let mut session = Session::new("none").starting_in_bypass();
         let trust = TrustStore::new(workspace.root());
         let rules = starting_rules(&mut session, &state, workspace.root());
         let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);

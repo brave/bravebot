@@ -45,7 +45,8 @@ pub enum PermissionMode {
     Plan,
     /// Nothing is asked at all, including vouching for files nobody vouched for.
     ///
-    /// What `--dangerously-skip-permissions` selects, reachable only where it was given. See
+    /// What `--dangerously-skip-permissions` selects, and what the mode key reaches unless a settings
+    /// layer wrote `permissions.bypassUnreachable`. See
     /// [`Confining::confirm_vouch`] for what the last of those costs, and
     /// [`Confining::confirm_vetted_read`] for the one answer this mode does not give itself.
     Bypass,
@@ -54,23 +55,23 @@ pub enum PermissionMode {
 impl PermissionMode {
     /// The modes one key cycles through, in order, ending back at the first.
     ///
-    /// `Bypass` is not among them: it is reachable only where the flag was given, so the ladder
-    /// depends on that and is built by [`PermissionMode::cycle`] rather than listed here.
+    /// `Bypass` is not among them: it is left off where a settings layer made it unreachable, so the
+    /// ladder depends on that and is built by [`PermissionMode::cycle`] rather than listed here.
     const LADDER: [Self; 3] = [Self::Ask, Self::AcceptEdits, Self::Plan];
 
     /// The next mode round the ladder.
     ///
-    /// `bypass_available` is whether `--dangerously-skip-permissions` was given. Without it the
-    /// fourth rung does not exist: a session that could cycle into bypassing every check would make
-    /// the flag decorative, and the flag is the record that somebody accepted what it costs.
-    pub fn cycle(self, bypass_available: bool) -> Self {
+    /// `bypass_reachable` is false where a settings layer wrote `permissions.bypassUnreachable`
+    /// (PERM-17). Then the fourth rung does not exist, and the key cannot reach bypassing however
+    /// many times it is pressed.
+    pub fn cycle(self, bypass_reachable: bool) -> Self {
         // From bypass the ladder is rejoined at the start, so the key remains a cycle rather than a
-        // one-way door out of the mode the flag asked for.
+        // one-way door out of the mode.
         let Some(rung) = Self::LADDER.iter().position(|mode| *mode == self) else {
             return Self::Ask;
         };
         match rung + 1 == Self::LADDER.len() {
-            true if bypass_available => Self::Bypass,
+            true if bypass_reachable => Self::Bypass,
             true => Self::Ask,
             false => Self::LADDER[rung + 1],
         }
@@ -1057,10 +1058,10 @@ mod tests {
         }
     }
 
-    /// The ladder one key walks. Three rungs without the flag, back to the start from the last: a
+    /// The ladder one key walks. Three rungs where bypass is unreachable, back to the start from the last: a
     /// key that stopped cycling would be a mode somebody could not leave.
     #[test]
-    fn the_key_cycles_three_modes_without_the_flag() {
+    fn the_key_cycles_three_modes_where_bypass_is_unreachable() {
         let mut mode = PermissionMode::default();
         let mut seen = Vec::new();
         for _ in 0..4 {
@@ -1078,10 +1079,10 @@ mod tests {
         );
     }
 
-    /// The fourth rung exists only where the flag was given. Without that, a session could cycle
-    /// into bypassing every check and the flag would be decorative.
+    /// The fourth rung is on the ladder unless a layer made it unreachable, and is then absent
+    /// however many times the key is pressed.
     #[test]
-    fn bypass_is_only_reachable_where_the_flag_was_given() {
+    fn bypass_is_reachable_unless_a_layer_made_it_unreachable() {
         let mut mode = PermissionMode::default();
         let mut seen = Vec::new();
         for _ in 0..4 {
@@ -1099,7 +1100,7 @@ mod tests {
             "the ladder must come back round rather than stop at bypass"
         );
 
-        // The rung is unreachable without it, however many times the key is pressed.
+        // The rung is unreachable where a layer said so, however many times the key is pressed.
         let mut mode = PermissionMode::default();
         for _ in 0..12 {
             mode = mode.cycle(false);

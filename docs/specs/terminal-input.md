@@ -1060,7 +1060,7 @@ reaches for it before reading anything.
 `verified-by: bravebot_tui::app::either_spelling_of_shift_tab_cycles_the_mode`
 `verified-by: bravebot_tui::app::the_mode_key_leaves_the_line_alone`
 `verified-by: bravebot_tui::app::the_mode_can_be_changed_while_a_turn_runs`
-`verified-by: bravebot_agent::permission_mode::the_key_cycles_three_modes_without_the_flag`
+`verified-by: bravebot_agent::permission_mode::the_key_cycles_three_modes_where_bypass_is_unreachable`
 `verified-by: bravebot_agent::permission_mode::a_session_started_in_bypass_can_cycle_out_of_it`
 
 

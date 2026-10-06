@@ -1256,9 +1256,9 @@ and could not withhold it. It says what the mode does **not** reach, which is ev
 spec, and it is [MODE-7](permission-modes.md#MODE-7)'s rule applied here: no mode answers a question
 that is not a permission, and most of what protects a person from a server is not a question at all.
 
-The mode is reachable only where the command line asked for it
-([MODE-5](permission-modes.md#MODE-5)), so nothing in a declaration, a request key or a settings
-layer turns it on.
+Nothing in a declaration, a request key or a settings layer turns the mode on: it is chosen with the
+command line or the mode key ([MODE-5](permission-modes.md#MODE-5)), and a settings layer can only
+make it unreachable.
 
 Each of the following holds in that mode exactly as it holds outside it:
 
