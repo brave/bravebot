@@ -517,6 +517,7 @@ process, and is [layering.md](layering.md)'s: a rule about the crates here canno
 this workspace does not compile. This clause is the half enforceable here, which is that the label
 arrives at all.
 
+`verified-by: bravebot_ui_bridge::fetch::the_session_view_orders_prompts_approvals_and_labelled_results`
 `verified-by: bravebot_ui_bridge::wire::released_content_crosses_the_transport_with_the_label_it_was_released_under`
 `verified-by: bravebot_ui_bridge::wire::quarantined_content_says_how_much_it_left_out`
 `verified-by: bravebot_agent::turn::the_preview_of_a_mixed_listing_states_the_label_of_the_untrusted_entries`

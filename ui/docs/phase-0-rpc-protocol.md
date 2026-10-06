@@ -1295,3 +1295,50 @@ Still open:
   A settings file edited while a session is open governs the next one.
 - A manifest run is passed the session's rules, and the agent's runner does not read them.
 
+
+## Shared session view, version 1
+
+The optional `capabilities.sessionView` in `agent.info` and `agent.ready` advertises a shared Rust
+view for fresh sessions. Require version 1 before using it; an absent capability is unsupported.
+After `session.new`, call `session.view.start` with `{ "session": "s1", "version": 1 }` before
+sending any turn. Its initial event precedes the response. Repeating the call, subscribing after
+a turn, or subscribing to saved/forked history fails. Manifest runs are unavailable on a viewed
+session. Clients that do not subscribe keep their existing stream.
+
+`session.view.initial` and `session.view.update` use the Rust `view::Update` shape:
+
+```json
+{
+  "event": "session.view.update",
+  "session": "s1",
+  "data": {
+    "sequence": 1,
+    "turn": 0,
+    "status": "idle",
+    "pending": null,
+    "rows": []
+  }
+}
+```
+
+The initial sequence is 0. Apply updates consecutively, replacing each listed row by its `id` and
+replacing all status fields. Rows have `id`, `turn`, `kind`, `event`, `data`, and `resolved`.
+Kinds are `prompt`, `narration`, `quarantined`, `approval`, `reply`, `error`, and `activity`.
+`event` names the original event; it is null for accepted prompts, whose `data` uses the saved
+transcript's user/composed shape. Other row payloads preserve the original event's full `data`.
+A resolved approval replacement retains its event name and payload.
+
+`pending` holds `row`, `request`, `kind`, `supported`, and `data`. Supported kinds are `confirm`,
+`run`, `fetch`, and `ask`; use their existing reply operations. Unsupported kinds require a capable
+local surface or cancellation. Startup trust uses the existing local operation. The view never
+authorizes an action, and does not strengthen legacy request targeting.
+
+Status is `awaiting_trust`, `idle`, `running`, `waiting`, `completed`, `failed`, `cancelled`, or
+`detached`. Session close emits `detached`, which means the view ended, not that the worker stopped
+or saving succeeded. A gap or lost connection ends the view: version 1 has no reconnect or history
+recovery. IDs are scoped to the current connection lifetime and session, with request IDs also
+qualified by turn. Keep drafts and optimistic UI separate until an accepted prompt row arrives.
+
+The [shared session view spec](../../docs/specs/session-view.md) defines the supported rows, ordering,
+approval transitions, label preservation and limits. This is the Rust part of the first mobile
+block; no TypeScript client or native renderer is supplied yet.

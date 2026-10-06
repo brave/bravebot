@@ -1254,3 +1254,17 @@ fn the_mcp_questions_carry_what_a_card_draws() {
     assert_eq!(moved["destination"], "https://user@elsewhere.example/mcp");
     assert_eq!(moved["mayRecord"], true);
 }
+
+/// A live accepted prompt follows the saved transcript's tag-only rule.
+#[test]
+fn accepted_composed_prompts_cross_without_their_text() {
+    use bravebot_agent::conversation::Composed;
+    assert_eq!(
+        wire::submitted("typed", None),
+        json!({"kind": "user", "text": "typed"})
+    );
+    assert_eq!(
+        wire::submitted("must not cross", Some(&Composed::Consolidation)),
+        json!({"kind": "consolidation"})
+    );
+}

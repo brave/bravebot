@@ -1,12 +1,12 @@
 # Mobile prototype open questions
 
-Status: proposal, with no implementation evidence recorded here yet. This is the single record of unresolved decisions and choices awaiting validation. The [decision record](decisions-and-tradeoffs.md) holds settled choices and their reasons; the linked architecture and contract sections hold implementation requirements.
+Status: proposal with Q2 resolved for the first Rust block. This is the single record of unresolved decisions and choices awaiting validation. The [decision record](decisions-and-tradeoffs.md) holds settled choices and their reasons; the linked architecture and contract sections hold implementation requirements.
 
 **Unresolved** means an answer is still needed. **Awaiting validation** means the plan has a proposed answer that needs evidence. Neither status establishes implemented behavior. Each entry names the capability that needs its answer; unrelated work can proceed.
 
 ## What can proceed
 
-Stages 1–2a can start, resolving Q2's Rust placement during that work. U1 blocks real-session listener control; U2 and U3 block authenticated network exposure. The restricted stage-3d synthetic experiment can proceed under its [development transport limits](implementation-plan.md#3d-run-a-thin-phone-experiment). Device UI, real credentials, distribution, and dependency additions have the separate checkpoints below.
+Stages 1–2a can continue from the first Rust block; Q2 records its placement. U1 blocks real-session listener control; U2 and U3 block authenticated network exposure. The restricted stage-3d synthetic experiment can proceed under its [development transport limits](implementation-plan.md#3d-run-a-thin-phone-experiment). Device UI, real credentials, distribution, and dependency additions have the separate checkpoints below.
 
 ## Unresolved security decisions
 
@@ -49,11 +49,21 @@ These are not accepted risks or implementation details that can be skipped. The 
 
 ### Q2. Where should shared Rust presentation code live?
 
-- **Status:** unresolved module placement; Rust reuse is settled.
-- **Question and reason:** can existing crates supply the shared view and display transforms under the layering rules, or does presentation need a small separate crate?
-- **Current assumption:** reuse the owning crates, keep session transitions beside the bridge, and keep inspection of released display content in the [separate presentation layer](architecture.md#rust-sharing-boundary), outside bridge dispatch, `bravebot-core`, and `bravebot-agent`. TypeScript applies typed view updates without a second domain reducer.
-- **Evidence needed:** a dependency and API choice checked against the layering spec, plus a real stdio caller and binding fixtures for the minimal [shared view](client-contract.md#shared-screen-state). Preserve the legacy protocol and test refusal when the new capability is absent.
-- **Before:** completing stages 1–2a. Resolve this during the local proof; it does not require solving mobile bindings or networking first.
+- **Status:** resolved for the minimal local Rust block; native display validation remains pending.
+- **Decision:** `crates/ui-bridge/src/view.rs` owns session projection under LAYER-1's existing
+  non-presentation boundary. It copies complete labelled wire payloads and branches only on
+  bridge-owned event names and status/identity metadata. `wire::submitted` reuses saved-history
+  tags, and `Running`/`BridgeConfirmer` keep approval semantics.
+- **Evidence:** the stdio caller exercises `session.view.start`, initial state and typed updates
+  through the real process in `crates/ui-bridge/tests/fetch.rs`. The emitter barrier test pins
+  terminal ordering; view tests pin approval replacement payloads. No new dependency is needed.
+- **Presentation choice:** no released-content transform is needed by this transport-only block.
+  Existing CLI/TUI marking helpers inspect text and produce terminal output; importing them into
+  bridge dispatch would violate its boundary. Extract a narrow allowed presentation module or
+  crate when the first rendering caller needs shared transforms, with its layering entry and tests.
+- **Remaining:** TypeScript capability-refusal and binding fixtures, native rendering and marking.
+  See [implemented scope](client-contract.md#implemented-rust-block). This decision completes the
+  placement choice for this block, not stages 1–2a or device presentation.
 
 ### Q3. How are embedded API keys set up, stored, and revoked after device loss?
 
