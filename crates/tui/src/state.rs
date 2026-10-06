@@ -6865,12 +6865,18 @@ impl Session {
         self.todos.clear();
     }
 
-    /// Discard whatever has been typed.
+    /// Discard whatever has been typed, keeping it as the draft Up brings back first.
+    ///
+    /// A prompt walked back to is not kept: it is in the history already, and keeping it would
+    /// displace a draft for a line that was never lost.
     ///
     /// Guarded like the other editing methods: input belongs to the idle state, and clearing it
     /// mid-turn would mean the field the user returns to is not the one they left.
     pub fn clear_input(&mut self) {
         if self.status == Status::Idle {
+            if !self.history.on_a_sent_prompt() && !self.input.trim().is_empty() {
+                self.history.keep_draft(self.input.clone());
+            }
             self.history.leave();
             self.set_input(String::new());
             // The mode goes with the line. Escape means "never mind this", and leaving the marker
@@ -9115,7 +9121,7 @@ impl Session {
         if self.history.is_empty() {
             return false;
         }
-        let typed = !self.input.contains('\n') && !self.history.is_browsing();
+        let typed = !self.input.contains('\n') && !self.history.on_a_sent_prompt();
         let seed = match typed {
             true => self.input.trim().to_string(),
             false => String::new(),
@@ -17740,6 +17746,63 @@ mod tests {
             1,
             "the picture did not survive the round trip"
         );
+    }
+
+    /// A cleared line that named a picture comes back naming it, since clearing leaves what is
+    /// staged where it was. Kept as the words alone, the marker would stand over nothing.
+    #[test]
+    fn what_a_cleared_line_named_is_named_again_when_the_draft_comes_back() {
+        let mut s = session();
+        for c in "look at ".chars() {
+            s.type_char(c);
+        }
+        s.attach(picture(b"pixels"));
+        let line = s.input.clone();
+
+        s.clear_input();
+        assert!(
+            s.pasted_named(&s.input).is_empty(),
+            "a cleared line still named a picture"
+        );
+
+        s.recall_older();
+        assert_eq!(s.input, line);
+        assert_eq!(
+            s.pasted_named(&s.input).len(),
+            1,
+            "the picture did not survive the clear"
+        );
+    }
+
+    /// The caret lands at the end of a line that comes back, where somebody carries on typing, the
+    /// same as for a line brought back from the stash.
+    #[test]
+    fn the_caret_lands_at_the_end_of_a_recalled_draft() {
+        let mut s = session();
+        for c in "half a thought".chars() {
+            s.type_char(c);
+        }
+        s.clear_input();
+        s.recall_older();
+        s.type_char('!');
+        assert_eq!(s.input, "half a thought!");
+    }
+
+    /// The mode is not part of the words: a command cleared in the armed shell comes back as the
+    /// words of a prompt, as a stashed one does.
+    #[test]
+    fn a_cleared_command_comes_back_as_words_and_not_as_a_command() {
+        let mut s = session();
+        s.type_char('!');
+        for c in "ls -la".chars() {
+            s.type_char(c);
+        }
+        s.clear_input();
+        assert!(!s.shell, "the mode stayed armed after the clear");
+
+        s.recall_older();
+        assert_eq!(s.input, "ls -la");
+        assert!(!s.shell, "the draft came back as a command");
     }
 
     /// Sending another line settles what that line named and nothing a put-away line still names:
