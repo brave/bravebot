@@ -264,6 +264,7 @@ did, since the usual mistake is a uri missing its scheme and the username stays 
 `verified-by: bravebot_net::transport::two_spellings_of_a_proxy_variable_holding_different_values_are_both_named`
 `verified-by: bravebot_cli::main::the_network_section_names_a_proxy_variable_that_cannot_be_parsed`
 `verified-by: bravebot_cli::main::the_network_section_names_every_proxy_variable_that_cannot_be_parsed`
+`verified-by: bravebot_cli::running::doctor_ends_on_the_configuration_status_for_a_proxy_variable_that_names_no_route`
 `verified-by: bravebot_cli::main::a_proxy_this_build_cannot_connect_through_is_reported_as_not_the_route`
 `verified-by: bravebot_cli::main::the_network_section_names_the_hosts_a_proxy_is_not_used_for`
 `verified-by: bravebot_cli::main::the_network_section_names_the_roots_in_force_and_the_proxy`
