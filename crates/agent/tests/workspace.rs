@@ -4712,6 +4712,31 @@ fn a_search_skips_a_linked_worktree_under_claude_worktrees() {
     assert_eq!(named.matches.len(), 1, "naming the worktree found nothing");
 }
 
+/// A linked worktree under `.worktrees` is a full copy of the tree, as one under `.claude/worktrees`
+/// is. Left in, its copy of a common word fills the match cap before the walk reaches the tree
+/// the question is about. Naming a directory inside it still reaches it.
+#[test]
+fn a_search_skips_a_linked_worktree_under_dot_worktrees() {
+    let scratch = Scratch::new("grep-dot-worktrees");
+    std::fs::write(scratch.path.join("mine.rs"), "needle\n").unwrap();
+    let copy = scratch.path.join(".worktrees/feature");
+    std::fs::create_dir_all(&copy).unwrap();
+    std::fs::write(copy.join("mine.rs"), "needle\n").unwrap();
+
+    let found = search_in(&scratch.path, &["needle"], None, true, 1);
+    let paths: Vec<&str> = found.matches.iter().map(|m| m.path.as_str()).collect();
+    assert_eq!(paths, ["mine.rs"], "a linked worktree was walked");
+
+    let named = search_in(
+        &scratch.path.join(".worktrees/feature"),
+        &["needle"],
+        None,
+        true,
+        1,
+    );
+    assert_eq!(named.matches.len(), 1, "naming the worktree found nothing");
+}
+
 /// A cap the caller cannot ask past is a cap that loses whatever is behind it. Saying the answer
 /// is a sample leaves the planner narrowing the pattern and guessing, and a guess that misses
 /// drops the matches it was meant to find.
