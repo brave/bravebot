@@ -1675,6 +1675,9 @@ skill-model-refused = { $skill } demande { $model }, que cette machine ne demand
 skill-model-kept-for-definition = { $skill } demande { $model }, mais ce tour reste sur le modèle que { $definition } a désigné
 skill-model-substituted = { $skill } a demandé { $model } et a reçu la réponse d'un autre modèle
 source-denied-by-rule = { $source } n'a pas été chargé : une règle deny de vos réglages le couvre
+import-too-deep = { $import } n'a pas été importé : les imports sont trop imbriqués ou trop nombreux
+import-cycle = { $import } n'a pas été importé : un fichier au-dessus l'importe déjà
+import-not-loaded = { $import } n'a pas été importé : il est hors de ce projet, illisible ou non approuvé
 
 
 ## Ce que la session répond

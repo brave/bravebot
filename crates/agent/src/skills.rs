@@ -375,6 +375,17 @@ impl Skill {
     }
 }
 
+/// Why an `@path` import was not expanded.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ImportRefusal {
+    /// Nested past the depth limit, or past the count limit for one instructions file.
+    TooDeep,
+    /// A file above it on the way down is already importing it.
+    Cycle,
+    /// Outside the project, unreadable, or not trusted.
+    NotLoaded,
+}
+
 /// Something the user should be told about discovery, in words a person reads.
 ///
 /// A skill that was skipped is worth a line: silence would read as "you have no skills" to
@@ -399,6 +410,15 @@ impl Notice {
     /// may not come from a catalog, and this sentence is the person's.
     pub(crate) fn denied_by_rule(origin: &str) -> Self {
         Self::new(t!(source_denied_by_rule, source = origin))
+    }
+
+    /// That an `@path` import in an instructions file was left as written, and why (INSTR-11).
+    pub(crate) fn import_refused(import: &str, why: ImportRefusal) -> Self {
+        Self::new(match why {
+            ImportRefusal::TooDeep => t!(import_too_deep, import = import),
+            ImportRefusal::Cycle => t!(import_cycle, import = import),
+            ImportRefusal::NotLoaded => t!(import_not_loaded, import = import),
+        })
     }
 
     fn new(message: impl Into<String>) -> Self {

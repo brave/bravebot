@@ -165,7 +165,8 @@ workspace, that file is read instead and is what reaches the planner. Once only:
 turn is not followed.
 
 Length is the whole test. A document is not a pointer however many files it cites, so anything
-longer is read as itself and its citations are left alone.
+longer is read as itself and its citations are left alone. An explicit `@path` import is a different signal, and
+[INSTR-11](#INSTR-11) expands it.
 
 The pointer is resolved by the same `workspace.read` that governs every other path, so confinement
 and the trust map decide whether the named file may be opened. A pointer naming something outside
@@ -292,6 +293,45 @@ opening is replaceable because what follows it is what the other clauses rely on
 `verified-by: bravebot_agent::turn::a_replaced_opening_takes_the_place_of_the_opening_alone`
 `verified-by: bravebot_agent::turn::system_prompt_words_reach_every_turn_and_are_not_stored`
 `verified-by: bravebot_agent::turn::a_delegate_reads_the_appended_words_and_not_the_replaced_opening`
+
+<a id="INSTR-11"></a>
+### INSTR-11: an `@path` import in the project's instructions is replaced by the file's text
+
+In the project's instructions, after they have passed the trust gate, a whitespace-delimited token
+that begins with `@` and names a markdown file is replaced by that file's text, trimmed, where the
+token stands. Punctuation that ends the token, as in `@docs/style.md.`, stays after the text. The
+path is resolved against the directory of the file the token is written in, and nested imports are
+expanded the same way, to four hops from the instructions file. A token inside a code span or a
+fenced code block is not an import. A token naming no file, or not a markdown file, is ordinary
+text.
+
+Each import is read through the same `workspace.read` and trust gate as [INSTR-8](#INSTR-8)'s
+pointer, after a `deny` rule is asked ([PERM-7](permissions.md#PERM-7)), so confinement and the
+trust map decide. An import that cannot be expanded stays as written and the person is told which
+file and why: a `deny` rule covers it, it is outside the workspace or not trusted, a file above it
+is already importing it, or the nesting or the count (64 for one instructions file) is past the
+limit. An absolute path, or one reaching above the workspace, is never read and is not reported, because
+it names no file the project holds. The same refusal is reported once, however many times the
+file is named. An untrusted
+directory's instructions never reach this rule ([INSTR-5](#INSTR-5)).
+
+Only the project's file is expanded. `~/.bravebot/AGENTS.md` is not, because its imports would
+have to name files outside the workspace.
+
+**Why.** Claude Code and Gemini CLI expand these, so a CLAUDE.md written for either arrives intact
+here, and a long file can be split or composed from shared parts. Handed the literal token, a
+planner spends a read on it or never reads it. The driver branches only on text that passed the
+gate and reads each import through it, so nothing untrusted decides what is read.
+
+`verified-by: bravebot_agent::preamble::an_at_path_import_is_expanded_in_place_and_resolved_beside_its_file`
+`verified-by: bravebot_agent::preamble::an_import_nested_past_four_hops_is_left_as_written`
+`verified-by: bravebot_agent::preamble::an_import_in_a_code_fence_or_a_code_span_is_not_followed`
+`verified-by: bravebot_agent::preamble::an_import_cycle_is_cut_where_it_closes`
+`verified-by: bravebot_agent::preamble::an_import_back_to_the_file_a_pointer_was_read_from_is_a_cycle`
+`verified-by: bravebot_agent::preamble::a_shorter_fence_inside_a_longer_one_does_not_end_it`
+`verified-by: bravebot_agent::preamble::an_import_outside_the_workspace_is_left_as_written`
+`verified-by: bravebot_agent::preamble::an_untrusted_project_loads_no_import`
+`verified-by: bravebot_agent::turn::a_denied_file_an_agents_file_imports_does_not_reach_the_system_prompt`
 
 ## Known costs
 
