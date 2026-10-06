@@ -6897,3 +6897,70 @@ fn a_run_without_the_safe_flag_says_nothing_of_safe_mode() {
     assert!(!refused.status.success());
     assert!(said(&refused).1.contains("--safe"), "{:?}", said(&refused));
 }
+
+/// A session in lines started in `cwd` with `flag` among its arguments, which answers the trust
+/// question yes and sends one prompt.
+///
+/// A one-shot run never vouches for its checkout, so a checkout's own `AGENTS.md` is only read by a
+/// session that asked. `script(1)` supplies the terminal such a session refuses to run without, in
+/// util-linux's argument form.
+#[cfg(target_os = "linux")]
+fn a_session_in_lines_that_trusts_its_checkout(home: &Path, cwd: &Path, flag: &str) -> Output {
+    let mut session = Command::new("/usr/bin/script")
+        .env_clear()
+        .env("HOME", home)
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .envs(AT_A_GATEWAY.iter().copied())
+        .current_dir(cwd)
+        .args([
+            "-qec",
+            &format!("{} --plain {flag}", env!("CARGO_BIN_EXE_bravebot")),
+            "/dev/null",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("a terminal for a session in lines");
+    session
+        .stdin
+        .take()
+        .expect("the session's input")
+        .write_all(b"y\nsay something\n")
+        .expect("write the script");
+    session.wait_with_output().expect("the session ends")
+}
+
+/// `--safe` leaves out the `AGENTS.md` a checkout holds as well as the one in the home, and the
+/// same checkout without it sends that file to the planner.
+///
+/// Both sessions trust the checkout, since a file from one nobody vouched for is left out either
+/// way, and the first is what shows the second's fixture was going to be read. `script(1)` is
+/// util-linux's, so this runs on Linux.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_safe_session_sends_no_agents_file_from_its_checkout_a_plain_one_sends() {
+    for (name, flag, sent) in [
+        ("cli-running-safe-checkout-control", "", true),
+        ("cli-running-safe-checkout", "--safe", false),
+    ] {
+        let gateway = a_gateway_listing(r#"["tools"]"#);
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let cwd = scratch.path.join("checkout");
+        std::fs::create_dir_all(&cwd).expect("create the checkout");
+        std::fs::write(cwd.join("AGENTS.md"), "zebra-project-words\n").expect("write AGENTS.md");
+
+        let output = a_session_in_lines_that_trusts_its_checkout(&scratch.path, &cwd, flag);
+
+        let asked = gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .unwrap_or_else(|_| panic!("the session reached the gateway: {:?}", said(&output)));
+        assert_eq!(
+            asked.contains("zebra-project-words"),
+            sent,
+            "{flag:?}: the checkout's AGENTS.md was {}sent: {asked}",
+            if sent { "not " } else { "" }
+        );
+    }
+}

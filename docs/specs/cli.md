@@ -1148,4 +1148,5 @@ what it leaves out is permission: nothing is added to what the planner may do.
 
 `verified-by: bravebot_cli::running::a_safe_run_loads_none_of_the_customizations_a_plain_one_loads`
 `verified-by: bravebot_cli::running::a_run_without_the_safe_flag_says_nothing_of_safe_mode`
+`verified-by: bravebot_cli::running::a_safe_session_sends_no_agents_file_from_its_checkout_a_plain_one_sends`
 `verified-by: bravebot_cli::main::the_safe_flag_is_taken_out_wherever_it_appears`
