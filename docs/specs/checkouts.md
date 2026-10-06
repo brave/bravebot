@@ -809,6 +809,7 @@ its record or resumes none, which is the issue's last stage. On Windows nothing 
 
 `verified-by: bravebot_agent::git::the_sweep_takes_only_an_unlisted_checkout_nobody_holds`
 `verified-by: bravebot_tui::sessions::the_checkouts_the_records_list_are_every_id_and_none_where_one_cannot_be_read`
+`verified-by: bravebot_agent::workspace::a_sweep_leaves_the_checkouts_a_session_made_or_took_back`
 `verified-by: bravebot_agent::workspace::a_move_is_refused_while_the_session_keeps_a_checkout_and_names_it`
 `verified-by: bravebot_agent::workspace::a_workspace_taking_the_records_checkouts_back_lists_them_with_their_candidates`
 `verified-by: bravebot_agent::workspace::a_checkout_the_record_names_anywhere_but_where_one_was_made_is_not_taken_back`
