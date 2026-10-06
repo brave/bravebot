@@ -264,8 +264,8 @@ permissions. A session that reached bypass with the key draws nothing when it le
 nothing before it entered. Leaving the mode prints nothing in the transcript.
 
 **Why.** The key is pressed by a person looking at the line that draws the mode, so it is as much a
-choice as the flag is. Requiring the flag meant that a person who decided mid-session to stop being
-asked had to restart it.
+choice as the flag is. Gating the key behind the flag would make a person who decides mid-session to
+stop being asked restart the session.
 
 What holds against that choice is `permissions.bypassUnreachable`, which any layer may write
 and an administrator may pin ([PERM-18](permissions.md#PERM-18)). It is checked where the flag is
