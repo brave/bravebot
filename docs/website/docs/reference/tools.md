@@ -111,6 +111,13 @@ and the turn schedules the look that would catch a change. In a session that kee
 [`watch_file`](#watch_file) is the better answer and this tool says so. For a file the planner may not
 be shown there is no token, and the size in the reference is what there is to compare.
 
+### A repeat read of a file nobody wrote is answered with a notice
+
+Ask for the same window of a file again, with the file as it was, and the result is a short notice
+that repeats the change token instead of the lines, which are already earlier in the conversation. A
+different offset or limit, or a file written since, comes back as lines. After the conversation is
+compacted the lines are sent again, because the round that held them is no longer sent.
+
 ## `list_files`
 
 Lists files under a directory.
