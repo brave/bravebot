@@ -637,9 +637,9 @@ there, and a memory the map does not trust is listed as withheld whether or not 
 caches no copy ([MEMORY-4](#MEMORY-4)) and does not open the file for the person: reading a
 withheld memory is a read of untrusted content, and a person's own editor is theirs to start.
 
-**Why.** The only place a memory's standing was said was the sentence given to the run, so a person
-could not tell which definitions keep one, where it is, or that it is withheld without reading
-`.bravebot/memory/` and `~/.bravebot/untrusted/` by hand.
+**Why.** Without a listing, the only place a memory's standing is said is the sentence given to the
+run, so a person has to read `.bravebot/memory/` and `~/.bravebot/untrusted/` by hand to learn which
+definitions keep one, where it is, or that it is withheld.
 
 `verified-by: bravebot_agent::memory::a_listed_memory_is_withheld_when_the_map_does_not_trust_it_whatever_is_on_disk`
 `verified-by: bravebot_tui::app::the_memory_command_lists_and_takes_no_argument`
