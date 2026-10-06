@@ -2342,12 +2342,11 @@ key. A blank value is not a key, for the reason BACKEND-11 gives about blanks ge
 The host and the path do not change, and the model listing is signed whichever way chat requests go
 out, so a configuration that holds a key holds both credentials.
 
-**Why.** The level was being carried, sent, and dropped, and the interface went on reporting it as in
-force; the Known cost below is the measurement. The fix is not ours to make in the protocol, the
-field being one the service reads or does not, so what is left is to reach the handler that reads it.
-Making that an opt-in rather than the new default is what keeps the sentence above true: this changes
-nothing for anyone who has not exported a key, at a moment when the handler is deployed to one
-environment and reachable only from inside Brave's network.
+**Why.** The handler that answers a signed request drops the level, and the relay forwards it. The
+service reads the field or does not, so the protocol cannot make it take effect, and what is left is
+to reach the handler that reads it. Making that an opt-in keeps the first sentence of this clause
+true: nothing changes for anyone who has not exported a key, and the relay is deployed to one
+environment and reachable only from inside Brave's network. The Known cost below is the measurement.
 
 Two credentials for one request would be the service deciding which it read rather than this deciding
 what it sent. A single-use subscription credential spent on a request whose handler reads no cookie
