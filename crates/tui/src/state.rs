@@ -1764,6 +1764,11 @@ pub struct Session {
     /// True until a listing says otherwise, so a session that has never reached one sends what the
     /// person asked for rather than withholding it on a fact nobody established.
     model_reads_effort: bool,
+    /// The model `/advisor` named for this session's planner to consult, resolved.
+    ///
+    /// Kept for the session only: the `advisorModel` setting is the saved route, and a turn that
+    /// finds none here leaves it to that.
+    advisor: Option<String>,
     /// Which offered command is under the cursor while one is being typed.
     ///
     /// An index into what [`Session::offered`] returns for the current input rather than a copy of
@@ -1929,6 +1934,7 @@ impl Session {
             model: None,
             effort: None,
             model_reads_effort: true,
+            advisor: None,
             completion: 0,
             workspace: std::path::PathBuf::new(),
             skills: None,
@@ -2044,6 +2050,18 @@ impl Session {
             bravebot_session::store::save_model(config.name_to_record(&model));
         }
         self.model = Some(model);
+    }
+
+    /// The model `/advisor` named, resolved, or `None` where it named none.
+    pub fn advisor(&self) -> Option<&str> {
+        self.advisor.as_deref()
+    }
+
+    /// Name the model the planner may consult from the next turn on, or `None` to drop the choice.
+    ///
+    /// Not recorded anywhere: a session that is resumed starts with the setting's advisor, if any.
+    pub fn choose_advisor(&mut self, model: Option<String>) {
+        self.advisor = model;
     }
 
     /// How hard to think, or `None` to leave the service its own default.

@@ -93,7 +93,7 @@ the routing-versus-content split they share.
 | [tools/schedule-next.md](tools/schedule-next.md) | `SCHED` | 5 | `schedule_next` |
 | [tools/watch-file.md](tools/watch-file.md) | `ARM` | 6 | `watch_file` |
 | [tools/ask-user.md](tools/ask-user.md) | `ASK` | 8 | `ask_user` |
-| [tools/advisor.md](tools/advisor.md) | `ADVISOR` | 8 | `advisor` |
+| [tools/advisor.md](tools/advisor.md) | `ADVISOR` | 9 | `advisor` |
 
 Topics with no spec yet are ordinary code. Adding one is how a topic becomes review-required.
 

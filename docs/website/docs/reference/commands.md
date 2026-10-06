@@ -19,6 +19,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/add-dir` | `<path> \| close <path>` | Open another directory and trust it for this session, or close one |
 | `/cd` | `<path>` | Work in another directory from now on, and trust it for this session |
 | `/rename` | `<name>` | Call this conversation something else |
+| `/advisor` | `[model \| off]` | Name the model the planner may consult, say which it may, or drop the choice |
 | `/compact` | `[focus]` | Summarise the conversation so far, keeping the recent part |
 | `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
 | `/clear` | | Start a new session here, keeping this one resumable |
@@ -135,6 +136,23 @@ The choice is written to `~/.bravebot`, so it outlives the session and applies i
 Themes of your own are JSON files under `~/.bravebot/themes/`, and nothing in a workspace is read. See
 [Choosing a theme](../customize/configuration.md#choosing-a-theme) and
 [Themes](../using/transcript.md#themes).
+
+## `/advisor [model | off]`
+
+Names the model the planner may consult through the [`advisor`](tools.md#advisor) tool, from the
+next turn on. `/advisor opus` takes it, in the words [`--advisor`](cli.md#--advisor-name) takes, and
+it outranks the [`advisorModel`](../customize/configuration.md#advisormodel) setting. The bare
+`/advisor` says which advisor is in force and opens no picker. A model that this machine's
+administrator refuses, that nothing configured serves, or that needs a sign-in first is not taken,
+and the line says why.
+
+`/advisor off` drops the choice made here. It does not switch off an advisor the setting names, and
+says so when the setting still names one. The choice lasts for the session and is not written down:
+put the model in the setting to have it in every session. Each call the planner makes spends the
+advisor's tokens and is counted in the turn's.
+
+Typed while a turn runs with nothing waiting, it is taken at once and the next turn is the first
+to use it.
 
 ## `/effort [level]`
 
@@ -820,7 +838,7 @@ what the session keeps for itself, so they are carried out as you type them, ahe
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. The exception is a line of the same command already waiting, which they wait behind, so
 `/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/rename`, `/issue`, `/pr`,
-`/forget-trust`, `/theme <name>` and `/effort <level>` change only what the session keeps, and are carried out as you
+`/forget-trust`, `/theme <name>`, `/effort <level>` and `/advisor` change only what the session keeps, and are carried out as you
 type them when nothing is waiting. Behind a waiting line they wait too, so `/rename` typed after a
 waiting `/clear` names the new session. What they say is drawn under the turn and joins the
 transcript once the turn has ended. `/theme` and `/effort` alone open a picker, so they wait.
