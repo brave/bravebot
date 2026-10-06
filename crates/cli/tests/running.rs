@@ -6707,20 +6707,23 @@ fn an_allow_rule_does_not_answer_a_write_a_background_session_holds() {
     let _ = host.wait();
 }
 
-/// BG-7: a server the user has not approved is not started by a background session and not asked
-/// about either. The session says it was not started and why, and goes on to its first prompt.
-///
-/// A property of the process: the declaration is read from the user's settings, the asking mode is
-/// chosen where the session is built, and the words say which was chosen. A session built with
-/// the foreground's choice would hold a question about the server instead of finishing the turn.
+/// A background session whose settings request a server nobody approved, attached and past the
+/// trust question, with the server question on screen.
 #[cfg(unix)]
-#[test]
-fn a_server_nobody_approved_is_not_started_by_a_background_session() {
+struct HeldServer {
+    home: ShortHome,
+    gateway: Gateway,
+    host: std::process::Child,
+    terminal: std::os::unix::net::UnixStream,
+    seen: BufReader<std::os::unix::net::UnixStream>,
+}
+
+#[cfg(unix)]
+fn a_server_question_is_held() -> HeldServer {
     use std::os::unix::net::UnixStream;
 
     let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
     let home = ShortHome::new();
-    let started = home.0.join("server-started");
     // Declared where only the person can write one, and requested by name in the settings, but
     // approved nowhere.
     std::fs::create_dir_all(home.0.join(".bravebot")).expect("the state directory");
@@ -6728,14 +6731,13 @@ fn a_server_nobody_approved_is_not_started_by_a_background_session() {
         home.0.join(".bravebot/mcp.json"),
         serde_json::json!({"servers": {"weather": {
             "transport": "stdio",
-            "argv": ["/bin/sh", "-c", format!("touch {}", started.display())],
+            "argv": ["/bin/sh", "-c", "exit 0"],
             "variables": ["PATH"],
         }}})
         .to_string(),
     )
     .expect("the declaration");
-    let (mut host, socket) =
-        a_started_host(&home, &gateway, r#"{"mcp": {"request": ["weather"]}}"#);
+    let (host, socket) = a_started_host(&home, &gateway, r#"{"mcp": {"request": ["weather"]}}"#);
 
     let mut terminal = UnixStream::connect(&socket).expect("attach");
     terminal
@@ -6745,14 +6747,79 @@ fn a_server_nobody_approved_is_not_started_by_a_background_session() {
     let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
     shown_until(&mut seen, "trust this directory?");
     writeln!(terminal, "n").expect("answer the question");
+    shown_until(&mut seen, "[1/2/3]");
+    HeldServer {
+        home,
+        gateway,
+        host,
+        terminal,
+        seen,
+    }
+}
 
-    let transcript = shown_until(&mut seen, "all done");
+/// BG-7: a server the user has not approved is put to whoever attaches, and nothing happens until
+/// they answer: the roster says the session needs input for a server and the model is not asked.
+/// Declining it runs the turn without the server.
+///
+/// A property of the process: the declaration is read from the user's settings, the asking mode is
+/// chosen where the session is built, and only the roster and the gateway say whether the
+/// question was held. A session that answered for the person, or that skipped the question, would
+/// have asked the gateway already.
+#[cfg(unix)]
+#[test]
+fn a_server_nobody_approved_is_held_by_a_background_session_until_answered() {
+    let mut held = a_server_question_is_held();
+
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let listed = said(&bravebot(&held.home.0, &[], &["sessions"])).0;
+        if listed.contains("needs input (server)") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "the roster never said a server was held: {listed}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::thread::sleep(Duration::from_millis(500));
     assert!(
-        transcript.contains("weather was not started: a one-shot run asks nobody"),
+        held.gateway.asked.try_recv().is_err(),
+        "the model was asked before the server question was answered"
+    );
+
+    writeln!(held.terminal, "3").expect("answer the question");
+    let transcript = shown_until(&mut held.seen, "all done");
+    assert!(
+        transcript.contains("weather is not used in this session"),
         "{transcript}"
     );
-    assert!(!started.exists(), "the server was started unapproved");
+    assert!(
+        !transcript.contains("weather was started"),
+        "the server was started though declined: {transcript}"
+    );
 
-    let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
-    let _ = host.wait();
+    let _ = bravebot(&held.home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+    let _ = held.host.wait();
+}
+
+/// BG-7: approving the held question starts the server, so the question was a real one and not a
+/// refusal worded as a question. The stand-in program exits without speaking, which is reported as
+/// a handshake that failed after the start.
+#[cfg(unix)]
+#[test]
+fn a_server_approved_at_the_held_question_is_started() {
+    let mut held = a_server_question_is_held();
+
+    writeln!(held.terminal, "1").expect("answer the question");
+    let transcript = shown_until(&mut held.seen, "all done");
+    // The server is confined and writes nothing, so the report that it was started and did not
+    // finish its handshake is what says it was launched.
+    assert!(
+        transcript.contains("weather was started"),
+        "the approved server was not started: {transcript}"
+    );
+
+    let _ = bravebot(&held.home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+    let _ = held.host.wait();
 }

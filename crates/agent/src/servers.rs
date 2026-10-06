@@ -934,6 +934,17 @@ pub enum Answer {
     No,
 }
 
+impl Answer {
+    /// What a typed line answers: 1 and 2 approve, and anything else is a no.
+    pub fn typed(line: &str) -> Self {
+        match line.trim() {
+            "1" => Self::Once,
+            "2" => Self::Project,
+            _ => Self::No,
+        }
+    }
+}
+
 /// SERVERS-4's question about one server.
 pub struct Question<'a> {
     pub alias: &'a str,
@@ -998,6 +1009,21 @@ impl Question<'_> {
         lines.extend(fetching(self.alias, self.declaration));
         lines
     }
+
+    /// The question and its three answers, drawn under [`Question::lines`].
+    pub fn choices(&self) -> Vec<String> {
+        vec![
+            format!("  {}", t!(mcp_question)),
+            format!("  1. {}", t!(servers_answer_once)),
+            format!("  2. {}", t!(servers_answer_project)),
+            format!("  3. {}", t!(servers_answer_no)),
+        ]
+    }
+
+    /// The words written after the choices, where the answer is typed.
+    pub fn answer_prompt() -> String {
+        format!("  {}", t!(servers_answer))
+    }
 }
 
 impl<R: BufRead, W: Write> Asker for Person<R, W> {
@@ -1012,20 +1038,15 @@ impl<R: BufRead, W: Write> Asker for Person<R, W> {
             say(self, line);
         }
         say(self, "");
-        say(self, format!("  {}", t!(mcp_question)));
-        say(self, format!("  1. {}", t!(servers_answer_once)));
-        say(self, format!("  2. {}", t!(servers_answer_project)));
-        say(self, format!("  3. {}", t!(servers_answer_no)));
-        let _ = write!(self.screen, "  {} ", t!(servers_answer));
+        for line in question.choices() {
+            say(self, line);
+        }
+        let _ = write!(self.screen, "{} ", Question::answer_prompt());
         let _ = self.screen.flush();
         let mut typed = String::new();
         match self.answers.read_line(&mut typed) {
             Ok(0) | Err(_) => Answer::No,
-            Ok(_) => match typed.trim() {
-                "1" => Answer::Once,
-                "2" => Answer::Project,
-                _ => Answer::No,
-            },
+            Ok(_) => Answer::typed(&typed),
         }
     }
 
