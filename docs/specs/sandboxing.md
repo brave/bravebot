@@ -603,7 +603,7 @@ Confinement is a property of the session and not of the plan: the terminal, desk
 one-shot front ends each ask for it when they open a session. A caller that does not ask, which is a
 test driving the executor directly, starts stages as the user's own shell would.
 
-A platform with no base to build a profile on starts a stage as it always has. That is Windows, where
+A platform with no base to build a profile on starts a stage unconfined, as the user's own shell would. That is Windows, where
 the decision is to confine Linux and macOS first and leave coverage of the third to
 [brave/bravebot#1632](https://github.com/brave/bravebot/issues/1632). The carve-out is the absence
 of a base and no other reason: a platform that has one and cannot apply a policy refuses.
@@ -611,13 +611,13 @@ of a base and no other reason: a platform that has one and cannot apply a policy
 **Why.** A profile that is applied when it can be and skipped when it cannot is the silent
 degradation [SANDBOX-1](#SANDBOX-1) exists to forbid, and the person who endorsed a line believes it
 ran under what the plan accounts for. An off switch would be the setting a person reaches for after
-one refusal and forgets, and every session after it would run the way these did before. Starting the
+one refusal and forgets, and every session after it would run unconfined. Starting the
 process already confined, through a command the caller spawns, keeps the stage's pipes and process
 group its own, so the executor's cancellation and job handling are unchanged.
 
 **What it costs.** A program argument that names a path outside the directories the session was
 opened on is refused by the kernel, since only redirections are opened by this process on the
-stage's behalf. A `cat ~/notes.txt` that worked before fails, and a person adds the directory
+stage's behalf. A `cat ~/notes.txt` fails, and a person adds the directory
 ([trust-map.md](trust-map.md)). On macOS the refusal of a `.git` write is lifted for these stages
 ([SANDBOX-14](#SANDBOX-14)), which gives them the reach Linux gives.
 
