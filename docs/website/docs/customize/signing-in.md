@@ -80,6 +80,16 @@ when one is set. A session reads the file when it starts, so one already open ke
 `bravebot auth logout gateway openrouter` forgets the key. With only one stored the id can be left
 off. Forgetting it here does not revoke it: it works at the gateway until you revoke it there.
 
+## Checking a sign-in
+
+```sh
+bravebot auth status leo
+```
+
+prints whether Leo is signed in and usable, and exits 0 only if it is, so a script can test it.
+`bedrock` and `gateway [id]` ask about the other two. With no way named it asks about all of them and
+exits 0 if any is usable. See [the reference](../reference/cli.md#auth).
+
 ## In an incognito session
 
 In an [incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind), `leo`,

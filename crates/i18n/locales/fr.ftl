@@ -44,6 +44,7 @@ cli-usage-import = Importer un abonnement Leo Premium
 cli-usage-import-providers = Importer un service de modèle configuré par Claude Code ou opencode
 cli-usage-auth-login = Se connecter à un service de modèle, en listant chaque façon si aucune n'est nommée
 cli-usage-auth-logout = Oublier un abonnement Leo Premium importé ou une clé de passerelle enregistrée
+cli-usage-auth-status = Dire si une connexion est utilisable, avec le code de sortie 0 seulement si elle l'est
 cli-usage-mcp = Déclarer, lister et approuver des serveurs MCP
 cli-usage-completion = Afficher un script de complétion pour le shell
 
@@ -619,6 +620,16 @@ auth-logout-gateway-forgotten =
     la clé pour { $id } est oubliée ici, et fonctionne encore chez { $host } jusqu'à sa révocation là-bas
 auth-logout-gateway-forgotten-elsewhere =
     la clé pour { $id } est oubliée ici, et fonctionne encore auprès du service qui l'a émise jusqu'à sa révocation là-bas
+
+auth-status-signed-in = connecté : { $detail }
+auth-status-not-signed-in = non connecté : { $detail }
+auth-status-unusable = inutilisable : { $detail }
+auth-status-none-usable = aucune connexion n'est utilisable
+auth-status-not-all-usable = une connexion demandée n'est pas utilisable
+auth-status-import = bravebot auth login import écrit des réglages et ne garde aucune connexion, donc il n'y a rien à demander : nommez leo, bedrock ou gateway
+auth-status-leo-none = aucun abonnement Leo n'est importé ; lancez bravebot auth login leo
+auth-status-leo-nowhere = cette machine n'a nulle part où garder des identifiants, donc aucun n'est importé
+auth-status-bedrock-good = la session AWS fournit des identifiants pour signer une requête
 
 
 ## Déclarer un serveur MCP, et l'approuver

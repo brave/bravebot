@@ -4612,6 +4612,336 @@ fn auth_logout_gateway_forgets_the_key_named_in_an_incognito_session() {
     assert_eq!(code, Some(2), "{stderr}");
 }
 
+/// A batch imported for `environment`, holding one spent and one unspent credential. The tokens are
+/// placeholders, and [`A_LEO_TOKEN`] is the one a test looks for in what was printed.
+const A_LEO_TOKEN: &str = "placeholder-leo-token";
+
+fn a_batch_for(environment: &str) -> String {
+    format!(
+        r#"{{"version": 1,
+            "order_id": "aaaaaaaa-1111-4222-8333-444444444444",
+            "environment": "{environment}",
+            "item_id": "b7114ccc-b3a5-4951-9a5d-8b7a28731111",
+            "issuer": "brave.com?sku=brave-leo-premium",
+            "credentials": [
+                {{"unblinded": "{A_LEO_TOKEN}", "valid_from": "2020-01-01T00:00:00Z",
+                  "valid_to": "2099-01-01T00:00:00Z", "spent": true, "rfc": true}},
+                {{"unblinded": "{A_LEO_TOKEN}", "valid_from": "2020-01-01T00:00:00Z",
+                  "valid_to": "2099-01-01T00:00:00Z", "spent": false, "rfc": true}}]}}"#
+    )
+}
+
+/// What `auth status` printed and exited with, for the arguments after `auth status`.
+fn status_of(
+    scratch: &Scratch,
+    environment: &[(&str, &str)],
+    arguments: &[&str],
+) -> (Option<i32>, String, String) {
+    let mut command = vec!["auth", "status"];
+    command.extend(arguments);
+    let output = bravebot(&scratch.path, environment, &command);
+    let (stdout, stderr) = said(&output);
+    assert!(
+        !stdout.contains(A_LEO_TOKEN) && !stderr.contains(A_LEO_TOKEN),
+        "{arguments:?} printed a Leo credential: {stdout}{stderr}"
+    );
+    assert!(
+        !stdout.contains(A_STORED_KEY) && !stderr.contains(A_STORED_KEY),
+        "{arguments:?} printed a gateway key: {stdout}{stderr}"
+    );
+    (output.status.code(), stdout, stderr)
+}
+
+/// CLI-23: with nothing imported Leo is not signed in, which is a failure a script can test for, and
+/// the line says how to sign in.
+#[test]
+fn auth_status_leo_with_nothing_imported_is_not_signed_in_and_exits_nonzero() {
+    let scratch = Scratch::new("cli-running-auth-status-none");
+
+    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["leo"]);
+
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("leo: not signed in: no Leo subscription is imported"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("bravebot auth login leo"), "{stdout}");
+    assert!(stderr.starts_with("BB1001: "), "{stderr}");
+
+    // Reading writes nothing, so an incognito session may ask.
+    let incognito = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["--incognito", "auth", "status", "leo"],
+    );
+    assert_eq!(said(&incognito), (stdout, stderr));
+}
+
+/// CLI-23: an imported batch is signed in, reported by its environment and the count of what is
+/// unspent, and nothing of it is printed.
+#[test]
+fn auth_status_leo_with_a_usable_batch_reports_counts_only() {
+    let scratch = Scratch::new("cli-running-auth-status-leo")
+        .with_state("leo-premium.json", &a_batch_for("production"));
+
+    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["leo"]);
+
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    assert_eq!(
+        stdout,
+        "leo: signed in: production subscription imported, 1 of 2 credentials unspent\n"
+    );
+    assert_eq!(stderr, "");
+}
+
+/// CLI-23 and PREM-8: a batch for an environment the endpoint does not accept is unusable and says
+/// what a turn would say, remedy included; against an endpoint that belongs to no environment the
+/// same batch is not refused, as it is not in a turn.
+#[test]
+fn auth_status_leo_for_another_environment_prints_the_remedy_a_turn_would() {
+    let scratch = Scratch::new("cli-running-auth-status-mismatch")
+        .with_state("leo-premium.json", &a_batch_for("staging"));
+
+    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["leo"]);
+
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("leo: unusable: the imported subscription is for staging"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("run `bravebot auth login leo` with the matching Brave channel"),
+        "the remedy is missing: {stdout}"
+    );
+
+    let local = [
+        ("SERVICES_KEY_AICHAT", "a-services-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+        ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ("BRAVE_AI_CHAT_PREMIUM_ENDPOINT", "http://127.0.0.1:1"),
+    ];
+    let (code, stdout, stderr) = status_of(&scratch, &local, &["leo"]);
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    assert!(stdout.contains("signed in"), "{stdout}");
+}
+
+/// CLI-23 and PREM-8: a file that cannot be read as a batch is unusable rather than absent, with the
+/// store's own refusal text, which names the remedy.
+#[test]
+fn auth_status_leo_with_an_unreadable_batch_is_unusable_with_the_stores_remedy() {
+    let scratch = Scratch::new("cli-running-auth-status-unreadable")
+        .with_state("leo-premium.json", "not a batch");
+
+    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["leo"]);
+
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(stdout.starts_with("leo: unusable: "), "{stdout}");
+    assert!(
+        stdout.contains("run `bravebot auth login leo` again to replace it"),
+        "{stdout}"
+    );
+}
+
+/// CLI-23: a gateway is signed in where a turn would find a key for it, said by where and never by
+/// what, and a gateway with none to find is not. Naming one asks about that one alone.
+#[test]
+fn auth_status_gateway_says_where_a_key_is_found_and_never_what_it_is() {
+    let scratch = Scratch::new("cli-running-auth-status-gateway")
+        .with_settings(TWO_GATEWAYS)
+        .with_state("gateway-keys.json", &stored_keys(&["work"]));
+
+    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["gateway", "work"]);
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    assert_eq!(
+        stdout,
+        "gateway work: signed in: stored by bravebot auth login gateway (never printed)\n"
+    );
+
+    let (code, stdout, stderr) =
+        status_of(&scratch, NOTHING_CONFIGURED, &["gateway", "openrouter"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("gateway openrouter: not signed in: none found")
+            && stdout.contains("bravebot auth login gateway openrouter"),
+        "{stdout}"
+    );
+
+    // Every gateway when none is named, so one without a key fails the way.
+    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["gateway"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert_eq!(stdout.lines().count(), 2, "{stdout}");
+
+    let exported = [NOTHING_CONFIGURED, &[("OPENROUTER_API_KEY", A_STORED_KEY)]].concat();
+    let (code, stdout, stderr) = status_of(&scratch, &exported, &["gateway"]);
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("gateway openrouter: signed in: found (never printed)"),
+        "{stdout}"
+    );
+}
+
+/// CLI-23: a gateway whose block names no credential needs none, so it is signed in and a script
+/// asking about it is told yes.
+#[test]
+fn auth_status_gateway_naming_no_credential_is_signed_in() {
+    let scratch = Scratch::new("cli-running-auth-status-no-key").with_settings(
+        r#"{"provider": {"ollama": {"options": {"baseURL": "http://localhost:11434/v1"}}}}"#,
+    );
+
+    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["gateway", "ollama"]);
+
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    assert!(
+        stdout.starts_with("gateway ollama: signed in: "),
+        "{stdout}"
+    );
+}
+
+/// CLI-23: a file of gateway keys that cannot be read is not reported as a missing key, which
+/// storing another would not fix.
+#[test]
+fn auth_status_gateway_with_an_unreadable_file_of_keys_is_unusable() {
+    let scratch = Scratch::new("cli-running-auth-status-unreadable-keys")
+        .with_settings(TWO_GATEWAYS)
+        .with_state("gateway-keys.json", "not a file of keys");
+
+    let (code, stdout, stderr) =
+        status_of(&scratch, NOTHING_CONFIGURED, &["gateway", "openrouter"]);
+
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("gateway openrouter: unusable: the file of gateway keys cannot be read"),
+        "{stdout}"
+    );
+}
+
+/// CLI-23: a word naming no gateway is refused without being repeated, since it may be a key, and
+/// so is an id where none is configured.
+#[test]
+fn auth_status_gateway_refuses_an_id_that_names_none_without_repeating_it() {
+    let scratch =
+        Scratch::new("cli-running-auth-status-gateway-refused").with_settings(TWO_GATEWAYS);
+
+    let (code, stdout, stderr) =
+        status_of(&scratch, NOTHING_CONFIGURED, &["gateway", A_STORED_KEY]);
+    assert_eq!(code, Some(2), "{stdout}{stderr}");
+    assert!(stderr.contains("openrouter, work"), "{stderr}");
+    assert_eq!(stdout, "");
+
+    let bare = Scratch::new("cli-running-auth-status-no-gateways");
+    let (code, _, stderr) = status_of(&bare, NOTHING_CONFIGURED, &["gateway", "work"]);
+    assert_eq!(code, Some(3), "{stderr}");
+    let (code, stdout, _) = status_of(&bare, NOTHING_CONFIGURED, &["gateway"]);
+    assert_eq!(code, Some(1), "{stdout}");
+    assert!(
+        stdout.contains("gateway: not signed in: no gateway is configured"),
+        "{stdout}"
+    );
+}
+
+/// CLI-23: naming no way asks about all of them and succeeds if any one is usable, since nobody
+/// holds every way; naming a way asks about that way, whatever else is usable.
+#[test]
+fn auth_status_with_no_way_named_succeeds_when_any_sign_in_is_usable() {
+    let scratch = Scratch::new("cli-running-auth-status-any")
+        .with_settings(TWO_GATEWAYS)
+        .with_state("gateway-keys.json", &stored_keys(&["openrouter"]));
+
+    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &[]);
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    for expected in [
+        "leo: not signed in",
+        "bedrock: not signed in",
+        "gateway openrouter: signed in",
+    ] {
+        assert!(stdout.contains(expected), "{expected} is missing: {stdout}");
+    }
+
+    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["leo"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+
+    let nothing = Scratch::new("cli-running-auth-status-nothing");
+    let (code, stdout, stderr) = status_of(&nothing, NOTHING_CONFIGURED, &[]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(
+        stderr.starts_with("BB1001: no sign-in is usable"),
+        "{stderr}"
+    );
+}
+
+/// CLI-23 and CLI-6: a configuration that cannot be read leaves the question without an answer,
+/// which is the configuration ending rather than a plain failure, and Leo with nothing imported
+/// does not need the configuration to be told apart.
+#[test]
+fn auth_status_in_an_unconfigured_build_is_a_configuration_failure() {
+    let scratch = Scratch::new("cli-running-auth-status-unconfigured");
+
+    let (code, stdout, stderr) = status_of(&scratch, &[], &["gateway"]);
+    assert_eq!(code, Some(3), "{stdout}{stderr}");
+    assert!(stderr.starts_with("BB1003: "), "{stderr}");
+
+    let (code, stdout, _) = status_of(&scratch, &[], &["leo"]);
+    assert_eq!(code, Some(1), "{stdout}");
+}
+
+/// CLI-23: what names no sign-in to ask about is an argument refusal, and the forms the refusal
+/// lists include this command.
+#[test]
+fn auth_status_refuses_what_asks_about_no_sign_in() {
+    let scratch = Scratch::new("cli-running-auth-status-refused");
+
+    for arguments in [
+        &["import"][..],
+        &["elsewhere"],
+        &["leo", "now"],
+        &["bedrock", "now"],
+        &["gateway", "work", "now"],
+        &["--json"],
+        &["leo", "--json"],
+        &["gateway", "--json"],
+    ] {
+        let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, arguments);
+        assert_eq!(code, Some(2), "{arguments:?}: {stdout}{stderr}");
+        assert_eq!(stdout, "", "{arguments:?}");
+        assert!(stderr.starts_with("BB1002: "), "{arguments:?}: {stderr}");
+    }
+    let (_, _, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["elsewhere"]);
+    assert!(
+        stderr.contains("bravebot auth status [leo|bedrock|gateway [id]]"),
+        "{stderr}"
+    );
+}
+
+/// CLI-23: an AWS account is signed in where its session gives credentials, asked of the AWS CLI
+/// without starting a sign-in, and a lapsed one fails with the sign-in named as the remedy.
+#[cfg(unix)]
+#[test]
+fn auth_status_bedrock_asks_the_aws_cli_without_signing_in() {
+    let scratch = Scratch::new("cli-running-auth-status-bedrock").with_settings(
+        r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2", "profile": "work"}}}}"#,
+    );
+    let path = aws_stand_in(&scratch);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("PATH", path.as_str()));
+
+    let (code, stdout, stderr) = status_of(&scratch, &environment, &["bedrock"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(
+        stdout.starts_with("bedrock work: not signed in: "),
+        "{stdout}"
+    );
+    assert!(stdout.contains("aws sso login"), "{stdout}");
+    assert!(
+        !scratch.path.join("aws-work").exists(),
+        "asking started a sign-in"
+    );
+
+    std::fs::write(scratch.path.join("aws-work"), "").expect("sign in to work");
+    let (code, stdout, stderr) = status_of(&scratch, &environment, &["bedrock"]);
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    assert!(stdout.starts_with("bedrock work: signed in: "), "{stdout}");
+}
+
 /// CRED-25: `doctor` names a stored key as stored and never prints it, and a file of keys it cannot
 /// read is named, since every gateway a key in it was for then reports none.
 #[test]

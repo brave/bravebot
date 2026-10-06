@@ -1150,3 +1150,65 @@ what it leaves out is permission: nothing is added to what the planner may do.
 `verified-by: bravebot_cli::running::a_run_without_the_safe_flag_says_nothing_of_safe_mode`
 `verified-by: bravebot_cli::running::a_safe_session_sends_no_agents_file_from_its_checkout_a_plain_one_sends`
 `verified-by: bravebot_cli::main::the_safe_flag_is_taken_out_wherever_it_appears`
+
+<a id="CLI-23"></a>
+### CLI-23: `auth status` says whether a sign-in is usable, and its exit status says it too
+
+`bravebot auth status [leo|bedrock|gateway [id]]` reads what a turn reads, writes nothing, and
+prints one line per sign-in: `leo`, `bedrock` for the default AWS profile or `bedrock <profile>`,
+and `gateway <id>`. Each line is one of:
+
+- **signed in**, with a detail. For Leo that is the line `doctor` prints, the environment and the
+  count of credentials unspent. For an AWS account it is that the session gives credentials, asked
+  of the AWS CLI without starting a sign-in. For a gateway it is where a key is found, never what it
+  is.
+- **not signed in**, with the way to sign in: nothing is imported, the AWS session has lapsed, or
+  a gateway has no key.
+- **unusable**, with the reason and remedy, where signing in again does not fix it: a stored
+  batch that cannot be read or was written by another version, or one imported for an environment
+  the premium endpoint does not accept, in the words a turn uses
+  ([PREM-8](premium-credentials.md#PREM-8)); the AWS CLI missing or the profile unknown; a file of
+  gateway keys that cannot be read.
+
+A gateway whose block names nowhere for a key to live needs none and is signed in. Leo needs the
+configuration only to know the endpoint, so nothing imported is reported without it. A configuration
+that cannot be read is reported as unusable on the lines it blocks.
+
+With no way named, all three are asked about. The command exits 0 if any sign-in is usable, since
+nobody holds every way and a script asking whether bravebot can run is asking about the set. With a
+way named, it exits 0 only if every sign-in under it is usable. Otherwise it exits with the
+configuration status where a configuration could not be read, and the failure status
+([CLI-6](#CLI-6)) where not, after the lines, saying which. `import` is refused with the argument
+status, since it keeps no sign-in. So are an unknown way, an option, and a word after the way, or
+after the id. An id no block has is refused naming the ids configured and not the word given
+([CRED-24](credential-protection.md#CRED-24)); with no gateway configured it is the configuration
+status.
+
+It is allowed in an incognito session, since it writes nothing.
+
+No line carries a credential, a token, an account or order id, or content from the workspace: only
+counts, ids the person wrote in settings, and fixed sentences
+([AGENTS.md](../../agents/AGENTS.md)).
+
+**Why.** `doctor` runs every check and reports a subscription inside a longer report, so it gives a
+script, or a person confirming that an import worked, no short answer and no exit status that means
+signed in. Nothing imported is reported as not signed in, where a turn says nothing about it
+([PREM-8](premium-credentials.md#PREM-8)), because here the person asked. Any-of for the set and
+all-of for a named way is so that the same command serves a script that wants to know whether to
+start and one that wants to know whether a particular sign-in worked.
+
+`verified-by: bravebot_cli::running::auth_status_leo_with_nothing_imported_is_not_signed_in_and_exits_nonzero`
+`verified-by: bravebot_cli::running::auth_status_leo_with_a_usable_batch_reports_counts_only`
+`verified-by: bravebot_cli::running::auth_status_leo_for_another_environment_prints_the_remedy_a_turn_would`
+`verified-by: bravebot_cli::running::auth_status_leo_with_an_unreadable_batch_is_unusable_with_the_stores_remedy`
+`verified-by: bravebot_cli::running::auth_status_gateway_says_where_a_key_is_found_and_never_what_it_is`
+`verified-by: bravebot_cli::running::auth_status_gateway_with_an_unreadable_file_of_keys_is_unusable`
+`verified-by: bravebot_cli::running::auth_status_gateway_naming_no_credential_is_signed_in`
+`verified-by: bravebot_cli::running::auth_status_gateway_refuses_an_id_that_names_none_without_repeating_it`
+`verified-by: bravebot_cli::running::auth_status_with_no_way_named_succeeds_when_any_sign_in_is_usable`
+`verified-by: bravebot_cli::running::auth_status_in_an_unconfigured_build_is_a_configuration_failure`
+`verified-by: bravebot_cli::running::auth_status_refuses_what_asks_about_no_sign_in`
+`verified-by: bravebot_cli::running::auth_status_bedrock_asks_the_aws_cli_without_signing_in`
+`verified-by: bravebot_cli::auth::the_verdict_asks_all_of_a_named_way_and_any_of_the_rest`
+`verified-by: bravebot_cli::auth::a_lapsed_aws_session_is_not_signed_in_and_a_missing_cli_is_unusable`
+`verified-by: bravebot_cli::auth::nothing_imported_is_told_from_a_store_that_could_not_be_read`

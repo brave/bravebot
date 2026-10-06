@@ -136,3 +136,11 @@ bravebot doctor
 reports whether a subscription is imported, which environment it was issued for, and how many of its
 credentials are still unspent. Counts only: a credential is a bearer secret, so none of it is
 printed.
+
+```sh
+bravebot auth status leo
+```
+
+says the same in one line and exits 0 only if the subscription is usable. A subscription imported
+for a Brave channel the endpoint does not accept is reported as unusable, with the command that
+replaces it.

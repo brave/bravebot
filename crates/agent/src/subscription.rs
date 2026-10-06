@@ -153,12 +153,8 @@ impl ImportedSubscription {
         // channel this build does not talk to cannot be spent. Reported rather than passed over: it
         // is a paid subscription going unused, and the remedy is importing from the matching
         // channel, which nobody would guess from a turn that quietly got worse.
-        if (wallet.environment() == bravebot_skus::Environment::Production) != production {
-            return Discovery::Refused(format!(
-                "the imported subscription is for {}, which this endpoint does not accept; \
-                 run `bravebot auth login leo` with the matching Brave channel",
-                wallet.environment().as_str()
-            ));
+        if let Some(refusal) = environment_refusal(production, wallet.environment()) {
+            return Discovery::Refused(refusal);
         }
 
         Discovery::Found(Self {
@@ -269,6 +265,32 @@ fn is_production_endpoint(endpoint: &str) -> Option<bool> {
     } else {
         None
     }
+}
+
+/// Why a batch imported for `environment` cannot be spent against `endpoint`, or `None` where it can
+/// or where the endpoint belongs to no environment.
+///
+/// The sentence [`ImportedSubscription::discover`] refuses with, shared so that
+/// `bravebot auth status` prints the one a turn would show, and the two cannot say different things
+/// about one batch.
+pub fn environment_mismatch(
+    endpoint: &str,
+    environment: bravebot_skus::Environment,
+) -> Option<String> {
+    environment_refusal(is_production_endpoint(endpoint)?, environment)
+}
+
+fn environment_refusal(
+    production: bool,
+    environment: bravebot_skus::Environment,
+) -> Option<String> {
+    ((environment == bravebot_skus::Environment::Production) != production).then(|| {
+        format!(
+            "the imported subscription is for {}, which this endpoint does not accept; \
+             run `bravebot auth login leo` with the matching Brave channel",
+            environment.as_str()
+        )
+    })
 }
 
 /// Whether an aichat endpoint is one of Brave's own deployments.
@@ -458,6 +480,35 @@ mod tests {
         assert_eq!(
             is_production_endpoint("https://ai-chat.bsg.bravesoftware.com"),
             Some(false)
+        );
+    }
+
+    /// PREM-8: the mismatch sentence names the batch's environment and the remedy, only for a pairing
+    /// the endpoint does not accept, and never for an endpoint in no environment. `auth status` prints
+    /// this sentence, so what it says is what a turn says.
+    #[test]
+    fn a_batch_for_the_wrong_environment_is_refused_with_its_remedy() {
+        use bravebot_skus::Environment;
+        let production = "https://ai-chat-premium.bsg.brave.com";
+        let development = "https://ai-chat-premium.bsg.brave.software";
+
+        let refusal =
+            environment_mismatch(production, Environment::Staging).expect("a staging batch");
+        assert!(refusal.contains("is for staging"), "{refusal}");
+        assert!(refusal.contains("bravebot auth login leo"), "{refusal}");
+        assert!(environment_mismatch(development, Environment::Production).is_some());
+        assert_eq!(
+            environment_mismatch(production, Environment::Production),
+            None
+        );
+        // Staging and development are both "not production" to the hosts that verify them.
+        assert_eq!(
+            environment_mismatch(development, Environment::Staging),
+            None
+        );
+        assert_eq!(
+            environment_mismatch("http://127.0.0.1:8000", Environment::Staging),
+            None
         );
     }
 
