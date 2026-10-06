@@ -2120,7 +2120,7 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
         // there: putting it away stores a second copy of a stored prompt, and the search is what
         // somebody who has walked back at all is looking for. Before the arm below, since that one
         // answers every line.
-        _ if session.bindings().is_stash(&key) && session.history.is_browsing() => {
+        _ if session.bindings().is_stash(&key) && session.history.on_a_sent_prompt() => {
             session.open_history_search_here();
             Action::Redraw
         }
@@ -2200,7 +2200,7 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
         // Up and Down walk the prompt history, which is what they do in a shell and so what a
         // user expects at a prompt. Scrolling the transcript keeps the wheel and the page keys,
         // and Up still scrolls once there is no history left to walk.
-        KeyCode::Up if !session.history.is_empty() => {
+        KeyCode::Up if session.history.can_recall() => {
             session.recall_older();
             Action::Redraw
         }
@@ -19777,6 +19777,142 @@ mod tests {
             session.complete("ok", Vec::new(), 0);
         }
         session
+    }
+
+    /// Escape clears in one press, so a slip loses the paragraph unless Up can bring it back. Nothing
+    /// has been sent, so the person has not been asked to send anything to get it.
+    #[test]
+    fn escape_keeps_the_cleared_line_for_up() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "half a thought");
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert_eq!(session.input(), "");
+
+        assert_eq!(handle_key(&mut session, key(KeyCode::Up)), Action::Redraw);
+        assert_eq!(session.input(), "half a thought");
+        assert_eq!(session.status, Status::Idle, "recalling the draft sent it");
+        assert!(session.history.is_empty(), "the draft became a sent prompt");
+
+        handle_key(&mut session, key(KeyCode::Down));
+        assert_eq!(session.input(), "", "Down did not leave the draft");
+    }
+
+    /// The first rung of Ctrl-C takes the line, and takes it by the same route as Escape.
+    #[test]
+    fn ctrl_c_keeps_the_cleared_line_for_up() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "half a thought");
+        handle_key(&mut session, ctrl('c'));
+        assert_eq!(session.input(), "");
+
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(session.input(), "half a thought");
+    }
+
+    /// One place to keep a cleared line, so the latest is what Up brings back first and the
+    /// earlier one is gone rather than stacked behind it.
+    #[test]
+    fn a_second_clear_replaces_the_kept_draft() {
+        let mut session = having_sent(&["sent before"]);
+        type_line(&mut session, "first draft");
+        handle_key(&mut session, key(KeyCode::Esc));
+        type_line(&mut session, "second draft");
+        handle_key(&mut session, ctrl('c'));
+
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(session.input(), "second draft");
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(
+            session.input(),
+            "sent before",
+            "the first draft was kept behind the second"
+        );
+    }
+
+    /// A draft belongs to the line that was being written when it was cleared. Once a prompt goes,
+    /// Up walks the sent prompts alone.
+    #[test]
+    fn sending_a_prompt_drops_the_kept_draft() {
+        let mut session = having_sent(&["sent before"]);
+        type_line(&mut session, "abandoned");
+        handle_key(&mut session, key(KeyCode::Esc));
+        type_line(&mut session, "sent after");
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.complete("ok", Vec::new(), 0);
+
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            handle_key(&mut session, key(KeyCode::Up));
+            seen.push(session.input().to_string());
+        }
+        assert_eq!(
+            seen,
+            ["sent after", "sent before", "sent before", "sent before"],
+            "the draft survived a send"
+        );
+    }
+
+    /// Clearing a prompt that was only walked back to loses nothing, since the history has it, and
+    /// must not push out a draft that was lost.
+    #[test]
+    fn clearing_a_recalled_prompt_does_not_replace_the_draft() {
+        let mut session = having_sent(&["sent before"]);
+        type_line(&mut session, "abandoned");
+        handle_key(&mut session, key(KeyCode::Esc));
+        handle_key(&mut session, key(KeyCode::Up));
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(session.input(), "sent before");
+
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert_eq!(session.input(), "");
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(session.input(), "abandoned");
+    }
+
+    /// Clearing a box with nothing to lose keeps nothing, so Up does not bring back blanks.
+    #[test]
+    fn clearing_an_empty_or_blank_line_keeps_no_draft() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "a real draft");
+        handle_key(&mut session, key(KeyCode::Esc));
+        type_line(&mut session, "   ");
+        handle_key(&mut session, key(KeyCode::Esc));
+        handle_key(&mut session, key(KeyCode::Esc));
+
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(session.input(), "a real draft");
+    }
+
+    /// The draft is not a sent prompt, so the search over what was sent does not offer it.
+    #[test]
+    fn the_kept_draft_is_not_a_candidate_for_the_search() {
+        let mut session = having_sent(&["sent before"]);
+        type_line(&mut session, "abandoned");
+        handle_key(&mut session, key(KeyCode::Esc));
+
+        handle_key(&mut session, ctrl('r'));
+        let offered: Vec<_> = session
+            .history_matches()
+            .iter()
+            .map(|entry| entry.prompt.clone())
+            .collect();
+        assert_eq!(offered, ["sent before"]);
+    }
+
+    /// The draft in the box is the person's own typing, so Ctrl-S puts it away like any other line
+    /// and does not open a search the way it does on a stored prompt.
+    #[test]
+    fn ctrl_s_on_the_recalled_draft_puts_it_away() {
+        let mut session = having_sent(&["sent before"]);
+        type_line(&mut session, "abandoned");
+        handle_key(&mut session, key(KeyCode::Esc));
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(session.input(), "abandoned");
+
+        handle_key(&mut session, ctrl('s'));
+        assert!(!session.searching_history());
+        assert_eq!(session.input(), "");
+        assert_eq!(session.stashed(), Some("abandoned"));
     }
 
     /// Up walks a prompt at a time, which is no way to reach the hundredth. Ctrl-R is the chord

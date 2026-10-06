@@ -182,6 +182,69 @@ pub struct Conversation {
     /// Trusted metadata: from the names of the functions the planner called, never their
     /// arguments or anything a tool returned.
     asked_to_write: bool,
+    /// The windows of files the planner has been shown, and the call that showed each.
+    ///
+    /// Held here for the reason `quarantine` is: a session is many turns and this is the only thing
+    /// that outlives one. Not part of a [`Snapshot`], because a resumed conversation owes the
+    /// planner nothing about a read it cannot be sure the planner still holds, and showing the lines
+    /// again is the safe direction to be wrong in.
+    ///
+    /// Trusted metadata: a path the planner named, the window it asked for and a change token taken
+    /// from the file's size and modification time, never anything a file said.
+    reads: ShownReads,
+}
+
+/// A window of a file as `read_file` showed it, for telling a repeat of the same read from a new one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadWindow {
+    /// The workspace key of the file, so two spellings of one path are one file.
+    pub file: String,
+    /// The first line shown, 1-based.
+    pub offset: usize,
+    /// The most lines asked for, as the read applied it.
+    pub limit: usize,
+    /// The file's change token when the window was read.
+    pub token: String,
+}
+
+/// What `read_file` has shown the planner in this conversation.
+///
+/// An entry stands for lines that are in a message the planner still has. It names that message by
+/// its position in the conversation, not by the id of the call it answered: providers number ids
+/// per response, so two rounds can carry one. Compaction drops every entry whose message it removed
+/// (COMPACT-6): the lines are then in a summary at best, and a repeat of the read has to send them.
+#[derive(Debug, Default)]
+pub struct ShownReads {
+    shown: Vec<(usize, ReadWindow)>,
+}
+
+impl ShownReads {
+    /// The change token this window was last shown under, if the planner still has those lines.
+    pub fn token_of(&self, file: &str, offset: usize, limit: usize) -> Option<&str> {
+        self.shown
+            .iter()
+            .find(|(_, w)| w.file == file && w.offset == offset && w.limit == limit)
+            .map(|(_, w)| w.token.as_str())
+    }
+
+    /// Record that the message at `position` put this window in front of the planner, replacing
+    /// what was recorded for the same window.
+    pub fn record(&mut self, position: usize, window: ReadWindow) {
+        self.shown.retain(|(_, w)| {
+            !(w.file == window.file && w.offset == window.offset && w.limit == window.limit)
+        });
+        self.shown.push((position, window));
+    }
+
+    /// Forget the messages before `boundary`, and move the rest to where compaction puts them: the
+    /// summary takes the first position, so each kept message is one later than its place after
+    /// the drain.
+    fn compacted(&mut self, boundary: usize) {
+        self.shown.retain(|(position, _)| *position >= boundary);
+        for (position, _) in &mut self.shown {
+            *position = *position - boundary + 1;
+        }
+    }
 }
 
 impl Default for Conversation {
@@ -204,6 +267,7 @@ impl Conversation {
             archive: Vec::new(),
             measured: 0,
             asked_to_write: false,
+            reads: ShownReads::default(),
         }
     }
 
@@ -297,6 +361,19 @@ impl Conversation {
     /// The quarantine, for the kernel to write into and read back out of.
     pub fn quarantine(&mut self) -> &mut SlotStore {
         &mut self.quarantine
+    }
+
+    /// The quarantine and the record of what was shown, together, because a tool call borrows both
+    /// and a method for each would borrow the conversation twice.
+    pub fn for_a_tool(&mut self) -> (&mut SlotStore, &mut ShownReads) {
+        (&mut self.quarantine, &mut self.reads)
+    }
+
+    /// Record that the message just pushed put a window of a file in front of the planner.
+    pub fn shown_read(&mut self, window: ReadWindow) {
+        if let Some(last) = self.messages.len().checked_sub(1) {
+            self.reads.record(last, window);
+        }
     }
 
     /// Record what the last request built from this conversation came to.
@@ -439,6 +516,7 @@ impl Conversation {
     pub fn compacted(&mut self, boundary: usize, summary: &str) {
         let replaced: Vec<Stored> = self.messages.drain(..boundary).collect();
         self.archive.extend(replaced);
+        self.reads.compacted(boundary);
 
         let mut note = format!("{COMPACTED_PREFIX}\n\n{}", summary.trim());
         if let Some(live) = self.live_references() {
@@ -674,6 +752,7 @@ impl Conversation {
             archive: snapshot.archive,
             measured: snapshot.measured,
             asked_to_write: snapshot.asked_to_write,
+            reads: ShownReads::default(),
         }
     }
 
@@ -1324,6 +1403,99 @@ mod tests {
         assert_eq!(kept.len(), 5, "{kept:?}");
         assert!(kept[0].starts_with(COMPACTED_PREFIX), "{kept:?}");
         assert_eq!(&kept[1..], ["third", "c", "fourth", "d"]);
+    }
+
+    fn a_window(file: &str, token: &str) -> ReadWindow {
+        ReadWindow {
+            file: file.to_string(),
+            offset: 1,
+            limit: 2000,
+            token: token.to_string(),
+        }
+    }
+
+    /// A summary is a paraphrase, so a read whose round compaction removed leaves the planner
+    /// without the lines the notice would point at. The record has to go with the round, and only
+    /// that round: a read in a round the compaction kept is still in front of the planner.
+    #[test]
+    fn compaction_forgets_the_reads_whose_rounds_it_removed_and_keeps_the_others() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("first"));
+        let mut early = a_call("read_file", r#"{"path":"old.md"}"#);
+        early.id = "call".into();
+        conversation.push(Message::assistant_calling("looking", vec![early]));
+        conversation.push(Message::tool_result("call", "the old notes"));
+        conversation.shown_read(a_window("old.md", "aaaa"));
+        conversation.push(Message::assistant("done"));
+        conversation.push(Message::user("second"));
+        conversation.push(Message::assistant("b"));
+        conversation.push(Message::user("third"));
+        let mut late = a_call("read_file", r#"{"path":"new.md"}"#);
+        late.id = "call".into();
+        conversation.push(Message::assistant_calling("looking", vec![late]));
+        conversation.push(Message::tool_result("call", "the new notes"));
+        conversation.shown_read(a_window("new.md", "bbbb"));
+        conversation.push(Message::assistant("c"));
+        conversation.push(Message::user("fourth"));
+        conversation.push(Message::assistant("d"));
+
+        assert_eq!(
+            conversation.for_a_tool().1.token_of("old.md", 1, 2000),
+            Some("aaaa")
+        );
+
+        let boundary = conversation
+            .compaction_boundary()
+            .expect("something to compact");
+        conversation.compacted(boundary, "they read some notes");
+
+        let (_, reads) = conversation.for_a_tool();
+        assert_eq!(
+            reads.token_of("old.md", 1, 2000),
+            None,
+            "a read from a compacted round is still recorded as shown"
+        );
+        assert_eq!(
+            reads.token_of("new.md", 1, 2000),
+            Some("bbbb"),
+            "a read from a round compaction kept was forgotten"
+        );
+    }
+
+    /// Reading the same window again replaces the entry, so the record holds the token the planner
+    /// saw last rather than the first one: the older of two is a file that has since been written.
+    #[test]
+    fn a_window_shown_again_is_recorded_under_its_latest_token() {
+        let mut reads = ShownReads::default();
+        reads.record(1, a_window("a.md", "aaaa"));
+        reads.record(2, a_window("a.md", "bbbb"));
+        reads.record(3, a_window("b.md", "cccc"));
+
+        assert_eq!(reads.token_of("a.md", 1, 2000), Some("bbbb"));
+        assert_eq!(reads.token_of("b.md", 1, 2000), Some("cccc"));
+        assert_eq!(reads.token_of("a.md", 2, 2000), None);
+        assert_eq!(reads.token_of("a.md", 1, 10), None);
+    }
+
+    /// A second compaction runs on positions the first one moved, so the move has to be exact: the
+    /// summary takes position 0, which puts the message that was at `boundary` at position 1.
+    #[test]
+    fn a_kept_read_follows_its_message_to_its_new_position() {
+        let mut reads = ShownReads::default();
+        reads.record(2, a_window("gone.md", "aaaa"));
+        reads.record(3, a_window("first-kept.md", "bbbb"));
+        reads.record(6, a_window("later.md", "cccc"));
+
+        reads.compacted(3);
+
+        assert_eq!(
+            reads
+                .shown
+                .iter()
+                .map(|(position, w)| (*position, w.file.as_str()))
+                .collect::<Vec<_>>(),
+            [(1, "first-kept.md"), (4, "later.md")]
+        );
     }
 
     /// The invariant the cut point exists for. `with_system` answers a call nothing answered by

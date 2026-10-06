@@ -89,6 +89,15 @@ empty name is refused. The issue and the pull request the person said the sessio
 restores both, `bravebot --fork` copies both, `/clear` begins a session with neither, and a record
 written before they were kept reads as having neither.
 
+The list carries the branch and both links beside the title, as optional fields, so a record
+without them is listed as before and the desktop list ([SESSION-28](#SESSION-28)) is unaffected. The
+resume picker narrows on what is typed against the title, the branch and either link, without
+regard to case. Typing the whole of a session's link stops other links matching by containing it,
+so a pasted pull request address finds the session that was given it and not also the one whose
+pull request number starts with the same digits. A title or a branch still matches by what it
+contains. The links are addresses the person typed to
+`/issue` and `/pr`, so matching them reads no untrusted content.
+
 What the record says about each individual turn is SESSION-23.
 
 The record also holds the checkouts a session's delegates were given and it keeps
@@ -102,6 +111,12 @@ disk. A record written before they were kept reads as having none.
 `verified-by: bravebot_tui::sessions::an_empty_name_is_refused`
 `verified-by: bravebot_session::sessions::a_link_is_written_at_once_and_a_resume_and_a_fork_keep_it`
 `verified-by: bravebot_session::sessions::a_record_from_before_the_links_reads_as_having_none`
+`verified-by: bravebot_session::sessions::the_list_carries_the_links_and_lists_a_record_without_them`
+`verified-by: bravebot_tui::resume::typing_part_of_a_branch_finds_the_session_that_ran_on_it`
+`verified-by: bravebot_tui::resume::typing_part_of_an_issue_link_finds_the_session_given_it`
+`verified-by: bravebot_tui::resume::a_pasted_pull_request_link_leaves_only_the_session_that_holds_it`
+`verified-by: bravebot_tui::resume::a_pasted_link_keeps_a_session_whose_title_holds_it`
+`verified-by: bravebot_tui::resume::part_of_a_pull_request_link_keeps_every_session_it_is_part_of`
 `verified-by: bravebot_tui::sessions::a_record_from_before_checkouts_were_kept_reads_as_having_none`
 
 <a id="SESSION-4"></a>
@@ -141,7 +156,9 @@ Queued submissions keep their entries. Where consecutive duplicates share an ent
 while any submission it represents has not been cancelled. Cancelling a generated turn removes no
 input-recall entry, since that turn did not submit one. A cancellation that removes no entry leaves
 the stored history as it stands, because another session may have added to it since this one read it
-and writing this session's list back would take those prompts away.
+and writing this session's list back would take those prompts away. A line cleared with Escape or
+Ctrl-C is not a sent prompt and is not in this history: it is a draft held for the session alone
+([INPUT-39](terminal-input.md#INPUT-39)).
 
 `verified-by: bravebot_tui::sessions::cancelling_removes_only_the_running_prompt_from_recall`
 `verified-by: bravebot_tui::sessions::quitting_removes_only_the_running_prompt_from_recall`

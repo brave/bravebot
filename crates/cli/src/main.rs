@@ -69,13 +69,24 @@ fn main() -> ExitCode {
     // given would be running under rules its author did not choose.
     let carried: Option<String> = args
         .iter()
-        .find(|arg| matches!(arg.as_str(), "--incognito" | "--vet" | "--settings"))
+        .find(|arg| {
+            matches!(
+                arg.as_str(),
+                "--incognito" | "--safe" | "--vet" | "--settings"
+            )
+        })
         .cloned();
 
     // Engaged here rather than deeper in because it must be true before the first thing that could
     // write is reached, and this is the last moment that is certain to be before all of them.
     if take_incognito(&mut args) {
         bravebot_core::incognito::engage();
+    }
+
+    // Beside the mode above and for the same reason: every loader it turns off is reached while a
+    // session is assembled, and this is before the first of them.
+    if take_safe(&mut args) {
+        bravebot_core::safe::engage();
     }
 
     // Beside the mode above and for the same reason: the switch has to be settled before a session
@@ -565,6 +576,7 @@ fn print_help() {
         ("--trace", t!(cli_option_trace)),
         ("--json", t!(cli_option_json)),
         ("--incognito", t!(cli_option_incognito)),
+        ("--safe", t!(cli_option_safe)),
         ("--vet", t!(cli_option_vet)),
         (
             "--dangerously-skip-permissions",
@@ -654,6 +666,19 @@ fn how_to_configure_a_model(
 fn take_incognito(args: &mut Vec<String>) -> bool {
     let asked = args.len();
     args.retain(|arg| arg != "--incognito");
+    args.len() != asked
+}
+
+/// Take `--safe` out of the arguments, reporting whether it was there.
+///
+/// Removed before dispatch for the reason `--incognito` is, and it composes with every way of
+/// starting: a session, a resumed session, a session in lines and a one-shot run all load the same
+/// five things, so reading it per subcommand would be a chance to forget it in each.
+///
+/// Repeats are one flag rather than an error, as with `--incognito`.
+fn take_safe(args: &mut Vec<String>) -> bool {
+    let asked = args.len();
+    args.retain(|arg| arg != "--safe");
     args.len() != asked
 }
 
@@ -5154,6 +5179,24 @@ mod tests {
         let mut arguments = args(&["-p", "write about incognito mode"]);
         assert!(!take_incognito(&mut arguments));
         assert_eq!(arguments, args(&["-p", "write about incognito mode"]));
+    }
+
+    /// `--safe` belongs to every way of starting, so it is taken out wherever it appears, once or
+    /// twice, and a task that merely mentions safe mode does not turn it on.
+    #[test]
+    fn the_safe_flag_is_taken_out_wherever_it_appears() {
+        for typed in [
+            &["--safe", "-p", "do a thing"][..],
+            &["-p", "--safe", "do a thing"][..],
+            &["-p", "do a thing", "--safe", "--safe"][..],
+        ] {
+            let mut arguments = args(typed);
+            assert!(take_safe(&mut arguments), "{typed:?}");
+            assert!(!arguments.iter().any(|arg| arg == "--safe"), "{typed:?}");
+        }
+        let mut arguments = args(&["-p", "explain safe mode"]);
+        assert!(!take_safe(&mut arguments));
+        assert_eq!(arguments, args(&["-p", "explain safe mode"]));
     }
 
     /// `--vet` belongs to every way of starting, so it is taken out wherever it appears and the

@@ -1600,6 +1600,18 @@ int main(void) {
         program: &str,
         arguments: &[&str],
     ) -> Option<i32> {
+        exit_code_under_with(policy, environment, program, arguments, nothing_attached())
+    }
+
+    /// [`exit_code_under`] with the streams the caller chose, for a test whose failure needs what
+    /// the program said.
+    fn exit_code_under_with(
+        policy: &SandboxPolicy,
+        environment: crate::process::Variables,
+        program: &str,
+        arguments: &[&str],
+        streams: crate::process::Streams,
+    ) -> Option<i32> {
         let arguments: Vec<String> = arguments.iter().map(|a| a.to_string()).collect();
         SeatbeltSandbox::new()
             .expect("sandbox-exec is present on macOS")
@@ -1607,7 +1619,7 @@ int main(void) {
                 program,
                 &arguments,
                 policy,
-                nothing_attached(),
+                streams,
                 Environment::Only(environment),
             )
             .expect("should spawn")
@@ -1645,9 +1657,9 @@ int main(void) {
     /// has a developer directory, and it is the one `xcode-select` names, as a session's is.
     ///
     /// The temporary directory and `HOME` are this process's, as a session's are: the shims keep
-    /// a lookup cache in the account's temporary directory, keyed on its home, and a lookup that
-    /// misses it runs `xcodebuild`, which refuses on a machine whose Xcode licence has not been
-    /// accepted since its last update, confined or not. git is pointed at an empty configuration
+    /// a lookup cache, keyed on the home, and a lookup that misses it runs `xcodebuild`, which
+    /// refuses on a machine whose Xcode licence has not been accepted since its last update,
+    /// confined or not. The cache is a file this test names inside the temporary directory. git is pointed at an empty configuration
     /// of the account's, so that what starts or does not is the shim and the machine's own
     /// configuration rather than this account's settings.
     #[test]
@@ -1684,16 +1696,23 @@ int main(void) {
             .to_str()
             .expect("the temporary directory is UTF-8");
 
-        // The shims keep what a lookup found in a database in the temporary directory, and a lookup
-        // that misses it runs `xcodebuild`, which a confined process cannot start. Looked up here
-        // unconfined, so that the confined runs below read what is already there rather than
-        // depend on whether this machine had run the lookup before.
+        // The shims keep what a lookup found in a database, and a lookup that misses it runs
+        // `xcodebuild`, which a confined process cannot start. The database is named here, inside
+        // the temporary directory the base writes, and looked up unconfined first, so that the
+        // confined runs below read what is already there whatever this machine's own database
+        // holds or where it keeps it.
+        let database = temporary.join(format!(
+            "bravebot-sandbox-a-shim-lookups-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&database);
         for tool in ["git", "make"] {
             let _ = Command::new("/usr/bin/xcrun")
                 .args(["--find", tool])
                 .env_clear()
                 .env("HOME", &home)
                 .env("PATH", "/usr/bin:/bin")
+                .env("xcrun_db", &database)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status();
@@ -1705,6 +1724,7 @@ int main(void) {
                     .env_clear()
                     .env("HOME", &home)
                     .env("PATH", "/usr/bin:/bin")
+                    .env("xcrun_db", &database)
                     .stdout(std::process::Stdio::null())
                     .status()
                     .expect("the shim is on every macOS")
@@ -1721,15 +1741,22 @@ int main(void) {
             let environment = crate::process::Variables::new()
                 .with("HOME", &home)
                 .with("PATH", "/usr/bin:/bin")
+                .with("xcrun_db", &database)
                 .with("GIT_CONFIG_GLOBAL", "/dev/null");
+            let streams = crate::process::Streams {
+                stdin: crate::process::Stream::Null,
+                stdout: crate::process::Stream::Null,
+                stderr: crate::process::Stream::Inherited,
+            };
             assert_eq!(
-                exit_code_under(&policy, environment, program, &arguments),
+                exit_code_under_with(&policy, environment, program, &arguments, streams),
                 Some(0),
                 "{program} {arguments:?} did not start under the base"
             );
         }
 
         let _ = std::fs::remove_dir_all(repository);
+        let _ = std::fs::remove_file(&database);
     }
 
     /// The cargo list as the kernel holds it: the registry is written, the configuration cargo

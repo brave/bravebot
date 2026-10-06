@@ -111,6 +111,8 @@ cli-option-print = Non-interactive. Reads piped stdin as quarantined context
 cli-option-trace = Print the audit trail
 cli-option-json = Print one result object on stdout instead of the reply
 cli-option-incognito = Write nothing to ~/.bravebot: no history, no session record, no preference
+cli-option-safe =
+    Load none of your own hooks, skills, definitions, MCP servers or AGENTS.md. Sign-in, model and permissions still apply
 cli-option-vet =
     For this run, let a check answer: content it finds nothing in is promoted without asking you,
     and where nobody can be asked, anything else is kept back
@@ -980,6 +982,8 @@ servers-answer-once = Yes
 servers-answer-project = Yes, and use all future MCP servers in this project
 servers-answer-no = No, continue without this server
 servers-answer = [1/2/3]
+safe-mode-started =
+    Safe mode: hooks, skills, definitions, MCP servers and AGENTS.md were not loaded. Sign-in, the model and permissions are as usual
 servers-for-this-session-only =
     { $alias } is used in this session only: an incognito session records no answer
 servers-not-kept = { $alias } is used, and its approval was not recorded: { $reason }

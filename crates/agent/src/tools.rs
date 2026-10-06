@@ -263,6 +263,11 @@ fn table(
              Where you have taken a look and not scheduled another, say so, because no change with \
              nothing watching reads as a promise to report the next one.{watching} \
              \
+             Ask for the same window of a file again while it is as it was and the answer is a \
+             short notice carrying the same token, because the lines are already earlier in this \
+             conversation. A different window, or a file somebody has written since, comes back as \
+             lines. \
+             \
              A picture or a PDF (.png, .jpg, .gif, .webp, .pdf) comes back as a reference rather \
              than as anything you can look at, whoever vouched for the directory it is in. Give \
              that reference to spawn_processor with a question about it and the answer comes back \
@@ -1548,6 +1553,11 @@ pub struct Output {
     /// The content alone, where `text` has the driver's own notes after it, so that a glimpse of
     /// a file is of the file and counts the file's lines.
     pub glimpsed: Option<Labelled<String>>,
+    /// The window of a file this result shows, where it is a read that put lines in the result.
+    ///
+    /// Recorded by the turn loop only once the planner was shown the result (READ-8): a read that
+    /// was quarantined, refused or answered with a notice shows no window.
+    pub window: Option<crate::conversation::ReadWindow>,
     /// Whether the text is workspace content rather than the driver's own words about the call.
     pub content: bool,
     /// Whether this call left a file on disk different from how it found it.
@@ -1670,6 +1680,9 @@ pub struct Tools<'a> {
     pub skills: &'a crate::skills::Catalogue,
     /// Where quarantined content lives, by the names the planner was given for it.
     pub slots: &'a mut SlotStore,
+    /// The windows of files this conversation has shown the planner, which a repeat read is
+    /// compared against.
+    pub reads: &'a mut crate::conversation::ShownReads,
     /// The model an isolated processor runs on.
     pub chat: Chat<'a>,
     /// The turn's stop token, so a slow program does not have to be waited out.
@@ -2182,6 +2195,8 @@ struct Produced {
     said: Option<Labelled<String>>,
     /// The content alone, where `text` has the driver's own notes after it.
     glimpsed: Option<Labelled<String>>,
+    /// The window of a file `text` shows, for the record of what the planner has been shown.
+    window: Option<crate::conversation::ReadWindow>,
     /// Whether `text` is workspace content rather than the driver's own words about the call.
     ///
     /// What the kernel does with a result is worth reporting only where the result is content:
@@ -2257,6 +2272,7 @@ impl Produced {
             answers_for: None,
             said: None,
             glimpsed: None,
+            window: None,
             content: false,
             usage: Usage::default(),
             inference_interval: None,
@@ -2298,6 +2314,7 @@ impl Produced {
             answers_for: None,
             said: None,
             glimpsed: None,
+            window: None,
             wakeup: None,
             watch: None,
             content: false,
@@ -2900,6 +2917,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                 answers_for: produced.answers_for,
                 said: produced.said,
                 glimpsed: produced.glimpsed,
+                window: produced.window,
                 content: produced.content,
                 changed_a_file: produced.changed_a_file,
                 ran_a_program: produced.ran_a_program,
@@ -3075,6 +3093,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         answers_for: produced.answers_for,
         said: produced.said,
         glimpsed: produced.glimpsed,
+        window: produced.window,
         content: produced.content,
         changed_a_file: produced.changed_a_file,
         ran_a_program: produced.ran_a_program,
@@ -3698,8 +3717,46 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         });
     }
 
-    let page = match workspace.read_page(policy, &path, offset, limit) {
-        Ok(page) => page,
+    // The planner already holds this window if an earlier answer put it there and the file has not
+    // been written since (READ-8). Looked up by the path as the trust map keys it and the window as
+    // the read applies it, so a spelling or a limit that comes to the same lines is the same read.
+    let (first_line, line_limit) = crate::workspace::window_of(offset, limit);
+    let earlier = tools
+        .reads
+        .token_of(&keyed, first_line, line_limit)
+        .map(str::to_string);
+    let shown_token;
+    let page = match workspace.read_page_unless_unchanged(
+        policy,
+        &path,
+        offset,
+        limit,
+        earlier.as_deref(),
+    ) {
+        Ok(crate::workspace::Reading::Page { page, token }) => {
+            shown_token = token;
+            page
+        }
+        Ok(crate::workspace::Reading::Unchanged) => {
+            // Both halves are the driver's own words: the token is metadata of the file and the
+            // window is what the planner asked for. Nothing the file holds is in either.
+            let token = earlier.unwrap_or_default();
+            let asked = match arguments.get("limit").and_then(Value::as_u64) {
+                Some(limit) => format!("from line {first_line}, at most {limit} lines"),
+                None => format!("from line {first_line}"),
+            };
+            return priced(Produced {
+                origin: shown_path.clone(),
+                ..confirmed(
+                    format!(
+                        "{shown_path} ({asked}) has not changed since it was shown to you earlier \
+                         in this conversation, so its lines are not sent again: they are in that \
+                         earlier result.\n\n(change token {token})"
+                    ),
+                    format!("unchanged since it was shown, not sent again ({token})"),
+                )
+            });
+        }
         Err(e) => {
             return priced(Produced::problem(format!(
                 "error: {}",
@@ -3773,6 +3830,12 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     let glimpsed = policy.render_in_place("read_file", &page, |p| p.lines.join("\n"));
     priced(Produced {
         glimpsed: Some(glimpsed),
+        window: Some(crate::conversation::ReadWindow {
+            file: keyed,
+            offset: first_line,
+            limit: line_limit,
+            token: shown_token,
+        }),
         ..Produced::new(rendered, shown_path, exposed_note(note, &found)).of_content()
     })
 }
@@ -13894,6 +13957,7 @@ mod tests {
             let egress = bravebot_net::Egress::new();
             let skills = crate::skills::Catalogue::default();
             let mut slots = SlotStore::new();
+            let mut reads = crate::conversation::ShownReads::default();
             let cancel = bravebot_core::cancel::Cancel::new();
             let mut armed = 0usize;
             let mut jobs = Jobs::default();
@@ -13904,6 +13968,7 @@ mod tests {
                 deadlines: Deadlines::BUILT_IN,
                 skills: &skills,
                 slots: &mut slots,
+                reads: &mut reads,
                 chat: Chat {
                     config: &config,
                     egress: &egress,
