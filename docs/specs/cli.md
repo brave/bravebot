@@ -235,6 +235,7 @@ installed. It also checks that `gh` can read the login it holds in the real home
 `verified-by: bravebot_cli::main::doctor_accepts_current_windows_copies_and_reports_stale_ones`
 `verified-by: bravebot_cli::main::doctor_checks_resolved_agent_link_targets`
 `verified-by: bravebot_cli::main::doctor_finds_direnv_only_when_path_contains_an_executable`
+`verified-by: bravebot_cli::running::doctor_says_whether_requests_are_signed_or_present_an_api_key`
 
 **Why.** It exists to answer "what will this actually use", so reporting a default when a choice
 is in force would explain the wrong thing, and naming one backend where two are reachable would
