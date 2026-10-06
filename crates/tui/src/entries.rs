@@ -187,6 +187,7 @@ mod tests {
             std::fs::create_dir_all(path.join("node_modules")).expect("create");
             std::fs::create_dir_all(path.join(".hg")).expect("create");
             std::fs::create_dir_all(path.join("dist")).expect("create");
+            std::fs::create_dir_all(path.join(".worktrees/feature")).expect("create");
             std::fs::write(path.join("Cargo.toml"), "").expect("write");
             std::fs::write(path.join("Makefile"), "").expect("write");
             // What a worktree or a submodule has in place of the directory: a file naming the
@@ -256,6 +257,10 @@ mod tests {
         );
         assert!(!root.contains(&".hg/"), "version control was offered");
         assert!(!root.contains(&"dist/"), "build output was offered");
+        assert!(
+            !root.contains(&".worktrees/"),
+            "a linked worktree's copy of the tree was offered"
+        );
         // Withheld under the name a checkout of this shape gives it, which is a file.
         assert!(
             !paths(&matching(&scratch.path, "crates/tui/")).contains(&"crates/tui/.git"),

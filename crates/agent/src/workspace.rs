@@ -2753,6 +2753,9 @@ const IGNORED_DIRECTORIES: &[&str] = &[
     ".nyc_output",
     ".terraform",
     ".stack-work",
+    // Linked worktrees, each a full copy of the tree. `.claude/worktrees` is the two-segment
+    // case, in `is_ignored_in`.
+    ".worktrees",
     // Dependencies, fetched or vendored. `out` and `bin` are deliberately absent: plenty of
     // projects keep real sources under those names.
     "node_modules",
