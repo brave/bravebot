@@ -416,6 +416,37 @@ def test_all_lists_the_open_pull_requests_of_the_configured_user():
         assert gh[gh.index("--author") + 1] == "netzenbot" and gh[gh.index("--repo") + 1] == "brave/bravebot", gh
 
 
+def test_review_asks_netzenbot_reviewer_through_the_requested_reviewers_api():
+    calls = []
+    real = pr_fix.run
+
+    def fake(*args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    pr_fix.run = fake
+    try:
+        code, out = quietly(pr_fix.review, SimpleNamespace(number=12, url="https://github.com/brave/bravebot/pull/12"))
+    finally:
+        pr_fix.run = real
+    assert code == 0 and calls == [
+        (
+            "gh", "api", "--method", "POST", "repos/brave/bravebot/pulls/12/requested_reviewers",
+            "-f", "reviewers[]=netzenbot-reviewer",
+        )
+    ], (calls, out)
+
+
+def test_a_refused_review_request_fails_the_step():
+    real = pr_fix.run
+    pr_fix.run = lambda *args, **kwargs: SimpleNamespace(stdout="", stderr="HTTP 403", returncode=1)
+    try:
+        code, out = quietly(pr_fix.review, SimpleNamespace(number=12, url="u"))
+    finally:
+        pr_fix.run = real
+    assert code == 1 and "HTTP 403" in out, out
+
+
 def test_pull_requests_are_named_by_commas_spaces_or_links_and_once_each():
     named = pr_fix.pr_numbers(
         ["12,7", "https://github.com/brave/bravebot/pull/9/files #7", " 3 "], Path("."),
