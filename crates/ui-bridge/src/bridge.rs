@@ -2581,6 +2581,82 @@ mod watch_tests {
         );
     }
 
+    /// Arms a watch on `watched` while it holds `before` (absent for `None`), applies `change`,
+    /// polls past the first look and returns the names of the events sent.
+    fn events_after(before: Option<&str>, change: impl FnOnce(&std::path::Path)) -> Vec<String> {
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("bravebot-watch-presence-");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            builder.permissions(std::fs::Permissions::from_mode(0o700));
+        }
+        let directory = builder.tempdir().unwrap();
+        let root = directory.path().to_path_buf();
+        if let Some(text) = before {
+            std::fs::write(root.join("watched"), text).unwrap();
+        }
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let held = Arc::clone(&events);
+        let mut bridge = Bridge::new(Box::new(move |e| held.lock().unwrap().push(e)));
+        // A removed override fails the turn before any model request, which leaves the fire
+        // as the only thing to observe.
+        bridge.settings = Some(root.join("missing.json"));
+        let now = Instant::now();
+        let mut watches = bravebot_agent::watch::Watches::new();
+        let workspace = Workspace::new(root.clone()).unwrap();
+        watches
+            .arm(
+                "watched".into(),
+                workspace.root().to_path_buf(),
+                1,
+                workspace.look("watched", workspace.root()),
+                now,
+            )
+            .unwrap();
+        bridge.mint(Open {
+            project: root.clone(),
+            state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&root)))),
+            answered_trust: true,
+            keeping: None,
+            running: None,
+            model: None,
+            watches: Arc::new(Mutex::new(watches)),
+            auto_vetting: false,
+            definition: None,
+        });
+        change(&root);
+        bridge.poll_watches_at(now + Duration::from_secs(6));
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|e| e.name.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_watch_armed_on_an_absent_path_fires_when_the_file_appears() {
+        let names = events_after(None, |root| {
+            std::fs::write(root.join("watched"), "new").unwrap();
+        });
+        assert_eq!(names.iter().filter(|n| *n == "watch.fired").count(), 1);
+    }
+
+    #[test]
+    fn a_watch_armed_on_an_absent_path_stays_quiet_while_nothing_appears() {
+        let names = events_after(None, |_| {});
+        assert!(names.is_empty());
+    }
+
+    #[test]
+    fn a_watch_fires_when_the_file_it_watches_is_removed() {
+        let names = events_after(Some("old"), |root| {
+            std::fs::remove_file(root.join("watched")).unwrap();
+        });
+        assert_eq!(names.iter().filter(|n| *n == "watch.fired").count(), 1);
+    }
+
     #[test]
     fn cancelling_an_automatic_turn_stops_only_its_originating_watch() {
         let mut builder = tempfile::Builder::new();

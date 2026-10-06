@@ -726,6 +726,13 @@ fn watches_require_trust_are_bounded_and_are_not_inherited_by_new_sessions() {
         ),
         Err(ErrorCode::BadRequest)
     );
+    let armed = call(
+        &mut bridge,
+        "watches.add",
+        json!({"session": session, "path": "not-yet"}),
+    )
+    .unwrap();
+    assert_eq!(armed["watches"][0]["path"], "not-yet");
     let fresh =
         call(&mut bridge, "session.new", json!({"directory": project})).unwrap()["session"].clone();
     assert_eq!(
