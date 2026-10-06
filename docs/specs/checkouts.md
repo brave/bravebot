@@ -796,10 +796,19 @@ the working directory after the resume reads as one made since the checkout
 ([CHECKOUT-14](#CHECKOUT-14)), since the writes before it are not known, and saying too much is the
 safe way to be wrong.
 
-The lock and the opening sweep are not built: `scratch.rs`'s lock covers the session's own
-directory alone, and nothing removes an unlisted directory under `checkouts/`. The desktop writes
-no checkouts into its record and resumes none, which is the issue's last stage.
+The lock and the opening sweep are built for Unix. A checkout's directory is made at a mode the
+sweep leaves alone, locked, and only then opened to its owner, and the session holds the lock for as
+long as it keeps the checkout, a resumed one included. The sweep runs on a thread of its own as a
+terminal or `-p` session opens, takes only a plain `c<number>` directory that is not a link, is
+owned by whoever owns the `checkouts/` directory for the working directory, and is at the mode a
+claimed checkout is left at, and holds the lock through the removal. It reads every record of the
+project, and removes nothing where one will not parse, since that one might list any of them. It
+leaves everything where `.git` is a link. The desktop does not run it and writes no checkouts into
+its record or resumes none, which is the issue's last stage. On Windows nothing is removed, and
+`/checkouts` does not yet name a checkout no record lists.
 
+`verified-by: bravebot_agent::git::the_sweep_takes_only_an_unlisted_checkout_nobody_holds`
+`verified-by: bravebot_tui::sessions::the_checkouts_the_records_list_are_every_id_and_none_where_one_cannot_be_read`
 `verified-by: bravebot_agent::workspace::a_move_is_refused_while_the_session_keeps_a_checkout_and_names_it`
 `verified-by: bravebot_agent::workspace::a_workspace_taking_the_records_checkouts_back_lists_them_with_their_candidates`
 `verified-by: bravebot_agent::workspace::a_checkout_the_record_names_anywhere_but_where_one_was_made_is_not_taken_back`

@@ -4779,6 +4779,49 @@ fn a_record_keeps_the_checkouts_a_resume_reads_back_and_a_fork_does_not_carry() 
     assert_eq!(original.checkouts.len(), 1, "the fork emptied the original");
 }
 
+/// CHECKOUT-16: the sweep's list is every id any record of the project names, and nothing at all
+/// where one record cannot be read, since that one might name any of them.
+#[test]
+fn the_checkouts_the_records_list_are_every_id_and_none_where_one_cannot_be_read() {
+    let scratch = Scratch::new("checkouts-listed");
+    assert_eq!(
+        sessions::listed_checkouts(&scratch.project),
+        Some(Default::default()),
+        "no record lists none"
+    );
+    let kept = a_kept_checkout();
+    let conversation = a_conversation();
+    let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
+    handle.save(
+        "make a space invaders game",
+        Standing {
+            history: None,
+            conversation: &conversation.snapshot(),
+            turns: 1,
+            tokens: 1,
+            spend: &BTreeMap::new(),
+            timing: &BTreeMap::new(),
+            model: None,
+            todos: &BTreeMap::new(),
+            asides: &[],
+            trust: &a_trust_map(),
+            programs: &TrustedPrograms::new(),
+            directories: &[],
+            manifest: None,
+            rewind: &[],
+            checkouts: std::slice::from_ref(&kept),
+        },
+    );
+    assert_eq!(
+        sessions::listed_checkouts(&scratch.project),
+        Some(["c1".to_string()].into())
+    );
+
+    let directory = sessions::project_directory(&scratch.project).expect("a directory");
+    std::fs::write(directory.join("torn.json"), "{\"id\": ").expect("a torn record");
+    assert_eq!(sessions::listed_checkouts(&scratch.project), None);
+}
+
 /// A record from before checkouts were kept reads as having none.
 #[test]
 fn a_record_from_before_checkouts_were_kept_reads_as_having_none() {

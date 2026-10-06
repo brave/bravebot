@@ -2037,6 +2037,45 @@ fn continuable(sessions: Vec<Summary>) -> Option<Summary> {
     sessions.into_iter().find(|session| !session.manifest)
 }
 
+/// The ids of every checkout a record of this project's lists (CHECKOUT-16), or `None` where one
+/// cannot be told: a record that will not parse might list any of them, so the caller has to
+/// assume it does.
+pub fn listed_checkouts(project: &Path) -> Option<std::collections::HashSet<String>> {
+    let directory = project_directory(project)?;
+    let mut listed = std::collections::HashSet::new();
+    let entries = match std::fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(listed),
+        Err(_) => return None,
+    };
+    for entry in entries {
+        let path = entry.ok()?.path();
+        if path.extension().is_none_or(|e| e != "json") {
+            continue;
+        }
+        listed.extend(read(&path)?.checkouts.into_iter().map(|one| one.id));
+    }
+    Some(listed)
+}
+
+/// As a session opens, remove the checkouts under this working directory's key that no record
+/// lists and no running session holds, with their `worktrees/<id>` entries (CHECKOUT-16). Off the
+/// thread the session opens on, since a leftover can hold a large build tree. Nothing where there
+/// is no writable state directory, as in an incognito session, or where a record cannot be read.
+pub fn sweep_unlisted_checkouts(workspace: &Workspace) {
+    let Some(state) = bravebot_agent::home::writable() else {
+        return;
+    };
+    let workspace = workspace.clone();
+    let _ = std::thread::Builder::new()
+        .name("checkout sweep".into())
+        .spawn(move || {
+            if let Some(listed) = listed_checkouts(workspace.root()) {
+                workspace.sweep_checkouts(&state, &|id| listed.contains(id));
+            }
+        });
+}
+
 /// Read one session back, by the id the list gave.
 pub fn load(project: &Path, id: &str) -> Option<Record> {
     let directory = project_directory(project)?;

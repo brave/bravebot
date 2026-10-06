@@ -594,6 +594,8 @@ struct Made {
     record: Arc<Record>,
     /// How many working-directory writes had been recorded when it was made (CHECKOUT-14).
     after: u64,
+    /// The lock on its directory, held for as long as the session keeps it (CHECKOUT-16).
+    _claim: Option<Arc<std::fs::File>>,
 }
 
 impl Made {
@@ -4027,12 +4029,29 @@ impl Workspace {
                 git_dir: git_dir.clone(),
                 record: Arc::new(record),
                 after: 0,
+                _claim: crate::git::checkout::reclaim(&one.path),
             });
             if let Ok(mut listed) = self.checkouts.lock() {
                 listed.push(one.path.clone());
             }
         }
         unplaced
+    }
+
+    /// Remove what no session record lists and no running session holds under this working
+    /// directory's key in `state`'s `checkouts/`, with the `worktrees/<id>` entries (CHECKOUT-16).
+    /// `listed` says whether a record names an id. Answers the ids removed.
+    ///
+    /// Slow where a leftover holds a large build tree, so a caller runs it off the thread a
+    /// session opens on.
+    pub fn sweep_checkouts(&self, state: &Path, listed: &dyn Fn(&str) -> bool) -> Vec<String> {
+        let Ok(state) = state.canonicalize() else {
+            return Vec::new();
+        };
+        let directory = state
+            .join("checkouts")
+            .join(crate::home::key_for(&self.root));
+        crate::git::checkout::sweep(&self.root.join(".git"), &directory, listed)
     }
 
     /// For starting over inside one process: the session beginning here has made no checkout, so
@@ -4180,6 +4199,7 @@ impl Workspace {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .count,
+            _claim: made.claim.clone(),
         };
         self.session_checkouts
             .lock()

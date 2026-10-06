@@ -6734,6 +6734,70 @@ mod tests {
             assert!(admin(&repo).exists());
         }
 
+        /// Make checkout `id` under `checkouts/`, as a session's delegate would.
+        #[cfg(unix)]
+        fn made_as(repo: &Repo, id: &str) -> Made {
+            survey(&repo.git, Query::Status, later()).expect("surveyed");
+            let at = repo.root.join("checkouts");
+            std::fs::create_dir_all(&at).expect("directory");
+            make(
+                &repo.git,
+                &at.join(id),
+                id,
+                &|_| false,
+                &|_| false,
+                Bound::FIXED,
+            )
+            .expect("made")
+        }
+
+        /// CHECKOUT-16: what no record lists and no running session holds is taken, with its
+        /// entry; a listed one, one a session holds, and one that is not a plain checkout name are
+        /// not, and neither is anything where `.git` is a link.
+        #[cfg(unix)]
+        #[test]
+        fn the_sweep_takes_only_an_unlisted_checkout_nobody_holds() {
+            use crate::git::checkout::sweep;
+            let repo = Repo::new("checkout-swept");
+            let readme = repo.blob("hello\n");
+            committed(&repo, &[("100644", "README", readme)]);
+            let at = repo.root.join("checkouts");
+            let leftover = made_as(&repo, "c1");
+            let listed = made_as(&repo, "c2");
+            let held = made_as(&repo, "c3");
+            drop((leftover, listed));
+            std::fs::create_dir_all(at.join("scratch")).expect("other");
+            std::fs::create_dir_all(at.join("c4")).expect("not made by a session");
+            let outside = repo.root.join("outside");
+            std::fs::create_dir_all(&outside).expect("outside");
+            std::os::unix::fs::symlink(&outside, at.join("c5")).expect("link");
+
+            let taken = sweep(&repo.git, &at, &|id| id == "c2");
+            assert_eq!(taken, ["c1"]);
+            assert!(!at.join("c1").exists());
+            assert!(!repo.git.join("worktrees/c1").exists());
+            assert!(at.join("c2/README").exists(), "a listed checkout was taken");
+            assert!(repo.git.join("worktrees/c2").exists());
+            assert!(at.join("c3/README").exists(), "a held checkout was taken");
+            assert!(repo.git.join("worktrees/c3").exists());
+            assert!(at.join("scratch").exists());
+            assert!(
+                at.join("c4").exists(),
+                "a directory at another mode was taken"
+            );
+            assert!(outside.exists(), "a link was followed");
+            assert!(std::fs::symlink_metadata(at.join("c5")).is_ok());
+
+            drop(held);
+            assert_eq!(sweep(&repo.git, &at, &|id| id == "c2"), ["c3"]);
+
+            let moved = repo.root.join("elsewhere.git");
+            std::fs::rename(&repo.git, &moved).expect("moved");
+            std::os::unix::fs::symlink(&moved, &repo.git).expect("link");
+            assert!(sweep(&repo.git, &at, &|_| false).is_empty());
+            assert!(at.join("c2/README").exists());
+        }
+
         #[cfg(unix)]
         #[test]
         fn removing_a_checkout_leaves_everything_where_worktrees_is_a_link() {
