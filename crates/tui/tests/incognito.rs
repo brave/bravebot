@@ -218,6 +218,7 @@ fn no_session_record_is_written() {
             directories: &[],
             manifest: None,
             rewind: &[],
+            checkouts: &[],
         },
     );
 

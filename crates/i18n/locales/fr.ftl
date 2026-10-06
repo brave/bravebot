@@ -833,6 +833,9 @@ servers-no-confinement-here =
     { $alias } n'a pas été démarré : cette plateforme n'a pas encore de confinement pour un serveur MCP local
 servers-no-home =
     { $alias } n'a pas été démarré : aucun répertoire à lui n'a pu être créé dans { $path } : { $reason }
+servers-paths-left-out =
+    { $alias } a été démarré sans certains chemins qui lui étaient accordés, le confinement ici ne
+    nommant aucun chemin absent du disque : { $paths }
 servers-no-handshake = { $alias } a été démarré et n'a pas terminé sa poignée de main : { $reason }
 servers-too-slow = { $alias } n'a pas terminé sa poignée de main en { $seconds } secondes
 
@@ -1521,6 +1524,11 @@ turn-cancelled = tour { $turn } annulé
 ## Reprendre une session qui tournait ailleurs, ou sur autre chose
 
 session-reopen-failed = impossible de rouvrir { $directory } : { $problem }
+session-checkout-not-restored =
+    { $count ->
+        [one] le checkout { $ids } était gardé par cette session mais n'est plus où il a été créé, il n'est donc pas listé
+       *[other] les checkouts { $ids } étaient gardés par cette session mais ne sont plus où ils ont été créés, ils ne sont donc pas listés
+    }
 session-branch-moved =
     cette session tournait sur { $was } ; cette copie de travail est sur { $now }
 session-branch-gone =

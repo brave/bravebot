@@ -3870,6 +3870,84 @@ impl Workspace {
         Ok(Labelled::new(text, policy.label_in_force(&key)))
     }
 
+    /// Bring back the checkouts a resumed session's record kept (CHECKOUT-16), and say which of
+    /// them it could not.
+    ///
+    /// What the record says is read as a claim and not as an answer: a checkout is taken back only
+    /// where its directory is the one this session would have made for that number, under
+    /// `state`'s `checkouts/` for this working directory, is a directory and not a link, and has
+    /// the `worktrees/<id>` entry in this repository's `.git`. Removing a checkout deletes that
+    /// directory and that entry, so a record that named any other path would otherwise point the
+    /// deletion at it. The commit has to be a full object id, since it is shown to the person and
+    /// handed to the planner. The repository removing it is always this one, never one the record
+    /// names.
+    ///
+    /// The numbers it holds are not made again. The rules a checkout needs came back with the
+    /// map. A write to the working directory after the resume reads as one made since the
+    /// checkout (CHECKOUT-14): the writes before it are not known, and saying too much is the safe
+    /// way to be wrong.
+    pub fn restore_session_checkouts(&self, state: &Path, kept: &[SessionCheckout]) -> Vec<String> {
+        let directory = state.canonicalize().ok().map(|state| {
+            state
+                .join("checkouts")
+                .join(crate::home::key_for(&self.root))
+        });
+        let git_dir = self.root.join(".git");
+        let mut unplaced = Vec::new();
+        for one in kept {
+            let number = one
+                .id
+                .strip_prefix('c')
+                .filter(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|digits| digits.parse::<u64>().ok());
+            let whole_id = matches!(one.commit.len(), 40 | 64)
+                && one.commit.bytes().all(|b| b.is_ascii_hexdigit());
+            let placed = match (&directory, number) {
+                (Some(directory), Some(_)) if whole_id => {
+                    one.path == directory.join(&one.id)
+                        && std::fs::symlink_metadata(&one.path)
+                            .is_ok_and(|found| found.file_type().is_dir())
+                        && std::fs::symlink_metadata(git_dir.join("worktrees").join(&one.id))
+                            .is_ok_and(|found| found.file_type().is_dir())
+                }
+                _ => false,
+            };
+            let mut held = self
+                .session_checkouts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if !placed || held.iter().any(|made| made.id == one.id) {
+                if !held.iter().any(|made| made.id == one.id) {
+                    unplaced.push(one.id.clone());
+                }
+                continue;
+            }
+            if let Some(number) = number {
+                self.checkout_numbers
+                    .fetch_max(number + 1, Ordering::SeqCst);
+            }
+            let record = Record {
+                worked_in: AtomicBool::new(one.worked_in),
+                written: Mutex::new(one.candidates.clone()),
+                size: Mutex::new(one.size),
+            };
+            held.push(Made {
+                id: one.id.clone(),
+                path: one.path.clone(),
+                key: self.trust_key(&one.path.to_string_lossy()),
+                commit: one.commit.clone(),
+                delegate: one.delegate,
+                git_dir: git_dir.clone(),
+                record: Arc::new(record),
+                after: 0,
+            });
+            if let Ok(mut listed) = self.checkouts.lock() {
+                listed.push(one.path.clone());
+            }
+        }
+        unplaced
+    }
+
     /// For starting over inside one process: the session beginning here has made no checkout, so
     /// the list empties for every clone. The checkouts themselves stay on disk.
     pub fn forget_session_checkouts(&self) {

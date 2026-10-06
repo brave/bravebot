@@ -360,6 +360,85 @@ pub struct Record {
     /// Server descendants may outlive both their server and the last undo point.
     #[serde(default)]
     pub server_children_may_run: bool,
+    /// The checkouts the session's delegates were given and it keeps (CHECKOUT-15).
+    ///
+    /// Beside the trust map, which holds the rules copied for them: a resume brings the checkouts
+    /// back with their candidate paths, and a fork brings neither (CHECKOUT-16).
+    ///
+    /// Empty for a record written before this was kept, and for a session that kept none.
+    #[serde(default)]
+    pub checkouts: Vec<StoredCheckout>,
+}
+
+/// A kept checkout as it is written down.
+///
+/// What the driver recorded and nothing a checkout's own files say. A resume takes it as a claim
+/// to check against the disk, not as an answer ([`Workspace::restore_session_checkouts`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredCheckout {
+    /// Its number, `c1` and on.
+    pub id: String,
+    pub path: String,
+    /// The commit it holds, in full.
+    pub commit: String,
+    /// The delegate it was made for, as [`bravebot_core::delegate::DelegateId`] spells it.
+    pub delegate: String,
+    /// Whether the driver recorded a file effect in it or a program started in it.
+    pub worked_in: bool,
+    /// The names the planner typed for files it wrote there.
+    #[serde(default)]
+    pub written: Vec<String>,
+    /// How many writes there went through a reference.
+    #[serde(default)]
+    pub referenced: usize,
+    /// What it took on disk as its delegate ended, where that was measured.
+    #[serde(default)]
+    pub size: Option<StoredSize>,
+}
+
+/// [`bravebot_agent::git::checkout::Size`] as it is written down.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct StoredSize {
+    pub bytes: u64,
+    pub whole: bool,
+}
+
+impl StoredCheckout {
+    fn of(checkout: &bravebot_agent::workspace::SessionCheckout) -> Self {
+        Self {
+            id: checkout.id.clone(),
+            path: checkout.path.display().to_string(),
+            commit: checkout.commit.clone(),
+            delegate: checkout.delegate.to_string(),
+            worked_in: checkout.worked_in,
+            written: checkout.candidates.named.iter().cloned().collect(),
+            referenced: checkout.candidates.referenced,
+            size: checkout.size.map(|size| StoredSize {
+                bytes: size.bytes,
+                whole: size.whole,
+            }),
+        }
+    }
+
+    /// The checkout this describes, or nothing where its delegate's number is not one.
+    fn read(&self, repository: &Path) -> Option<bravebot_agent::workspace::SessionCheckout> {
+        Some(bravebot_agent::workspace::SessionCheckout {
+            id: self.id.clone(),
+            path: PathBuf::from(&self.path),
+            commit: self.commit.clone(),
+            delegate: bravebot_core::delegate::DelegateId::parse(&self.delegate)?,
+            worked_in: self.worked_in,
+            candidates: bravebot_agent::workspace::Candidates {
+                named: self.written.iter().cloned().collect(),
+                referenced: self.referenced,
+            },
+            repository: repository.join(".git"),
+            size: self.size.map(|size| bravebot_agent::git::checkout::Size {
+                bytes: size.bytes,
+                whole: size.whole,
+            }),
+        })
+    }
 }
 
 /// Display-only turn boundaries in the recounted conversation. These never enter planner context.
@@ -816,6 +895,21 @@ fn vouched_for(trust: &TrustStore, path: &Path, backslash_separates: bool) -> bo
         ))
 }
 
+/// A fork carries no checkout and none of the rules copied for them, so no two records list one
+/// directory (CHECKOUT-16). A rule that distrusts a path stays, as it does when a checkout is
+/// removed.
+fn drop_checkouts(record: &mut Record) {
+    let kept = std::mem::take(&mut record.checkouts);
+    let Some(rules) = record.trust.as_ref().filter(|_| !kept.is_empty()) else {
+        return;
+    };
+    let mut trust = restored_rules(Path::new(&record.directory), rules);
+    for checkout in &kept {
+        trust.withdraw_beneath(&checkout.path);
+    }
+    record.trust = Some(stored_rules(&trust));
+}
+
 /// Load weaker decisions last so equivalent path spellings cannot hide them.
 fn restored_rules(root: &Path, rules: &[StoredRule]) -> TrustStore {
     let mut trust = bravebot_agent::workspace::trust_store(root);
@@ -1076,6 +1170,8 @@ pub fn record_manifest_run(
             // None, on the same footing as the asides: a manifest run plans its whole sequence
             // in advance and is not resumed, so there is no session for a rewind to go back in.
             rewind: &[],
+            // None: a manifest run starts no delegate in a checkout of its own.
+            checkouts: &[],
         },
     );
     Some(handle.id().to_string())
@@ -1238,6 +1334,54 @@ impl Record {
         restored_programs(&self.programs, root)
     }
 
+    /// The checkouts this session kept, for the workspace of the session resuming it to take back
+    /// (CHECKOUT-16). `root` is the directory it resumes in, whose `.git` made them.
+    ///
+    /// One whose recorded delegate number is not one is left out, and the workspace names the rest
+    /// it cannot take back.
+    pub fn kept_checkouts(&self, root: &Path) -> Vec<bravebot_agent::workspace::SessionCheckout> {
+        self.checkouts
+            .iter()
+            .filter_map(|checkout| checkout.read(root))
+            .collect()
+    }
+
+    /// Take back the checkouts this session kept into the workspace of the one resuming it, and
+    /// say which could not be taken back (CHECKOUT-16).
+    ///
+    /// None in a session that keeps no state directory, which could not have made them: what the
+    /// record lists is left on disk and out of the list. `handle` holds what was not taken back
+    /// and writes it with the record again, so the next resume that can reach it finds it.
+    pub fn restore_checkouts(&self, workspace: &Workspace, handle: &mut Handle) -> Option<String> {
+        if self.checkouts.is_empty() {
+            return None;
+        }
+        let kept = self.kept_checkouts(workspace.root());
+        let mut unplaced: Vec<String> = self
+            .checkouts
+            .iter()
+            .filter(|stored| !kept.iter().any(|one| one.id == stored.id))
+            .map(|stored| stored.id.clone())
+            .collect();
+        match bravebot_agent::home::directory().filter(|_| !bravebot_core::incognito::engaged()) {
+            Some(state) => unplaced.extend(workspace.restore_session_checkouts(&state, &kept)),
+            None => unplaced.extend(kept.iter().map(|one| one.id.clone())),
+        }
+        handle.unplaced = self
+            .checkouts
+            .iter()
+            .filter(|stored| unplaced.contains(&stored.id))
+            .cloned()
+            .collect();
+        (!unplaced.is_empty()).then(|| {
+            t!(
+                session_checkout_not_restored,
+                count = unplaced.len(),
+                ids = unplaced.join(", ")
+            )
+        })
+    }
+
     /// Open again the directories this session added, and say which could not be opened.
     ///
     /// The map is only half of what `/add-dir` granted, and it is the half that is no use alone:
@@ -1337,6 +1481,8 @@ pub struct Standing<'a> {
     pub manifest: Option<&'a StoredManifest>,
     /// The turns a rewind can go back to, oldest first.
     pub rewind: &'a [RewindPoint],
+    /// The checkouts the session keeps (CHECKOUT-15).
+    pub checkouts: &'a [bravebot_agent::workspace::SessionCheckout],
 }
 
 /// A session worth picking up again, and where to pick it up.
@@ -1421,6 +1567,10 @@ pub struct Handle {
     /// other one, which is worse than a record that says nothing.
     front: Front,
     server_children_may_run: bool,
+    /// Checkouts the record listed that a resume could not take back, written again with every
+    /// save so a state directory that is out of reach for one session does not erase them for the
+    /// next (CHECKOUT-16).
+    unplaced: Vec<StoredCheckout>,
 }
 
 impl Handle {
@@ -1441,6 +1591,7 @@ impl Handle {
             server_children_may_run: false,
             build: build.to_string(),
             front,
+            unplaced: Vec::new(),
         }
     }
 
@@ -1463,6 +1614,10 @@ impl Handle {
             server_children_may_run: record.server_children_may_run(),
             build: build.to_string(),
             front,
+            // Every checkout the record holds is carried through a save until a front end that
+            // restores them says which it took back, so one that restores none (the desktop)
+            // does not write them away (CHECKOUT-16).
+            unplaced: record.checkouts.clone(),
         }
     }
 
@@ -1703,6 +1858,17 @@ impl Handle {
                 .rewind
                 .iter()
                 .map(|point| StoredRewind::of(point, &self.project))
+                .collect(),
+            checkouts: standing
+                .checkouts
+                .iter()
+                .map(StoredCheckout::of)
+                .chain(
+                    self.unplaced
+                        .iter()
+                        .filter(|held| !standing.checkouts.iter().any(|one| one.id == held.id))
+                        .cloned(),
+                )
                 .collect(),
         };
 
@@ -2308,6 +2474,7 @@ pub fn fork(project: &Path, source_id: &str) -> Option<Record> {
     record.title = format!("{} (fork)", record.title);
     record.server_children_may_run = record.server_children_may_run();
     record.rewind.clear();
+    drop_checkouts(&mut record);
 
     if let Some(directory) = writable_project_directory(project) {
         let path = directory.join(format!("{}.json", record.id));
@@ -3704,6 +3871,7 @@ mod tests {
             },
             manifest: None,
             rewind: Vec::new(),
+            checkouts: Vec::new(),
         }
     }
 
@@ -3884,6 +4052,7 @@ mod tests {
                 directories: &[],
                 manifest: None,
                 rewind: &[],
+                checkouts: &[],
             },
         );
     }
@@ -4276,6 +4445,7 @@ mod tests {
                 directories: &[],
                 manifest: None,
                 rewind: &[],
+                checkouts: &[],
             },
         );
         handle.append_audit(
@@ -4342,6 +4512,7 @@ mod tests {
                     directories: &[],
                     manifest: None,
                     rewind: &[],
+                    checkouts: &[],
                 },
             );
             handle.append_audit(

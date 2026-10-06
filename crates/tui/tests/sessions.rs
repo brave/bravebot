@@ -193,6 +193,7 @@ fn a_session_is_named_once_there_is_a_record_to_name() {
             directories: &[],
             manifest: None,
             rewind: &[],
+            checkouts: &[],
         },
     );
 
@@ -239,6 +240,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
             directories: &[],
             manifest: None,
             rewind: &[],
+            checkouts: &[],
         },
     );
     handle.append_audit(
@@ -320,6 +322,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
             directories: &[],
             manifest: None,
             rewind: &[],
+            checkouts: &[],
         },
     );
     assert_eq!(sessions::list(&scratch.project).len(), 1);
@@ -354,6 +357,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
             directories: &[],
             manifest: None,
             rewind: &[],
+            checkouts: &[],
         },
     );
     assert_eq!(sessions::list(&elsewhere).len(), 1);
@@ -386,6 +390,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
             directories: &[],
             manifest: None,
             rewind: &[],
+            checkouts: &[],
         },
     );
     let listed = sessions::list(&scratch.project);
@@ -565,6 +570,7 @@ fn the_audit_keeps_the_time_each_event_happened() {
             directories: &[],
             manifest: None,
             rewind: &[],
+            checkouts: &[],
         },
     );
 
@@ -632,6 +638,7 @@ fn renaming_a_session_rewrites_the_record_immediately() {
             directories: &[],
             manifest: None,
             rewind: &[],
+            checkouts: &[],
         },
     );
     let derived = sessions::list(&scratch.project)[0].title.clone();
@@ -679,6 +686,7 @@ fn a_chosen_name_survives_the_next_turn() {
             directories: &[],
             manifest: None,
             rewind: &[],
+            checkouts: &[],
         },
     );
 
@@ -752,6 +760,7 @@ fn a_resumed_session_can_still_open_the_directory_it_added() {
             directories: workspace.added_directories(),
             manifest: None,
             rewind: &[],
+            checkouts: &[],
         },
     );
 
@@ -820,6 +829,7 @@ fn a_directory_that_has_gone_since_is_reported_on_resume() {
             directories: workspace.added_directories(),
             manifest: None,
             rewind: &[],
+            checkouts: &[],
         },
     );
     std::fs::remove_dir_all(&notes).expect("the directory goes away between sessions");
@@ -874,6 +884,7 @@ fn a_manifest_run_is_recorded_and_cannot_be_resumed() {
             directories: &[],
             manifest: Some(&stored),
             rewind: &[],
+            checkouts: &[],
         },
     );
 
@@ -921,6 +932,7 @@ fn the_session_continued_is_the_one_written_here() {
             directories: &[],
             manifest: None,
             rewind: &[],
+            checkouts: &[],
         },
     );
 
@@ -962,6 +974,7 @@ fn the_session_continued_is_the_one_written_here() {
             directories: &[],
             manifest: Some(&stored),
             rewind: &[],
+            checkouts: &[],
         },
     );
 
@@ -1010,6 +1023,7 @@ fn a_session_that_changes_directory_is_recorded_where_it_moved_to() {
         directories: &[],
         manifest: None,
         rewind: &[],
+        checkouts: &[],
     };
 
     let nothing_vouched_for = TrustStore::new("/work");
@@ -1086,6 +1100,7 @@ fn a_session_that_moves_before_anything_is_written_is_recorded_where_it_moved_to
         directories: &[],
         manifest: None,
         rewind: &[],
+        checkouts: &[],
     };
 
     let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
@@ -1157,6 +1172,7 @@ fn a_record_written_before_the_first_turn_follows_the_session_when_it_moves() {
         directories: &[],
         manifest: None,
         rewind: &[],
+        checkouts: &[],
     };
 
     let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
@@ -1213,6 +1229,7 @@ fn session_records_and_audit_trails_are_written_mode_0600() {
             directories: &[],
             manifest: None,
             rewind: &[],
+            checkouts: &[],
         },
     );
 
@@ -1321,6 +1338,7 @@ fn pre_existing_session_files_and_directories_are_tightened_on_write() {
             directories: &[],
             manifest: None,
             rewind: &[],
+            checkouts: &[],
         },
     );
 
@@ -1408,6 +1426,7 @@ fn forking_narrows_the_session_directory_it_writes_into() {
             directories: &[],
             manifest: None,
             rewind: &[],
+            checkouts: &[],
         },
     );
     handle.append_audit(
@@ -1470,6 +1489,7 @@ fn a_question_asked_beside_the_work_survives_a_resume() {
             directories: &[],
             manifest: None,
             rewind: &[],
+            checkouts: &[],
         },
     );
 
@@ -1541,6 +1561,7 @@ fn a_pasted_picture_is_kept_with_the_session_and_comes_back_on_a_resume() {
             directories: &[],
             manifest: None,
             rewind: &[],
+            checkouts: &[],
         },
     );
 
@@ -1602,6 +1623,7 @@ fn an_answer_the_planner_could_not_have_held_is_not_written_down() {
             directories: &[],
             manifest: None,
             rewind: &[],
+            checkouts: &[],
         },
     );
 
@@ -1669,6 +1691,7 @@ fn a_rewind_point_survives_being_written_and_read_back() {
             directories: &[],
             manifest: None,
             rewind: &[point],
+            checkouts: &[],
         },
     );
 
@@ -1756,6 +1779,7 @@ fn what_a_file_nobody_vouched_for_held_is_not_written_down() {
             directories: &[],
             manifest: None,
             rewind: &[point],
+            checkouts: &[],
         },
     );
 
@@ -1892,6 +1916,7 @@ fn backup_capture_trust_overrides_a_stale_pre_turn_grant() {
             directories: &[],
             manifest: None,
             rewind: &[point],
+            checkouts: &[],
         },
     );
 
@@ -2008,6 +2033,7 @@ fn a_path_vouched_for_inside_the_turn_keeps_what_it_held_out_of_the_record() {
             directories: &[],
             manifest: None,
             rewind: &[point],
+            checkouts: &[],
         },
     );
 
@@ -2082,6 +2108,7 @@ fn a_rewind_point_keeps_no_cache_figure_in_the_record() {
             directories: &[],
             manifest: None,
             rewind: &[point],
+            checkouts: &[],
         },
     );
 
@@ -2152,6 +2179,7 @@ fn a_rename_takes_the_points_it_gave_up_out_of_the_record() {
             directories: &[],
             manifest: None,
             rewind: &[point],
+            checkouts: &[],
         },
     );
 
@@ -2287,6 +2315,7 @@ fn completed_failed_and_stopped_usage_survives_session_storage() {
             directories: &[],
             manifest: None,
             rewind: &[],
+            checkouts: &[],
         },
     );
     let record = sessions::load(&scratch.project, handle.id()).unwrap();
@@ -2447,6 +2476,7 @@ mod completed_usage {
                     directories: &[],
                     manifest: None,
                     rewind: &[],
+                    checkouts: &[],
                 },
             );
             let record = sessions::load(root, stored.id()).unwrap();
@@ -2512,6 +2542,7 @@ mod preserved_history {
                 directories: &[],
                 manifest: None,
                 rewind: session.rewind_points(),
+                checkouts: &[],
             },
         );
         sessions::load(root, handle.id()).unwrap()
@@ -4618,6 +4649,7 @@ fn failed_and_stopped_manifest_usage_survives_session_reload() {
                     directories: &[],
                     manifest: None,
                     rewind: &[],
+                    checkouts: &[],
                 },
                 &[],
             )
@@ -4640,4 +4672,273 @@ fn failed_and_stopped_manifest_usage_survives_session_reload() {
             if stopped { 1 } else { 2 }
         );
     }
+}
+
+/// A kept checkout, as the session lists it.
+fn a_kept_checkout() -> bravebot_agent::workspace::SessionCheckout {
+    bravebot_agent::workspace::SessionCheckout {
+        id: "c1".into(),
+        path: "/state/checkouts/project/c1".into(),
+        commit: "0123456789abcdef0123456789abcdef01234567".into(),
+        delegate: bravebot_core::delegate::DelegateId::nth(2)
+            .child(1)
+            .unwrap(),
+        worked_in: true,
+        candidates: bravebot_agent::workspace::Candidates {
+            named: ["src/new.rs".to_string()].into(),
+            referenced: 3,
+        },
+        repository: "/work/.git".into(),
+        size: Some(bravebot_agent::git::checkout::Size {
+            bytes: 4096,
+            whole: false,
+        }),
+    }
+}
+
+/// CHECKOUT-15, CHECKOUT-16. The record keeps each checkout with its number, its commit, its
+/// delegate and what the driver recorded in it, a resume reads them back as written, and a fork
+/// carries neither the checkout nor the rules copied for it, except a rule that distrusts a path.
+///
+/// The failures this rejects are a record that drops the candidate paths, a resume that reads the
+/// delegate's number as another, and a fork that keeps the rules of a directory the original
+/// record still lists.
+#[test]
+fn a_record_keeps_the_checkouts_a_resume_reads_back_and_a_fork_does_not_carry() {
+    let scratch = Scratch::new("checkouts-kept");
+    let kept = a_kept_checkout();
+    let mut trust = a_trust_map();
+    trust.trust("/state/checkouts/project/c1/src");
+    trust.distrust("/state/checkouts/project/c1/src/fetched.json");
+    trust.trust("/state/checkouts/project/c2/src");
+
+    let conversation = a_conversation();
+    let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
+    handle.save(
+        "make a space invaders game",
+        Standing {
+            history: None,
+            conversation: &conversation.snapshot(),
+            turns: 1,
+            tokens: 1,
+            spend: &BTreeMap::new(),
+            timing: &BTreeMap::new(),
+            model: None,
+            todos: &BTreeMap::new(),
+            asides: &[],
+            trust: &trust,
+            programs: &TrustedPrograms::new(),
+            directories: &[],
+            manifest: None,
+            rewind: &[],
+            checkouts: std::slice::from_ref(&kept),
+        },
+    );
+
+    let record = sessions::load(&scratch.project, handle.id()).expect("the record loads");
+    let read = record.kept_checkouts(Path::new("/work"));
+    assert_eq!(read.len(), 1);
+    let (read, kept_one) = (&read[0], &kept);
+    assert_eq!(
+        (&read.id, &read.path, &read.commit, read.delegate),
+        (
+            &kept_one.id,
+            &kept_one.path,
+            &kept_one.commit,
+            kept_one.delegate
+        )
+    );
+    assert_eq!(read.candidates, kept_one.candidates);
+    assert_eq!((read.worked_in, read.size), (true, kept_one.size));
+    assert_eq!(read.repository, Path::new("/work/.git"));
+
+    let forked = sessions::fork(&scratch.project, handle.id()).expect("the session forks");
+    assert!(forked.checkouts.is_empty());
+    let rules: Vec<(String, String)> = forked
+        .trust
+        .expect("the map came with it")
+        .into_iter()
+        .map(|rule| (rule.path, rule.integrity))
+        .collect();
+    let under_c1: Vec<&(String, String)> = rules
+        .iter()
+        .filter(|(path, _)| path.contains("/c1"))
+        .collect();
+    assert_eq!(
+        under_c1.len(),
+        1,
+        "the fork kept a rule copied for the checkout: {under_c1:?}"
+    );
+    assert!(under_c1[0].0.ends_with("/c1/src/fetched.json") && under_c1[0].1 != "trusted");
+    assert!(
+        rules.iter().any(|(path, _)| path.ends_with("/c2/src")),
+        "the fork dropped a rule about another directory: {rules:?}"
+    );
+    let original = sessions::load(&scratch.project, handle.id()).expect("the original loads");
+    assert_eq!(original.checkouts.len(), 1, "the fork emptied the original");
+}
+
+/// A record from before checkouts were kept reads as having none.
+#[test]
+fn a_record_from_before_checkouts_were_kept_reads_as_having_none() {
+    let scratch = Scratch::new("checkouts-absent");
+    let conversation = a_conversation();
+    let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
+    handle.save(
+        "make a space invaders game",
+        Standing {
+            history: None,
+            conversation: &conversation.snapshot(),
+            turns: 1,
+            tokens: 1,
+            spend: &BTreeMap::new(),
+            timing: &BTreeMap::new(),
+            model: None,
+            todos: &BTreeMap::new(),
+            asides: &[],
+            trust: &a_trust_map(),
+            programs: &TrustedPrograms::new(),
+            directories: &[],
+            manifest: None,
+            rewind: &[],
+            checkouts: &[],
+        },
+    );
+    let path = sessions::project_directory(&scratch.project)
+        .expect("directory")
+        .join(format!("{}.json", handle.id()));
+    let mut body: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    body.as_object_mut().unwrap().remove("checkouts");
+    std::fs::write(&path, serde_json::to_vec(&body).unwrap()).unwrap();
+
+    let record = sessions::load(&scratch.project, handle.id()).expect("it loads without the key");
+    assert!(record.checkouts.is_empty());
+}
+
+/// CHECKOUT-16. A resume that cannot take a recorded checkout back says which one, and a record
+/// that kept none says nothing.
+///
+/// The failure this rejects is a checkout that silently drops out of the list, leaving a person
+/// with files under their state directory that nothing names.
+#[test]
+fn a_checkout_that_is_not_where_the_record_put_it_is_named_on_resume() {
+    let scratch = Scratch::new("checkouts-named");
+    let conversation = a_conversation();
+    let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
+    let save = |handle: &mut Handle, checkouts: &[bravebot_agent::workspace::SessionCheckout]| {
+        handle.save(
+            "make a space invaders game",
+            Standing {
+                history: None,
+                conversation: &conversation.snapshot(),
+                turns: 1,
+                tokens: 1,
+                spend: &BTreeMap::new(),
+                timing: &BTreeMap::new(),
+                model: None,
+                todos: &BTreeMap::new(),
+                asides: &[],
+                trust: &a_trust_map(),
+                programs: &TrustedPrograms::new(),
+                directories: &[],
+                manifest: None,
+                rewind: &[],
+                checkouts,
+            },
+        );
+    };
+    save(&mut handle, &[]);
+    let workspace = Workspace::new(&scratch.project).expect("workspace");
+    let record = sessions::load(&scratch.project, handle.id()).expect("loads");
+    let mut resumed = Handle::resuming(
+        &scratch.project,
+        &record,
+        Front::Terminal,
+        bravebot_stamp::BUILD,
+    );
+    assert_eq!(record.restore_checkouts(&workspace, &mut resumed), None);
+
+    save(&mut handle, &[a_kept_checkout()]);
+    let record = sessions::load(&scratch.project, handle.id()).expect("loads");
+    let mut resumed = Handle::resuming(
+        &scratch.project,
+        &record,
+        Front::Terminal,
+        bravebot_stamp::BUILD,
+    );
+    let said = record
+        .restore_checkouts(&workspace, &mut resumed)
+        .expect("a checkout that is not there is not named");
+    assert!(said.contains("c1"), "{said}");
+    assert_eq!(workspace.session_checkouts(), []);
+
+    // The next save, from a session that holds none, must not erase what could not be taken back.
+    save(&mut resumed, &[]);
+    let again = sessions::load(&scratch.project, handle.id()).expect("loads");
+    assert_eq!(
+        again
+            .checkouts
+            .iter()
+            .map(|one| one.id.as_str())
+            .collect::<Vec<_>>(),
+        ["c1"],
+        "a checkout that could not be taken back was erased from the record"
+    );
+}
+
+/// CHECKOUT-16. A front end that resumes a record and restores no checkout, as the desktop does,
+/// writes the record's checkouts back on its next save.
+///
+/// The failure this rejects is a resumed handle that starts with nothing to carry, so one turn
+/// from such a front end rewrites the record as `checkouts: []` and the terminal's next resume
+/// has lost them.
+#[test]
+fn a_resume_that_restores_no_checkout_still_writes_the_records_checkouts_back() {
+    let scratch = Scratch::new("checkouts-carried");
+    let conversation = a_conversation();
+    let save = |handle: &mut Handle, checkouts: &[bravebot_agent::workspace::SessionCheckout]| {
+        handle.save(
+            "make a space invaders game",
+            Standing {
+                history: None,
+                conversation: &conversation.snapshot(),
+                turns: 1,
+                tokens: 1,
+                spend: &BTreeMap::new(),
+                timing: &BTreeMap::new(),
+                model: None,
+                todos: &BTreeMap::new(),
+                asides: &[],
+                trust: &a_trust_map(),
+                programs: &TrustedPrograms::new(),
+                directories: &[],
+                manifest: None,
+                rewind: &[],
+                checkouts,
+            },
+        );
+    };
+    let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
+    save(&mut handle, &[a_kept_checkout()]);
+    let record = sessions::load(&scratch.project, handle.id()).expect("loads");
+
+    let mut resumed = Handle::resuming(
+        &scratch.project,
+        &record,
+        Front::Desktop,
+        bravebot_stamp::BUILD,
+    );
+    save(&mut resumed, &[]);
+
+    let again = sessions::load(&scratch.project, handle.id()).expect("loads");
+    assert_eq!(
+        again
+            .checkouts
+            .iter()
+            .map(|one| one.id.as_str())
+            .collect::<Vec<_>>(),
+        ["c1"],
+        "a checkout the record held was erased by a front end that restored none"
+    );
 }
