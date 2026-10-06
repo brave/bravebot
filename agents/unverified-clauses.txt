@@ -26,3 +26,15 @@ docs/specs/credential-protection.md:CRED-17: no gate passes because the scan ran
 docs/specs/credential-protection.md:CRED-18: no part of the scan discloses the tree off this machine
 docs/specs/credential-protection.md:CRED-22: the baseline is not writable by a turn
 docs/specs/credential-protection.md:CRED-24: a credential never travels as a command-line argument
+docs/specs/session-messages.md:MSG-1: `message_session` has one routing field, the target's name, and one content field, the text
+docs/specs/session-messages.md:MSG-2: a message is sent only from a context that has met nothing untrusted, and carries what that context held
+docs/specs/session-messages.md:MSG-3: the first message to a session is put to a person, with the target and the whole text
+docs/specs/session-messages.md:MSG-4: a second answer covers later messages to the same session for the rest of the turn, and no longer
+docs/specs/session-messages.md:MSG-5: a message is delivered to a live process, and starts nothing
+docs/specs/session-messages.md:MSG-6: a message never starts a turn
+docs/specs/session-messages.md:MSG-7: the receiving planner is told what the text is, in words the driver wrote
+docs/specs/session-messages.md:MSG-8: the receiver's driver decides nothing from a message, and a message is nothing a person types
+docs/specs/session-messages.md:MSG-9: a message arrives with the label it was sent under, and the receiver can only lower it
+docs/specs/session-messages.md:MSG-10: a session sends a bounded number of messages
+docs/specs/session-messages.md:MSG-11: both transcripts show the message, and the trail records that it happened
+docs/specs/session-messages.md:MSG-12: a delegate and a processor are offered no `message_session`

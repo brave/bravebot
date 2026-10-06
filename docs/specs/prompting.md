@@ -20,7 +20,11 @@ There are eight: the startup trust question, a directory a settings file asked f
 nobody vouched for, a write or edit, a run, reading what a run printed, being shown one quarantined
 slot a check has read, and the plan a manifest run is about to walk.
 
-The last is the only one about a whole run rather than about one thing at the moment it is due. It
+A ninth is proposed and not built: sending a message to another background session
+([session-messages.md](session-messages.md#MSG-3)). The count and the mode paragraph below read
+without it until it is.
+
+The last of the eight is the only one about a whole run rather than about one thing at the moment it is due. It
 can be, because that mode fixes every step while the task string is still the only input
 ([manifest.md](manifest.md#MANIFEST-10)). Everything below applies to it as it does to the rest.
 
