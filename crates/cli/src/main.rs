@@ -5742,6 +5742,7 @@ mod tests {
             "-c",
             "--fork",
             "-f",
+            "--from-pr",
             "doctor",
             "auth",
             "mcp",
