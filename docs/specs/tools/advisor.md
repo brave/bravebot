@@ -19,7 +19,7 @@ the advisor's reply as text. Which model answers is a choice the session makes, 
 <a id="ADVISOR-1"></a>
 ### ADVISOR-1: the tool exists only where the session named a model to consult
 
-A session that names no advisor is offered no `advisor` tool, and a call to it is answered as any
+A session that names no advisor, by flag or by setting, is offered no `advisor` tool, and a call to it is answered as any
 other unknown name is. A delegate is never offered it and is refused it if it calls it anyway.
 
 **Why.** The tool spends a request on a model chosen for being stronger than the planner. A
@@ -100,3 +100,28 @@ refuse is not asked, whichever route named it, and the planner is told to carry 
 
 `verified-by: bravebot_agent::turn::a_failed_advisor_call_tells_the_planner_only_the_category`
 `verified-by: bravebot_agent::turn::an_advisor_model_the_machine_refuses_is_not_asked`
+
+<a id="ADVISOR-8"></a>
+### ADVISOR-8: the `advisorModel` setting names the advisor when the command line does not
+
+`advisorModel` in the settings names the model the `advisor` tool asks, in the words `--advisor`
+takes, tier words included. `--advisor` outranks it for the run it is given to. The key is read
+from `~/.bravebot/settings.json` and from the file `--settings` names, as `model` is
+([BACKEND-24](../backends.md#BACKEND-24)); a project or local file that sets it is not obeyed, and
+`doctor` and the desktop settings report name the file. A delegate is not offered the tool
+whatever the setting says. A model the setting names that the machine refuses or nothing serves is
+answered per call as in [ADVISOR-7](#ADVISOR-7), because a setting is read on every run and a
+refusal up front would stop every run that did not ask for the advisor.
+
+**Why.** The advisor is sent the whole conversation, so choosing it chooses a destination for
+everything the planner read. A file that arrives with a clone is not the person's choice of one,
+for the reason it cannot choose `model`. A flag is refused up front because the person typed it
+for this run and a run that silently lacked it would not say so.
+
+`verified-by: bravebot_agent::turn::an_advisor_the_settings_name_is_offered_and_asked_without_the_flag`
+`verified-by: bravebot_agent::turn::the_flag_outranks_the_advisor_setting_and_either_alone_names_one`
+`verified-by: bravebot_agent::turn::a_delegate_is_not_given_the_advisor_the_settings_name`
+`verified-by: bravebot_config::settings::a_project_or_local_layer_cannot_name_an_advisor`
+`verified-by: bravebot_config::settings::the_home_and_the_named_file_may_name_an_advisor`
+`verified-by: bravebot_config::lib::the_advisor_setting_resolves_a_tier_word_and_is_absent_when_unset`
+`verified-by: bravebot_ui_bridge::settings::a_project_files_advisor_is_reported_as_ignored`

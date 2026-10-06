@@ -126,6 +126,7 @@ const PERMISSIONS_BLOCK: &str = "permissions";
 /// file that tried to declare a server ([`Settings::mcp_declared`]), and a key named twice in one
 /// report is one mistake somebody has to work out is not two.
 const READ_KEYS: &[&str] = &[
+    "advisorModel",
     "attribution",
     "editorMode",
     "effort",
@@ -200,6 +201,10 @@ pub struct Settings {
     /// Separate from `env` because it is not a variable: nothing exports `model`, and folding it
     /// into that map would make it collide with a name someone's shell already uses.
     model: Option<String>,
+    /// What the top-level `advisorModel` key named, if it named anything.
+    ///
+    /// The name as the file spelled it. Resolving a tier word is the configuration's to do.
+    advisor_model: Option<String>,
     /// What the top-level `effort` key named, if it named anything.
     ///
     /// The word as the file spelled it, for the reason `editor_mode` below keeps one: which words
@@ -277,6 +282,11 @@ pub struct Settings {
     ///
     /// Kept for the same reason, the key picking which of the providers above answers.
     model_ignored: Vec<PathBuf>,
+    /// The layers that named `advisorModel` and were not obeyed, weakest first.
+    ///
+    /// Kept for the same reason: the model it names is sent the whole conversation, which makes it
+    /// a destination, and a checkout cannot choose one.
+    advisor_ignored: Vec<PathBuf>,
     /// The `permissions` blocks and rule lists a layer spelled as another shape, with the file each
     /// came from. The merge keeps the weaker block or list in their place, so the merged root no
     /// longer holds them and only the layer that wrote one can say it was ignored (PERM-11).
@@ -538,6 +548,7 @@ impl Settings {
         // from the layer's own root below, before it reaches the merge.
         let mut provider_ignored = Vec::new();
         let mut model_ignored = Vec::new();
+        let mut advisor_ignored = Vec::new();
         let mut misshapen = Vec::new();
         let mut mcp_declared = Vec::new();
         let mut mcp_requested: Vec<(PathBuf, String)> = Vec::new();
@@ -574,6 +585,9 @@ impl Settings {
                 }
                 if root.remove(PROVIDER_BLOCK) {
                     provider_ignored.push(path.clone());
+                }
+                if root.remove("advisorModel") {
+                    advisor_ignored.push(path.clone());
                 }
             }
             if root.contains_key(VETTING_BLOCK) {
@@ -674,6 +688,7 @@ impl Settings {
         settings.effort_outranks_a_pick = effort_above_home && settings.effort.is_some();
         settings.provider_ignored = provider_ignored;
         settings.model_ignored = model_ignored;
+        settings.advisor_ignored = advisor_ignored;
         // `merged` goes here, and clears what every layer stated as it does: the settings hold what
         // they keep of it by now, so the rest is a spare copy of a gateway token.
         settings
@@ -722,6 +737,7 @@ impl Settings {
             scrub: scrub_list(root),
             permissions: permission_lists(root),
             model: word(root, "model"),
+            advisor_model: word(root, "advisorModel"),
             effort: word(root, "effort"),
             // False here, one root being read as the person's own until [`Settings::layered`]
             // says which file it was.
@@ -766,6 +782,7 @@ impl Settings {
             contested: BTreeMap::new(),
             provider_ignored: Vec::new(),
             model_ignored: Vec::new(),
+            advisor_ignored: Vec::new(),
         }
     }
 
@@ -804,6 +821,14 @@ impl Settings {
     /// that tried is reported.
     pub fn model_outranks_a_pick(&self) -> bool {
         self.model_outranks_a_pick
+    }
+
+    /// The model the settings in force name as the planner's advisor, if they name one.
+    ///
+    /// Read from the person's own file and the file `--settings` names only, for the reason
+    /// [`Settings::model`] is.
+    pub fn advisor_model(&self) -> Option<&str> {
+        self.advisor_model.as_deref()
     }
 
     /// How hard the settings in force asked the model to think, if they asked for anything.
@@ -1037,6 +1062,7 @@ impl Settings {
             // `doctor` names for the reason it names the two above.
             && self.provider_ignored.is_empty()
             && self.model_ignored.is_empty()
+            && self.advisor_ignored.is_empty()
     }
 
     /// The rule text and added directories the `permissions` block carried.
@@ -1061,6 +1087,11 @@ impl Settings {
     /// The files that named the top-level `model` key from a layer not entitled to, weakest first.
     pub fn model_ignored(&self) -> impl Iterator<Item = &Path> {
         self.model_ignored.iter().map(PathBuf::as_path)
+    }
+
+    /// The files that named `advisorModel` from a layer not entitled to, weakest first.
+    pub fn advisor_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.advisor_ignored.iter().map(PathBuf::as_path)
     }
 
     /// The files that were read, weakest first, for `doctor` to report.
@@ -1101,6 +1132,7 @@ impl Settings {
             .is_some()
             .then_some("model")
             .into_iter()
+            .chain(self.advisor_model.is_some().then_some("advisorModel"))
             .chain(self.effort.is_some().then_some("effort"))
             .chain(self.editor_mode.is_some().then_some("editorMode"))
             .chain(self.terminal_title.is_some().then_some("terminalTitle"))
@@ -4586,6 +4618,43 @@ mod tests {
             .project(r#"{"env": {"AWS_PROFILE": "this-checkout"}}"#)
             .read();
         assert_eq!(settings.model(), Some("personal-choice"));
+    }
+
+    /// The advisor is a second model the planner's context is sent to, so it is a destination as
+    /// the main model is: a checkout cannot name one, and the file is reported rather than obeyed.
+    #[test]
+    fn a_project_or_local_layer_cannot_name_an_advisor() {
+        let settings = Layers::new("advisor-checkout")
+            .global(r#"{"advisorModel": "personal-advisor"}"#)
+            .project(r#"{"advisorModel": "this-checkout"}"#)
+            .local(r#"{"advisorModel": "also-this-checkout"}"#)
+            .read();
+        assert_eq!(settings.advisor_model(), Some("personal-advisor"));
+        assert_eq!(settings.advisor_ignored().count(), 2);
+
+        let only_project = Layers::new("advisor-project-only")
+            .project(r#"{"advisorModel": "this-checkout"}"#)
+            .read();
+        assert_eq!(only_project.advisor_model(), None);
+        assert_eq!(only_project.advisor_ignored().count(), 1);
+    }
+
+    /// The file `--settings` named is the person's own act, so it may name an advisor and wins
+    /// over the home file.
+    #[test]
+    fn the_home_and_the_named_file_may_name_an_advisor() {
+        let home = Layers::new("advisor-home")
+            .global(r#"{"advisorModel": "  personal-advisor "}"#)
+            .read();
+        assert_eq!(home.advisor_model(), Some("personal-advisor"));
+        assert_eq!(home.advisor_ignored().count(), 0);
+
+        let named = Layers::new("advisor-named")
+            .global(r#"{"advisorModel": "personal-advisor"}"#)
+            .named(r#"{"advisorModel": "named-advisor"}"#)
+            .read();
+        assert_eq!(named.advisor_model(), Some("named-advisor"));
+        assert_eq!(named.advisor_ignored().count(), 0);
     }
 
     /// The reason to report an override at all: somebody seeing a value they did not set has three

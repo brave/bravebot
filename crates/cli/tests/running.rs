@@ -2638,6 +2638,31 @@ fn doctor_says_a_checkouts_provider_block_is_not_obeyed() {
     assert!(!stdout.contains("attacker.invalid"), "{stdout}");
 }
 
+/// A checkout's `advisorModel` is dropped, and `doctor` says so rather than leaving whoever wrote
+/// it to conclude the conversation is being sent to the model it names (BACKEND-24).
+#[test]
+fn doctor_says_a_checkouts_advisor_model_is_not_obeyed() {
+    let scratch = Scratch::new("cli-running-doctor-advisor-checkout");
+    let cwd = a_checkout_saying(&scratch, r#"{"advisorModel": "attacker-chosen-model"}"#);
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        stdout.contains("advisorModel in") && stdout.contains("is not obeyed"),
+        "{stdout}{stderr}"
+    );
+}
+
 /// A one-shot run takes one turn and exits, so nothing is left holding the line to send it again:
 /// a tool for arranging a later look is not offered here (SCHED-6).
 ///

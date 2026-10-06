@@ -1109,7 +1109,9 @@ what fails when they differ. Session ids are not completed.
 ### CLI-21: `--advisor <name>` offers the planner a second model to consult
 
 `--advisor <name>` names the model the `advisor` tool asks for one run, in the words `--model`
-takes, tier words included. Without it the planner is offered no such tool. The flag is refused
+takes, tier words included. Without it the planner is offered the model the `advisorModel` setting
+names, if any ([ADVISOR-8](tools/advisor.md#ADVISOR-8)), and otherwise no such tool. The flag
+outranks the setting. The flag is refused
 before the run starts when it has no name after it, when the name is blank, when the machine-level
 settings refuse the model, when nothing is configured to serve it, and with `--mode manifest`,
 which has no planner to ask. What the tool then does is [tools/advisor.md](tools/advisor.md).

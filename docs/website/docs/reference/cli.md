@@ -149,8 +149,10 @@ bravebot --advisor opus "plan the migration, then carry it out"
 
 Names a second model the planner may consult during the run. The planner is then offered an
 [`advisor`](tools.md#advisor) tool, which sends the conversation so far and a question the planner
-wrote to that model and returns its reply. Without the flag there is no such tool. The name is read as
-`--model` reads it, so `opus`, `sonnet` and `haiku` name a tier.
+wrote to that model and returns its reply. Without the flag the model is the one the
+[`advisorModel`](../customize/configuration.md#advisormodel) setting names, and with neither there is
+no such tool. The flag wins over the setting. The name is read as `--model` reads it, so `opus`,
+`sonnet` and `haiku` name a tier.
 
 `--advisor` with no name, a blank one, a model this machine's managed settings refuse, a model
 nothing is configured to serve, or `--mode manifest` is refused and the run stops before it starts.

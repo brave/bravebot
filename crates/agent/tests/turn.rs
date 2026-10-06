@@ -40349,6 +40349,41 @@ fn a_session_without_an_advisor_cannot_call_one() {
     );
 }
 
+/// ADVISOR-8: a session whose settings name an advisor and whose command line names none is
+/// offered the tool, and the model the settings name is the one asked.
+#[test]
+fn an_advisor_the_settings_name_is_offered_and_asked_without_the_flag() {
+    let scratch = Scratch::new("advisor-from-settings");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("advisor", AN_ADVISOR_CALL),
+        reply_with("ADVICE-SETTINGS"),
+        reply_with("done"),
+    ]);
+    let mut config = config_for(&endpoint);
+    config.advisor_model = Some("settings-advisor".into());
+    turn::run_with_trust(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("choose the first file to read"),
+        &mut bravebot_agent::Unattended,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+    let requests: Vec<serde_json::Value> = every_request(&received)
+        .iter()
+        .map(|body| serde_json::from_str(body).expect("a request"))
+        .collect();
+    assert_eq!(requests.len(), 3, "planner, advisor, planner");
+    assert!(
+        the_tools_in(&requests[0]).contains(&"advisor".to_string()),
+        "the planner was not offered the advisor"
+    );
+    assert_eq!(requests[1]["model"], "settings-advisor");
+}
+
 /// ADVISOR-2 and ADVISOR-3: the advisor is sent the planner's own context and the question, to the
 /// model named for it, with no tools; what it says is the result of the call.
 #[test]

@@ -38,7 +38,8 @@ it again. Not to a tick of a loop you gave an interval for, not to a delegate, a
 will ask again, which is a one-shot run, the desktop application, or a line the agent wrote itself.
 [`watch_file`](#watch_file) goes to a session that keeps watches, so not to a delegate, a one-shot
 run or a planned run. [`advisor`](#advisor) goes to a session that named a model to consult with
-[`--advisor`](cli.md#--advisor-name), so not to one that did not, and not to a delegate.
+[`--advisor`](cli.md#--advisor-name) or the [`advisorModel`](../customize/configuration.md#advisormodel)
+setting, so not to one that did not, and not to a delegate.
 
 Every tool also takes `why`, one line from the planner saying what the call is for. It is content
 on every tool: it is drawn beside the call for you to read, and nothing reads it or decides on it.
@@ -875,7 +876,8 @@ Puts a question to a second model that is shown the conversation. The result is 
 
 The advisor is sent the same request the planner was sent on that round, followed by the question, and
 is offered no tools. It can only advise. The planner does not choose the model: the session does, with
-[`--advisor`](cli.md#--advisor-name).
+[`--advisor`](cli.md#--advisor-name) or the [`advisorModel`](../customize/configuration.md#advisormodel)
+setting.
 
 The reply is labelled from the planner's context, as the planner's own words are. While that context
 has met nothing untrusted the planner reads it. Once it has, the planner is given a reference to it
