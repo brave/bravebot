@@ -1600,6 +1600,18 @@ int main(void) {
         program: &str,
         arguments: &[&str],
     ) -> Option<i32> {
+        exit_code_under_with(policy, environment, program, arguments, nothing_attached())
+    }
+
+    /// [`exit_code_under`] with the streams the caller chose, for a test whose failure needs what
+    /// the program said.
+    fn exit_code_under_with(
+        policy: &SandboxPolicy,
+        environment: crate::process::Variables,
+        program: &str,
+        arguments: &[&str],
+        streams: crate::process::Streams,
+    ) -> Option<i32> {
         let arguments: Vec<String> = arguments.iter().map(|a| a.to_string()).collect();
         SeatbeltSandbox::new()
             .expect("sandbox-exec is present on macOS")
@@ -1607,7 +1619,7 @@ int main(void) {
                 program,
                 &arguments,
                 policy,
-                nothing_attached(),
+                streams,
                 Environment::Only(environment),
             )
             .expect("should spawn")
@@ -1722,8 +1734,13 @@ int main(void) {
                 .with("HOME", &home)
                 .with("PATH", "/usr/bin:/bin")
                 .with("GIT_CONFIG_GLOBAL", "/dev/null");
+            let streams = crate::process::Streams {
+                stdin: crate::process::Stream::Null,
+                stdout: crate::process::Stream::Null,
+                stderr: crate::process::Stream::Inherited,
+            };
             assert_eq!(
-                exit_code_under(&policy, environment, program, &arguments),
+                exit_code_under_with(&policy, environment, program, &arguments, streams),
                 Some(0),
                 "{program} {arguments:?} did not start under the base"
             );
