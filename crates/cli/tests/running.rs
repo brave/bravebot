@@ -6262,6 +6262,273 @@ fn a_background_session_runs_its_prompt_and_takes_a_reply_only_while_idle() {
     host.wait().expect("the host ends once stopped");
 }
 
+/// A background session that has had one turn and was then stopped, in `home`'s `work` directory.
+/// Returns that directory.
+#[cfg(unix)]
+fn a_stopped_session_with_one_turn(home: &ShortHome, gateway: &Gateway) -> PathBuf {
+    use std::os::unix::net::UnixStream;
+
+    let (mut host, socket) = a_started_host(home, gateway, "{}");
+    let mut terminal = UnixStream::connect(&socket).expect("attach");
+    terminal
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .expect("timeout");
+    writeln!(terminal, "attach").expect("attach");
+    let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
+    shown_until(&mut seen, "trust this directory?");
+    // The question is drawn a moment before the session reads an answer to it, and a line sent in
+    // that moment is refused, so it is sent again.
+    loop {
+        writeln!(terminal, "n").expect("answer the question");
+        let shown = shown_until_any(&mut seen, &["all done", "Not sent"]);
+        if shown.contains("all done") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let first = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the first prompt reached the gateway");
+    assert!(first.contains("fix the build"), "{first}");
+    drop(seen);
+    drop(terminal);
+
+    let stopped = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+    assert!(stopped.status.success(), "{}", said(&stopped).1);
+    host.wait().expect("the host ends once stopped");
+    let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
+    assert!(listed.contains("stopped"), "{listed}");
+    home.0.join("work")
+}
+
+/// BG-1, BG-9, BG-10: the process that starts a stopped session again reads the earlier conversation
+/// back from the record, does not put the startup question a second time, and takes the next
+/// prompt with the earlier turn in the request.
+///
+/// Started here by hand with nothing to start with, which is what `attach` leaves for it.
+#[cfg(unix)]
+#[test]
+fn a_session_started_again_continues_the_conversation_it_stopped_with() {
+    use std::os::unix::net::UnixStream;
+
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    let work = a_stopped_session_with_one_turn(&home, &gateway);
+
+    let job = home.0.join(format!(".bravebot/jobs/{SESSION_ID}"));
+    std::fs::write(job.join("first-prompt"), "").expect("nothing to start with");
+    let _ = std::fs::remove_file(job.join("attach.sock"));
+    let mut host = Command::new(env!("CARGO_BIN_EXE_bravebot"))
+        .env_clear()
+        .env("HOME", &home.0)
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .env("OLLAMA_HOST", NO_OLLAMA)
+        .envs(AT_A_GATEWAY.iter().copied())
+        .args(["__bg-host", SESSION_ID])
+        .current_dir(&work)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("the host starts");
+    let socket = job.join("attach.sock");
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    while !socket.exists() {
+        assert!(std::time::Instant::now() < until, "the host never listened");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let mut terminal = UnixStream::connect(&socket).expect("attach");
+    terminal
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .expect("timeout");
+    writeln!(terminal, "attach").expect("attach");
+    let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
+    let transcript = shown_until(&mut seen, "earlier conversation (1 turn)");
+    assert!(
+        !transcript.contains("trust this directory?"),
+        "{transcript}"
+    );
+
+    // Idle with nothing to start with, so a reply is the next prompt. A held startup question
+    // would answer `needs-input` here for as long as the loop waits.
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let mut stream = UnixStream::connect(&socket).expect("connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(30)))
+            .expect("timeout");
+        write!(stream, "reply\nand the tests\n").expect("write");
+        let mut answer = String::new();
+        BufReader::new(stream)
+            .read_line(&mut answer)
+            .expect("an answer");
+        if answer.trim() == "ok" {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "the reply was never taken: {answer}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let second = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the reply reached the gateway");
+    assert!(second.contains("and the tests"), "{second}");
+    assert!(second.contains("fix the build"), "{second}");
+
+    let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+    let _ = host.wait();
+}
+
+/// BG-2: starting a stopped session again is a thing a terminal does. A `reply` or an `attach` whose
+/// input is a pipe says so, and starts nothing.
+#[cfg(unix)]
+#[test]
+fn a_stopped_session_is_not_started_again_from_a_pipe() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    a_stopped_session_with_one_turn(&home, &gateway);
+
+    for arguments in [
+        &["reply", "3f2a9c1e", "and the tests"][..],
+        &["attach", "3f2a9c1e"][..],
+    ] {
+        let output = bravebot(&home.0, AT_A_GATEWAY, arguments);
+        assert!(!output.status.success(), "{arguments:?}");
+        assert!(
+            said(&output).1.contains("only a terminal can start it"),
+            "{arguments:?}: {}",
+            said(&output).1
+        );
+    }
+    let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
+    assert!(listed.contains("stopped"), "{listed}");
+    assert!(
+        !home
+            .0
+            .join(format!(".bravebot/jobs/{SESSION_ID}/first-prompt"))
+            .exists(),
+        "a refused start left the line it would have started with"
+    );
+}
+
+/// BG-9, BG-10: `reply` from a terminal starts a stopped session with the reply as its prompt, and
+/// the conversation it stopped with is in the request.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_reply_from_a_terminal_starts_a_stopped_session_with_it() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    a_stopped_session_with_one_turn(&home, &gateway);
+
+    let output = in_a_terminal(
+        &home.0,
+        AT_A_GATEWAY,
+        &["reply", "3f2a9c1e", "and the tests"],
+    );
+    let (out, err) = said(&output);
+    assert!(output.status.success(), "{out}{err}");
+    assert!(out.contains("Sent to"), "{out}{err}");
+    let second = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the reply reached the gateway");
+    assert!(second.contains("and the tests"), "{second}");
+    assert!(second.contains("fix the build"), "{second}");
+    let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
+    assert!(!listed.contains("stopped"), "{listed}");
+}
+
+/// BG-9: `attach` from a terminal starts a stopped session idle, from the record it stopped with.
+///
+/// The terminal here ends its input at once, so it detaches before the session has drawn much; what
+/// shows the session started from the record is the next prompt, which carries the earlier turn.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_attach_from_a_terminal_starts_a_stopped_session() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    a_stopped_session_with_one_turn(&home, &gateway);
+
+    let output = in_a_terminal(&home.0, AT_A_GATEWAY, &["attach", "3f2a9c1e"]);
+    let (out, err) = said(&output);
+    assert!(output.status.success(), "{out}{err}");
+    assert!(!out.contains("trust this directory?"), "{out}{err}");
+
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let sent = bravebot(
+            &home.0,
+            AT_A_GATEWAY,
+            &["reply", "3f2a9c1e", "and the tests"],
+        );
+        if sent.status.success() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "the session never took a reply: {}",
+            said(&sent).1
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let second = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the reply reached the gateway");
+    assert!(second.contains("and the tests"), "{second}");
+    assert!(second.contains("fix the build"), "{second}");
+}
+
+/// BG-9: `--resume` and `--continue` name a record a running background session holds, and say to
+/// attach, instead of opening a second writer on it.
+#[cfg(unix)]
+#[test]
+fn a_record_a_running_session_holds_is_not_resumed() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    let work = a_stopped_session_with_one_turn(&home, &gateway);
+    let job = home.0.join(format!(".bravebot/jobs/{SESSION_ID}"));
+    std::fs::write(job.join("first-prompt"), "").expect("nothing to start with");
+    let _ = std::fs::remove_file(job.join("attach.sock"));
+    let mut host = Command::new(env!("CARGO_BIN_EXE_bravebot"))
+        .env_clear()
+        .env("HOME", &home.0)
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .env("OLLAMA_HOST", NO_OLLAMA)
+        .envs(AT_A_GATEWAY.iter().copied())
+        .args(["__bg-host", SESSION_ID])
+        .current_dir(&work)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("the host starts");
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    while !job.join("attach.sock").exists() {
+        assert!(std::time::Instant::now() < until, "the host never listened");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    for arguments in [&["--resume", SESSION_ID][..], &["--continue"][..]] {
+        let output = bravebot_started_in(&home.0, &work, AT_A_GATEWAY, arguments);
+        assert!(!output.status.success(), "{arguments:?}");
+        let err = said(&output).1;
+        assert!(
+            err.contains("held by a running background session"),
+            "{arguments:?}: {err}"
+        );
+        assert!(err.contains("bravebot attach 3f2a9c1e"), "{err}");
+    }
+
+    let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+    let _ = host.wait();
+}
+
 /// BG-10: a reply with no text is refused even when standard input carries some, because a prompt
 /// that arrived on a pipe is not a line a person typed.
 #[test]
@@ -6337,12 +6604,23 @@ fn a_started_host(
 /// What a terminal attached to `socket` has been shown so far, read until it contains `wanted`.
 #[cfg(unix)]
 fn shown_until(seen: &mut BufReader<std::os::unix::net::UnixStream>, wanted: &str) -> String {
+    shown_until_any(seen, &[wanted])
+}
+
+/// The same, read until it contains any one of `wanted`.
+#[cfg(unix)]
+fn shown_until_any(
+    seen: &mut BufReader<std::os::unix::net::UnixStream>,
+    wanted: &[&str],
+) -> String {
     let mut transcript = String::new();
     let mut chunk = [0u8; 1024];
-    while !transcript.contains(wanted) {
+    while !wanted.iter().any(|text| transcript.contains(text)) {
         let read = match seen.read(&mut chunk) {
             Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
-            other => other.expect("the session spoke"),
+            other => other.unwrap_or_else(|err| {
+                panic!("the session spoke: {err}, waiting for {wanted:?}, shown {transcript:?}")
+            }),
         };
         assert!(
             read > 0,

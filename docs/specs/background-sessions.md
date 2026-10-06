@@ -21,10 +21,12 @@ The roster, `bravebot sessions`, `bravebot sessions stop`, `bravebot --bg`, `bra
 `bravebot reply` are built, and the session a background process runs is the session in lines. A
 clause that is built whole names its tests. A clause with a part still to build reads
 `verified-by: none` until all of it lands, and the parts not built are: the supervisor and restarts
-([BG-12](#BG-12)), the idle stop ([BG-13](#BG-13)), starting a session again from `attach` or
-`reply`, `/bg` and `/detach`, the refusal of `--resume`, `--continue` and `--fork` for a record a
-running session holds, the checkout ([BG-14](#BG-14)), and holding a question from an MCP server
-that has to be started. A session that needs one of those servers starts without it. The clauses
+([BG-12](#BG-12)), the idle stop ([BG-13](#BG-13)), starting an `interrupted` session again from
+`attach` or `reply`, `/bg` and `/detach`, the checkout ([BG-14](#BG-14)), and holding a question
+from an MCP server that has to be started. A session that needs one of those servers starts without
+it. A `stopped` session is started again from `attach` or `reply` by a terminal, resuming the record
+the process wrote after each turn, and `--resume` and `--continue` refuse a record a running session
+holds. The clauses
 that other specs would contradict are named under
 [What this changes in other specs](#what-this-changes-in-other-specs).
 

@@ -1579,8 +1579,14 @@ impl Handle {
     /// Nothing is written yet: a session that is opened and abandoned should not leave a record,
     /// or the list fills with launches nobody meant.
     pub fn begin(project: &Path, front: Front, build: &str) -> Self {
+        Self::begin_as(new_id(), project, front, build)
+    }
+
+    /// Begin a session under an id that was chosen before it, as a background session's is: the
+    /// roster names it by the same id, so the record and the entry are found from one another.
+    pub fn begin_as(id: String, project: &Path, front: Front, build: &str) -> Self {
         Self {
-            id: new_id(),
+            id,
             project: project.to_path_buf(),
             started: now(),
             branch: branch_of(project),
