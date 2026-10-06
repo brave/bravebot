@@ -50,20 +50,23 @@ the gate is not looser either.
 `verified-by: bravebot_agent::tools::a_path_outside_the_workspace_is_refused_the_way_a_read_of_it_would_be`
 
 <a id="ARM-3"></a>
-### ARM-3: the path must name a file that exists now
+### ARM-3: the path must name a file, or have nothing at it yet
 
-A directory is refused, and so is a name with nothing at it.
+A directory is refused. A path with nothing at it is armed, and the first look records that nothing
+was there.
 
 **Why the directory.** What changed inside one is a file name the filesystem produced, and a fire's
 prompt may carry nothing off the filesystem, so the only fire a directory could produce is one
 saying it moved, which a planner can do nothing with.
 
-**Why an existing file.** A watch compares each look with the look before, and the first look is
-taken when the watch is armed. A path with nothing at it leaves nothing to compare against, so the
-first look that found the file would be reported as a change the file never underwent.
+**Why a path with nothing at it is accepted.** A watch compares each look with the look before, and
+whether the path is there is one of the facts compared ([FSWATCH-3](../file-watches.md#FSWATCH-3)),
+so an absent first look is something a later look can differ from: the file appearing is reported as
+that, and not as a write. A path the session could not reach is still refused, as a read of it would
+be ([ARM-2](#ARM-2)).
 
 `verified-by: bravebot_agent::tools::a_directory_is_refused_rather_than_watched`
-`verified-by: bravebot_agent::tools::a_path_that_names_nothing_is_refused`
+`verified-by: bravebot_agent::tools::a_path_that_names_nothing_is_armed_to_report_it_appearing`
 
 <a id="ARM-4"></a>
 ### ARM-4: a call the session cannot honour is refused with the reason, not armed silently

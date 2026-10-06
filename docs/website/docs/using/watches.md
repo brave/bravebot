@@ -20,13 +20,11 @@ decision you are approving is which file this session may be told about.
 ## What a watch may be armed on
 
 One file, settled when the watch is armed and never changing afterwards. Not a glob, not a directory,
-and not a tree walked for anything underneath it. The file has to exist now: a path with nothing at it
-is refused rather than watched for something to appear.
+and not a tree walked for anything underneath it. The file need not exist yet: a path with nothing at it is armed, and the watch reports the file
+appearing.
 
 A directory is refused because what changed inside one is a file name the filesystem produced, and a
-firing may carry nothing off the filesystem. A path with nothing at it is refused because the first
-look would have nothing to compare against, so finding the file would be reported as a write that
-never happened.
+firing may carry nothing off the filesystem.
 
 Asking about one file is what a watch is for. Where what you are waiting on is not a single file, or
 where you want your own line sent again on an interval, the answer is a
@@ -35,14 +33,14 @@ where you want your own line sent again on an interval, the answer is a
 ## What a watch observes
 
 A watch does one thing: it looks at the path, and compares what it sees with what it saw at the look
-before. **Size and modification time, and nothing else.** No content, and nothing derived from
+before. **Size, modification time and whether the path is there, and nothing else.** No content, and nothing derived from
 content: not a hash, not a first line, not a count of what differs.
 
 The first look is taken when the watch is armed, so a change is a change since you asked about the
 file. Every look afterwards is measured against the one before it.
 
-Those two facts stay with Brave Bot itself and are never quoted to the planner. A firing says that the
-path looks written to, which is the strongest thing it can say, and it says it without naming a size
+Those facts stay with Brave Bot itself and are never quoted to the planner. A firing says that the
+path looks written to, no longer exists, or now exists, which is the strongest thing it can say, and it says it without naming a size
 or a time. A file the [trust map](../security/trust.md) quarantines is one whose bytes may not reach
 the planner, and a watch that derived a bit from those bytes would be releasing exactly that.
 
@@ -75,8 +73,8 @@ waiting, and not before. **It never interrupts.** A filesystem event is not a li
 session off you.
 
 Any number of changes seen while a turn is running, or while a firing is held for one, produce one
-firing when the session is free. A firing reports that the path looks written to, which is one fact
-however many times it was written.
+firing when the session is free. A firing reports one of those three facts about the path, however many
+times it moved. A file removed and written back before the firing goes out is reported as a write.
 
 ## What arming asks you
 

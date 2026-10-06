@@ -1395,7 +1395,7 @@ impl Bridge {
                 let workspace = Workspace::new(open.project.clone())
                     .map_err(|_| Failure::bad_request("Project unavailable."))?;
                 watches.arm(path.clone(), workspace.root().to_path_buf(), 0, workspace.look(&path, workspace.root()), std::time::Instant::now())
-                    .map_err(|_| Failure::bad_request("Cannot watch this file. It must exist inside the project, with fewer than eight active watches."))?;
+                    .map_err(|_| Failure::bad_request("Cannot watch this file. It must be inside the project, with fewer than eight active watches."))?;
             }
         } else if request.method == "watches.stop" {
             if request.flag("all", false) {
@@ -1463,10 +1463,14 @@ impl Bridge {
                         bravebot_agent::watch::Reaped::Aged => "expired", bravebot_agent::watch::Reaped::OutOfReach => "out-of-reach",
                     }})));
                 }
-                watches.due(now).map(|w| (w.number(), w.path().to_string()))
+                watches
+                    .due(now)
+                    .and_then(|w| Some((w.number(), w.path().to_string(), w.change()?)))
             };
-            let Some((number, path)) = due else { continue };
-            let prompt = bravebot_agent::watch::fired(number, &path);
+            let Some((number, path, change)) = due else {
+                continue;
+            };
+            let prompt = bravebot_agent::watch::fired(number, &path, change);
             // Announce the cause before starting a worker, so early events follow it.
             self.emitter.send(Event::new(
                 "watch.fired",

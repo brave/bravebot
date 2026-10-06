@@ -1180,15 +1180,15 @@ fn table(
     if arming.offered() {
         tools.push(Tool::function(
             "watch_file",
-            "Be told when one file changes, with no turn of yours running to notice it. This              arms a standing watch: the file is looked at every few seconds from now on, and the              first look that finds its size or modification time moved begins a new turn naming              this watch and this path. The watch outlives this turn and every turn after it.                           Nothing is read, now or when it fires. A fire says the path looks written to and              says nothing else about the file, so read it then if you need what is in it. Two              things follow that are worth saying to the user: a write that restores the same              bytes fires the watch, and a change that leaves the modification time alone does              not.                           Use this where somebody asked to be told when a file changes. Use schedule_next              instead where what is being waited on is not one file, or where they asked for              their own line to be run again.                           One existing file, never a directory and never a pattern, and the path cannot be              changed once the watch is armed. A watch lives at most a week, at most 8 are live              at once, and the user sees every live one: they end one with /watch stop <n>, and              ctrl-c ends them all.",
+            "Be told when one file changes, with no turn of yours running to notice it. This              arms a standing watch: the file is looked at every few seconds from now on, and the              first look that finds its size or modification time moved, or finds it removed or newly there, begins a new turn naming              this watch and this path. The watch outlives this turn and every turn after it.                           Nothing is read, now or when it fires. A fire says the path looks written to, no longer exists, or now exists, and says nothing else about the file, so read it then if you need what is in it. Two              things follow that are worth saying to the user: a write that restores the same              bytes fires the watch, and a change that leaves the modification time alone does              not.                           Use this where somebody asked to be told when a file changes. Use schedule_next              instead where what is being waited on is not one file, or where they asked for              their own line to be run again.                           One file, which may not exist yet, never a directory and never a pattern, and the path cannot be              changed once the watch is armed. A watch lives at most a week, at most 8 are live              at once, and the user sees every live one: they end one with /watch stop <n>, and              ctrl-c ends them all.",
             json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
                         "description": "Workspace-relative path of the one file to watch, e.g. \
-                                        src/main.rs. It must exist now: there is nothing to \
-                                        compare a later look against otherwise."
+                                        src/main.rs. It may have nothing at it yet, in which \
+                                        case the watch reports it appearing."
                     }
                 },
                 "required": ["path"]
@@ -5509,8 +5509,8 @@ fn schedule_next<S: Sink>(
 ///
 /// Three refusals before the gate, each of which the planner can act on: a session already doing
 /// something without anybody typing, a session with no room, and a turn arming more than the
-/// session can hold. Two after it: a path that names no file, and a path that cannot be looked at
-/// now, which leaves nothing for a later look to be compared against.
+/// session can hold. Two after it: a path that names something that is not a file, and a path
+/// the session cannot reach.
 fn watch_file<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
@@ -5597,19 +5597,21 @@ fn watch_file<S: Sink>(
     // inside one is a file name the filesystem produced, and putting that in a fire's prompt is
     // untrusted content in the one position nothing can label; reporting only that the directory
     // moved is a fire nobody can act on.
-    if !workspace.names_a_file(&path) {
+    if workspace.names_something_else(&path) {
         return Produced::problem(
-            "refused: 'path' must name a file that exists. A directory cannot be watched: what \
-             changed inside one is a name off the filesystem, and a fire may not carry one.",
+            "refused: 'path' must name a file, or a path with nothing at it yet. A directory \
+             cannot be watched: what changed inside one is a name off the filesystem, and a fire \
+             may not carry one.",
         );
     }
-    if !matches!(
+    // A path with nothing at it is armed, and the first look records that it is absent. Only a
+    // path the session cannot reach is refused, as a read of it would be.
+    if matches!(
         workspace.look(&path, workspace.root()),
-        crate::watch::Looked::Saw(_)
+        crate::watch::Looked::OutOfReach
     ) {
         return Produced::problem(
-            "refused: that path cannot be looked at, so there is nothing for a later look to be \
-             compared against.",
+            "refused: that path cannot be looked at from here, so it cannot be watched.",
         );
     }
 
@@ -5618,7 +5620,7 @@ fn watch_file<S: Sink>(
     Produced::new(
         Labelled::trusted(format!(
             "watching: {shown}. You will be asked again, in a turn of its own, when that path \
-             looks written to. Nothing is read until then and the fire says nothing about the \
+             looks written to, no longer exists, or now exists. Nothing is read until then and the fire says nothing about the \
              file beyond which watch fired and on what path. Tell the user the watch exists and \
              that /watch stop ends it."
         )),
@@ -13036,10 +13038,9 @@ mod tests {
             assert_eq!(produced.watch, None);
         }
 
-        /// Nothing for a later look to be compared against is nothing to watch, and arming
-        /// anyway would make the first look that found the file a change it never underwent.
+        /// A path with nothing at it is armed, the first look recording that nothing was there.
         #[test]
-        fn a_path_that_names_nothing_is_refused() {
+        fn a_path_that_names_nothing_is_armed_to_report_it_appearing() {
             let scratch = Scratch::new("missing");
             let workspace = Workspace::new(&scratch.path).expect("workspace");
 
@@ -13051,8 +13052,8 @@ mod tests {
                 json!({"path": "gone.txt"}),
             );
 
-            assert!(told.starts_with("refused:"), "{told}");
-            assert_eq!(produced.watch, None);
+            assert!(told.starts_with("watching:"), "{told}");
+            assert_eq!(produced.watch.as_deref(), Some("gone.txt"));
         }
 
         /// A path the read gate refuses is a path nobody vouched for, and a watch on one is a

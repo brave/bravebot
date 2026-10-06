@@ -7997,10 +7997,19 @@ impl Session {
             return None;
         }
         let watch = self.watches.due(now)?;
+        let change = watch.change()?;
         let (number, path) = (watch.number(), watch.path().to_string());
         self.watches.dispatched(number);
-        self.note(t!(watch_fired, number = number, path = &path));
-        let prompt = watch::fired(number, &path);
+        match change {
+            watch::Change::Written => self.note(t!(watch_fired, number = number, path = &path)),
+            watch::Change::Removed => {
+                self.note(t!(watch_fired_removed, number = number, path = &path))
+            }
+            watch::Change::Appeared => {
+                self.note(t!(watch_fired_appeared, number = number, path = &path))
+            }
+        }
+        let prompt = watch::fired(number, &path, change);
         Some(self.begin_turn(prompt, (Vec::new(), Vec::new()), Vec::new()))
     }
 
@@ -13272,13 +13281,40 @@ mod tests {
         let later = Instant::now() + Duration::from_secs(6);
         let prompt = s.watch_fired(later, |_, _| saw("second")).expect("a fire");
 
-        assert_eq!(prompt, watch::fired(1, "notes.md"));
+        assert_eq!(prompt, watch::fired(1, "notes.md", watch::Change::Written));
         let sent = s
             .transcript
             .iter()
             .find(|entry| entry.speaker == Speaker::User)
             .expect("the fire's prompt is in the transcript");
         assert_eq!(sent.text, prompt);
+    }
+
+    /// A file removed, and a path with nothing at it that gets one, each begin a turn that says
+    /// which, in a sentence the driver wrote.
+    #[test]
+    fn a_removal_and_an_appearance_are_each_reported_as_what_they_were() {
+        let later = Instant::now() + Duration::from_secs(6);
+
+        let mut s = session();
+        s.arm_watch("notes.md", ARMED_IN, saw("first"));
+        let prompt = s
+            .watch_fired(later, |_, _| watch::Looked::Absent)
+            .expect("a removal did not fire");
+        assert_eq!(prompt, watch::fired(1, "notes.md", watch::Change::Removed));
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_fired_removed, number = 1, path = "notes.md"))
+        );
+
+        let mut s = session();
+        s.arm_watch("new.md", ARMED_IN, watch::Looked::Absent);
+        assert!(s.watch_fired(later, |_, _| watch::Looked::Absent).is_none());
+        let prompt = s
+            .watch_fired(later + Duration::from_secs(6), |_, _| saw("created"))
+            .expect("an appearance did not fire");
+        assert_eq!(prompt, watch::fired(1, "new.md", watch::Change::Appeared));
     }
 
     /// A filesystem event is not a licence to interrupt: the person is still the one using this
@@ -13429,12 +13465,12 @@ mod tests {
         );
     }
 
-    /// Nothing to compare a later look against is nothing to watch, and the turn is told rather
-    /// than left believing a watch exists.
+    /// A path the session cannot reach is not armed, and the turn is told rather than left
+    /// believing a watch exists.
     #[test]
     fn a_path_that_cannot_be_looked_at_is_refused_and_said_so() {
         let mut s = session();
-        s.arm_watch("gone.md", ARMED_IN, watch::Looked::Absent);
+        s.arm_watch("gone.md", ARMED_IN, watch::Looked::OutOfReach);
         assert!(s.watches().is_empty());
         assert!(
             s.transcript

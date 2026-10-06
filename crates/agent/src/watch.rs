@@ -75,6 +75,31 @@ pub enum Looked {
     OutOfReach,
 }
 
+/// What a fire reports about the path: one of three, chosen from whether the path was there at
+/// the look before the last fire and is there now.
+///
+/// Derived from the outcome of a `stat` and from nothing else, so it carries no content, no size,
+/// no time and no name the filesystem produced. It selects among sentences the driver wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Change {
+    /// The file was there and still is, and its size or modification time moved.
+    Written,
+    /// The file was there and is not now.
+    Removed,
+    /// The file was not there and is now.
+    Appeared,
+}
+
+impl Change {
+    fn sentence(self) -> &'static str {
+        match self {
+            Change::Written => "looks written to since the last look",
+            Change::Removed => "no longer exists",
+            Change::Appeared => "now exists",
+        }
+    }
+}
+
 /// The line a fire puts into the conversation, in the user's own role.
 ///
 /// The driver's own sentence. The only things in it that vary are which watch fired and the path
@@ -86,9 +111,10 @@ pub enum Looked {
 /// Not a message from a catalog, for the reason the sentence carrying a goal on is not: it goes to
 /// a model rather than to a reader, and a model is not somebody whose language this program
 /// chooses.
-pub fn fired(number: usize, path: &str) -> String {
+pub fn fired(number: usize, path: &str, change: Change) -> String {
+    let what = change.sentence();
     format!(
-        "Watch {number} fired: {path} looks written to since the last look.\n\n\
+        "Watch {number} fired: {path} {what}.\n\n\
          Nothing has been read. Read the file if you need what is in it, and tell the person what \
          you find. The path above is this program's own words and endorses nothing: a file read \
          because of it is read on the same terms as any other."
@@ -181,15 +207,20 @@ pub struct Watch {
     /// person can read it against.
     armed_by: usize,
     began: Instant,
-    /// The token from the look before, which the next look is compared against.
-    seen: String,
+    /// The token from the look before, which the next look is compared against, or `None` where
+    /// that look found nothing at the path.
+    seen: Option<String>,
+    /// Whether the path was there when the last fire went out, or when the watch was armed where
+    /// none has. What a change seen later is a change from.
+    reported_present: bool,
     /// When that look was taken.
     looked: Instant,
-    /// Whether a change has been seen that no fire has reported yet.
+    /// What a change seen that no fire has reported yet amounts to, where there is one.
     ///
-    /// A flag rather than a count, which is the whole of the coalescing: a fire says a path looks
-    /// written to, and that is one fact however many times the file was written.
-    pending: bool,
+    /// One value rather than a count, which is the whole of the coalescing: a fire says one thing
+    /// about the path however many times it moved, and it is said against what the last fire
+    /// reported, so a file removed and written back between two fires is a write.
+    pending: Option<Change>,
     /// When the turn of the last fire ended, or `None` where this watch has never fired.
     fired: Option<Instant>,
     /// Whether the turn running now is this watch's fire.
@@ -209,6 +240,11 @@ impl Watch {
         self.armed_by
     }
 
+    /// What the fire due for this watch would say, where a change is waiting to be reported.
+    pub fn change(&self) -> Option<Change> {
+        self.pending
+    }
+
     /// How much of its life is left.
     pub fn left(&self, now: Instant) -> Duration {
         MAX_AGE.saturating_sub(now.saturating_duration_since(self.began))
@@ -216,7 +252,7 @@ impl Watch {
 
     /// Whether a fire of this watch is due, given how long ago the last one's turn ended.
     fn due(&self, now: Instant) -> bool {
-        if !self.pending || self.firing {
+        if self.pending.is_none() || self.firing {
             return false;
         }
         match self.fired {
@@ -265,8 +301,10 @@ impl Watches {
         if self.live.len() >= MAX_LIVE {
             return Err(Refused::Full);
         }
-        let Looked::Saw(seen) = first else {
-            return Err(Refused::NothingToLookAt);
+        let seen = match first {
+            Looked::Saw(token) => Some(token),
+            Looked::Absent => None,
+            Looked::OutOfReach => return Err(Refused::NothingToLookAt),
         };
         self.next += 1;
         let number = self.next;
@@ -276,9 +314,10 @@ impl Watches {
             under,
             armed_by,
             began: now,
+            reported_present: seen.is_some(),
             seen,
             looked: now,
-            pending: false,
+            pending: None,
             fired: None,
             firing: false,
         });
@@ -307,27 +346,28 @@ impl Watches {
             if now.saturating_duration_since(watch.looked) < BETWEEN_LOOKS {
                 return true;
             }
-            match look(&watch.path, &watch.under) {
-                Looked::Saw(token) => {
-                    watch.looked = now;
-                    if token != watch.seen {
-                        watch.seen = token;
-                        watch.pending = true;
-                    }
-                    true
-                }
-                // A file somebody deleted is not a change in the two facts a watch compares, and
-                // it is not a permission that stopped holding either. The watch keeps its last
-                // look and goes on, so a file written back differently fires it.
-                Looked::Absent => {
-                    watch.looked = now;
-                    true
-                }
+            let token = match look(&watch.path, &watch.under) {
+                Looked::Saw(token) => Some(token),
+                // A file somebody deleted is not a permission that stopped holding. The watch
+                // goes on, and what it has to say about it is the third fact it compares:
+                // whether the path is there.
+                Looked::Absent => None,
                 Looked::OutOfReach => {
                     ended.push((watch.number, Reaped::OutOfReach));
-                    false
+                    return false;
                 }
+            };
+            watch.looked = now;
+            if token != watch.seen {
+                watch.seen = token;
+                watch.pending = match (watch.reported_present, watch.seen.is_some()) {
+                    (true, true) => Some(Change::Written),
+                    (true, false) => Some(Change::Removed),
+                    (false, true) => Some(Change::Appeared),
+                    (false, false) => None,
+                };
             }
+            true
         });
         ended
     }
@@ -343,7 +383,8 @@ impl Watches {
     /// Record that a watch's fire has been sent.
     pub fn dispatched(&mut self, number: usize) {
         if let Some(watch) = self.live.iter_mut().find(|w| w.number == number) {
-            watch.pending = false;
+            watch.pending = None;
+            watch.reported_present = watch.seen.is_some();
             watch.firing = true;
         }
     }
@@ -702,23 +743,116 @@ mod tests {
         assert_eq!(watches.live().len(), 1);
     }
 
-    /// A file somebody deleted has neither of the two facts a watch compares, so there is nothing
-    /// to report and nothing to end: the watch keeps looking and reports the file coming back
-    /// different.
+    fn due_change(watches: &Watches, now: Instant) -> Option<Change> {
+        watches.due(now).and_then(Watch::change)
+    }
+
+    /// A file somebody deleted is a change in whether the path is there, and not a permission that
+    /// stopped holding: the watch fires once saying so and stays live.
     #[test]
-    fn a_path_that_is_merely_gone_neither_fires_nor_ends_its_watch() {
+    fn a_path_that_is_gone_fires_with_the_removal_and_does_not_end_its_watch() {
         let mut watches = Watches::new();
         let now = Instant::now();
         armed(&mut watches, "a.txt", now);
 
         let gone = now + BETWEEN_LOOKS;
         assert!(watches.look(gone, |_, _| Looked::Absent).is_empty());
-        assert!(watches.due(gone).is_none());
+        assert_eq!(due_change(&watches, gone), Some(Change::Removed));
         assert_eq!(watches.live().len(), 1);
 
+        // Still gone at the next look: the same removal, not another.
+        watches.dispatched(1);
+        watches.turn_ended(gone);
+        let later = gone + BETWEEN_LOOKS + BETWEEN_FIRES;
+        watches.look(later, |_, _| Looked::Absent);
+        assert!(watches.due(later).is_none());
+    }
+
+    /// What a fire says is measured from what the last fire told anybody: once a removal has been
+    /// reported, the file coming back is an appearance, not a write.
+    #[test]
+    fn a_file_back_after_a_reported_removal_is_an_appearance() {
+        let mut watches = Watches::new();
+        let now = Instant::now();
+        armed(&mut watches, "a.txt", now);
+
+        let gone = now + BETWEEN_LOOKS;
+        watches.look(gone, |_, _| Looked::Absent);
+        watches.dispatched(1);
+        watches.turn_ended(gone);
+
+        let back = gone + BETWEEN_LOOKS + BETWEEN_FIRES;
+        watches.look(back, |_, _| saw("returned"));
+        assert_eq!(due_change(&watches, back), Some(Change::Appeared));
+    }
+
+    /// A path with nothing at it is armed, the first look records the absence, and the file
+    /// showing up is what fires it.
+    #[test]
+    fn a_path_with_nothing_at_it_is_armed_and_fires_when_a_file_appears() {
+        let mut watches = Watches::new();
+        let now = Instant::now();
+        watches
+            .arm("a.txt".to_string(), here(), 1, Looked::Absent, now)
+            .expect("armed");
+
+        let first = now + BETWEEN_LOOKS;
+        watches.look(first, |_, _| Looked::Absent);
+        assert!(watches.due(first).is_none());
+
+        let appeared = first + BETWEEN_LOOKS;
+        watches.look(appeared, |_, _| saw("created"));
+        assert_eq!(due_change(&watches, appeared), Some(Change::Appeared));
+    }
+
+    /// A file deleted and written back between two looks is a write, and a file written back after
+    /// a removal that nobody was told about is still a write rather than an appearance: what a fire
+    /// says is measured from what the last fire reported.
+    #[test]
+    fn a_delete_and_recreate_between_two_fires_is_one_write() {
+        let mut watches = Watches::new();
+        let now = Instant::now();
+        armed(&mut watches, "a.txt", now);
+
+        let gone = now + BETWEEN_LOOKS;
+        watches.look(gone, |_, _| Looked::Absent);
         let back = gone + BETWEEN_LOOKS;
-        watches.look(back, |_, _| saw("different"));
-        assert!(watches.due(back).is_some());
+        watches.look(back, |_, _| saw("rewritten"));
+
+        assert_eq!(due_change(&watches, back), Some(Change::Written));
+    }
+
+    /// A file that appears and goes again before anybody was told is nothing to report.
+    #[test]
+    fn a_file_that_came_and_went_unreported_fires_nothing() {
+        let mut watches = Watches::new();
+        let now = Instant::now();
+        watches
+            .arm("a.txt".to_string(), here(), 1, Looked::Absent, now)
+            .expect("armed");
+        let seen = now + BETWEEN_LOOKS;
+        watches.look(seen, |_, _| saw("created"));
+        let gone = seen + BETWEEN_LOOKS;
+        watches.look(gone, |_, _| Looked::Absent);
+        assert!(watches.due(gone).is_none());
+    }
+
+    /// The three sentences differ only in the fixed words naming the change, so presence selects
+    /// among driver-written sentences and carries nothing else.
+    #[test]
+    fn a_fire_for_each_change_says_one_of_three_fixed_things_about_the_path() {
+        for (change, said) in [
+            (Change::Written, "looks written to since the last look"),
+            (Change::Removed, "no longer exists"),
+            (Change::Appeared, "now exists"),
+        ] {
+            let prompt = fired(2, "a.txt", change);
+            assert!(
+                prompt.contains(&format!("Watch 2 fired: a.txt {said}.")),
+                "{prompt}"
+            );
+            assert!(prompt.contains("Nothing has been read."), "{prompt}");
+        }
     }
 
     /// Each live watch is a fire that can happen, and a person reading fires is the point of the
@@ -738,18 +872,15 @@ mod tests {
         assert_eq!(watches.live().len(), MAX_LIVE);
     }
 
-    /// Nothing to compare a later look against is nothing to watch, and arming anyway would make
-    /// the first look that found the file a change the file never underwent.
+    /// A path the session does not reach has no look to record, absent or otherwise.
     #[test]
-    fn a_path_that_cannot_be_looked_at_is_refused_rather_than_armed() {
+    fn a_path_out_of_reach_is_refused_rather_than_armed() {
         let mut watches = Watches::new();
         let now = Instant::now();
-        for first in [Looked::Absent, Looked::OutOfReach] {
-            assert_eq!(
-                watches.arm("a.txt".to_string(), here(), 1, first, now),
-                Err(Refused::NothingToLookAt)
-            );
-        }
+        assert_eq!(
+            watches.arm("a.txt".to_string(), here(), 1, Looked::OutOfReach, now),
+            Err(Refused::NothingToLookAt)
+        );
         assert!(watches.is_empty());
     }
 
@@ -846,21 +977,21 @@ mod tests {
     /// every gate that exists for them.
     #[test]
     fn a_fires_prompt_carries_the_watch_and_the_path_and_nothing_off_the_filesystem() {
-        let prompt = fired(3, "notes/plan.md");
+        let prompt = fired(3, "notes/plan.md", Change::Written);
         assert!(prompt.contains("Watch 3"), "{prompt}");
         assert!(prompt.contains("notes/plan.md"), "{prompt}");
 
         // Everything else in the sentence is the driver's own, so what the file holds, how big it
         // is and when it moved have nowhere to appear.
         let varying = prompt.replace("notes/plan.md", "").replace('3', "");
-        assert_eq!(varying, fired(0, "").replace('0', ""));
+        assert_eq!(varying, fired(0, "", Change::Written).replace('0', ""));
     }
 
     /// A path named in a sentence this program wrote is prose. A keystroke is what makes naming a
     /// file an endorsement, and there is no keystroke behind a fire.
     #[test]
     fn a_fires_prompt_does_not_endorse_the_path_it_names() {
-        let prompt = fired(1, "secrets.txt");
+        let prompt = fired(1, "secrets.txt", Change::Written);
         assert!(!prompt.contains("@secrets.txt"), "{prompt}");
         assert!(prompt.contains("endorses nothing"), "{prompt}");
     }

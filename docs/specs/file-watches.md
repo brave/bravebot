@@ -107,16 +107,22 @@ it was already in the context of the turn that armed the watch.
 `verified-by: bravebot_tui::status::the_report_lists_every_live_watch_with_the_turn_that_armed_it`
 
 <a id="FSWATCH-3"></a>
-### FSWATCH-3: what a watch observes is the file's size and modification time, and nothing else
+### FSWATCH-3: what a watch observes is the file's size, modification time and presence, and nothing else
 
-The same two facts a read hands the planner back as a change token, compared the same way. No
-content, and nothing derived from content: not a hash, not a first line, not a byte count of what
-differs.
+The same two facts a read hands the planner back as a change token, compared the same way, and
+whether the path is there at all, which is read off the same `stat`. No content, and nothing derived
+from content: not a hash, not a first line, not a byte count of what differs.
 
 The driver holds those two facts, because comparing them is the whole of what a watch does. Nothing
-about them reaches the planner. A fire says that a path looks written to since the last look
-([FSWATCH-4](#FSWATCH-4)), which is the strongest thing it can say, and it says it without quoting
-a size or a modification time.
+about them reaches the planner. A fire says that a path looks written to since the last look, no
+longer exists, or now exists ([FSWATCH-4](#FSWATCH-4)), which is the strongest thing it can say, and
+it says it without quoting a size or a modification time.
+
+**Why presence is allowed.** Whether a path is there is the outcome of the same `stat` that yields the
+other two facts, about a path the turn already named, and it selects among sentences the driver
+wrote. It is a branch on filesystem state, not on content or on a name the filesystem produced.
+A file removed and written back between two fires is reported as a write, since a fire says what
+changed since the last one told anybody.
 
 **Why no content.** A file the trust map quarantines is one whose bytes may not reach the planner,
 and a watch that derived a bit from those bytes would be releasing content-derived information
@@ -135,6 +141,9 @@ and [tools/read-file.md](tools/read-file.md) states them for the read that share
 
 `verified-by: bravebot_agent::watch::a_look_that_sees_what_the_last_one_saw_fires_nothing`
 `verified-by: bravebot_agent::watch::a_fires_prompt_carries_the_watch_and_the_path_and_nothing_off_the_filesystem`
+`verified-by: bravebot_agent::watch::a_path_that_is_gone_fires_with_the_removal_and_does_not_end_its_watch`
+`verified-by: bravebot_agent::watch::a_delete_and_recreate_between_two_fires_is_one_write`
+`verified-by: bravebot_agent::watch::a_file_that_came_and_went_unreported_fires_nothing`
 
 ## What a firing does
 
@@ -142,8 +151,10 @@ and [tools/read-file.md](tools/read-file.md) states them for the read that share
 ### FSWATCH-4: a fire's prompt says which watch fired and on what path, and carries nothing from the filesystem
 
 A fire begins a turn by putting a line in the conversation in the user's own role. That line is the
-driver's own sentence, and the only things in it that vary are which watch fired and the path that
-watch was armed on. No file content, no size, no modification time, no directory listing, and no
+driver's own sentence, and the only things in it that vary are which watch fired, the path that
+watch was armed on, and which of three fixed endings it takes: looks written to since the last look,
+no longer exists, or now exists. The ending is chosen from whether the path was there at the last fire
+and is there now, and from nothing else. No file content, no size, no modification time, no directory listing, and no
 name the filesystem produced.
 
 The turn then asks for the content if it wants it, and the content arrives labelled, through the
@@ -174,6 +185,8 @@ the one prompt in this system nobody can label would be the one carrying bytes o
 
 `verified-by: bravebot_agent::watch::a_fires_prompt_carries_the_watch_and_the_path_and_nothing_off_the_filesystem`
 `verified-by: bravebot_agent::watch::a_fires_prompt_does_not_endorse_the_path_it_names`
+`verified-by: bravebot_agent::watch::a_fire_for_each_change_says_one_of_three_fixed_things_about_the_path`
+`verified-by: bravebot_tui::state::a_removal_and_an_appearance_are_each_reported_as_what_they_were`
 `verified-by: bravebot_tui::state::a_fires_prompt_carries_the_watch_and_the_path_and_nothing_else`
 
 <a id="FSWATCH-5"></a>
@@ -384,21 +397,20 @@ can be wrong.
 `verified-by: by-construction (the watches are a field on the live session and are not among the things a session record writes, so there is nothing on disk for a resume to restore and nothing for a later run to clean up)`
 
 <a id="FSWATCH-12"></a>
-### FSWATCH-12: a path with nothing at it is refused rather than watched for something to appear
+### FSWATCH-12: a path with nothing at it is armed, and its first look records that
 
-Arming asks for the first look at once, and a path that cannot be looked at is refused saying so.
+Arming asks for the first look at once. A path with nothing at it has a first look of absence, and
+the watch reports the file appearing ([FSWATCH-4](#FSWATCH-4)). Only a path the session could not
+reach is refused.
 
-**Why.** Every look after the first is compared with the one before it, and the first is compared
-with nothing. A watch armed on a path with nothing at it would report the look that first found
-the file as a change, which is a write it never saw and cannot have seen.
+**Why.** Presence is compared like the other two facts ([FSWATCH-3](#FSWATCH-3)), so an absent first
+look is something a later look can differ from, and the file's first appearance is reported as an
+appearance rather than as a write nobody saw. A file removed and written back between two fires is
+one write.
 
-**Why not the other answer.** Watching for a file to appear is a real thing to want, and it is a
-different feature: what it compares is presence rather than the two facts
-[FSWATCH-3](#FSWATCH-3) fixes, and it needs its own answer to what a fire says about a file that
-came and went between two looks. Refusing here leaves room for it rather than half-building it.
-
-`verified-by: bravebot_agent::tools::a_path_that_names_nothing_is_refused`
-`verified-by: bravebot_agent::watch::a_path_that_cannot_be_looked_at_is_refused_rather_than_armed`
+`verified-by: bravebot_agent::tools::a_path_that_names_nothing_is_armed_to_report_it_appearing`
+`verified-by: bravebot_agent::watch::a_path_with_nothing_at_it_is_armed_and_fires_when_a_file_appears`
+`verified-by: bravebot_agent::watch::a_path_out_of_reach_is_refused_rather_than_armed`
 `verified-by: bravebot_tui::state::a_path_that_cannot_be_looked_at_is_refused_and_said_so`
 
 ## Open questions
