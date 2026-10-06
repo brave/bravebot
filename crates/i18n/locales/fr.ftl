@@ -37,6 +37,7 @@ cli-usage-plain = Démarrer une session en lignes, sans rien prendre au terminal
 cli-usage-task = Exécuter une seule tâche
 cli-usage-piped = ... avec une entrée redirigée, jamais fiable
 cli-usage-resume = Reprendre une session dans ce répertoire
+cli-usage-from-pr = Reprendre une session liée à une pull request
 cli-usage-continue = Reprendre la session la plus récente de ce répertoire
 cli-usage-fork = Dupliquer une session pour explorer une autre voie
 cli-usage-doctor = Vérifier la configuration et le confinement
@@ -167,6 +168,7 @@ cli-directory-unknown = impossible de savoir de quel répertoire il s'agit
 cli-no-such-session = aucune session { $id } dans ce répertoire
 cli-manifest-run = { $id } est une exécution planifiée : il n'y a rien à poursuivre, voici ce qu'elle a fait
 cli-nothing-to-continue = aucune session à reprendre dans ce répertoire
+cli-from-pr-needs-a-value = --from-pr nécessite un numéro ou une adresse de pull request
 cli-fork-needs-a-name = --fork nécessite un identifiant de session
 cli-piped-input-unreadable = avertissement : impossible de lire l'entrée redirigée : { $problem }
 cli-piped-input-too-large =
@@ -1066,6 +1068,7 @@ resume-search-placeholder = Rechercher…
 resume-keys =
     ↑↓ pour choisir  ·  Entrée pour reprendre  ·  tapez pour rechercher  ·  Échap pour une
     nouvelle session
+resume-from-pr = pull request { $pull_request }
 resume-nothing-matches = aucune correspondance
 resume-manifest-run =
     c'était une exécution manifest, qui ne peut pas être reprise ; démarrez une nouvelle

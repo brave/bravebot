@@ -15,6 +15,7 @@ Usage:
   bravebot "<task>" [--file <path>]...   Run a single task
   cat file | bravebot -p "<task>"        ...with piped input, never trusted
   bravebot --resume [id]                 Pick up a session in this directory
+  bravebot --from-pr <number|url>        Pick up a session linked to a pull request
   bravebot --continue                    Pick up the most recent session in this directory
   bravebot --fork <id>                   Fork a session and start exploring a different path
   bravebot doctor                        Check configuration and confinement
@@ -36,6 +37,7 @@ Usage:
 | `bravebot "<task>"` | run one task and print the reply |
 | `bravebot --resume`, `-r` | choose a session in this directory to pick up |
 | `bravebot --resume <id>` | resume that session by id |
+| `bravebot --from-pr <number or url>` | choose among the sessions linked to that pull request |
 | `bravebot --continue`, `-c` | pick up the most recent session in this directory |
 | `bravebot --fork <id>`, `-f` | copy a session into one of its own and open that, to try a second approach |
 | `bravebot doctor` | report configuration and confinement, changing nothing |

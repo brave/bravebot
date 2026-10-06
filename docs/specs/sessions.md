@@ -98,6 +98,13 @@ pull request number starts with the same digits. A title or a branch still match
 contains. The links are addresses the person typed to
 `/issue` and `/pr`, so matching them reads no untrusted content.
 
+`bravebot --from-pr <number or address>` opens the same picker already narrowed to the sessions whose
+pull request is the one named: its address, or its number, which is whole rather than a prefix, so
+`127` does not find the session linked to `1270`. An issue link is never taken for a pull request.
+What is typed then narrows the opened list further. A missing or blank value is refused by name
+rather than read as a plain `--resume`, and where no session is linked to the pull request the
+picker says nothing matches rather than starting a session.
+
 What the record says about each individual turn is SESSION-23.
 
 The record also holds the checkouts a session's delegates were given and it keeps
@@ -117,6 +124,10 @@ disk. A record written before they were kept reads as having none.
 `verified-by: bravebot_tui::resume::a_pasted_pull_request_link_leaves_only_the_session_that_holds_it`
 `verified-by: bravebot_tui::resume::a_pasted_link_keeps_a_session_whose_title_holds_it`
 `verified-by: bravebot_tui::resume::part_of_a_pull_request_link_keeps_every_session_it_is_part_of`
+`verified-by: bravebot_tui::resume::a_pull_request_number_leaves_only_the_session_linked_to_that_number`
+`verified-by: bravebot_tui::resume::a_pull_request_address_leaves_only_the_session_linked_to_it`
+`verified-by: bravebot_tui::resume::the_pull_request_opening_ignores_issue_links_and_typing_narrows_it_further`
+`verified-by: bravebot_cli::running::from_pr_without_a_pull_request_is_refused_rather_than_listing_every_session`
 `verified-by: bravebot_tui::sessions::a_record_from_before_checkouts_were_kept_reads_as_having_none`
 
 <a id="SESSION-4"></a>
