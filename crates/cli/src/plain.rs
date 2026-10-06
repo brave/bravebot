@@ -83,8 +83,8 @@ pub fn session(
 ///
 /// The mode is the one every session opens in, bypass is not offered, and an allow rule in a
 /// settings file answers nothing: a rule is a decision about a session somebody is sitting in
-/// front of (BG-8). A server that would have needed a question is left out, so nothing a person
-/// did not see is started.
+/// front of (BG-8). A question about starting a server is held for whoever attaches, so nothing a
+/// person did not see is started (BG-7).
 #[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn hosted(hosting: crate::host::Hosting) -> ExitCode {
     run(
@@ -317,19 +317,27 @@ fn run(
 
     // After that question, and put on the same two streams every other question here is. Held for
     // the length of the session, since dropping one stops its server.
+    let mut terminal;
+    let mut attached;
+    let asker: &mut dyn bravebot_agent::servers::Asker = if hosted {
+        attached = Attached(&mut asking);
+        &mut attached
+    } else {
+        terminal = crate::mcp::Person {
+            answers: &mut asking.input,
+            screen: &mut asking.output,
+            present: true,
+        };
+        &mut terminal
+    };
     let mut reached = bravebot_agent::servers::for_this_session(
         &settings,
         workspace.root(),
-        match (skip_permissions, hosted) {
-            (true, _) => bravebot_agent::servers::Asking::Bypass,
-            (false, false) => bravebot_agent::servers::Asking::Person,
-            (false, true) => bravebot_agent::servers::Asking::OneShot,
+        match skip_permissions {
+            true => bravebot_agent::servers::Asking::Bypass,
+            false => bravebot_agent::servers::Asking::Person,
         },
-        &mut crate::mcp::Person {
-            answers: &mut asking.input,
-            screen: &mut asking.output,
-            present: !hosted,
-        },
+        asker,
         // Where this session's own lines go, since nothing draws over them.
         bravebot_sandbox::Stream::Inherited,
     );
@@ -926,6 +934,40 @@ pub struct Prompting<R: BufRead, W: Write> {
     watch: Option<Box<dyn Watcher>>,
     /// The kind of question about to be put, for the watcher. Taken by the read that follows.
     kind: Option<Held>,
+}
+
+/// Puts the questions about starting a tool server to whoever attaches, and holds them until one
+/// does (BG-7).
+struct Attached<'a, R: BufRead, W: Write>(&'a mut Prompting<R, W>);
+
+impl<R: BufRead, W: Write> bravebot_agent::servers::Asker for Attached<'_, R, W> {
+    fn anybody_there(&self) -> bool {
+        true
+    }
+
+    fn ask_to_start(
+        &mut self,
+        question: &bravebot_agent::servers::Question<'_>,
+    ) -> bravebot_agent::servers::Answer {
+        use bravebot_agent::servers::{Answer, Question};
+        self.0.say("");
+        for line in question.lines() {
+            self.0.say(&line);
+        }
+        self.0.say("");
+        for line in question.choices() {
+            self.0.say(&line);
+        }
+        self.0.about(Held::Server);
+        match self.0.answer(&Question::answer_prompt()) {
+            Some(typed) => Answer::typed(&typed),
+            None => Answer::No,
+        }
+    }
+
+    fn ask_to_move(&mut self, request: &MoveRequest) -> bool {
+        matches!(self.0.confirm_move(request), Decision::Approve)
+    }
 }
 
 /// What a line is being waited for.
@@ -2252,6 +2294,49 @@ mod tests {
         }
 
         fn received(&mut self, _on: Waiting, _line: Option<&str>) {}
+    }
+
+    /// BG-7: a server question is put to whoever attaches as a held question of its own kind, and
+    /// is read as the foreground reads it. A reader at the end of its input declines, so a session
+    /// nobody answers for is never given a server.
+    #[test]
+    fn a_server_question_is_held_as_its_own_kind_and_read_as_the_foreground_reads_it() {
+        use bravebot_agent::servers::{Answer, Asker, Question};
+
+        let declaration = bravebot_config::mcp::Declaration::Http {
+            url: "https://news.example/mcp".to_string(),
+        };
+        for (typed, expected) in [
+            (&b"1\n"[..], Answer::Once),
+            (b"2\n", Answer::Project),
+            (b"3\n", Answer::No),
+            (b"what\n", Answer::No),
+            (b"", Answer::No),
+        ] {
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let mut asking = Prompting::watched(
+                std::io::BufReader::new(std::io::Cursor::new(typed.to_vec())),
+                Vec::new(),
+                Box::new(Recorded(seen.clone())),
+            );
+            let answer = Attached(&mut asking).ask_to_start(&Question {
+                alias: "news",
+                file: ".bravebot/settings.json",
+                declaration: &declaration,
+                program: None,
+                changed: false,
+            });
+
+            assert_eq!(answer, expected, "{typed:?}");
+            assert_eq!(
+                *seen.lock().expect("the record"),
+                vec![Waiting::Answer(Held::Server)],
+                "{typed:?}"
+            );
+            let screen = String::from_utf8(asking.output).expect("text");
+            assert!(screen.contains("news"), "{screen}");
+            assert!(screen.contains("[1/2/3]"), "{screen}");
+        }
     }
 
     /// BG-7: every question a session puts reaches its watcher as the kind it is, which is the

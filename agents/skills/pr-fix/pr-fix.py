@@ -8,6 +8,7 @@
     pr-fix.py check <pr> [--target T]   run the checks the changed files call for, or the make
                                         targets named, printing only a failure
     pr-fix.py push <pr>                 push over the head `start` fetched, and nothing newer
+    pr-fix.py review <pr>               ask netzenbot-reviewer to review the pull request again
 
 Every step that needs no judgement is decided here, so what it prints is only what a model has to
 act on: the line ranges of each conflict, the log of each failing job, the text of each open review
@@ -35,6 +36,7 @@ except ImportError:
     fcntl = None
 
 BASE_REPO = "brave/bravebot"
+REVIEWER = "netzenbot-reviewer"
 SCRIPT = "python3 agents/skills/pr-fix/pr-fix.py"
 GITHUB_URL = re.compile(r"(?:^|[@/])github\.com[:/]+([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
 PULL_URL = re.compile(r"github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)")
@@ -503,6 +505,20 @@ def push(pr):
     return 0
 
 
+def review(pr):
+    done = run(
+        "gh", "api", "--method", "POST",
+        f"repos/{BASE_REPO}/pulls/{pr.number}/requested_reviewers",
+        "-f", f"reviewers[]={REVIEWER}",
+        check=False,
+    )
+    if done.returncode:
+        print(f"could not request {REVIEWER} on {pr.url}:\n{(done.stderr or done.stdout).strip()}", file=sys.stderr)
+        return 1
+    print(f"requested {REVIEWER} on {pr.url}")
+    return 0
+
+
 def classify(rollup):
     """Split a pull request's checks into (failing, pending, passing), each as (name, link, verdict)."""
     failing, pending, passing = [], [], []
@@ -664,7 +680,7 @@ def fan_out(step, numbers, flags):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("step", choices=["start", "continue", "ci", "comments", "check", "push"])
+    parser.add_argument("step", choices=["start", "continue", "ci", "comments", "check", "push", "review"])
     parser.add_argument("prs", nargs="+", metavar="pr")
     parser.add_argument("--target", action="append", default=[], help="a make target for check to run")
     parser.add_argument("--wait", action="store_true")
@@ -687,6 +703,7 @@ def main():
         "comments": comments,
         "check": lambda pr: check(pr, args.target),
         "push": push,
+        "review": review,
     }
     try:
         if args.step == "start":
