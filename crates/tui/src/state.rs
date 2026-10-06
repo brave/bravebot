@@ -7750,6 +7750,14 @@ impl Session {
         self.goal.as_ref()
     }
 
+    /// The goal turns are told about and judged against: the one that is set, unless the person
+    /// has held it still.
+    ///
+    /// The one place that decides it, so a turn's prompt and the check after it cannot disagree.
+    pub fn goal_in_force(&self) -> Option<&crate::goals::Running> {
+        self.goal().filter(|goal| !goal.is_paused())
+    }
+
     /// Work towards a condition from the next turn on.
     ///
     /// Nothing is sent. A goal has a condition and no prompt, so there is no line here that
@@ -7787,6 +7795,28 @@ impl Session {
             self.note(t!(goal_cleared));
         }
         cleared
+    }
+
+    /// Hold the goal still because somebody asked, and say so. Where there is none, or it is
+    /// already held, say that instead.
+    ///
+    /// The condition and the rounds spent stay where they are, and nothing about the goal is put
+    /// in a turn or put to the judge until it is resumed.
+    pub fn pause_goal(&mut self) {
+        match self.goal.as_mut().map(crate::goals::Running::pause) {
+            None => self.note(t!(goal_none)),
+            Some(true) => self.note(t!(goal_paused)),
+            Some(false) => self.note(t!(goal_already_paused)),
+        }
+    }
+
+    /// Arm a held goal again because somebody asked, and say so.
+    pub fn resume_goal(&mut self) {
+        match self.goal.as_mut().map(crate::goals::Running::resume) {
+            None => self.note(t!(goal_none)),
+            Some(true) => self.note(t!(goal_resumed)),
+            Some(false) => self.note(t!(goal_not_paused)),
+        }
     }
 
     /// Take the goal off because it has been met, and say so.
@@ -7859,6 +7889,13 @@ impl Session {
         judged: Result<bravebot_agent::goal::Verdict, String>,
     ) -> Option<String> {
         use bravebot_agent::goal::Verdict;
+        // A goal held still while the check was in flight is a person having said not now, the way
+        // one taken off is a person having said stop: the verdict is about a goal nothing is being
+        // judged against, so it is not acted on and not reported, and a failed check does not end
+        // a goal the person chose to keep.
+        if self.goal.as_ref().is_some_and(|goal| goal.is_paused()) {
+            return None;
+        }
         let verdict = match judged {
             Ok(verdict) => verdict,
             Err(problem) => {
@@ -14484,6 +14521,125 @@ mod tests {
             s.turns, 0,
             "a verdict against a cleared goal started a turn"
         );
+    }
+
+    /// Pausing holds the condition and the count and is not one of the endings, and a paused goal
+    /// is out of the turn's reach: nothing to tell it, nothing to judge it against. Resuming arms
+    /// the same goal, rounds and all.
+    #[test]
+    fn a_paused_goal_is_kept_but_not_in_force_until_it_is_resumed() {
+        let mut s = session();
+        s.start_goal("cargo test exits 0".to_string());
+        s.goal_not_met("nothing above runs the tests".to_string());
+        let said = s.transcript.len();
+
+        s.pause_goal();
+
+        let goal = s.goal().expect("pausing ended the goal");
+        assert!(goal.is_paused());
+        assert_eq!(goal.condition(), "cargo test exits 0");
+        assert_eq!(goal.rounds(), 1, "pausing spent or reset a round");
+        assert!(s.goal_in_force().is_none(), "a paused goal is in force");
+        assert!(
+            s.transcript[said..]
+                .iter()
+                .any(|e| e.text == t!(goal_paused))
+        );
+
+        let said = s.transcript.len();
+        s.resume_goal();
+
+        let goal = s.goal_in_force().expect("resuming did not arm the goal");
+        assert_eq!(goal.condition(), "cargo test exits 0");
+        assert_eq!(goal.rounds(), 1);
+        assert!(
+            s.transcript[said..]
+                .iter()
+                .any(|e| e.text == t!(goal_resumed))
+        );
+    }
+
+    #[test]
+    fn pausing_or_resuming_says_when_it_changed_nothing() {
+        let mut none = session();
+        let said = none.transcript.len();
+        none.pause_goal();
+        none.resume_goal();
+        let texts: Vec<_> = none.transcript[said..]
+            .iter()
+            .map(|e| e.text.as_str())
+            .collect();
+        assert_eq!(texts, [t!(goal_none), t!(goal_none)]);
+
+        let mut s = session();
+        s.start_goal("cargo test exits 0".to_string());
+        let said = s.transcript.len();
+        s.resume_goal();
+        s.pause_goal();
+        s.pause_goal();
+        let texts: Vec<_> = s.transcript[said..]
+            .iter()
+            .map(|e| e.text.as_str())
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                t!(goal_not_paused),
+                t!(goal_paused),
+                t!(goal_already_paused)
+            ]
+        );
+    }
+
+    /// A paused goal is still the session's goal, so a person's `/loop` replaces it and says so,
+    /// and one a turn arranged is refused under it, as under a running goal.
+    #[test]
+    fn a_paused_goal_is_replaced_by_a_loop_and_still_refuses_one_a_turn_arranged() {
+        let mut s = session();
+        s.start_goal("cargo test exits 0".to_string());
+        s.pause_goal();
+        assert_eq!(s.arming(), bravebot_agent::watch::Arming::UnderAGoal);
+
+        s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
+
+        assert!(s.goal().is_none(), "the loop left the paused goal standing");
+        assert!(s.looping().is_some());
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(loop_replaces_goal)),
+            "the loop took the paused goal off without saying so"
+        );
+    }
+
+    /// The check already in flight is one request, so a goal paused behind it gets a verdict that
+    /// was asked for before the person said not now. Neither a not-met nor a failure may act on a
+    /// goal they chose to keep, and nothing may be announced about it.
+    #[test]
+    fn a_verdict_after_the_goal_was_paused_is_neither_acted_on_nor_announced() {
+        use bravebot_agent::goal::Verdict;
+        for judged in [
+            Ok(Verdict::NotMet {
+                reason: "nothing above runs the tests".to_string(),
+            }),
+            Ok(Verdict::Met {
+                reason: "the run above exits 0".to_string(),
+            }),
+            Err("the request failed".to_string()),
+        ] {
+            let mut s = session();
+            s.start_goal("cargo test exits 0".to_string());
+            s.pause_goal();
+            let said = s.transcript.len();
+
+            assert_eq!(s.goal_judged(judged.clone()), None, "{judged:?}");
+
+            let goal = s.goal().expect("a verdict ended a paused goal");
+            assert!(goal.is_paused());
+            assert_eq!(goal.rounds(), 0, "a verdict counted a round");
+            assert_eq!(s.transcript.len(), said, "{judged:?} was announced");
+            assert_eq!(s.turns, 0, "a verdict started a turn");
+        }
     }
 
     #[test]

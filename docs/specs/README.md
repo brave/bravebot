@@ -52,7 +52,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [import.md](import.md) | `IMPORT` | 10 | a first start with nothing configured: what Claude Code and opencode set up, or a running Ollama serves, and what of it may be copied here |
 | [compaction.md](compaction.md) | `COMPACT` | 13 | shortening a long conversation into a summary of itself, in the request only |
 | [loop.md](loop.md) | `LOOP` | 15 | sending one prompt again and again until somebody stops it |
-| [goal.md](goal.md) | `GOAL` | 17 | one condition a person set, judged after every turn, until it holds |
+| [goal.md](goal.md) | `GOAL` | 18 | one condition a person set, judged after every turn, until it holds |
 | [file-watches.md](file-watches.md) | `FSWATCH` | 12 | a standing watch on one path, firing with no turn running to notice it |
 | [sessions.md](sessions.md) | `SESSION` | 31 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |
 | [info-panel.md](info-panel.md) | `PANEL` | 14 | telling many sessions apart: the terminal's title and the info panel |

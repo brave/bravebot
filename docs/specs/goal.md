@@ -202,7 +202,8 @@ pays for it.
 | the session moves on | `/clear`, and leaving |
 | the rounds run out | [GOAL-9](#GOAL-9) |
 
-A turn that failed is not one of them, and neither is a turn somebody stopped. Both are recorded
+Pausing is not one of them: [GOAL-18](#GOAL-18) holds a goal still without ending it. A turn that
+failed is not one of them either, and neither is a turn somebody stopped. Both are recorded
 as failures and neither is judged: a request that never came back says nothing about whether the
 work is finished, and an interrupted turn says only that the person did not want that turn. The
 goal stays set, and what is judged is the next turn there is something to judge.
@@ -239,7 +240,9 @@ just judged is still standing there.
 <a id="GOAL-11"></a>
 ### GOAL-11: a goal and a loop are never both running
 
-Whichever was asked for second stands, and the one it replaced is reported as stopped.
+Whichever was asked for second stands, and the one it replaced is reported as stopped. A paused
+goal ([GOAL-18](#GOAL-18)) is not running, but it is still a goal: a person's `/loop` replaces it
+and says so, and a loop or watch a turn asks for is refused under it, as under a running one.
 
 **Why.** Both keep a session working without anybody typing, and together neither is the thing that
 was asked for: the interval stops meaning anything once a tick can be held open for ten more turns,
@@ -280,7 +283,8 @@ about to give up.
 
 While a goal stands, each turn's system prompt states the condition, says the turn is judged
 against it once it ends, and says the turn cannot change it. The first round carries it as much as
-the tenth. A turn with no goal is told nothing about one.
+the tenth. A turn with no goal is told nothing about one, and neither is a turn under a paused goal
+([GOAL-18](#GOAL-18)).
 
 **Why.** The driver is the only thing that knows a goal is set. A turn that is not told works on
 whatever the person's line said and is then judged against a condition it never saw, so the first
@@ -349,6 +353,39 @@ working towards a condition, and each one carries the whole conversation.
 prompt is for. What is given up is a write and no read.
 
 `verified-by: bravebot_agent::turn::the_judge_asks_for_no_cache_of_the_exchange_it_judges`
+
+<a id="GOAL-18"></a>
+### GOAL-18: a paused goal keeps its condition and is neither told nor judged
+
+`/goal pause`, the whole argument, holds the goal still, and `/goal resume`, the whole argument,
+arms it again. While it is paused the condition is not in a turn's system prompt
+([GOAL-14](#GOAL-14)), no check is sent when a turn ends, and `/status` and the panel
+([GOAL-13](#GOAL-13)) say it is paused. The condition and the rounds spent are the ones it had, so
+resuming is not setting ([GOAL-1](#GOAL-1)): the next turn after it is judged against the same
+sentence. A verdict, or a failure, that arrives for a goal paused while its check was in flight is
+not acted on and not reported, as for a goal that was cleared ([GOAL-10](#GOAL-10)). `/clear`,
+`/loop` and `/goal clear` still end a paused goal, and it is still never written down
+([GOAL-12](#GOAL-12)). Both words are typed by a person and read as whole words, so `/goal pause the
+deploy first` sets a goal, and neither runs a turn, so both are carried out as typed
+([CMD-8](commands.md#CMD-8)).
+
+**Why.** The only way to stop a goal judging an unrelated turn was to clear it and type the
+condition again. The state the person wants is the one they already have, with the judging held
+off, and a pause that is only ever a word the person typed puts nothing the driver did not get from
+them into the decision.
+
+**Why not a count.** A pause is not a round, so nothing is spent by it: giving a goal fewer rounds
+for having been interrupted would punish the detour the pause exists for.
+
+`verified-by: bravebot_tui::goals::pause_and_resume_are_whole_words_and_not_prefixes`
+`verified-by: bravebot_tui::goals::pausing_keeps_the_condition_and_the_rounds_and_resuming_arms_it_again`
+`verified-by: bravebot_tui::state::a_paused_goal_is_kept_but_not_in_force_until_it_is_resumed`
+`verified-by: bravebot_tui::state::pausing_or_resuming_says_when_it_changed_nothing`
+`verified-by: bravebot_tui::state::a_verdict_after_the_goal_was_paused_is_neither_acted_on_nor_announced`
+`verified-by: bravebot_tui::state::a_paused_goal_is_replaced_by_a_loop_and_still_refuses_one_a_turn_arranged`
+`verified-by: bravebot_tui::app::the_goal_command_pauses_and_resumes_the_goal_even_mid_turn`
+`verified-by: bravebot_tui::status::the_report_says_a_goal_is_paused`
+`verified-by: bravebot_tui::panel::a_paused_goal_is_drawn_and_says_it_is_paused`
 
 ## Known costs
 

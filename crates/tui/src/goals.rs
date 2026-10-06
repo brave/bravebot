@@ -14,6 +14,12 @@
 /// The word that takes a goal off, rather than setting one called `clear`.
 const CLEAR: &str = "clear";
 
+/// The word that holds a goal still, rather than setting one called `pause`.
+const PAUSE: &str = "pause";
+
+/// The word that arms a held goal again, rather than setting one called `resume`.
+const RESUME: &str = "resume";
+
 /// How many times a goal may send the work back before it gives up.
 ///
 /// Every one of these is a whole turn with the conversation re-sent, so this is what stands
@@ -29,22 +35,29 @@ pub enum Asked {
     Report,
     /// Take the goal off.
     Clear,
+    /// Keep the goal and its condition, and stop judging turns against it.
+    Pause,
+    /// Judge turns against a paused goal again.
+    Resume,
     /// Work towards this condition.
     Set(String),
 }
 
 /// Read the argument to `/goal`.
 ///
-/// One literal word is reserved and the rest of the language is a condition, which is as narrow as
-/// the reservation can be made: `clear the build directory first` sets a goal, because the word is
-/// not the whole argument.
+/// Three literal words are reserved and the rest of the language is a condition, which is as narrow
+/// as the reservation can be made: `clear the build directory first` sets a goal, because the word
+/// is not the whole argument.
 pub fn parse(argument: &str) -> Asked {
     let argument = argument.trim();
     if argument.is_empty() {
         return Asked::Report;
     }
-    if argument == CLEAR {
-        return Asked::Clear;
+    match argument {
+        CLEAR => return Asked::Clear,
+        PAUSE => return Asked::Pause,
+        RESUME => return Asked::Resume,
+        _ => {}
     }
     Asked::Set(argument.to_string())
 }
@@ -58,6 +71,8 @@ pub struct Running {
     rounds: usize,
     /// What the judge said last time it was asked.
     last: Option<String>,
+    /// Whether the person has held the goal still. The condition and the count are kept either way.
+    paused: bool,
 }
 
 impl Running {
@@ -67,7 +82,24 @@ impl Running {
             condition,
             rounds: 0,
             last: None,
+            paused: false,
         }
+    }
+
+    /// Whether turns are being judged against this goal, or the person has held it still.
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    /// Hold the goal still, and say whether it was running. The condition and the rounds spent are
+    /// kept, so resuming picks up where this left off.
+    pub fn pause(&mut self) -> bool {
+        !std::mem::replace(&mut self.paused, true)
+    }
+
+    /// Arm a held goal again, and say whether it was paused.
+    pub fn resume(&mut self) -> bool {
+        std::mem::replace(&mut self.paused, false)
     }
 
     pub fn condition(&self) -> &str {
@@ -127,6 +159,38 @@ mod tests {
             parse("clear the build directory and cargo test exits 0"),
             Asked::Set("clear the build directory and cargo test exits 0".to_string())
         );
+    }
+
+    /// Same reservation as `clear`: the whole word, so a condition that opens with one is a
+    /// condition, and a person describing work is not silently holding their goal still.
+    #[test]
+    fn pause_and_resume_are_whole_words_and_not_prefixes() {
+        assert_eq!(parse("pause"), Asked::Pause);
+        assert_eq!(parse("  resume  "), Asked::Resume);
+        assert_eq!(
+            parse("pause the deploy before the tests pass"),
+            Asked::Set("pause the deploy before the tests pass".to_string())
+        );
+        assert_eq!(
+            parse("resume.txt exists"),
+            Asked::Set("resume.txt exists".to_string())
+        );
+    }
+
+    #[test]
+    fn pausing_keeps_the_condition_and_the_rounds_and_resuming_arms_it_again() {
+        let mut goal = Running::begin("the tests pass".to_string());
+        goal.not_met("nothing ran them".to_string());
+        assert!(goal.pause());
+        assert!(!goal.pause(), "a second pause reported a change");
+        assert!(goal.is_paused());
+        assert_eq!(goal.condition(), "the tests pass");
+        assert_eq!(goal.rounds(), 1);
+        assert_eq!(goal.last_reason(), Some("nothing ran them"));
+        assert!(goal.resume());
+        assert!(!goal.resume(), "a second resume reported a change");
+        assert!(!goal.is_paused());
+        assert_eq!(goal.rounds(), 1);
     }
 
     #[test]

@@ -1909,6 +1909,8 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
                     session.note(t!(goal_none));
                 }
             }
+            crate::goals::Asked::Pause => session.pause_goal(),
+            crate::goals::Asked::Resume => session.resume_goal(),
             crate::goals::Asked::Set(condition) => session.start_goal(condition),
         }
         return Action::Redraw;
@@ -7042,7 +7044,7 @@ fn goal_check_animated(
     conversation: &Conversation,
     trust: &TrustStore,
 ) -> io::Result<(Option<String>, Vec<Stamped>)> {
-    if session.goal().is_none() {
+    if session.goal_in_force().is_none() {
         return Ok((None, Vec::new()));
     }
     // Read rather than assumed: `begin_aside` below sets the session working again, and after that
@@ -7053,7 +7055,7 @@ fn goal_check_animated(
     // An invariant of the branch above, not a runtime condition.
     // nosemgrep: trailofbits.rs.panic-in-function-returning-result.panic-in-function-returning-result
     let condition = session
-        .goal()
+        .goal_in_force()
         .expect("the goal was there a moment ago")
         .condition()
         .to_string();
@@ -7288,7 +7290,10 @@ fn run_turn_animated(
     // And what the session is working towards, where a person set a condition. Every turn under a
     // goal carries it, the first one included: the round that sets the direction is the one that
     // most needs to know what it is aiming at.
-    let working_towards = session.goal().map(|goal| goal.condition().to_string());
+    // A goal the person has held still is not aimed at: the turn is told nothing about it.
+    let working_towards = session
+        .goal_in_force()
+        .map(|goal| goal.condition().to_string());
     // And whether this turn may arm a standing watch. Read here for the reason the mode is read
     // here: only the session can count what is live, and a tool answering out of a stale count
     // would tell the planner about a watch the session then refused.
@@ -15456,6 +15461,35 @@ mod tests {
             Action::Redraw
         );
         assert!(session.goal().is_none());
+    }
+
+    /// Pause and resume are typed by a person and touch only what the session keeps, so they run
+    /// where `/goal clear` does, mid-turn, while setting a goal waits.
+    #[test]
+    fn the_goal_command_pauses_and_resumes_the_goal_even_mid_turn() {
+        let mut session = Session::new("none");
+        session.start_goal("cargo test exits 0".to_string());
+        for (line, paused) in [("/goal pause", true), ("/goal resume", false)] {
+            assert!(runs_while_working(line), "{line} waited for the turn");
+            for c in line.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Redraw
+            );
+            assert_eq!(
+                session.goal().map(crate::goals::Running::is_paused),
+                Some(paused),
+                "{line}"
+            );
+            assert_eq!(
+                session.goal().map(crate::goals::Running::condition),
+                Some("cargo test exits 0"),
+                "{line} changed the condition"
+            );
+        }
+        assert!(!runs_while_working("/goal pause the deploy first"));
     }
 
     /// With no condition there is no goal to set, and the interface says what it needs rather

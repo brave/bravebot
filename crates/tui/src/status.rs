@@ -451,6 +451,7 @@ pub fn report(facts: &Facts<'_>) -> Report {
     // its ninth round is one turn from giving up.
     if let Some(goal) = facts.goal {
         let note = match goal.rounds() {
+            _ if goal.is_paused() => t!(status_goal_paused).to_string(),
             0 => t!(goal_never_checked).to_string(),
             rounds => t!(status_goal_rounds, rounds = rounds, left = goal.left()),
         };
@@ -1164,6 +1165,33 @@ mod tests {
             )),
             "the definition's model was reported as one /model chose"
         );
+    }
+
+    /// A held goal is still the session's, so it is on the report, and the report says it is held
+    /// rather than counting rounds as though the next turn would be judged.
+    #[test]
+    fn the_report_says_a_goal_is_paused() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string());
+        goal.not_met("nothing above runs the tests".to_string());
+        goal.pause();
+
+        let mut facts = facts(&config, &trust);
+        facts.goal = Some(&goal);
+        let report = report(&facts);
+
+        let line = report
+            .lines
+            .iter()
+            .find(|line| line.label.trim() == t!(status_goal))
+            .expect("a paused goal is on the report");
+        assert!(
+            line.value.contains("cargo test exits 0"),
+            "{:?}",
+            line.value
+        );
+        assert_eq!(line.note, t!(status_goal_paused));
     }
 
     #[test]

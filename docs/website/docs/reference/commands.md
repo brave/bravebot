@@ -347,11 +347,19 @@ is put to a judge, and where it is not met yet the work goes back for another tu
 ```
 /goal cargo test exits 0 and the diff is committed
 /goal                              # say what the condition is, and how it is going
+/goal pause                        # keep it, and stop judging turns against it
+/goal resume                       # judge them again, against the same condition
 /goal clear                        # take it off
 ```
 
-`clear` takes a goal off only when it is the whole argument, so `/goal clear the build directory and
+`pause`, `resume` and `clear` act only when they are the whole argument, so `/goal clear the build directory and
 the tests pass` is a condition like any other.
+
+**Pausing keeps the goal for a detour.** While it is paused no turn is told the condition and none is
+judged against it, so you can ask something unrelated or work by hand without losing the sentence.
+`/goal resume` arms the same condition with the rounds it had spent, and `/status` and the panel say
+it is paused. A check already out when you pause is not acted on. `/goal clear`, `/clear` and `/loop`
+still end a paused goal, and it is not written down either.
 
 **Setting a goal sends nothing.** A condition is not a prompt, so the session sits idle until you
 ask for something; what a goal does is keep that work going. Nothing here writes a first prompt for

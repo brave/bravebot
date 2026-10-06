@@ -1657,6 +1657,7 @@ status-loop-next = next in { $next }
 status-loop-running = running now
 status-loop-unpaced = waiting for the turn to say when
 status-goal = Goal
+status-goal-paused = paused, /goal resume arms it
 status-watch = Watch { $number }
 status-watch-armed-by = armed by turn { $turn } · { $left } left
 # One line per background job of the last turn. The name is the driver's.
@@ -1944,6 +1945,7 @@ caffeinate-ended = /caffeinate is off: `{ $program }` stopped holding the comput
 # The info panel's section headings.
 panel-session = Session
 panel-goal = Goal
+panel-goal-paused = paused
 panel-context = Context
 panel-language-servers = Language servers
 panel-mcp-servers = MCP servers
@@ -2321,6 +2323,12 @@ goal-set =
     turn is judged against it. Ctrl-c takes it off, and so does leaving
 goal-replaced = the goal that was set has been replaced
 goal-cleared = the goal is cleared
+goal-paused =
+    the goal is paused: turns are not judged against it until /goal resume, and /goal clear
+    still takes it off
+goal-already-paused = the goal is already paused; /goal resume arms it again
+goal-resumed = the goal is resumed: the next turn is judged against it again
+goal-not-paused = the goal is not paused
 goal-none =
     no goal is set. /goal <condition> sets one, as in /goal cargo test exits 0, and /goal clear
     takes it off again

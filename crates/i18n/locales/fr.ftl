@@ -1453,6 +1453,7 @@ status-loop-next = prochaine dans { $next }
 status-loop-running = en cours
 status-loop-unpaced = en attente que le tour dise quand
 status-goal = Objectif
+status-goal-paused = suspendu, /goal resume le réarme
 status-watch = Veille { $number }
 status-watch-armed-by = posée au tour { $turn } · il reste { $left }
 # Une ligne par tâche en arrière-plan du dernier tour. Le nom est celui du pilote.
@@ -1925,6 +1926,12 @@ goal-set =
     ensuite chaque tour est jugé par rapport à lui. Ctrl-c le retire, et partir aussi
 goal-replaced = l'objectif qui était fixé a été remplacé
 goal-cleared = l'objectif est retiré
+goal-paused =
+    l'objectif est suspendu : les tours ne sont pas jugés par rapport à lui avant /goal resume, et
+    /goal clear le retire toujours
+goal-already-paused = l'objectif est déjà suspendu ; /goal resume le réarme
+goal-resumed = l'objectif est repris : le prochain tour est de nouveau jugé par rapport à lui
+goal-not-paused = l'objectif n'est pas suspendu
 goal-none =
     aucun objectif n'est fixé. /goal <condition> en fixe un, comme /goal cargo test se termine
     avec le code 0, et /goal clear le retire
@@ -2273,6 +2280,7 @@ panel-hide = { $chord } masquer le panneau
 panel-too-narrow = Le panneau d'informations demande un terminal d'au moins { $columns } colonnes.
 panel-session = Session
 panel-goal = Objectif
+panel-goal-paused = suspendu
 panel-context = Contexte
 panel-language-servers = Serveurs de langage
 panel-mcp-servers = Serveurs MCP
