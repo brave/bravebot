@@ -22,11 +22,11 @@ The roster, `bravebot sessions`, `bravebot sessions stop`, `bravebot --bg`, `bra
 clause that is built whole names its tests. A clause with a part still to build reads
 `verified-by: none` until all of it lands, and the parts not built are: the supervisor and restarts
 ([BG-12](#BG-12)), the idle stop ([BG-13](#BG-13)), starting an `interrupted` session again from
-`attach` or `reply`, `/bg` and `/detach`, the checkout ([BG-14](#BG-14)), and holding a question
-from an MCP server that has to be started. A session that needs one of those servers starts without
-it. A `stopped` session is started again from `attach` or `reply` by a terminal, resuming the record
-the process wrote after each turn, and `--resume` and `--continue` refuse a record a running session
-holds. The clauses
+`attach` or `reply`, `/bg` and `/detach`, and the checkout ([BG-14](#BG-14)). A question from an
+MCP server that has to be started is held like any other, and is drawn as a foreground session
+draws it. A `stopped` session is started again from `attach` or `reply` by a terminal, resuming the
+record the process wrote after each turn, and `--resume` and `--continue` refuse a record a running
+session holds. The clauses
 that other specs would contradict are named under
 [What this changes in other specs](#what-this-changes-in-other-specs).
 
