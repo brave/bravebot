@@ -281,6 +281,7 @@ because its body is read to the end without a stop being looked at.
 `verified-by: bravebot_net::egress::a_redirect_from_this_machine_keeps_the_bounds`
 `verified-by: bravebot_net::egress::a_wait_that_nobody_can_stop_keeps_the_bounds`
 `verified-by: bravebot_net::lib::only_this_machine_is_this_machine`
+`verified-by: bravebot_net::lib::a_request_through_a_proxy_keeps_its_bounds_when_it_asks_to_be_patient`
 `verified-by: bravebot_aichat::client::a_model_on_this_machine_that_goes_quiet_while_it_writes_is_waited_for`
 `verified-by: bravebot_aichat::client::a_quiet_local_model_is_not_waited_on_without_bound_by_a_client_nobody_can_stop`
 
