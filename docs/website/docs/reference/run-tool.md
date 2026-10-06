@@ -170,11 +170,18 @@ meaning is not in its argv, not the setting of a variable.
 than as a reference. It cannot write anything, and it reads one file you already answered about, so
 there was nothing for a prompt to decide.
 
-That holds where every step of the plan is one of nine audited programs (`wc`, `head`, `tail`, `cut`,
-`tr`, `grep`, `basename`, `dirname`, `pwd`), called with options that program's entry lists, and the
+That holds where every step of the plan is one of the audited programs (`wc`, `head`, `tail`, `cut`,
+`tr`, `grep`, `basename`, `dirname`, `pwd`, `ls`, `cat`, `sort`, `uniq`, `diff`, `stat`, `du`), called with options that program's entry lists, and the
 plan writes nothing and reads only paths the trust map answers for. The output's label is the map's
 answer about what the line read. Where any path is one nobody vouched for, the output is untrusted and
 private and the prompt stands, exactly as for every other run.
+
+`sort` and `uniq` are in the list because the entry refuses what writes: `sort -o`, `--output`,
+`-T` and `--compress-program` leave the step unproven, and so does a second operand to `uniq`, which
+is the file it writes. `diff` compares two paths and `-r` is refused, since GNU `diff -r` follows a
+link to a directory. `ls`, `stat` and `du` must name a path, because with none they report on the
+working directory or, for BSD `stat`, on standard input, and `-L` and `-H` are refused because they
+follow a link to a place the line does not name.
 
 A recursive search answers for the whole tree it walks, so `grep -r` takes its label from the
 directory it was pointed at and everything beneath it. A directory you refused inside a project you

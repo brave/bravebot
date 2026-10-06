@@ -393,6 +393,17 @@ it as an operand wherever it is written. What it names differs instead: GNU and 
 read standard input for it, and BSD `head`, `tail` and `wc` open a file called `-`, so for those
 three it is counted as a path.
 
+**`sort` and `uniq` are in the table, and what writes is refused by the entry.** `sort` lists no
+option that names an output file, runs a program or names a file of names (`-o`, `--output`,
+`--compress-program`, `-T`, `--temporary-directory`, `--files0-from`, `--random-source`), and `uniq`
+admits one operand because the second is the file it writes. That operand is counted whatever it is
+spelled, so `uniq - out` is refused. `diff` admits two paths and never `-r`, `-l`, `-X` or
+`--from-file`. `ls`, `stat` and `du` must name a path and exclude the options that follow a link
+(`-L`, `-H`). `cat`, `ls`, `diff` and `stat` report only on the paths they are given, the same
+claim as the other entries. `sort` spills to scratch files under `TMPDIR` holding bytes it was
+given, named by the program rather than by the call. BSD `cat` connects to a Unix socket named as an
+operand, which the table cannot see because it has no file types to look at.
+
 A stage whose program resolves to a file inside the workspace is not read-proven, and neither is one
 whose line named a path rather than a program, one carrying an environment assignment, or one opening
 a file for a stream. The table's entries are claims about the programs a system provides under those
@@ -488,6 +499,13 @@ interpreters, and `awk`'s `system()` reaches the shell this repository excludes.
 `verified-by: bravebot_core::pure::a_lone_dash_is_a_path_where_bsd_opens_a_file_by_that_name`
 `verified-by: bravebot_core::pure::an_operand_a_program_has_no_reading_for_proves_nothing`
 `verified-by: bravebot_core::pure::interpreters_never_qualify_however_harmless_they_look`
+`verified-by: bravebot_core::pure::a_sort_or_uniq_call_that_names_an_output_file_proves_nothing`
+`verified-by: bravebot_core::pure::sort_and_uniq_reading_one_input_answer_with_it`
+`verified-by: bravebot_core::pure::diff_compares_two_paths_and_never_walks_a_tree`
+`verified-by: bravebot_core::pure::a_reporting_program_with_no_path_proves_nothing`
+`verified-by: bravebot_core::pure::a_reporting_program_following_links_or_reading_a_list_proves_nothing`
+`verified-by: bravebot_core::pure::cat_answers_with_the_files_it_reads`
+`verified-by: bravebot_core::policy::a_pipeline_of_sort_uniq_cat_and_ls_over_vouched_paths_does_not_ask`
 `verified-by: bravebot_core::trust::a_subtree_is_trusted_only_when_nothing_beneath_it_is_not`
 `verified-by: bravebot_core::policy::a_line_that_only_reads_vouched_for_paths_comes_back_trusted`
 `verified-by: bravebot_core::policy::a_line_reading_an_unvouched_path_still_asks`
