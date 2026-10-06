@@ -111,13 +111,28 @@ or the last, so a held key comes to rest somewhere the next press can move away 
 One wheel event moves the number of rows `tui.wheelRows` names, and three where no settings file
 names one. The same distance at rest and in the scroller, the wheel being one of the keys here: a
 transcript that moved by one figure and a scroller by another would be two movements under one
-gesture. The count is read once when the session opens, from the person's own settings files and
-from nothing a workspace or a response carries. A figure outside one row to a hundred is held to
-that range rather than refused, since the movement a figure asks for is on the screen the moment the
-wheel is turned: a zero would answer the wheel with nothing, and a figure past a screen's worth
-would move further in one event than the person can see. Both promises above hold whatever the
-figure is: the wheel stops at the first row and the last, and it takes no count, so a count waiting
-for its key goes with the event rather than multiplying it.
+gesture.
+
+The count is read once when the session opens, from the settings files as any other key of its kind
+is read: the home layer, a checkout's `.bravebot/settings.json` and `settings.local.json`, and a
+file the command line named, the later overriding the earlier. A checkout therefore names it, which
+is the layering every key that configures how the interface behaves gets, and the cost of it is the
+one written down under Known costs in [backends.md](backends.md). It is not one of the four names
+read from the home layer alone, because it decides no effect: the figure moves a view on this
+person's screen and reaches nothing else, so a checkout naming it changes what a gesture feels like
+and nothing about where a request goes or what is read. Nothing a response carries reaches it at
+all.
+
+A figure from one row to a hundred is taken as it stands, and a larger one is held to a hundred
+rather than refused, since the movement a figure asks for is on the screen the moment the wheel is
+turned and a figure past a screen's worth would move further in one event than the person can
+follow. Anything that is not a whole number above zero is read as absence rather than as a figure to
+bring into range, so a zero, a fraction, a negative or a word leaves the built-in three in force.
+That is the only thing a settings file can say below the range: the floor of one row is the bound
+the screen's own layer holds a figure to, and no file reaches it.
+
+Both promises above hold whatever the figure is: the wheel stops at the first row and the last, and
+it takes no count, so a count waiting for its key goes with the event rather than multiplying it.
 
 `{` and `}` land on the row a turn begins at, which is a prompt the person typed. Where they land
 is settled by what the person wrote and by nothing read out of the workspace.

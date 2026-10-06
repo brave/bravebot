@@ -648,9 +648,14 @@ Terminals disagree about how many events a notch sends, and a trackpad swipe sen
 so the same figure crawls on one and jumps a screen on another. Raise it where the transcript barely
 moves, lower it where one swipe overshoots what you were reading.
 
-Whole numbers from 1 to 100. A figure outside that range is brought to the nearest end of it rather
-than refused, and a zero, a fraction or a word leaves the built-in 3 in force. The value is read when
-the session opens, so editing it describes your next session.
+Whole numbers from 1 to 100. A larger figure is held to 100 rather than refused, and a zero, a
+fraction, a negative or a word leaves the built-in 3 in force. The value is read when the session
+opens, so editing it describes your next session.
+
+Unlike `model` and `provider`, this key is read from every settings file, so a checkout's
+`.bravebot/settings.json` can name it. It moves a view on your own screen and decides nothing about
+where a request goes or what is read, which is why it is not one of the keys held to your home
+directory.
 
 ### `updateCheck`
 
