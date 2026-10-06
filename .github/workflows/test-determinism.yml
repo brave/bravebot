@@ -37,32 +37,74 @@ jobs:
       - name: Check the parser
         run: contrib/measure-flakes.py --selftest
 
-  # Both thread counts are named rather than left to cargo, because a hosted runner has four cores
-  # and cargo's default there is already the cap `make check-linux` sets. The wide leg
-  # oversubscribes those four cores; it does not stand in for a sixteen core machine, so what the
-  # legs differ by is the cost of oversubscription rather than what a developer's machine does. The
-  # mock server races `make check-linux` documents want a busier machine than a hosted runner, so a
-  # clean sweep here is a bound, not an all-clear, and the report says the rate it could have seen.
+  # The suite runs on each platform it is tested on, because a test that loses runs on one host
+  # passes on another and the platform's own tests are compiled nowhere else: the Seatbelt half of
+  # crates/sandbox exists only on macOS. The Linux legs name both thread counts rather than leaving
+  # them to cargo, because a hosted runner has four cores and cargo's default there is already the
+  # cap `make check-linux` sets. The wide leg oversubscribes those four cores; it does not stand in
+  # for a sixteen core machine, so what the legs differ by is the cost of oversubscription rather
+  # than what a developer's machine does. The mock server races `make check-linux` documents want a
+  # busier machine than a hosted runner, so a clean sweep here is a bound, not an all-clear, and the
+  # report says the rate it could have seen. The macOS leg takes cargo's default, as the macOS job
+  # in ci.yml does.
+  #
+  # The Windows leg reports and files nothing. ci.yml does not run the suite on Windows (#88): it
+  # spawns a POSIX shell, drives a pty and exercises a confinement backend Windows has none of, so
+  # most of it fails every run. A test that fails every run agrees with itself and is not named,
+  # but one that passes now and then would be filed as a flake when it is a failure, and filing is
+  # left until the suite is expected to pass there.
+  #
+  # One leg at a time, in the order below, so that a test that flakes on two platforms is filed by
+  # the first leg that sees it and found as already filed by the second, instead of both opening an
+  # issue at the same moment. Only the legs that can file need this; each takes about an hour.
   measure:
-    name: ${{ matrix.threads }} threads
+    name: ${{ matrix.name }}
     needs: parser
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 240
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout }}
     permissions:
       contents: read
       # A flake nobody filed is a flake nobody works on, so the job that finds one opens the issue.
       issues: write
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
-          # Only the wide leg files. Both legs measure the same tests, so both filing would race to
-          # open two issues for one flake.
-          - threads: 4
+          # Only the wide Linux leg files for Linux. Both Linux legs measure the same tests, so
+          # both filing would race to open two issues for one flake.
+          - name: Linux, 4 threads
+            os: ubuntu-latest
+            threads: "4"
             issues: ""
-          - threads: 16
+            python: python3
+            toolchain: stable
+            timeout: 240
+          - name: Linux, 16 threads
+            os: ubuntu-latest
+            threads: "16"
             issues: ${{ github.repository }}
+            python: python3
+            toolchain: stable
+            timeout: 240
+          - name: macOS
+            os: macos-latest
+            threads: ""
+            issues: ${{ github.repository }}
+            python: python3
+            toolchain: stable
+            timeout: 240
+          - name: Windows
+            os: windows-latest
+            threads: ""
+            issues: ""
+            python: python
+            toolchain: stable-x86_64-pc-windows-gnu
+            timeout: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -71,7 +113,7 @@ jobs:
         # nosemgrep: brave-third-party-action-not-pinned-to-commit-sha
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
-          toolchain: stable
+          toolchain: ${{ matrix.toolchain }}
 
       - name: Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -97,7 +139,8 @@ jobs:
           RUNS: ${{ inputs.runs || '100' }}
           THREADS: ${{ matrix.threads }}
           ISSUES: ${{ matrix.issues }}
+          PYTHON: ${{ matrix.python }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          contrib/measure-flakes.py --runs "$RUNS" --test-threads "$THREADS" \
+          "$PYTHON" contrib/measure-flakes.py --runs "$RUNS" ${THREADS:+--test-threads "$THREADS"} \
             --file-issues "$ISSUES" --assign netzenbot --summary "$GITHUB_STEP_SUMMARY"
