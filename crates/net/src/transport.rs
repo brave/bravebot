@@ -112,8 +112,8 @@ pub struct Transport {
     proxy: Option<Proxy>,
     /// The protocol of a proxy that was named and cannot be used.
     unusable_proxy: Option<String>,
-    /// The names of the proxy variables that are set and whose value is not a uri, in the order the
-    /// variables are read. Names only: a proxy uri carries a credential.
+    /// The names of the proxy variables that are set and whose value cannot be read as a proxy
+    /// address, in the order the variables are read. Names only: a proxy uri carries a credential.
     unparseable_proxies: Vec<String>,
     /// What `NO_PROXY` held, for the report. The transport library reads it for itself.
     no_proxy: Option<String>,
@@ -259,8 +259,8 @@ impl Transport {
         self.unusable_proxy.as_deref()
     }
 
-    /// The proxy variables that are set to something that is not a uri, in the order the variables
-    /// are read.
+    /// The proxy variables that are set to something that cannot be read as a proxy address, in the
+    /// order the variables are read.
     ///
     /// Names alone, never values: a proxy uri carries a username and password on the networks that
     /// require one, and a value that failed to parse is as likely to hold one as a value that did.
@@ -391,8 +391,12 @@ fn from_pem(bytes: &[u8]) -> Vec<Certificate<'static>> {
         .collect()
 }
 
-/// Every proxy variable that is set, non-empty, and holds something that is not a uri, in the order
-/// the variables are read, and in either case.
+/// Every proxy variable that is set, non-empty, and holding something that cannot be read as a
+/// proxy address, in the order the variables are read, and in either case.
+///
+/// A value that is not a uri at all, one naming no authority, and one whose scheme no proxy speaks
+/// all fail the same parse, which is why neither this nor the report calls the value "not a uri":
+/// `gopher://proxy.corp` is one.
 ///
 /// The names alone are collected. A value that does not parse is as likely to hold a credential as
 /// one that does, and a report exists to be pasted into an issue.

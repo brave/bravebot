@@ -201,8 +201,11 @@ protocol this build cannot connect through is not carried at all. `doctor` names
 protocol, host and port, the hosts it is not used for, and whether it requires a credential, or says
 that a proxy was named and is not the route; the credential itself is never printed.
 
-A variable that is set and non-empty and whose value is not a uri is named too, one line each, in
-the order the variables are read and in either case. Only the name: the value is withheld on the
+A variable that is set and non-empty and whose value cannot be read as a proxy address is named too,
+one line each, in the order the variables are read and in either case. That covers a value that is
+not a uri at all, one naming no authority, and one whose scheme no proxy speaks: the report says the
+value could not be read as a proxy rather than that it is not a uri, since `gopher://proxy.corp` is a
+uri and naming it as one would send a reader after a typo that is not there. Only the name: the value is withheld on the
 same terms the credential is. One line each counts variables and not spellings: where the
 environment matches a name without regard to case, as Windows does, both spellings answer with the
 one value somebody set and it is named once, under the spelling read first. Two spellings holding
@@ -238,7 +241,7 @@ unauthenticated request is among the failures the report exists to explain. `NO_
 the same reason in the other direction: it decides whether a proxy in force applies to the host that
 is failing, and `NO_PROXY=*` leaves one configured and used for nothing.
 
-A value that is not a uri is named for the reason an unusable protocol is. The reader's answer to one
+A value that cannot be read as a proxy address is named for the reason an unusable protocol is. The reader's answer to one
 is to try the next variable, so the route it settles on and the route somebody wrote down are two
 different things and the report otherwise states only the first: a machine whose one way out is a
 mistyped `HTTPS_PROXY` says that no proxy was named, or names a lower-priority variable as the route,
