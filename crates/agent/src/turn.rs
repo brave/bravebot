@@ -786,8 +786,9 @@ pub struct Task {
     pub remembering: Option<String>,
     /// A model the planner may put a question to, when the session named one.
     ///
-    /// `None` offers no `advisor` tool. Never set on a delegate's turn: a delegate is not shown
-    /// the tool and a call to it is answered as an unknown name.
+    /// `None` leaves it to the `advisorModel` setting, which may name none. Never offered on a
+    /// delegate's turn: a delegate is not shown the tool and a call to it is answered as an
+    /// unknown name.
     pub advisor: Option<String>,
     /// The model to request, when the user has chosen one.
     ///
@@ -1174,7 +1175,7 @@ impl Task {
         self
     }
 
-    /// Name the model the planner may consult, or `None` to offer no `advisor` tool.
+    /// Name the model the planner may consult, or `None` to leave it to the `advisorModel` setting.
     pub fn with_advisor(mut self, model: Option<String>) -> Self {
         self.advisor = model;
         self
@@ -2953,6 +2954,16 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     outcome
 }
 
+/// The model a turn's planner may consult: the one the command line named, else the one the
+/// settings name. A delegate is offered neither, since the planner that started it already has
+/// the tool.
+fn advisor_for(task: &Task, config: &Config) -> Option<String> {
+    task.advisor
+        .clone()
+        .or_else(|| config.advisor())
+        .filter(|_| task.delegate.is_none())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter + ?Sized + Send>(
     config: &Config,
@@ -2986,6 +2997,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // parts would silently fail to add up to the whole.
     let began = Instant::now();
     let mut spent = Elapsed::default();
+
+    let advisor = advisor_for(task, config);
 
     // Every route into a file this turn takes goes through this copy, so a write that leaves a
     // definition's memory untrusted is recorded wherever it comes from (MEMORY-5).
@@ -3151,7 +3164,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         task.deadlines,
                         tools::Running::Offered,
                     );
-                    if task.advisor.is_some() {
+                    if advisor.is_some() {
                         tools::offer_advisor(&mut offered);
                     }
                     let names: Vec<&str> = offered
@@ -3175,7 +3188,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 task.deadlines,
                                 tools::Running::Withheld,
                             );
-                            if task.advisor.is_some() {
+                            if advisor.is_some() {
                                 tools::offer_advisor(&mut offered);
                             }
                         }
@@ -4265,15 +4278,13 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 profile: task.profile.as_deref(),
                                 cache: task.cache.as_deref(),
                                 remembering: task.remembering.as_deref(),
-                                advising: task
-                                    .advisor
-                                    .as_deref()
-                                    .filter(|_| task.delegate.is_none())
-                                    .map(|model| crate::advisor::Advising {
+                                advising: advisor.as_deref().map(|model| {
+                                    crate::advisor::Advising {
                                         model,
                                         context: &request.messages,
                                         asked: &mut advice_asked,
-                                    }),
+                                    }
+                                }),
                                 delegated: task.delegate.is_some(),
                                 confined_to: addressed.as_ref().map(|addressed| addressed.tools()),
                                 servers: servers.as_deref_mut(),
@@ -5294,6 +5305,62 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
+    fn a_delegate_spec(kind: &str, held: CapabilitySet) -> bravebot_core::delegate::DelegateSpec {
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "look it up");
+        let mut policy = Policy::begin(routing, ReleasePlan::new(), held, &mut sink).unwrap();
+        policy
+            .before_delegate(
+                &Labelled::trusted(kind.to_string()),
+                &Labelled::trusted("look it up".to_string()),
+                None,
+            )
+            .expect("a trusted run may delegate")
+    }
+
+    fn configured_with_advisor(setting: Option<&str>) -> Config {
+        let mut config = Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("http://127.0.0.1:9/never-asked".into()),
+            _ => None,
+        })
+        .unwrap();
+        config.advisor_model = setting.map(str::to_string);
+        config
+    }
+
+    /// ADVISOR-8: a setting alone names the advisor, and the flag, which is a person's choice for
+    /// this run, outranks it. With neither there is none.
+    #[test]
+    fn the_flag_outranks_the_advisor_setting_and_either_alone_names_one() {
+        let setting = configured_with_advisor(Some("from-settings"));
+        let unset = configured_with_advisor(None);
+        let plain = Task::new("look it up");
+        let flagged = Task::new("look it up").with_advisor(Some("from-flag".into()));
+
+        assert_eq!(
+            advisor_for(&plain, &setting).as_deref(),
+            Some("from-settings")
+        );
+        assert_eq!(
+            advisor_for(&flagged, &setting).as_deref(),
+            Some("from-flag")
+        );
+        assert_eq!(advisor_for(&flagged, &unset).as_deref(), Some("from-flag"));
+        assert_eq!(advisor_for(&plain, &unset), None);
+    }
+
+    /// ADVISOR-1: a delegate is not offered the tool, whatever the settings or the flag name.
+    #[test]
+    fn a_delegate_is_not_given_the_advisor_the_settings_name() {
+        let spec = a_delegate_spec("worker", held(&Task::new("")));
+        let delegated = Task::delegated(spec).with_advisor(Some("from-flag".into()));
+        let config = configured_with_advisor(Some("from-settings"));
+        assert_eq!(advisor_for(&delegated, &config), None);
+    }
+
     /// A delegate is a turn nobody is watching, so no definition may give one longer than such a
     /// turn may run, and the widest kind may give it that long. The ceilings live in the kernel
     /// and this bound here, so the two are held together here.
@@ -5526,18 +5593,7 @@ mod tests {
         );
 
         for kind in bravebot_core::delegate::Kind::NAMES {
-            let mut sink = bravebot_core::event::RecordingSink::new();
-            let mut routing = Routing::new();
-            routing.insert_trusted("task", "look it up");
-            let mut policy =
-                Policy::begin(routing, ReleasePlan::new(), held.clone(), &mut sink).unwrap();
-            let spec = policy
-                .before_delegate(
-                    &Labelled::trusted(kind.to_string()),
-                    &Labelled::trusted("look it up".to_string()),
-                    None,
-                )
-                .expect("a trusted run may delegate");
+            let spec = a_delegate_spec(kind, held.clone());
             let delegated = super::held(
                 &Task::delegated(spec)
                     .with_servers(vec![ServerAlias::new("weather"), ServerAlias::new("docs")]),

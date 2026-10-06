@@ -634,7 +634,8 @@ struct Invocation {
     /// The model the command line named. `None` leaves the configured one in force rather than
     /// standing for a model of its own.
     model: Option<String>,
-    /// The model the command line named as the planner's advisor. `None` offers no advisor tool.
+    /// The model the command line named as the planner's advisor. `None` leaves it to the
+    /// `advisorModel` setting.
     advisor: Option<String>,
     /// The level the command line named, which outranks the saved pick and every settings file for
     /// this run alone. `None` leaves those to answer.
@@ -2551,6 +2552,15 @@ fn doctor() -> ExitCode {
                     t!(doctor_settings_ignored),
                     t!(
                         doctor_settings_model_ignored,
+                        path = path.display().to_string()
+                    ),
+                );
+            }
+            for path in settings.advisor_ignored() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_advisor_ignored,
                         path = path.display().to_string()
                     ),
                 );

@@ -812,7 +812,7 @@ every file that was found. The flag that names one, and the path it refuses, are
 |---|---|
 | `env`, `attribution`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
-| `provider`, `model` | home layer, and the file `--settings` names; a project or local layer naming either is ignored, and the file is reported as one whose naming was dropped |
+| `provider`, `model`, `advisorModel` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
 | anything else | the closest layer that set it wins |
 
 A layer that spells `permissions` or `run` as something other than an object, or `run.scrubEnv` or
@@ -831,10 +831,10 @@ is restating an entire configuration to change a host. Going deeper than a name 
 request's destination the product of two files with no single place to read that says where it goes,
 which is why a gateway entry is replaced whole and a project file naming one must name its host too.
 
-`provider` and `model` are the exception on the other side: which host every request goes to and
+`provider`, `model` and `advisorModel` are the exception on the other side: which host every request goes to and
 which credential signs it is exactly what a file nobody opened must not decide, and the credential
 value comes from the person's own environment under names the layer would choose. A project or
-local layer naming either is dropped whole and reported, so the destination of every request stays
+local layer naming one is dropped whole and reported, so the destination of every request stays
 something the person's own files or command line named. The file `--settings` names is the person's
 own act and is read.
 
@@ -898,6 +898,8 @@ with it.
 `verified-by: bravebot_config::settings::a_layer_answering_for_one_attribution_name_leaves_the_other`
 `verified-by: bravebot_config::settings::a_layer_capping_one_side_of_a_search_leaves_the_other`
 `verified-by: bravebot_config::settings::a_layer_naming_no_model_leaves_the_one_below_it`
+`verified-by: bravebot_cli::running::doctor_says_a_checkouts_advisor_model_is_not_obeyed`
+`verified-by: bravebot_config::settings::a_project_or_local_layer_cannot_name_an_advisor`
 `verified-by: bravebot_config::settings::an_unparseable_project_layer_leaves_the_global_one_in_force`
 `verified-by: bravebot_config::settings::an_oversized_project_layer_leaves_the_global_one_in_force`
 `verified-by: bravebot_config::settings::a_directory_with_no_project_layer_reads_the_global_one_alone`
