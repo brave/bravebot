@@ -12356,6 +12356,15 @@ mod tests {
                     "asked for {asked}: {}",
                     produced.note
                 );
+                for scheduling in [Scheduling::PacingALoop, Scheduling::ArrangingALook] {
+                    let produced =
+                        scheduled(scheduling, json!({"delay_seconds": asked, "noop": false}));
+                    let told = released(&produced.text);
+                    assert!(
+                        told.contains(&format!("again in {held} seconds")),
+                        "{scheduling:?}, asked for {asked}: {told}"
+                    );
+                }
             }
         }
 
