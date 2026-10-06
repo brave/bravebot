@@ -629,6 +629,33 @@ fn a_refused_argument_exits_non_zero() {
     }
 }
 
+/// A script whose variable expanded to nothing asked about one pull request, and opening the list
+/// of every session instead would not say so. Each of these is refused by name, and none reaches
+/// the interface.
+#[test]
+fn from_pr_without_a_pull_request_is_refused_rather_than_listing_every_session() {
+    let scratch = Scratch::new("cli-running-from-pr");
+
+    for arguments in [
+        &["--from-pr"][..],
+        &["--from-pr", ""][..],
+        &["--from-pr", "   "][..],
+        &["--from-pr", "--json"][..],
+    ] {
+        let output = bravebot(&scratch.path, &[], arguments);
+
+        let (_, stderr) = said(&output);
+        assert!(
+            !output.status.success(),
+            "{arguments:?} was refused and exited successfully: {stderr}"
+        );
+        assert!(
+            stderr.contains("--from-pr requires a pull request number or address"),
+            "{arguments:?} failed without saying what --from-pr needs: {stderr}"
+        );
+    }
+}
+
 /// A command line refused before it named a command is a failure before the turn, so CLI-12 owes
 /// it a result object, and stdout is where the object goes. The usage table is written there too,
 /// so a run that asked for an object used to get prose in its place and nothing to parse: the

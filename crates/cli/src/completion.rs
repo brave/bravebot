@@ -42,12 +42,13 @@ const fn flag(long: &'static str, short: Option<char>, value: bool) -> Flag {
     Flag { long, short, value }
 }
 
-const FLAGS: [Flag; 24] = [
+const FLAGS: [Flag; 25] = [
     flag("plain", None, false),
     flag("bg", None, false),
     flag("resume", Some('r'), false),
     flag("continue", Some('c'), false),
     flag("fork", Some('f'), false),
+    flag("from-pr", None, true),
     flag("file", None, true),
     flag("add-dir", None, true),
     flag("settings", None, true),

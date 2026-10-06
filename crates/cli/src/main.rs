@@ -201,6 +201,17 @@ fn main() -> ExitCode {
             Some(id) => resume_named(id, skip_permissions, prompts),
             None => interactive(bravebot_tui::app::Start::Choose, skip_permissions, prompts),
         },
+        // The same list, opened for the sessions linked to one pull request. A missing value is
+        // refused rather than read as a plain `--resume`, since a script whose variable expanded to
+        // nothing asked about one pull request and would be shown every session.
+        Some("--from-pr") => match args.get(1).map(|wanted| wanted.trim()) {
+            Some(wanted) if !wanted.is_empty() && !wanted.starts_with('-') => interactive(
+                bravebot_tui::app::Start::ChooseFromPr(wanted.to_string()),
+                skip_permissions,
+                prompts,
+            ),
+            _ => fail(Ending::Argument, t!(cli_from_pr_needs_a_value)),
+        },
         // The same, for the session somebody was in a moment ago, which is the one they mean
         // often enough that asking them to find its id is asking for nothing.
         Some("--continue" | "-c") => continue_here(skip_permissions, prompts),
@@ -324,7 +335,7 @@ fn take_agent(args: &mut Vec<String>) -> Result<Option<String>, String> {
 /// reason CLI-13 gives about a settings file.
 fn without_a_definition(first: Option<&str>) -> Option<String> {
     match first? {
-        flag @ ("--resume" | "-r" | "--continue" | "-c" | "--fork" | "-f") => {
+        flag @ ("--resume" | "-r" | "--continue" | "-c" | "--fork" | "-f" | "--from-pr") => {
             Some(t!(cli_agent_not_with_a_recorded_session, flag = flag).to_string())
         }
         command @ ("doctor" | "auth" | "mcp" | "sessions" | "attach" | "reply"
@@ -505,6 +516,7 @@ fn print_help() {
         ("bravebot \"<task>\" [--file <path>]...", t!(cli_usage_task)),
         ("cat file | bravebot -p \"<task>\"", t!(cli_usage_piped)),
         ("bravebot --resume [id]", t!(cli_usage_resume)),
+        ("bravebot --from-pr <number|url>", t!(cli_usage_from_pr)),
         ("bravebot --continue", t!(cli_usage_continue)),
         ("bravebot --fork <id>", t!(cli_usage_fork)),
         ("bravebot doctor", t!(cli_usage_doctor)),

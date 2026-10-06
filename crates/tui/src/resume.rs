@@ -5,7 +5,8 @@
 //!
 //! Typing filters rather than jumping, since a title is remembered as a few words out of the
 //! middle of it rather than as the way it starts. The branch and the issue and pull request the
-//! person linked are searched as well. Escape leaves without resuming anything, which
+//! person linked are searched as well, and `--from-pr` opens the list already narrowed to the
+//! sessions linked to one pull request. Escape leaves without resuming anything, which
 //! starts an ordinary session: nothing here can strand a user who opened it by mistake.
 
 use crate::input;
@@ -35,6 +36,9 @@ pub struct Picker {
     selected: usize,
     /// The project these sessions belong to, for the heading.
     project: String,
+    /// A pull request number or address the list was opened for, which keeps only the sessions
+    /// linked to it before anything typed narrows further.
+    from_pr: Option<String>,
 }
 
 impl Picker {
@@ -45,7 +49,14 @@ impl Picker {
             note: None,
             selected: 0,
             project: project.into(),
+            from_pr: None,
         }
+    }
+
+    /// Open the list for one pull request, given as its number or its address (`--from-pr`).
+    pub fn from_pull_request(mut self, wanted: impl Into<String>) -> Self {
+        self.from_pr = Some(wanted.into());
+        self
     }
 
     /// The sessions matching what has been typed, in order.
@@ -74,6 +85,11 @@ impl Picker {
                 .any(|session| links(session).contains(&needle));
         self.sessions
             .iter()
+            .filter(|session| {
+                self.from_pr
+                    .as_deref()
+                    .is_none_or(|wanted| is_pull_request(session, wanted))
+            })
             .filter(|session| {
                 let words = [Some(session.title.as_str()), session.branch.as_deref()]
                     .into_iter()
@@ -125,6 +141,22 @@ impl Picker {
         let last = self.matching().len().saturating_sub(1);
         self.selected = self.selected.min(last);
     }
+}
+
+/// Whether the session's pull request is the one `wanted` names: its address, or its number, which
+/// is the last part of the address on GitHub, GitLab and Bitbucket alike. A number is not matched
+/// as a substring, so `127` does not find the session whose pull request is `1270`.
+fn is_pull_request(session: &Summary, wanted: &str) -> bool {
+    let Some(link) = session.pull_request.as_deref() else {
+        return false;
+    };
+    let link = link.trim().trim_end_matches('/').to_lowercase();
+    let wanted = wanted.trim().trim_end_matches('/').to_lowercase();
+    let number = wanted.trim_start_matches('#');
+    if !number.is_empty() && number.chars().all(|c| c.is_ascii_digit()) {
+        return link.rsplit('/').next() == Some(number);
+    }
+    link == wanted
 }
 
 /// What a key press did to the picker.
@@ -207,8 +239,18 @@ pub enum Choice {
 }
 
 /// Show the list and return what to do.
-pub fn choose<B: Backend>(terminal: &mut Terminal<B>, project: &Path) -> Choice {
+///
+/// `from_pr` opens the list for one pull request, by number or address. Where no session is linked
+/// to it the picker says so rather than starting a session, so the answer is seen.
+pub fn choose<B: Backend>(
+    terminal: &mut Terminal<B>,
+    project: &Path,
+    from_pr: Option<&str>,
+) -> Choice {
     let mut picker = Picker::new(sessions::list(project), project.display().to_string());
+    if let Some(wanted) = from_pr {
+        picker = picker.from_pull_request(wanted);
+    }
     if picker.is_empty() {
         return Choice::Fresh;
     }
@@ -300,9 +342,17 @@ fn draw(frame: &mut Frame, picker: &Picker) {
         layout[1],
     );
 
+    let project = match &picker.from_pr {
+        Some(wanted) => format!(
+            "  {}  ·  {}",
+            picker.project,
+            t!(resume_from_pr, pull_request = wanted.as_str())
+        ),
+        None => format!("  {}", picker.project),
+    };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            format!("  {}", picker.project),
+            project,
             Style::default().fg(theme::muted()),
         ))),
         layout[2],
@@ -503,6 +553,47 @@ mod tests {
     }
 
     /// A record from before the links were kept has none, and the empty search lists everything.
+    /// `--from-pr 1270` is the number, and the session whose number merely starts with it is not
+    /// the one meant.
+    #[test]
+    fn a_pull_request_number_leaves_only_the_session_linked_to_that_number() {
+        let mut picker = linked_picker();
+        // Ends in the same digits, without being that number.
+        picker.sessions.push(linked(
+            "d",
+            "main",
+            None,
+            Some("https://github.com/brave/bravebot/pull/21270"),
+        ));
+        let picker = picker.from_pull_request("1270");
+        assert_eq!(ids(&picker), ["a"]);
+        let picker = linked_picker().from_pull_request("#12700");
+        assert_eq!(ids(&picker), ["b"]);
+        let picker = linked_picker().from_pull_request("127");
+        assert!(ids(&picker).is_empty());
+    }
+
+    #[test]
+    fn a_pull_request_address_leaves_only_the_session_linked_to_it() {
+        let picker =
+            linked_picker().from_pull_request("https://github.com/brave/bravebot/pull/1270/");
+        assert_eq!(ids(&picker), ["a"]);
+        let picker =
+            linked_picker().from_pull_request("https://github.com/brave/bravebot/pull/127");
+        assert!(ids(&picker).is_empty());
+    }
+
+    /// An issue link ending in the same number is not a pull request, and typing still narrows
+    /// the opened list.
+    #[test]
+    fn the_pull_request_opening_ignores_issue_links_and_typing_narrows_it_further() {
+        let mut picker = linked_picker().from_pull_request("1429");
+        assert!(ids(&picker).is_empty());
+        picker = linked_picker().from_pull_request("12700");
+        typed(&mut picker, "xyz");
+        assert!(ids(&picker).is_empty());
+    }
+
     #[test]
     fn a_session_without_links_is_listed_and_found_by_its_title() {
         let mut picker = linked_picker();

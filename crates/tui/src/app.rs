@@ -2779,6 +2779,8 @@ pub enum Start {
     Fresh,
     /// Ask which of this directory's sessions to pick up, if there are any.
     Choose,
+    /// The same, opened for the sessions linked to one pull request, given by number or address.
+    ChooseFromPr(String),
     /// A session read back off disk, continuing where it left off.
     Resuming(Box<bravebot_session::sessions::Record>),
     /// A new session whose every turn addresses the definition `--agent` named (CLI-17).
@@ -2833,12 +2835,18 @@ pub fn run(
     // Asked before the session begins, so what it starts with is settled before anything is
     // drawn for it. Choosing nothing is an ordinary session rather than an error.
     let start = match start {
-        Start::Choose => match crate::resume::choose(&mut terminal, workspace.root()) {
-            crate::resume::Choice::Resume(record) => Some(Start::Resuming(record)),
-            crate::resume::Choice::Fresh => Some(Start::Fresh),
-            // Leaving at the picker starts nothing. The terminal is still put back below.
-            crate::resume::Choice::Quit => None,
-        },
+        choosing @ (Start::Choose | Start::ChooseFromPr(_)) => {
+            let from_pr = match &choosing {
+                Start::ChooseFromPr(wanted) => Some(wanted.as_str()),
+                _ => None,
+            };
+            match crate::resume::choose(&mut terminal, workspace.root(), from_pr) {
+                crate::resume::Choice::Resume(record) => Some(Start::Resuming(record)),
+                crate::resume::Choice::Fresh => Some(Start::Fresh),
+                // Leaving at the picker starts nothing. The terminal is still put back below.
+                crate::resume::Choice::Quit => None,
+            }
+        }
         chosen => Some(chosen),
     };
 
@@ -3388,7 +3396,7 @@ fn event_loop(
     // session begins with an exchange that outlived the process it happened in.
     let (mut conversation, mut stored, programs) = match start {
         // Already answered before the loop was entered: the picker runs once, in `run`.
-        Start::Fresh | Start::Choose | Start::Under(_) => (
+        Start::Fresh | Start::Choose | Start::ChooseFromPr(_) | Start::Under(_) => (
             Conversation::new(),
             bravebot_session::sessions::Handle::begin(
                 workspace.root(),
@@ -5888,7 +5896,7 @@ enum Beginning {
 fn beginning_of(start: &Start, root: &std::path::Path) -> Beginning {
     match start {
         // Choosing has already resolved into one of the other two by the time this runs.
-        Start::Fresh | Start::Choose | Start::Under(_) => Beginning::New,
+        Start::Fresh | Start::Choose | Start::ChooseFromPr(_) | Start::Under(_) => Beginning::New,
         // Read under the directory being resumed into rather than the one recorded, so a project
         // that was moved or renamed since resumes with its rules about the same files.
         Start::Resuming(record) => Beginning::Resumed(record.trust_map(root)),
