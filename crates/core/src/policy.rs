@@ -7370,6 +7370,41 @@ five
         assert!(released, "the release was not recorded in the trail");
     }
 
+    /// A line wider than the box is several rows, so the width cap is what keeps four lines of
+    /// remark from becoming a screenful above the diff. The cut is in characters, not bytes, so a
+    /// remark in another script is not split inside one.
+    #[test]
+    fn a_remark_line_wider_than_the_box_is_cut_where_it_is_released() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+        slots
+            .writer_for(SlotId::new("ref:1"), Label::untrusted_private())
+            .unwrap()
+            .write("the document")
+            .unwrap();
+
+        let said = Labelled::new(
+            format!("{}\nshort\n{}", "a".repeat(100), "é".repeat(10)),
+            Label::untrusted_private(),
+        );
+        policy.came_with_a_remark(&SlotId::new("ref:1"), &said, &mut slots);
+
+        let (preview, lines, _) = policy
+            .remark_for_review(&SlotId::new("ref:1"), &slots, 4, 10)
+            .expect("the claim made about the document");
+        assert_eq!(
+            preview,
+            vec![
+                format!("{}…", "a".repeat(10)),
+                "short".to_string(),
+                "é".repeat(10)
+            ],
+            "a line over the width is cut and marked, one at the width is kept whole"
+        );
+        assert_eq!(lines, 3);
+    }
+
     /// Nothing said about a document is nothing to draw beside it, rather than whatever was said
     /// last. A write of the planner's own words is the ordinary case and has no claim behind it.
     #[test]
