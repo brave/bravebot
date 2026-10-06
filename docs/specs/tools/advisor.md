@@ -19,7 +19,7 @@ the advisor's reply as text. Which model answers is a choice the session makes, 
 <a id="ADVISOR-1"></a>
 ### ADVISOR-1: the tool exists only where the session named a model to consult
 
-A session that names no advisor, by flag or by setting, is offered no `advisor` tool, and a call to it is answered as any
+A session that names no advisor, by flag, by setting or by `/advisor`, is offered no `advisor` tool, and a call to it is answered as any
 other unknown name is. A delegate is never offered it and is refused it if it calls it anyway.
 
 **Why.** The tool spends a request on a model chosen for being stronger than the planner. A
@@ -125,3 +125,33 @@ for this run and a run that silently lacked it would not say so.
 `verified-by: bravebot_config::settings::the_home_and_the_named_file_may_name_an_advisor`
 `verified-by: bravebot_config::lib::the_advisor_setting_resolves_a_tier_word_and_is_absent_when_unset`
 `verified-by: bravebot_ui_bridge::settings::a_project_files_advisor_is_reported_as_ignored`
+
+<a id="ADVISOR-9"></a>
+### ADVISOR-9: `/advisor` names the advisor for the rest of an interactive session
+
+`/advisor <model>` makes the model the session's advisor from the next turn, in the words
+`--advisor` takes, tier words included, and outranks the `advisorModel` setting as `--advisor`
+does. `/advisor off` drops the session's own choice and says so, naming the setting's model where
+the setting still names one. The bare word says which advisor is in force. The choice is held for
+the session and written nowhere: the setting is the saved route, and a session that is resumed
+starts from it.
+
+A model the machine-level settings refuse, or that nothing configured serves, or that needs a
+sign-in first, is not taken. The line says why and the advisor in force is left as it was.
+
+**Why.** The flag and the setting are fixed before a session starts, and the person at a long
+session is the one who learns that a task wants a second opinion. Refusing up front, unlike the
+setting ([ADVISOR-8](#ADVISOR-8)), is right here for the reason it is right for the flag: the
+person typed the name for this session, and a tool that failed on every call would not say so.
+`/advisor off` does not switch off an advisor the setting names, because the session's choice is
+the only thing a turn can be told, and the answer says as much rather than reporting the advisor
+gone.
+
+`verified-by: bravebot_tui::app::the_advisor_command_takes_a_model_or_nothing`
+`verified-by: bravebot_tui::app::a_model_named_to_the_advisor_command_reaches_the_next_turn`
+`verified-by: bravebot_tui::app::a_session_naming_no_advisor_leaves_the_task_without_one`
+`verified-by: bravebot_tui::app::an_advisor_this_machine_may_not_request_is_refused`
+`verified-by: bravebot_tui::app::an_advisor_nothing_is_configured_to_answer_is_refused_and_the_held_one_stays`
+`verified-by: bravebot_tui::app::an_advisor_needing_a_sign_in_is_refused_and_the_held_one_stays`
+`verified-by: bravebot_tui::app::dropping_the_advisor_says_whether_the_setting_still_names_one`
+`verified-by: bravebot_tui::app::the_bare_advisor_command_says_which_advisor_is_in_force`

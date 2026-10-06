@@ -88,6 +88,12 @@ const THEME_COMMAND: &str = "/theme";
 /// The line that opens the effort picker, or takes a level named after the word.
 const EFFORT_COMMAND: &str = "/effort";
 
+/// The line that names the model the planner may consult, says which it may, or drops the choice.
+const ADVISOR_COMMAND: &str = "/advisor";
+
+/// The word after `/advisor` that drops the session's own choice.
+const ADVISOR_OFF: &str = "off";
+
 /// The line that opens the panel of preferences about the interface itself.
 const CONFIG_COMMAND: &str = "/config";
 
@@ -241,7 +247,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 30] {
+pub fn commands() -> [Command; 31] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -295,6 +301,12 @@ pub fn commands() -> [Command; 30] {
             name: RENAME_COMMAND,
             argument: "<name>",
             description: t!(command_rename),
+            mid_turn: MidTurn::Changes,
+        },
+        Command {
+            name: ADVISOR_COMMAND,
+            argument: "[model | off]",
+            description: t!(command_advisor),
             mid_turn: MidTurn::Changes,
         },
         Command {
@@ -560,6 +572,9 @@ pub enum Action {
     ChooseEffort,
     /// Take a level by name without opening the picker.
     SetEffort(String),
+    /// Say which model the planner may consult, take one by name, or drop the choice. Empty says.
+    /// Needs the configuration to resolve the name against, which the loop owns.
+    Advisor(String),
     /// Ask how the box should edit. Needs the terminal, so the loop runs it.
     ChooseEditing,
     /// Open another directory. Needs the workspace and the trust map, which the loop owns.
@@ -965,6 +980,9 @@ fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut 
         }
         Action::SetEffort(level) => {
             session.answer_while_working(|session| set_effort(session, &level));
+        }
+        Action::Advisor(word) => {
+            session.answer_while_working(|session| set_advisor(session, beside.config, &word));
         }
         Action::CopyReply(text) => session.answer_while_working(|session| {
             copy_reply(session, &text, crate::clipboard::copy);
@@ -1739,6 +1757,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         } else {
             Action::SetEffort(level.to_string())
         };
+    }
+    if let Some(word) = argument_to(line, ADVISOR_COMMAND) {
+        return Action::Advisor(word.to_string());
     }
     if line.trim() == CONFIG_COMMAND {
         return Action::ChooseEditing;
@@ -3763,6 +3784,10 @@ fn event_loop(
                 set_effort(&mut session, &level);
                 needs_draw = true;
             }
+            Action::Advisor(word) => {
+                set_advisor(&mut session, config, &word);
+                needs_draw = true;
+            }
             Action::ChooseEditing => {
                 choose_editing(terminal, &mut session);
                 needs_draw = true;
@@ -5177,6 +5202,57 @@ fn set_effort(session: &mut Session, word: &str) {
             say_if_unread(session);
         }
         None => session.note(t!(session_no_such_effort, effort = word)),
+    }
+}
+
+/// Name the model the planner may consult, say which it may, or drop the choice.
+///
+/// The name is held to what `--advisor` holds it to: resolved as every route to a model resolves,
+/// then refused where the machine-level layer refuses it or nothing is configured to answer it
+/// (ADVISOR-9). A name that changes nothing says why, since the next turn would otherwise offer a
+/// tool whose every call fails.
+fn set_advisor(session: &mut Session, config: &Config, word: &str) {
+    let word = word.trim();
+    if word.is_empty() {
+        let note = match session
+            .advisor()
+            .map(str::to_string)
+            .or_else(|| config.advisor())
+        {
+            Some(model) => t!(session_advisor_in_force, model = model),
+            None => t!(session_advisor_none).to_string(),
+        };
+        session.note(note);
+        return;
+    }
+    if word == ADVISOR_OFF {
+        session.choose_advisor(None);
+        session.note(match config.advisor() {
+            Some(model) => t!(session_advisor_dropped_setting_remains, model = model),
+            None => t!(session_advisor_dropped).to_string(),
+        });
+        return;
+    }
+    let model = config.model_named(word);
+    match bravebot_agent::backend::serving(config, &Egress::new(), &model) {
+        bravebot_agent::backend::Serving::Refused { file, why } => {
+            session.note(t!(
+                managed_model_refused,
+                model = model,
+                reason = bravebot_agent::backend::refusal_reason(&file, why)
+            ));
+        }
+        bravebot_agent::backend::Serving::NothingConfigured { .. } => {
+            session.note(t!(session_advisor_nothing_serves, model = model));
+        }
+        bravebot_agent::backend::Serving::Configured => {
+            if bravebot_agent::backend::Backend::needs_sign_in(config, &model) {
+                session.note(t!(session_advisor_needs_sign_in, model = model));
+            } else {
+                session.note(t!(session_advisor_set, model = model.as_str()));
+                session.choose_advisor(Some(model));
+            }
+        }
     }
 }
 
@@ -7237,6 +7313,7 @@ fn run_turn_animated(
         task = task.with_file(file);
     }
     task = with_submitted_attachments(task, session);
+    task = with_session_advisor(task, session);
     // The worker shares file decisions so errors cannot return the pre-write map.
     let file_authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
     let task = task.with_file_authority(file_authority.clone());
@@ -7738,6 +7815,13 @@ fn finish_turn(
         exposed,
         events,
     }
+}
+
+/// The model `/advisor` named, carried on the turn so the planner is offered it (ADVISOR-9).
+///
+/// `None` where the session named none, which leaves the turn to the `advisorModel` setting.
+fn with_session_advisor(task: Task, session: &Session) -> Task {
+    task.with_advisor(session.advisor().map(str::to_string))
 }
 
 /// Carry the attachments owned by the submitted line into its turn request.
@@ -13951,6 +14035,237 @@ mod tests {
         );
     }
 
+    /// The words `/advisor` takes, as the key handler reads them. A bare word and a named model
+    /// are the same command; `off` is a word of its own only to the handler that acts on it.
+    #[test]
+    fn the_advisor_command_takes_a_model_or_nothing() {
+        for (line, word) in [
+            ("/advisor", ""),
+            ("/advisor some-model", "some-model"),
+            ("/advisor off", "off"),
+        ] {
+            let mut session = Session::new("none");
+            assert_eq!(
+                dispatch_command(&mut session, commanded(line)),
+                Action::Advisor(word.to_string()),
+                "{line}"
+            );
+        }
+    }
+
+    /// `/advisors` is not `/advisor`: the whole word must match.
+    #[test]
+    fn a_longer_word_starting_with_advisor_is_a_prompt() {
+        let mut session = Session::new("none");
+        for c in "/advisors are useful".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("/advisors are useful".to_string())
+        );
+    }
+
+    /// Only the command word. "ask the /advisor about it" is a thing to say to the planner.
+    #[test]
+    fn a_prompt_containing_the_advisor_command_is_still_a_prompt() {
+        let mut session = Session::new("none");
+        for c in "ask the /advisor about it".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("ask the /advisor about it".to_string()),
+            "the line was not sent"
+        );
+    }
+
+    /// ADVISOR-9: a model the session names is the one the next turn offers the planner, resolved
+    /// as `--advisor` resolves it, and it reaches the turn's task.
+    #[test]
+    fn a_model_named_to_the_advisor_command_reaches_the_next_turn() {
+        let config = a_config_needing_no_sign_in();
+        let mut session = Session::new("none");
+
+        set_advisor(&mut session, &config, "opus");
+
+        assert_eq!(session.advisor(), Some(config.model_named("opus").as_str()));
+        assert!(
+            session
+                .transcript
+                .iter()
+                .any(|entry| entry.text.contains(&config.model_named("opus"))),
+            "nothing named the model"
+        );
+        assert_eq!(
+            with_session_advisor(Task::new("p"), &session).advisor,
+            Some(config.model_named("opus")),
+            "the task did not carry the advisor"
+        );
+    }
+
+    /// A session that named no advisor leaves the turn to the setting rather than overriding it
+    /// with nothing.
+    #[test]
+    fn a_session_naming_no_advisor_leaves_the_task_without_one() {
+        let session = Session::new("none");
+        assert_eq!(with_session_advisor(Task::new("p"), &session).advisor, None);
+    }
+
+    /// BACKEND-48 as `/advisor` meets it: a model this machine may not request is not taken, and
+    /// the refusal names the model and the file that refused it. Taking it would offer the planner
+    /// a tool whose every call fails.
+    #[test]
+    fn an_advisor_this_machine_may_not_request_is_refused() {
+        let scratch = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join("tui-models-advisor");
+        std::fs::create_dir_all(&scratch).expect("a scratch directory");
+        let path = scratch.join("managed.json");
+        std::fs::write(&path, r#"{"models": {"deny": ["an-expensive-model"]}}"#)
+            .expect("a managed file");
+        let mut config = a_config_needing_no_sign_in();
+        config.models = bravebot_config::Managed::at(&path).models().clone();
+        let mut session = Session::new("none");
+
+        set_advisor(&mut session, &config, "an-expensive-model");
+
+        assert_eq!(session.advisor(), None, "a refused model was taken");
+        let said = session
+            .transcript
+            .last()
+            .map(|entry| entry.text.clone())
+            .unwrap_or_default();
+        assert!(
+            said.contains("an-expensive-model") && said.contains(&path.display().to_string()),
+            "the refusal named neither the model nor the file: {said}"
+        );
+    }
+
+    /// A model nothing is configured to answer is not taken: the line names it, and the advisor
+    /// the session already held stays. Taking it would offer the planner a tool whose every call
+    /// fails, and dropping the held one would lose a working choice for a typo.
+    #[test]
+    fn an_advisor_nothing_is_configured_to_answer_is_refused_and_the_held_one_stays() {
+        let config = Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("https://ai-chat.bsg.brave.com".into()),
+            _ => None,
+        })
+        .expect("config");
+        assert!(
+            matches!(
+                bravebot_agent::backend::serving(
+                    &config,
+                    &Egress::new(),
+                    &config.model_named("an-unserved-model")
+                ),
+                bravebot_agent::backend::Serving::NothingConfigured { .. }
+            ),
+            "the fixture does not describe a model nothing answers"
+        );
+        let mut session = Session::new("none");
+        session.choose_advisor(Some("the-advisor-already-held".to_string()));
+
+        set_advisor(&mut session, &config, "an-unserved-model");
+
+        assert_eq!(
+            session.advisor(),
+            Some("the-advisor-already-held"),
+            "a model nothing answers replaced the advisor in force"
+        );
+        let said = session.transcript.last().expect("a note").text.clone();
+        assert!(
+            said.contains("an-unserved-model") && said.contains("nothing is configured"),
+            "the line did not say which model nothing answers: {said}"
+        );
+    }
+
+    /// A model whose account needs a sign-in first is not taken either, and the line says so rather
+    /// than reporting a service that is not there. The advisor the session already held stays.
+    #[test]
+    fn an_advisor_needing_a_sign_in_is_refused_and_the_held_one_stays() {
+        let config = Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("http://unused.invalid".into()),
+            bravebot_config::env_var::USE_BEDROCK => Some("1".into()),
+            bravebot_config::env_var::AWS_REGION => Some("us-west-2".into()),
+            bravebot_config::env_var::BEDROCK_HAIKU_MODEL => Some("haiku-arn".into()),
+            // A profile no machine has, so no session exists whoever runs this.
+            bravebot_config::env_var::AWS_PROFILE => Some("a-profile-no-machine-has".into()),
+            _ => None,
+        })
+        .expect("config");
+        assert!(
+            bravebot_agent::backend::Backend::needs_sign_in(&config, &config.model_named("haiku")),
+            "the fixture does not describe a model needing a sign-in"
+        );
+        let mut session = Session::new("none");
+        session.choose_advisor(Some("the-advisor-already-held".to_string()));
+
+        set_advisor(&mut session, &config, "haiku");
+
+        assert_eq!(
+            session.advisor(),
+            Some("the-advisor-already-held"),
+            "a model needing a sign-in replaced the advisor in force"
+        );
+        let said = session.transcript.last().expect("a note").text.clone();
+        assert!(
+            said.contains(&config.model_named("haiku")) && said.contains("sign-in"),
+            "the line did not say which model needs a sign-in: {said}"
+        );
+    }
+
+    /// `off` drops the session's own choice, and says the setting still applies where one does:
+    /// reporting the advisor as gone while the setting keeps offering it would be a false report.
+    #[test]
+    fn dropping_the_advisor_says_whether_the_setting_still_names_one() {
+        let mut config = a_config_needing_no_sign_in();
+        let mut session = Session::new("none");
+        set_advisor(&mut session, &config, "opus");
+
+        set_advisor(&mut session, &config, "off");
+        assert_eq!(session.advisor(), None, "the choice was kept");
+        let said = session.transcript.last().expect("a note").text.clone();
+        assert!(!said.contains("advisorModel"), "{said}");
+
+        config.advisor_model = Some("sonnet".to_string());
+        set_advisor(&mut session, &config, "opus");
+        set_advisor(&mut session, &config, "off");
+        let said = session.transcript.last().expect("a note").text.clone();
+        assert!(
+            said.contains("advisorModel") && said.contains(&config.model_named("sonnet")),
+            "the setting still in force went unmentioned: {said}"
+        );
+    }
+
+    /// The bare word says which advisor is in force, the session's own before the setting's.
+    #[test]
+    fn the_bare_advisor_command_says_which_advisor_is_in_force() {
+        let mut config = a_config_needing_no_sign_in();
+        let mut session = Session::new("none");
+
+        set_advisor(&mut session, &config, "");
+        let none = session.transcript.last().expect("a note").text.clone();
+
+        config.advisor_model = Some("sonnet".to_string());
+        set_advisor(&mut session, &config, "");
+        let setting = session.transcript.last().expect("a note").text.clone();
+        assert!(setting.contains(&config.model_named("sonnet")), "{setting}");
+        assert_ne!(none, setting);
+
+        set_advisor(&mut session, &config, "opus");
+        set_advisor(&mut session, &config, "");
+        let own = session.transcript.last().expect("a note").text.clone();
+        assert!(own.contains(&config.model_named("opus")), "{own}");
+        assert!(!own.contains(&config.model_named("sonnet")), "{own}");
+    }
+
     /// The choice survives the model that cannot use it: somebody may be about to change model,
     /// and discarding it would make the two commands depend on the order they were typed in.
     #[test]
@@ -17756,6 +18071,7 @@ mod tests {
         assert_eq!(
             skipping,
             vec![
+                ADVISOR_COMMAND,
                 CAFFEINATE_COMMAND,
                 COPY_COMMAND,
                 COST_COMMAND,
@@ -18614,6 +18930,7 @@ mod tests {
             (CLEAR_COMMAND, "/rename deploy watch"),
             ("/cd crates/tui", FORGET_TRUST_COMMAND),
             ("second", "/effort high"),
+            ("second", "/advisor some-model"),
             (MODEL_COMMAND, "/theme no-such-theme"),
         ] {
             let mut session = a_turn_running_on("first");
