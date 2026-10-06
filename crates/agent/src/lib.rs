@@ -6,12 +6,14 @@
 
 #![deny(unsafe_code)]
 
+pub mod advisor;
 pub mod agents;
 pub mod aside;
 pub mod attached;
 pub mod backend;
 pub mod cmdline;
 pub mod compact;
+pub mod confine;
 pub mod confirm;
 pub mod conversation;
 pub mod delegate;

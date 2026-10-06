@@ -45,6 +45,7 @@ LEDGER = "docs/peer-features-reviewed"
 REPO = pa.REPO
 MAX_UNITS = 6
 MAX_GAPS = 5
+MAX_PEER_GAPS = 8
 STALE_DAYS = 90
 MAX_SOURCES = 5
 MAX_QUOTE = 300
@@ -56,6 +57,12 @@ VERIFY_VERDICTS = ("confirmed", "covered", "declined", "unsupported", "tracked")
 AREAS = pa.AREAS + ("infrastructure",)
 GAP_LABELS = ("parity", "beyond-parity")
 ISSUE_SUMMARY = 300
+MAX_SPEC_HOME = 200
+
+PEERS = HERE / "peers.tsv"
+PEER_KINDS = ("terminal", "ide", "cloud")
+PEER_FIELDS = ("slug", "name", "kind", "docs", "changelog", "repo")
+OWNER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+")
 
 UNIT_KEY = re.compile(r"(?:spec:[A-Z][A-Z0-9_]*|peer:[a-z0-9]+(?:-[a-z0-9]+)*)")
 GAP_KEY = re.compile(r"(?:parity|beyond)-[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -152,13 +159,47 @@ def slug(name):
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 
 
-def peer_tools():
-    """Every tool the advisory skill watches, by slug, with its repository where it has one."""
+def read_peers(path):
+    """The rows of peers.tsv, each a dict, refusing a malformed one with its line number."""
+    rows, seen = [], set()
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip() or line.startswith("#"):
+            continue
+        where = f"{path.name}:{number}"
+        fields = line.split("\t")
+        if len(fields) != len(PEER_FIELDS):
+            raise Problem(f"{where}: {len(fields)} fields, not {len(PEER_FIELDS)} ({', '.join(PEER_FIELDS)})")
+        row = dict(zip(PEER_FIELDS, fields))
+        if not UNIT_KEY.fullmatch(f"peer:{row['slug']}"):
+            raise Problem(f"{where}: slug {row['slug']!r} is not lowercase words joined by hyphens")
+        if row["slug"] in seen:
+            raise Problem(f"{where}: slug {row['slug']!r} is listed twice")
+        seen.add(row["slug"])
+        if not row["name"].strip() or row["name"] != row["name"].strip():
+            raise Problem(f"{where}: the name is empty or has spaces around it")
+        if row["kind"] not in PEER_KINDS:
+            raise Problem(f"{where}: kind {row['kind']!r} is not among {', '.join(PEER_KINDS)}")
+        if not URL.fullmatch(row["docs"]):
+            raise Problem(f"{where}: docs {row['docs']!r} is not an https url")
+        if row["changelog"] != "-" and not URL.fullmatch(row["changelog"]):
+            raise Problem(f"{where}: changelog {row['changelog']!r} is neither an https url nor -")
+        if row["repo"] != "-" and not OWNER_NAME.fullmatch(row["repo"]):
+            raise Problem(f"{where}: repo {row['repo']!r} is neither owner/name nor -")
+        rows.append({k: (None if v == "-" else v) for k, v in row.items()})
+    return rows
+
+
+def peer_tools(path=PEERS):
+    """Every tool to compare, by slug: the ones the advisory skill watches, then the ones in peers.tsv.
+    A row's repository replaces the advisory skill's for the same tool."""
     tools = {}
     for repo, name in pa.REPOSITORIES:
         tools[slug(name)] = {"name": name, "repo": repo}
     for _, _, name in pa.PACKAGES:
         tools.setdefault(slug(name), {"name": name, "repo": None})
+    for row in read_peers(path):
+        known = tools.get(row["slug"], {})
+        tools[row["slug"]] = {**row, "repo": row["repo"] or known.get("repo")}
     return tools
 
 
@@ -180,7 +221,8 @@ def all_units(root):
             }
         )
     for name, tool in peer_tools().items():
-        found.append({"unit": f"peer:{name}", "kind": "peer", "name": tool["name"], "repo": tool["repo"]})
+        found.append({"unit": f"peer:{name}", "kind": "peer", "name": tool["name"], "repo": tool["repo"],
+                      "tool_kind": tool.get("kind"), "docs": tool.get("docs"), "changelog": tool.get("changelog")})
     return found
 
 
@@ -219,8 +261,14 @@ def select(units, ledger, named, limit, today=None):
 
 def peers_block(tools):
     return "\n".join(
-        f"- {t['name']}" + (f": https://github.com/{t['repo']}" if t["repo"] else "") for t in tools.values()
+        f"- {t['name']}" + (f": https://github.com/{t['repo']}" if t["repo"] else f": {t['docs']}" if t.get("docs") else "")
+        for t in tools.values()
     )
+
+
+def gap_cap(unit):
+    """A tool review can show far more missing capabilities than one spec can."""
+    return MAX_PEER_GAPS if unit.startswith("peer:") else MAX_GAPS
 
 
 def known_gaps(ledger, path):
@@ -264,7 +312,7 @@ def pending(args):
             "tracker": str(tracker_file),
             "known_gaps": str(known_file),
             "results_file": str(result),
-            "max_gaps": str(MAX_GAPS),
+            "max_gaps": str(gap_cap(unit["unit"])),
             "max_sources": str(MAX_SOURCES),
             "max_quote": str(MAX_QUOTE),
             "peers": peers_block(peer_tools()),
@@ -280,7 +328,10 @@ def pending(args):
         else:
             values.update(
                 peer_name=unit["name"],
-                peer_source=f"https://github.com/{unit['repo']}" if unit["repo"] else "none known; find its official site",
+                peer_kind=unit["tool_kind"] or "unknown",
+                peer_docs=unit["docs"] or "none known; find its official site",
+                peer_changelog=unit["changelog"] or "none published; read the repository's releases and tags",
+                peer_repo=f"https://github.com/{unit['repo']}" if unit["repo"] else "none known",
             )
             template = "research-peer.md"
         values["gap_rules"] = pa.render(rules, values)
@@ -338,6 +389,8 @@ def check_gap(gap):
     area = str(gap.get("area") or "").strip().removeprefix("area/")
     if area and area not in AREAS:
         return f"area {area!r} is not among {', '.join(AREAS)}"
+    if len(str(gap.get("spec_home") or "")) > MAX_SPEC_HOME:
+        return f"spec_home is longer than {MAX_SPEC_HOME} characters"
     if gap.get("existing_issue") is not None and pa.issue_number(gap["existing_issue"]) is None:
         return "existing_issue is not an issue number"
     return None
@@ -352,15 +405,15 @@ def load_research(path, unit):
     gaps = data.get("gaps")
     if not isinstance(gaps, list):
         return None, "gaps is not a list"
-    seen = set()
-    for number, gap in enumerate(gaps[:MAX_GAPS], 1):
+    seen, cap = set(), gap_cap(unit)
+    for number, gap in enumerate(gaps[:cap], 1):
         problem = check_gap(gap)
         if problem is None and gap["id"] in seen:
             problem = f"id {gap['id']} is used twice"
         if problem:
             return None, f"gap {number}: {problem}"
         seen.add(gap["id"])
-    return gaps[:MAX_GAPS], None
+    return gaps[:cap], None
 
 
 def load_verify(path, unit):
@@ -690,6 +743,8 @@ def body_for(gap, unit, manifest, also=None):
     today = "## What bravebot does today\n\n" + pa.clean(gap["bravebot_today"], root)
     today += "\n\nRead: " + ", ".join(f"`{pa.undash(e.strip()).replace('`', '')}`" for e in gap["evidence"])
     sections = [pa.clean(gap["summary"], root), does, today, "## Proposal\n\n" + pa.clean(gap["proposal"], root)]
+    if str(gap.get("spec_home") or "").strip():
+        sections.append("## Where it lands\n\n" + pa.clean(gap["spec_home"], root))
     if gap["kind"] == "beyond":
         sections.append("## Where it goes past parity\n\n" + pa.clean(gap["delta"], root))
     if str(gap.get("constraints") or "").strip():

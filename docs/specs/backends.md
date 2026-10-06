@@ -144,6 +144,12 @@ request fails unsigned.
 `verified-by: bravebot_tui::app::only_the_gateway_models_the_file_named_are_offered`
 `verified-by: bravebot_config::provider::a_provider_may_offer_no_models`
 `verified-by: bravebot_config::provider::a_provider_without_a_base_url_is_not_offered`
+`verified-by: bravebot_tui::app::the_brave_roster_is_offered_only_where_this_build_can_sign_for_it`
+`verified-by: bravebot_tui::app::a_gateway_whose_credential_nothing_holds_is_not_asked_for_its_models`
+`verified-by: bravebot_tui::app::an_aws_provider_entrys_models_are_offered_under_names_bedrock_answers_to`
+`verified-by: bravebot_ui_bridge::models::the_window_asks_for_no_brave_roster_this_build_cannot_sign_for`
+`verified-by: bravebot_ui_bridge::models::the_window_asks_no_gateway_whose_credential_nothing_holds`
+`verified-by: bravebot_ui_bridge::models::the_window_offers_an_aws_provider_entry_under_its_bare_id`
 
 <a id="BACKEND-6"></a>
 ### BACKEND-6: a row says which service will answer it
@@ -255,6 +261,8 @@ rather than a way to get stuck.
 `verified-by: bravebot_bedrock::credentials::an_expiry_that_is_not_the_expected_shape_is_not_guessed_at`
 `verified-by: bravebot_bedrock::credentials::a_session_shown_to_be_bad_is_no_longer_remembered_as_good`
 `verified-by: bravebot_bedrock::credentials::forgetting_one_profile_leaves_the_others_alone`
+`verified-by: bravebot_bedrock::credentials::a_refused_export_drops_the_kept_answer_before_the_sign_in`
+`verified-by: bravebot_bedrock::credentials::a_good_export_and_another_profiles_refusal_leave_a_kept_answer_alone`
 
 <a id="BACKEND-11"></a>
 ### BACKEND-11: a settings file names the model above the build, and a pick above a checkout's
@@ -296,6 +304,7 @@ and the pick is the later of the two.
 `verified-by: bravebot_config::settings::a_layer_above_the_home_one_does_not_pick_a_model`
 `verified-by: bravebot_config::settings::the_home_layer_does_not_outrank_a_saved_pick`
 `verified-by: bravebot_config::settings::a_layer_above_that_names_nothing_does_not_outrank_a_saved_pick`
+`verified-by: bravebot_config::settings::a_named_file_spelling_the_model_blank_displaces_the_home_key_and_names_nothing`
 `verified-by: bravebot_cli::running::doctor_says_a_checkouts_provider_block_is_not_obeyed`
 `verified-by: bravebot_session::store::a_checkouts_model_cannot_displace_the_saved_pick_and_the_home_file_does_not`
 `verified-by: bravebot_tui::persist::a_recorded_model_answers_over_a_checkouts_file_and_the_persons_own`
@@ -589,6 +598,7 @@ the same conservative default a stated roster gets.
 `verified-by: bravebot_aichat::models::fetched_gateway_models_are_not_marked_premium`
 `verified-by: bravebot_aichat::client::a_gateway_with_a_credential_is_asked_what_that_account_may_reach`
 `verified-by: bravebot_aichat::client::a_gateway_needing_no_credential_is_asked_for_its_roster_unauthenticated`
+`verified-by: bravebot_aichat::client::a_gateway_that_cannot_answer_the_account_question_is_asked_for_its_whole_roster`
 `verified-by: bravebot_tui::app::a_fetched_roster_leads_with_the_model_in_force`
 `verified-by: bravebot_tui::app::a_fetched_roster_nobody_has_chosen_from_is_still_sorted`
 
@@ -802,7 +812,7 @@ every file that was found. The flag that names one, and the path it refuses, are
 |---|---|
 | `env`, `attribution`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
-| `provider`, `model` | home layer, and the file `--settings` names; a project or local layer naming either is ignored, and the file is reported as one whose naming was dropped |
+| `provider`, `model`, `advisorModel` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
 | anything else | the closest layer that set it wins |
 
 A layer that spells `permissions` or `run` as something other than an object, or `run.scrubEnv` or
@@ -821,10 +831,10 @@ is restating an entire configuration to change a host. Going deeper than a name 
 request's destination the product of two files with no single place to read that says where it goes,
 which is why a gateway entry is replaced whole and a project file naming one must name its host too.
 
-`provider` and `model` are the exception on the other side: which host every request goes to and
+`provider`, `model` and `advisorModel` are the exception on the other side: which host every request goes to and
 which credential signs it is exactly what a file nobody opened must not decide, and the credential
 value comes from the person's own environment under names the layer would choose. A project or
-local layer naming either is dropped whole and reported, so the destination of every request stays
+local layer naming one is dropped whole and reported, so the destination of every request stays
 something the person's own files or command line named. The file `--settings` names is the person's
 own act and is read.
 
@@ -888,6 +898,8 @@ with it.
 `verified-by: bravebot_config::settings::a_layer_answering_for_one_attribution_name_leaves_the_other`
 `verified-by: bravebot_config::settings::a_layer_capping_one_side_of_a_search_leaves_the_other`
 `verified-by: bravebot_config::settings::a_layer_naming_no_model_leaves_the_one_below_it`
+`verified-by: bravebot_cli::running::doctor_says_a_checkouts_advisor_model_is_not_obeyed`
+`verified-by: bravebot_config::settings::a_project_or_local_layer_cannot_name_an_advisor`
 `verified-by: bravebot_config::settings::an_unparseable_project_layer_leaves_the_global_one_in_force`
 `verified-by: bravebot_config::settings::an_oversized_project_layer_leaves_the_global_one_in_force`
 `verified-by: bravebot_config::settings::a_directory_with_no_project_layer_reads_the_global_one_alone`
@@ -1071,6 +1083,8 @@ reads, which is why this is worth stating rather than left to fall out of the id
 `verified-by: bravebot_config::lib::a_name_qualified_by_the_aws_id_is_not_a_gateway_either`
 `verified-by: bravebot_agent::backend::a_model_an_aws_block_named_selects_the_bedrock_backend`
 `verified-by: bravebot_tui::app::a_bedrock_model_a_block_named_is_shown_under_that_name`
+`verified-by: bravebot_tui::app::an_aws_provider_entrys_models_are_offered_under_names_bedrock_answers_to`
+`verified-by: bravebot_ui_bridge::models::the_window_offers_an_aws_provider_entry_under_its_bare_id`
 
 <a id="BACKEND-30"></a>
 ### BACKEND-30: what a commit or a pull request carries is a settings key, and empty says none
@@ -2133,6 +2147,8 @@ exactly what is offered, as for any other gateway.
 `verified-by: bravebot_config::provider::a_google_vertex_entry_in_a_region_is_reached_at_that_regions_host`
 `verified-by: bravebot_config::provider::a_google_vertex_entry_without_a_project_configures_nothing`
 `verified-by: bravebot_config::provider::a_project_or_location_that_would_move_the_request_configures_nothing`
+`verified-by: bravebot_config::provider::the_compiled_vertex_list_is_the_four_answered_ids_and_no_preview`
+`verified-by: bravebot_config::provider::a_project_and_location_holding_only_allowed_characters_are_accepted`
 `verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_google_vertex_host`
 `verified-by: bravebot_aichat::client::a_google_vertex_entry_offers_the_compiled_models_without_asking`
 `verified-by: bravebot_tui::app::the_picker_offers_the_compiled_models_for_a_google_vertex_service_naming_none`

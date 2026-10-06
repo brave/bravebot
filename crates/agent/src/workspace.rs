@@ -1941,6 +1941,35 @@ impl Workspace {
         offset: usize,
         limit: usize,
     ) -> Result<Labelled<Page>, WorkspaceError> {
+        self.gated_read(policy, path, |relative, label| {
+            Ok(self.labelled_page(relative, label, offset, limit)?.0)
+        })
+    }
+
+    /// A page under the label the gates gave its path, and the page's change token as plain data.
+    ///
+    /// The token is a fact about the file's shape (READ-7), so it may be had without looking inside
+    /// the labelled page.
+    fn labelled_page(
+        &self,
+        relative: &str,
+        label: Label,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(Labelled<Page>, String), WorkspaceError> {
+        let page = self.page(relative, offset, limit)?;
+        let token = page.change_token.clone();
+        Ok((Labelled::new(page, label), token))
+    }
+
+    /// The gates every read of a workspace file goes through, and then `read` with the path they
+    /// admitted and the label the policy gave it.
+    fn gated_read<S: Sink, R>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        path: &Labelled<String>,
+        read: impl FnOnce(&str, Label) -> Result<R, WorkspaceError>,
+    ) -> Result<R, WorkspaceError> {
         policy.capture_files(|policy, _capture| {
             policy.before_capability(Capability::FileRead)?;
             policy.before_action("file_read", "path", Role::Routing, path)?;
@@ -1954,7 +1983,38 @@ impl Workspace {
                 })?;
 
             let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
-            Ok(Labelled::new(self.page(&relative, offset, limit)?, label))
+            read(&relative, label)
+        })
+    }
+
+    /// [`Workspace::read_page`], answering `Unchanged` where the file is the one a window was
+    /// already shown from.
+    ///
+    /// Every gate runs exactly as it does for a read that returns lines, so a repeat is held to the
+    /// same capability, routing and path checks as the first look. Only what comes back differs.
+    /// The comparison is of the change token, which is taken from the file's metadata and so is a
+    /// fact about its shape that the driver may compare (READ-7). The bytes are not opened for it,
+    /// and nothing read decides it.
+    pub fn read_page_unless_unchanged<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        path: &Labelled<String>,
+        offset: usize,
+        limit: usize,
+        shown: Option<&str>,
+    ) -> Result<Reading, WorkspaceError> {
+        self.gated_read(policy, path, |relative, label| {
+            if let Some(shown) = shown {
+                let resolved = self.resolve(relative).map_err(WorkspaceError::for_a_read)?;
+                // A file that cannot be inspected falls through to the read, which says why.
+                if let Ok(metadata) = std::fs::metadata(&resolved)
+                    && change_token(&metadata) == shown
+                {
+                    return Ok(Reading::Unchanged);
+                }
+            }
+            let (page, token) = self.labelled_page(relative, label, offset, limit)?;
+            Ok(Reading::Page { page, token })
         })
     }
 
@@ -1996,8 +2056,8 @@ impl Workspace {
             path: relative.to_string(),
         })?;
 
-        let limit = limit.clamp(1, MAX_PAGE_LINES);
-        let start = offset.saturating_sub(1);
+        let (first, limit) = window_of(offset, limit);
+        let start = first - 1;
         let total = contents.lines().count();
 
         let mut lines = Vec::new();
@@ -2814,6 +2874,30 @@ fn change_token(metadata: &std::fs::Metadata) -> String {
         }
     }
     format!("{:016x}", hasher.finish())
+}
+
+/// What a read that may answer with a notice came back with.
+#[derive(Debug)]
+pub enum Reading {
+    /// The window, labelled by what the file's path is, and the file's change token as plain data.
+    ///
+    /// The token is the one inside the page, taken from metadata before the bytes were read
+    /// (READ-7). It is returned beside the page because a [`Labelled`] cannot be looked inside by
+    /// the caller, and what the caller keeps is a fact about the file's shape and no part of its
+    /// text.
+    Page { page: Labelled<Page>, token: String },
+    /// The file's change token is the one the window was last shown under, so its lines were not
+    /// read for this call.
+    Unchanged,
+}
+
+/// The first line and the line count a read of `offset` and `limit` comes to, as [`Workspace::page`]
+/// applies them.
+///
+/// Two requests that come to the same window are the same window: a limit above the cap and no limit
+/// at all return the same lines, and offset 0 starts where offset 1 does.
+pub(crate) fn window_of(offset: usize, limit: usize) -> (usize, usize) {
+    (offset.max(1), limit.clamp(1, MAX_PAGE_LINES))
 }
 
 /// A bounded window of a file's lines.
@@ -3870,6 +3954,84 @@ impl Workspace {
         Ok(Labelled::new(text, policy.label_in_force(&key)))
     }
 
+    /// Bring back the checkouts a resumed session's record kept (CHECKOUT-16), and say which of
+    /// them it could not.
+    ///
+    /// What the record says is read as a claim and not as an answer: a checkout is taken back only
+    /// where its directory is the one this session would have made for that number, under
+    /// `state`'s `checkouts/` for this working directory, is a directory and not a link, and has
+    /// the `worktrees/<id>` entry in this repository's `.git`. Removing a checkout deletes that
+    /// directory and that entry, so a record that named any other path would otherwise point the
+    /// deletion at it. The commit has to be a full object id, since it is shown to the person and
+    /// handed to the planner. The repository removing it is always this one, never one the record
+    /// names.
+    ///
+    /// The numbers it holds are not made again. The rules a checkout needs came back with the
+    /// map. A write to the working directory after the resume reads as one made since the
+    /// checkout (CHECKOUT-14): the writes before it are not known, and saying too much is the safe
+    /// way to be wrong.
+    pub fn restore_session_checkouts(&self, state: &Path, kept: &[SessionCheckout]) -> Vec<String> {
+        let directory = state.canonicalize().ok().map(|state| {
+            state
+                .join("checkouts")
+                .join(crate::home::key_for(&self.root))
+        });
+        let git_dir = self.root.join(".git");
+        let mut unplaced = Vec::new();
+        for one in kept {
+            let number = one
+                .id
+                .strip_prefix('c')
+                .filter(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|digits| digits.parse::<u64>().ok());
+            let whole_id = matches!(one.commit.len(), 40 | 64)
+                && one.commit.bytes().all(|b| b.is_ascii_hexdigit());
+            let placed = match (&directory, number) {
+                (Some(directory), Some(_)) if whole_id => {
+                    one.path == directory.join(&one.id)
+                        && std::fs::symlink_metadata(&one.path)
+                            .is_ok_and(|found| found.file_type().is_dir())
+                        && std::fs::symlink_metadata(git_dir.join("worktrees").join(&one.id))
+                            .is_ok_and(|found| found.file_type().is_dir())
+                }
+                _ => false,
+            };
+            let mut held = self
+                .session_checkouts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if !placed || held.iter().any(|made| made.id == one.id) {
+                if !held.iter().any(|made| made.id == one.id) {
+                    unplaced.push(one.id.clone());
+                }
+                continue;
+            }
+            if let Some(number) = number {
+                self.checkout_numbers
+                    .fetch_max(number + 1, Ordering::SeqCst);
+            }
+            let record = Record {
+                worked_in: AtomicBool::new(one.worked_in),
+                written: Mutex::new(one.candidates.clone()),
+                size: Mutex::new(one.size),
+            };
+            held.push(Made {
+                id: one.id.clone(),
+                path: one.path.clone(),
+                key: self.trust_key(&one.path.to_string_lossy()),
+                commit: one.commit.clone(),
+                delegate: one.delegate,
+                git_dir: git_dir.clone(),
+                record: Arc::new(record),
+                after: 0,
+            });
+            if let Ok(mut listed) = self.checkouts.lock() {
+                listed.push(one.path.clone());
+            }
+        }
+        unplaced
+    }
+
     /// For starting over inside one process: the session beginning here has made no checkout, so
     /// the list empties for every clone. The checkouts themselves stay on disk.
     pub fn forget_session_checkouts(&self) {
@@ -4557,6 +4719,16 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::io;
+
+    /// A read that asks for more than a page and one that names no limit return the same lines, and
+    /// so are the same window: told apart, the second of two reads of one page would be sent again
+    /// for a limit the first did not spell.
+    #[test]
+    fn requests_that_come_to_the_same_lines_are_one_window() {
+        assert_eq!(window_of(1, usize::MAX), window_of(0, MAX_PAGE_LINES + 7));
+        assert_ne!(window_of(1, usize::MAX), window_of(1, 10));
+        assert_ne!(window_of(1, usize::MAX), window_of(2, usize::MAX));
+    }
 
     /// A filesystem that holds the paths it is given, on volume 1, each its own file, and answers
     /// to the other spelling of a name when `folds` says the volume does.

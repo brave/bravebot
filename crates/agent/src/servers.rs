@@ -28,7 +28,7 @@ use bravebot_core::value::Labelled;
 use bravebot_i18n::t;
 use bravebot_mcp::{HttpServer, McpError, McpResult, StdioServer};
 use bravebot_sandbox::base::{Prelude, base};
-use bravebot_sandbox::policy::SandboxPolicy;
+use bravebot_sandbox::policy::{Capabilities, SandboxPolicy};
 use bravebot_sandbox::{Stream, Variables};
 use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, IsTerminal, Write};
@@ -934,6 +934,17 @@ pub enum Answer {
     No,
 }
 
+impl Answer {
+    /// What a typed line answers: 1 and 2 approve, and anything else is a no.
+    pub fn typed(line: &str) -> Self {
+        match line.trim() {
+            "1" => Self::Once,
+            "2" => Self::Project,
+            _ => Self::No,
+        }
+    }
+}
+
 /// SERVERS-4's question about one server.
 pub struct Question<'a> {
     pub alias: &'a str,
@@ -998,6 +1009,21 @@ impl Question<'_> {
         lines.extend(fetching(self.alias, self.declaration));
         lines
     }
+
+    /// The question and its three answers, drawn under [`Question::lines`].
+    pub fn choices(&self) -> Vec<String> {
+        vec![
+            format!("  {}", t!(mcp_question)),
+            format!("  1. {}", t!(servers_answer_once)),
+            format!("  2. {}", t!(servers_answer_project)),
+            format!("  3. {}", t!(servers_answer_no)),
+        ]
+    }
+
+    /// The words written after the choices, where the answer is typed.
+    pub fn answer_prompt() -> String {
+        format!("  {}", t!(servers_answer))
+    }
 }
 
 impl<R: BufRead, W: Write> Asker for Person<R, W> {
@@ -1012,20 +1038,15 @@ impl<R: BufRead, W: Write> Asker for Person<R, W> {
             say(self, line);
         }
         say(self, "");
-        say(self, format!("  {}", t!(mcp_question)));
-        say(self, format!("  1. {}", t!(servers_answer_once)));
-        say(self, format!("  2. {}", t!(servers_answer_project)));
-        say(self, format!("  3. {}", t!(servers_answer_no)));
-        let _ = write!(self.screen, "  {} ", t!(servers_answer));
+        for line in question.choices() {
+            say(self, line);
+        }
+        let _ = write!(self.screen, "{} ", Question::answer_prompt());
         let _ = self.screen.flush();
         let mut typed = String::new();
         match self.answers.read_line(&mut typed) {
             Ok(0) | Err(_) => Answer::No,
-            Ok(_) => match typed.trim() {
-                "1" => Answer::Once,
-                "2" => Answer::Project,
-                _ => Answer::No,
-            },
+            Ok(_) => Answer::typed(&typed),
         }
     }
 
@@ -1413,6 +1434,29 @@ fn start(
     notes: &mut Vec<String>,
     hops: &mut Vec<Hop>,
 ) -> Vec<crate::mcp::Reached> {
+    start_under(None, plans, home, diagnostics, notes, hops)
+}
+
+/// [`start`], resolving each policy against `granting` rather than against what this machine's
+/// backend reports.
+///
+/// The same split [`confinement`] has from [`confinement_here`], and for the same reason: which
+/// paths a backend may name is a fact about the host, and a test that read it off this one could
+/// only check the answer this machine gives. Whether a path missing from disk may be named is
+/// `false` on Linux and `true` on macOS, so the dropping, and the note saying what was dropped,
+/// are reachable on one and unreachable on the other.
+///
+/// The backend still spawns. Only the capabilities the policy is resolved against are the
+/// caller's, so a narrower policy than this machine demanded is installed by the real sandbox,
+/// which every backend can do: a profile naming fewer paths is one any of them accepts.
+fn start_under(
+    granting: Option<Capabilities>,
+    plans: Vec<(String, Plan)>,
+    home: &Home,
+    diagnostics: Stream,
+    notes: &mut Vec<String>,
+    hops: &mut Vec<Hop>,
+) -> Vec<crate::mcp::Reached> {
     if plans.is_empty() {
         return Vec::new();
     }
@@ -1478,7 +1522,9 @@ fn start(
                     notes.push(t!(servers_no_confinement_here, alias = alias).to_string());
                     continue;
                 };
-                let policy = policy.nameable_under(&sandbox.capabilities()).policy;
+                let granted = granting.clone().unwrap_or_else(|| sandbox.capabilities());
+                let (policy, left_out) = nameable(&alias, policy, &granted);
+                notes.extend(left_out);
                 let launched = StdioServer::launch(
                     alias.as_str(),
                     program.to_str().unwrap_or_default(),
@@ -1639,6 +1685,41 @@ fn temporary_directory() -> PathBuf {
     temporary.canonicalize().unwrap_or(temporary)
 }
 
+/// The part of `policy` this backend can be asked for, and the note saying what that left out.
+///
+/// A backend that cannot name a path missing from the disk is asked for the rest of the policy
+/// rather than refusing the server over a toolchain the machine never had (SANDBOX-9), so the
+/// server starts holding fewer paths than were granted it. The note is how that is said: without
+/// it, a person reading a refusal from the server cannot tell a path it was refused from one it
+/// was never granted, and neither can the person who declared it.
+///
+/// Every path it left out, rather than how many. The prelude names spellings a distribution may
+/// lack, so the list is long and usually of no interest, and a count hides the one path somebody
+/// is looking for, which is the whole of what this is for. Each is drawn as a word from a
+/// declaration is drawn, since a `PATH` the declaration names is granted as written and is left
+/// out here where it is not on disk.
+fn nameable(
+    alias: &str,
+    policy: SandboxPolicy,
+    capabilities: &Capabilities,
+) -> (SandboxPolicy, Option<String>) {
+    let resolved = policy.nameable_under(capabilities);
+    let left_out = (!resolved.omitted.is_empty()).then(|| {
+        let paths: Vec<String> = resolved
+            .omitted
+            .iter()
+            .map(|path| shown(&path.display().to_string()))
+            .collect();
+        t!(
+            servers_paths_left_out,
+            alias = alias,
+            paths = paths.join(", ")
+        )
+        .to_string()
+    });
+    (resolved.policy, left_out)
+}
+
 /// [`confinement`] on this machine: its platform's base, and the person's own profile directory as
 /// the home kept out, which is not the state directory inside it.
 fn confinement_here(
@@ -1720,46 +1801,11 @@ fn confinement(
     temporary: &Path,
     home: Option<&Path>,
 ) -> Option<SandboxPolicy> {
-    let mut policy = base(prelude?, temporary, None);
+    let mut policy = base(prelude?, temporary, None, None);
     let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    // Compared with paths whose links are followed, so a home reached through one is followed too.
-    let home = home.map(canonical);
-    let outside_home = |path: &Path| home.as_ref().is_none_or(|home| !home.starts_with(path));
-    let beside_home = |path: &Path| {
-        path.parent().is_some()
-            && outside_home(path)
-            && home.as_ref().is_none_or(|home| !path.starts_with(home))
-    };
-    let below_the_top_of_home = |path: &Path| {
-        home.as_ref().is_some_and(|home| {
-            path.strip_prefix(home)
-                .is_ok_and(|below| below.components().count() > 1)
-        })
-    };
-    let program = canonical(program);
-    if let Some(installation) = program
-        .parent()
-        .filter(|directory| directory.file_name() == Some(OsStr::new("bin")))
-        .and_then(Path::parent)
-        .filter(|installation| below_the_top_of_home(installation))
-    {
-        policy = policy.allow_read(installation);
-    }
     let own = canonical(own);
     policy = policy.allow_read(&own).allow_write(&own);
-    let readable = searched
-        .iter()
-        .map(|directory| canonical(directory))
-        .chain(program.parent().map(Path::to_path_buf));
-    for directory in readable {
-        if directory.parent().is_none() || !outside_home(&directory) {
-            continue;
-        }
-        if directory.file_name() == Some(OsStr::new("bin"))
-            && let Some(parent) = directory.parent().filter(|parent| beside_home(parent))
-        {
-            policy = policy.allow_read(parent);
-        }
+    for directory in crate::confine::program_reads(program, searched, home) {
         policy = policy.allow_read(directory);
     }
     // A recorded read is resolved already, so one that resolves elsewhere now is a file replaced by
@@ -1787,6 +1833,7 @@ mod tests {
     use super::*;
     use crate::mcp::entry;
     use bravebot_config::Rule;
+    use bravebot_sandbox::policy::ConfinementLevel;
 
     /// A state directory of its own under the build directory, emptied first.
     fn scratch(name: &str) -> PathBuf {
@@ -2907,6 +2954,66 @@ mod tests {
         assert_eq!(in_home, [&key], "more of the home directory was granted");
     }
 
+    /// A capability set whose backend grants a path that is not on disk, or one whose backend
+    /// cannot. Written here rather than read off this machine, so both answers are checked on
+    /// every platform that runs the suite.
+    fn a_backend_naming_an_absent_path(grants: bool) -> Capabilities {
+        Capabilities {
+            level: ConfinementLevel::Partial,
+            mechanisms: vec!["test"],
+            network_denial_enforced: false,
+            grants_paths_that_do_not_exist: grants,
+        }
+    }
+
+    /// SANDBOX-9: a server started under fewer paths than were granted it will be refused one
+    /// somebody meant it to reach, and nothing else tells the person reading that refusal apart
+    /// from a path that was never granted. Each path by name, since a count hides the one they are
+    /// looking for.
+    #[test]
+    fn a_server_started_without_paths_its_backend_cannot_name_has_a_note_naming_each_one() {
+        let root = scratch("cli-servers-left-out");
+        let there = root.join("there");
+        std::fs::create_dir_all(&there).expect("there");
+        let absent = root.join("absent");
+        let blurred = root.join("absent directory");
+        let wanted = SandboxPolicy::strict()
+            .allow_read(&there)
+            .allow_read(&absent)
+            .allow_write(&blurred);
+
+        let (policy, note) = nameable("weather", wanted, &a_backend_naming_an_absent_path(false));
+
+        assert_eq!(policy.readable, vec![there]);
+        assert!(policy.writable.is_empty());
+        assert_eq!(
+            note,
+            Some(
+                t!(
+                    servers_paths_left_out,
+                    alias = "weather",
+                    paths = format!("{}, {:?}", absent.display(), blurred.display().to_string())
+                )
+                .to_string()
+            ),
+            "the note did not name both paths as the launch left them"
+        );
+    }
+
+    /// Resolution leaves a path out only where the backend cannot name one, so a backend that can
+    /// leaves none out and there is nothing to say. A note on every launch there is a note nobody
+    /// reads.
+    #[test]
+    fn a_server_whose_backend_names_an_absent_path_is_started_with_no_such_note() {
+        let absent = scratch("cli-servers-nothing-left-out").join("absent");
+        let wanted = SandboxPolicy::strict().allow_read(&absent);
+
+        let (policy, note) = nameable("weather", wanted, &a_backend_naming_an_absent_path(true));
+
+        assert_eq!(policy.readable, vec![absent]);
+        assert_eq!(note, None);
+    }
+
     /// SERVERS-10: a stored value reaches the server as the declaration holds it, and this
     /// process's environment is read only for the names it declares. A stored `PATH` is the one a
     /// bare name is looked for in.
@@ -3081,6 +3188,21 @@ done
         ))
     }
 
+    /// The note a launch of `program` from `work` with `own` as its home leaves about what this
+    /// machine's confinement left out, and nothing where it left out nothing.
+    ///
+    /// Which of the prelude's spellings a distribution lacks is the machine's, so the note is built
+    /// from the policy the launch built rather than written down here. Only the launch's other
+    /// notes are what the tests below are about. Takes the same program and declared reads the
+    /// launch does, since a row that is on disk is not one the resolution leaves out.
+    #[cfg(unix)]
+    fn left_out_of(program: &Path, reads: &[PathBuf], work: &Path, own: &Path) -> Vec<String> {
+        let sandbox = bravebot_sandbox::for_current_platform().expect("a backend");
+        let policy = confinement_here(program, &[], reads, Some(work), own)
+            .expect("a policy to start under");
+        Vec::from_iter(nameable("weather", policy, &sandbox.capabilities()).1)
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_started_server_writes_its_own_files_in_the_home_kept_for_it() {
@@ -3098,9 +3220,12 @@ done
             return;
         };
 
-        assert_eq!(notes, Vec::<String>::new());
-        assert_eq!(started.len(), 1);
         let own = mcp::server_home(&state, &digested(&["weather-mcp"]));
+        assert_eq!(
+            notes,
+            left_out_of(&root.join("bin").join("weather-mcp"), &[], &work, &own)
+        );
+        assert_eq!(started.len(), 1);
         assert_eq!(
             std::fs::read_to_string(work.join("home-was")).expect("where its home was"),
             own.display().to_string()
@@ -3129,11 +3254,14 @@ done
             return;
         };
 
-        assert_eq!(notes, Vec::<String>::new());
-        assert_eq!(started.len(), 1);
         let own = PathBuf::from(
             std::fs::read_to_string(work.join("home-was")).expect("where its home was"),
         );
+        assert_eq!(
+            notes,
+            left_out_of(&root.join("bin").join("weather-mcp"), &[], &work, &own)
+        );
+        assert_eq!(started.len(), 1);
         assert!(own.join("was-here").exists());
         assert!(own.starts_with(temporary_directory()));
         assert_eq!(std::fs::read_dir(&state).expect("state").count(), 0);
@@ -3429,6 +3557,76 @@ done
         assert_eq!(declared_in(&redirected.home), redirected.declared);
     }
 
+    /// SANDBOX-9: a launch under a backend that cannot name a path missing from disk leaves the
+    /// note saying which granted paths it was started without, and the launch is where that note
+    /// has to come from.
+    ///
+    /// The capabilities are the test's rather than this machine's, so the dropping is reached on
+    /// every platform that runs the suite. Read off the host instead, this would check nothing on
+    /// macOS, where a backend names a path that is not there and so leaves nothing out: the note
+    /// would be absent, an expectation built the same way would be absent too, and the two would
+    /// agree with the reporting taken out of [`start`] altogether.
+    #[cfg(unix)]
+    #[test]
+    fn a_launch_under_a_backend_that_cannot_name_an_absent_path_leaves_the_note() {
+        let root = scratch("cli-servers-launch-left-out")
+            .canonicalize()
+            .expect("the scratch directory resolves");
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        }
+        // A declared PATH directory, which `confinement` grants as written: a read of a named file
+        // is dropped where the file is not there, so a row that is absent has to come from here.
+        // Outside the home directory, which is the other thing that decides whether it is granted.
+        let absent = temporary_directory().join("bravebot-absent-path-directory");
+        assert!(!absent.exists(), "{} is on disk", absent.display());
+        let program = installed(&root.join("bin"), "weather-mcp");
+        std::fs::write(&program, HOME_WRITING_SERVER).expect("write the server");
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).expect("work");
+        let state = root.join("state");
+        std::fs::create_dir_all(&state).expect("state");
+        let home = Home {
+            directory: Some(state.clone()),
+            writable: true,
+        };
+        let plan = Plan::Stdio {
+            program,
+            arguments: Vec::new(),
+            variables: Variables::new(),
+            searched: vec![absent.clone()],
+            reads: Vec::new(),
+            directory: Some(work.clone()),
+            declared: digested(&["weather-mcp"]),
+        };
+        let mut notes = Vec::new();
+
+        let started = start_under(
+            Some(a_backend_naming_an_absent_path(false)),
+            vec![("weather".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+
+        assert_eq!(started.len(), 1, "the server did not start: {notes:?}");
+        // One note, naming the row this test made absent. Not the whole list: the base names
+        // spellings a distribution may lack, so on Linux the prelude's own absent rows are in here
+        // too and are no part of what this is about. What the note says in full is
+        // `a_server_started_without_paths_its_backend_cannot_name_has_a_note_naming_each_one`,
+        // which writes the whole policy down and so does not read this machine's.
+        let [said] = notes.as_slice() else {
+            panic!("one note, saying which granted paths the launch left out: {notes:?}");
+        };
+        assert!(
+            said.contains(&absent.display().to_string()),
+            "the launch did not say it was started without {}: {said}",
+            absent.display()
+        );
+    }
+
     /// SERVERS-10: a started server reads the files its declaration says it may, a key file a
     /// stored value names and one an argument names, and nothing beside them. It exits before it
     /// answers where it cannot read either. A read in the state directory, which only a hand edit
@@ -3474,17 +3672,18 @@ done
         let approvals = state.join("mcp-approvals.json");
         std::fs::write(&approvals, "{}").expect("a file in the state directory");
         let home = Home {
-            directory: Some(state),
+            directory: Some(state.clone()),
             writable: true,
         };
+        let reads = vec![key.clone(), argument.clone(), approvals.clone()];
         let plan = Plan::Stdio {
-            program,
+            program: program.clone(),
             arguments: vec![argument.to_str().unwrap().to_string()],
             variables: Variables::new()
                 .with("KEY_FILE", &key)
                 .with("STATE_FILE", &approvals),
             searched: Vec::new(),
-            reads: vec![key.clone(), argument.clone(), approvals.clone()],
+            reads: reads.clone(),
             directory: Some(work.clone()),
             declared: digested(&["weather-mcp"]),
         };
@@ -3498,7 +3697,8 @@ done
             &mut Vec::new(),
         );
 
-        assert_eq!(notes, Vec::<String>::new());
+        let own = mcp::server_home(&state, &digested(&["weather-mcp"]));
+        assert_eq!(notes, left_out_of(&program, &reads, &work, &own));
         assert_eq!(started.len(), 1);
         let read = |name: &str| std::fs::read_to_string(work.join(name)).expect("what it read");
         assert_eq!(read("key-was"), "the key");

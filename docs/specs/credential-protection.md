@@ -525,9 +525,9 @@ Both are about the file the write lands in as the workspace resolves it, never t
 gave. The same name in another checkout, the same name after `/cd`, and a name a link sends
 elsewhere are other files, and are asked about. Both settle the secret and nothing else: a write the
 person would be asked about for its own sake still is, and that question offers neither key. `a`
-ends with the session, so `/cd`, `/clear` and `--resume` start without it, a delegate starts
-without it, and so does a manifest run. A key the prompt did not draw grants nothing, whatever a
-front end sends back. The terminal draws both; the desktop front end and `--plain`
+ends with the session, so `/cd`, `/clear`, `/branch` and `--resume` start without it, a delegate
+starts without it, and so does a manifest run. A key the prompt did not draw grants nothing,
+whatever a front end sends back. The terminal draws both; the desktop front end and `--plain`
 ([CLI-14](cli.md#CLI-14)) offer yes and no.
 
 `verified-by: bravebot_agent::turn::a_credential_created_as_a_whole_file_is_not_created_and_the_planner_is_told_so`
@@ -631,7 +631,8 @@ inside it is kept under its name from there, which from the new one names anothe
 answer is dropped ([TRUST-13](trust-map.md#TRUST-13)).
 
 A live session keeps these answers after a turn fails or is cancelled, including when a later
-context load fails. They are not written into the session record, so reopening asks again.
+context load fails. They are not written into the session record, so reopening asks again, and so
+does a session carrying on in a copy with `/branch` ([SESSION-31](sessions.md#SESSION-31)).
 
 `verified-by: bravebot_agent::turn::retention::ordinary_endings_retain_live_exposure_answers`
 `verified-by: bravebot_tui::undo_tests::ordinary_tui_endings_keep_exact_approvals_advice_and_exposure`

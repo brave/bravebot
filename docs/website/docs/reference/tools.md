@@ -31,13 +31,15 @@ that is merely carried.
 | [`ask_user`](#ask_user) | the questions | none | it *is* the question |
 | [`todo_write`](#todo_write) | none | `todos` | no |
 
-Two more are offered only where they mean something.
+Three more are offered only where they mean something.
 [`schedule_next`](#schedule_next) goes to a turn that will be asked again: one inside a self-paced
 [`/loop`](commands.md#loop-interval-prompt), and one on a line you typed in a session that can send
 it again. Not to a tick of a loop you gave an interval for, not to a delegate, and not where nothing
 will ask again, which is a one-shot run, the desktop application, or a line the agent wrote itself.
 [`watch_file`](#watch_file) goes to a session that keeps watches, so not to a delegate, a one-shot
-run or a planned run.
+run or a planned run. [`advisor`](#advisor) goes to a session that named a model to consult with
+[`--advisor`](cli.md#--advisor-name), the [`advisorModel`](../customize/configuration.md#advisormodel)
+setting or [`/advisor`](commands.md#advisor-model--off), so not to one that did not, and not to a delegate.
 
 Every tool also takes `why`, one line from the planner saying what the call is for. It is content
 on every tool: it is drawn beside the call for you to read, and nothing reads it or decides on it.
@@ -108,6 +110,13 @@ This is how "tell me when this changes" is answered where no watch can be armed:
 and the turn schedules the look that would catch a change. In a session that keeps watches,
 [`watch_file`](#watch_file) is the better answer and this tool says so. For a file the planner may not
 be shown there is no token, and the size in the reference is what there is to compare.
+
+### A repeat read of a file nobody wrote is answered with a notice
+
+Ask for the same window of a file again, with the file as it was, and the result is a short notice
+that repeats the change token instead of the lines, which are already earlier in the conversation. A
+different offset or limit, or a file written since, comes back as lines. After the conversation is
+compacted the lines are sent again, because the round that held them is no longer sent.
 
 ## `list_files`
 
@@ -868,6 +877,29 @@ already holding as many watches as it keeps, each say which of the three it is.
 
 See [Watches](../using/watches.md) for what a watch then is, what a firing puts in the conversation, how
 long one lives and what ends it.
+
+---
+
+## `advisor`
+
+Puts a question to a second model that is shown the conversation. The result is its reply, as text.
+
+| Parameter | |
+|---|---|
+| `question` | what the planner wants the advisor's view on |
+
+The advisor is sent the same request the planner was sent on that round, followed by the question, and
+is offered no tools. It can only advise. The planner does not choose the model: the session does, with
+[`--advisor`](cli.md#--advisor-name), the [`advisorModel`](../customize/configuration.md#advisormodel)
+setting or [`/advisor`](commands.md#advisor-model--off).
+
+The reply is labelled from the planner's context, as the planner's own words are. While that context
+has met nothing untrusted the planner reads it. Once it has, the planner is given a reference to it
+like any other content nobody vouched for.
+
+A turn may ask at most three times, and a fourth call is refused without a request. Each call is
+counted in the turn's tokens and recorded in the trail with its model and cost. A call that fails is
+reported to the planner as a category of failure, without anything the service said.
 
 ---
 

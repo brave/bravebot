@@ -31,7 +31,7 @@ other tool does and what bravebot would do instead, there is no gap.
   somebody else is not a source. A page that names a feature without describing what it does is not a
   source either. Read the page. Your memory of what a tool does is from before today's date, and these
   tools change monthly.
-- **At most {{max_gaps}} gaps**, the most valuable first. None is a good answer, and a long list of
+- **At most {{max_gaps}} gaps**, in the order the instructions give, else the most valuable first. None is a good answer, and a long list of
   marginal ones is a bad one. Someone has to read every issue this produces.
 - **Skip what is decided.** `{{known_gaps}}` lists every gap already decided, one per line as
   `id`, `verdict`, `issue` and `reason`, tab separated. Do not propose one of those again, and reuse
@@ -75,6 +75,9 @@ other tool does and what bravebot would do instead, there is no gap.
   would do instead, and the thing a person would notice.
 - `constraints`: optional. Clauses, specs or `## Known costs` entries that bear on it, including any
   conflict with the rule.
+- `spec_home`: optional. Where the capability would be specified. Set it to `none; a new spec,
+  example.md` for a topic no spec covers, with the file name that spec would take. Leave it empty
+  where an existing spec governs the topic, since `evidence` already names that spec.
 - `existing_issue`: the issue number that already holds it, or null.
 
 ## The output
@@ -102,6 +105,7 @@ Write this JSON, and nothing else, to `{{results_file}}`:
       "proposal": "...",
       "delta": "",
       "constraints": "",
+      "spec_home": "",
       "existing_issue": null
     }
   ]

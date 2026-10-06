@@ -2295,6 +2295,56 @@ mod tests {
         );
     }
 
+    /// The request the client builds is what the service is asked, so the summariser's choice to
+    /// give its conversation up has to survive `converse_for`. It marks the end of the exchange
+    /// the way any request does, and leaves it unmarked when the request says the exchange is not
+    /// sent again. The instructions keep their mark either way, and a whole reply and a stream are
+    /// told the same thing.
+    #[test]
+    fn a_request_giving_up_its_conversation_sends_no_breakpoint_on_the_end_of_it() {
+        let config = config();
+        let egress = Egress::new();
+        let client = BedrockClient::new(&config, &egress);
+        let messages = vec![
+            Message::system("summarise what you are shown"),
+            Message::user("first"),
+            Message::assistant("an answer"),
+            Message::user("summarise everything above"),
+        ];
+        let ordinary = ChatRequest::new("opus-arn", messages.clone());
+        let giving_up = ChatRequest::new("opus-arn", messages).giving_up_its_conversation();
+        let body = |request: &ChatRequest, streaming: bool| {
+            serde_json::to_value(client.converse_for(request, "opus-arn", streaming))
+                .expect("a body")
+        };
+
+        for streaming in [false, true] {
+            let kept = body(&ordinary, streaming);
+            assert_eq!(
+                kept["messages"][2]["content"].as_array().map(Vec::len),
+                Some(2),
+                "the ordinary request no longer marks the end of its conversation: {kept}"
+            );
+
+            let given_up = body(&giving_up, streaming);
+            assert_eq!(
+                given_up["messages"][2]["content"].as_array().map(Vec::len),
+                Some(1),
+                "streaming {streaming}: the end of a conversation given up was marked: {given_up}"
+            );
+            assert_eq!(
+                given_up["system"], kept["system"],
+                "streaming {streaming}: the instructions lost their mark"
+            );
+            assert!(
+                given_up["system"].as_array().is_some_and(|blocks| blocks
+                    .last()
+                    .is_some_and(|b| b.get("cachePoint").is_some())),
+                "streaming {streaming}: the instructions carry no mark: {given_up}"
+            );
+        }
+    }
+
     /// An egress layer that gives up on a reply after a short silence, standing in for the idle
     /// bound a real one has.
     fn impatient() -> Egress {

@@ -198,6 +198,19 @@ impl std::error::Error for CredentialError {}
 /// nothing to draw on. Callers that can ask beforehand call [`sign_in_if_needed`], which reports
 /// those lines to somebody, and reach here with nothing left to fix.
 pub fn resolve(profile: Option<&str>) -> Result<Credentials, CredentialError> {
+    resolve_with(known_good(), profile, export, |profile| {
+        login(profile, |_| {})
+    })
+}
+
+/// [`resolve`] with the kept answers and the two commands passed in, so the order of what it does
+/// can be tested without an AWS CLI.
+fn resolve_with(
+    known: &KnownGood,
+    profile: Option<&str>,
+    export: impl Fn(Option<&str>) -> Result<Credentials, CredentialError>,
+    login: impl FnOnce(Option<&str>) -> Result<(), CredentialError>,
+) -> Result<Credentials, CredentialError> {
     match export(profile) {
         Ok(credentials) => Ok(credentials),
         // The common cause of a failed export is a session that has expired, and the remedy is a
@@ -208,8 +221,8 @@ pub fn resolve(profile: Option<&str>) -> Result<Credentials, CredentialError> {
             // Forgotten here so the next check before a turn asks the CLI rather than repeating the
             // stale yes, which is what puts the sign-in back in front of the person: the login
             // below reports to nobody.
-            known_good().forget(profile);
-            login(profile, |_| {}).map_err(|failure| match failure {
+            known.forget(profile);
+            login(profile).map_err(|failure| match failure {
                 // The whole diagnosis, and it must not be replaced by the export's account of the
                 // same thing or by a sign-in that never had a chance.
                 absent @ CredentialError::NoSuchProfile { .. } => absent,
@@ -811,6 +824,79 @@ mod tests {
             !known.holds(Some("work"), now()),
             "a session proved bad was still remembered as good"
         );
+    }
+
+    fn a_credential() -> Credentials {
+        Credentials {
+            access_key_id: "AKIDEXAMPLE".to_string(),
+            secret_access_key: Secret::new("example-secret".to_string()),
+            session_token: None,
+            expires_at: None,
+        }
+    }
+
+    /// A request that proves a kept answer wrong has to drop it on the production path, not only
+    /// through `KnownGood::forget`: without the call in `resolve_with` the next check repeats the
+    /// stale yes and the sign-in never runs.
+    #[test]
+    fn a_refused_export_drops_the_kept_answer_before_the_sign_in() {
+        let known = KnownGood::default();
+        known.keep(Some("work"), Some(now() + 3_600));
+        let held_at_sign_in = std::cell::Cell::new(true);
+
+        let result = resolve_with(
+            &known,
+            Some("work"),
+            |_| {
+                Err(CredentialError::Refused {
+                    detail: "expired".to_string(),
+                })
+            },
+            |_| {
+                held_at_sign_in.set(known.holds(Some("work"), now()));
+                Err(CredentialError::Refused {
+                    detail: "no browser".to_string(),
+                })
+            },
+        );
+
+        assert!(result.is_err());
+        assert!(!held_at_sign_in.get(), "the answer outlived the refusal");
+        assert!(!known.holds(Some("work"), now()));
+    }
+
+    /// Only the profile the request used is dropped, and a good export leaves the kept answer be.
+    #[test]
+    fn a_good_export_and_another_profiles_refusal_leave_a_kept_answer_alone() {
+        let known = KnownGood::default();
+        known.keep(Some("work"), Some(now() + 3_600));
+        known.keep(Some("personal"), Some(now() + 3_600));
+
+        let refused = resolve_with(
+            &known,
+            Some("work"),
+            |_| {
+                Err(CredentialError::Refused {
+                    detail: "expired".to_string(),
+                })
+            },
+            |_| {
+                Err(CredentialError::Refused {
+                    detail: String::new(),
+                })
+            },
+        );
+        assert!(refused.is_err());
+        assert!(known.holds(Some("personal"), now()));
+
+        let good = resolve_with(
+            &known,
+            Some("personal"),
+            |_| Ok(a_credential()),
+            |_| panic!("signed in though the export worked"),
+        );
+        assert!(good.is_ok());
+        assert!(known.holds(Some("personal"), now()));
     }
 
     /// Forgetting one profile must not forget another: a session is signed in to one and not the

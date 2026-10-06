@@ -4,6 +4,7 @@ title: read_file
 status: normative
 governs:
   - crates/agent/src/workspace.rs
+  - crates/agent/src/conversation.rs
 documented-by: docs/website/docs/reference/tools.md
 ---
 
@@ -223,7 +224,56 @@ is the one component that has to compare one look with another.
 
 `verified-by: bravebot_agent::workspace::two_reads_of_an_untouched_file_carry_the_same_change_token`
 `verified-by: bravebot_agent::workspace::a_written_file_carries_a_different_change_token`
+`verified-by: bravebot_agent::workspace::a_change_token_moves_with_the_modification_time_when_the_size_does_not`
+`verified-by: bravebot_agent::workspace::a_change_token_is_the_same_for_different_bytes_of_the_same_size_and_time`
 `verified-by: bravebot_agent::workspace::the_change_token_carries_no_time_the_planner_could_read`
 `verified-by: bravebot_agent::turn::a_read_hands_the_planner_a_token_that_moves_when_the_file_does`
 `verified-by: bravebot_agent::turn::a_read_of_an_empty_file_still_carries_a_token`
 `verified-by: bravebot_agent::tools::a_slot_is_filled_with_the_file_and_a_read_also_carries_its_token`
+
+<a id="READ-8"></a>
+### READ-8: a repeat of a read the planner still holds is answered with a notice, not the lines again
+
+Where the planner asks for a window of a file that an earlier `read_file` in this conversation
+**showed** it, and the file's change token ([READ-7](#READ-7)) is still the one that read carried, the
+result is a short notice instead of the lines. It names the window the planner asked for and repeats
+the token, so a comparison of looks still has something to compare. Every gate a read passes runs
+first, exactly as for a read that returns lines: the capability, the path and the trust label are
+checked and observed, and only what comes back differs.
+
+**The same window.** The record is of the file as the trust map keys it, the first line and the line
+count the read applied. A different offset or limit is lines the planner has not been shown, whatever
+the token says about the file as a whole, and so is a request that comes to the same lines spelled
+differently, which is the same window.
+
+**Only a window that was shown.** The record is made by the turn, once the result was presented to the
+planner as text. A read that was quarantined, deferred, refused for holding a credential, or that failed
+records nothing (so a repeat of it is never a notice about lines the planner never had), and neither
+does a read whose result carried no call id to attach the record to.
+
+**It goes with the round that showed it.** An entry stands for lines in a message the planner still
+has, and names that message by its position in the conversation, not by the id of the call it answered,
+since providers number ids per response and two rounds can carry one. Compaction removes messages from
+the request ([COMPACT-6](../compaction.md#COMPACT-6)), and removes the entry with each one, so a read
+after a compaction sends the lines again. A resumed conversation starts with no record, which errs toward
+sending them.
+
+**The comparison is of metadata.** The token is taken from the file's size and modification time
+before any byte is read, so what is compared is a fact about the file's shape and no part of its
+text, and the notice is built from that token and the planner's own `offset` and `limit` and nothing
+else. A write moves the token and ends the notice. The limits [READ-7](#READ-7) states apply to it
+unchanged: a rewrite of the same bytes is a read with lines, and a write that leaves the
+modification time and size alone is a notice.
+
+**Why.** A planner that checks a file after each step re-reads it on every round, and every line comes
+back each time. A conversation is re-sent whole on every round, so each copy is paid for again on all
+the rounds after it, to tell the planner what it already had.
+
+`verified-by: bravebot_agent::turn::a_repeat_read_of_an_untouched_file_is_answered_with_a_notice`
+`verified-by: bravebot_agent::turn::a_file_written_since_it_was_shown_is_sent_again`
+`verified-by: bravebot_agent::turn::a_different_window_of_the_same_file_is_not_answered_with_a_notice`
+`verified-by: bravebot_agent::turn::a_repeat_read_of_a_file_the_planner_may_not_see_is_not_a_notice`
+`verified-by: bravebot_agent::conversation::compaction_forgets_the_reads_whose_rounds_it_removed_and_keeps_the_others`
+`verified-by: bravebot_agent::conversation::a_kept_read_follows_its_message_to_its_new_position`
+`verified-by: bravebot_agent::conversation::a_window_shown_again_is_recorded_under_its_latest_token`
+`verified-by: bravebot_agent::workspace::requests_that_come_to_the_same_lines_are_one_window`

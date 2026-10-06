@@ -28,6 +28,7 @@ pub mod linux;
 pub mod macos;
 pub mod policy;
 pub mod process;
+pub mod scope;
 pub mod swap;
 // Compiled under test on every platform as well as on the one it confines, so what this
 // backend decides before a process starts is pinned by every job that runs the suite
@@ -37,6 +38,7 @@ pub mod swap;
 // exist.
 #[cfg(test)]
 mod testutil;
+pub mod toolchain;
 #[cfg(any(windows, test))]
 pub mod windows;
 
@@ -112,6 +114,25 @@ pub trait Sandbox {
         streams: Streams,
         environment: Environment,
     ) -> Result<ConfinedChild, SandboxError>;
+
+    /// A command that is confined when it is spawned, or refuse.
+    ///
+    /// For a caller that runs the process itself, a pipeline wiring one stage's output to the
+    /// next and watching every stage, which [`Sandbox::spawn`]'s streams cannot describe. Only
+    /// where confinement travels with the command: Landlock is installed between the fork and
+    /// the exec, and Seatbelt wraps the program in `sandbox-exec`. The command carries the
+    /// environment named here and the directory the policy starts in; its standard streams are
+    /// the caller's to set. A platform where confinement is an argument to process creation has
+    /// no such command, so there is no method there, and a caller cannot reach one unconfined
+    /// by asking.
+    #[cfg(unix)]
+    fn command(
+        &self,
+        program: &str,
+        args: &[String],
+        policy: &SandboxPolicy,
+        environment: &Environment,
+    ) -> Result<std::process::Command, SandboxError>;
 }
 
 /// The backend for the current platform.
@@ -210,6 +231,20 @@ impl Sandbox for Unavailable {
         _streams: Streams,
         _environment: Environment,
     ) -> Result<ConfinedChild, SandboxError> {
+        Err(SandboxError::Unavailable {
+            platform: std::env::consts::OS,
+            detail: "confinement is unavailable".into(),
+        })
+    }
+
+    #[cfg(unix)]
+    fn command(
+        &self,
+        _program: &str,
+        _args: &[String],
+        _policy: &SandboxPolicy,
+        _environment: &Environment,
+    ) -> Result<std::process::Command, SandboxError> {
         Err(SandboxError::Unavailable {
             platform: std::env::consts::OS,
             detail: "confinement is unavailable".into(),

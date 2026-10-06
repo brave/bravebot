@@ -6710,6 +6710,190 @@ fn a_read_of_an_empty_file_still_carries_a_token() {
     );
 }
 
+/// The 16 hex characters after each "change token " in a request body.
+fn tokens_in(body: &str) -> Vec<String> {
+    body.match_indices("change token ")
+        .map(|(at, found)| body[at + found.len()..].chars().take(16).collect())
+        .collect()
+}
+
+/// Reading a file again with nothing written to it used to send every line a second time, and a
+/// planner that checks a file after each step does it on every round for the rest of the session.
+///
+/// Asserts on the request the third round is built from, because that is what the planner holds:
+/// the lines once, then a notice carrying the same token, which is what a question about whether the
+/// file changed is answered from.
+#[test]
+fn a_repeat_read_of_an_untouched_file_is_answered_with_a_notice() {
+    let scratch = Scratch::new("read-repeat-notice");
+    std::fs::write(scratch.path.join("a.txt"), "alpha\nbeta\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+        tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("read a.txt twice"),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let _second = received.recv().expect("second request");
+    let third = received.recv().expect("third request");
+
+    assert_eq!(
+        third.matches("alpha").count(),
+        1,
+        "the lines were sent twice for a file nobody wrote: {third}"
+    );
+    assert!(
+        third.contains("has not changed since it was shown to you"),
+        "the repeat was not answered with a notice: {third}"
+    );
+    let tokens = tokens_in(&third);
+    assert_eq!(tokens.len(), 2, "both answers carry a token: {third}");
+    assert_eq!(
+        tokens[0], tokens[1],
+        "the notice names a different token from the read it stands for"
+    );
+}
+
+/// The notice stands for lines the planner holds, so a write must end it: a planner told a file
+/// is unchanged after somebody wrote it would answer from text that is no longer there.
+#[test]
+fn a_file_written_since_it_was_shown_is_sent_again() {
+    let scratch = Scratch::new("read-repeat-written");
+    let path = scratch.path.join("a.txt");
+    std::fs::write(&path, "alpha\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let look = |conversation: &mut bravebot_agent::Conversation| {
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        take_a_turn(
+            &config,
+            &workspace,
+            conversation,
+            trusting_the_workspace(),
+            Task::new("read a.txt"),
+        )
+        .expect("turn runs");
+        let _first = received.recv().expect("first request");
+        received.recv().expect("second request")
+    };
+
+    let shown = look(&mut conversation);
+    assert!(shown.contains("alpha"), "the first read showed no lines");
+
+    let repeated = look(&mut conversation);
+    assert!(
+        repeated.contains("has not changed since it was shown to you"),
+        "a repeat across turns was not answered with a notice: {repeated}"
+    );
+
+    std::fs::write(&path, "alpha\nbeta\n").unwrap();
+    let rewritten = look(&mut conversation);
+    assert!(
+        rewritten.contains("beta"),
+        "a written file was answered with a notice: {rewritten}"
+    );
+    let tokens = tokens_in(&rewritten);
+    assert_ne!(
+        tokens.first(),
+        tokens.last(),
+        "the new read carries the old token: {rewritten}"
+    );
+}
+
+/// The notice is for the same window. A different slice of the file is lines nobody has been
+/// shown, whatever the token says about the file as a whole.
+#[test]
+fn a_different_window_of_the_same_file_is_not_answered_with_a_notice() {
+    let scratch = Scratch::new("read-repeat-window");
+    std::fs::write(scratch.path.join("a.txt"), "alpha\nbeta\ngamma\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"a.txt","limit":1}"#),
+        tool_request_2("read_file", r#"{"path":"a.txt","offset":2}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("read a.txt in parts"),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let _second = received.recv().expect("second request");
+    let third = received.recv().expect("third request");
+    assert!(
+        third.contains("beta") && third.contains("gamma"),
+        "the second window was not sent: {third}"
+    );
+    assert!(
+        !third.contains("has not changed since it was shown to you"),
+        "a different window was answered with a notice: {third}"
+    );
+}
+
+/// A read whose lines the planner was never shown is not a read it holds. Asking twice for a file
+/// it may not see gets a reference twice, and never a notice about lines that do not exist.
+#[test]
+fn a_repeat_read_of_a_file_the_planner_may_not_see_is_not_a_notice() {
+    let scratch = Scratch::new("read-repeat-quarantined");
+    std::fs::write(scratch.path.join("a.txt"), "alpha\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+        tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        Task::new("read a.txt twice"),
+    )
+    .expect("turn runs");
+
+    // The last request is the final round's. A check the quarantine runs is also a request, so the
+    // third is not always it.
+    let third = received.try_iter().last().expect("a final request");
+    assert!(
+        !third.contains("has not changed since it was shown to you"),
+        "a notice stood for lines the planner never saw: {third}"
+    );
+    assert_eq!(
+        third
+            .matches("Quarantined: you will not be shown what this file holds")
+            .count(),
+        2,
+        "each read should have been answered with a reference: {third}"
+    );
+}
+
 /// The model must be told the file is binary, not handed a decoding error it cannot act on.
 #[test]
 fn a_binary_read_tells_the_model_it_is_binary() {
@@ -19495,6 +19679,10 @@ fn an_output_offer_carries_what_a_check_said() {
         check.contains("SENTINEL-XYZZY"),
         "the check was not given what the command printed: {check}"
     );
+    assert!(
+        !check.contains("expects"),
+        "the planner said nothing about what the command printed, yet the check was told: {check}"
+    );
     let third = received.recv().expect("third request");
     assert!(
         !third.contains("SENTINEL-REASON"),
@@ -21920,6 +22108,81 @@ fn a_delegate_inherits_the_mode_of_the_turn_that_spawned_it() {
     );
 }
 
+/// A delegate's programs are held to what the spawning turn's are. The regression it rejects is a
+/// delegate started with confinement off, which makes spawning one the way around the profile: the
+/// same `touch` that is refused in the turn would write outside the session from inside it. The
+/// unconfined turn is the control that the file is writable at all.
+#[test]
+fn a_delegate_of_a_confining_turn_cannot_write_outside_the_session() {
+    if bravebot_sandbox::base::Prelude::current().is_none()
+        || !bravebot_sandbox::confinement_works_here()
+    {
+        return;
+    }
+    for (confining, written) in [(false, true), (true, false)] {
+        let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!("delegate-confined-{confining}"));
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(top.join("session")).unwrap();
+        std::fs::create_dir_all(top.join("beside")).unwrap();
+        let session = top.join("session").canonicalize().unwrap();
+        let planted = top
+            .join("beside")
+            .canonicalize()
+            .unwrap()
+            .join("planted.txt");
+        let workspace = Workspace::new(&session).expect("workspace");
+
+        let (endpoint, _received) = serve_by_marker(vec![
+            (
+                "HAVE-A-DELEGATE-WRITE-IT",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"worker","task":"PLANT-THE-FILE"}"#,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "PLANT-THE-FILE",
+                vec![
+                    tool_request(
+                        "run",
+                        &format!(r#"{{"command":"touch {}"}}"#, planted.display()),
+                    ),
+                    reply_with("tried"),
+                ],
+            ),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        turn::run(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("HAVE-A-DELEGATE-WRITE-IT")
+                .with_permission_mode(bravebot_agent::PermissionMode::Bypass)
+                .with_confined_runs(confining),
+            &mut bravebot_agent::confirm::ApproveRuns,
+            &mut sink,
+        )
+        .expect("turn runs");
+
+        assert_eq!(
+            planted.exists(),
+            written,
+            "confining: {confining}, and the delegate's program {} outside the session",
+            if written { "did not write" } else { "wrote" }
+        );
+        let _ = std::fs::remove_dir_all(&top);
+    }
+}
+
 /// Everything a delegate read and ran ends with it, so its report is the only thing that says
 /// what the run was for. Told nothing but the round count, a person is left with a number for
 /// work done in a directory they own: a delegate asked to pick a file said which one here.
@@ -24002,6 +24265,7 @@ fn a_delegate_spends_the_wallet_the_turn_lent_it() {
         None,
         None,
         bravebot_agent::exec::Deadlines::BUILT_IN,
+        false,
         None,
         &bravebot_core::cancel::Cancel::new(),
         &mut bravebot_agent::confirm::ApproveWrites,
@@ -40366,4 +40630,327 @@ fn a_delegate_reads_the_appended_words_and_not_the_replaced_opening() {
             "the delegate was given the parent's replaced opening: {request}"
         );
     }
+}
+
+/// What the advisor tests all do: run a turn whose session names `advisor`, and give back the
+/// requests the endpoint saw, the sink, and the outcome.
+fn consulting(
+    name: &str,
+    advisor: Option<&str>,
+    replies: Vec<String>,
+) -> (
+    Vec<serde_json::Value>,
+    RecordingSink,
+    Result<bravebot_agent::turn::Outcome, bravebot_agent::turn::TurnError>,
+) {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let task = Task::new("choose the first file to read").with_advisor(advisor.map(str::to_string));
+    let outcome = turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    );
+    let requests = every_request(&received)
+        .iter()
+        .map(|body| serde_json::from_str(body).expect("a request"))
+        .collect();
+    (requests, sink, outcome)
+}
+
+fn the_tools_in(request: &serde_json::Value) -> Vec<String> {
+    request["tools"]
+        .as_array()
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+const AN_ADVISOR_CALL: &str =
+    r#"{"question":"which file should I read first?","why":"unsure where to start"}"#;
+
+/// ADVISOR-1: the tool exists only where the session named a model to consult.
+#[test]
+fn the_advisor_tool_is_offered_only_when_a_model_is_named() {
+    let (named, _, outcome) = consulting(
+        "advisor-offered",
+        Some("advisor-model"),
+        vec![reply_with("done")],
+    );
+    outcome.expect("turn runs");
+    assert!(the_tools_in(&named[0]).contains(&"advisor".to_string()));
+
+    let (unnamed, _, outcome) = consulting("advisor-not-offered", None, vec![reply_with("done")]);
+    outcome.expect("turn runs");
+    assert!(
+        !the_tools_in(&unnamed[0]).contains(&"advisor".to_string()),
+        "a session with no advisor was offered the tool"
+    );
+}
+
+/// ADVISOR-1: a call to a tool the session was not offered is an unknown name, not a working one.
+#[test]
+fn a_session_without_an_advisor_cannot_call_one() {
+    let (requests, _, outcome) = consulting(
+        "advisor-uncalled",
+        None,
+        vec![tool_request("advisor", AN_ADVISOR_CALL), reply_with("done")],
+    );
+    outcome.expect("turn runs");
+    assert_eq!(requests.len(), 2, "no request went to any advisor");
+    assert!(
+        !requests[1].to_string().contains("ADVICE-ALPHA"),
+        "a call to an advisor nobody named produced advice"
+    );
+}
+
+/// ADVISOR-8: a session whose settings name an advisor and whose command line names none is
+/// offered the tool, and the model the settings name is the one asked.
+#[test]
+fn an_advisor_the_settings_name_is_offered_and_asked_without_the_flag() {
+    let scratch = Scratch::new("advisor-from-settings");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("advisor", AN_ADVISOR_CALL),
+        reply_with("ADVICE-SETTINGS"),
+        reply_with("done"),
+    ]);
+    let mut config = config_for(&endpoint);
+    config.advisor_model = Some("settings-advisor".into());
+    turn::run_with_trust(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("choose the first file to read"),
+        &mut bravebot_agent::Unattended,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+    let requests: Vec<serde_json::Value> = every_request(&received)
+        .iter()
+        .map(|body| serde_json::from_str(body).expect("a request"))
+        .collect();
+    assert_eq!(requests.len(), 3, "planner, advisor, planner");
+    assert!(
+        the_tools_in(&requests[0]).contains(&"advisor".to_string()),
+        "the planner was not offered the advisor"
+    );
+    assert_eq!(requests[1]["model"], "settings-advisor");
+}
+
+/// ADVISOR-2 and ADVISOR-3: the advisor is sent the planner's own context and the question, to the
+/// model named for it, with no tools; what it says is the result of the call.
+#[test]
+fn the_advisor_is_asked_with_the_planners_context_and_no_tools() {
+    let (requests, _, outcome) = consulting(
+        "advisor-asked",
+        Some("advisor-model"),
+        vec![
+            tool_request("advisor", AN_ADVISOR_CALL),
+            reply_with("ADVICE-ALPHA: read main.rs"),
+            reply_with("done"),
+        ],
+    );
+    outcome.expect("turn runs");
+    assert_eq!(requests.len(), 3, "planner, advisor, planner");
+
+    let asked = &requests[1];
+    assert_eq!(asked["model"], "advisor-model");
+    assert!(
+        asked.get("tools").is_none_or(|tools| tools.is_null()),
+        "the advisor was offered tools: {}",
+        asked["tools"]
+    );
+    let sent = asked.to_string();
+    assert!(
+        sent.contains("choose the first file to read"),
+        "the task was not in its context"
+    );
+    assert!(
+        sent.contains("which file should I read first?"),
+        "the question was not asked"
+    );
+
+    assert_eq!(
+        requests[2]["model"], requests[0]["model"],
+        "the planner kept its own model"
+    );
+    assert!(
+        requests[2]
+            .to_string()
+            .contains("ADVICE-ALPHA: read main.rs"),
+        "the advice did not reach the planner"
+    );
+}
+
+/// ADVISOR-4: what the advisor cost is part of what the turn cost, and the trail says which model
+/// was asked.
+#[test]
+fn an_advisor_call_is_counted_and_recorded() {
+    let (_, sink, outcome) = consulting(
+        "advisor-counted",
+        Some("advisor-model"),
+        vec![
+            tool_request_with_usage("advisor", AN_ADVISOR_CALL, 10, 1),
+            reply_with_usage("advice", 200, 30),
+            reply_with_usage("done", 50, 5),
+        ],
+    );
+    let outcome = outcome.expect("turn runs");
+    assert_eq!(
+        outcome.tokens,
+        11 + 230 + 55,
+        "the advisor's tokens were left out"
+    );
+    assert!(
+        sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "advice", detail }
+                if detail.contains("advisor-model") && detail.contains("230 tokens")
+        )),
+        "the call left no record: {:?}",
+        sink.events()
+    );
+}
+
+/// ADVISOR-5: a turn may ask only so often, and a refused call costs no request.
+#[test]
+fn a_turn_may_ask_its_advisor_only_three_times() {
+    let (requests, _, outcome) = consulting(
+        "advisor-limit",
+        Some("advisor-model"),
+        vec![
+            tool_request("advisor", AN_ADVISOR_CALL),
+            reply_with("ADVICE-1"),
+            tool_request("advisor", AN_ADVISOR_CALL),
+            reply_with("ADVICE-2"),
+            tool_request("advisor", AN_ADVISOR_CALL),
+            reply_with("ADVICE-3"),
+            tool_request("advisor", AN_ADVISOR_CALL),
+            reply_with("done"),
+        ],
+    );
+    outcome.expect("turn runs");
+    let to_the_advisor = requests
+        .iter()
+        .filter(|request| request["model"] == "advisor-model")
+        .count();
+    assert_eq!(to_the_advisor, 3, "the fourth question was sent");
+    assert!(
+        requests
+            .last()
+            .unwrap()
+            .to_string()
+            .contains("as often as a turn may"),
+        "the planner was not told why the fourth was refused"
+    );
+}
+
+/// ADVISOR-6: a call that fails is reported as a category, never in the backend's words.
+#[test]
+fn a_failed_advisor_call_tells_the_planner_only_the_category() {
+    let scratch = Scratch::new("advisor-fails");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_script(vec![
+        Served::Reply(tool_request("advisor", AN_ADVISOR_CALL)),
+        Served::Status(401),
+        Served::Reply(reply_with("done")),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("choose the first file to read").with_advisor(Some("advisor-model".into())),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("a failed consultation does not fail the turn");
+    let last = every_request(&received).pop().expect("a last request");
+    assert!(last.contains("error: advisor request"), "got: {last}");
+    assert!(
+        !last.contains("401"),
+        "the planner was told more than the category: {last}"
+    );
+}
+
+/// ADVISOR-7: a model the machine-level settings refuse is not asked, whichever route named it.
+#[test]
+fn an_advisor_model_the_machine_refuses_is_not_asked() {
+    let scratch = Scratch::new("advisor-refused");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let managed = scratch.path.join("managed.json");
+    std::fs::write(&managed, r#"{"models": {"deny": ["advisor-model"]}}"#).unwrap();
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("advisor", AN_ADVISOR_CALL),
+        reply_with("done"),
+    ]);
+    let mut config = config_for(&endpoint);
+    config.models = bravebot_config::Managed::at(&managed).models().clone();
+    turn::run_with_trust(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("choose the first file to read").with_advisor(Some("advisor-model".into())),
+        &mut bravebot_agent::Unattended,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+    let requests = every_request(&received);
+    assert_eq!(requests.len(), 2, "a request went to a refused model");
+    assert!(
+        requests[1].contains("do not allow the advisor model"),
+        "got: {}",
+        requests[1]
+    );
+}
+
+/// ADVISOR-4: once the planner's context has met content nobody vouched for, the advisor's reply is
+/// labelled by that context and the planner is given a reference rather than the text.
+#[test]
+fn an_advisor_that_was_shown_untrusted_content_is_quarantined() {
+    let scratch = Scratch::new("advisor-quarantined");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("advisor", AN_ADVISOR_CALL),
+        reply_with("ADVICE-QUARANTINED"),
+        reply_with("done"),
+    ]);
+    let mut snapshot = bravebot_agent::Conversation::new().snapshot();
+    snapshot.context = "untrusted".to_string();
+    let mut conversation = bravebot_agent::Conversation::restored(snapshot);
+    take_a_turn(
+        &config_for(&endpoint),
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("choose the first file to read").with_advisor(Some("advisor-model".into())),
+    )
+    .expect("turn runs");
+    let requests = every_request(&received);
+    assert!(
+        requests.iter().any(|body| body.contains("advisor-model")),
+        "the advisor was never asked"
+    );
+    let last = requests.last().expect("a last request");
+    assert!(
+        !last.contains("ADVICE-QUARANTINED"),
+        "the planner was handed advice given over untrusted content: {last}"
+    );
 }

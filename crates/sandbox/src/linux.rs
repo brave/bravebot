@@ -211,6 +211,31 @@ impl Sandbox for LandlockSandbox {
         streams: Streams,
         environment: Environment,
     ) -> Result<ConfinedChild, SandboxError> {
+        let command = Self::confining(program, args, policy)?;
+        crate::process::start(command, streams, &environment)
+    }
+
+    fn command(
+        &self,
+        program: &str,
+        args: &[String],
+        policy: &SandboxPolicy,
+        environment: &Environment,
+    ) -> Result<Command, SandboxError> {
+        let mut command = Self::confining(program, args, policy)?;
+        crate::process::apply_environment(&mut command, environment);
+        Ok(command)
+    }
+}
+
+impl LandlockSandbox {
+    /// The command for `program` with the ruleset installed between the fork and the exec, or
+    /// a refusal of the policy.
+    fn confining(
+        program: &str,
+        args: &[String],
+        policy: &SandboxPolicy,
+    ) -> Result<Command, SandboxError> {
         if !policy.is_meaningful() {
             return Err(SandboxError::PolicyTooPermissive);
         }
@@ -316,7 +341,7 @@ impl Sandbox for LandlockSandbox {
             });
         }
 
-        crate::process::start(command, streams, &environment)
+        Ok(command)
     }
 }
 
@@ -671,6 +696,61 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A command handed back for the caller to spawn is confined by the time it runs: the caller
+    /// wires its own streams, as a pipeline must, and the ruleset and the environment it was
+    /// given are still what the process gets. A `command` that handed back the bare program
+    /// passes the granted half and fails the refused one.
+    #[test]
+    fn a_command_handed_back_is_confined_when_the_caller_spawns_it() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let granted = crate::testutil::scratch_dir("bravebot-landlock-command-granted");
+        let withheld = crate::testutil::scratch_dir("bravebot-landlock-command-withheld");
+        for dir in [&granted, &withheld] {
+            let _ = std::fs::remove_dir_all(dir);
+            std::fs::create_dir_all(dir).expect("the scratch directory is creatable");
+        }
+        let policy = loadable_policy().allow_write(&granted);
+        let environment =
+            Environment::Only(crate::process::Variables::new().with("PATH", "/usr/bin"));
+        let touch = |target: &std::path::Path| {
+            sandbox
+                .command(
+                    "/usr/bin/touch",
+                    &[target.display().to_string()],
+                    &policy,
+                    &environment,
+                )
+                .expect("a command")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .expect("spawned")
+                .code()
+        };
+
+        assert_eq!(touch(&granted.join("written")), Some(0));
+        assert!(granted.join("written").exists());
+        assert_eq!(touch(&withheld.join("written")), Some(TOUCH_FAILED));
+        assert!(!withheld.join("written").exists());
+
+        let printed = sandbox
+            .command("/usr/bin/env", &[], &policy, &environment)
+            .expect("a command")
+            .output()
+            .expect("spawned");
+        assert_eq!(
+            String::from_utf8_lossy(&printed.stdout).trim(),
+            "PATH=/usr/bin"
+        );
+
+        for dir in [&granted, &withheld] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
     /// A directory standing in for the one a session resolved as it opened. Under the workspace
     /// rather than under the machine's temporary directory, which is shared between users and
     /// so is not a place for a test to put a file it is about to assert on.
@@ -692,7 +772,7 @@ mod tests {
         };
         let temporary_directory = a_temporary_directory("bravebot-base-starts");
         let home = std::env::var_os("HOME").map(PathBuf::from);
-        let wanted = base(Prelude::Linux, &temporary_directory, home.as_deref());
+        let wanted = base(Prelude::Linux, &temporary_directory, None, home.as_deref());
 
         let resolved = wanted.nameable_under(&sandbox.capabilities());
 
@@ -723,7 +803,7 @@ mod tests {
             return;
         };
         let temporary_directory = a_temporary_directory("bravebot-base-account");
-        let policy = base(Prelude::Linux, &temporary_directory, None)
+        let policy = base(Prelude::Linux, &temporary_directory, None, None)
             .nameable_under(&sandbox.capabilities())
             .policy;
 
@@ -763,7 +843,7 @@ mod tests {
         let key = home.join(".ssh").join("id_rsa");
         std::fs::write(&key, CONTENTS).expect("the key file is writable");
 
-        let policy = base(Prelude::Linux, &temporary_directory, Some(&home))
+        let policy = base(Prelude::Linux, &temporary_directory, None, Some(&home))
             .nameable_under(&sandbox.capabilities())
             .policy;
         let cat = |path: &Path| {

@@ -59,6 +59,7 @@ fn a_record_written_here_is_read_back_by_the_agents_own_reader() {
         Standing {
             history: None,
             rewind: &[],
+            checkouts: &[],
             asides: &[],
             conversation: &conversation.snapshot(),
             turns: 1,
@@ -126,6 +127,7 @@ fn a_stored_conversation_recounts_to_what_a_person_said() {
         Standing {
             history: None,
             rewind: &[],
+            checkouts: &[],
             asides: &[],
             conversation: &conversation.snapshot(),
             turns: 2,
@@ -226,6 +228,7 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
                 backups: Vec::new(),
                 prompt: "remember the word haddock".into(),
             }],
+            checkouts: &[],
             asides: &[bravebot_session::sessions::Aside {
                 question: "what is haddock?".into(),
                 answer: Some("a fish".into()),
@@ -262,6 +265,7 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
         Standing {
             history: None,
             rewind: &state.rewind,
+            checkouts: &[],
             asides: &state.asides,
             conversation: &state.conversation.snapshot(),
             turns: state.turns,
@@ -356,6 +360,7 @@ fn two_prompt_session(project: &std::path::Path, trust: Option<&TrustStore>) -> 
         Standing {
             history: None,
             rewind: &[],
+            checkouts: &[],
             asides: &[bravebot_session::sessions::Aside {
                 question: "what is haddock?".into(),
                 answer: Some("a fish".into()),
@@ -642,6 +647,7 @@ fn a_fork_gets_an_id_of_its_own_rather_than_the_one_it_came_from() {
         Standing {
             history: None,
             rewind: &state.rewind,
+            checkouts: &[],
             asides: &state.asides,
             conversation: &state.conversation.snapshot(),
             turns: state.turns,
@@ -821,6 +827,7 @@ fn a_session_written_by(project: &std::path::Path, front: sessions::Front) -> St
         Standing {
             history: None,
             rewind: &[],
+            checkouts: &[],
             asides: &[],
             conversation: &conversation.snapshot(),
             turns: 1,

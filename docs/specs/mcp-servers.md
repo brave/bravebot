@@ -942,7 +942,9 @@ word, a missing path and a file the confinement reaches already record nothing.
 The process is confined under [MCP-3](mcp.md#MCP-3), and what it may reach is built for it:
 
 - The sandbox's base rows for this platform, which allow egress and children, with no home
-  directory given, so the git configuration in it is not among them either. Egress is to IP
+  directory given, so the git configuration in it is not among them either, and no developer
+  directory, so on macOS a server whose program is a `/usr/bin` shim such as `python3` does not
+  start. Egress is to IP
   addresses, and a unix socket is reached only under a path the server may write
   ([SANDBOX-3](sandboxing.md#SANDBOX-3)), the temporary directory among them. A server that runs
   `docker` against the daemon's usual socket does not reach it, and one reaching a daemon on a
@@ -1256,9 +1258,9 @@ and could not withhold it. It says what the mode does **not** reach, which is ev
 spec, and it is [MODE-7](permission-modes.md#MODE-7)'s rule applied here: no mode answers a question
 that is not a permission, and most of what protects a person from a server is not a question at all.
 
-The mode is reachable only where the command line asked for it
-([MODE-5](permission-modes.md#MODE-5)), so nothing in a declaration, a request key or a settings
-layer turns it on.
+Nothing in a declaration, a request key or a settings layer turns the mode on: it is chosen with the
+command line or the mode key ([MODE-5](permission-modes.md#MODE-5)), and a settings layer can only
+make it unreachable.
 
 Each of the following holds in that mode exactly as it holds outside it:
 

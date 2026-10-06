@@ -3,8 +3,10 @@
 #![forbid(unsafe_code)]
 
 mod auth;
+mod background;
 mod completion;
 mod exit;
+mod host;
 mod import;
 mod json;
 mod mcp;
@@ -61,6 +63,14 @@ fn main() -> ExitCode {
         Some(at) => args.split_off(at),
         None => Vec::new(),
     };
+
+    // Noted before the flags below are taken out, because they are what it looks for: a session
+    // that starts in another process reads none of them, and one that ran without a flag it was
+    // given would be running under rules its author did not choose.
+    let carried: Option<String> = args
+        .iter()
+        .find(|arg| matches!(arg.as_str(), "--incognito" | "--vet" | "--settings"))
+        .cloned();
 
     // Engaged here rather than deeper in because it must be true before the first thing that could
     // write is reached, and this is the last moment that is certain to be before all of them.
@@ -203,11 +213,26 @@ fn main() -> ExitCode {
         // The task flags may lead: `bravebot -p "task"` and `bravebot --mode manifest "task"`
         // would otherwise be caught below as unknown options.
         Some(
-            "-p" | "--print" | "--mode" | "--model" | "--effort" | "--file" | "--add-dir"
-            | "--trace" | "--json",
+            "-p" | "--print" | "--mode" | "--model" | "--advisor" | "--effort" | "--file"
+            | "--add-dir" | "--trace" | "--json",
         ) => run_task(&args, skip_permissions, agent, prompts),
         Some("doctor") => doctor(),
         Some("auth") => auth::command(&args[1..]),
+        Some("sessions") => background::sessions(&args[1..]),
+        Some("--bg") => match carried {
+            Some(flag) => stopped_before_the_turn(
+                as_json,
+                Ending::Argument,
+                t!(bg_takes_nothing_else, flag = flag.as_str()),
+            ),
+            None => background_start(&args[1..], skip_permissions, agent, &prompts),
+        },
+        Some("attach") => background::attach(&args[1..]),
+        Some("reply") => background::reply(&args[1..]),
+        Some("__bg-host") => match args.get(1) {
+            Some(id) => background::host(id),
+            None => ExitCode::FAILURE,
+        },
         Some("mcp") => mcp::command(&args[1..]),
         Some("completion") => match completion::command(&args[1..]) {
             Some(()) => ExitCode::SUCCESS,
@@ -223,6 +248,29 @@ fn main() -> ExitCode {
         // Anything else is treated as the task prompt.
         Some(_) => run_task(&args, skip_permissions, agent, prompts),
     }
+}
+
+/// `--bg <prompt>`, which starts a session in another process and so cannot carry what the other
+/// flags carry into this one.
+fn background_start(
+    words: &[String],
+    skip_permissions: bool,
+    agent: Option<String>,
+    prompts: &SystemPrompts,
+) -> ExitCode {
+    if skip_permissions {
+        return fail(Ending::Argument, t!(bg_bypass_refused));
+    }
+    if agent.is_some() {
+        return fail(
+            Ending::Argument,
+            t!(bg_takes_nothing_else, flag = "--agent"),
+        );
+    }
+    if let Some(flag) = flag_named(prompts) {
+        return fail(Ending::Argument, t!(bg_takes_nothing_else, flag = flag));
+    }
+    background::start(words)
 }
 
 /// Take `--agent <name>` out of the arguments, answering with the definition it named.
@@ -268,8 +316,10 @@ fn without_a_definition(first: Option<&str>) -> Option<String> {
         flag @ ("--resume" | "-r" | "--continue" | "-c" | "--fork" | "-f") => {
             Some(t!(cli_agent_not_with_a_recorded_session, flag = flag).to_string())
         }
-        command @ ("doctor" | "auth" | "mcp" | "import-leo-creds" | "import-providers"
-        | "completion") => Some(t!(cli_agent_not_for_a_command, command = command).to_string()),
+        command @ ("doctor" | "auth" | "mcp" | "sessions" | "attach" | "reply"
+        | "import-leo-creds" | "import-providers" | "completion") => {
+            Some(t!(cli_agent_not_for_a_command, command = command).to_string())
+        }
         _ => None,
     }
 }
@@ -329,8 +379,8 @@ fn flag_named(prompts: &SystemPrompts) -> Option<&'static str> {
 /// rather than ignored, for the reason CLI-13 gives about a settings file.
 fn without_a_prompt_to_give(flag: &str, first: Option<&str>) -> Option<String> {
     match first? {
-        command @ ("doctor" | "auth" | "mcp" | "import-leo-creds" | "import-providers"
-        | "completion") => Some(
+        command @ ("doctor" | "auth" | "mcp" | "sessions" | "attach" | "reply"
+        | "import-leo-creds" | "import-providers" | "completion") => Some(
             t!(
                 cli_system_prompt_not_for_a_command,
                 flag = flag,
@@ -447,6 +497,11 @@ fn print_help() {
         ("bravebot --continue", t!(cli_usage_continue)),
         ("bravebot --fork <id>", t!(cli_usage_fork)),
         ("bravebot doctor", t!(cli_usage_doctor)),
+        ("bravebot sessions [--json]", t!(cli_usage_sessions)),
+        ("bravebot sessions stop <id>", t!(cli_usage_sessions_stop)),
+        ("bravebot --bg <prompt>", t!(cli_usage_bg)),
+        ("bravebot attach <id>", t!(cli_usage_attach)),
+        ("bravebot reply <id> <prompt>", t!(cli_usage_reply)),
         ("bravebot auth login [way]", t!(cli_usage_auth_login)),
         ("bravebot auth logout <way>", t!(cli_usage_auth_logout)),
         ("bravebot import-leo-creds [channel]", t!(cli_usage_import)),
@@ -504,6 +559,7 @@ fn print_help() {
         ),
         ("--mode <mode>", t!(cli_option_mode)),
         ("--model <name>", t!(cli_option_model)),
+        ("--advisor <name>", t!(cli_option_advisor)),
         ("--effort <level>", t!(cli_option_effort)),
         ("-p, --print", t!(cli_option_print)),
         ("--trace", t!(cli_option_trace)),
@@ -633,6 +689,9 @@ struct Invocation {
     /// The model the command line named. `None` leaves the configured one in force rather than
     /// standing for a model of its own.
     model: Option<String>,
+    /// The model the command line named as the planner's advisor. `None` leaves it to the
+    /// `advisorModel` setting.
+    advisor: Option<String>,
     /// The level the command line named, which outranks the saved pick and every settings file for
     /// this run alone. `None` leaves those to answer.
     effort: Option<bravebot_session::store::Effort>,
@@ -651,6 +710,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     let mut files = Vec::new();
     let mut mode = Mode::default();
     let mut model = None;
+    let mut advisor = None;
     let mut effort = None;
     let mut directories = Vec::new();
     let mut trace = false;
@@ -680,6 +740,15 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                     index += 2;
                 }
                 _ => return Err(t!(cli_model_needs_a_name).to_string()),
+            },
+            // Refused when blank for the reason `--model` is: a script that computed an empty
+            // variable asked for an advisor and would otherwise run without one, untold.
+            "--advisor" => match args.get(index + 1).map(|name| name.trim()) {
+                Some(name) if !name.is_empty() => {
+                    advisor = Some(name.to_string());
+                    index += 2;
+                }
+                _ => return Err(t!(cli_advisor_needs_a_name).to_string()),
             },
             // Refused unless it is a level, for the reason a blank `--model` is, and for a stronger
             // one: a model name the service does not know is substituted and reported, where a word
@@ -741,6 +810,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
         files,
         mode,
         model,
+        advisor,
         effort,
         directories,
         trace,
@@ -767,6 +837,7 @@ fn run_task(
         files,
         mode,
         model,
+        advisor,
         effort,
         directories,
         trace,
@@ -799,6 +870,15 @@ fn run_task(
             as_json,
             Ending::Argument,
             t!(cli_agent_not_with_a_manifest),
+        );
+    }
+    // A manifest run's steps are run from the plan, not chosen by a planner that could ask, so an
+    // advisor would be named and never consulted.
+    if advisor.is_some() && mode == Mode::Manifest {
+        return stopped_before_the_turn(
+            as_json,
+            Ending::Argument,
+            t!(cli_advisor_not_with_a_manifest),
         );
     }
     // Neither reaches the planner of a manifest run, which is given no standing instructions from
@@ -841,6 +921,14 @@ fn run_task(
     {
         return stopped_before_the_turn(as_json, Ending::Configuration, how);
     }
+
+    // Resolved like `--model`, and refused like it where the machine-level layer refuses the
+    // name, so a run never starts with an advisor its first question could not reach (BACKEND-48).
+    let advisor = match advisor.map(|name| resolve_advisor(&config, &name)) {
+        Some(Ok(advisor)) => Some(advisor),
+        Some(Err(how)) => return stopped_before_the_turn(as_json, Ending::Configuration, how),
+        None => None,
+    };
 
     let settings = bravebot_config::Settings::load();
 
@@ -960,6 +1048,7 @@ fn run_task(
         .with_profile(bravebot_agent::home::profile())
         .with_cache(bravebot_agent::home::cache())
         .with_model(model_asked_for(named, pick.into_model()))
+        .with_advisor(advisor)
         // The flag, then the settings layers and the saved pick ranked as BACKEND-43 ranks them.
         // The layers are the only route a machine where nobody ever opens the interface has to a
         // level that outlives one run.
@@ -982,6 +1071,7 @@ fn run_task(
         .with_deadlines(bravebot_agent::exec::Deadlines::resolve(
             settings.run_deadlines(),
         ))
+        .with_confined_runs(true)
         // Whether a check that finds nothing answers in a person's place. Resolved here, once, out
         // of the three routes: `bravebot_core::vetting::auto` is the rule and nothing below reads
         // any of the three again. A run nobody is watching has no prompt to fall back to, so
@@ -1536,6 +1626,15 @@ fn nothing_serves(config: &Config, model: &str) -> Option<String> {
     }
 }
 
+/// The model `--advisor` names, resolved like `--model`, or what to say where nothing could ask it.
+fn resolve_advisor(config: &Config, name: &str) -> Result<String, String> {
+    let advisor = config.model_named(name);
+    match nothing_serves(config, &advisor) {
+        Some(how) => Err(how),
+        None => Ok(advisor),
+    }
+}
+
 /// What a start or a run says where the machine-level layer refuses `model` (BACKEND-48).
 ///
 /// Here rather than at each site because four of them say it: a one-shot run, the report, the start
@@ -1960,6 +2059,11 @@ fn resume_named(id: &str, skip_permissions: bool, prompts: SystemPrompts) -> Exi
                 }
             }
             ExitCode::SUCCESS
+        }
+        // Not resumed by a second process: the one running it writes the record after every turn,
+        // and two writers would be one conversation (BG-9).
+        Some(record) if background::is_running(&record.id) => {
+            background::refuse_to_resume(&record.id)
         }
         Some(record) => interactive(
             bravebot_tui::app::Start::Resuming(Box::new(record)),
@@ -2508,6 +2612,15 @@ fn doctor() -> ExitCode {
                     t!(doctor_settings_ignored),
                     t!(
                         doctor_settings_model_ignored,
+                        path = path.display().to_string()
+                    ),
+                );
+            }
+            for path in settings.advisor_ignored() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_advisor_ignored,
                         path = path.display().to_string()
                     ),
                 );
@@ -5577,6 +5690,9 @@ mod tests {
             "doctor",
             "auth",
             "mcp",
+            "sessions",
+            "attach",
+            "reply",
             "import-leo-creds",
             "import-providers",
             "completion",
@@ -5689,6 +5805,9 @@ mod tests {
             "doctor",
             "auth",
             "mcp",
+            "sessions",
+            "attach",
+            "reply",
             "import-leo-creds",
             "import-providers",
             "completion",
@@ -5784,6 +5903,69 @@ mod tests {
             let err = parse_invocation(&typed).expect_err("must refuse");
             assert!(err.contains("--model"), "{typed:?}: {err}");
         }
+    }
+
+    /// The advisor is named on the command line, separately from the model, and a run that did not
+    /// name one has none.
+    #[test]
+    fn an_advisor_flag_names_the_model_the_planner_may_consult() {
+        let invocation =
+            parse_invocation(&args(&["--advisor", "big-model", "do a thing"])).expect("parses");
+        assert_eq!(invocation.advisor.as_deref(), Some("big-model"));
+        assert_eq!(
+            invocation.model, None,
+            "the advisor replaced the run's model"
+        );
+        assert_eq!(invocation.prompt, "do a thing");
+
+        let invocation = parse_invocation(&args(&["do a thing"])).expect("parses");
+        assert_eq!(invocation.advisor, None);
+    }
+
+    /// A script that computed an empty variable asked for an advisor, and running without one would
+    /// not say so.
+    #[test]
+    fn a_blank_advisor_is_refused_rather_than_read_as_no_choice() {
+        for typed in [
+            args(&["--advisor"]),
+            args(&["--advisor", "", "do a thing"]),
+            args(&["--advisor", "   ", "do a thing"]),
+        ] {
+            let err = parse_invocation(&typed).expect_err("must refuse");
+            assert!(err.contains("--advisor"), "{typed:?}: {err}");
+        }
+    }
+
+    /// CLI-21. A machine whose managed settings refuse a model does not request it for an advisor
+    /// either, and the run stops before the first round naming the file that refused it, rather than
+    /// starting with an advisor whose first question could not be sent.
+    ///
+    /// Not a binary run, because the managed file is read from a fixed system path that a test
+    /// cannot point elsewhere. The configuration is built from a managed file the test writes.
+    #[test]
+    fn an_advisor_the_managed_settings_refuse_is_refused_before_the_run() {
+        let scratch = Scratch::new("cli-advisor-managed");
+        let (managed, file) = pinned(&scratch, r#"{"models": {"deny": ["stub/advisor-model"]}}"#);
+        let settings = layers(
+            &scratch,
+            Some(
+                r#"{"provider": {"stub": {"options": {"baseURL": "http://127.0.0.1:1/v1"},
+                    "models": {"planner": {}, "advisor-model": {}}}}}"#,
+            ),
+            None,
+        );
+        let config = Config::from_env_and_settings(&settings, &managed).expect("a configuration");
+
+        let how = resolve_advisor(&config, "stub/advisor-model").expect_err("must be refused");
+        assert!(
+            how.contains("stub/advisor-model") && how.contains(&file.display().to_string()),
+            "the refusal named neither the model nor the file that refused it: {how}"
+        );
+        assert_eq!(
+            resolve_advisor(&config, "stub/planner").as_deref(),
+            Ok("stub/planner"),
+            "a model the file does not name was refused"
+        );
     }
 
     /// The level a run asks for, in any case, and nothing where the flag was not given, which

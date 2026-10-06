@@ -164,13 +164,17 @@ fn an_empty_line_is_not_run() {
 }
 
 /// `$SHELL` is what makes the line behave the way it does in the user's own terminal. A system with
-/// it unset still has to get a shell rather than an empty program name.
+/// it unset or blank still has to get a POSIX shell rather than an empty program name, and one that
+/// names a shell gets that shell.
 #[test]
 fn the_shell_falls_back_to_a_posix_one_when_the_variable_is_unset() {
-    // Asserted through the public helper rather than by unsetting the variable, which would race
-    // every other test in this binary.
-    let chosen = shell::shell();
-    assert!(!chosen.trim().is_empty());
+    assert_eq!(shell::shell_named(None), "/bin/sh");
+    assert_eq!(shell::shell_named(Some(String::new())), "/bin/sh");
+    assert_eq!(shell::shell_named(Some("  ".to_string())), "/bin/sh");
+    assert_eq!(
+        shell::shell_named(Some("/usr/bin/fish".to_string())),
+        "/usr/bin/fish"
+    );
 }
 
 /// The whole point of the feature: a user who runs something and then says "fix that" is relying on

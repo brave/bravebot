@@ -55,7 +55,7 @@ fn opening_answers(
 /// A session in `mode`, as the terminal starts one.
 fn a_session(mode: PermissionMode) -> Session {
     match mode {
-        PermissionMode::Bypass => Session::new("none").allowing_bypass(),
+        PermissionMode::Bypass => Session::new("none").starting_in_bypass(),
         PermissionMode::AcceptEdits => {
             let mut session = Session::new("none");
             session.cycle_permission_mode();

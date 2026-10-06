@@ -48,8 +48,10 @@ fn running<'a>(config: &'a Config, workspace: &'a Workspace, trust: TrustStore) 
         servers: None,
         mcp: None,
         asked_about: AskedAbout::new(),
+        beside: None,
         exposed: Default::default(),
         auto_vetting: false,
+        kept: None,
     }
 }
 
@@ -108,6 +110,12 @@ mod answers;
 /// The real plain caller must adopt grants, advice and exposure answers even without an outcome.
 #[test]
 fn failed_plain_turn_keeps_exact_approvals_advice_and_exposure() {
+    // A `run` is refused where the platform has a base and no way to apply it.
+    if bravebot_sandbox::base::Prelude::current().is_some()
+        && !bravebot_sandbox::confinement_works_here()
+    {
+        return;
+    }
     let directory = Scratch::new("plain-retention-decisions");
     let home = Scratch::new("plain-retention-home");
     let workspace = Workspace::new(directory.path()).unwrap();

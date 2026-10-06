@@ -512,6 +512,11 @@ A turn does not answer while something it started is still working. Where the pl
 first, the reports are waited for, put in front of it, and it answers again knowing what came
 back. A turn that has run out of tool calls waits too, and answers without being asked again.
 
+[background-sessions.md](background-sessions.md) proposes a session whose process outlives the
+terminal, which nothing yet builds. It changes nothing here: the turn in such a session still does
+not answer while a delegate is working, and what outlives the terminal is the session, not a
+delegate.
+
 **Why.** A person told the turn is over reasonably believes nothing of theirs is being read or
 written any more. A delegate still running is still doing both, and can still put a write in
 front of them for a turn they were told had finished.

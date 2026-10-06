@@ -19,7 +19,7 @@ guards:
       - crates/agent/tests/workspace.rs: 35
       - crates/aichat/src/lib.rs: 5
       - crates/bedrock/src/lib.rs: 6
-      - crates/core/src/policy.rs: 111
+      - crates/core/src/policy.rs: 114
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 7
       - crates/mcp/src/http.rs: 2
@@ -34,14 +34,14 @@ guards:
       - crates/agent/src/mcp.rs: 3
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
-      - crates/agent/src/tools.rs: 35
+      - crates/agent/src/tools.rs: 36
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
       - crates/agent/tests/workspace.rs: 49
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 2
-      - crates/core/src/policy.rs: 62
+      - crates/core/src/policy.rs: 63
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 2
       - crates/mcp/tests/stdio.rs: 4
@@ -68,7 +68,7 @@ guards:
       - crates/core/src/value.rs: 4
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 59
+      - crates/core/src/policy.rs: 60
   - symbol: SlotStore::path_of
     sites:
       - crates/core/src/policy.rs: 5
@@ -131,6 +131,7 @@ guards:
       - crates/core/src/policy.rs: 21
   - symbol: Policy::adopt_model_output
     sites:
+      - crates/agent/src/advisor.rs: 1
       - crates/agent/src/aside.rs: 1
       - crates/agent/src/compact.rs: 1
       - crates/agent/src/goal.rs: 1
@@ -438,6 +439,10 @@ Where a path is known, integrity is the trust map's answer about that path rathe
 capability's, which is what the three rows for reads say and why the first row is the label a read
 starts from. Which paths a person vouched for is in [trust-map.md](trust-map.md).
 
+A road proposed and not built is a message one background session sends another, which
+[session-messages.md](session-messages.md#MSG-9) has arrive under the label it was sent with and be
+quarantined when it has none. It becomes a row when it is built.
+
 Three carriers a reader may go looking for are absent, none of which takes a first label. A
 delegate's reply is model output, labelled in the delegate's own run by the row for what the planner
 wrote, and a delegate starts out holding what the context that wrote its task held. Content restored
@@ -516,6 +521,7 @@ process, and is [layering.md](layering.md)'s: a rule about the crates here canno
 this workspace does not compile. This clause is the half enforceable here, which is that the label
 arrives at all.
 
+`verified-by: bravebot_ui_bridge::fetch::the_session_view_orders_prompts_approvals_and_labelled_results`
 `verified-by: bravebot_ui_bridge::wire::released_content_crosses_the_transport_with_the_label_it_was_released_under`
 `verified-by: bravebot_ui_bridge::wire::quarantined_content_says_how_much_it_left_out`
 `verified-by: bravebot_agent::turn::the_preview_of_a_mixed_listing_states_the_label_of_the_untrusted_entries`

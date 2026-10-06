@@ -562,7 +562,7 @@ mod tests {
     /// jobs say something is spending, and the panel the offer names is one press away anyway.
     #[test]
     fn the_info_part_is_the_first_the_hint_line_gives_up() {
-        let mut session = Session::new("kernel").allowing_bypass();
+        let mut session = Session::new("kernel").starting_in_bypass();
         session.start_loop(
             crate::loops::request("2d check the deploy"),
             Vec::new(),

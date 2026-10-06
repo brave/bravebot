@@ -45,7 +45,8 @@ pub enum PermissionMode {
     Plan,
     /// Nothing is asked at all, including vouching for files nobody vouched for.
     ///
-    /// What `--dangerously-skip-permissions` selects, reachable only where it was given. See
+    /// What `--dangerously-skip-permissions` selects, and what the mode key reaches unless a settings
+    /// layer wrote `permissions.bypassUnreachable`. See
     /// [`Confining::confirm_vouch`] for what the last of those costs, and
     /// [`Confining::confirm_vetted_read`] for the one answer this mode does not give itself.
     Bypass,
@@ -54,23 +55,23 @@ pub enum PermissionMode {
 impl PermissionMode {
     /// The modes one key cycles through, in order, ending back at the first.
     ///
-    /// `Bypass` is not among them: it is reachable only where the flag was given, so the ladder
-    /// depends on that and is built by [`PermissionMode::cycle`] rather than listed here.
+    /// `Bypass` is not among them: it is left off where a settings layer made it unreachable, so the
+    /// ladder depends on that and is built by [`PermissionMode::cycle`] rather than listed here.
     const LADDER: [Self; 3] = [Self::Ask, Self::AcceptEdits, Self::Plan];
 
     /// The next mode round the ladder.
     ///
-    /// `bypass_available` is whether `--dangerously-skip-permissions` was given. Without it the
-    /// fourth rung does not exist: a session that could cycle into bypassing every check would make
-    /// the flag decorative, and the flag is the record that somebody accepted what it costs.
-    pub fn cycle(self, bypass_available: bool) -> Self {
+    /// `bypass_reachable` is false where a settings layer wrote `permissions.bypassUnreachable`
+    /// (PERM-17). Then the fourth rung does not exist, and the key cannot reach bypassing however
+    /// many times it is pressed.
+    pub fn cycle(self, bypass_reachable: bool) -> Self {
         // From bypass the ladder is rejoined at the start, so the key remains a cycle rather than a
-        // one-way door out of the mode the flag asked for.
+        // one-way door out of the mode.
         let Some(rung) = Self::LADDER.iter().position(|mode| *mode == self) else {
             return Self::Ask;
         };
         match rung + 1 == Self::LADDER.len() {
-            true if bypass_available => Self::Bypass,
+            true if bypass_reachable => Self::Bypass,
             true => Self::Ask,
             false => Self::LADDER[rung + 1],
         }
@@ -1057,10 +1058,10 @@ mod tests {
         }
     }
 
-    /// The ladder one key walks. Three rungs without the flag, back to the start from the last: a
+    /// The ladder one key walks. Three rungs where bypass is unreachable, back to the start from the last: a
     /// key that stopped cycling would be a mode somebody could not leave.
     #[test]
-    fn the_key_cycles_three_modes_without_the_flag() {
+    fn the_key_cycles_three_modes_where_bypass_is_unreachable() {
         let mut mode = PermissionMode::default();
         let mut seen = Vec::new();
         for _ in 0..4 {
@@ -1078,10 +1079,10 @@ mod tests {
         );
     }
 
-    /// The fourth rung exists only where the flag was given. Without that, a session could cycle
-    /// into bypassing every check and the flag would be decorative.
+    /// The fourth rung is on the ladder unless a layer made it unreachable, and is then absent
+    /// however many times the key is pressed.
     #[test]
-    fn bypass_is_only_reachable_where_the_flag_was_given() {
+    fn bypass_is_reachable_unless_a_layer_made_it_unreachable() {
         let mut mode = PermissionMode::default();
         let mut seen = Vec::new();
         for _ in 0..4 {
@@ -1099,7 +1100,7 @@ mod tests {
             "the ladder must come back round rather than stop at bypass"
         );
 
-        // The rung is unreachable without it, however many times the key is pressed.
+        // The rung is unreachable where a layer said so, however many times the key is pressed.
         let mut mode = PermissionMode::default();
         for _ in 0..12 {
             mode = mode.cycle(false);
@@ -1126,6 +1127,85 @@ mod tests {
                     bravebot_core::ask::Answer::Declined
                 ],
                 "{mode:?} answered a question that was not a permission"
+            );
+        }
+    }
+
+    /// Has one line to hand over when asked whether the person typed anything, and refuses the rest.
+    struct Interjects(Option<String>);
+
+    impl Confirmer for Interjects {
+        fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
+            Unattended.confirm_write(request)
+        }
+        fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+            Unattended.confirm_run(request)
+        }
+        fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
+            Unattended.confirm_read_output(request)
+        }
+        fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+            Unattended.confirm_vetted_read(request)
+        }
+        fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
+            Unattended.confirm_fetch(request)
+        }
+        fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
+            Unattended.confirm_server(request)
+        }
+        fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+            Unattended.confirm_manifest(request)
+        }
+        fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
+            Unattended.confirm_vouch(request)
+        }
+        fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
+            Unattended.confirm_exposing_read(request)
+        }
+        fn confirm_tool_list(&mut self, request: &crate::confirm::ToolListRequest) -> Decision {
+            Unattended.confirm_tool_list(request)
+        }
+        fn confirm_mcp_call(
+            &mut self,
+            request: &crate::confirm::McpCallRequest,
+        ) -> crate::confirm::CallDecision {
+            Unattended.confirm_mcp_call(request)
+        }
+        fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
+            Unattended.confirm_move(request)
+        }
+        fn ask_user(
+            &mut self,
+            asking: &bravebot_core::ask::Asking,
+        ) -> Vec<bravebot_core::ask::Answer> {
+            Unattended.ask_user(asking)
+        }
+        fn interjection(&mut self) -> Option<String> {
+            self.0.take()
+        }
+    }
+
+    /// A line the person typed unprompted is their own words, so every mode hands it on as it
+    /// arrived, and a mode has no line of its own to hand on in its place.
+    #[test]
+    fn no_mode_answers_for_a_line_the_person_typed() {
+        for mode in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+            PermissionMode::Bypass,
+        ] {
+            let mut typing = Interjects(Some("use the other file".to_string()));
+            let mut confining = Confining::new(&mut typing, mode, false);
+            assert_eq!(
+                confining.interjection().as_deref(),
+                Some("use the other file"),
+                "{mode:?} did not pass on what the person typed"
+            );
+            assert_eq!(
+                confining.interjection(),
+                None,
+                "{mode:?} made up a line when the person had typed nothing"
             );
         }
     }

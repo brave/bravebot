@@ -1393,9 +1393,12 @@ pub struct Session {
     /// Coming back tomorrow into a session that had stopped asking about writes, with nothing on
     /// screen having been chosen today, is the wrong way for this to be wrong.
     permission_mode: bravebot_agent::PermissionMode,
-    /// Whether `--dangerously-skip-permissions` was given, which is what puts the fourth rung on the
-    /// ladder above. Fixed for the session: it comes from the command line.
-    bypass_available: bool,
+    /// Whether the fourth rung is on the ladder above. True until a settings layer wrote
+    /// `permissions.bypassUnreachable`, and never true again after that.
+    bypass_reachable: bool,
+    /// Whether `--dangerously-skip-permissions` opened the session in bypass. Fixed for the
+    /// session: it comes from the command line, and decides whether leaving bypass is named.
+    began_in_bypass: bool,
     /// What the configuration says about the tier, drawn beside the confinement on the opening
     /// screen.
     ///
@@ -1761,6 +1764,11 @@ pub struct Session {
     /// True until a listing says otherwise, so a session that has never reached one sends what the
     /// person asked for rather than withholding it on a fact nobody established.
     model_reads_effort: bool,
+    /// The model `/advisor` named for this session's planner to consult, resolved.
+    ///
+    /// Kept for the session only: the `advisorModel` setting is the saved route, and a turn that
+    /// finds none here leaves it to that.
+    advisor: Option<String>,
     /// Which offered command is under the cursor while one is being typed.
     ///
     /// An index into what [`Session::offered`] returns for the current input rather than a copy of
@@ -1858,10 +1866,11 @@ impl Session {
             confinement: confinement.into(),
             servers: Servers::default(),
             language_servers: bravebot_agent::lsp::Roster::default(),
-            // Asking, which is what a session has always done. `allowing_bypass` moves it, and is
-            // the only thing that can: the flag is the record that somebody accepted the cost.
+            // Asking, which is what a session has always done. `starting_in_bypass` moves it; the
+            // key reaches bypass from there unless a layer made it unreachable (MODE-5).
             permission_mode: bravebot_agent::PermissionMode::default(),
-            bypass_available: false,
+            bypass_reachable: true,
+            began_in_bypass: false,
             // No subscription until a caller says otherwise, which is what a build with no premium
             // host has and what a test that does not care about tiers should see.
             tier: t!(status_no_subscription).to_string(),
@@ -1925,6 +1934,7 @@ impl Session {
             model: None,
             effort: None,
             model_reads_effort: true,
+            advisor: None,
             completion: 0,
             workspace: std::path::PathBuf::new(),
             skills: None,
@@ -1964,13 +1974,26 @@ impl Session {
 
     /// Open the session in bypass, because `--dangerously-skip-permissions` asked for it.
     ///
-    /// Both at once, and they belong together: the flag puts the fourth rung on the ladder *and*
-    /// starts the session on it. Honouring only the first would make the flag do nothing a person
-    /// could see, and disagree with what the same flag does to a one-shot run.
-    pub fn allowing_bypass(mut self) -> Self {
-        self.bypass_available = true;
+    /// The rung is on the ladder either way, so this only chooses where the session starts and
+    /// records that it started there, which is what makes the line under the box name asking once
+    /// the key leaves bypass (MODE-5).
+    pub fn starting_in_bypass(mut self) -> Self {
+        self.began_in_bypass = true;
         self.permission_mode = bravebot_agent::PermissionMode::Bypass;
         self
+    }
+
+    /// Take bypass off the ladder, because a settings layer wrote `permissions.bypassUnreachable`.
+    ///
+    /// A session already in bypass is put back to asking, and the person is told, since the mode
+    /// was theirs and the line under the box would otherwise change without a reason. One-way: a
+    /// later `/cd` into a checkout that wrote nothing does not put the rung back (PERM-17).
+    pub fn make_bypass_unreachable(&mut self) {
+        self.bypass_reachable = false;
+        if self.permission_mode == bravebot_agent::PermissionMode::Bypass {
+            self.permission_mode = bravebot_agent::PermissionMode::Ask;
+            self.note(t!(session_bypass_made_unreachable));
+        }
     }
 
     /// How much this session asks before it acts.
@@ -1978,9 +2001,9 @@ impl Session {
         self.permission_mode
     }
 
-    /// Whether the session was started with the flag that skips permissions.
-    pub fn bypass_available(&self) -> bool {
-        self.bypass_available
+    /// Whether the session opened in bypass because the flag that skips permissions was given.
+    pub fn began_in_bypass(&self) -> bool {
+        self.began_in_bypass
     }
 
     /// Move to the next mode, and say nothing: the line under the box is the answer.
@@ -1988,7 +2011,7 @@ impl Session {
     /// A note in the transcript would be a running commentary on a key somebody is pressing to see
     /// what the modes are, and the one place a mode has to be legible is while it is in force.
     pub fn cycle_permission_mode(&mut self) {
-        self.permission_mode = self.permission_mode.cycle(self.bypass_available);
+        self.permission_mode = self.permission_mode.cycle(self.bypass_reachable);
     }
 
     /// Load history from disk and keep writing to it.
@@ -2027,6 +2050,18 @@ impl Session {
             bravebot_session::store::save_model(config.name_to_record(&model));
         }
         self.model = Some(model);
+    }
+
+    /// The model `/advisor` named, resolved, or `None` where it named none.
+    pub fn advisor(&self) -> Option<&str> {
+        self.advisor.as_deref()
+    }
+
+    /// Name the model the planner may consult from the next turn on, or `None` to drop the choice.
+    ///
+    /// Not recorded anywhere: a session that is resumed starts with the setting's advisor, if any.
+    pub fn choose_advisor(&mut self, model: Option<String>) {
+        self.advisor = model;
     }
 
     /// How hard to think, or `None` to leave the service its own default.

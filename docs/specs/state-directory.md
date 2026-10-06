@@ -35,6 +35,8 @@ session left untrusted, `untrusted/` ([MEMORY-5](definition-memory.md#MEMORY-5))
 definition a desktop bot is made as. [checkouts.md](checkouts.md) proposes another, which nothing
 yet builds either: the checkouts delegates are given, `checkouts/`, which hold a project's files
 written readable by their owner alone and are read through the trust map.
+[background-sessions.md](background-sessions.md) proposes a third, which nothing yet builds: the
+roster of sessions running in the background, `jobs/` ([BG-4](background-sessions.md#BG-4)).
 
 What each of those files means belongs to the spec for that subject:
 [sessions.md](sessions.md) for a session record, [tools/run.md](tools/run.md) for the remembered

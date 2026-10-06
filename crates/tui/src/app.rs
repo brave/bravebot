@@ -88,6 +88,12 @@ const THEME_COMMAND: &str = "/theme";
 /// The line that opens the effort picker, or takes a level named after the word.
 const EFFORT_COMMAND: &str = "/effort";
 
+/// The line that names the model the planner may consult, says which it may, or drops the choice.
+const ADVISOR_COMMAND: &str = "/advisor";
+
+/// The word after `/advisor` that drops the session's own choice.
+const ADVISOR_OFF: &str = "off";
+
 /// The line that opens the panel of preferences about the interface itself.
 const CONFIG_COMMAND: &str = "/config";
 
@@ -120,6 +126,9 @@ const COMPACT_COMMAND: &str = "/compact";
 
 /// The line that starts a new session in place of this one.
 const CLEAR_COMMAND: &str = "/clear";
+
+/// The line that copies this session and moves onto the copy, taking its name as an option.
+const BRANCH_COMMAND: &str = "/branch";
 
 /// The line that renames this session, taking the new name as its argument.
 const RENAME_COMMAND: &str = "/rename";
@@ -238,7 +247,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 29] {
+pub fn commands() -> [Command; 31] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -295,6 +304,12 @@ pub fn commands() -> [Command; 29] {
             mid_turn: MidTurn::Changes,
         },
         Command {
+            name: ADVISOR_COMMAND,
+            argument: "[model | off]",
+            description: t!(command_advisor),
+            mid_turn: MidTurn::Changes,
+        },
+        Command {
             name: COMPACT_COMMAND,
             argument: "[focus]",
             description: t!(command_compact),
@@ -310,6 +325,12 @@ pub fn commands() -> [Command; 29] {
             name: CLEAR_COMMAND,
             argument: "",
             description: t!(command_clear),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
+            name: BRANCH_COMMAND,
+            argument: "[<name>]",
+            description: t!(command_branch),
             mid_turn: MidTurn::Waits,
         },
         Command {
@@ -551,6 +572,9 @@ pub enum Action {
     ChooseEffort,
     /// Take a level by name without opening the picker.
     SetEffort(String),
+    /// Say which model the planner may consult, take one by name, or drop the choice. Empty says.
+    /// Needs the configuration to resolve the name against, which the loop owns.
+    Advisor(String),
     /// Ask how the box should edit. Needs the terminal, so the loop runs it.
     ChooseEditing,
     /// Open another directory. Needs the workspace and the trust map, which the loop owns.
@@ -598,6 +622,9 @@ pub enum Action {
     Clear,
     /// Call this session something else. Needs the session record, which the loop owns.
     Rename(String),
+    /// Copy this session and carry on in the copy, named as given or marked as a fork. Needs the
+    /// conversation and the session record, which the loop owns.
+    Branch(String),
     /// Show, set or clear one of the session's links. Needs the session record, which the loop
     /// owns, and carries the argument unparsed, since what it says back goes in the transcript.
     Link(bravebot_session::sessions::Link, String),
@@ -873,7 +900,7 @@ fn status_report(
         confinement: &session.confinement,
         servers: &session.servers,
         permission_mode: session.permission_mode(),
-        bypass_available: session.bypass_available(),
+        began_in_bypass: session.began_in_bypass(),
         auto_vetting: session.auto_vetting(),
         turns: session.turns,
         tokens: session.tokens,
@@ -953,6 +980,9 @@ fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut 
         }
         Action::SetEffort(level) => {
             session.answer_while_working(|session| set_effort(session, &level));
+        }
+        Action::Advisor(word) => {
+            session.answer_while_working(|session| set_advisor(session, beside.config, &word));
         }
         Action::CopyReply(text) => session.answer_while_working(|session| {
             copy_reply(session, &text, crate::clipboard::copy);
@@ -1728,6 +1758,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
             Action::SetEffort(level.to_string())
         };
     }
+    if let Some(word) = argument_to(line, ADVISOR_COMMAND) {
+        return Action::Advisor(word.to_string());
+    }
     if line.trim() == CONFIG_COMMAND {
         return Action::ChooseEditing;
     }
@@ -1790,6 +1823,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     }
     if let Some(name) = argument_to(line, RENAME_COMMAND) {
         return Action::Rename(name.to_string());
+    }
+    if let Some(name) = argument_to(line, BRANCH_COMMAND) {
+        return Action::Branch(name.to_string());
     }
     if let Some(argument) = argument_to(line, ISSUE_COMMAND) {
         return Action::Link(
@@ -3224,6 +3260,7 @@ fn rewind(
                 directories: workspace.added_directories(),
                 manifest: None,
                 rewind: session.rewind_points(),
+                checkouts: &workspace.session_checkouts(),
             },
         );
     }
@@ -3299,9 +3336,13 @@ fn event_loop(
     // Windows reports modifiers on every key without being asked, and crossterm says it cannot be
     // asked there, so the question only settles it elsewhere.
     session.ctrl_enter_arrives = cfg!(windows) || enhanced_keys();
-    // The flag both opens the session in bypass and puts that rung on the ladder the key walks.
+    // The flag opens the session in bypass. The rung is on the ladder the key walks either way,
+    // unless a settings layer took it off (MODE-5).
     if skip_permissions {
-        session = session.allowing_bypass();
+        session = session.starting_in_bypass();
+    }
+    if bypass_is_unreachable(&settings) {
+        session.make_bypass_unreachable();
     }
     // Before the first turn, and kept until the session ends: a resumed record stores none, so
     // these are the words of the turns this process sends (CLI-19).
@@ -3337,7 +3378,7 @@ fn event_loop(
             TrustedPrograms::new(),
         ),
         Start::Resuming(record) => {
-            let handle = bravebot_session::sessions::Handle::resuming(
+            let mut handle = bravebot_session::sessions::Handle::resuming(
                 workspace.root(),
                 &record,
                 bravebot_session::sessions::Front::Terminal,
@@ -3391,6 +3432,11 @@ fn event_loop(
             // open for an absolute path in it to resolve at all. Restored here so the rule and
             // the reach come back together, rather than the rule alone.
             for note in record.reopen_added_directories(&mut workspace) {
+                session.note(note);
+            }
+            // Beside them, the checkouts the session's delegates were given: their rules came
+            // back with the map, and the list and the candidate paths come back here (CHECKOUT-16).
+            if let Some(note) = record.restore_checkouts(&workspace, &mut handle) {
                 session.note(note);
             }
             // After the transcript rather than before it, because each point's place in that
@@ -3738,6 +3784,10 @@ fn event_loop(
                 set_effort(&mut session, &level);
                 needs_draw = true;
             }
+            Action::Advisor(word) => {
+                set_advisor(&mut session, config, &word);
+                needs_draw = true;
+            }
             Action::ChooseEditing => {
                 choose_editing(terminal, &mut session);
                 needs_draw = true;
@@ -3776,6 +3826,7 @@ fn event_loop(
                                 directories: workspace.added_directories(),
                                 manifest: None,
                                 rewind: session.rewind_points(),
+                                checkouts: &workspace.session_checkouts(),
                             },
                         );
                     }
@@ -3811,6 +3862,7 @@ fn event_loop(
                             directories: workspace.added_directories(),
                             manifest: None,
                             rewind: session.rewind_points(),
+                            checkouts: &workspace.session_checkouts(),
                         },
                     );
                 }
@@ -3820,6 +3872,21 @@ fn event_loop(
                 }
             }
             Action::Rename(name) => rename_session(&mut session, &mut stored, &name),
+            Action::Branch(name) => {
+                // And a directory of its own, as a session carrying on from another is given one
+                // (TRUST-15): the old one goes with the session that wrote in it.
+                if branch_session(
+                    &mut session,
+                    &mut stored,
+                    &conversation,
+                    &mut answers,
+                    &workspace,
+                    &workspace.session_checkouts(),
+                    &name,
+                ) {
+                    scratch = opened_scratch(&mut session, &mut workspace);
+                }
+            }
             Action::Link(kind, argument) => {
                 link_session(&mut session, &mut stored, kind, &argument)
             }
@@ -3954,6 +4021,7 @@ fn event_loop(
                         directories: workspace.added_directories(),
                         manifest: None,
                         rewind: session.rewind_points(),
+                        checkouts: &workspace.session_checkouts(),
                     },
                 );
                 stored.append_audit(session.turns, &events);
@@ -4005,6 +4073,7 @@ fn event_loop(
                                 directories: workspace.added_directories(),
                                 manifest: None,
                                 rewind: session.rewind_points(),
+                                checkouts: &workspace.session_checkouts(),
                             },
                         );
                         stored.append_audit(session.turns, &events);
@@ -4069,6 +4138,7 @@ fn event_loop(
                             // record of its own where that field is filled.
                             manifest: None,
                             rewind: session.rewind_points(),
+                            checkouts: &workspace.session_checkouts(),
                         },
                         &events,
                     );
@@ -4236,6 +4306,7 @@ fn event_loop(
                             directories: workspace.added_directories(),
                             manifest: None,
                             rewind: session.rewind_points(),
+                            checkouts: &workspace.session_checkouts(),
                         },
                     );
                     stored.append_audit(session.turns, &events);
@@ -4281,6 +4352,7 @@ fn event_loop(
                         directories: workspace.added_directories(),
                         manifest: None,
                         rewind: session.rewind_points(),
+                        checkouts: &workspace.session_checkouts(),
                     },
                 );
                 stored.append_audit(session.turns, &events);
@@ -5133,6 +5205,57 @@ fn set_effort(session: &mut Session, word: &str) {
     }
 }
 
+/// Name the model the planner may consult, say which it may, or drop the choice.
+///
+/// The name is held to what `--advisor` holds it to: resolved as every route to a model resolves,
+/// then refused where the machine-level layer refuses it or nothing is configured to answer it
+/// (ADVISOR-9). A name that changes nothing says why, since the next turn would otherwise offer a
+/// tool whose every call fails.
+fn set_advisor(session: &mut Session, config: &Config, word: &str) {
+    let word = word.trim();
+    if word.is_empty() {
+        let note = match session
+            .advisor()
+            .map(str::to_string)
+            .or_else(|| config.advisor())
+        {
+            Some(model) => t!(session_advisor_in_force, model = model),
+            None => t!(session_advisor_none).to_string(),
+        };
+        session.note(note);
+        return;
+    }
+    if word == ADVISOR_OFF {
+        session.choose_advisor(None);
+        session.note(match config.advisor() {
+            Some(model) => t!(session_advisor_dropped_setting_remains, model = model),
+            None => t!(session_advisor_dropped).to_string(),
+        });
+        return;
+    }
+    let model = config.model_named(word);
+    match bravebot_agent::backend::serving(config, &Egress::new(), &model) {
+        bravebot_agent::backend::Serving::Refused { file, why } => {
+            session.note(t!(
+                managed_model_refused,
+                model = model,
+                reason = bravebot_agent::backend::refusal_reason(&file, why)
+            ));
+        }
+        bravebot_agent::backend::Serving::NothingConfigured { .. } => {
+            session.note(t!(session_advisor_nothing_serves, model = model));
+        }
+        bravebot_agent::backend::Serving::Configured => {
+            if bravebot_agent::backend::Backend::needs_sign_in(config, &model) {
+                session.note(t!(session_advisor_needs_sign_in, model = model));
+            } else {
+                session.note(t!(session_advisor_set, model = model.as_str()));
+                session.choose_advisor(Some(model));
+            }
+        }
+    }
+}
+
 /// What the session says about the level now in force.
 fn said_of(effort: Option<bravebot_aichat::protocol::Effort>) -> String {
     match effort {
@@ -5156,6 +5279,82 @@ fn rename_session(
         session.note(t!(session_renamed, title = stored.title()));
     } else {
         session.note(t!(session_rename_needs_something));
+    }
+}
+
+/// Copy the session as `--fork` does and carry on in the copy, saying where the original is.
+///
+/// The copy is made from the original's record, which this leaves as the last turn wrote it, and is
+/// then written again from what the session holds, so anything newer than that record is in the
+/// copy and not lost to a copy that was only as current as the record. The rewind points go,
+/// because a fork inherits none (SESSION-18) and the ones held describe the original's turns. A
+/// loop, a goal and the watches are not written down, so none of them carries over (SESSION-18).
+/// A session that keeps a checkout is refused before anything is copied, because the copy's record
+/// lists none (CHECKOUT-16). What no record keeps is forgotten, so the copy asks again about it as
+/// `--resume` of it would; whether a copy was made is what comes back.
+fn branch_session(
+    session: &mut Session,
+    stored: &mut bravebot_session::sessions::Handle,
+    conversation: &Conversation,
+    answers: &mut Answers,
+    workspace: &Workspace,
+    kept: &[bravebot_agent::workspace::SessionCheckout],
+    name: &str,
+) -> bool {
+    use bravebot_session::sessions::Unbranched;
+    if stored.to_resume().is_some() && !kept.is_empty() {
+        let ids: Vec<&str> = kept.iter().map(|checkout| checkout.id.as_str()).collect();
+        session.note(t!(
+            session_branch_keeps_checkouts,
+            count = ids.len(),
+            ids = ids.join(", ")
+        ));
+        return false;
+    }
+    match stored.branch_off(name) {
+        Ok(original) => {
+            session.close_rewind_window();
+            session.stop_loop();
+            session.clear_goal();
+            session.stop_watches();
+            let title = stored.title().to_string();
+            stored.save(
+                &title,
+                bravebot_session::sessions::Standing {
+                    history: Some(session.turn_history()),
+                    conversation: &conversation.snapshot(),
+                    turns: session.turns,
+                    tokens: session.tokens,
+                    spend: session.spend_by_turn(),
+                    timing: session.timing_by_turn(),
+                    model: session.served_model(),
+                    todos: &session.todos_by_turn(),
+                    asides: session.asides(),
+                    trust: &answers.trust,
+                    programs: &answers.programs,
+                    directories: workspace.added_directories(),
+                    manifest: None,
+                    rewind: session.rewind_points(),
+                    checkouts: &workspace.session_checkouts(),
+                },
+            );
+            session.note(t!(
+                session_branched,
+                title = stored.title(),
+                id = original.id,
+                directory = original.directory.display().to_string()
+            ));
+            answers.forget_what_no_record_keeps();
+            true
+        }
+        Err(refused) => {
+            session.note(match refused {
+                Unbranched::NothingWritten => t!(session_branch_nothing_written),
+                Unbranched::Unwritable => t!(session_branch_unwritable),
+                Unbranched::Refused => t!(session_branch_refused),
+            });
+            false
+        }
     }
 }
 
@@ -5492,6 +5691,15 @@ impl RuleSources {
     }
 }
 
+/// Whether a layer in force, or the administrator's pinned file, wrote
+/// `permissions.bypassUnreachable` (PERM-17).
+fn bypass_is_unreachable(settings: &bravebot_config::Settings) -> bool {
+    settings
+        .narrowing()
+        .strictest(bravebot_config::Managed::load().narrowing())
+        .makes_bypass_unreachable()
+}
+
 /// The rules every turn is given, built from the settings of the workspace the session is in.
 struct Rules {
     sources: RuleSources,
@@ -5510,6 +5718,11 @@ impl Rules {
         ask: impl FnOnce(&[bravebot_agent::granted::Proposed], &mut String) -> Option<bool>,
     ) -> bool {
         let settings = self.sources.settings(root);
+        // Before the person is asked anything, so a checkout that forbids bypassing holds whatever
+        // they answer about its rules.
+        if bypass_is_unreachable(&settings) {
+            session.make_bypass_unreachable();
+        }
         let grants = self.sources.grants(root);
         let Some(permissions) =
             rules_from(session, &settings, root, grants.as_ref(), whence, id, ask)
@@ -5560,6 +5773,16 @@ impl Answers {
             exposed: bravebot_core::credentials::Exposed::new(),
             rules,
         }
+    }
+
+    /// The map, the programs vouched for and the rules are the record's, so the copy `/branch`
+    /// carries on in holds them. A server approved, a run prompt drawn and a file agreed to hold a
+    /// secret were answers given to the session the copy was made from, and `--resume` of the copy
+    /// would start without them.
+    fn forget_what_no_record_keeps(&mut self) {
+        self.servers = None;
+        self.asked_about = AskedAbout::new();
+        self.exposed = bravebot_core::credentials::Exposed::new();
     }
 
     /// Forget what the session agreed to, for one beginning again in this process (`/clear`).
@@ -6418,7 +6641,8 @@ fn manifest_animated(
         .with_permission_mode(permission_mode)
         .with_attribution(attribution.clone())
         .with_output_cap(output_cap)
-        .with_deadlines(deadlines);
+        .with_deadlines(deadlines)
+        .with_confined_runs(true);
     // In the order the markers in the task number them, for the reason a turn's are: a planner
     // reading "[Image #2]" has to be able to count to the picture that answers it.
     for image in pasted {
@@ -7066,6 +7290,7 @@ fn run_turn_animated(
         .with_system_prompts(session.system_prompts().clone())
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
+        .with_confined_runs(true)
         // Whether a check that finds nothing answers in the person's place. Read off the session
         // for the reason the mode is: the `a` key can change it, and a turn keeps the answer it
         // began with.
@@ -7088,6 +7313,7 @@ fn run_turn_animated(
         task = task.with_file(file);
     }
     task = with_submitted_attachments(task, session);
+    task = with_session_advisor(task, session);
     // The worker shares file decisions so errors cannot return the pre-write map.
     let file_authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
     let task = task.with_file_authority(file_authority.clone());
@@ -7589,6 +7815,13 @@ fn finish_turn(
         exposed,
         events,
     }
+}
+
+/// The model `/advisor` named, carried on the turn so the planner is offered it (ADVISOR-9).
+///
+/// `None` where the session named none, which leaves the turn to the `advisorModel` setting.
+fn with_session_advisor(task: Task, session: &Session) -> Task {
+    task.with_advisor(session.advisor().map(str::to_string))
 }
 
 /// Carry the attachments owned by the submitted line into its turn request.
@@ -8764,6 +8997,163 @@ mod tests {
             google_vertex_rows(&config),
             ["google-vertex/google/gemini-3-flash-preview"]
         );
+    }
+
+    /// A loopback server answering every request with `body`, and the path of each request it
+    /// answered. A path is sent before its answer is written, so a caller whose request has returned
+    /// finds it already there.
+    fn a_listing_server(body: &'static str) -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{BufRead, BufReader, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+        let address = format!("http://{}", listener.local_addr().expect("an address"));
+        let (sender, asked) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+                let mut reader = BufReader::new(stream);
+                let mut request = String::new();
+                if reader.read_line(&mut request).is_err() {
+                    continue;
+                }
+                let mut header = String::new();
+                while matches!(reader.read_line(&mut header), Ok(read) if read > 2) {
+                    header.clear();
+                }
+                let Some(path) = request.split(' ').nth(1) else {
+                    continue;
+                };
+                if sender.send(path.to_string()).is_err() {
+                    return;
+                }
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = reader.into_inner().write_all(response.as_bytes());
+            }
+        });
+        (address, asked)
+    }
+
+    /// BACKEND-5: the Brave roster is asked for only where this build holds the keys to sign for it.
+    /// The listing itself is unsigned, so a build pointed at AWS with the endpoint set and a key
+    /// blank would be answered, and would offer models whose every request then fails unsigned.
+    ///
+    /// The same endpoint is asked once both keys are there, so a server that answered nothing cannot
+    /// be what keeps the roster out.
+    #[test]
+    fn the_brave_roster_is_offered_only_where_this_build_can_sign_for_it() {
+        use bravebot_config::env_var;
+
+        let (endpoint, asked) = a_listing_server(
+            r#"[{"key": "brave-model", "display_name": "Brave Model",
+                "capabilities": ["chat", "tools"], "options": {"access": "basic_and_premium"}}]"#,
+        );
+        let holding = |key_id: bool, signing_key: bool| {
+            Config::from_lookup(|name| match name {
+                env_var::USE_BEDROCK => Some("1".into()),
+                env_var::AWS_REGION => Some("us-west-2".into()),
+                env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+                env_var::ENDPOINT => Some(endpoint.clone()),
+                env_var::KEY_ID if key_id => Some("a-key-id".into()),
+                env_var::SIGNING_KEY if signing_key => Some("a-signing-key".into()),
+                _ => None,
+            })
+            .expect("an account named on its own is a working configuration")
+        };
+        let offered = |config: &Config| -> Vec<String> {
+            list_models(config, None)
+                .expect("a roster")
+                .into_iter()
+                .map(|model| model.key)
+                .collect()
+        };
+
+        for (key_id, signing_key) in [(false, false), (true, false), (false, true)] {
+            let unsigned = holding(key_id, signing_key);
+            let state = format!("key id held: {key_id}, signing key held: {signing_key}");
+            assert_eq!(offered(&unsigned), ["opus-arn"], "{state}");
+            assert!(!unsigned.serves_aichat(), "{state}");
+        }
+        assert_eq!(
+            offered(&holding(true, true)),
+            ["opus-arn", bravebot_config::DEFAULT_MODEL, "brave-model"]
+        );
+        assert_eq!(asked.try_iter().collect::<Vec<_>>(), ["/v1/models"]);
+    }
+
+    /// BACKEND-5: a gateway whose block names a credential nothing holds is not asked for its
+    /// models. Its listing would be refused and every row from it would fail the same way, so the
+    /// only useful thing to say about it is what `doctor` says: no credential found.
+    ///
+    /// A block naming no credential is asked by the same server. That is a local Ollama's block, and
+    /// it shows the refusal is about the credential rather than about asking.
+    #[test]
+    fn a_gateway_whose_credential_nothing_holds_is_not_asked_for_its_models() {
+        let (base, asked) = a_listing_server(r#"{"data": [{"id": "llama3"}]}"#);
+        let with = |credential: &str| {
+            let mut config = a_config_with_a_named_roster();
+            config.providers = bravebot_config::Settings::parse(&format!(
+                r#"{{"provider": {{"local": {{"options": {{"baseURL": "{base}/v1"}}{credential}}}}}}}"#
+            ))
+            .providers()
+            .to_vec();
+            assert_eq!(config.providers.len(), 1, "the block configured no gateway");
+            config
+        };
+        let offered = |config: &Config| -> Vec<String> {
+            list_models(config, None)
+                .expect("a roster")
+                .into_iter()
+                .map(|model| model.key)
+                .filter(|key| key.starts_with("local/"))
+                .collect()
+        };
+
+        assert_eq!(
+            offered(&with(r#", "env": ["BRAVEBOT_TEST_UNSET_GATEWAY_KEY"]"#)),
+            Vec::<String>::new()
+        );
+        assert_eq!(offered(&with("")), ["local/llama3"]);
+        assert_eq!(asked.try_iter().collect::<Vec<_>>(), ["/v1/models"]);
+    }
+
+    /// BACKEND-5, BACKEND-29: a model an AWS `provider` entry names is offered under a name the
+    /// Bedrock backend answers to, and that name reaches the entry's own account. Qualified by the
+    /// entry's id, as a gateway's rows are, the name reaches no Bedrock account and no gateway, and
+    /// the request goes to Brave's endpoint naming a model it does not serve.
+    #[test]
+    fn an_aws_provider_entrys_models_are_offered_under_names_bedrock_answers_to() {
+        let mut config = a_config_with_a_named_roster();
+        config.providers = bravebot_config::Settings::parse(
+            r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-east-1"},
+                "models": {"openai.gpt-5.6-sol": {}}}}}"#,
+        )
+        .providers()
+        .to_vec();
+        assert_eq!(
+            config.providers.len(),
+            1,
+            "the block configured no AWS entry"
+        );
+        assert!(config.providers[0].bedrock.is_some());
+
+        let offered: Vec<String> = list_models(&config, None)
+            .expect("a roster")
+            .into_iter()
+            .map(|model| model.key)
+            .collect();
+        assert_eq!(offered, ["opus-arn", "openai.gpt-5.6-sol"]);
+        let regions: Vec<Option<&str>> = offered
+            .iter()
+            .map(|key| {
+                config
+                    .bedrock_for(key)
+                    .map(|account| account.region.as_str())
+            })
+            .collect();
+        assert_eq!(regions, [Some("us-west-2"), Some("us-east-1")]);
     }
 
     /// A model chosen in an earlier session is read back off disk, and the window that came with it
@@ -12529,6 +12919,40 @@ mod tests {
         assert!(session.input().is_empty(), "the slash was typed");
     }
 
+    /// A running turn answers the two letters the way an idle one does, since neither sends anything.
+    /// The path a turn in flight takes is a second one through the keys, so an idle session's
+    /// answer says nothing about it: `k` has to recall the last prompt and `/` has to open the
+    /// search, not move a caret or type into a box that is waiting for the turn to end.
+    #[test]
+    fn the_letters_that_spell_keys_reach_the_history_and_the_search_mid_turn() {
+        let mut session = editing_vis_way();
+        type_line(&mut session, "an earlier prompt");
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.complete("an answer", Vec::new(), 0);
+        type_line(&mut session, "the running prompt");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert!(session.indicator().is_some(), "no turn is running");
+        handle_key_while_working(&mut session, key(KeyCode::Esc));
+
+        handle_key_while_working(&mut session, key(KeyCode::Char('k')));
+        assert_eq!(
+            session.input(),
+            "the running prompt",
+            "k did not reach the history mid-turn"
+        );
+
+        handle_key_while_working(&mut session, key(KeyCode::Char('/')));
+        assert!(
+            session.searching_history(),
+            "the slash did not open the search mid-turn"
+        );
+        assert_eq!(
+            session.input(),
+            "the running prompt",
+            "the slash was typed into the line"
+        );
+    }
+
     /// In INSERT mode every one of those letters is a letter, which is the whole of what the mode
     /// means. A `/` typed there is the start of a command, and a `j` is a `j`.
     #[test]
@@ -13609,6 +14033,237 @@ mod tests {
             None,
             "a dropped field was still sent"
         );
+    }
+
+    /// The words `/advisor` takes, as the key handler reads them. A bare word and a named model
+    /// are the same command; `off` is a word of its own only to the handler that acts on it.
+    #[test]
+    fn the_advisor_command_takes_a_model_or_nothing() {
+        for (line, word) in [
+            ("/advisor", ""),
+            ("/advisor some-model", "some-model"),
+            ("/advisor off", "off"),
+        ] {
+            let mut session = Session::new("none");
+            assert_eq!(
+                dispatch_command(&mut session, commanded(line)),
+                Action::Advisor(word.to_string()),
+                "{line}"
+            );
+        }
+    }
+
+    /// `/advisors` is not `/advisor`: the whole word must match.
+    #[test]
+    fn a_longer_word_starting_with_advisor_is_a_prompt() {
+        let mut session = Session::new("none");
+        for c in "/advisors are useful".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("/advisors are useful".to_string())
+        );
+    }
+
+    /// Only the command word. "ask the /advisor about it" is a thing to say to the planner.
+    #[test]
+    fn a_prompt_containing_the_advisor_command_is_still_a_prompt() {
+        let mut session = Session::new("none");
+        for c in "ask the /advisor about it".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("ask the /advisor about it".to_string()),
+            "the line was not sent"
+        );
+    }
+
+    /// ADVISOR-9: a model the session names is the one the next turn offers the planner, resolved
+    /// as `--advisor` resolves it, and it reaches the turn's task.
+    #[test]
+    fn a_model_named_to_the_advisor_command_reaches_the_next_turn() {
+        let config = a_config_needing_no_sign_in();
+        let mut session = Session::new("none");
+
+        set_advisor(&mut session, &config, "opus");
+
+        assert_eq!(session.advisor(), Some(config.model_named("opus").as_str()));
+        assert!(
+            session
+                .transcript
+                .iter()
+                .any(|entry| entry.text.contains(&config.model_named("opus"))),
+            "nothing named the model"
+        );
+        assert_eq!(
+            with_session_advisor(Task::new("p"), &session).advisor,
+            Some(config.model_named("opus")),
+            "the task did not carry the advisor"
+        );
+    }
+
+    /// A session that named no advisor leaves the turn to the setting rather than overriding it
+    /// with nothing.
+    #[test]
+    fn a_session_naming_no_advisor_leaves_the_task_without_one() {
+        let session = Session::new("none");
+        assert_eq!(with_session_advisor(Task::new("p"), &session).advisor, None);
+    }
+
+    /// BACKEND-48 as `/advisor` meets it: a model this machine may not request is not taken, and
+    /// the refusal names the model and the file that refused it. Taking it would offer the planner
+    /// a tool whose every call fails.
+    #[test]
+    fn an_advisor_this_machine_may_not_request_is_refused() {
+        let scratch = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join("tui-models-advisor");
+        std::fs::create_dir_all(&scratch).expect("a scratch directory");
+        let path = scratch.join("managed.json");
+        std::fs::write(&path, r#"{"models": {"deny": ["an-expensive-model"]}}"#)
+            .expect("a managed file");
+        let mut config = a_config_needing_no_sign_in();
+        config.models = bravebot_config::Managed::at(&path).models().clone();
+        let mut session = Session::new("none");
+
+        set_advisor(&mut session, &config, "an-expensive-model");
+
+        assert_eq!(session.advisor(), None, "a refused model was taken");
+        let said = session
+            .transcript
+            .last()
+            .map(|entry| entry.text.clone())
+            .unwrap_or_default();
+        assert!(
+            said.contains("an-expensive-model") && said.contains(&path.display().to_string()),
+            "the refusal named neither the model nor the file: {said}"
+        );
+    }
+
+    /// A model nothing is configured to answer is not taken: the line names it, and the advisor
+    /// the session already held stays. Taking it would offer the planner a tool whose every call
+    /// fails, and dropping the held one would lose a working choice for a typo.
+    #[test]
+    fn an_advisor_nothing_is_configured_to_answer_is_refused_and_the_held_one_stays() {
+        let config = Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("https://ai-chat.bsg.brave.com".into()),
+            _ => None,
+        })
+        .expect("config");
+        assert!(
+            matches!(
+                bravebot_agent::backend::serving(
+                    &config,
+                    &Egress::new(),
+                    &config.model_named("an-unserved-model")
+                ),
+                bravebot_agent::backend::Serving::NothingConfigured { .. }
+            ),
+            "the fixture does not describe a model nothing answers"
+        );
+        let mut session = Session::new("none");
+        session.choose_advisor(Some("the-advisor-already-held".to_string()));
+
+        set_advisor(&mut session, &config, "an-unserved-model");
+
+        assert_eq!(
+            session.advisor(),
+            Some("the-advisor-already-held"),
+            "a model nothing answers replaced the advisor in force"
+        );
+        let said = session.transcript.last().expect("a note").text.clone();
+        assert!(
+            said.contains("an-unserved-model") && said.contains("nothing is configured"),
+            "the line did not say which model nothing answers: {said}"
+        );
+    }
+
+    /// A model whose account needs a sign-in first is not taken either, and the line says so rather
+    /// than reporting a service that is not there. The advisor the session already held stays.
+    #[test]
+    fn an_advisor_needing_a_sign_in_is_refused_and_the_held_one_stays() {
+        let config = Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("http://unused.invalid".into()),
+            bravebot_config::env_var::USE_BEDROCK => Some("1".into()),
+            bravebot_config::env_var::AWS_REGION => Some("us-west-2".into()),
+            bravebot_config::env_var::BEDROCK_HAIKU_MODEL => Some("haiku-arn".into()),
+            // A profile no machine has, so no session exists whoever runs this.
+            bravebot_config::env_var::AWS_PROFILE => Some("a-profile-no-machine-has".into()),
+            _ => None,
+        })
+        .expect("config");
+        assert!(
+            bravebot_agent::backend::Backend::needs_sign_in(&config, &config.model_named("haiku")),
+            "the fixture does not describe a model needing a sign-in"
+        );
+        let mut session = Session::new("none");
+        session.choose_advisor(Some("the-advisor-already-held".to_string()));
+
+        set_advisor(&mut session, &config, "haiku");
+
+        assert_eq!(
+            session.advisor(),
+            Some("the-advisor-already-held"),
+            "a model needing a sign-in replaced the advisor in force"
+        );
+        let said = session.transcript.last().expect("a note").text.clone();
+        assert!(
+            said.contains(&config.model_named("haiku")) && said.contains("sign-in"),
+            "the line did not say which model needs a sign-in: {said}"
+        );
+    }
+
+    /// `off` drops the session's own choice, and says the setting still applies where one does:
+    /// reporting the advisor as gone while the setting keeps offering it would be a false report.
+    #[test]
+    fn dropping_the_advisor_says_whether_the_setting_still_names_one() {
+        let mut config = a_config_needing_no_sign_in();
+        let mut session = Session::new("none");
+        set_advisor(&mut session, &config, "opus");
+
+        set_advisor(&mut session, &config, "off");
+        assert_eq!(session.advisor(), None, "the choice was kept");
+        let said = session.transcript.last().expect("a note").text.clone();
+        assert!(!said.contains("advisorModel"), "{said}");
+
+        config.advisor_model = Some("sonnet".to_string());
+        set_advisor(&mut session, &config, "opus");
+        set_advisor(&mut session, &config, "off");
+        let said = session.transcript.last().expect("a note").text.clone();
+        assert!(
+            said.contains("advisorModel") && said.contains(&config.model_named("sonnet")),
+            "the setting still in force went unmentioned: {said}"
+        );
+    }
+
+    /// The bare word says which advisor is in force, the session's own before the setting's.
+    #[test]
+    fn the_bare_advisor_command_says_which_advisor_is_in_force() {
+        let mut config = a_config_needing_no_sign_in();
+        let mut session = Session::new("none");
+
+        set_advisor(&mut session, &config, "");
+        let none = session.transcript.last().expect("a note").text.clone();
+
+        config.advisor_model = Some("sonnet".to_string());
+        set_advisor(&mut session, &config, "");
+        let setting = session.transcript.last().expect("a note").text.clone();
+        assert!(setting.contains(&config.model_named("sonnet")), "{setting}");
+        assert_ne!(none, setting);
+
+        set_advisor(&mut session, &config, "opus");
+        set_advisor(&mut session, &config, "");
+        let own = session.transcript.last().expect("a note").text.clone();
+        assert!(own.contains(&config.model_named("opus")), "{own}");
+        assert!(!own.contains(&config.model_named("sonnet")), "{own}");
     }
 
     /// The choice survives the model that cannot use it: somebody may be about to change model,
@@ -17416,6 +18071,7 @@ mod tests {
         assert_eq!(
             skipping,
             vec![
+                ADVISOR_COMMAND,
                 CAFFEINATE_COMMAND,
                 COPY_COMMAND,
                 COST_COMMAND,
@@ -18274,6 +18930,7 @@ mod tests {
             (CLEAR_COMMAND, "/rename deploy watch"),
             ("/cd crates/tui", FORGET_TRUST_COMMAND),
             ("second", "/effort high"),
+            ("second", "/advisor some-model"),
             (MODEL_COMMAND, "/theme no-such-theme"),
         ] {
             let mut session = a_turn_running_on("first");
@@ -19836,6 +20493,7 @@ mod tests {
         for expected in [
             PermissionMode::AcceptEdits,
             PermissionMode::Plan,
+            PermissionMode::Bypass,
             PermissionMode::Ask,
         ] {
             handle_key(&mut session, shift(KeyCode::Tab));
@@ -19873,24 +20531,95 @@ mod tests {
         );
     }
 
-    /// Bypass is reachable only where `--dangerously-skip-permissions` was given. Without it the
-    /// rung does not exist, however many times the key is pressed, or the flag would be decorative.
+    /// Bypass is on the ladder of a session that did not start in it, and reaching it that way does
+    /// not make the line under the box name asking once the key leaves it: that is said only of a
+    /// session the flag opened in bypass.
     #[test]
-    fn the_key_cannot_reach_bypass_without_the_flag() {
+    fn the_key_reaches_bypass_without_the_flag() {
         use bravebot_agent::PermissionMode;
         let mut session = Session::new("none");
+        assert!(!session.began_in_bypass());
+        let mut reached = false;
+        for _ in 0..4 {
+            handle_key(&mut session, shift(KeyCode::Tab));
+            reached |= session.permission_mode() == PermissionMode::Bypass;
+        }
+        assert!(reached, "four presses never reached bypass");
+        assert_eq!(session.permission_mode(), PermissionMode::Ask);
+        assert!(!session.began_in_bypass());
+    }
+
+    /// PERM-17: where a layer wrote `permissions.bypassUnreachable` the rung is off the ladder, and
+    /// the key cannot reach it however many times it is pressed.
+    #[test]
+    fn the_key_cannot_reach_bypass_where_a_layer_made_it_unreachable() {
+        use bravebot_agent::PermissionMode;
+        let mut session = Session::new("none");
+        session.make_bypass_unreachable();
         for _ in 0..12 {
             handle_key(&mut session, shift(KeyCode::Tab));
             assert_ne!(session.permission_mode(), PermissionMode::Bypass);
         }
     }
 
-    /// The flag opens the session in bypass and puts that rung on the ladder. Honouring only the
-    /// second would make the flag do nothing a person could see.
+    /// A session already in bypass when a layer takes it away goes back to asking, is told so, and
+    /// does not get the rung back.
+    #[test]
+    fn a_session_in_bypass_is_put_back_to_asking_when_a_layer_takes_bypass_away() {
+        use bravebot_agent::PermissionMode;
+        let mut session = Session::new("none").starting_in_bypass();
+        let notes = session.transcript.len();
+        session.make_bypass_unreachable();
+        assert_eq!(session.permission_mode(), PermissionMode::Ask);
+        assert!(session.transcript.len() > notes, "the person was not told");
+        for _ in 0..12 {
+            handle_key(&mut session, shift(KeyCode::Tab));
+            assert_ne!(session.permission_mode(), PermissionMode::Bypass);
+        }
+    }
+
+    /// `/cd` reads the destination's layers, and a checkout that forbids bypassing holds in a session
+    /// that was in bypass when it moved there, whatever the person answers about its rules.
+    #[test]
+    fn reading_the_rules_of_a_checkout_that_forbids_bypassing_takes_bypass_away() {
+        use bravebot_agent::PermissionMode;
+        let root = crate::testutil::scratch_dir("bravebot-bypass-unreachable-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let a = root.join("a");
+        let b = root.join("b");
+        checkout_with_settings(&a, r#"{"permissions": {}}"#);
+        checkout_with_settings(&b, r#"{"permissions": {"bypassUnreachable": true}}"#);
+
+        let workspace = Workspace::new(&a).expect("workspace");
+        let mut session = Session::new("none");
+        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        session.cycle_permission_mode();
+        session.cycle_permission_mode();
+        session.cycle_permission_mode();
+        assert_eq!(session.permission_mode(), PermissionMode::Bypass);
+
+        rules.read_for(
+            &mut session,
+            &b,
+            Whence::Asked,
+            "the-next-session",
+            never_asked,
+        );
+
+        assert_eq!(session.permission_mode(), PermissionMode::Ask);
+        session.cycle_permission_mode();
+        session.cycle_permission_mode();
+        session.cycle_permission_mode();
+        assert_eq!(session.permission_mode(), PermissionMode::Ask);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The flag opens the session in bypass, and the key walks out of it and back round.
     #[test]
     fn the_flag_opens_the_session_in_bypass_and_can_be_cycled_out_of() {
         use bravebot_agent::PermissionMode;
-        let mut session = Session::new("none").allowing_bypass();
+        let mut session = Session::new("none").starting_in_bypass();
         assert_eq!(session.permission_mode(), PermissionMode::Bypass);
 
         // Out of it, round the ladder, and back: the key means the same thing wherever it started.
@@ -20792,6 +21521,7 @@ mod tests {
                     directories: &[],
                     manifest: None,
                     rewind: session.rewind_points(),
+                    checkouts: &[],
                 },
             );
         }
@@ -20936,6 +21666,384 @@ mod tests {
         );
     }
 
+    /// CMD-2: `/branch` is a command only as the whole line or with a name after it, so a question
+    /// about it is a prompt, and so is a longer word that starts with it.
+    #[test]
+    fn a_prompt_containing_the_branch_command_is_still_a_prompt() {
+        for line in ["what does /branch copy", "/branches are useful"] {
+            let mut session = Session::new("none");
+            for c in line.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit(line.to_string())
+            );
+        }
+    }
+
+    /// CMD-1: `/branch` alone and `/branch <name>` both reach the loop, the name unparsed.
+    #[test]
+    fn the_branch_command_carries_its_name() {
+        for (line, name) in [
+            ("/branch", ""),
+            ("/branch try the other parser", "try the other parser"),
+        ] {
+            let mut session = Session::new("none");
+            for c in line.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Branch(name.to_string())
+            );
+        }
+    }
+
+    /// CMD-8: `/branch` typed during a turn waits for it, since the copy is read from the record
+    /// the turn is still to write.
+    #[test]
+    fn the_branch_command_waits_for_the_turn_in_flight() {
+        let mut session = a_turn_running_on("first");
+        for c in "/branch".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        assert_eq!(waiting_prompts(&session), vec!["/branch"]);
+    }
+
+    /// A session one finished turn in, with a goal and a loop running and a record written, the
+    /// state `/branch` is typed in.
+    fn a_session_to_branch(
+        root: &std::path::Path,
+    ) -> (
+        Workspace,
+        Session,
+        bravebot_session::sessions::Handle,
+        Conversation,
+        Answers,
+    ) {
+        use bravebot_aichat::protocol::Message;
+        use bravebot_session::sessions::{self, Standing};
+
+        let root = root.to_path_buf();
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let trust = TrustStore::new(&root);
+        let programs = TrustedPrograms::new();
+        let mut session = Session::new("none");
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let answers = Answers::opening(trust, programs, rules);
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        let mut conversation = Conversation::new();
+
+        let prompt = "write a line saying hello into notes.txt";
+        let start = conversation.recounted().len();
+        type_line(&mut session, prompt);
+        session.submit().expect("the prompt is sent");
+        let point = rewind_point(
+            &session,
+            &conversation,
+            &answers.trust,
+            &answers.programs,
+            &stored,
+        );
+        session.open_rewind_point(point, prompt.to_string());
+        session.prompt_recorded(conversation.recounted().len());
+        conversation.push(Message::user(prompt));
+        conversation.push(Message::assistant("written"));
+        session.complete("written", vec![], 10);
+        session.record_turn(start, &conversation);
+        stored.save(
+            prompt,
+            Standing {
+                history: Some(session.turn_history()),
+                conversation: &conversation.snapshot(),
+                turns: session.turns,
+                tokens: session.tokens,
+                spend: session.spend_by_turn(),
+                timing: session.timing_by_turn(),
+                model: None,
+                todos: &session.todos_by_turn(),
+                asides: &[],
+                trust: &answers.trust,
+                programs: &answers.programs,
+                directories: &[],
+                manifest: None,
+                rewind: session.rewind_points(),
+                checkouts: &[],
+            },
+        );
+        session.start_goal("cargo test exits 0".to_string());
+        session.start_loop(crate::loops::request("watch"), Vec::new(), Vec::new());
+        assert!(!session.rewind_points().is_empty());
+        (workspace, session, stored, conversation, answers)
+    }
+
+    /// What a session holds once it has vouched for a program, drawn a run prompt for it, agreed a
+    /// file may be shown and built its language servers.
+    fn give_answers(answers: &mut Answers, root: &std::path::Path) {
+        let make =
+            bravebot_core::programs::Command::new("/usr/bin/make", vec!["check".into()], root);
+        answers.programs.trust(make.clone());
+        answers.asked_about.record(make);
+        answers.exposed.allow(".env");
+        answers.servers = Some(LanguageServers::new(root, None));
+    }
+
+    /// SESSION-31: the session moves onto a marked copy of its record and says where the original
+    /// is. The goal and the loop, which no record holds, end with the original; the rewind points,
+    /// which a fork inherits none of, go too. The original's record is left as it was.
+    #[test]
+    fn branching_a_session_moves_onto_the_copy_and_leaves_the_original() {
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-branch");
+        std::fs::create_dir_all(&root).expect("create");
+        let (workspace, mut session, mut stored, conversation, mut answers) =
+            a_session_to_branch(&root);
+        let prompt = "write a line saying hello into notes.txt";
+
+        let original = stored.id().to_string();
+        let original_path = sessions::project_directory(&root)
+            .expect("the store")
+            .join(format!("{original}.json"));
+        let before = std::fs::read(&original_path).expect("the original's record");
+
+        assert!(branch_session(
+            &mut session,
+            &mut stored,
+            &conversation,
+            &mut answers,
+            &workspace,
+            &[],
+            "",
+        ));
+
+        assert_ne!(stored.id(), original, "the session stayed on the original");
+        assert_eq!(
+            stored.title(),
+            format!("{} (fork)", sessions::title_from(prompt))
+        );
+        assert!(session.goal().is_none(), "a goal carried over to the copy");
+        assert!(
+            session.looping().is_none(),
+            "a loop carried over to the copy"
+        );
+        assert!(
+            session.rewind_points().is_empty(),
+            "the copy kept the original's rewind points"
+        );
+        let said = session.transcript.last().expect("a note").text.clone();
+        assert!(
+            said.contains(&format!("bravebot --resume {original}")),
+            "the original's id is not in {said:?}"
+        );
+        let copy = sessions::load(&root, stored.id()).expect("the copy's record");
+        assert_eq!(copy.turns, session.turns);
+        assert_eq!(
+            std::fs::read(&original_path).expect("the original's record"),
+            before,
+            "the original's record changed"
+        );
+    }
+
+    /// SESSION-31: the copy holds what `--resume` of it would. The trust map and the programs
+    /// vouched for are in the record, so they stay; the language servers, the run prompts drawn
+    /// and the files agreed to be shown are in none, so they are asked about again.
+    #[test]
+    fn a_branch_keeps_what_the_record_holds_and_forgets_the_rest() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-branch-answers");
+        std::fs::create_dir_all(&root).expect("create");
+        let (workspace, mut session, mut stored, conversation, mut answers) =
+            a_session_to_branch(&root);
+        give_answers(&mut answers, &root);
+        let programs = answers.programs.clone();
+
+        assert!(branch_session(
+            &mut session,
+            &mut stored,
+            &conversation,
+            &mut answers,
+            &workspace,
+            &[],
+            "",
+        ));
+
+        assert_eq!(
+            answers.programs, programs,
+            "the copy forgot a program vouched for"
+        );
+        assert!(
+            answers.servers.is_none(),
+            "the copy kept the servers approved"
+        );
+        assert_eq!(
+            answers.asked_about,
+            AskedAbout::new(),
+            "the copy kept the run prompts drawn"
+        );
+        assert!(
+            !answers.exposed.holds(".env"),
+            "the copy kept a file agreed to be shown"
+        );
+    }
+
+    /// SESSION-31, CHECKOUT-16: a fork carries no checkout, so a branch while the session keeps one
+    /// is refused, naming it, and nothing is copied, ended or forgotten.
+    #[test]
+    fn branching_is_refused_while_the_session_keeps_a_checkout() {
+        use bravebot_session::sessions;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-branch-checkout");
+        std::fs::create_dir_all(&root).expect("create");
+        let (workspace, mut session, mut stored, conversation, mut answers) =
+            a_session_to_branch(&root);
+        give_answers(&mut answers, &root);
+        let original = stored.id().to_string();
+        let (asked_about, exposed) = (answers.asked_about.clone(), answers.exposed.clone());
+
+        assert!(!branch_session(
+            &mut session,
+            &mut stored,
+            &conversation,
+            &mut answers,
+            &workspace,
+            &[kept_checkout(true)],
+            "",
+        ));
+
+        assert_eq!(stored.id(), original, "the session moved to a copy");
+        assert_eq!(sessions::list(&root).len(), 1, "a copy was written");
+        assert_eq!(
+            session.transcript.last().map(|entry| entry.text.clone()),
+            Some(t!(session_branch_keeps_checkouts, count = 1, ids = "c2"))
+        );
+        assert!(session.looping().is_some(), "a refusal ended the loop");
+        assert!(answers.servers.is_some(), "a refusal dropped the servers");
+        assert_eq!(answers.asked_about, asked_about);
+        assert_eq!(answers.exposed, exposed);
+    }
+
+    /// SESSION-31, GOAL-12: a goal is not written down, so the copy has none. The setup starts a
+    /// loop, which replaces a goal, so the loop is stopped before the goal is set.
+    #[test]
+    fn branching_a_session_with_a_goal_takes_the_goal_off() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-branch-goal");
+        std::fs::create_dir_all(&root).expect("create");
+        let (workspace, mut session, mut stored, conversation, mut answers) =
+            a_session_to_branch(&root);
+        session.stop_loop();
+        session.start_goal("cargo test exits 0".to_string());
+        assert!(session.goal().is_some(), "the goal was not set");
+
+        assert!(branch_session(
+            &mut session,
+            &mut stored,
+            &conversation,
+            &mut answers,
+            &workspace,
+            &[],
+            "",
+        ));
+
+        assert!(
+            session.goal().is_none(),
+            "the goal carried over to the copy"
+        );
+    }
+
+    /// SESSION-31: a watch is not written down, so the copy has none, and the person who armed it
+    /// is told it ended. The setup's loop is stopped first, as a loop and a watch do not stand
+    /// together.
+    #[test]
+    fn branching_a_session_with_a_watch_ends_it_and_says_so() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-branch-watch");
+        std::fs::create_dir_all(&root).expect("create");
+        let (workspace, mut session, mut stored, conversation, mut answers) =
+            a_session_to_branch(&root);
+        session.stop_loop();
+        session.arm_watch(
+            "notes.md",
+            "/work",
+            bravebot_agent::watch::Looked::Saw("first".to_string()),
+        );
+        assert_eq!(session.watches().len(), 1, "the watch was not armed");
+
+        assert!(branch_session(
+            &mut session,
+            &mut stored,
+            &conversation,
+            &mut answers,
+            &workspace,
+            &[],
+            "",
+        ));
+
+        assert!(
+            session.watches().is_empty(),
+            "a watch carried over to the copy"
+        );
+        assert!(
+            session
+                .transcript
+                .iter()
+                .any(|entry| entry.text == t!(watches_stopped, count = 1)),
+            "the watch ended in silence"
+        );
+    }
+
+    /// SESSION-31: a session with no turn has no record, and says so rather than copying nothing.
+    #[test]
+    fn branching_a_session_with_no_turn_says_so_and_stays_put() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-branch-empty");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let mut session = Session::new("none");
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut answers = Answers::opening(TrustStore::new(&root), TrustedPrograms::new(), rules);
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            &root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        let id = stored.id().to_string();
+
+        assert!(!branch_session(
+            &mut session,
+            &mut stored,
+            &Conversation::new(),
+            &mut answers,
+            &workspace,
+            &[],
+            "",
+        ));
+
+        assert_eq!(stored.id(), id);
+        assert_eq!(
+            session.transcript.last().expect("a note").text,
+            t!(session_branch_nothing_written)
+        );
+        assert!(bravebot_session::sessions::list(&root).is_empty());
+    }
+
     /// `/rename` gives up every rewind point and then writes the record, so the session it wrote
     /// has nothing to rewind to and neither has the one resumed from it. Left in the record, the
     /// point came back to a session whose own `/undo` had just said there was nothing left to undo,
@@ -20988,6 +22096,7 @@ mod tests {
                 directories: &[],
                 manifest: None,
                 rewind: session.rewind_points(),
+                checkouts: &workspace.session_checkouts(),
             },
         );
         assert_eq!(
@@ -21433,7 +22542,7 @@ mod tests {
         checkout_with_settings(&b, CHECK);
 
         let mut workspace = Workspace::new(&a).expect("workspace");
-        let mut session = Session::new("none").allowing_bypass();
+        let mut session = Session::new("none").starting_in_bypass();
         let trust = TrustStore::new(workspace.root());
         let rules = starting_rules(&mut session, &state, workspace.root());
         let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
@@ -22735,6 +23844,7 @@ mod tests {
                     directories: &[],
                     manifest: None,
                     rewind: session.rewind_points(),
+                    checkouts: &[],
                 },
             );
         }

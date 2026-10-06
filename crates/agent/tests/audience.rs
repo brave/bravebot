@@ -60,17 +60,41 @@ fn what_the_planner_reads_is_not_taken_from_a_catalog() {
 }
 
 /// Whether the line calls the catalog lookup, as opposed to merely ending a longer macro name
-/// with the same three characters, which `format!(` and `assert!(` both do.
+/// with the same three characters, which `format!(` and `assert!(` both do. The lookup written
+/// with its crate path, `bravebot_i18n::t!(`, is a lookup too.
 fn looks_up_a_message(line: &str) -> bool {
     let bytes = line.as_bytes();
     let mut from = 0;
     while let Some(offset) = line[from..].find("t!(") {
         let at = from + offset;
         match at.checked_sub(1).map(|before| bytes[before]) {
+            Some(b':') if line[..at].ends_with("bravebot_i18n::") => return true,
             Some(c) if c.is_ascii_alphanumeric() || c == b'_' || c == b':' => {}
             _ => return true,
         }
         from = at + 3;
     }
     false
+}
+
+/// The search is only worth its name if it recognises each way a lookup is written, and passes
+/// the macros that merely end in the same characters.
+#[test]
+fn a_lookup_is_recognised_however_it_is_written() {
+    for lookup in [
+        "let line = t!(hello);",
+        "t!(hello, name = who)",
+        "let line = bravebot_i18n::t!(hello);",
+        "use_it(bravebot_i18n::t!(hello, name = who))",
+    ] {
+        assert!(looks_up_a_message(lookup), "{lookup}");
+    }
+    for other in [
+        "let line = format!(\"{x}\");",
+        "assert!(ready);",
+        "std::print!(\"x\")",
+        "let line = other_crate::t!(hello);",
+    ] {
+        assert!(!looks_up_a_message(other), "{other}");
+    }
 }

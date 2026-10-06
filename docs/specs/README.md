@@ -32,16 +32,17 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [shell-mode.md](shell-mode.md) | `SHELL` | 5 | the `!` prompt: a line the user typed, and why the planner can never reach it |
 | [skills.md](skills.md) | `SKILL` | 14 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for |
 | [instructions.md](instructions.md) | `INSTR` | 10 | which instruction files are looked for, where, in what order, and where what they say ends up |
-| [cli.md](cli.md) | `CLI` | 20 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth` |
+| [cli.md](cli.md) | `CLI` | 21 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth` |
 | [manifest.md](manifest.md) | `MANIFEST` | 11 | plan the whole run first, then execute it with no model in the control path |
 | [terminal-input.md](terminal-input.md) | `INPUT` | 38 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 12 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, what a slash word is offered, what `/copy` copies, and what `/caffeinate` holds awake |
 | [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 26 | what is drawn back: the transcript, a resumed session, and how content reaches the screen |
+| [session-view.md](session-view.md) | `RPCVIEW` | 4 | the opt-in shared Rust view for fresh local bridge sessions |
 | [watching.md](watching.md) | `WATCH` | 23 | work done outside the transcript: a delegate's own lines, what a command printed, a question asked beside it, and the mode Ctrl-L opens over them |
 | [scroller.md](scroller.md) | `SCROLL` | 9 | reading back through what happened: the mode Ctrl-O opens over the transcript, and the keys inside it |
 | [credential-protection.md](credential-protection.md) | `CRED` | 25 | where credentials come from, which of them may be held at all, and what each tier owes |
 | [premium-credentials.md](premium-credentials.md) | `PREM` | 9 | importing a Leo Premium subscription and spending its credentials |
-| [sandboxing.md](sandboxing.md) | `SANDBOX` | 14 | operating-system confinement for processes running code we did not write |
+| [sandboxing.md](sandboxing.md) | `SANDBOX` | 18 | operating-system confinement for processes running code we did not write |
 | [mcp.md](mcp.md) | `MCP` | 9 | tools that come from outside this repository, and what they are allowed to do |
 | [mcp-servers.md](mcp-servers.md) | `SERVERS` | 14 | how a person declares one of those servers, what that declaration is trusted for, and what is asked before a tool from one runs |
 | [browser.md](browser.md) | `BROWSER` | 15 | reaching a Brave extension from a session: the relay between them, who starts each half, and how each trusts the other |
@@ -53,8 +54,10 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [loop.md](loop.md) | `LOOP` | 15 | sending one prompt again and again until somebody stops it |
 | [goal.md](goal.md) | `GOAL` | 17 | one condition a person set, judged after every turn, until it holds |
 | [file-watches.md](file-watches.md) | `FSWATCH` | 12 | a standing watch on one path, firing with no turn running to notice it |
-| [sessions.md](sessions.md) | `SESSION` | 30 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |
+| [sessions.md](sessions.md) | `SESSION` | 31 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |
 | [info-panel.md](info-panel.md) | `PANEL` | 14 | telling many sessions apart: the terminal's title and the info panel |
+| [background-sessions.md](background-sessions.md) | `BG` | 14 | proposed, the roster, its list and stop, `--bg`, attach and reply built: sessions that keep running after the terminal closes, with a list, attach and reply |
+| [session-messages.md](session-messages.md) | `MSG` | 12 | proposed, nothing built: one background session sending text to another, put to a person and never starting a turn |
 | [state-directory.md](state-directory.md) | `STATE` | 3 | `~/.bravebot`, and who on the machine may read what is written into it |
 | [incognito.md](incognito.md) | `INCOG` | 8 | a session that runs normally and adds nothing to `~/.bravebot` |
 | [trace.md](trace.md) | `TRACE` | 8 | what is recorded about every decision the system makes, and what that record may contain |
@@ -71,7 +74,7 @@ the routing-versus-content split they share.
 | Spec | Id | Clauses | Tool |
 |---|---|---|---|
 | [tools/tool-surface.md](tools/tool-surface.md) | `TOOL` | 6 | the surface every tool shares |
-| [tools/read-file.md](tools/read-file.md) | `READ` | 7 | `read_file` |
+| [tools/read-file.md](tools/read-file.md) | `READ` | 8 | `read_file` |
 | [tools/list-files.md](tools/list-files.md) | `LIST` | 5 | `list_files` |
 | [tools/search.md](tools/search.md) | `SEARCH` | 10 | `search` |
 | [tools/read-git.md](tools/read-git.md) | `GIT` | 14 | `read_git` |
@@ -90,6 +93,7 @@ the routing-versus-content split they share.
 | [tools/schedule-next.md](tools/schedule-next.md) | `SCHED` | 5 | `schedule_next` |
 | [tools/watch-file.md](tools/watch-file.md) | `ARM` | 6 | `watch_file` |
 | [tools/ask-user.md](tools/ask-user.md) | `ASK` | 8 | `ask_user` |
+| [tools/advisor.md](tools/advisor.md) | `ADVISOR` | 9 | `advisor` |
 
 Topics with no spec yet are ordinary code. Adding one is how a topic becomes review-required.
 

@@ -509,6 +509,59 @@ mod tests {
         assert_eq!(list(&empty)["warnings"], json!([]));
     }
 
+    /// An account named by the tier variables alone, with whatever `extra` names besides.
+    fn an_aws_account_and(extra: impl Fn(&str) -> Option<String>) -> Config {
+        use bravebot_config::env_var;
+
+        Config::from_lookup(|key| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+            _ => extra(key),
+        })
+        .expect("an account named on its own is a working configuration")
+    }
+
+    /// BACKEND-5 in the window: a build pointed at AWS with the endpoint set and the Brave keys
+    /// blank is not asked the unsigned listing. Its rows would fail unsigned when picked, and a
+    /// warning to try again would point at a listing no retry makes usable.
+    ///
+    /// The endpoint is a port nothing listens on, so a window that asked would say it could not
+    /// load the Brave models.
+    #[test]
+    fn the_window_asks_for_no_brave_roster_this_build_cannot_sign_for() {
+        let config = an_aws_account_and(|key| {
+            (key == bravebot_config::env_var::ENDPOINT).then(|| "http://127.0.0.1:1".into())
+        });
+        assert!(!config.serves_aichat());
+
+        assert_eq!(list(&config)["warnings"], json!([]));
+    }
+
+    /// BACKEND-5 in the window: a gateway whose block names a credential nothing holds is not asked
+    /// for its models, and the window says the credential is missing. A refused listing would say
+    /// only that the models could not be loaded, which sends somebody to retry rather than to the
+    /// key.
+    ///
+    /// The gateway is a port nothing listens on, so a window that asked would say it could not load
+    /// the models.
+    #[test]
+    fn the_window_asks_no_gateway_whose_credential_nothing_holds() {
+        let mut config = an_aws_account_and(|_| None);
+        config.providers = bravebot_config::Settings::parse(
+            r#"{"provider": {"local": {"options": {"baseURL": "http://127.0.0.1:1/v1"},
+                "env": ["BRAVEBOT_TEST_UNSET_GATEWAY_KEY"]}}}"#,
+        )
+        .providers()
+        .to_vec();
+        assert_eq!(config.providers.len(), 1, "the block configured no gateway");
+
+        assert_eq!(
+            list(&config)["warnings"],
+            json!(["No credential configured for local."])
+        );
+    }
+
     #[test]
     fn model_ids_are_validated_without_losing_provider_qualification() {
         assert_eq!(selection(None).unwrap(), None);
