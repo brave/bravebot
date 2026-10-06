@@ -30,7 +30,7 @@
 //! same projection counts them the same way. Which is why the caller checks the prompt's *text*
 //! against the ordinal before cutting anything.
 
-use bravebot_agent::conversation::{Said, Snapshot};
+use bravebot_agent::conversation::{Composed, Said, Snapshot, Stored};
 use bravebot_aichat::protocol::Role;
 
 /// A conversation cut in front of a prompt, and the prompt it was cut in front of.
@@ -51,12 +51,24 @@ pub fn prompts(said: &[Said]) -> Vec<&str> {
         .collect()
 }
 
+/// Whether any of these were copied in from another program rather than said in this session.
+pub fn imported_in(archive: &[Stored]) -> bool {
+    archive
+        .iter()
+        .any(|stored| stored.composed == Some(Composed::Imported))
+}
+
 /// Cut in front of the `ordinal`-th thing the user said.
 ///
 /// `None` when there is no such prompt, or when the walk cannot find the message it came from.
 /// Both are refusals rather than approximations: a fork taken a few messages away from where
 /// somebody pointed is worse than one that did not happen.
 pub fn cut(snapshot: &Snapshot, said: &[Said], ordinal: usize) -> Option<Cut> {
+    // Refused whole. A cut inside the archive moves its words into the child's request, which
+    // copied words never were in, and the turn numbers a cut counts from do not include them.
+    if imported_in(&snapshot.archive) {
+        return None;
+    }
     let prompts = prompts(said);
     let wanted = (*prompts.get(ordinal)?).to_string();
 
@@ -73,7 +85,13 @@ pub fn cut(snapshot: &Snapshot, said: &[Said], ordinal: usize) -> Option<Cut> {
         // A message the agent composed is not one of the places a fork may be taken, whatever it
         // says. Skipped from the tag rather than from the prose, which is why the ordinal a window
         // sends and the one resolved here are counted over the same list.
-        if stored.composed.is_some() || stored.message.role != Role::User {
+        // An imported prompt is drawn as one, so it is counted as one.
+        if stored.message.role != Role::User
+            || stored
+                .composed
+                .as_ref()
+                .is_some_and(|why| *why != Composed::Imported)
+        {
             continue;
         }
         // Anything that does not match the prompt we are expecting next is one of the user-role
@@ -342,6 +360,37 @@ mod tests {
             cut.before.archive.is_empty(),
             "nothing is left standing in for"
         );
+    }
+
+    #[test]
+    fn a_fork_never_moves_copied_words_into_the_request() {
+        let mut before = snapshot(Vec::new());
+        before.archive = ["first", "one", "second", "two"]
+            .iter()
+            .enumerate()
+            .map(|(index, words)| Stored {
+                message: if index % 2 == 0 {
+                    Message::user(*words)
+                } else {
+                    Message::assistant(*words)
+                },
+                composed: Some(Composed::Imported),
+            })
+            .collect();
+        before.messages.push(Stored::plain(Message::user("third")));
+        let said = drawn(&before);
+        assert_eq!(
+            prompts(&said),
+            vec!["first", "second", "third"],
+            "drawn as the prompts they were"
+        );
+
+        for ordinal in 0..3 {
+            assert!(
+                cut(&before, &said, ordinal).is_none(),
+                "a fork at {ordinal}"
+            );
+        }
     }
 
     #[test]

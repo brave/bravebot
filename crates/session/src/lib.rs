@@ -15,6 +15,7 @@ mod testutil;
 mod test_profile;
 
 pub mod audit;
+pub mod import;
 pub mod jobs;
 pub mod sessions;
 pub mod store;

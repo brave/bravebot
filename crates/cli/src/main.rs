@@ -12,6 +12,7 @@ mod json;
 mod mcp;
 mod plain;
 mod progress;
+mod session_import;
 use bravebot_agent::servers;
 
 use crate::exit::{Ending, fail};
@@ -522,6 +523,10 @@ fn print_help() {
         ("bravebot doctor", t!(cli_usage_doctor)),
         ("bravebot sessions [--json]", t!(cli_usage_sessions)),
         ("bravebot sessions stop <id>", t!(cli_usage_sessions_stop)),
+        (
+            "bravebot sessions import <tool>",
+            t!(cli_usage_sessions_import),
+        ),
         ("bravebot --bg <prompt>", t!(cli_usage_bg)),
         ("bravebot attach <id>", t!(cli_usage_attach)),
         ("bravebot reply <id> <prompt>", t!(cli_usage_reply)),

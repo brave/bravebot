@@ -2180,7 +2180,7 @@ pub fn project_directory(project: &Path) -> Option<PathBuf> {
 /// Narrowing an existing directory belongs here rather than at each writer, because SESSION-16
 /// tightens on write and a writer that resolved the location for itself would satisfy the mode on
 /// the file it wrote and leave the directory holding it listable by every other account.
-fn writable_project_directory(project: &Path) -> Option<PathBuf> {
+pub(crate) fn writable_project_directory(project: &Path) -> Option<PathBuf> {
     let directory = bravebot_agent::home::writable()?
         .join(SESSIONS)
         .join(key_for(project));
@@ -2362,7 +2362,7 @@ fn size_of(path: &Path) -> u64 {
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())

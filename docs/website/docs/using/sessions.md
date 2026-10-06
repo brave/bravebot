@@ -250,6 +250,31 @@ line break, an escape or a character outside ASCII in it included. Alone, each s
 one. Both are written to the session record at once, a resume brings them back, and `/clear` starts
 a session with neither.
 
+## Importing sessions from Claude Code
+
+```sh
+bravebot sessions import claude-code                  # list this directory's Claude Code sessions
+bravebot sessions import claude-code 3f2a9c1e         # copy one, by the start of its id
+bravebot sessions import claude-code --all --project ~/work/app
+```
+
+With nothing named it lists the sessions Claude Code kept for the directory, newest first, and
+copies none. Each one named, or all of them with `--all`, becomes a record here called
+`claude-code-<its id>`. A session that records no directory is skipped, as is one that belongs to
+another directory.
+
+What is copied is what you typed and what the model answered in words. Tool calls and results, the
+model's reasoning, pictures and Claude Code's own notes are left behind. The words are in the record
+to be read: `bravebot --resume` draws them, and none of them is sent to the model, so a resumed copy
+does not know what the old session said. It asks the trust question as a new session does and
+carries no permission from the old one. Copying the same session again changes nothing, and
+Claude Code's files are not read again afterwards. Because the words are never part of a request, the
+desktop app does not fork a session that holds them; `/branch` in the terminal still copies it.
+
+The record comes from the files Claude Code keeps under `$CLAUDE_CONFIG_DIR`, or `~/.claude`.
+`bravebot sessions import opencode` is refused: opencode keeps its sessions in a database file this
+build cannot read.
+
 ## Starting over
 
 ```
