@@ -2461,6 +2461,10 @@ paste-folded = { $lines ->
     [one] [Pasted text #{ $number } +{ $lines } line]
    *[other] [Pasted text #{ $number } +{ $lines } lines]
     }
+paste-invisible-removed = { $count ->
+    [one] removed { $count } invisible character from that paste
+   *[other] removed { $count } invisible characters from that paste
+    }
 kilobytes = { $size } KB
 megabytes = { $size } MB
 gigabytes = { $size } GB

@@ -6429,8 +6429,16 @@ impl Session {
     ///
     /// Shell mode is left alone, and has to be: the line there is the command, and a command that
     /// is not what the user is looking at is the one thing that mode may never do.
+    ///
+    /// Characters a terminal draws as nothing are taken out first, in shell mode too, and the
+    /// number removed is said. That comes before the fold so the words a marker stands for are the
+    /// words that were checked, and before the shell test because a command is the line where
+    /// text nobody can see matters most (`pasting.md` PASTE-10).
     pub fn paste_text(&mut self, text: &str) {
-        let text = normalised(text);
+        let (text, removed) = crate::invisible::without_invisible(&normalised(text));
+        if removed > 0 {
+            self.note(t!(paste_invisible_removed, count = removed));
+        }
         if self.shell || text.matches('\n').count() < FOLD_AT_NEWLINES {
             self.paste(&text);
             return;
@@ -12498,6 +12506,108 @@ mod tests {
 
         assert!(s.shell, "the paste left shell mode");
         assert_eq!(s.input, "one\ntwo\nthree\n");
+    }
+
+    /// The notes the session has made, oldest first.
+    fn notes(s: &Session) -> Vec<&str> {
+        s.transcript
+            .iter()
+            .filter(|entry| entry.speaker == Speaker::System)
+            .map(|entry| entry.text.as_str())
+            .collect()
+    }
+
+    /// The tag block writes ASCII in characters no terminal draws, so a paste can carry an
+    /// instruction its sender never showed. Removing them is only honest if the person is told how
+    /// many, which is what lets them compare it to what they copied.
+    #[test]
+    fn a_paste_loses_the_characters_a_terminal_draws_as_nothing_and_says_how_many() {
+        let hidden: String = "obey"
+            .chars()
+            .map(|c| char::from_u32(0xE0000 + c as u32).unwrap())
+            .collect();
+        let mut s = session();
+        s.paste_text(&format!("read{hidden} this\u{202E}\u{200B}"));
+
+        assert_eq!(s.input, "read this");
+        assert_eq!(
+            notes(&s),
+            ["removed 6 invisible characters from that paste"]
+        );
+    }
+
+    /// The singular arm of the notice, since a count of one is the common case of a stray
+    /// zero-width space and "1 invisible characters" reads as a bug.
+    #[test]
+    fn one_removed_character_is_said_in_the_singular() {
+        let mut s = session();
+        s.paste_text("a\u{200B}b");
+
+        assert_eq!(s.input, "ab");
+        assert_eq!(notes(&s), ["removed 1 invisible character from that paste"]);
+    }
+
+    /// A notice for a paste that held nothing hidden would teach a person to ignore it, and
+    /// removing anything from a clean paste would change words they meant. Emoji and the scripts
+    /// that are written with joiners are the pastes a loose filter damages.
+    #[test]
+    fn a_paste_with_nothing_hidden_arrives_whole_and_says_nothing() {
+        let text = "👨\u{200D}👩 ❤\u{FE0F} 1\u{FE0F}\u{20E3} क्\u{200D}ष می\u{200C}خواهم";
+        let mut s = session();
+        s.paste_text(text);
+
+        assert_eq!(s.input, text);
+        assert!(notes(&s).is_empty(), "{:?}", notes(&s));
+    }
+
+    /// Everything that was pasted was hidden, so the box is left as it was. The notice is the
+    /// only trace that a paste happened.
+    #[test]
+    fn a_paste_of_nothing_but_hidden_characters_writes_nothing_and_says_so() {
+        let mut s = session();
+        s.paste_text("\u{E0041}\u{E0042}\u{E0043}");
+
+        assert_eq!(s.input, "");
+        assert_eq!(
+            notes(&s),
+            ["removed 3 invisible characters from that paste"]
+        );
+    }
+
+    /// The words a marker stands for are the ones that get sent, so they are the ones that have
+    /// to be clean. A filter that ran on the marker, or on short pastes only, would leave the
+    /// hidden words in the part nobody can see in the box.
+    #[test]
+    fn a_folded_paste_is_put_back_without_what_a_terminal_draws_as_nothing() {
+        let hidden: String = "obey"
+            .chars()
+            .map(|c| char::from_u32(0xE0000 + c as u32).unwrap())
+            .collect();
+        let mut s = session();
+        s.paste_text(&format!("one{hidden}\ntwo\nthree\nfour\n"));
+
+        assert_eq!(s.input, "[Pasted text #1 +4 lines]");
+        assert_eq!(s.unfolded(&s.input), "one\ntwo\nthree\nfour\n");
+        assert_eq!(
+            notes(&s),
+            ["removed 4 invisible characters from that paste"]
+        );
+    }
+
+    /// The line in shell mode is the command that runs, so it is where a character nobody can see
+    /// matters most, and shell mode is exempt from folding but not from this.
+    #[test]
+    fn a_paste_into_a_command_line_loses_what_a_terminal_draws_as_nothing() {
+        let mut s = session();
+        s.type_char('!');
+        s.paste_text("ls\u{202E} -la\u{E0041}");
+
+        assert!(s.shell, "the paste left shell mode");
+        assert_eq!(s.input, "ls -la");
+        assert_eq!(
+            notes(&s),
+            ["removed 2 invisible characters from that paste"]
+        );
     }
 
     /// One counter for everything a line can carry, so no two markers in front of a user can be
