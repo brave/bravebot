@@ -114,6 +114,58 @@ impl PartialEq for JobStop {
 
 impl Eq for JobStop {}
 
+/// A one-way flag asking one delegate to stop, leaving the turn and every other delegate going.
+///
+/// The same shape as [`JobStop`]: the person asks on the interface thread, and the delegate reads
+/// it at its own next round. Each delegate gets a fresh one, so asking about one reaches no other.
+///
+/// It also records whether the delegate acted on the ask. A press that arrives after the delegate
+/// has answered changes nothing about how it ended, and the sentence the turn is told about the
+/// delegate has to say what happened and not what was asked.
+///
+/// Equal only to its own clones, because what two handles have to agree on is which delegate they
+/// reach.
+#[derive(Debug, Clone, Default)]
+pub struct DelegateStop {
+    asked: Arc<AtomicBool>,
+    honoured: Arc<AtomicBool>,
+}
+
+impl DelegateStop {
+    /// A token nobody has asked with.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Ask the delegate to stop at its next round.
+    pub fn request(&self) {
+        self.asked.store(true, Ordering::Release);
+    }
+
+    /// Whether the stop has been asked for.
+    pub fn is_requested(&self) -> bool {
+        self.asked.load(Ordering::Acquire)
+    }
+
+    /// Record that the delegate took its tools away because it was asked to.
+    pub fn honour(&self) {
+        self.honoured.store(true, Ordering::Release);
+    }
+
+    /// Whether the delegate stopped because the person asked.
+    pub fn was_honoured(&self) -> bool {
+        self.honoured.load(Ordering::Acquire)
+    }
+}
+
+impl PartialEq for DelegateStop {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.asked, &other.asked)
+    }
+}
+
+impl Eq for DelegateStop {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,5 +285,27 @@ mod tests {
         assert!(!other_seen, "asking to stop one job asked to stop another");
         assert_eq!(asked, asked.clone());
         assert_ne!(asked, other, "two jobs' tokens compare equal");
+    }
+
+    #[test]
+    fn asking_one_delegate_to_stop_reaches_no_other() {
+        let one = DelegateStop::new();
+        let other = DelegateStop::new();
+        one.request();
+        assert!(one.is_requested());
+        assert!(!other.is_requested());
+        assert_ne!(one, other);
+    }
+
+    #[test]
+    fn a_clone_of_a_delegates_stop_reaches_the_same_delegate() {
+        let stop = DelegateStop::new();
+        let remote = stop.clone();
+        remote.request();
+        assert!(stop.is_requested());
+        assert!(!stop.was_honoured());
+        stop.honour();
+        assert!(remote.was_honoured());
+        assert_eq!(stop, remote);
     }
 }

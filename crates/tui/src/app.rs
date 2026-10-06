@@ -1389,6 +1389,17 @@ fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
             Action::Redraw
         }
 
+        // Stops the delegate the view is on, and nothing else: the turn and the other delegates go
+        // on (DELEGATE-25). Read only in a delegate's own view, so a person on the list or on a
+        // command's view who presses it does nothing.
+        KeyCode::Char('x') if !listing => {
+            if session.stop_watched_delegate() {
+                Action::Redraw
+            } else {
+                Action::None
+            }
+        }
+
         // Between delegates without going back to the list, for somebody comparing two runs.
         KeyCode::Char('n') | KeyCode::Right | KeyCode::Tab => {
             session.watch_next();
@@ -9549,6 +9560,7 @@ mod tests {
         fn spawn(session: &mut Session, kind: &'static str, task: &str) -> DelegateId {
             let id = DelegateId::nth(session.delegates().len() as u32 + 1);
             session.delegate_started(Delegation {
+                stop: Default::default(),
                 id,
                 kind: kind.to_string(),
                 task: task.to_string(),
@@ -10111,6 +10123,94 @@ mod tests {
                     .map(|delegate| delegate.kind.as_str()),
                 Some("checker")
             );
+        }
+
+        /// A person who sees one delegate going the wrong way stops that one. The turn and the
+        /// delegate beside it are the work they did not want thrown away.
+        #[test]
+        fn x_stops_the_delegate_the_view_is_on_and_no_other() {
+            let mut session = Session::new("kernel-enforced");
+            session.status = Status::Working;
+            spawn(&mut session, "reader", "find the parser");
+            spawn(&mut session, "checker", "run the build");
+            handle_key(&mut session, ctrl('l'));
+            session.open_watched();
+            handle_key(&mut session, key(KeyCode::Char('p')));
+            assert_eq!(
+                session.watched_delegate().map(|d| d.kind.as_str()),
+                Some("reader")
+            );
+
+            handle_key(&mut session, key(KeyCode::Char('x')));
+
+            let stopped: Vec<_> = session
+                .delegates()
+                .iter()
+                .map(|delegate| (delegate.kind.clone(), delegate.stop.is_requested()))
+                .collect();
+            assert_eq!(
+                stopped,
+                vec![("reader".to_string(), true), ("checker".to_string(), false)]
+            );
+            assert!(
+                session.watching_a_delegate(),
+                "stopping a delegate closed the view"
+            );
+            assert_eq!(
+                session.status,
+                Status::Working,
+                "stopping a delegate ended the turn"
+            );
+        }
+
+        /// The key is the view's for a delegate that is still working. On the list, on a delegate
+        /// that has finished and on one already asked it is read as nothing.
+        #[test]
+        fn x_does_nothing_on_the_list_or_on_a_delegate_that_is_not_working() {
+            let mut session = Session::new("kernel-enforced");
+            let finished = spawn(&mut session, "reader", "find the parser");
+            session.delegate_finished(finished, "answered".to_string(), false, None);
+            spawn(&mut session, "checker", "run the build");
+
+            handle_key(&mut session, ctrl('l'));
+            assert!(session.listing_delegates());
+            handle_key(&mut session, key(KeyCode::Char('x')));
+            assert!(
+                session.delegates().iter().all(|d| !d.stop.is_requested()),
+                "x on the list stopped a delegate"
+            );
+
+            handle_key(&mut session, key(KeyCode::Up));
+            session.open_watched();
+            assert_eq!(
+                session.watched_delegate().map(|d| d.kind.as_str()),
+                Some("reader")
+            );
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Char('x'))),
+                Action::None
+            );
+            assert!(
+                session.delegates().iter().all(|d| !d.stop.is_requested()),
+                "x asked a delegate that had finished to stop"
+            );
+        }
+
+        /// A chord is not the key: Ctrl-X and Alt-X are not the view's.
+        #[test]
+        fn a_chord_on_x_does_not_stop_a_delegate() {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "reader", "find the parser");
+            handle_key(&mut session, ctrl('l'));
+            session.open_watched();
+
+            handle_key(&mut session, ctrl('x'));
+            handle_key(
+                &mut session,
+                KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT),
+            );
+
+            assert!(session.delegates().iter().all(|d| !d.stop.is_requested()));
         }
 
         /// The list is a list of one thing to do: open the row it is on.
@@ -17255,6 +17355,7 @@ mod tests {
         session.narrate("looking at the notes");
         let delegate = bravebot_agent::report::DelegateId::nth(1);
         session.delegate_started(bravebot_agent::report::Delegation {
+            stop: Default::default(),
             id: delegate,
             kind: "checker".to_string(),
             task: "check the notes".to_string(),

@@ -57,6 +57,7 @@ impl<'a, T: ?Sized> Lent<'a, T> {
             lent: self,
             from: None,
             relayed: None,
+            stop: None,
             spent: Default::default(),
             inference: Vec::new(),
         }
@@ -68,8 +69,23 @@ impl<'a, T: ?Sized> Lent<'a, T> {
             lent: self,
             from: Some(id),
             relayed: None,
+            stop: None,
             spent: Default::default(),
             inference: Vec::new(),
+        }
+    }
+
+    /// A handle for one delegate whose prompts a person can decline in advance by stopping it
+    /// (DELEGATE-25). A question it has queued for the person is refused instead of asked once the
+    /// stop is set, including one that was waiting on another delegate's question.
+    pub fn delegate_stoppable(
+        &self,
+        id: DelegateId,
+        stop: bravebot_core::cancel::DelegateStop,
+    ) -> Borrowed<'_, 'a, T> {
+        Borrowed {
+            stop: Some(stop),
+            ..self.delegate(id)
         }
     }
 
@@ -148,6 +164,8 @@ pub struct Borrowed<'m, 'a, T: ?Sized> {
     /// A delegate beneath `from` whose work the next call forwards, as the handle that call came
     /// through said. Only ever one of `from`'s own descendants, and spent by the call it names.
     relayed: Option<DelegateId>,
+    /// Set where the person asked this one delegate to stop.
+    stop: Option<bravebot_core::cancel::DelegateStop>,
     spent: crate::outcome::Spent,
     inference: Vec<crate::timing::Interval>,
 }
@@ -266,61 +284,100 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
 
 impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
     fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
-        self.lent.hold().confirm_write(request)
+        self.asked(
+            |held| held.confirm_write(request),
+            |refuse| refuse.confirm_write(request),
+        )
     }
 
     fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
-        self.lent.hold().confirm_run(request)
+        self.asked(
+            |held| held.confirm_run(request),
+            |refuse| refuse.confirm_run(request),
+        )
     }
 
     fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
-        self.lent.hold().confirm_read_output(request)
+        self.asked(
+            |held| held.confirm_read_output(request),
+            |refuse| refuse.confirm_read_output(request),
+        )
     }
 
     fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
-        self.lent.hold().confirm_vetted_read(request)
+        self.asked(
+            |held| held.confirm_vetted_read(request),
+            |refuse| refuse.confirm_vetted_read(request),
+        )
     }
 
     fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
-        self.lent.hold().confirm_fetch(request)
+        self.asked(
+            |held| held.confirm_fetch(request),
+            |refuse| refuse.confirm_fetch(request),
+        )
     }
 
     fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
-        self.lent.hold().confirm_vouch(request)
+        self.asked(
+            |held| held.confirm_vouch(request),
+            |refuse| refuse.confirm_vouch(request),
+        )
     }
 
     fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
-        self.lent.hold().confirm_exposing_read(request)
+        self.asked(
+            |held| held.confirm_exposing_read(request),
+            |refuse| refuse.confirm_exposing_read(request),
+        )
     }
 
     fn confirm_tool_list(
         &mut self,
         request: &crate::confirm::ToolListRequest,
     ) -> crate::confirm::Decision {
-        self.lent.hold().confirm_tool_list(request)
+        self.asked(
+            |held| held.confirm_tool_list(request),
+            |refuse| refuse.confirm_tool_list(request),
+        )
     }
 
     fn confirm_mcp_call(
         &mut self,
         request: &crate::confirm::McpCallRequest,
     ) -> crate::confirm::CallDecision {
-        self.lent.hold().confirm_mcp_call(request)
+        self.asked(
+            |held| held.confirm_mcp_call(request),
+            |refuse| refuse.confirm_mcp_call(request),
+        )
     }
 
     fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
-        self.lent.hold().confirm_move(request)
+        self.asked(
+            |held| held.confirm_move(request),
+            |refuse| refuse.confirm_move(request),
+        )
     }
 
     fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
-        self.lent.hold().confirm_server(request)
+        self.asked(
+            |held| held.confirm_server(request),
+            |refuse| refuse.confirm_server(request),
+        )
     }
 
     fn confirm_manifest(&mut self, request: &crate::confirm::ManifestRequest) -> Decision {
-        self.lent.hold().confirm_manifest(request)
+        self.asked(
+            |held| held.confirm_manifest(request),
+            |refuse| refuse.confirm_manifest(request),
+        )
     }
 
     fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
-        self.lent.hold().ask_user(asking)
+        self.asked(
+            |held| held.ask_user(asking),
+            |refuse| refuse.ask_user(asking),
+        )
     }
 
     /// The one method here nobody is waiting on, so it never waits.
@@ -332,6 +389,31 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
     /// question it did not ask. What was typed keeps until the next poll.
     fn interjection(&mut self) -> Option<String> {
         self.lent.try_hold()?.interjection()
+    }
+}
+
+impl<T: Confirmer + ?Sized> Borrowed<'_, '_, T> {
+    /// Put a question to the person, or refuse it where this delegate has been stopped.
+    ///
+    /// Checked again once the lock is held: a delegate waiting its turn behind another's question
+    /// can be stopped while it waits, and the person should not be shown the question of a run
+    /// they just ended.
+    fn asked<R>(
+        &mut self,
+        ask: impl FnOnce(&mut T) -> R,
+        refuse: impl FnOnce(&mut crate::confirm::Unattended) -> R,
+    ) -> R {
+        let stopped = |stop: &Option<bravebot_core::cancel::DelegateStop>| {
+            stop.as_ref().is_some_and(|stop| stop.is_requested())
+        };
+        if stopped(&self.stop) {
+            return refuse(&mut crate::confirm::Unattended);
+        }
+        let mut held = self.lent.hold();
+        if stopped(&self.stop) {
+            return refuse(&mut crate::confirm::Unattended);
+        }
+        ask(&mut **held)
     }
 }
 
@@ -372,6 +454,178 @@ mod tests {
             tokens,
             ..Default::default()
         }
+    }
+
+    /// One question with one row, which a double that answers questions picks.
+    fn a_question() -> Asking {
+        Asking {
+            prompts: vec![bravebot_core::ask::Prompt {
+                rows: vec![bravebot_core::ask::Row {
+                    index: 0,
+                    label: "yes".to_string(),
+                    detail: None,
+                }],
+                ..Default::default()
+            }],
+        }
+    }
+
+    /// A delegate the person stopped is not asked about anything further, and one beside it still
+    /// is. Reaching the person with a stopped delegate's question would show them the prompt of a
+    /// run they had just ended.
+    #[test]
+    fn a_stopped_delegates_question_is_declined_and_a_siblings_is_asked() {
+        let mut person = crate::confirm::ChoosesFirst;
+        let lent = Lent::new(&mut person);
+        let stop = bravebot_core::cancel::DelegateStop::new();
+        let mut stopped = lent.delegate_stoppable(DelegateId::nth(1), stop.clone());
+        let mut sibling = lent.delegate_stoppable(
+            DelegateId::nth(2),
+            bravebot_core::cancel::DelegateStop::new(),
+        );
+
+        assert_eq!(
+            stopped.ask_user(&a_question()),
+            vec![Answer::Chosen(vec![0])]
+        );
+        stop.request();
+
+        assert!(
+            stopped.ask_user(&a_question()).is_empty(),
+            "a stopped delegate's question reached the person"
+        );
+        assert_eq!(
+            sibling.ask_user(&a_question()),
+            vec![Answer::Chosen(vec![0])],
+            "stopping one delegate declined another's question"
+        );
+    }
+
+    /// The press can arrive while the delegate is queued behind somebody else's question, which
+    /// is the one case a check before taking the lock cannot see.
+    #[test]
+    fn a_question_waiting_for_the_person_is_declined_when_its_delegate_is_stopped_meanwhile() {
+        use std::sync::mpsc;
+
+        struct Slow(mpsc::Sender<()>, mpsc::Receiver<()>);
+        impl crate::confirm::Confirmer for Slow {
+            fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
+                self.0.send(()).expect("announce the question");
+                self.1
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .expect("be let go");
+                crate::confirm::ChoosesFirst.ask_user(asking)
+            }
+            fn confirm_write(
+                &mut self,
+                r: &crate::confirm::WriteRequest,
+            ) -> crate::confirm::WriteDecision {
+                crate::confirm::Unattended.confirm_write(r)
+            }
+            fn confirm_run(
+                &mut self,
+                r: &crate::confirm::RunRequest,
+            ) -> crate::confirm::RunDecision {
+                crate::confirm::Unattended.confirm_run(r)
+            }
+            fn confirm_read_output(
+                &mut self,
+                r: &crate::confirm::OutputRequest,
+            ) -> crate::confirm::Decision {
+                crate::confirm::Unattended.confirm_read_output(r)
+            }
+            fn confirm_vetted_read(
+                &mut self,
+                r: &crate::confirm::VetRequest,
+            ) -> crate::confirm::Decision {
+                crate::confirm::Unattended.confirm_vetted_read(r)
+            }
+            fn confirm_fetch(
+                &mut self,
+                r: &crate::confirm::FetchRequest,
+            ) -> crate::confirm::Decision {
+                crate::confirm::Unattended.confirm_fetch(r)
+            }
+            fn confirm_vouch(
+                &mut self,
+                r: &crate::confirm::VouchRequest,
+            ) -> crate::confirm::Decision {
+                crate::confirm::Unattended.confirm_vouch(r)
+            }
+            fn confirm_exposing_read(
+                &mut self,
+                r: &crate::confirm::ExposureRequest,
+            ) -> crate::confirm::Decision {
+                crate::confirm::Unattended.confirm_exposing_read(r)
+            }
+            fn confirm_tool_list(
+                &mut self,
+                r: &crate::confirm::ToolListRequest,
+            ) -> crate::confirm::Decision {
+                crate::confirm::Unattended.confirm_tool_list(r)
+            }
+            fn confirm_mcp_call(
+                &mut self,
+                r: &crate::confirm::McpCallRequest,
+            ) -> crate::confirm::CallDecision {
+                crate::confirm::Unattended.confirm_mcp_call(r)
+            }
+            fn confirm_move(
+                &mut self,
+                r: &crate::confirm::MoveRequest,
+            ) -> crate::confirm::Decision {
+                crate::confirm::Unattended.confirm_move(r)
+            }
+            fn confirm_server(
+                &mut self,
+                r: &crate::confirm::ServerRequest,
+            ) -> crate::confirm::Decision {
+                crate::confirm::Unattended.confirm_server(r)
+            }
+            fn confirm_manifest(
+                &mut self,
+                r: &crate::confirm::ManifestRequest,
+            ) -> crate::confirm::Decision {
+                crate::confirm::Unattended.confirm_manifest(r)
+            }
+            fn interjection(&mut self) -> Option<String> {
+                None
+            }
+        }
+
+        let (asked_tx, asked_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let mut person = Slow(asked_tx, release_rx);
+        let lent = Lent::new(&mut person);
+        let stop = bravebot_core::cancel::DelegateStop::new();
+        let mut first = lent.delegate(DelegateId::nth(1));
+        let mut queued = lent.delegate_stoppable(DelegateId::nth(2), stop.clone());
+
+        std::thread::scope(|scope| {
+            let holding = scope.spawn(|| first.ask_user(&a_question()));
+            asked_rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the first question reached the person");
+            let waiting = scope.spawn(|| queued.ask_user(&a_question()));
+            // Nothing observable says the thread is blocked on the lock. The pause only makes it
+            // likely that the stop lands after the check that precedes the lock, which is the
+            // case this test is for; a thread that has not got that far is declined all the same.
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            stop.request();
+            release_tx.send(()).expect("let the first question go");
+            assert_eq!(
+                holding.join().expect("first"),
+                vec![Answer::Chosen(vec![0])]
+            );
+            assert!(
+                waiting.join().expect("queued").is_empty(),
+                "a question queued behind another was put to the person after its delegate was stopped"
+            );
+        });
+        assert!(
+            asked_rx.try_recv().is_err(),
+            "the stopped delegate's question reached the person"
+        );
     }
 
     /// A delegate must not overwrite parent progress while cancellation is still possible.

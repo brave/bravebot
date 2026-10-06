@@ -518,6 +518,7 @@ the key and how many rows there are, counting them all together, for as long as 
 | Enter | open the row under the cursor |
 | Up / Down | move through the list |
 | n / p | in a delegate, step to the next or previous one without going back to the list |
+| x | in a delegate that is working, stop that delegate and no other: it answers with what it has and the turn goes on |
 | q, Escape | back to the list from a delegate, then out |
 | Ctrl-C | close the mode, leaving the turn in flight running |
 

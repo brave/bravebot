@@ -872,6 +872,8 @@ managed-model-denied =
 delegate-model-refused =
     { $definition } demande { $model }, que cette machine ne demande pas : { $reason }
 
+delegate-stopped-narration = vous avez arrete ce delegue, il doit donc conclure avec ce qu'il a
+
 ## The tools an MCP server offers, read by the person before any of them is offered to the model
 
 mcp-tools-title = proposer ces outils au modèle ?
@@ -2213,12 +2215,14 @@ delegate-memory-in-checkout =
 watching-footer = delegue { $kind } { $number }
 watching-footer-job = arrière-plan { $name }
 watching-working = au travail
+watching-stopping = arret en cours
 watching-answered = a repondu
 watching-failed = n'a pas termine
 watching-position = { $at } sur { $total }
 watching-keys = q ferme  ·  n / p un autre delegue
 watching-keys-one = q ferme
 watching-keys-back = q revient  ·  n / p un autre delegue
+watching-keys-stop = x l'arrete
 watching-nothing-yet = rien pour l'instant
 # La liste de tous les delegues lances par ce tour, la session au-dessus d'eux.
 watching-list-title = delegues

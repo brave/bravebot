@@ -874,6 +874,38 @@ repeats nothing of the line, since the entry may hold an argv and a variable's v
 `verified-by: bravebot_agent::mcp::a_worker_whose_definition_names_one_server_is_offered_only_its_tool`
 `verified-by: bravebot_agent::mcp::an_addressed_worker_naming_one_server_is_put_its_list_alone`
 
+<a id="DELEGATE-25"></a>
+### DELEGATE-25: a person may stop one delegate, and the turn and the others go on
+
+Each delegate is started with a token of its own, and the interface is handed it in the
+announcement that the delegate started. A person asking one delegate to stop sets that token and
+no other, and not the turn's: the turn, every other delegate and the box are untouched
+([WATCH-9](watching.md#WATCH-9) names the key).
+
+The delegate reads it at the end of a round, as it reads its limit ([DELEGATE-6](#DELEGATE-6)).
+The calls the planner already asked for in that round run, and the next request carries no tools,
+so the delegate answers with what it has. A question it has put to the person and not had
+answered, or one still queued behind another delegate's ([DELEGATE-16](#DELEGATE-16)), is declined
+and not shown to them. A delegate that has answered by then is not reported as stopped, since the
+press changed nothing about how it ended.
+
+Where the delegate acted on it, the driver says so in its own words before the report, as
+[DELEGATE-14](#DELEGATE-14) has it say whose work a report is: that the person stopped delegate
+`dN`. The report keeps the label its own context earned ([DELEGATE-8](#DELEGATE-8)), the vouched
+record still comes home ([DELEGATE-11](#DELEGATE-11)), and nothing is decided from the report's
+bytes. The press is a person's input and is neither read from nor written into any content.
+
+**Why.** Ctrl-C ends the turn and every delegate in it, so the only answer to one delegate going
+the wrong way threw away the work of the ones going the right way. The stop is a bound on the same
+futility as the round limit and takes the same way out, which keeps what the delegate found.
+
+`verified-by: bravebot_core::cancel::asking_one_delegate_to_stop_reaches_no_other`
+`verified-by: bravebot_core::cancel::a_clone_of_a_delegates_stop_reaches_the_same_delegate`
+`verified-by: bravebot_agent::turn::stopping_one_delegate_leaves_the_other_and_the_turn_going`
+`verified-by: bravebot_agent::turn::a_stop_the_delegate_never_acted_on_is_not_reported_as_one`
+`verified-by: bravebot_agent::shared::a_stopped_delegates_question_is_declined_and_a_siblings_is_asked`
+`verified-by: bravebot_agent::shared::a_question_waiting_for_the_person_is_declined_when_its_delegate_is_stopped_meanwhile`
+
 ## Known costs
 
 - **A definition is trusted exactly as far as a configuration file somebody pasted is.** That is

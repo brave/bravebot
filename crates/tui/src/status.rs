@@ -1037,6 +1037,7 @@ mod tests {
         let mut session = crate::state::Session::new("none");
         let id = bravebot_agent::report::DelegateId::nth(1);
         session.delegate_started(bravebot_agent::report::Delegation {
+            stop: Default::default(),
             id,
             kind: "reader".to_string(),
             task: "find the parser".to_string(),
