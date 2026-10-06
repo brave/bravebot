@@ -6,6 +6,7 @@ governs:
   - crates/tui/src/app.rs
   - crates/tui/src/skills.rs
   - crates/tui/src/caffeinate.rs
+  - crates/tui/src/init_command.rs
 guards:
   - symbol: commands
 documented-by: docs/website/docs/reference/commands.md
@@ -23,7 +24,8 @@ trust map's, in [trust-map.md](trust-map.md); `/compact` is [compaction.md](comp
 conversation never sees, and where its answer is drawn is [watching.md](watching.md)'s;
 `/manifest` starts the other kind of run, which is [manifest.md](manifest.md)'s. The `!` prompt is
 a different surface entirely and is [shell-mode.md](shell-mode.md). `/copy` has no other spec to
-belong to, so what it copies is CMD-11, and neither has `/caffeinate`, so what it holds is CMD-12.
+belong to, so what it copies is CMD-11, and neither has `/caffeinate`, so what it holds is CMD-12. `/init` starts an ordinary turn, but the words that turn is given and
+when it is refused are CMD-13.
 
 **Skills are offered here, and are never commands.** A slash word is offered the skills a turn
 starting now would advertise to the planner, beneath the commands at the start of a line and alone
@@ -100,6 +102,7 @@ stay a question. Prefix matching would have made `/add-dirs are useful` open a d
 `verified-by: bravebot_tui::app::the_bare_btw_command_is_still_the_command`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_caffeinate_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_longer_word_starting_with_caffeinate_is_a_prompt`
+`verified-by: bravebot_tui::app::init_with_words_after_it_is_a_prompt`
 
 
 <a id="CMD-3"></a>
@@ -563,6 +566,40 @@ not write ([sandboxing.md](sandboxing.md)).
 `verified-by: bravebot_tui::caffeinate::an_inhibitor_that_ended_by_itself_is_reported`
 `verified-by: bravebot_tui::caffeinate::the_macos_inhibitor_holds_idle_sleep_for_this_process_alone`
 `verified-by: bravebot_session::store::only_the_confirmed_word_is_an_agreement_to_caffeinate`
+
+## Drafting the project's instructions
+
+<a id="CMD-13"></a>
+### CMD-13: `/init` asks the planner to draft `AGENTS.md`, and never where one exists
+
+`/init` starts an ordinary turn whose prompt is a fixed text written in this program: write
+`AGENTS.md` in the working directory, titled "Repository Guidelines", of 200 to 400 words, covering
+structure, build and test commands, style, testing, and commit and pull request conventions. It
+takes no argument, so `/init` followed by words is a prompt (CMD-2), and nothing the person typed
+reaches the fixed text. The prompt is what the transcript shows as sent.
+
+Where the working directory already holds a file named `AGENTS.md`, nothing starts: the command says
+so and no turn runs. This is a check on the name, made without reading the file, so a link with no
+target counts and what an existing file says cannot decide anything.
+
+The turn reads what any turn may read, and the prompt adds no reach. In a workspace the person
+vouched for, the planner reads the project's files and writes from them. In one they did not, a read
+of a project file returns a reference and not the lines ([READ-1](tools/read-file.md#READ-1)), and
+the prompt tells the planner to ask the person with `ask_user` and write from their answers. The
+write is `write_file`, so it is shown and asked about like any other write, and a file written under
+this name is read from the next turn on ([INSTR-7](instructions.md#INSTR-7)).
+
+**Why.** A guide drafted from bytes nobody vouched for would be a standing instruction file built from
+untrusted content, and the planner never has those bytes ([AGENTS.md](../../agents/AGENTS.md)), so
+the only footing it has there is what the person says. Refusing on the name keeps `/init` from
+offering a write over a file somebody wrote, and keeps the check from depending on content.
+
+`verified-by: bravebot_tui::app::the_init_command_starts_a_turn_with_the_drivers_own_prompt`
+`verified-by: bravebot_tui::app::the_init_command_starts_no_turn_where_agents_md_exists`
+`verified-by: bravebot_tui::init_command::a_file_of_the_name_is_there_whatever_it_holds`
+`verified-by: bravebot_tui::init_command::a_link_with_no_target_is_there`
+`verified-by: bravebot_tui::init_command::the_prompt_names_no_path_for_the_person_to_vouch_for`
+`verified-by: bravebot_agent::turn::a_file_the_planner_may_not_see_is_reserved_rather_than_opened`
 
 ## Known costs
 

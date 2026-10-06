@@ -206,6 +206,12 @@ const MANIFEST_COMMAND: &str = "/manifest";
 /// completion row (ADDRESS-2, ADDRESS-6). See `docs/specs/addressing-a-definition.md`.
 const AGENT_COMMAND: &str = "/agent";
 
+/// The line that has the planner draft an `AGENTS.md` for a project that has none.
+///
+/// Starts an ordinary turn with words the driver wrote, and takes no argument, so `/init the
+/// project` stays a prompt (CMD-2). See [`crate::init_command`] and CMD-13.
+const INIT_COMMAND: &str = "/init";
+
 /// One command, and what it does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Command {
@@ -247,7 +253,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 31] {
+pub fn commands() -> [Command; 32] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -403,6 +409,12 @@ pub fn commands() -> [Command; 31] {
             name: AGENT_COMMAND,
             argument: "<name> <task>",
             description: t!(command_agent),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
+            name: INIT_COMMAND,
+            argument: "",
+            description: t!(command_init),
             mid_turn: MidTurn::Waits,
         },
         Command {
@@ -1845,6 +1857,14 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     // anything back from it.
     if let Some(task) = argument_to(line, MANIFEST_COMMAND) {
         return Action::Manifest(task.to_string(), pasted, attached);
+    }
+    // A turn the driver writes the prompt of. Nothing the person typed after the word reaches it:
+    // the word takes no argument, so a line with one was never this command.
+    if line.trim() == INIT_COMMAND {
+        return match session.start_init() {
+            Some(prompt) => Action::Submit(prompt),
+            None => Action::Redraw,
+        };
     }
     // Carried unparsed, because which names exist is read from the workspace and the trust map,
     // both of which the loop owns.
@@ -13953,6 +13973,67 @@ mod tests {
         assert_eq!(
             session.transcript.last().expect("a note").text,
             t!(caffeinate_explained)
+        );
+    }
+
+    fn enter_line(session: &mut Session, line: &str) -> Action {
+        for c in line.chars() {
+            handle_key(session, key(KeyCode::Char(c)));
+        }
+        handle_key(session, key(KeyCode::Enter))
+    }
+
+    /// CMD-13: in a project with no `AGENTS.md`, `/init` starts a turn whose prompt is the one the
+    /// driver wrote, and that prompt is what the transcript shows the person sent.
+    #[test]
+    fn the_init_command_starts_a_turn_with_the_drivers_own_prompt() {
+        let root = crate::testutil::scratch_dir("init-command-starts");
+        let mut session = Session::new("none").in_workspace(&root);
+        assert_eq!(
+            enter_line(&mut session, "/init"),
+            Action::Submit(crate::init_command::PROMPT.to_string())
+        );
+        assert_eq!(session.turns, 1);
+        assert_eq!(
+            session.transcript.last().expect("the prompt").text,
+            crate::init_command::PROMPT
+        );
+    }
+
+    /// CMD-13: an `AGENTS.md` already in the project is left alone, whatever it holds. No turn
+    /// starts, so nothing is read and no write is offered over it.
+    #[test]
+    fn the_init_command_starts_no_turn_where_agents_md_exists() {
+        let root = crate::testutil::scratch_dir("init-command-refuses");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("AGENTS.md"), "").unwrap();
+        let mut session = Session::new("none").in_workspace(&root);
+        assert_eq!(enter_line(&mut session, "/init"), Action::Redraw);
+        assert_eq!(session.turns, 0);
+        assert_eq!(
+            session.transcript.last().expect("a note").text,
+            t!(init_already_there, file = "AGENTS.md")
+        );
+        assert!(
+            session
+                .transcript
+                .iter()
+                .all(|entry| entry.speaker != crate::state::Speaker::User),
+            "a prompt was recorded for a turn that never started"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// CMD-2: the word takes no argument, so words after it make a prompt and none of them reach
+    /// the one the driver wrote.
+    #[test]
+    fn init_with_words_after_it_is_a_prompt() {
+        let root = crate::testutil::scratch_dir("init-command-prompt");
+        let mut session = Session::new("none").in_workspace(&root);
+        assert_eq!(
+            enter_line(&mut session, "/init the project"),
+            Action::Submit("/init the project".to_string())
         );
     }
 

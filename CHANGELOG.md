@@ -12,6 +12,7 @@
  - Added `/issue <url>` and `/pr <url>`, which set the issue and pull request a session is for. A resume or `--fork` keeps them. ([#1267](https://github.com/brave/bravebot/issues/1267))
  - Added `bravebot completion <shell>`, which prints a bash, zsh or fish completion script. ([#1506](https://github.com/brave/bravebot/issues/1506))
  - Added `/caffeinate`, which keeps the computer from sleeping while a turn runs or a loop has a tick to come. It is off until you use it. ([#1513](https://github.com/brave/bravebot/issues/1513))
+ - Added `/init`, which has the planner draft an `AGENTS.md` for a project that has none, from the project's files where you vouched for them and from your answers where you did not. It leaves an existing file alone. ([#1539](https://github.com/brave/bravebot/issues/1539))
  - Added `ctrl-y`, which puts back what `ctrl-u`, `ctrl-k`, `ctrl-w` or `alt-d` deleted. ([#1439](https://github.com/brave/bravebot/issues/1439))
  - Added `updateCheck: false` and `BRAVEBOT_UPDATE_CHECK=0`, which turn off the update check at startup. ([#1487](https://github.com/brave/bravebot/issues/1487))
  - Added the session's name to the terminal's title, so several open sessions can be told apart. A `terminalTitle` setting of `false` turns it off. ([#1220](https://github.com/brave/bravebot/issues/1220))

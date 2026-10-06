@@ -48,7 +48,9 @@ fr:cli-usage-sessions
 fr:cli-usage-sessions-stop
 fr:command-branch
 fr:command-caffeinate
+fr:command-init
 fr:gigabytes
+fr:init-already-there
 fr:kilobytes
 fr:reply-needs-input
 fr:reply-not-sent

@@ -7566,6 +7566,22 @@ impl Session {
         self.begin_turn(task.to_string(), (attached, pasted), Vec::new())
     }
 
+    /// Begin the turn `/init` is, or say why there is none (CMD-13).
+    ///
+    /// An existing `AGENTS.md` is a refusal and not a question: the turn is never started, so
+    /// nothing is read and nothing is offered a write over a file somebody wrote.
+    pub fn start_init(&mut self) -> Option<String> {
+        if crate::init_command::already_there(&self.workspace) {
+            self.note(t!(init_already_there, file = crate::init_command::FILE));
+            return None;
+        }
+        Some(self.begin_turn(
+            crate::init_command::PROMPT.to_string(),
+            (Vec::new(), Vec::new()),
+            Vec::new(),
+        ))
+    }
+
     /// The definition the turn starting now was addressed to, taken so no later turn inherits it.
     ///
     /// Falls back to the session's standing definition where no `/agent` line named one. That one
