@@ -26,13 +26,13 @@
 //! pipeline is refused if a step no longer reaches the file that was approved. See
 //! [`crate::programs`].
 //!
-//! # Not confined
+//! # Confined where the session asks for it
 //!
-//! Deliberately, for now. `bravebot-sandbox` confines processes running code we did not write; these
-//! run with whatever access the user's own shell would give them, because `git push` needs `~/.ssh`
-//! and the set of programs someone might ask for cannot be enumerated in advance. What holds is the
-//! label on the output, not any belief about the binary. Bounding the paths one may reach is decided
-//! in `docs/specs/sandboxing.md`, which says what has to exist before a profile applies.
+//! A caller that passes a [`Confinement`] has every step started under the profile that step's
+//! plan accounts for ([`crate::confine`]), and a step the platform cannot confine is not started.
+//! A caller that passes none runs steps with whatever access the user's own shell would give
+//! them, which is what a platform with no base does. What holds either way is the label on the
+//! output, not any belief about the binary. The rows are decided in `docs/specs/sandboxing.md`.
 //!
 //! # Nothing on stdin unless it was approved
 //!
@@ -56,6 +56,7 @@
 //! for, and a filter matching names cannot tell one of those from an exfiltration, so it is not
 //! attempted: what holds is narrow and exact rather than broad and approximate.
 
+use crate::confine::Confinement;
 use bravebot_core::Pipeline;
 use bravebot_core::cancel::{Cancel, Handoff, JobStop};
 use bravebot_core::command::{Joiner, Plan, Route, Step, Steps, is_the_null_device};
@@ -286,6 +287,13 @@ pub enum ExecError {
     /// Carries the program name, which is safe to report: argv was endorsed by a person, so it is
     /// not content an attacker chose.
     NotStarted { program: String, detail: String },
+    /// The platform could not confine the program, so it was not started.
+    ///
+    /// A program a person approved runs under its profile or not at all, so this is a refusal and
+    /// never a program started without one ([SANDBOX-17]).
+    ///
+    /// [SANDBOX-17]: ../../../docs/specs/sandboxing.md
+    NotConfined { program: String, detail: String },
     /// The user asked the turn to stop while this was running, and it has been killed.
     Cancelled,
     /// The plumbing itself failed: a pipe that could not be created or read.
@@ -299,6 +307,12 @@ impl fmt::Display for ExecError {
         match self {
             Self::NotStarted { program, detail } => {
                 write!(f, "'{program}' could not be started: {detail}")
+            }
+            Self::NotConfined { program, detail } => {
+                write!(
+                    f,
+                    "'{program}' was not started, since it could not be confined: {detail}"
+                )
             }
             Self::Cancelled => f.write_str("stopped because the turn was cancelled"),
             Self::Io(detail) => write!(f, "the pipeline could not be run: {detail}"),
@@ -413,9 +427,11 @@ pub fn run_plan_observed(
     limit: Duration,
     scratch: Option<&std::path::Path>,
     stdin: Option<&str>,
+    confinement: Option<&Confinement>,
     entering: &mut dyn FnMut(&std::path::Path) -> Result<(), ExecError>,
 ) -> Result<Ran, ExecError> {
     let mut running = Running::new(&plan.directory, cancel, limit, scratch, stdin);
+    running.confinement = confinement;
     running.entering = Some(entering);
     running.finish(&plan.steps)
 }
@@ -457,8 +473,10 @@ pub fn run_plan_movable(
     handoff: &Handoff,
     limit: Duration,
     scratch: Option<&std::path::Path>,
+    confinement: Option<&Confinement>,
 ) -> Result<Waited, ExecError> {
     let mut running = Running::new(&plan.directory, cancel, limit, scratch, None);
+    running.confinement = confinement;
     running.handoff = plan.steps.unrouted_pipeline().map(|_| handoff);
     let ended_well = running.run(&plan.steps)?;
     Ok(match running.moved.take() {
@@ -520,6 +538,8 @@ struct Running<'a> {
     handoff: Option<&'a Handoff>,
     /// The pipeline the token took, once it has.
     moved: Option<Moved>,
+    /// What each step is confined to, where the session asked for it.
+    confinement: Option<&'a Confinement>,
 }
 
 /// Why a wait came back without an error.
@@ -556,6 +576,7 @@ impl<'a> Running<'a> {
             stdin,
             handoff: None,
             moved: None,
+            confinement: None,
         }
     }
 
@@ -676,6 +697,10 @@ impl<'a> Running<'a> {
             // Every step, not only the first. A credential is as reachable from the middle of a
             // pipeline as from the front, and one step spared would be the whole of the hole.
             crate::scrub::apply(&mut command);
+            let mut command = match self.confinement {
+                Some(confinement) => confinement.wrap(command, step, self.directory)?,
+                None => command,
+            };
 
             let mut into = Where::Upstream;
             let mut out = if index == last {
@@ -1367,7 +1392,7 @@ pub fn start(
             routes: Vec::new(),
         })
         .collect();
-    start_steps(&steps, directory, scratch)
+    start_steps(&steps, directory, scratch, None)
 }
 
 /// [`start`], for the steps of a compiled plan.
@@ -1380,6 +1405,7 @@ pub fn start_steps(
     steps: &[Step],
     directory: &std::path::Path,
     scratch: Option<&std::path::Path>,
+    confinement: Option<&Confinement>,
 ) -> Result<Background, ExecError> {
     if steps.is_empty() {
         return Err(ExecError::Io("no stages to run".to_string()));
@@ -1417,6 +1443,16 @@ pub fn start_steps(
         // Every step, as in the foreground: a credential is as reachable from the middle of a
         // pipeline as from the front, and one spared would be the whole of the hole.
         crate::scrub::apply(&mut command);
+        let mut command = match confinement {
+            Some(confinement) => match confinement.wrap(command, step, directory) {
+                Ok(command) => command,
+                Err(error) => {
+                    stop(&mut children);
+                    return Err(error);
+                }
+            },
+            None => command,
+        };
 
         let (out_reader, out_writer) = std::io::pipe().map_err(|e| ExecError::Io(e.to_string()))?;
         let (err_reader, err_writer) = std::io::pipe().map_err(|e| ExecError::Io(e.to_string()))?;

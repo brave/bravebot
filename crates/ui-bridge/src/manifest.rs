@@ -95,6 +95,7 @@ pub(crate) fn walk(walk: Walk) {
         .with_attribution(attribution)
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
+        .with_confined_runs(true)
         // The rules the session opened under, as the terminal passes them. The agent's manifest
         // runner does not read them today, so no rule holds in a run. A front end says so on the
         // plan it puts to the person.

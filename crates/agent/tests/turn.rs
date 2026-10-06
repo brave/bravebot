@@ -21920,6 +21920,81 @@ fn a_delegate_inherits_the_mode_of_the_turn_that_spawned_it() {
     );
 }
 
+/// A delegate's programs are held to what the spawning turn's are. The regression it rejects is a
+/// delegate started with confinement off, which makes spawning one the way around the profile: the
+/// same `touch` that is refused in the turn would write outside the session from inside it. The
+/// unconfined turn is the control that the file is writable at all.
+#[test]
+fn a_delegate_of_a_confining_turn_cannot_write_outside_the_session() {
+    if bravebot_sandbox::base::Prelude::current().is_none()
+        || !bravebot_sandbox::confinement_works_here()
+    {
+        return;
+    }
+    for (confining, written) in [(false, true), (true, false)] {
+        let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!("delegate-confined-{confining}"));
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(top.join("session")).unwrap();
+        std::fs::create_dir_all(top.join("beside")).unwrap();
+        let session = top.join("session").canonicalize().unwrap();
+        let planted = top
+            .join("beside")
+            .canonicalize()
+            .unwrap()
+            .join("planted.txt");
+        let workspace = Workspace::new(&session).expect("workspace");
+
+        let (endpoint, _received) = serve_by_marker(vec![
+            (
+                "HAVE-A-DELEGATE-WRITE-IT",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"worker","task":"PLANT-THE-FILE"}"#,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "PLANT-THE-FILE",
+                vec![
+                    tool_request(
+                        "run",
+                        &format!(r#"{{"command":"touch {}"}}"#, planted.display()),
+                    ),
+                    reply_with("tried"),
+                ],
+            ),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        turn::run(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("HAVE-A-DELEGATE-WRITE-IT")
+                .with_permission_mode(bravebot_agent::PermissionMode::Bypass)
+                .with_confined_runs(confining),
+            &mut bravebot_agent::confirm::ApproveRuns,
+            &mut sink,
+        )
+        .expect("turn runs");
+
+        assert_eq!(
+            planted.exists(),
+            written,
+            "confining: {confining}, and the delegate's program {} outside the session",
+            if written { "did not write" } else { "wrote" }
+        );
+        let _ = std::fs::remove_dir_all(&top);
+    }
+}
+
 /// Everything a delegate read and ran ends with it, so its report is the only thing that says
 /// what the run was for. Told nothing but the round count, a person is left with a number for
 /// work done in a directory they own: a delegate asked to pick a file said which one here.
@@ -24002,6 +24077,7 @@ fn a_delegate_spends_the_wallet_the_turn_lent_it() {
         None,
         None,
         bravebot_agent::exec::Deadlines::BUILT_IN,
+        false,
         None,
         &bravebot_core::cancel::Cancel::new(),
         &mut bravebot_agent::confirm::ApproveWrites,

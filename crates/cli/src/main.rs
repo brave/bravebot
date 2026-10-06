@@ -1015,6 +1015,7 @@ fn run_task(
         .with_deadlines(bravebot_agent::exec::Deadlines::resolve(
             settings.run_deadlines(),
         ))
+        .with_confined_runs(true)
         // Whether a check that finds nothing answers in a person's place. Resolved here, once, out
         // of the three routes: `bravebot_core::vetting::auto` is the rule and nothing below reads
         // any of the three again. A run nobody is watching has no prompt to fall back to, so

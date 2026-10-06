@@ -31,6 +31,11 @@ pub struct SandboxPolicy {
     /// Not a grant: a process started in a directory it may not read is refused its first
     /// read of it, so a caller that means the process to work there grants it too.
     pub starting_in: Option<PathBuf>,
+    /// Whether a write row reaches a `.git` beneath it on macOS, where the default is that it
+    /// does not ([SANDBOX-14]). Linux holds nothing back either way.
+    ///
+    /// [SANDBOX-14]: ../../../docs/specs/sandboxing.md
+    pub git_directories_writable: bool,
 }
 
 impl SandboxPolicy {
@@ -42,6 +47,7 @@ impl SandboxPolicy {
             allow_network: false,
             allow_subprocesses: false,
             starting_in: None,
+            git_directories_writable: false,
         }
     }
 
@@ -95,6 +101,17 @@ impl SandboxPolicy {
         self
     }
 
+    /// Let a write row reach a `.git` beneath it.
+    ///
+    /// Named to be conspicuous in review: a confined process that may write a `.git` may run
+    /// code outside its confinement the next time anybody runs git there, which is what the
+    /// default withholds. For a caller whose program is one a person asked to run against the
+    /// repository, where a commit or a clone is the request.
+    pub fn allow_git_directory_writes(mut self) -> Self {
+        self.git_directories_writable = true;
+        self
+    }
+
     pub fn starting_in(mut self, directory: impl Into<PathBuf>) -> Self {
         self.starting_in = Some(directory.into());
         self
@@ -138,6 +155,7 @@ impl SandboxPolicy {
                 allow_network: self.allow_network,
                 allow_subprocesses: self.allow_subprocesses,
                 starting_in: self.starting_in.clone(),
+                git_directories_writable: self.git_directories_writable,
             },
             omitted,
         }

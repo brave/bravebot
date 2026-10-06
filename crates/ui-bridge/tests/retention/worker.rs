@@ -130,6 +130,12 @@ fn bridge_ordinary_endings_keep_decisions_live_and_resumed() {
     if !profile::in_isolated_profile() {
         return;
     }
+    // A `run` is refused where the platform has a base and no way to apply it.
+    if bravebot_sandbox::base::Prelude::current().is_some()
+        && !bravebot_sandbox::confinement_works_here()
+    {
+        return;
+    }
     for ending in ["success", "failure", "cancel"] {
         for resumed in [false, true] {
             const SENTINEL: &str = "UNTRUSTED_BRIDGE_INTERRUPTION_52019";

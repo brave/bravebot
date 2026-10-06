@@ -942,7 +942,9 @@ word, a missing path and a file the confinement reaches already record nothing.
 The process is confined under [MCP-3](mcp.md#MCP-3), and what it may reach is built for it:
 
 - The sandbox's base rows for this platform, which allow egress and children, with no home
-  directory given, so the git configuration in it is not among them either. Egress is to IP
+  directory given, so the git configuration in it is not among them either, and no developer
+  directory, so on macOS a server whose program is a `/usr/bin` shim such as `python3` does not
+  start. Egress is to IP
   addresses, and a unix socket is reached only under a path the server may write
   ([SANDBOX-3](sandboxing.md#SANDBOX-3)), the temporary directory among them. A server that runs
   `docker` against the daemon's usual socket does not reach it, and one reaching a daemon on a

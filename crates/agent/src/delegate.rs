@@ -518,6 +518,9 @@ pub fn run(
     // built-in figures would be the one run stopped five minutes in, in the one place nobody is
     // watching it happen.
     deadlines: crate::exec::Deadlines,
+    // The spawning turn's too: a delegate's programs are held to what the person's are, or the
+    // confinement is a thing to avoid by delegating.
+    confine_runs: bool,
     // The servers the spawning turn reached. A delegate is offered the tools of the ones its spec
     // holds a grant for, on the lists that turn already settled (SERVERS-9).
     mcp: Option<&crate::mcp::Session>,
@@ -608,6 +611,7 @@ pub fn run(
         })
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
+        .with_confined_runs(confine_runs)
         .with_mcp(mcp.cloned());
 
     task.file_authority = Some(seeded.file_authority.clone());

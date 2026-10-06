@@ -1780,46 +1780,11 @@ fn confinement(
     temporary: &Path,
     home: Option<&Path>,
 ) -> Option<SandboxPolicy> {
-    let mut policy = base(prelude?, temporary, None);
+    let mut policy = base(prelude?, temporary, None, None);
     let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    // Compared with paths whose links are followed, so a home reached through one is followed too.
-    let home = home.map(canonical);
-    let outside_home = |path: &Path| home.as_ref().is_none_or(|home| !home.starts_with(path));
-    let beside_home = |path: &Path| {
-        path.parent().is_some()
-            && outside_home(path)
-            && home.as_ref().is_none_or(|home| !path.starts_with(home))
-    };
-    let below_the_top_of_home = |path: &Path| {
-        home.as_ref().is_some_and(|home| {
-            path.strip_prefix(home)
-                .is_ok_and(|below| below.components().count() > 1)
-        })
-    };
-    let program = canonical(program);
-    if let Some(installation) = program
-        .parent()
-        .filter(|directory| directory.file_name() == Some(OsStr::new("bin")))
-        .and_then(Path::parent)
-        .filter(|installation| below_the_top_of_home(installation))
-    {
-        policy = policy.allow_read(installation);
-    }
     let own = canonical(own);
     policy = policy.allow_read(&own).allow_write(&own);
-    let readable = searched
-        .iter()
-        .map(|directory| canonical(directory))
-        .chain(program.parent().map(Path::to_path_buf));
-    for directory in readable {
-        if directory.parent().is_none() || !outside_home(&directory) {
-            continue;
-        }
-        if directory.file_name() == Some(OsStr::new("bin"))
-            && let Some(parent) = directory.parent().filter(|parent| beside_home(parent))
-        {
-            policy = policy.allow_read(parent);
-        }
+    for directory in crate::confine::program_reads(program, searched, home) {
         policy = policy.allow_read(directory);
     }
     // A recorded read is resolved already, so one that resolves elsewhere now is a file replaced by

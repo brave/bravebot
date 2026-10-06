@@ -1746,6 +1746,7 @@ fn work(work: Work) {
         .with_attribution(attribution)
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
+        .with_confined_runs(true)
         .with_auto_vetting(auto_vetting)
         // The rules the session opened under, and not the files as they are now (PERM-12).
         .with_permissions(state.rules.permissions.clone())

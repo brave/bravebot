@@ -1790,9 +1790,29 @@ pub struct Tools<'a> {
     /// this turn was not offered is answered the way any other unknown name is rather than
     /// quietly working.
     pub advising: Option<crate::advisor::Advising<'a>>,
+    /// Whether a program `run` starts is held to the profile its plan accounts for.
+    ///
+    /// `false` for a turn nobody turned it on for, which starts programs with the access the
+    /// user's own shell has. Where it is `true` the platform has to confine every step or the step
+    /// is not started; a platform with no base (Windows) starts them as it always has
+    /// ([SANDBOX-1]).
+    ///
+    /// [SANDBOX-1]: ../../../docs/specs/sandboxing.md
+    pub confine_runs: bool,
 }
 
 impl<'a> Tools<'a> {
+    /// What this call's programs are confined to, or `None` where they are not.
+    fn confinement(&self) -> Option<crate::confine::Confinement> {
+        if !self.confine_runs {
+            return None;
+        }
+        let roots = std::iter::once(self.workspace.root().to_path_buf())
+            .chain(self.workspace.added_directories().iter().cloned())
+            .collect();
+        crate::confine::Confinement::here(roots, self.workspace.scratch(), self.profile)
+    }
+
     /// Where this turn's credential findings are written, and under whose name.
     ///
     /// Both halves are already here for other reasons, and putting them together in one place is
@@ -6865,6 +6885,8 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     // grant is a sentence somebody answered and a use is a thing that happened.
     let spends = bravebot_core::ambient::spent_by(&plan);
 
+    let confinement = tools.confinement();
+
     if in_the_background {
         // What has to be refused is what start_steps cannot honour, and it honours no route at
         // all, including `2>&1`, which names nothing for anybody to endorse.
@@ -6879,7 +6901,12 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         tools
             .workspace
             .mark_rewind_gap(crate::rewind::CoverageGap::Command);
-        return match crate::exec::start_steps(steps, &plan.directory, tools.workspace.scratch()) {
+        return match crate::exec::start_steps(
+            steps,
+            &plan.directory,
+            tools.workspace.scratch(),
+            confinement.as_ref(),
+        ) {
             Ok(running) => {
                 // Spent at the moment the programs start, which for a background line is here:
                 // it outlives this call, and nothing later in the turn knows what it reached.
@@ -6956,6 +6983,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             &handoff,
             limit,
             tools.workspace.scratch(),
+            confinement.as_ref(),
         ) {
             Ok(crate::exec::Waited::Moved(moved)) => {
                 // Everything the background branch above does once its line has started, at the
@@ -6999,6 +7027,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             limit,
             tools.workspace.scratch(),
             supplied.as_ref().map(|(bytes, _)| bytes.as_str()),
+            confinement.as_ref(),
             &mut |path| {
                 let key = authority.key(&tools.workspace.trust_key(&path.to_string_lossy()));
                 if effects.contains_key(&key) {
@@ -9295,7 +9324,7 @@ mod tests {
             let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
                 panic!("one pipeline");
             };
-            let mut running = crate::exec::start_steps(steps, &root, None).unwrap();
+            let mut running = crate::exec::start_steps(steps, &root, None, None).unwrap();
             let until = Instant::now() + Duration::from_secs(5);
             while !running.ended() {
                 assert!(Instant::now() < until, "job did not end");
@@ -9347,7 +9376,7 @@ mod tests {
             let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
                 panic!("one pipeline");
             };
-            let running = crate::exec::start_steps(steps, &root, None).unwrap();
+            let running = crate::exec::start_steps(steps, &root, None, None).unwrap();
             let (_, stop) = jobs.keep(
                 running,
                 plan.display(),
@@ -9421,7 +9450,7 @@ mod tests {
             let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
                 panic!("one pipeline");
             };
-            let running = crate::exec::start_steps(steps, &root, None).unwrap();
+            let running = crate::exec::start_steps(steps, &root, None, None).unwrap();
             let (name, stop) = jobs.keep(
                 running,
                 plan.display(),
@@ -13889,9 +13918,49 @@ mod tests {
                 permission_mode: crate::PermissionMode::default(),
                 auto_vetting: false,
                 run_directory: &mut run_directory,
+                confine_runs: false,
                 remembering: None,
                 advising: None,
             })
+        }
+
+        /// The regression it rejects: a turn that asks for confined runs building its confinement
+        /// from something other than the directories its workspace was opened on, or building none.
+        #[cfg(unix)]
+        #[test]
+        fn a_turn_that_confines_runs_is_confined_to_its_workspace_and_a_turn_that_does_not_is_not()
+        {
+            let scratch = Scratch::new("confine-roots");
+            let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+            let beside = Scratch::new("confine-added");
+            let added = beside.path.clone();
+            workspace
+                .add_directory(&added.to_string_lossy())
+                .expect("added");
+            let step = bravebot_core::command::Step {
+                program: "ls".to_string(),
+                resolved: "/bin/ls".into(),
+                started_as: "/bin/ls".into(),
+                args: Vec::new(),
+                environment: Vec::new(),
+                routes: Vec::new(),
+            };
+
+            let (off, on) = with_tools(&workspace, |tools| {
+                let off = tools.confinement().is_some();
+                tools.confine_runs = true;
+                (off, tools.confinement())
+            });
+
+            assert!(!off);
+            let on = on.expect("a platform with a base");
+            let policy = on.policy(&step, workspace.root(), &[]);
+            for root in [workspace.root(), added.canonicalize().unwrap().as_path()] {
+                assert!(
+                    policy.writable.iter().any(|row| row.path == root),
+                    "{root:?} is not written in {policy:?}"
+                );
+            }
         }
 
         pub(super) fn told(
