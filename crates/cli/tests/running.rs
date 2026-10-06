@@ -986,6 +986,59 @@ fn doctor_ends_on_the_configuration_status_and_says_its_identifier() {
     );
 }
 
+/// NET-8 over the status rather than the line: a proxy variable naming no route ends `doctor` on the
+/// configuration error, as a certificate path holding nothing does. A machine whose only way out is
+/// a mistyped `HTTPS_PROXY` is misconfigured, and a CI job checking a fleet reads the status rather
+/// than the report.
+///
+/// The same configuration twice, once without the variable and once with it. The run without it has
+/// to end at zero or the status proves nothing: `doctor` ends on this code for a missing model
+/// service and for a certificate path that holds nothing too, so a test asserting three against one
+/// environment would pass with the proxy taking no part in it.
+#[test]
+fn doctor_ends_on_the_configuration_status_for_a_proxy_variable_that_names_no_route() {
+    let scratch = Scratch::new("cli-running-doctor-proxy-status");
+    // Complete, so nothing but the proxy below can decide the status.
+    let configured = [
+        ("SERVICES_KEY_AICHAT", "a-services-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+        (
+            "BRAVE_AI_CHAT_ENDPOINT",
+            "https://ai-chat.example.invalid/v1/chat/completions",
+        ),
+    ];
+
+    let clean = bravebot(&scratch.path, &configured, &["doctor"]);
+    let (clean_out, clean_err) = said(&clean);
+    assert_eq!(
+        clean.status.code(),
+        Some(0),
+        "this configuration fails for a reason of its own, so the status below says nothing about \
+         the proxy: {clean_out}{clean_err}"
+    );
+
+    let mut with_proxy = configured.to_vec();
+    with_proxy.push(("HTTPS_PROXY", "ht tp://proxy.corp"));
+    let output = bravebot(&scratch.path, &with_proxy, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "a proxy variable naming no route did not end the report on the configuration status: \
+         {stdout}{stderr}"
+    );
+    assert!(
+        stderr.contains("BB1003"),
+        "the status carries no identifier to search for: {stderr}"
+    );
+    // The status is worth nothing on its own: a reader given it has to be told which variable.
+    assert!(
+        stdout.contains("HTTPS_PROXY"),
+        "the report ended on the status without naming the variable: {stdout}"
+    );
+}
+
 /// The same status for the other way a configuration can be unusable: one this build can parse
 /// and that names nothing which will serve a turn, which CLI-7 calls a configuration error rather
 /// than a finding. The report says it and goes on to the end, so the status is accumulated across

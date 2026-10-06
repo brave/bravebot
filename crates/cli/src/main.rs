@@ -3029,7 +3029,10 @@ fn doctor() -> ExitCode {
     // which is what a report exits non-zero over: nothing is trusted, a named path holds nothing, or
     // a proxy was named that requests are not taking. CLI-7 calls each of them a configuration
     // error rather than a finding, which is the status CLI-6 gives them.
-    if !transport.trust_problems().is_empty() || transport.unusable_proxy().is_some() {
+    if !transport.trust_problems().is_empty()
+        || transport.unusable_proxy().is_some()
+        || !transport.unparseable_proxies().is_empty()
+    {
         ending = ends_on(ending, Ending::Configuration);
     }
 
@@ -3782,6 +3785,18 @@ fn network(transport: &Transport) -> Vec<String> {
     };
     lines.push(aligned(t!(doctor_proxy), proxy, DETAIL));
 
+    // A variable that holds something that is not a uri is passed over by the reader, which then
+    // tries the next one, so the line above describes a route that is not the one somebody set. One
+    // line each, naming the variable and never its value: the value is as likely to carry a
+    // credential as a value that parsed.
+    for name in transport.unparseable_proxies() {
+        lines.push(aligned(
+            t!(doctor_proxy_unparseable),
+            t!(doctor_proxy_unparseable_detail, variable = name.as_str()),
+            DETAIL,
+        ));
+    }
+
     // Which hosts the proxy is not used for, since that is what decides whether a proxy in force
     // applies to the host that is failing, and `NO_PROXY=*` leaves one configured and used for
     // nothing.
@@ -3977,6 +3992,48 @@ mod tests {
 
         assert!(report.contains("socks5"), "{report}");
         assert!(report.contains("direct"), "{report}");
+    }
+
+    /// A variable the reader passed over is a route somebody stated, and the proxy line describes a
+    /// different one. Saying nothing leaves them reading a report that denies the proxy they set.
+    #[test]
+    fn the_network_section_names_a_proxy_variable_that_cannot_be_parsed() {
+        let transport = Transport::stated_with_unparseable_proxies(
+            TrustRoots::Bundled,
+            None,
+            None,
+            &["HTTPS_PROXY"],
+        );
+
+        let report = network(&transport).join("\n");
+
+        assert!(report.contains("HTTPS_PROXY"), "{report}");
+        assert!(
+            !report.contains("alice") && !report.contains("s3cret"),
+            "the value is never printed: {report}"
+        );
+    }
+
+    /// Every one of them, in the order the variables are read. A reader who fixed the only variable
+    /// named would run this again to be told about the next.
+    #[test]
+    fn the_network_section_names_every_proxy_variable_that_cannot_be_parsed() {
+        let transport = Transport::stated_with_unparseable_proxies(
+            TrustRoots::Bundled,
+            None,
+            None,
+            &["ALL_PROXY", "HTTP_PROXY"],
+        );
+
+        let lines = network(&transport);
+        let named: Vec<&String> = lines
+            .iter()
+            .filter(|line| line.contains("_PROXY is set"))
+            .collect();
+
+        assert_eq!(named.len(), 2, "one line each: {named:?}");
+        assert!(named[0].contains("ALL_PROXY"), "{named:?}");
+        assert!(named[1].contains("HTTP_PROXY"), "{named:?}");
     }
 
     /// A remedy naming three variables is read, not parsed, so the list is punctuated the way a

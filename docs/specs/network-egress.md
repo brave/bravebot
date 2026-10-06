@@ -201,6 +201,20 @@ protocol this build cannot connect through is not carried at all. `doctor` names
 protocol, host and port, the hosts it is not used for, and whether it requires a credential, or says
 that a proxy was named and is not the route; the credential itself is never printed.
 
+A variable that is set and non-empty and whose value cannot be read as a proxy address is named too,
+one line each, in the order the variables are read and in either case. That covers a value that is
+not a uri at all, one naming no authority, and one whose scheme no proxy speaks: the report says the
+value could not be read as a proxy rather than that it is not a uri, since `gopher://proxy.corp` is a
+uri and naming it as one would send a reader after a typo that is not there. Only the name: the value is withheld on the
+same terms the credential is. One line each counts variables and not spellings: where the
+environment matches a name without regard to case, as Windows does, both spellings answer with the
+one value somebody set and it is named once, under the spelling read first. Two spellings holding
+two different values are two variables and are named separately. The reader passes over such a value and goes on to the next variable,
+so a later variable may still be the route, and every unparseable variable is named whether or not
+one of them was: a variable naming no route is a statement about this machine the program is not
+honouring, and `doctor` ends on a configuration error for it as it does for a path that holds no
+certificate.
+
 **Why.** Honouring the variables is right: they are how whoever set the machine up states the only
 route off it, and a program that ignored them would not connect at all. Inheriting them is not.
 Behaviour inherited from a default is a property of a dependency's version rather than a decision
@@ -227,10 +241,30 @@ unauthenticated request is among the failures the report exists to explain. `NO_
 the same reason in the other direction: it decides whether a proxy in force applies to the host that
 is failing, and `NO_PROXY=*` leaves one configured and used for nothing.
 
+A value that cannot be read as a proxy address is named for the reason an unusable protocol is. The reader's answer to one
+is to try the next variable, so the route it settles on and the route somebody wrote down are two
+different things and the report otherwise states only the first: a machine whose one way out is a
+mistyped `HTTPS_PROXY` says that no proxy was named, or names a lower-priority variable as the route,
+and either reads as a denial of the thing that was set. The name alone is enough to act on, and is
+all that is printed: a value that failed to parse is as likely to carry a credential as one that
+did, since the usual mistake is a uri missing its scheme and the username stays where it was.
+
 `verified-by: bravebot_net::transport::the_proxy_a_client_gets_is_the_one_stated_rather_than_a_library_default`
 `verified-by: bravebot_net::transport::a_proxy_is_named_without_the_credential_it_carries`
 `verified-by: bravebot_net::transport::a_proxy_without_a_credential_is_not_reported_as_having_one`
 `verified-by: bravebot_net::transport::a_proxy_protocol_this_build_cannot_connect_through_is_not_the_route`
+`verified-by: bravebot_net::transport::a_proxy_variable_that_cannot_be_parsed_is_named`
+`verified-by: bravebot_net::transport::the_values_a_proxy_variable_cannot_hold_are_each_named`
+`verified-by: bravebot_net::transport::a_proxy_variable_naming_a_bare_host_is_not_a_problem_to_report`
+`verified-by: bravebot_net::transport::a_proxy_variable_that_cannot_be_parsed_is_named_without_its_value`
+`verified-by: bravebot_net::transport::a_proxy_variable_that_parses_or_is_empty_is_not_named`
+`verified-by: bravebot_net::transport::every_proxy_variable_that_cannot_be_parsed_is_named_in_the_order_they_are_read`
+`verified-by: bravebot_net::transport::a_lower_case_proxy_variable_that_cannot_be_parsed_is_named`
+`verified-by: bravebot_net::transport::a_proxy_variable_a_case_folding_lookup_answers_twice_is_named_once`
+`verified-by: bravebot_net::transport::two_spellings_of_a_proxy_variable_holding_different_values_are_both_named`
+`verified-by: bravebot_cli::main::the_network_section_names_a_proxy_variable_that_cannot_be_parsed`
+`verified-by: bravebot_cli::main::the_network_section_names_every_proxy_variable_that_cannot_be_parsed`
+`verified-by: bravebot_cli::running::doctor_ends_on_the_configuration_status_for_a_proxy_variable_that_names_no_route`
 `verified-by: bravebot_cli::main::a_proxy_this_build_cannot_connect_through_is_reported_as_not_the_route`
 `verified-by: bravebot_cli::main::the_network_section_names_the_hosts_a_proxy_is_not_used_for`
 `verified-by: bravebot_cli::main::the_network_section_names_the_roots_in_force_and_the_proxy`

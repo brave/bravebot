@@ -112,6 +112,9 @@ pub struct Transport {
     proxy: Option<Proxy>,
     /// The protocol of a proxy that was named and cannot be used.
     unusable_proxy: Option<String>,
+    /// The names of the proxy variables that are set and whose value cannot be read as a proxy
+    /// address, in the order the variables are read. Names only: a proxy uri carries a credential.
+    unparseable_proxies: Vec<String>,
     /// What `NO_PROXY` held, for the report. The transport library reads it for itself.
     no_proxy: Option<String>,
 }
@@ -128,8 +131,14 @@ impl Transport {
     }
 
     fn from_env() -> Self {
+        let lookup = |name: &str| std::env::var_os(name);
+        // Which variables the reader below passes over, read for the report alone. It skips a value
+        // that is not a uri and goes on to the next variable, so without this the route it chose and
+        // the variable somebody set are two different statements and the report makes only the
+        // first.
+        let unparseable = unparseable_proxy_variables(&lookup);
         let mut transport = Self::resolve(
-            TrustRoots::from_env(|name| std::env::var_os(name)),
+            TrustRoots::from_env(lookup),
             // The transport library's own reader, so the variables it looks at and the `NO_PROXY`
             // exceptions it honours are the ones every other client of it honours. Called here
             // rather than left to its default, so a release that stopped calling it changes
@@ -137,6 +146,7 @@ impl Transport {
             // going away.
             Proxy::try_from_env(),
         );
+        transport.unparseable_proxies = unparseable;
         transport.no_proxy = [NO_PROXY, "no_proxy"]
             .iter()
             .find_map(|name| std::env::var(name).ok())
@@ -153,6 +163,24 @@ impl Transport {
     pub fn stated(roots: TrustRoots, proxy: Option<&str>, no_proxy: Option<&str>) -> Self {
         let mut transport = Self::resolve(roots, proxy.and_then(|uri| Proxy::new(uri).ok()));
         transport.no_proxy = no_proxy.map(str::to_string);
+        transport
+    }
+
+    /// The transport a caller states, together with the proxy variables that hold something that is
+    /// not a uri.
+    ///
+    /// Exists for the same reason [`Transport::stated`] does: what the report says about a machine
+    /// whose proxy variable does not parse is otherwise reachable only by setting that variable in
+    /// the process every other test in the suite runs in.
+    pub fn stated_with_unparseable_proxies(
+        roots: TrustRoots,
+        proxy: Option<&str>,
+        no_proxy: Option<&str>,
+        unparseable: &[&str],
+    ) -> Self {
+        let mut transport = Self::stated(roots, proxy, no_proxy);
+        transport.unparseable_proxies =
+            unparseable.iter().map(|name| (*name).to_string()).collect();
         transport
     }
 
@@ -178,6 +206,7 @@ impl Transport {
             trust_problems,
             proxy,
             unusable_proxy,
+            unparseable_proxies: Vec::new(),
             no_proxy: None,
         }
     }
@@ -230,6 +259,20 @@ impl Transport {
         self.unusable_proxy.as_deref()
     }
 
+    /// The proxy variables that are set to something that cannot be read as a proxy address, in the
+    /// order the variables are read.
+    ///
+    /// Names alone, never values: a proxy uri carries a username and password on the networks that
+    /// require one, and a value that failed to parse is as likely to hold one as a value that did.
+    ///
+    /// Reported because the alternative is a report that denies the proxy somebody set. The reader
+    /// passes over a value it cannot parse and tries the next variable, so a machine whose only
+    /// route off it is a mistyped `HTTPS_PROXY` otherwise sees connection failures beside a line
+    /// saying no proxy was named.
+    pub fn unparseable_proxies(&self) -> &[String] {
+        &self.unparseable_proxies
+    }
+
     /// The hosts `NO_PROXY` excludes from the proxy, verbatim.
     ///
     /// Worth reporting because it decides whether a proxy in force applies to the host that is
@@ -270,6 +313,7 @@ impl fmt::Debug for Transport {
             .field("problems", &self.trust_problems)
             .field("proxy", &self.proxy_summary())
             .field("unusable_proxy", &self.unusable_proxy)
+            .field("unparseable_proxies", &self.unparseable_proxies)
             .field("no_proxy", &self.no_proxy)
             .finish()
     }
@@ -345,6 +389,48 @@ fn from_pem(bytes: &[u8]) -> Vec<Certificate<'static>> {
             _ => None,
         })
         .collect()
+}
+
+/// Every proxy variable that is set, non-empty, and holding something that cannot be read as a
+/// proxy address, in the order the variables are read, and in either case.
+///
+/// A value that is not a uri at all, one naming no authority, and one whose scheme no proxy speaks
+/// all fail the same parse, which is why neither this nor the report calls the value "not a uri":
+/// `gopher://proxy.corp` is one.
+///
+/// The names alone are collected. A value that does not parse is as likely to hold a credential as
+/// one that does, and a report exists to be pasted into an issue.
+///
+/// The same parse the transport library's own reader applies, so a variable named here is exactly
+/// one that reader passed over. That reader stops at the first variable it can parse and this does
+/// not stop at all: a variable set after the one in force is reported too, since whoever set it
+/// stated a route and is otherwise told nothing about why it is not the one in use.
+///
+/// Both spellings are read, and a spelling holding a value another spelling of the same variable
+/// already answered with is passed over. Windows matches an environment name without regard to
+/// case, so there both spellings answer with the one value somebody set, and naming each would
+/// print the variable twice and send the reader to correct a spelling nobody wrote.
+fn unparseable_proxy_variables(lookup: &impl Fn(&str) -> Option<OsString>) -> Vec<String> {
+    let mut named = Vec::new();
+    for variable in PROXY_VARIABLES {
+        let mut answered: Vec<String> = Vec::new();
+        for name in [variable.to_string(), variable.to_ascii_lowercase()] {
+            let Some(value) = lookup(&name)
+                .and_then(|value| value.into_string().ok())
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            if answered.contains(&value) {
+                continue;
+            }
+            answered.push(value.clone());
+            if Proxy::new(&value).is_err() {
+                named.push(name);
+            }
+        }
+    }
+    named
 }
 
 /// Whether this build can actually connect through a proxy of this protocol.
@@ -746,6 +832,131 @@ mod tests {
             transport.agent_config_builder().build().proxy().is_none(),
             "no client is handed a proxy it cannot connect through"
         );
+    }
+
+    /// A variable set to something that is not a uri is passed over by the reader, which then tries
+    /// the next variable. Without naming it, the report says no proxy was named on a machine where
+    /// somebody named one, and whoever set it has nothing to fix.
+    ///
+    /// A bare host is not such a value: the reader inserts a default scheme, so `proxy.corp:8080` is
+    /// a route. What fails is a value with a space in it, an authority that is not there, or a
+    /// scheme naming a protocol no proxy speaks.
+    #[test]
+    fn a_proxy_variable_that_cannot_be_parsed_is_named() {
+        let named =
+            unparseable_proxy_variables(&environment(&[("HTTPS_PROXY", "ht tp://proxy.corp")]));
+
+        assert_eq!(named, ["HTTPS_PROXY"]);
+    }
+
+    /// Each spelling that actually fails, so a reader of this test knows what the report is about
+    /// and a change to the parse that quietly accepted one of them shows up here.
+    #[test]
+    fn the_values_a_proxy_variable_cannot_hold_are_each_named() {
+        for value in ["ht tp://proxy.corp", "http://", "gopher://proxy.corp:70"] {
+            let named = unparseable_proxy_variables(&environment(&[("HTTPS_PROXY", value)]));
+
+            assert_eq!(named, ["HTTPS_PROXY"], "{value} is not a proxy uri");
+        }
+    }
+
+    /// A bare host and a bare host with a port are routes rather than mistakes: the reader inserts
+    /// the default scheme. Naming either would send somebody to fix a variable that works.
+    #[test]
+    fn a_proxy_variable_naming_a_bare_host_is_not_a_problem_to_report() {
+        let named = unparseable_proxy_variables(&environment(&[
+            ("ALL_PROXY", "proxy.corp"),
+            ("HTTPS_PROXY", "proxy.corp:8080"),
+        ]));
+
+        assert!(named.is_empty(), "{named:?}");
+    }
+
+    /// The value never appears. A proxy uri carries a username and password on the networks that
+    /// require one, and a value that failed to parse is as likely to hold one as a value that did.
+    #[test]
+    fn a_proxy_variable_that_cannot_be_parsed_is_named_without_its_value() {
+        let transport = Transport::stated_with_unparseable_proxies(
+            TrustRoots::Bundled,
+            None,
+            None,
+            &["HTTPS_PROXY"],
+        );
+
+        assert_eq!(transport.unparseable_proxies(), ["HTTPS_PROXY"]);
+        let shown = format!("{transport:?}");
+        assert!(shown.contains("HTTPS_PROXY"), "{shown}");
+        assert!(
+            !shown.contains("s3cret") && !shown.contains("alice"),
+            "no credential reaches a report: {shown}"
+        );
+    }
+
+    /// A value that parses is not a problem to report, and a variable that is set but empty names
+    /// nothing at all: a shell that exports one unconditionally leaves it empty rather than unset.
+    #[test]
+    fn a_proxy_variable_that_parses_or_is_empty_is_not_named() {
+        let named = unparseable_proxy_variables(&environment(&[
+            ("ALL_PROXY", "http://proxy.corp:3128"),
+            ("HTTPS_PROXY", ""),
+        ]));
+
+        assert!(named.is_empty(), "{named:?}");
+    }
+
+    /// Every one of them, rather than the first. The reader stops at the first variable it can
+    /// parse, so a later variable that does not parse is still a route somebody stated, and a report
+    /// that stopped would leave them fixing nothing.
+    #[test]
+    fn every_proxy_variable_that_cannot_be_parsed_is_named_in_the_order_they_are_read() {
+        let named = unparseable_proxy_variables(&environment(&[
+            ("HTTP_PROXY", "also not a uri"),
+            ("ALL_PROXY", "not a uri"),
+        ]));
+
+        assert_eq!(named, ["ALL_PROXY", "HTTP_PROXY"]);
+    }
+
+    /// The lower-case spelling is the form some networks hand out, and the reader honours it, so a
+    /// report that read only the upper-case one would deny a proxy somebody set.
+    #[test]
+    fn a_lower_case_proxy_variable_that_cannot_be_parsed_is_named() {
+        let named =
+            unparseable_proxy_variables(&environment(&[("https_proxy", "ht tp://proxy.corp")]));
+
+        assert_eq!(named, ["https_proxy"]);
+    }
+
+    /// Windows matches an environment name without regard to case, so both spellings answer with the
+    /// one value somebody set. NET-8 says a variable is named one line, and a reader told to correct
+    /// `https_proxy` on a machine where only `HTTPS_PROXY` exists is sent after a variable that is
+    /// not there.
+    ///
+    /// The lookup folds case rather than the test running on Windows, because the suite runs on
+    /// Linux and macOS too and the behaviour under test is the lookup's, not the platform's.
+    #[test]
+    fn a_proxy_variable_a_case_folding_lookup_answers_twice_is_named_once() {
+        let folding = |name: &str| match name.eq_ignore_ascii_case("HTTPS_PROXY") {
+            true => Some(OsString::from("ht tp://proxy.corp")),
+            false => None,
+        };
+
+        let named = unparseable_proxy_variables(&folding);
+
+        assert_eq!(named, ["HTTPS_PROXY"]);
+    }
+
+    /// Two spellings of one variable holding two different values are two variables, which is only
+    /// reachable where the lookup does not fold case. Both are routes somebody stated and neither is
+    /// honoured, so the dedup above must key on the value and not on the variable.
+    #[test]
+    fn two_spellings_of_a_proxy_variable_holding_different_values_are_both_named() {
+        let named = unparseable_proxy_variables(&environment(&[
+            ("HTTPS_PROXY", "ht tp://proxy.corp"),
+            ("https_proxy", "gopher://proxy.corp"),
+        ]));
+
+        assert_eq!(named, ["HTTPS_PROXY", "https_proxy"]);
     }
 
     /// The built-in roots are what a client gets when nothing named others, so a build that ships
