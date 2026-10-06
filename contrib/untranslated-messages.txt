@@ -19,6 +19,7 @@ fr:bg-bypass-refused
 fr:bg-needs-a-prompt
 fr:bg-needs-a-terminal
 fr:bg-not-started
+fr:bg-restart-needs-a-terminal
 fr:bg-spawn-failed
 fr:bg-started
 fr:bg-takes-nothing-else
@@ -39,6 +40,7 @@ fr:checkouts-unpushed
 fr:cli-advisor-needs-a-name
 fr:cli-advisor-not-with-a-manifest
 fr:cli-option-advisor
+fr:cli-plain-resumed
 fr:cli-usage-attach
 fr:cli-usage-bg
 fr:cli-usage-reply
@@ -53,6 +55,7 @@ fr:reply-not-sent
 fr:reply-sent
 fr:reply-usage
 fr:reply-working
+fr:resume-held-by-background
 fr:session-branch-keeps-checkouts
 fr:session-branch-nothing-written
 fr:session-branch-refused

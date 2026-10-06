@@ -51,6 +51,7 @@ fn running<'a>(config: &'a Config, workspace: &'a Workspace, trust: TrustStore) 
         beside: None,
         exposed: Default::default(),
         auto_vetting: false,
+        kept: None,
     }
 }
 

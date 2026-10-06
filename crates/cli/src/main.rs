@@ -2060,6 +2060,11 @@ fn resume_named(id: &str, skip_permissions: bool, prompts: SystemPrompts) -> Exi
             }
             ExitCode::SUCCESS
         }
+        // Not resumed by a second process: the one running it writes the record after every turn,
+        // and two writers would be one conversation (BG-9).
+        Some(record) if background::is_running(&record.id) => {
+            background::refuse_to_resume(&record.id)
+        }
         Some(record) => interactive(
             bravebot_tui::app::Start::Resuming(Box::new(record)),
             skip_permissions,

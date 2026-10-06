@@ -93,50 +93,84 @@ pub(crate) fn start(words: &[String]) -> ExitCode {
     launch(&roster, &prompt)
 }
 
-#[cfg(unix)]
 fn launch(roster: &Roster, prompt: &str) -> ExitCode {
+    let id = bravebot_session::jobs::new_id();
+    match start_host(roster, &id, prompt, None) {
+        Ok(()) => {
+            let shown: String = id.chars().take(ID_SHOWN).collect();
+            println!("{}", t!(bg_started, id = shown));
+            ExitCode::SUCCESS
+        }
+        Err(code) => code,
+    }
+}
+
+/// Start the process for `id` and wait until it is live and listening.
+///
+/// `first` is the line the process starts with, left where only it can take it (BG-2); an empty
+/// one starts the session idle. A session started again runs in the directory it worked in, since
+/// its record is found from there.
+#[cfg(unix)]
+fn start_host(
+    roster: &Roster,
+    id: &str,
+    first: &str,
+    directory: Option<&str>,
+) -> Result<(), ExitCode> {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
-    let id = bravebot_session::jobs::new_id();
-    if let Err(err) = roster.leave_first_prompt(&id, prompt) {
-        return fail(Ending::Failed, t!(bg_spawn_failed, problem = err));
+    if let Err(err) = roster.leave_first_prompt(id, first) {
+        return Err(fail(Ending::Failed, t!(bg_spawn_failed, problem = err)));
+    }
+    // The socket of the process that ended, which would otherwise be taken for the new one's. A
+    // live process's socket is its own, and another terminal may have started it a moment ago.
+    if !roster.get(id).is_some_and(|seen| seen.live)
+        && let Some(socket) = roster.socket_of(id)
+    {
+        let _ = std::fs::remove_file(socket);
     }
     // The host is this same program started again; nothing is trusted from where it says it is.
     // nosemgrep: rust.lang.security.current-exe.current-exe
     let Ok(me) = std::env::current_exe() else {
-        let _ = roster.take_first_prompt(&id);
-        return fail(Ending::Failed, t!(bg_not_started));
+        let _ = roster.take_first_prompt(id);
+        return Err(fail(Ending::Failed, t!(bg_not_started)));
     };
-    let spawned = Command::new(me)
+    let mut command = Command::new(me);
+    command
         .arg("__bg-host")
-        .arg(&id)
+        .arg(id)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-    if let Err(err) = spawned {
-        let _ = roster.take_first_prompt(&id);
-        return fail(Ending::Failed, t!(bg_spawn_failed, problem = err));
+        .stderr(Stdio::null());
+    if let Some(directory) = directory {
+        command.current_dir(directory);
+    }
+    if let Err(err) = command.spawn() {
+        let _ = roster.take_first_prompt(id);
+        return Err(fail(Ending::Failed, t!(bg_spawn_failed, problem = err)));
     }
     let until = Instant::now() + Duration::from_secs(10);
     while Instant::now() < until {
-        if roster.get(&id).is_some_and(|seen| seen.live)
-            && roster.socket_of(&id).is_some_and(|s| s.exists())
+        if roster.get(id).is_some_and(|seen| seen.live)
+            && roster.socket_of(id).is_some_and(|s| s.exists())
         {
-            let shown: String = id.chars().take(ID_SHOWN).collect();
-            println!("{}", t!(bg_started, id = shown));
-            return ExitCode::SUCCESS;
+            return Ok(());
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    let _ = roster.take_first_prompt(&id);
-    fail(Ending::Failed, t!(bg_not_started))
+    let _ = roster.take_first_prompt(id);
+    Err(fail(Ending::Failed, t!(bg_not_started)))
 }
 
 #[cfg(not(unix))]
-fn launch(_roster: &Roster, _prompt: &str) -> ExitCode {
-    fail(Ending::Failed, t!(bg_unsupported))
+fn start_host(
+    _roster: &Roster,
+    _id: &str,
+    _first: &str,
+    _directory: Option<&str>,
+) -> Result<(), ExitCode> {
+    Err(fail(Ending::Failed, t!(bg_unsupported)))
 }
 
 /// The hidden command a started session runs under.
@@ -150,13 +184,66 @@ pub(crate) fn host(_id: &str) -> ExitCode {
     ExitCode::FAILURE
 }
 
-/// The session `typed` names, which is running, or the complaint to give.
-fn running(typed: &str) -> Result<(Roster, Seen), ExitCode> {
+/// Whether a background session is running under `id`, the id of a session record (BG-9).
+pub(crate) fn is_running(id: &str) -> bool {
+    Roster::readable()
+        .and_then(|roster| roster.get(id))
+        .is_some_and(|seen| seen.live)
+}
+
+/// The refusal for `--resume` and `--continue` naming a record a running background session holds,
+/// which says how to join it instead.
+pub(crate) fn refuse_to_resume(id: &str) -> ExitCode {
+    let name = Roster::readable()
+        .and_then(|roster| roster.get(id))
+        .map(|seen| shown(&seen.job.name))
+        .unwrap_or_default();
+    let id: String = id.chars().take(ID_SHOWN).collect();
+    fail(
+        Ending::Failed,
+        t!(resume_held_by_background, name = name, id = id),
+    )
+}
+
+/// What a terminal does for a session that is not running.
+#[derive(Clone, Copy)]
+enum Wake<'a> {
+    /// Join it: it starts idle.
+    Attach,
+    /// Send it a prompt: it starts with that prompt.
+    Reply(&'a str),
+}
+
+/// The session `typed` names, running, or the complaint to give.
+///
+/// One that is `stopped` is started again first, in the mode every session opens in (BG-9,
+/// BG-10), and only from a terminal: the start of a session is a thing a person did (BG-2). One
+/// that is `interrupted` is not, since what to tell the planner about the turn that ended is not
+/// built (BG-12). The prompt a reply carries is the line the new process starts with, so it is
+/// not sent again, and `None` is returned in its place.
+fn running(typed: &str, wake: Wake<'_>) -> Result<(Roster, Seen, bool), ExitCode> {
     let Some(roster) = Roster::writable() else {
         return Err(fail(Ending::Failed, t!(sessions_no_home)));
     };
     match roster.find(typed) {
-        Ok(seen) if seen.live => Ok((roster, seen)),
+        Ok(seen) if seen.live => Ok((roster, seen, false)),
+        Ok(seen) if seen.state() == State::Stopped => {
+            if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+                return Err(fail(
+                    Ending::Argument,
+                    t!(bg_restart_needs_a_terminal, name = shown(&seen.job.name)),
+                ));
+            }
+            let first = match wake {
+                Wake::Attach => String::new(),
+                Wake::Reply(text) => one_line(text),
+            };
+            start_host(&roster, &seen.job.id, &first, Some(&seen.job.directory))?;
+            match roster.get(&seen.job.id) {
+                Some(started) => Ok((roster, started, true)),
+                None => Err(fail(Ending::Failed, t!(bg_not_started))),
+            }
+        }
         Ok(seen) => Err(fail(
             Ending::Failed,
             t!(attach_not_running, name = shown(&seen.job.name)),
@@ -172,6 +259,13 @@ fn running(typed: &str) -> Result<(Roster, Seen), ExitCode> {
     }
 }
 
+/// `text` as the one line the socket reads: a break in it would end the prompt early.
+fn one_line(text: &str) -> String {
+    text.chars()
+        .map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c })
+        .collect()
+}
+
 /// `bravebot attach <id>`: the terminal of a background session, for as long as this one stays.
 ///
 /// What the session wrote is drawn the way a listing is: control characters pictured, so the
@@ -180,7 +274,7 @@ pub(crate) fn attach(args: &[String]) -> ExitCode {
     let [typed] = args else {
         return fail(Ending::Argument, t!(attach_usage));
     };
-    let (roster, seen) = match running(typed) {
+    let (roster, seen, _) = match running(typed, Wake::Attach) {
         Ok(found) => found,
         Err(code) => return code,
     };
@@ -288,10 +382,14 @@ pub(crate) fn reply(args: &[String]) -> ExitCode {
     if text.trim().is_empty() {
         return fail(Ending::Argument, t!(reply_usage));
     }
-    let (roster, seen) = match running(typed) {
+    let (roster, seen, started_with_it) = match running(typed, Wake::Reply(text.trim())) {
         Ok(found) => found,
         Err(code) => return code,
     };
+    if started_with_it {
+        println!("{}", t!(reply_sent, name = shown(&seen.job.name)));
+        return ExitCode::SUCCESS;
+    }
     send(&roster, &seen, text.trim())
 }
 
@@ -308,10 +406,7 @@ fn send(roster: &Roster, seen: &Seen, text: &str) -> ExitCode {
     };
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
     // One line, as the socket reads it: a break in the text would end the reply early.
-    let text: String = text
-        .chars()
-        .map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c })
-        .collect();
+    let text = one_line(text);
     if writeln!(stream, "reply\n{text}").is_err() {
         return fail(Ending::Failed, t!(reply_not_sent, name = name));
     }

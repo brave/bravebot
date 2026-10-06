@@ -79,6 +79,10 @@ cli-plain-trusting-kept =
     trusting { $directory } (you said to remember it { $when }; to be asked again, run
     /forget-trust in bravebot without --plain, or delete the lines naming it from { $path })
 
+# Said when a background session is started again and its earlier conversation was read back from
+# its record (BG-1).
+cli-plain-resumed = Continuing this session's earlier conversation ({ $count }).
+
 ## How much a session asks before it acts, drawn under the input box
 #
 # The markers are Claude Code's, and deliberately: somebody who has used one of these knows what
@@ -2715,3 +2719,5 @@ reply-sent = Sent to { $name }.
 reply-working = { $name } is working and takes no prompt now. Reply when it is idle.
 reply-needs-input = { $name } is waiting on a question. Answer it with: bravebot attach { $id }
 reply-not-sent = { $name } did not take the prompt.
+bg-restart-needs-a-terminal = { $name } is stopped, and only a terminal can start it again.
+resume-held-by-background = { $name } is held by a running background session. Join it with: bravebot attach { $id }

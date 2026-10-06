@@ -66,13 +66,13 @@ pub(crate) struct Shared {
 }
 
 impl Shared {
-    pub(crate) fn new(roster: Roster, job: Job, first: String) -> Arc<Self> {
+    pub(crate) fn new(roster: Roster, job: Job, first: Option<String>) -> Arc<Self> {
         Arc::new(Self {
             inner: Mutex::new(Inner {
                 phase: Phase::Working,
                 reading: false,
                 queue: VecDeque::new(),
-                first: Some(first),
+                first,
                 backlog: Vec::new(),
                 attached: None,
                 connections: 0,
@@ -301,6 +301,8 @@ impl Watcher for Watching {
 
 /// What the session in lines is given to run as a background session.
 pub(crate) struct Hosting {
+    /// The session's id, which names its entry in the roster and its record.
+    pub(crate) id: String,
     pub(crate) input: Intake,
     pub(crate) output: Broadcast,
     pub(crate) watch: Box<dyn Watcher>,
@@ -309,6 +311,7 @@ pub(crate) struct Hosting {
 impl Hosting {
     pub(crate) fn of(shared: &Arc<Shared>) -> Self {
         Self {
+            id: shared.locked().job.id.clone(),
             input: Intake {
                 shared: Arc::clone(shared),
                 current: Vec::new(),
@@ -321,9 +324,21 @@ impl Hosting {
 }
 
 /// The entry for a session about to start: asking, in the directory this runs in.
-pub(crate) fn entry(id: &str, first: &str) -> Job {
+///
+/// A session started again keeps the name and the last prompt its entry had, and the time of its
+/// last turn, so the list does not forget what it was doing.
+pub(crate) fn entry(roster: &Roster, id: &str, first: Option<&str>) -> Job {
     let directory = std::env::current_dir().unwrap_or_default();
-    let mut job = Job::starting(id.to_string(), &directory, first, Mode::Ask);
+    let earlier = roster.get(id).map(|seen| seen.job);
+    let prompt = first
+        .map(str::to_string)
+        .or_else(|| earlier.as_ref().map(|job| job.prompt.clone()))
+        .unwrap_or_default();
+    let mut job = Job::starting(id.to_string(), &directory, &prompt, Mode::Ask);
+    if let Some(earlier) = earlier {
+        job.name = earlier.name;
+        job.last_turn = earlier.last_turn;
+    }
     job.is(State::Working, None);
     job
 }
@@ -373,10 +388,13 @@ mod socket {
         let Some(first) = roster.take_first_prompt(id) else {
             return ExitCode::FAILURE;
         };
+        // Nothing to start with is what an attach leaves for a session it starts again: the
+        // session opens idle, waiting for the person who attached.
+        let first = Some(first).filter(|line| !line.trim().is_empty());
         let Ok(Some(_lease)) = roster.claim(id) else {
             return ExitCode::FAILURE;
         };
-        let job = entry(id, &first);
+        let job = entry(&roster, id, first.as_deref());
         if roster.publish(&job).is_err() {
             return ExitCode::FAILURE;
         }
@@ -449,23 +467,27 @@ mod tests {
 
     const ID: &str = "11111111-1111-4111-8111-111111111111";
 
-    fn a_shared() -> Arc<Shared> {
+    fn a_root() -> std::path::PathBuf {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/test-scratch")
             .join(format!(
                 "host-{}-{}",
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
+            ))
+    }
+
+    fn a_shared() -> Arc<Shared> {
+        let root = a_root();
         let job = Job::starting(
             ID.to_string(),
             std::path::Path::new("/work"),
             "fix the build",
             Mode::Ask,
         );
-        Shared::new(Roster::at(root), job, "fix the build".to_string())
+        Shared::new(Roster::at(root), job, Some("fix the build".to_string()))
     }
 
     fn queued(shared: &Shared) -> Vec<String> {
@@ -548,6 +570,34 @@ mod tests {
         assert_eq!(shared.locked().job.state, State::Idle);
         shared.finish();
         assert_eq!(shared.locked().job.state, State::Stopped);
+    }
+
+    /// BG-9: a session started again keeps the name and the last prompt its entry had when nothing is
+    /// given to start with, and takes the prompt it is given when something is.
+    #[test]
+    fn an_entry_started_again_keeps_what_the_list_showed() {
+        let roster = Roster::at(a_root());
+        let mut earlier = Job::starting(
+            ID.to_string(),
+            std::path::Path::new("/work"),
+            "fix the build",
+            Mode::Ask,
+        );
+        earlier.typed("and the tests");
+        earlier.is(State::Stopped, None);
+        roster.publish(&earlier).expect("the entry is written");
+
+        let attached = entry(&roster, ID, None);
+        assert_eq!(attached.name, earlier.name);
+        assert_eq!(attached.prompt, "and the tests");
+        assert_eq!(attached.state, State::Working);
+
+        let replied = entry(&roster, ID, Some("and the docs"));
+        assert_eq!(replied.name, earlier.name);
+        assert_eq!(replied.prompt, "and the docs");
+
+        let fresh = entry(&roster, "22222222-2222-4222-8222-222222222222", Some("new"));
+        assert_eq!(fresh.prompt, "new");
     }
 
     #[derive(Clone, Default)]

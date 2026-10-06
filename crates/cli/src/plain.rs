@@ -110,6 +110,7 @@ fn run(
     prompts: bravebot_agent::turn::SystemPrompts,
     hosting: Option<crate::host::Hosting>,
 ) -> ExitCode {
+    let hosted_as = hosting.as_ref().map(|hosting| hosting.id.clone());
     // Refused rather than read. The lines this reads are the person's own prompts, and a pipe has
     // nothing vouching for what it carries: CLI-3 quarantines piped bytes for exactly that reason,
     // so a session taking its prompts from one would be taking instruction from whatever fed it,
@@ -257,11 +258,29 @@ fn run(
     // The startup question (TRUST-7), put as a line. The map a yes writes is the one the panel's
     // yes writes, because both go through the same function; the end of the input is the third
     // answer the panel has, and it starts no session.
-    let Some(trust) = opening_trust(&mut asking, mode, workspace.root(), |root| {
-        bravebot_agent::trusted::record_for(home.as_deref(), profile.as_deref(), root)
-    }) else {
+    //
+    // Not put again to a session that is started again: the map in its record is the answer it was
+    // given, as it is for a resumed foreground session.
+    let resumed = hosted_as
+        .as_deref()
+        .and_then(|id| bravebot_session::sessions::load(workspace.root(), id));
+    let Some(trust) = resumed
+        .as_ref()
+        .and_then(|record| record.trust_map(workspace.root()))
+        .or_else(|| {
+            opening_trust(&mut asking, mode, workspace.root(), |root| {
+                bravebot_agent::trusted::record_for(home.as_deref(), profile.as_deref(), root)
+            })
+        })
+    else {
         return ExitCode::SUCCESS;
     };
+    if let Some(record) = resumed.as_ref().filter(|record| record.turns > 0) {
+        asking.say(&t!(
+            cli_plain_resumed,
+            count = t!(count_turns, count = record.turns)
+        ));
+    }
 
     // Matched after that question, because its answer decides whether the checkout's definitions
     // are in the set, and before any server is reached, so a name matching nothing starts nothing
@@ -382,9 +401,20 @@ fn run(
         complained: None,
         home,
         profile,
-        conversation: bravebot_agent::conversation::Conversation::new(),
+        conversation: match &resumed {
+            Some(record) => {
+                bravebot_agent::conversation::Conversation::restored(record.conversation.clone())
+            }
+            None => bravebot_agent::conversation::Conversation::new(),
+        },
         trust,
-        programs: TrustedPrograms::new(),
+        programs: match &resumed {
+            Some(record) => record.trusted_programs(workspace.root()),
+            None => TrustedPrograms::new(),
+        },
+        kept: hosted_as
+            .as_deref()
+            .map(|id| Kept::opening(workspace.root(), id, resumed.as_ref())),
         servers: None,
         mcp: reached.session(),
         beside: beside_turns,
@@ -564,6 +594,83 @@ struct Running<'a> {
     mcp: Option<bravebot_agent::mcp::Session>,
     /// Where a turn's progress goes where this session has no terminal of its own.
     beside: Option<crate::host::Broadcast>,
+    /// The record a background session writes after each turn, which is what starting it again
+    /// resumes from (BG-1).
+    kept: Option<Kept>,
+}
+
+/// The record of a background session, written down after each turn that ended.
+///
+/// Named by the session's id in the roster, so the entry and the record are found from one
+/// another. Only what a session in lines produces is written: no history of its own, no asides, no
+/// rewind points and no checkouts.
+struct Kept {
+    handle: bravebot_session::sessions::Handle,
+    turns: usize,
+    tokens: u64,
+    spend: std::collections::BTreeMap<usize, u64>,
+}
+
+impl Kept {
+    fn opening(
+        root: &std::path::Path,
+        id: &str,
+        resumed: Option<&bravebot_session::sessions::Record>,
+    ) -> Self {
+        use bravebot_session::sessions::{Front, Handle};
+        match resumed {
+            Some(record) => Self {
+                handle: Handle::resuming(root, record, Front::Terminal, bravebot_stamp::BUILD),
+                turns: record.turns,
+                tokens: record.tokens,
+                spend: record.spend.clone(),
+            },
+            None => Self {
+                handle: Handle::begin_as(
+                    id.to_string(),
+                    root,
+                    Front::Terminal,
+                    bravebot_stamp::BUILD,
+                ),
+                turns: 0,
+                tokens: 0,
+                spend: std::collections::BTreeMap::new(),
+            },
+        }
+    }
+
+    fn after_a_turn(
+        &mut self,
+        prompt: &str,
+        outcome: &turn::Outcome,
+        conversation: &bravebot_agent::conversation::Conversation,
+        trust: &TrustStore,
+        programs: &TrustedPrograms,
+    ) {
+        self.turns += 1;
+        self.tokens += outcome.tokens;
+        *self.spend.entry(self.turns).or_insert(0) += outcome.tokens;
+        self.handle.save(
+            prompt,
+            bravebot_session::sessions::Standing {
+                conversation: &conversation.snapshot(),
+                history: None,
+                turns: self.turns,
+                tokens: self.tokens,
+                spend: &self.spend,
+                timing: &std::collections::BTreeMap::new(),
+                model: Some(&outcome.model),
+                todos: &std::collections::BTreeMap::new(),
+                asides: &[],
+                trust,
+                programs,
+                directories: &[],
+                manifest: None,
+                rewind: &[],
+                checkouts: &[],
+            },
+        );
+    }
 }
 
 impl<C: Confirmer + Send> Turns<C> for Running<'_> {
@@ -646,6 +753,15 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
         self.programs = programs;
         self.asked_about = asked_about;
         self.exposed = exposed;
+        if let (Ok(outcome), Some(kept)) = (&completed.outcome, &mut self.kept) {
+            kept.after_a_turn(
+                prompt,
+                outcome,
+                &self.conversation,
+                &self.trust,
+                &self.programs,
+            );
+        }
         let mut said = match completed.outcome {
             Ok(outcome) => Said {
                 reply: outcome.reply_for_display().to_string(),
