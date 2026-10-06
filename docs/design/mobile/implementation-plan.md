@@ -1,6 +1,6 @@
 # Mobile prototype implementation plan
 
-Status: documentation only. No prototype implementation or tests have been run for these documents. Begin stages 1 and 2a; later requirements gate only the behavior that depends on them. See the [overview](README.md), [architecture](architecture.md), and [client contract](client-contract.md).
+Status: the first Rust session-view block is implemented. The TypeScript client and later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-rust-block).
 
 This is a high-level starting plan, not an exhaustive account of edge cases or behavior. Expect implementation discoveries to change or add to it. Update the affected design, specs, and tests as those decisions are made; resolve security gaps before enabling the affected feature. See the [executive summary](executive-summary.md) for the full proposal in one document.
 
@@ -52,6 +52,11 @@ When reducing scope, use this order:
 Never cut authentication, scope checks, labels, complete approval details, exact targets, single-writer ownership, or the recovery tests for a capability still advertised. Full prototype completion still requires 2b, 5b, and stage 8 evidence. A store release is a separate decision governed by the [iOS limits](architecture.md#ios-capability-and-distribution-limits).
 
 ## Stages
+
+The first Rust block is complete: negotiated fresh-session view, typed row/status updates,
+existing approval semantics, and real stdio tests. This does not complete stages 1–2a: the
+TypeScript package, its capability-refusal behavior against old runtimes, framing/correlation
+fixtures and local client program remain outstanding. No native or listener work is included.
 
 ### 1. Define the common client and fixtures
 
@@ -180,7 +185,7 @@ Work one behavior at a time, including behavior discovered during implementation
 
 ## Verification and repository checks
 
-Apply `testing-preflight` before behavior or assertion changes. Apply `design` for governed visible `ui/` work, and carry its relevant approval/label quality requirements into the React Native surfaces. Use the repository's required final-diff checks. No tests were run for this documentation revision.
+Apply `testing-preflight` before behavior or assertion changes. Apply `design` for governed visible `ui/` work, and carry its relevant approval/label quality requirements into the React Native surfaces. Use the repository's required final-diff checks. The first-block evidence is recorded in the [client contract](client-contract.md#implemented-rust-block).
 
 Use a transport fault proxy plus a model stub with controlled gates for observable connection faults. Use narrow in-process barriers for atomic target and snapshot races that external proxies cannot force. Assert file bytes, invocation counts, and captured model requests, not screenshots alone. Screenshots and physical-device logs supplement automated evidence.
 

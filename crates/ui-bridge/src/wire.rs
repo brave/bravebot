@@ -197,6 +197,18 @@ pub fn row(row: &Row) -> Value {
     json!({ "content": row.content, "status": status(row.status) })
 }
 
+/// Project an accepted prompt through the same tag rules as saved history.
+pub fn submitted(text: &str, composed: Option<&Composed>) -> Value {
+    let entry = match composed {
+        Some(why) => Said::Composed {
+            why: why.clone(),
+            text: text.to_string(),
+        },
+        None => Said::User(text.to_string()),
+    };
+    said(&entry)
+}
+
 /// A whole transcript, each prompt carrying the ordinal `session.fork` cuts on.
 ///
 /// The ordinal is counted here because it is the agent's own count of what the user said, and
