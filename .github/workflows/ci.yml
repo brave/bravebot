@@ -538,6 +538,8 @@ jobs:
         shell: bash
     env:
       npm_config_script_shell: C:\Program Files\Git\bin\bash.exe
+      # As in Desktop on Windows, so the npm cache setup-node saves is the one npm writes.
+      npm_config_cache: C:\npm\cache
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -550,6 +552,17 @@ jobs:
       - name: Enable corepack for Leo's prepare
         run: corepack enable
 
+      # As in the Front end job. The key is the one Desktop on Windows saves under.
+      - name: Find the Leo commit
+        id: leo
+        run: echo "commit=$(node -p "require('./ui/package-lock.json').packages['node_modules/@brave/leo'].resolved.split('#')[1]")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the built Leo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/bravebot-leo
+          key: leo-${{ runner.os }}-${{ steps.leo.outputs.commit }}-${{ hashFiles('ui/scripts/patch-leo-types.mjs') }}
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: desktop-helpers-*
@@ -557,7 +570,7 @@ jobs:
           path: dist
 
       - name: Build the installers
-        run: make app-release-windows
+        run: make app-release-windows UI_INSTALL="ui/scripts/ci-install.sh $HOME/.cache/bravebot-leo"
 
       - name: Build an older installer of each
         run: |
